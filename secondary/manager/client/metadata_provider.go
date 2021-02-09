@@ -55,6 +55,7 @@ type Settings interface {
 	AllowScheduleCreate() bool
 	AllowScheduleCreateRebal() bool
 	WaitForScheduledIndex() bool
+	UseGreedyPlanner() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -2049,7 +2050,9 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		return nil, nil, err
 	}
 
-	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes, len(defn.Nodes) != 0)
+	useGreedyPlanner := o.settings.UseGreedyPlanner()
+
+	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes, len(defn.Nodes) != 0, useGreedyPlanner)
 	if err != nil {
 		return nil, nil, err
 	}

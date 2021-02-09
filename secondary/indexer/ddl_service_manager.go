@@ -81,6 +81,7 @@ type ddlSettings struct {
 	mutex       sync.RWMutex
 
 	allowPartialQuorum uint32
+	useGreedyPlanner   uint32
 }
 
 //////////////////////////////////////////////////////////////
@@ -2072,6 +2073,10 @@ func (s *ddlSettings) WaitForScheduledIndex() bool {
 	return false
 }
 
+func (s *ddlSettings) UseGreedyPlanner() bool {
+	return atomic.LoadUint32(&s.useGreedyPlanner) == 1
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2100,6 +2105,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	allowPartialQuorum := config["allowPartialQuorum"].Bool()
 	if allowPartialQuorum {
 		atomic.StoreUint32(&s.allowPartialQuorum, 1)
+	}
+
+	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
+	if useGreedyPlanner {
+		atomic.StoreUint32(&s.useGreedyPlanner, 1)
 	}
 }
 

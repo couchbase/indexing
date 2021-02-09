@@ -29,35 +29,36 @@ import (
 /////////////////////////////////////////////////////////////
 
 type RunConfig struct {
-	Detail         bool
-	GenStmt        string
-	MemQuotaFactor float64
-	CpuQuotaFactor float64
-	Resize         bool
-	MaxNumNode     int
-	Output         string
-	Shuffle        int
-	AllowMove      bool
-	AllowSwap      bool
-	AllowUnpin     bool
-	AddNode        int
-	DeleteNode     int
-	MaxMemUse      int
-	MaxCpuUse      int
-	MemQuota       int64
-	CpuQuota       int
-	DataCostWeight float64
-	CpuCostWeight  float64
-	MemCostWeight  float64
-	EjectOnly      bool
-	DisableRepair  bool
-	Timeout        int
-	UseLive        bool
-	Runtime        *time.Time
-	Threshold      float64
-	CpuProfile     bool
-	MinIterPerTemp int
-	MaxIterPerTemp int
+	Detail           bool
+	GenStmt          string
+	MemQuotaFactor   float64
+	CpuQuotaFactor   float64
+	Resize           bool
+	MaxNumNode       int
+	Output           string
+	Shuffle          int
+	AllowMove        bool
+	AllowSwap        bool
+	AllowUnpin       bool
+	AddNode          int
+	DeleteNode       int
+	MaxMemUse        int
+	MaxCpuUse        int
+	MemQuota         int64
+	CpuQuota         int
+	DataCostWeight   float64
+	CpuCostWeight    float64
+	MemCostWeight    float64
+	EjectOnly        bool
+	DisableRepair    bool
+	Timeout          int
+	UseLive          bool
+	Runtime          *time.Time
+	Threshold        float64
+	CpuProfile       bool
+	MinIterPerTemp   int
+	MaxIterPerTemp   int
+	UseGreedyPlanner bool
 }
 
 type RunStats struct {
@@ -474,7 +475,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 // Integration with Metadata Provider
 /////////////////////////////////////////////////////////////
 
-func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool) (*Solution, error) {
+func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool, useGreedyPlanner bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
 	if err != nil {
@@ -504,7 +505,7 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 	}
 
 	detail := logging.IsEnabled(logging.Info)
-	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true)
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner)
 }
 
 func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
@@ -646,7 +647,8 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig) (*Solution, error
 /////////////////////////////////////////////////////////////
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool) (*Solution, error) {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
+	useGreedyPlanner bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -663,6 +665,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 	config.UseLive = useLive
+	config.UseGreedyPlanner = useGreedyPlanner
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
