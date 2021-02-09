@@ -6791,6 +6791,10 @@ func newGreedyPlanner(cost CostMethod, constraint ConstraintMethod, placement Pl
 func canUseGreedyIndexPlacement(config *RunConfig, indexes []*IndexUsage,
 	movedIndex, movedData uint64, solution *Solution) (bool, common.IndexDefnId) {
 
+	if !config.UseGreedyPlanner {
+		return false, common.IndexDefnId(0)
+	}
+
 	// At this time, there aren't any eligible indexes. Check if the
 	// current cluster constraints are satisfied. If not, let the
 	// SAPlanner run
@@ -7025,8 +7029,8 @@ func NewPlannerForCommandPlan(config *RunConfig, indexes []*IndexUsage, movedInd
 
 	var planner Planner
 
-	if canUse, defnId := canUseGreedyIndexPlacement(config, indexes, movedIndex, movedData, solution); canUse {
-		logging.Infof("Trying out greedy index placement for index %v", defnId)
+	if ok, defnId := canUseGreedyIndexPlacement(config, indexes, movedIndex, movedData, solution); ok {
+		logging.Infof("Using greedy index placement for index %v", defnId)
 		planner = newGreedyPlanner(cost, constraint, placement, sizing, indexes)
 	} else {
 		if err := placement.Add(solution, indexes); err != nil {

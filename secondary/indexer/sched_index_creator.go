@@ -169,6 +169,11 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 		atomic.StoreUint32(&settings.allowPartialQuorum, 1)
 	}
 
+	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
+	if useGreedyPlanner {
+		atomic.StoreUint32(&settings.useGreedyPlanner, 1)
+	}
+
 	iq := make(schedIndexQueue, 0)
 	heap.Init(&iq)
 

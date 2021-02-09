@@ -2757,6 +2757,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.useGreedyPlanner": ConfigValue{
+		true,
+		"Attempt to use greedy planner (instead of simulated annealing planner) for index creation, for faster placement.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",
