@@ -51,7 +51,7 @@ type storageMgr struct {
 	indexSnapMap map[common.IndexInstId]IndexSnapshot
 	// List of waiters waiting for a snapshot to be created with expected
 	// atleast-timestamp
-	waitersMap map[common.IndexInstId][]*snapshotWaiter
+	waitersMap SnapshotWaitersMapHolder
 
 	dbfile *forestdb.File
 	meta   *forestdb.KVStore // handle for index meta
@@ -60,7 +60,7 @@ type storageMgr struct {
 
 	stats IndexerStatsHolder
 
-	muSnap sync.Mutex //lock to protect snapMap and waitersMap
+	muSnap sync.Mutex //lock to protect updates to snapMap and waitersMap
 
 	lastFlushDone int64
 }
@@ -113,11 +113,11 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch:       supvRespch,
 		snapshotNotifych: snapshotNotifych,
 		indexSnapMap:     make(map[common.IndexInstId]IndexSnapshot),
-		waitersMap:       make(map[common.IndexInstId][]*snapshotWaiter),
 		config:           config,
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
+	s.waitersMap.Init()
 
 	//if manager is not enabled, create meta file
 	if config["enableManager"].Bool() == false {
@@ -586,20 +586,34 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexStats) {
 
 	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
-
 	DestroyIndexSnapshot(s.indexSnapMap[is.IndexInstId()])
 	s.indexSnapMap[is.IndexInstId()] = is
+	s.muSnap.Unlock()
 
 	// notify a new snapshot through channel
 	// the channel receiver needs to destroy snapshot when done
 	s.notifySnapshotCreation(is)
 
+	var waitersContainer *SnapshotWaitersContainer
+	var ok bool
+
+	waiterMap := s.waitersMap.Get()
+	if waitersContainer, ok = waiterMap[is.IndexInstId()]; !ok {
+		waitersContainer = s.initSnapshotWaitersForInst(is.IndexInstId())
+	}
+
+	if waitersContainer == nil {
+		return
+	}
+
+	waitersContainer.Lock()
+	defer waitersContainer.Unlock()
+	waiters := waitersContainer.waiters
+
 	var numReplies int64
 	t := time.Now()
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
-	waiters := s.waitersMap[is.IndexInstId()]
 	for _, w := range waiters {
 		// Clean up expired requests from queue
 		if !w.expired.IsZero() && t.After(w.expired) {
@@ -616,7 +630,7 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 		}
 		newWaiters = append(newWaiters, w)
 	}
-	s.waitersMap[is.IndexInstId()] = newWaiters
+	waitersContainer.waiters = newWaiters
 	idxStats.numLastSnapshotReply.Set(numReplies)
 }
 
@@ -689,24 +703,24 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	}
 
 	go func() {
-		sm.muSnap.Lock()
-		defer sm.muSnap.Unlock()
 		// Notify all scan waiters for indexes in this keyspaceId
 		// and stream with error
 		stats := sm.stats.Get()
-		for idxInstId, waiters := range sm.waitersMap {
+		waitersMap := sm.waitersMap.Get()
+		for idxInstId, wc := range waitersMap {
 			idxInst := sm.indexInstMap.Get()[idxInstId]
 			idxStats := stats.indexes[idxInst.InstId]
 			if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 				idxInst.Stream == streamId {
-				for _, w := range waiters {
+				wc.Lock()
+				for _, w := range wc.waiters {
 					w.Error(ErrIndexRollback)
 					if idxStats != nil {
 						idxStats.numSnapshotWaiters.Add(-1)
 					}
 				}
-
-				delete(sm.waitersMap, idxInstId)
+				wc.waiters = nil
+				wc.Unlock()
 			}
 		}
 	}()
@@ -947,6 +961,27 @@ func (sm *storageMgr) validateRestartTsVbuuid(keyspaceId string,
 	return restartTs
 }
 
+func (s *storageMgr) initSnapshotWaitersForInst(instId common.IndexInstId) *SnapshotWaitersContainer {
+	s.muSnap.Lock()
+	defer s.muSnap.Unlock()
+
+	indexInstMap := s.indexInstMap.Get()
+	if inst, ok := indexInstMap[instId]; !ok || inst.State == common.INDEX_STATE_DELETED {
+		return nil
+	}
+	waitersMap := s.waitersMap.Get()
+	var waiterContainer *SnapshotWaitersContainer
+	var ok bool
+
+	if waiterContainer, ok = waitersMap[instId]; !ok {
+		waitersMap = s.waitersMap.Clone()
+		waiterContainer = &SnapshotWaitersContainer{}
+		waitersMap[instId] = waiterContainer
+		s.waitersMap.Set(waitersMap)
+	}
+	return waiterContainer
+}
+
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
 	if _, ok := s.indexSnapMap[idxInstId]; !ok {
 		ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
@@ -997,14 +1032,25 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	defer s.muSnap.Unlock()
 
 	indexInstMap = s.indexInstMap.Get()
+	waitersMap := s.waitersMap.Clone()
+
+	// Initialize waitersContainer for newly created instances
+	for instId, inst := range indexInstMap {
+		if _, ok := waitersMap[instId]; !ok && inst.State != common.INDEX_STATE_DELETED {
+			waitersMap[instId] = &SnapshotWaitersContainer{}
+		}
+	}
+
 	// Remove all snapshot waiters for indexes that do not exist anymore
-	for id, ws := range s.waitersMap {
-		if inst, ok := indexInstMap[id]; !ok ||
-			inst.State == common.INDEX_STATE_DELETED {
-			for _, w := range ws {
+	for id, wc := range waitersMap {
+		if inst, ok := indexInstMap[id]; !ok || inst.State == common.INDEX_STATE_DELETED {
+			wc.Lock()
+			for _, w := range wc.waiters {
 				w.Error(common.ErrIndexNotFound)
 			}
-			delete(s.waitersMap, id)
+			wc.waiters = nil
+			delete(waitersMap, id)
+			wc.Unlock()
 		}
 	}
 
@@ -1098,7 +1144,6 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	idxStats := stats.indexes[req.GetIndexId()]
 
 	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
 
 	// Return snapshot immediately if a matching snapshot exists already
 	// Else add into waiters list so that next snapshot creation event
@@ -1110,19 +1155,32 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 		return
 	}
 
-	if idxStats != nil {
-		idxStats.numSnapshotWaiters.Add(1)
+	s.muSnap.Unlock()
+
+	waitersMap := s.waitersMap.Get()
+
+	var waitersContainer *SnapshotWaitersContainer
+	var ok bool
+	if waitersContainer, ok = waitersMap[req.GetIndexId()]; !ok {
+		waitersContainer = s.initSnapshotWaitersForInst(req.GetIndexId())
+	}
+
+	if waitersContainer == nil {
+		req.respch <- common.ErrIndexNotFound
+		return
 	}
 
 	w := newSnapshotWaiter(
 		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
 		req.GetReplyChannel(), req.GetExpiredTime())
 
-	if ws, ok := s.waitersMap[req.GetIndexId()]; ok {
-		s.waitersMap[req.idxInstId] = append(ws, w)
-	} else {
-		s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
+	if idxStats != nil {
+		idxStats.numSnapshotWaiters.Add(1)
 	}
+
+	waitersContainer.Lock()
+	defer waitersContainer.Unlock()
+	waitersContainer.waiters = append(waitersContainer.waiters, w)
 }
 
 func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
