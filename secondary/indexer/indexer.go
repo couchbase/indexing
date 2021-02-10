@@ -326,7 +326,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start KV Sender
-	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config, idx.clusterInfoClient)
+	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer KVSender Init Error %+v", res)
 		return nil, res
@@ -9177,12 +9177,6 @@ func (idx *indexer) monitorKVNodes() {
 	cinfo.SetUserAgent("MonitorKVNodes")
 
 	getActiveKVNodes := func() map[string]bool {
-
-		if err := cinfo.FetchWithLock(); err != nil {
-			logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache, err: %v", err)
-			return nil
-		}
-
 		// Get all active KV nodes
 		activeKVNodes := cinfo.GetActiveKVNodes()
 
@@ -9285,6 +9279,12 @@ func (idx *indexer) monitorKVNodes() {
 				continue
 			}
 
+			if err := cinfo.FetchWithLockForPoolChange(); err != nil {
+				logging.Errorf("Indexer::monitorKVNodes, error observed while Updating cluster info cache, err: %v", err)
+				selfRestart()
+				return
+			}
+
 			currActiveKVNodes := getActiveKVNodes()
 			if currActiveKVNodes == nil {
 				selfRestart()
@@ -9299,6 +9299,12 @@ func (idx *indexer) monitorKVNodes() {
 			updateNodeToHostMap()
 
 		case <-ticker.C:
+			if err := cinfo.FetchWithLock(); err != nil {
+				logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache due to timer, err: %v", err)
+				selfRestart()
+				return
+			}
+
 			currActiveKVNodes := getActiveKVNodes()
 			if currActiveKVNodes == nil {
 				selfRestart()

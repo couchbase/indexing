@@ -81,11 +81,12 @@ type ClusterInfoCache struct {
 // and updated periodically or when things change in the cluster
 // Readers/Consumers must lock cinfo before using it
 type ClusterInfoClient struct {
-	cinfo                   *ClusterInfoCache
-	clusterURL              string
-	pool                    string
-	servicesNotifierRetryTm int
-	finch                   chan bool
+	cinfo                              *ClusterInfoCache
+	clusterURL                         string
+	pool                               string
+	servicesNotifierRetryTm            int
+	finch                              chan bool
+	fetchBucketInfoOnURIHashChangeOnly bool
 }
 
 type NodeId int
@@ -260,6 +261,121 @@ func (c *ClusterInfoCache) FetchWithLock() error {
 	defer c.Unlock()
 
 	return c.Fetch()
+}
+
+func (c *ClusterInfoCache) updateNodesData() {
+	var nodes []couchbase.Node
+	var failedNodes []couchbase.Node
+	var addNodes []couchbase.Node
+	version := uint32(math.MaxUint32)
+	minorVersion := uint32(math.MaxUint32)
+
+	for _, n := range c.pool.Nodes {
+		if n.ClusterMembership == "active" {
+			nodes = append(nodes, n)
+		} else if n.ClusterMembership == "inactiveFailed" {
+			// node being failed over
+			failedNodes = append(failedNodes, n)
+		} else if n.ClusterMembership == "inactiveAdded" {
+			// node being added (but not yet rebalanced in)
+			addNodes = append(addNodes, n)
+		} else {
+			logging.Warnf("ClusterInfoCache: unrecognized node membership %v", n.ClusterMembership)
+		}
+
+		// Find the minimum cluster compatibility
+		v := uint32(n.ClusterCompatibility / 65536)
+		minorv := uint32(n.ClusterCompatibility) - (v * 65536)
+		if v < version || (v == version && minorv < minorVersion) {
+			version = v
+			minorVersion = minorv
+		}
+	}
+
+	c.nodes = nodes
+	c.failedNodes = failedNodes
+	c.addNodes = addNodes
+	c.version = version
+	c.minorVersion = minorVersion
+	if c.version == math.MaxUint32 {
+		c.version = 0
+	}
+}
+
+func (c *ClusterInfoCache) FetchWithLockForPoolChange() error {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.FetchForPoolChange()
+}
+
+func (c *ClusterInfoCache) FetchForPoolChange() error {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Infof("%vError occured during cluster info update (%v) .. Retrying(%d)",
+				c.logPrefix, err, r)
+		}
+
+		vretry := 0
+	retry:
+		c.client, err = couchbase.Connect(c.url)
+		if err != nil {
+			return err
+		}
+		c.client.SetUserAgent(c.userAgent)
+
+		np, err := c.client.CallPoolURI(c.poolName)
+		if err != nil {
+			return err
+		}
+
+		err = c.updatePool(&np)
+		if err != nil {
+			return err
+		}
+
+		c.updateNodesData()
+
+		found := false
+		for _, node := range c.nodes {
+			if node.ThisNode {
+				found = true
+			}
+		}
+		if !found {
+			return errors.New("Current node's cluster membership is not active")
+		}
+
+		var poolServs couchbase.PoolServices
+		poolServs, err = c.client.GetPoolServices(c.poolName)
+		if err != nil {
+			return err
+		}
+		c.nodesvs = poolServs.NodesExt
+		c.buildEncryptPortMapping()
+
+		if err := c.fetchServerGroups(); err != nil {
+			return err
+		}
+
+		if !c.validateCache(c.client.Info.IsIPv6) {
+			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
+				vretry++
+				logging.Infof("%vValidation Failed for cluster info.. Retrying(%d)",
+					c.logPrefix, vretry)
+				goto retry
+			} else {
+				logging.Infof("%vValidation Failed for cluster info.. %v",
+					c.logPrefix, c)
+				return ErrValidationFailed
+			}
+		}
+
+		return nil
+	}
+
+	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	return rh.Run()
 }
 
 func (c *ClusterInfoCache) FetchManifestInfo(bucketName string) error {
@@ -850,6 +966,36 @@ func (c *ClusterInfoCache) getStaticServicePort(srvc string) (string, error) {
 
 }
 
+// updatePool will fetch bucket info if the verion hash in bucketURL changes
+// else it will copy it from existing pool avoiding REST Calls to ns-server.
+func (c *ClusterInfoCache) updatePool(np *couchbase.Pool) (err error) {
+	ovh, err := c.pool.GetBucketURLVersionHash()
+	if err != nil {
+		return err
+	}
+
+	nvh, err := np.GetBucketURLVersionHash()
+	if err != nil {
+		return err
+	}
+
+	if ovh != nvh {
+		err = np.Refresh()
+		if err != nil {
+			return err
+		}
+		c.pool = *np
+	} else {
+		np.BucketMap = c.pool.BucketMap
+		np.Manifest = c.pool.Manifest
+		c.pool.BucketMap = nil
+		c.pool.Manifest = nil
+		c.pool = *np
+	}
+
+	return nil
+}
+
 // IPv6 Support
 func GetLocalIpAddr(isIPv6 bool) string {
 	if isIPv6 {
@@ -867,9 +1013,10 @@ func GetLocalIpUrl(isIPv6 bool) string {
 
 func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *ClusterInfoClient, err error) {
 	cic := &ClusterInfoClient{
-		clusterURL: clusterURL,
-		pool:       pool,
-		finch:      make(chan bool),
+		clusterURL:                         clusterURL,
+		pool:                               pool,
+		finch:                              make(chan bool),
+		fetchBucketInfoOnURIHashChangeOnly: true,
 	}
 	cic.servicesNotifierRetryTm = 1000 // TODO: read from config
 
@@ -886,6 +1033,10 @@ func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *Clu
 // Consumer must lock returned cinfo before using it
 func (c *ClusterInfoClient) GetClusterInfoCache() *ClusterInfoCache {
 	return c.cinfo
+}
+
+func (c *ClusterInfoClient) WatchRebalanceChanges() {
+	c.fetchBucketInfoOnURIHashChangeOnly = false
 }
 
 func (c *ClusterInfoClient) SetUserAgent(userAgent string) {
@@ -955,6 +1106,25 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 				default:
 					logging.Errorf("ClusterInfoClient(%v): Invalid CollectionManifestChangeNotification type", c.cinfo.userAgent)
 					// Fetch full cluster info cache
+					if err := c.cinfo.FetchWithLock(); err != nil {
+						logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
+						selfRestart()
+						return
+					}
+				}
+			} else if notif.Type == PoolChangeNotification {
+				// Hash Value of Buckets URL in PoolChangeNotification will not change
+				// during rebalance it will only be updated at the begining and end
+				// if we want to watch real time changes during rebalance query terse
+				// Bucket endpoint. Other than that we can stop querying buckets URI
+				// if the hash value did not change.
+				if c.fetchBucketInfoOnURIHashChangeOnly {
+					if err := c.cinfo.FetchWithLockForPoolChange(); err != nil {
+						logging.Errorf("cic.cinfo.FetchForPoolChangeNotification(): %v\n", err)
+						selfRestart()
+						return
+					}
+				} else {
 					if err := c.cinfo.FetchWithLock(); err != nil {
 						logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
 						selfRestart()

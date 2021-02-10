@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -56,7 +57,14 @@ type kvSender struct {
 }
 
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config c.Config, cic *c.ClusterInfoClient) (KVSender, Message) {
+	config c.Config) (KVSender, Message) {
+
+	cic, err := common.NewClusterInfoClient(config["clusterAddr"].String(), DEFAULT_POOL, config)
+	if err != nil {
+		common.CrashOnError(err)
+	}
+	cic.SetUserAgent("kvsender")
+	cic.WatchRebalanceChanges()
 
 	//Init the kvSender struct
 	k := &kvSender{
