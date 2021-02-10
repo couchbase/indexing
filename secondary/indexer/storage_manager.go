@@ -1141,6 +1141,10 @@ func (s *storageMgr) handleStats(cmd Message) {
 	replych := req.GetReplyChannel()
 	storageStats := s.getIndexStorageStats(nil)
 
+	//node level stats
+	var numStorageInstances int64
+	var totalDataSize, totalDiskSize, sumResidentPercent int64
+
 	stats := s.stats.Get()
 	indexInstMap := s.indexInstMap.Get()
 	for _, st := range storageStats {
@@ -1148,6 +1152,8 @@ func (s *storageMgr) handleStats(cmd Message) {
 		if inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
+
+		numStorageInstances++
 
 		idxStats := stats.GetPartitionStats(st.InstId, st.PartnId)
 		// TODO(sarath): Investigate the reason for inconsistent stats map
@@ -1194,7 +1200,21 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 				idxStats.lastMutateGatherTime.Set(now)
 			}
+
+			//compute node level stats
+			totalDataSize += st.Stats.DataSize
+			totalDiskSize += st.Stats.DiskSize
+			sumResidentPercent += idxStats.residentPercent.Value()
 		}
+	}
+
+	stats.totalDataSize.Set(totalDataSize)
+	stats.totalDiskSize.Set(totalDiskSize)
+	stats.numStorageInstances.Set(numStorageInstances)
+	if numStorageInstances > 0 {
+		stats.avgResidentPercent.Set(sumResidentPercent / numStorageInstances)
+	} else {
+		stats.avgResidentPercent.Set(0)
 	}
 
 	replych <- true
@@ -1220,6 +1240,9 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		consumerFilter = spec.consumerFilter
 	}
 
+	var numIndexes int64
+	gStats := s.stats.Get()
+
 	indexInstMap := s.indexInstMap.Get()
 	indexPartnMap := s.indexPartnMap.Get()
 	for idxInstId, partnMap := range indexPartnMap {
@@ -1238,6 +1261,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		if !ok || inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
+
+		numIndexes++
 
 		for _, partnInst := range partnMap {
 			var internalData []string
@@ -1302,6 +1327,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 			}
 		}
 	}
+	gStats.numIndexes.Set(numIndexes)
 
 	return stats
 }
