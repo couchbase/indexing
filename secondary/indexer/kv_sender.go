@@ -16,6 +16,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
@@ -54,7 +55,14 @@ type kvSender struct {
 }
 
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config c.Config, cic *c.ClusterInfoClient) (KVSender, Message) {
+	config c.Config) (KVSender, Message) {
+
+	cic, err := c.NewClusterInfoClient(config["clusterAddr"].String(), DEFAULT_POOL, config)
+	if err != nil {
+		c.CrashOnError(err)
+	}
+	cic.SetUserAgent("kvsender")
+	cic.WatchRebalanceChanges()
 
 	//Init the kvSender struct
 	k := &kvSender{
