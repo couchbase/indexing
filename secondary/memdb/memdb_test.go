@@ -236,7 +236,11 @@ func TestLoadStoreDisk(t *testing.T) {
 	snap, _ := db.NewSnapshot()
 	fmt.Println(db.DumpStats())
 
+	n = CountItems(snap)
+	fmt.Println(fmt.Sprintf("snap count = %v", n))
+
 	t0 = time.Now()
+	db.PreparePersistence("db.dump", snap)
 	err := db.StoreToDisk("db.dump", snap, 8, nil)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
@@ -283,9 +287,13 @@ func TestStoreDiskShutdown(t *testing.T) {
 	snap, _ := db.NewSnapshot()
 	fmt.Println(db.DumpStats())
 
+	n = CountItems(snap)
+	fmt.Println(fmt.Sprintf("snap count = %v", n))
+
 	t0 = time.Now()
 	errch := make(chan error, 1)
 	go func() {
+		db.PreparePersistence("db.dump", snap)
 		errch <- db.StoreToDisk("db.dump", snap, 8, nil)
 	}()
 
@@ -422,7 +430,7 @@ func TestFullScan(t *testing.T) {
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
 	defer db.Close()
-	n := 1000000
+	n := runtime.GOMAXPROCS(0) * 100000
 	t0 := time.Now()
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
 		wg.Add(1)
@@ -608,7 +616,11 @@ func TestLoadDeltaStoreDisk(t *testing.T) {
 		<-waiter
 	}
 
+	n = CountItems(snap)
+	fmt.Println(fmt.Sprintf("snap count = %v", n))
+
 	t0 := time.Now()
+	db.PreparePersistence("db.dump", snap)
 	err := db.StoreToDisk("db.dump", snap, 8, callb)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
@@ -748,6 +760,7 @@ func TestDiskCorruption(t *testing.T) {
 	fmt.Println(db.DumpStats())
 
 	t0 = time.Now()
+	db.PreparePersistence("db.dump", snap)
 	err := db.StoreToDisk("db.dump", snap, 8, nil)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
@@ -788,7 +801,7 @@ func TestSnapshotStats(t *testing.T) {
 	for i := 0; i < n; i++ {
 		w.Put([]byte(fmt.Sprintf("%010d", i)))
 
-		if i % snapFreq == 0 {
+		if i%snapFreq == 0 {
 			snap, _ := w.NewSnapshot()
 			snaps = append(snaps, snap)
 		}
@@ -805,7 +818,7 @@ func TestSnapshotStats(t *testing.T) {
 	}
 
 	// Close half of the snapshots
-	numSnapsToClose := uint32(n/snapFreq/2)
+	numSnapsToClose := uint32(n / snapFreq / 2)
 	for _, snap := range snaps[:numSnapsToClose] {
 		snap.Close()
 	}

@@ -2497,8 +2497,9 @@ func (s *plasmaSnapshot) Close() error {
 	count := atomic.AddInt32(&s.refCount, int32(-1))
 
 	if count < 0 {
-		logging.Errorf("plasmaSnapshot::Close Close operation requested " +
-			"on already closed snapshot")
+		logging.Errorf("plasmaSnapshot::Close Close operation requested "+
+			"on already closed snapshot. Index %v, Bucket %v, IndexInstId %v, PartitionId %v",
+			s.slice.idxDefn.Name, s.slice.idxDefn.Bucket, s.slice.idxInstId, s.slice.idxPartnId)
 		return errors.New("Snapshot Already Closed")
 
 	} else if count == 0 {
@@ -2718,6 +2719,18 @@ func (s *plasmaSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error 
 
 func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	cmpFn CmpEntry, callback EntryCallback) error {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("plasmaSnapshot::Iterate: panic detected while iterating snapshot "+
+				"low key = %s high key = %s Index %v, Bucket %v, IndexInstId %v, "+
+				"PartitionId %v", logging.TagStrUD(low), logging.TagStrUD(high),
+				s.slice.idxDefn.Name, s.slice.idxDefn.Bucket, s.slice.idxInstId, s.slice.idxPartnId)
+			logging.Fatalf("%s", logging.StackTraceAll())
+			panic(r)
+		}
+	}()
+
 	var entry IndexEntry
 	var err error
 	t0 := time.Now()

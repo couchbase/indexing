@@ -39,6 +39,7 @@ type StreamState struct {
 
 	streamKeyspaceIdLastSnapAlignFlushedTsMap map[common.StreamId]KeyspaceIdLastFlushedTsMap
 	streamKeyspaceIdLastMutationVbuuid        map[common.StreamId]KeyspaceIdLastMutationVbuuid
+	streamKeyspaceIdNeedsLastRollbackReset    map[common.StreamId]KeyspaceIdNeedsLastRollbackReset
 
 	streamKeyspaceIdRestartVbTsMap map[common.StreamId]KeyspaceIdRestartVbTsMap
 
@@ -94,6 +95,7 @@ type KeyspaceIdHasBuildCompTSMap map[string]bool
 type KeyspaceIdNewTsReqdMap map[string]bool
 type KeyspaceIdLastSnapMarker map[string]*common.TsVbuuid
 type KeyspaceIdLastMutationVbuuid map[string]*common.TsVbuuid
+type KeyspaceIdNeedsLastRollbackReset map[string]bool
 
 type KeyspaceIdTsListMap map[string]*list.List
 type KeyspaceIdFlushInProgressTsMap map[string]*common.TsVbuuid
@@ -161,39 +163,40 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdLastSnapAlignFlushedTsMap: make(map[common.StreamId]KeyspaceIdLastFlushedTsMap),
 		streamKeyspaceIdRestartTsMap:              make(map[common.StreamId]KeyspaceIdRestartTsMap),
 
-		streamKeyspaceIdOpenTsMap:          make(map[common.StreamId]KeyspaceIdOpenTsMap),
-		streamKeyspaceIdStartTimeMap:       make(map[common.StreamId]KeyspaceIdStartTimeMap),
-		streamKeyspaceIdFlushEnabledMap:    make(map[common.StreamId]KeyspaceIdFlushEnabledMap),
-		streamKeyspaceIdDrainEnabledMap:    make(map[common.StreamId]KeyspaceIdDrainEnabledMap),
-		streamKeyspaceIdFlushDone:          make(map[common.StreamId]KeyspaceIdFlushDone),
-		streamKeyspaceIdForceRecovery:      make(map[common.StreamId]KeyspaceIdForceRecovery),
-		streamKeyspaceIdVbStatusMap:        make(map[common.StreamId]KeyspaceIdVbStatusMap),
-		streamKeyspaceIdVbRefCountMap:      make(map[common.StreamId]KeyspaceIdVbRefCountMap),
-		streamKeyspaceIdRestartVbTsMap:     make(map[common.StreamId]KeyspaceIdRestartVbTsMap),
-		streamStatus:                       make(map[common.StreamId]StreamStatus),
-		streamKeyspaceIdStatus:             make(map[common.StreamId]KeyspaceIdStatus),
-		streamKeyspaceIdIndexCountMap:      make(map[common.StreamId]KeyspaceIdIndexCountMap),
-		streamKeyspaceIdRepairStopCh:       make(map[common.StreamId]KeyspaceIdRepairStopCh),
-		streamKeyspaceIdTimerStopCh:        make(map[common.StreamId]KeyspaceIdTimerStopCh),
-		streamKeyspaceIdLastPersistTime:    make(map[common.StreamId]KeyspaceIdLastPersistTime),
-		streamKeyspaceIdSkippedInMemTs:     make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
-		streamKeyspaceIdHasInMemSnap:       make(map[common.StreamId]KeyspaceIdHasInMemSnap),
-		streamKeyspaceIdLastSnapMarker:     make(map[common.StreamId]KeyspaceIdLastSnapMarker),
-		streamKeyspaceIdLastMutationVbuuid: make(map[common.StreamId]KeyspaceIdLastMutationVbuuid),
-		keyspaceIdRollbackTime:             make(map[string]int64),
-		streamKeyspaceIdAsyncMap:           make(map[common.StreamId]KeyspaceIdStreamAsyncMap),
-		streamKeyspaceIdLastBeginTime:      make(map[common.StreamId]KeyspaceIdStreamLastBeginTime),
-		streamKeyspaceIdLastRepairTimeMap:  make(map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap),
-		streamKeyspaceIdKVRollbackTsMap:    make(map[common.StreamId]KeyspaceIdKVRollbackTsMap),
-		streamKeyspaceIdKVActiveTsMap:      make(map[common.StreamId]KeyspaceIdKVActiveTsMap),
-		streamKeyspaceIdKVPendingTsMap:     make(map[common.StreamId]KeyspaceIdKVPendingTsMap),
-		streamKeyspaceIdRepairStateMap:     make(map[common.StreamId]KeyspaceIdStreamRepairStateMap),
-		streamKeyspaceIdSessionId:          make(map[common.StreamId]KeyspaceIdSessionId),
-		streamKeyspaceIdCollectionId:       make(map[common.StreamId]KeyspaceIdCollectionId),
-		streamKeyspaceIdPastMinMergeTs:     make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
-		streamKeyspaceIdVBMap:              make(map[common.StreamId]KeyspaceIdVBMap),
-		streamKeyspaceIdEnableOSO:          make(map[common.StreamId]KeyspaceIdEnableOSO),
-		streamKeyspaceIdHWTOSO:             make(map[common.StreamId]KeyspaceIdHWTOSO),
+		streamKeyspaceIdOpenTsMap:              make(map[common.StreamId]KeyspaceIdOpenTsMap),
+		streamKeyspaceIdStartTimeMap:           make(map[common.StreamId]KeyspaceIdStartTimeMap),
+		streamKeyspaceIdFlushEnabledMap:        make(map[common.StreamId]KeyspaceIdFlushEnabledMap),
+		streamKeyspaceIdDrainEnabledMap:        make(map[common.StreamId]KeyspaceIdDrainEnabledMap),
+		streamKeyspaceIdFlushDone:              make(map[common.StreamId]KeyspaceIdFlushDone),
+		streamKeyspaceIdForceRecovery:          make(map[common.StreamId]KeyspaceIdForceRecovery),
+		streamKeyspaceIdVbStatusMap:            make(map[common.StreamId]KeyspaceIdVbStatusMap),
+		streamKeyspaceIdVbRefCountMap:          make(map[common.StreamId]KeyspaceIdVbRefCountMap),
+		streamKeyspaceIdRestartVbTsMap:         make(map[common.StreamId]KeyspaceIdRestartVbTsMap),
+		streamStatus:                           make(map[common.StreamId]StreamStatus),
+		streamKeyspaceIdStatus:                 make(map[common.StreamId]KeyspaceIdStatus),
+		streamKeyspaceIdIndexCountMap:          make(map[common.StreamId]KeyspaceIdIndexCountMap),
+		streamKeyspaceIdRepairStopCh:           make(map[common.StreamId]KeyspaceIdRepairStopCh),
+		streamKeyspaceIdTimerStopCh:            make(map[common.StreamId]KeyspaceIdTimerStopCh),
+		streamKeyspaceIdLastPersistTime:        make(map[common.StreamId]KeyspaceIdLastPersistTime),
+		streamKeyspaceIdSkippedInMemTs:         make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
+		streamKeyspaceIdHasInMemSnap:           make(map[common.StreamId]KeyspaceIdHasInMemSnap),
+		streamKeyspaceIdLastSnapMarker:         make(map[common.StreamId]KeyspaceIdLastSnapMarker),
+		streamKeyspaceIdLastMutationVbuuid:     make(map[common.StreamId]KeyspaceIdLastMutationVbuuid),
+		streamKeyspaceIdNeedsLastRollbackReset: make(map[common.StreamId]KeyspaceIdNeedsLastRollbackReset),
+		keyspaceIdRollbackTime:                 make(map[string]int64),
+		streamKeyspaceIdAsyncMap:               make(map[common.StreamId]KeyspaceIdStreamAsyncMap),
+		streamKeyspaceIdLastBeginTime:          make(map[common.StreamId]KeyspaceIdStreamLastBeginTime),
+		streamKeyspaceIdLastRepairTimeMap:      make(map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap),
+		streamKeyspaceIdKVRollbackTsMap:        make(map[common.StreamId]KeyspaceIdKVRollbackTsMap),
+		streamKeyspaceIdKVActiveTsMap:          make(map[common.StreamId]KeyspaceIdKVActiveTsMap),
+		streamKeyspaceIdKVPendingTsMap:         make(map[common.StreamId]KeyspaceIdKVPendingTsMap),
+		streamKeyspaceIdRepairStateMap:         make(map[common.StreamId]KeyspaceIdStreamRepairStateMap),
+		streamKeyspaceIdSessionId:              make(map[common.StreamId]KeyspaceIdSessionId),
+		streamKeyspaceIdCollectionId:           make(map[common.StreamId]KeyspaceIdCollectionId),
+		streamKeyspaceIdPastMinMergeTs:         make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
+		streamKeyspaceIdVBMap:                  make(map[common.StreamId]KeyspaceIdVBMap),
+		streamKeyspaceIdEnableOSO:              make(map[common.StreamId]KeyspaceIdEnableOSO),
+		streamKeyspaceIdHWTOSO:                 make(map[common.StreamId]KeyspaceIdHWTOSO),
 	}
 
 	return ss
@@ -296,6 +299,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdLastMutationVbuuid := make(KeyspaceIdLastMutationVbuuid)
 	ss.streamKeyspaceIdLastMutationVbuuid[streamId] = keyspaceIdLastMutationVbuuid
 
+	keyspaceIdNeedsLastRollbackReset := make(KeyspaceIdNeedsLastRollbackReset)
+	ss.streamKeyspaceIdNeedsLastRollbackReset[streamId] = keyspaceIdNeedsLastRollbackReset
+
 	keyspaceIdStreamAsyncMap := make(KeyspaceIdStreamAsyncMap)
 	ss.streamKeyspaceIdAsyncMap[streamId] = keyspaceIdStreamAsyncMap
 
@@ -364,6 +370,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 	ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdNeedsLastRollbackReset[streamId][keyspaceId] = true
 	ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
@@ -412,6 +419,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdStartTimeMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastSnapMarker[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastMutationVbuuid[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdNeedsLastRollbackReset[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdSkippedInMemTs[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdHasInMemSnap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdSessionId[streamId], keyspaceId)
@@ -475,6 +483,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdPastMinMergeTs, streamId)
 	delete(ss.streamKeyspaceIdLastSnapMarker, streamId)
 	delete(ss.streamKeyspaceIdLastMutationVbuuid, streamId)
+	delete(ss.streamKeyspaceIdNeedsLastRollbackReset, streamId)
 	delete(ss.streamKeyspaceIdAsyncMap, streamId)
 	delete(ss.streamKeyspaceIdLastBeginTime, streamId)
 	delete(ss.streamKeyspaceIdLastRepairTimeMap, streamId)
