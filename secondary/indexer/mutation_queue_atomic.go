@@ -213,7 +213,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 				//move head to next
 				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 				atomic.AddInt64(&q.size[vbucket], -1)
-				memReleased += m.Size()
+				memReleased += m.size
 				//send mutation to caller
 				dequeueSeq = m.meta.seqno
 				datach <- m

@@ -265,6 +265,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 	var mut *MutationKeys
 	keyspaceStats := f.stats.GetKeyspaceStats(streamId, keyspaceId)
 
+	var flushCount int64
 	//Process till supervisor asks to stop on the channel
 	for ok {
 		select {
@@ -276,14 +277,18 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 				}
 				f.flushSingleMutation(mut, streamId)
 				mut.Free()
-				if keyspaceStats != nil {
-					keyspaceStats.mutationQueueSize.Add(-1)
-				}
+				flushCount++
 			}
 		case <-stopch:
+			if keyspaceStats != nil {
+				keyspaceStats.mutationQueueSize.Add(0 - flushCount)
+			}
 			qstopch <- true
 			return
 		}
+	}
+	if keyspaceStats != nil {
+		keyspaceStats.mutationQueueSize.Add(0 - flushCount)
 	}
 }
 
@@ -311,6 +316,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested
+	var flushCount int64
 	for ok {
 		select {
 		case mut, ok = <-mutch:
@@ -321,15 +327,19 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 				}
 				f.flushSingleMutation(mut, streamId)
 				mut.Free()
-				if keyspaceStats != nil {
-					keyspaceStats.mutationQueueSize.Add(-1)
-				}
+				flushCount++
 			}
 		case <-errch:
+			if keyspaceStats != nil {
+				keyspaceStats.mutationQueueSize.Add(0 - flushCount)
+			}
 			workerMsgCh <- &MsgError{}
 			return
 
 		}
+	}
+	if keyspaceStats != nil {
+		keyspaceStats.mutationQueueSize.Add(0 - flushCount)
 	}
 }
 
@@ -355,6 +365,7 @@ func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 	var mut *MutationKeys
 	keyspaceStats := f.stats.GetKeyspaceStats(streamId, keyspaceId)
 
+	var flushCount int64
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested
 	for ok {
@@ -367,15 +378,19 @@ func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 				}
 				f.flushSingleMutation(mut, streamId)
 				mut.Free()
-				if keyspaceStats != nil {
-					keyspaceStats.mutationQueueSize.Add(-1)
-				}
+				flushCount++
 			}
 		case <-errch:
+			if keyspaceStats != nil {
+				keyspaceStats.mutationQueueSize.Add(0 - flushCount)
+			}
 			workerMsgCh <- &MsgError{}
 			return
 
 		}
+	}
+	if keyspaceStats != nil {
+		keyspaceStats.mutationQueueSize.Add(0 - flushCount)
 	}
 }
 

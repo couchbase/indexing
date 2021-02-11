@@ -98,6 +98,7 @@ type MutationKeys struct {
 	meta  *MutationMeta
 	docid []byte      // primary document id
 	mut   []*Mutation //list of mutations for each index-id
+	size  int64       // Total size of all the contents of MutationKeys
 }
 
 var mutkeysPool = sync.Pool{New: newMutationKeys}
