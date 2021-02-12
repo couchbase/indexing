@@ -16,6 +16,8 @@ const GSIClientFilter = 0x10
 // This filter is only used for storage stats
 const N1QLStorageStatsFilter = 0x20
 
+const SummaryFilter = 0x40
+
 // TODO: ns_server to provide a list of stats that will be
 // categorised as ExternalStats
 

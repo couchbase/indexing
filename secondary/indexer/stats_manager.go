@@ -687,6 +687,12 @@ type IndexerStats struct {
 	memoryTotal    stats.Uint64Val
 	pauseTotalNs   stats.Uint64Val
 
+	numIndexes          stats.Int64Val
+	numStorageInstances stats.Int64Val
+	avgResidentPercent  stats.Int64Val
+	totalDataSize       stats.Int64Val
+	totalDiskSize       stats.Int64Val
+
 	indexerStateHolder stats.StringVal
 }
 
@@ -720,9 +726,16 @@ func (s *IndexerStats) Init() {
 	s.indexerStateHolder.Init()
 	s.pauseTotalNs.Init()
 
+	s.numIndexes.Init()
+	s.numStorageInstances.Init()
+	s.avgResidentPercent.Init()
+	s.totalDataSize.Init()
+	s.totalDiskSize.Init()
+
 	s.SetPlannerFilters()
 	s.SetRebalanceFilters()
 	s.SetIndexStatusFilters()
+	s.SetSummaryFilters()
 
 	// Set values of invarients on Init.
 	s.numCPU.Set(int64(num_cpu_core))
@@ -742,6 +755,29 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.memoryQuota.AddFilter(stats.PlannerFilter)
 	s.uptime.AddFilter(stats.PlannerFilter)
 	s.cpuUtilization.AddFilter(stats.PlannerFilter)
+}
+
+func (s *IndexerStats) SetSummaryFilters() {
+
+	s.memoryQuota.AddFilter(stats.SummaryFilter)
+	s.memoryUsed.AddFilter(stats.SummaryFilter)
+	s.memoryUsedStorage.AddFilter(stats.SummaryFilter)
+	s.memoryTotalStorage.AddFilter(stats.SummaryFilter)
+	s.memoryUsedQueue.AddFilter(stats.SummaryFilter)
+	s.memoryRss.AddFilter(stats.SummaryFilter)
+
+	s.numCPU.AddFilter(stats.SummaryFilter)
+	s.cpuUtilization.AddFilter(stats.SummaryFilter)
+	s.avgResidentPercent.AddFilter(stats.SummaryFilter)
+	s.totalDataSize.AddFilter(stats.SummaryFilter)
+	s.totalDiskSize.AddFilter(stats.SummaryFilter)
+	s.numStorageInstances.AddFilter(stats.SummaryFilter)
+	s.numIndexes.AddFilter(stats.SummaryFilter)
+
+	s.storageMode.AddFilter(stats.SummaryFilter)
+	s.indexerStateHolder.AddFilter(stats.SummaryFilter)
+	s.uptime.AddFilter(stats.SummaryFilter)
+
 }
 
 // Reset recreates empty IndexStats and KeyspaceStats for each one that existed
@@ -916,6 +952,11 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("memory_used_queue", &is.memoryUsedQueue)
 	statMap.AddStatValueFiltered("needs_restart", &is.needsRestart)
 	statMap.AddStatValueFiltered("num_cpu_core", &is.numCPU)
+	statMap.AddStatValueFiltered("avg_resident_percent", &is.avgResidentPercent)
+	statMap.AddStatValueFiltered("total_data_size", &is.totalDataSize)
+	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
+	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
+	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
 
 	strts := fmt.Sprintf("%v", time.Now().UnixNano())
 	is.timestamp.Set(&strts)
@@ -2290,6 +2331,7 @@ var statsFilterMap = map[string]uint64{
 	"rebalancer":       stats.RebalancerFilter,
 	"gsiClient":        stats.GSIClientFilter,
 	"n1qlStorageStats": stats.N1QLStorageStatsFilter,
+	"summary":          stats.SummaryFilter,
 }
 
 const ST_TYPE_INDEXER = "indexer"
