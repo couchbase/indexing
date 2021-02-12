@@ -710,7 +710,7 @@ var SystemConfig = Config{
 		120, // value
 		"timeout, in seconds, is timeout for REST calls in GetWithCbauth Function of Index Planner.", //help
 		120,   // default
-		false, // immutable
+		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.allowPartialQuorum": ConfigValue{
