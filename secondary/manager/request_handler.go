@@ -3166,6 +3166,7 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 }
 
 func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, error) {
+
 	if s.cinfo == nil {
 		s.cinfo = s.mgr.reqcic.GetClusterInfoCache()
 		if s.cinfo == nil {
@@ -3174,9 +3175,31 @@ func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, 
 	}
 
 	nodeUUID := fmt.Sprintf("%v", token.IndexerId)
-	nid, found := s.cinfo.GetNodeIdByUUID(nodeUUID)
-	if !found {
-		return "", fmt.Errorf("node id for %v not found", nodeUUID)
+	fetched := false
+
+	var nid common.NodeId
+	var found bool
+
+	for {
+		nid, found = s.cinfo.GetNodeIdByUUID(nodeUUID)
+		if found {
+			break
+		}
+
+		if fetched {
+			return "", fmt.Errorf("node id for %v not found", nodeUUID)
+		}
+
+		var cinfo *common.ClusterInfoCache
+		var err error
+		// Try to fetch the latest cluster info
+		if cinfo, err = common.FetchNewClusterInfoCache(s.mgr.clusterURL, common.DEFAULT_POOL, "request_handler:schedTokenMonitor"); err != nil || cinfo == nil {
+			logging.Errorf("schedTokenMonitor: Error fetching cluster info cache %v", err)
+			return "", err
+		}
+
+		s.cinfo = cinfo
+		fetched = true
 	}
 
 	return s.cinfo.GetServiceAddress(nid, "mgmt")
