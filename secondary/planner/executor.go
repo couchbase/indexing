@@ -404,7 +404,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 					token = &common.TransferToken{
 						MasterId:     masterId,
 						SourceId:     "",
-						DestId:       indexer.NodeUUID,
+						DestId:       index.destNode.NodeUUID,
 						RebalId:      topologyChange.ID,
 						State:        common.TransferTokenCreated,
 						InstId:       index.InstId,
