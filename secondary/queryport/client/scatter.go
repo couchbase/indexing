@@ -2005,10 +2005,12 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 		return
 	}
 
-	// 1) If there is order-by, the projection list should not be empty
-	//    since cbq will add order-by keys to projection list.
-	// 2) order-by is pushed down only if order-by keys match leading index keys
+	// order-by is pushed down only if order-by keys match leading index keys
 	//
+	// If there is a projection list, cbq will have added any order-by keys
+	// to it (handled by "if" block). "Else" block handles the special
+	// case where there is an order-by but no projection list because primary
+	// key and all index keys are selected.
 	if c.projections != nil && len(c.projections.EntryKeys) != 0 {
 
 		pos := make([]int, len(c.projections.EntryKeys))
@@ -2028,6 +2030,8 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 				c.projDesc[i] = index.Desc[position]
 			}
 		}
+	} else {
+		c.projDesc = index.Desc
 	}
 }
 
