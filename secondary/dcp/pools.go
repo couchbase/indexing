@@ -688,9 +688,9 @@ loop:
 	return nil
 }
 
-// refresh calls pools/default/buckets to get data and list of buckets
+// Refresh calls pools/default/buckets to get data and list of buckets
 // calls terseBucket and scopes endpoint for bucket info and manifest.
-func (p *Pool) refresh() (err error) {
+func (p *Pool) Refresh() (err error) {
 	p.BucketMap = make(map[string]Bucket)
 	p.Manifest = make(map[string]*collections.CollectionManifest)
 
@@ -765,6 +765,21 @@ func (p *Pool) GetServerGroups() (groups ServerGroups, err error) {
 
 }
 
+// GetBucketURLVersionHash will prase the p.BucketURI and extract version hash from it
+// Parses /pools/default/buckets?v=<$ver>&uuid=<$uid> and returns $ver
+func (p *Pool) GetBucketURLVersionHash() (string, error) {
+	b := p.BucketURL["uri"]
+	u, err := url.Parse(b)
+	if err != nil {
+		return "", fmt.Errorf("Unable to parse BucketURL: %v in PoolChangeNotification", b)
+	}
+	m, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", fmt.Errorf("Unable to extract version hash from BucketURL: %v in PoolChangeNotification", b)
+	}
+	return m["v"][0], nil
+}
+
 // GetPoolWithBucket gets a pool from pool URI and calls ns_server terseBucket endpoint
 // API to get info for only given bucket
 func (c *Client) GetPoolWithBucket(name string, bucketn string) (p Pool, err error) {
@@ -788,6 +803,25 @@ func (c *Client) GetPoolWithBucket(name string, bucketn string) (p Pool, err err
 	return
 }
 
+func (c *Client) CallPoolURI(name string) (p Pool, err error) {
+	var poolURI string
+	for _, p := range c.Info.Pools {
+		if p.Name == name {
+			poolURI = p.URI
+		}
+	}
+	if poolURI == "" {
+		return p, errors.New("No pool named " + name)
+	}
+
+	if err = c.parseURLResponse(poolURI, &p); err != nil {
+		return
+	}
+
+	p.client = *c
+	return
+}
+
 // GetPool gets a pool from within the couchbase cluster (usually
 // "default").
 func (c *Client) GetPool(name string) (p Pool, err error) {
@@ -807,7 +841,7 @@ func (c *Client) GetPool(name string) (p Pool, err error) {
 
 	p.client = *c
 
-	err = p.refresh()
+	err = p.Refresh()
 	return
 }
 
