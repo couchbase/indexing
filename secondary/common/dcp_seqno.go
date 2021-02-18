@@ -1322,7 +1322,9 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 				seqnos[vbno] = seqno
 			}
 		}
+		i++
 	}
+
 	// The following code is to detect rebalance or recovery !!
 	// this is not yet supported in KV, GET_SEQNOS returns all
 	// seqnos.
