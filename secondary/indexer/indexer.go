@@ -341,8 +341,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//Start Scan Coordinator
 	snapshotNotifych := make(chan IndexSnapshot, 100000)
+	snapshotReqCh := make(MsgChannel, 100000)
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh,
-		idx.config, snapshotNotifych, idx.stats.Clone())
+		idx.config, snapshotNotifych, snapshotReqCh, idx.stats.Clone())
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error %+v", res)
 		return nil, res
@@ -394,7 +395,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	close(idx.enableSecurityChange)
 
 	//bootstrap phase 1
-	idx.bootstrap1(snapshotNotifych)
+	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
 
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
@@ -6115,7 +6116,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	return false
 }
 
-func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
+func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot, snapshotReqCh MsgChannel) error {
 
 	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
@@ -6151,7 +6152,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 		//Start Storage Manager
 		var res Message
 		idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
-			idx.indexPartnMap, idx.config, snapshotNotifych)
+			idx.indexPartnMap, idx.config, snapshotNotifych, snapshotReqCh)
 		if res.GetMsgType() == MSG_ERROR {
 			err := res.(*MsgError).GetError()
 			logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)

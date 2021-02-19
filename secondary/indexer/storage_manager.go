@@ -42,6 +42,8 @@ type storageMgr struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
 
+	snapshotReqCh MsgChannel // Channel to listen for snapshot requests from scan coordinator
+
 	snapshotNotifych chan IndexSnapshot
 
 	indexInstMap  IndexInstMapHolder
@@ -102,14 +104,15 @@ func (w *snapshotWaiter) Error(err error) {
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych chan IndexSnapshot) (
-	StorageManager, Message) {
+	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych chan IndexSnapshot,
+	snapshotReqCh MsgChannel) (StorageManager, Message) {
 
 	//Init the storageMgr struct
 	s := &storageMgr{
 		supvCmdch:        supvCmdch,
 		supvRespch:       supvRespch,
 		snapshotNotifych: snapshotNotifych,
+		snapshotReqCh:    snapshotReqCh,
 		config:           config,
 	}
 	s.indexInstMap.Init()
@@ -131,6 +134,15 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		if s.meta, err = s.dbfile.OpenKVStore("default", kvconfig); err != nil {
 			return nil, &MsgError{err: Error{cause: err}}
 		}
+	}
+
+	numSnapshotReqWrkrs := config["settings.snapshotRequestWorkers"].Int()
+	if numSnapshotReqWrkrs <= 0 {
+		numSnapshotReqWrkrs = 1
+	}
+
+	for i := 0; i < numSnapshotReqWrkrs; i++ {
+		go s.listenSnapshotReqs()
 	}
 
 	//start Storage Manager loop which listens to commands from its supervisor
@@ -1187,66 +1199,73 @@ func (s *storageMgr) handleUpdateKeyspaceStatsMap(cmd Message) {
 // available.
 func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
+	s.snapshotReqCh <- cmd
+}
 
-	req := cmd.(*MsgIndexSnapRequest)
-	inst, found := s.indexInstMap.Get()[req.GetIndexId()]
-	if !found || inst.State == common.INDEX_STATE_DELETED {
-		req.respch <- common.ErrIndexNotFound
-		return
-	}
-
-	stats := s.stats.Get()
-	idxStats := stats.indexes[req.GetIndexId()]
-
-	// Return snapshot immediately if a matching snapshot exists already
-	// Else add into waiters list so that next snapshot creation event
-	// can notify the requester when a snapshot with matching timestamp
-	// is available.
-	snapC := s.indexSnapMap.Get()[req.GetIndexId()]
-	if snapC == nil {
+func (s *storageMgr) listenSnapshotReqs() {
+	for cmd := range s.snapshotReqCh {
 		func() {
-			s.muSnap.Lock()
-			defer s.muSnap.Unlock()
-			snapC, _ = s.initSnapshotContainerForInst(req.GetIndexId(), nil)
+			req := cmd.(*MsgIndexSnapRequest)
+			inst, found := s.indexInstMap.Get()[req.GetIndexId()]
+			if !found || inst.State == common.INDEX_STATE_DELETED {
+				req.respch <- common.ErrIndexNotFound
+				return
+			}
+
+			stats := s.stats.Get()
+			idxStats := stats.indexes[req.GetIndexId()]
+
+			// Return snapshot immediately if a matching snapshot exists already
+			// Else add into waiters list so that next snapshot creation event
+			// can notify the requester when a snapshot with matching timestamp
+			// is available.
+			snapC := s.indexSnapMap.Get()[req.GetIndexId()]
+			if snapC == nil {
+				func() {
+					s.muSnap.Lock()
+					defer s.muSnap.Unlock()
+					snapC, _ = s.initSnapshotContainerForInst(req.GetIndexId(), nil)
+				}()
+				if snapC == nil {
+					req.respch <- common.ErrIndexNotFound
+					return
+				}
+			}
+
+			snapC.Lock()
+			if isSnapshotConsistent(snapC.snap, req.GetConsistency(), req.GetTS()) {
+				req.respch <- CloneIndexSnapshot(snapC.snap)
+				snapC.Unlock()
+				return
+			}
+			snapC.Unlock()
+
+			waitersMap := s.waitersMap.Get()
+
+			var waitersContainer *SnapshotWaitersContainer
+			var ok bool
+			if waitersContainer, ok = waitersMap[req.GetIndexId()]; !ok {
+				waitersContainer = s.initSnapshotWaitersForInst(req.GetIndexId())
+			}
+
+			if waitersContainer == nil {
+				req.respch <- common.ErrIndexNotFound
+				return
+			}
+
+			w := newSnapshotWaiter(
+				req.GetIndexId(), req.GetTS(), req.GetConsistency(),
+				req.GetReplyChannel(), req.GetExpiredTime())
+
+			if idxStats != nil {
+				idxStats.numSnapshotWaiters.Add(1)
+			}
+
+			waitersContainer.Lock()
+			defer waitersContainer.Unlock()
+			waitersContainer.waiters = append(waitersContainer.waiters, w)
 		}()
-		if snapC == nil {
-			req.respch <- common.ErrIndexNotFound
-			return
-		}
 	}
-
-	snapC.Lock()
-	if isSnapshotConsistent(snapC.snap, req.GetConsistency(), req.GetTS()) {
-		req.respch <- CloneIndexSnapshot(snapC.snap)
-		snapC.Unlock()
-		return
-	}
-	snapC.Unlock()
-
-	waitersMap := s.waitersMap.Get()
-
-	var waitersContainer *SnapshotWaitersContainer
-	var ok bool
-	if waitersContainer, ok = waitersMap[req.GetIndexId()]; !ok {
-		waitersContainer = s.initSnapshotWaitersForInst(req.GetIndexId())
-	}
-
-	if waitersContainer == nil {
-		req.respch <- common.ErrIndexNotFound
-		return
-	}
-
-	w := newSnapshotWaiter(
-		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
-		req.GetReplyChannel(), req.GetExpiredTime())
-
-	if idxStats != nil {
-		idxStats.numSnapshotWaiters.Add(1)
-	}
-
-	waitersContainer.Lock()
-	defer waitersContainer.Unlock()
-	waitersContainer.waiters = append(waitersContainer.waiters, w)
 }
 
 func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {

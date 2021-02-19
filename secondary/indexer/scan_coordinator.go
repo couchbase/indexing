@@ -49,6 +49,7 @@ type scanCoordinator struct {
 	supvCmdch        MsgChannel //supervisor sends commands on this channel
 	supvMsgch        MsgChannel //channel to send any async message to supervisor
 	snapshotNotifych chan IndexSnapshot
+	snapshotReqCh    MsgChannel
 	lastSnapshot     IndexSnapMapHolder
 	rollbackTimes    unsafe.Pointer
 
@@ -79,13 +80,14 @@ type scanCoordinator struct {
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	config common.Config, snapshotNotifych chan IndexSnapshot,
-	stats *IndexerStats) (ScanCoordinator, Message) {
+	snapshotReqCh MsgChannel, stats *IndexerStats) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
 		supvCmdch:        supvCmdch,
 		supvMsgch:        supvMsgch,
 		snapshotNotifych: snapshotNotifych,
+		snapshotReqCh:    snapshotReqCh,
 		logPrefix:        "ScanCoordinator",
 		reqCounter:       0,
 	}
@@ -128,6 +130,7 @@ loop:
 				if cmd.GetMsgType() == SCAN_COORD_SHUTDOWN {
 					logging.Infof("ScanCoordinator: Shutting Down")
 					s.serv.Close()
+					close(s.snapshotReqCh)
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -709,7 +712,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	}
 
 	// Block wait until a ts is available for fullfilling the request
-	s.supvMsgch <- snapReqMsg
+	s.snapshotReqCh <- snapReqMsg
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
@@ -1196,7 +1199,7 @@ func (s *scanCoordinator) updateItemsCount(instId common.IndexInstId, idxStats *
 		idxInstId: instId,
 	}
 
-	s.supvMsgch <- snapReqMsg
+	s.snapshotReqCh <- snapReqMsg
 	msg := <-snapResch
 
 	// Index snapshot is not available yet (non-active index or empty index)

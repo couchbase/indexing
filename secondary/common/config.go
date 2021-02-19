@@ -2191,6 +2191,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.snapshotRequestWorkers": ConfigValue{
+		(runtime.GOMAXPROCS(0) + 1) / 2,
+		"Number of workers storage manager will spawn to listen to " +
+			"snapshot requests from scan coordinator",
+		(runtime.GOMAXPROCS(0) + 1) / 2,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.settings.sliceBufSize": ConfigValue{
 		uint64(runtime.GOMAXPROCS(0) * 200),
