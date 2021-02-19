@@ -2193,8 +2193,16 @@ var SystemConfig = Config{
 	},
 	"indexer.settings.snapshotRequestWorkers": ConfigValue{
 		(runtime.GOMAXPROCS(0) + 1) / 2,
-		"Number of workers storage manager will spawn to listen to " +
+		"Number of workers storage manager will spawn for listening " +
 			"snapshot requests from scan coordinator",
+		(runtime.GOMAXPROCS(0) + 1) / 2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.snapshotListeners": ConfigValue{
+		(runtime.GOMAXPROCS(0) + 1) / 2,
+		"Number of workers scan coordinator will spawn for listening " +
+			"snapshot notifications from storage manager",
 		(runtime.GOMAXPROCS(0) + 1) / 2,
 		false, // mutable
 		false, // case-insensitive

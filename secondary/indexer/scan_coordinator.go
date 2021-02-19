@@ -113,9 +113,17 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	s.setIndexerState(common.INDEXER_BOOTSTRAP)
 	s.stats.Set(stats)
 
+	numSnapshotNotifWrkrs := config["settings.snapshotListeners"].Int()
+	if numSnapshotNotifWrkrs <= 0 {
+		numSnapshotNotifWrkrs = 1
+	}
+
+	for i := 0; i < numSnapshotNotifWrkrs; i++ {
+		go s.listenSnapshot()
+	}
+
 	// main loop
 	go s.run()
-	go s.listenSnapshot()
 
 	return s, &MsgSuccess{}
 
