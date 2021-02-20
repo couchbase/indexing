@@ -49,7 +49,7 @@ type scanCoordinator struct {
 	supvCmdch        MsgChannel //supervisor sends commands on this channel
 	supvMsgch        MsgChannel //channel to send any async message to supervisor
 	snapshotNotifych chan IndexSnapshot
-	lastSnapshot     IndexSnapMap2Holder
+	lastSnapshot     IndexSnapMapHolder
 	rollbackTimes    unsafe.Pointer
 
 	rollbackInProgress unsafe.Pointer

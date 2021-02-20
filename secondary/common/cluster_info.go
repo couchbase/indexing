@@ -378,6 +378,18 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 	return rh.Run()
 }
 
+func (c *ClusterInfoCache) FetchManifestInfoOnUIDChange(bucketName string, muid string) error {
+	c.Lock()
+	defer c.Unlock()
+
+	p := &c.pool
+	m, ok := p.Manifest[bucketName]
+	if !ok || m.UID != muid {
+		return p.RefreshManifest(bucketName)
+	}
+	return nil
+}
+
 func (c *ClusterInfoCache) FetchManifestInfo(bucketName string) error {
 	c.Lock()
 	defer c.Unlock()
@@ -1098,7 +1110,7 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 				switch (notif.Msg).(type) {
 				case *couchbase.Bucket:
 					bucket := (notif.Msg).(*couchbase.Bucket)
-					if err := c.cinfo.FetchManifestInfo(bucket.Name); err != nil {
+					if err := c.cinfo.FetchManifestInfoOnUIDChange(bucket.Name, bucket.CollectionManifestUID); err != nil {
 						logging.Errorf("cic.cinfo.FetchManifestInfo(): %v\n", err)
 						selfRestart()
 						return

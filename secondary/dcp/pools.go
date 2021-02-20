@@ -135,6 +135,8 @@ type Bucket struct {
 	BasicStats          map[string]interface{} `json:"basicStats,omitempty"`
 	Controllers         map[string]interface{} `json:"controllers,omitempty"`
 
+	CollectionManifestUID string `json:"collectionsManifestUid,omitempty"`
+
 	// These are used for JSON IO, but isn't used for processing
 	// since it needs to be swapped out safely.
 	VBSMJson  VBucketServerMap `json:"vBucketServerMap"`

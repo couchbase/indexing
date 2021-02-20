@@ -48,10 +48,10 @@ type storageMgr struct {
 	indexPartnMap IndexPartnMapHolder
 
 	// Latest readable index snapshot for each index instance
-	indexSnapMap map[common.IndexInstId]IndexSnapshot
+	indexSnapMap IndexSnapMapHolder
 	// List of waiters waiting for a snapshot to be created with expected
 	// atleast-timestamp
-	waitersMap map[common.IndexInstId][]*snapshotWaiter
+	waitersMap SnapshotWaitersMapHolder
 
 	dbfile *forestdb.File
 	meta   *forestdb.KVStore // handle for index meta
@@ -60,12 +60,10 @@ type storageMgr struct {
 
 	stats IndexerStatsHolder
 
-	muSnap sync.Mutex //lock to protect snapMap and waitersMap
+	muSnap sync.Mutex //lock to protect updates to snapMap and waitersMap
 
 	lastFlushDone int64
 }
-
-type IndexSnapMap map[common.IndexInstId]IndexSnapshot
 
 type snapshotWaiter struct {
 	wch       chan interface{}
@@ -112,12 +110,12 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvCmdch:        supvCmdch,
 		supvRespch:       supvRespch,
 		snapshotNotifych: snapshotNotifych,
-		indexSnapMap:     make(map[common.IndexInstId]IndexSnapshot),
-		waitersMap:       make(map[common.IndexInstId][]*snapshotWaiter),
 		config:           config,
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
+	s.indexSnapMap.Init()
+	s.waitersMap.Init()
 
 	//if manager is not enabled, create meta file
 	if config["enableManager"].Bool() == false {
@@ -254,9 +252,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	//pass copy of maps to worker
 	//TODO Collections create a filtered copy of maps based on keyspace
-	indexSnapMap := copyIndexSnapMap(s.indexSnapMap)
 	indexInstMap := s.indexInstMap.Get()
 	indexPartnMap := s.indexPartnMap.Get()
+	indexSnapMap := s.indexSnapMap.Get()
 	tsVbuuid_copy := tsVbuuid.Copy()
 	stats := s.stats.Get()
 
@@ -269,8 +267,6 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats,
 	flushWasAborted bool, hasAllSB bool) {
-
-	defer destroyIndexSnapMap(indexSnapMap)
 
 	var needsCommit bool
 	var forceCommit bool
@@ -297,11 +293,19 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		// Create snapshots for all indexes in parallel
 		wg.Add(1)
 		go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
-			defer wg.Done()
 
 			idxInst := indexInstMap[idxInstId]
 			idxStats := stats.indexes[idxInst.InstId]
-			lastIndexSnap := indexSnapMap[idxInstId]
+			snapC := indexSnapMap[idxInstId]
+			snapC.Lock()
+			lastIndexSnap := CloneIndexSnapshot(snapC.snap)
+			defer DestroyIndexSnapshot(lastIndexSnap)
+			snapC.Unlock()
+
+			// Signal the wait group first before destroying the snapshot
+			// inorder to avoid the cost of destroying the snapshot in the
+			// snapshot generation code path
+			defer wg.Done()
 
 			// List of snapshots for reading current timestamp
 			var isSnapCreated bool = true
@@ -585,21 +589,49 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 // Update index-snapshot map whenever a snapshot is created for an index
 func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexStats) {
 
-	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
+	var snapC *IndexSnapshotContainer
+	var ok, updated bool
+	indexSnapMap := s.indexSnapMap.Get()
+	if snapC, ok = indexSnapMap[is.IndexInstId()]; !ok {
+		func() {
+			s.muSnap.Lock()
+			defer s.muSnap.Unlock()
+			snapC, updated = s.initSnapshotContainerForInst(is.IndexInstId(), is)
+		}()
+	}
+	if snapC == nil {
+		return
+	}
 
-	DestroyIndexSnapshot(s.indexSnapMap[is.IndexInstId()])
-	s.indexSnapMap[is.IndexInstId()] = is
+	if updated == false {
+		snapC.Lock()
+		DestroyIndexSnapshot(snapC.snap)
+		snapC.snap = is
+		snapC.Unlock()
+	}
 
 	// notify a new snapshot through channel
 	// the channel receiver needs to destroy snapshot when done
 	s.notifySnapshotCreation(is)
 
+	var waitersContainer *SnapshotWaitersContainer
+	waiterMap := s.waitersMap.Get()
+	if waitersContainer, ok = waiterMap[is.IndexInstId()]; !ok {
+		waitersContainer = s.initSnapshotWaitersForInst(is.IndexInstId())
+	}
+
+	if waitersContainer == nil {
+		return
+	}
+
+	waitersContainer.Lock()
+	defer waitersContainer.Unlock()
+	waiters := waitersContainer.waiters
+
 	var numReplies int64
 	t := time.Now()
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
-	waiters := s.waitersMap[is.IndexInstId()]
 	for _, w := range waiters {
 		// Clean up expired requests from queue
 		if !w.expired.IsZero() && t.After(w.expired) {
@@ -616,7 +648,7 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 		}
 		newWaiters = append(newWaiters, w)
 	}
-	s.waitersMap[is.IndexInstId()] = newWaiters
+	waitersContainer.waiters = newWaiters
 	idxStats.numLastSnapshotReply.Set(numReplies)
 }
 
@@ -689,24 +721,24 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	}
 
 	go func() {
-		sm.muSnap.Lock()
-		defer sm.muSnap.Unlock()
 		// Notify all scan waiters for indexes in this keyspaceId
 		// and stream with error
 		stats := sm.stats.Get()
-		for idxInstId, waiters := range sm.waitersMap {
+		waitersMap := sm.waitersMap.Get()
+		for idxInstId, wc := range waitersMap {
 			idxInst := sm.indexInstMap.Get()[idxInstId]
 			idxStats := stats.indexes[idxInst.InstId]
 			if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 				idxInst.Stream == streamId {
-				for _, w := range waiters {
+				wc.Lock()
+				for _, w := range wc.waiters {
 					w.Error(ErrIndexRollback)
 					if idxStats != nil {
 						idxStats.numSnapshotWaiters.Add(-1)
 					}
 				}
-
-				delete(sm.waitersMap, idxInstId)
+				wc.waiters = nil
+				wc.Unlock()
 			}
 		}
 	}()
@@ -947,15 +979,69 @@ func (sm *storageMgr) validateRestartTsVbuuid(keyspaceId string,
 	return restartTs
 }
 
+// The caller of this method should acquire muSnap Lock
+func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId, is IndexSnapshot) (*IndexSnapshotContainer, bool) {
+	indexInstMap := s.indexInstMap.Get()
+	if inst, ok := indexInstMap[instId]; !ok || inst.State == common.INDEX_STATE_DELETED {
+		return nil, false
+	} else {
+		indexSnapMap := s.indexSnapMap.Get()
+		if sc, ok := indexSnapMap[instId]; ok {
+			return sc, false
+		}
+		var snap IndexSnapshot
+		bucket := inst.Defn.Bucket
+		if is == nil {
+			ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
+			snap = &indexSnapshot{
+				instId: instId,
+				ts:     ts, // nil snapshot should have ZERO Crc64 :)
+				epoch:  true,
+			}
+		} else {
+			snap = is
+		}
+		indexSnapMap = s.indexSnapMap.Clone()
+		sc := &IndexSnapshotContainer{snap: snap}
+		indexSnapMap[instId] = sc
+		s.indexSnapMap.Set(indexSnapMap)
+		return sc, true
+	}
+}
+
+func (s *storageMgr) initSnapshotWaitersForInst(instId common.IndexInstId) *SnapshotWaitersContainer {
+	s.muSnap.Lock()
+	defer s.muSnap.Unlock()
+
+	indexInstMap := s.indexInstMap.Get()
+	if inst, ok := indexInstMap[instId]; !ok || inst.State == common.INDEX_STATE_DELETED {
+		return nil
+	}
+	waitersMap := s.waitersMap.Get()
+	var waiterContainer *SnapshotWaitersContainer
+	var ok bool
+
+	if waiterContainer, ok = waitersMap[instId]; !ok {
+		waitersMap = s.waitersMap.Clone()
+		waiterContainer = &SnapshotWaitersContainer{}
+		waitersMap[instId] = waiterContainer
+		s.waitersMap.Set(waitersMap)
+	}
+	return waiterContainer
+}
+
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
-	if _, ok := s.indexSnapMap[idxInstId]; !ok {
+	indexSnapMap := s.indexSnapMap.Get()
+	if _, ok := indexSnapMap[idxInstId]; !ok {
+		indexSnapMap := s.indexSnapMap.Clone()
 		ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
 		snap := &indexSnapshot{
 			instId: idxInstId,
 			ts:     ts, // nil snapshot should have ZERO Crc64 :)
 			epoch:  true,
 		}
-		s.indexSnapMap[idxInstId] = snap
+		indexSnapMap[idxInstId] = &IndexSnapshotContainer{snap: snap}
+		s.indexSnapMap.Set(indexSnapMap)
 		s.notifySnapshotCreation(snap)
 	}
 }
@@ -997,27 +1083,42 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	defer s.muSnap.Unlock()
 
 	indexInstMap = s.indexInstMap.Get()
+	waitersMap := s.waitersMap.Clone()
+	indexSnapMap := s.indexSnapMap.Clone()
+
+	// Initialize waitersContainer for newly created instances
+	for instId, inst := range indexInstMap {
+		if _, ok := waitersMap[instId]; !ok && inst.State != common.INDEX_STATE_DELETED {
+			waitersMap[instId] = &SnapshotWaitersContainer{}
+		}
+	}
+
 	// Remove all snapshot waiters for indexes that do not exist anymore
-	for id, ws := range s.waitersMap {
-		if inst, ok := indexInstMap[id]; !ok ||
-			inst.State == common.INDEX_STATE_DELETED {
-			for _, w := range ws {
+	for id, wc := range waitersMap {
+		if inst, ok := indexInstMap[id]; !ok || inst.State == common.INDEX_STATE_DELETED {
+			wc.Lock()
+			for _, w := range wc.waiters {
 				w.Error(common.ErrIndexNotFound)
 			}
-			delete(s.waitersMap, id)
+			wc.waiters = nil
+			delete(waitersMap, id)
+			wc.Unlock()
 		}
 	}
 
 	// Cleanup all invalid index's snapshots
-	for idxInstId, is := range s.indexSnapMap {
-		if inst, ok := indexInstMap[idxInstId]; !ok ||
-			inst.State == common.INDEX_STATE_DELETED {
+	for idxInstId, snapC := range indexSnapMap {
+		if inst, ok := indexInstMap[idxInstId]; !ok || inst.State == common.INDEX_STATE_DELETED {
+			snapC.Lock()
+			is := snapC.snap
 			DestroyIndexSnapshot(is)
-			delete(s.indexSnapMap, idxInstId)
+			delete(indexSnapMap, idxInstId)
 			s.notifySnapshotDeletion(idxInstId)
+			snapC.Unlock()
 		}
 	}
 
+	s.indexSnapMap.Set(indexSnapMap)
 	// Add 0 items index snapshots for newly added indexes
 	for idxInstId, inst := range indexInstMap {
 		s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
@@ -1097,32 +1198,55 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	stats := s.stats.Get()
 	idxStats := stats.indexes[req.GetIndexId()]
 
-	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
-
 	// Return snapshot immediately if a matching snapshot exists already
 	// Else add into waiters list so that next snapshot creation event
 	// can notify the requester when a snapshot with matching timestamp
 	// is available.
-	is := s.indexSnapMap[req.GetIndexId()]
-	if is != nil && isSnapshotConsistent(is, req.GetConsistency(), req.GetTS()) {
-		req.respch <- CloneIndexSnapshot(is)
-		return
+	snapC := s.indexSnapMap.Get()[req.GetIndexId()]
+	if snapC == nil {
+		func() {
+			s.muSnap.Lock()
+			defer s.muSnap.Unlock()
+			snapC, _ = s.initSnapshotContainerForInst(req.GetIndexId(), nil)
+		}()
+		if snapC == nil {
+			req.respch <- common.ErrIndexNotFound
+			return
+		}
 	}
 
-	if idxStats != nil {
-		idxStats.numSnapshotWaiters.Add(1)
+	snapC.Lock()
+	if isSnapshotConsistent(snapC.snap, req.GetConsistency(), req.GetTS()) {
+		req.respch <- CloneIndexSnapshot(snapC.snap)
+		snapC.Unlock()
+		return
+	}
+	snapC.Unlock()
+
+	waitersMap := s.waitersMap.Get()
+
+	var waitersContainer *SnapshotWaitersContainer
+	var ok bool
+	if waitersContainer, ok = waitersMap[req.GetIndexId()]; !ok {
+		waitersContainer = s.initSnapshotWaitersForInst(req.GetIndexId())
+	}
+
+	if waitersContainer == nil {
+		req.respch <- common.ErrIndexNotFound
+		return
 	}
 
 	w := newSnapshotWaiter(
 		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
 		req.GetReplyChannel(), req.GetExpiredTime())
 
-	if ws, ok := s.waitersMap[req.GetIndexId()]; ok {
-		s.waitersMap[req.idxInstId] = append(ws, w)
-	} else {
-		s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
+	if idxStats != nil {
+		idxStats.numSnapshotWaiters.Add(1)
 	}
+
+	waitersContainer.Lock()
+	defer waitersContainer.Unlock()
+	waitersContainer.waiters = append(waitersContainer.waiters, w)
 }
 
 func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
@@ -1346,22 +1470,25 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 	tgtInstId := req.GetTargetInstId()
 	partitions := req.GetPartitions()
 
-	s.muSnap.Lock()
+	var source, target IndexSnapshot
+	indexSnapMap := s.indexSnapMap.Get()
 
-	source, ok := s.indexSnapMap[srcInstId]
+	sourceC, ok := indexSnapMap[srcInstId]
 	if !ok {
-		s.muSnap.Unlock()
 		s.supvCmdch <- &MsgSuccess{}
 		return
 	}
+	sourceC.Lock()
+	source = sourceC.snap
 
-	target, ok := s.indexSnapMap[tgtInstId]
+	targetC, ok := indexSnapMap[tgtInstId]
 	if !ok {
 		// increment source snapshot refcount
 		target = s.deepCloneIndexSnapshot(source, nil)
 
 	} else {
-
+		targetC.Lock()
+		target = targetC.snap
 		// Make sure that the source timestamp is greater than or equal to the target timestamp.
 		// This comparison will only cover the seqno and vbuuids.
 		//
@@ -1417,6 +1544,8 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 						category: STORAGE_MGR,
 						cause: fmt.Errorf("Source snapshot %v does not have all the required partitions %v",
 							srcInstId, partitions)}}
+				targetC.Unlock()
+				sourceC.Unlock()
 				return
 			}
 
@@ -1439,6 +1568,8 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 							category: STORAGE_MGR,
 							cause: fmt.Errorf("Duplicate partition %v found between source %v and target %v",
 								sp.PartitionId(), srcInstId, tgtInstId)}}
+					targetC.Unlock()
+					sourceC.Unlock()
 					return
 				}
 			}
@@ -1462,8 +1593,10 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 				target.Partitions()[snap.PartitionId()] = snap
 			}
 		}
-	}
+		targetC.Unlock()
 
+	}
+	sourceC.Unlock()
 	// decrement source snapshot refcount
 	// Do not decrement source snapshot refcount.   When the proxy instance is deleted, storage manager will be notified
 	// of the new instance state.   Storage manager will then decrement the ref count at that time.
@@ -1472,7 +1605,6 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 	stats := s.stats.Get()
 	idxStats := stats.indexes[tgtInstId]
 
-	s.muSnap.Unlock()
 	// update the target with new snapshot.  This will also decrement target old snapshot refcount.
 	s.updateSnapMapAndNotify(target, idxStats)
 
@@ -1484,14 +1616,13 @@ func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
 	instId := req.GetInstId()
 	partitions := req.GetPartitions()
 
-	s.muSnap.Lock()
-
-	snapshot, ok := s.indexSnapMap[instId]
+	snapC, ok := s.indexSnapMap.Get()[instId]
 	if !ok {
-		s.muSnap.Unlock()
 		s.supvCmdch <- &MsgSuccess{}
 		return
 	}
+	snapC.Lock()
+	snapshot := snapC.snap
 
 	// find the partitions that we want to keep
 	kept := make([]common.PartitionId, 0, len(snapshot.Partitions()))
@@ -1515,8 +1646,8 @@ func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
 
 	stats := s.stats.Get()
 	idxStats := stats.indexes[instId]
+	snapC.Unlock()
 
-	s.muSnap.Unlock()
 	s.updateSnapMapAndNotify(newSnapshot, idxStats)
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -1720,9 +1851,16 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 		}
 	}
 
-	DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
-	delete(s.indexSnapMap, idxInstId)
-	s.notifySnapshotDeletion(idxInstId)
+	indexSnapMap := s.indexSnapMap.Clone()
+	snapC := indexSnapMap[idxInstId]
+	if snapC != nil {
+		snapC.Lock()
+		DestroyIndexSnapshot(snapC.snap)
+		delete(indexSnapMap, idxInstId)
+		s.indexSnapMap.Set(indexSnapMap)
+		snapC.Unlock()
+		s.notifySnapshotDeletion(idxInstId)
+	}
 
 	var tsVbuuid *common.TsVbuuid
 	var err error
@@ -1768,7 +1906,17 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 			ts:     tsVbuuid,
 			partns: partnSnapMap,
 		}
-		s.indexSnapMap[idxInstId] = is
+		indexSnapMap = s.indexSnapMap.Clone()
+		if snapC == nil {
+			snapC = &IndexSnapshotContainer{snap: is}
+		} else {
+			snapC.Lock()
+			snapC.snap = is
+			snapC.Unlock()
+		}
+
+		indexSnapMap[idxInstId] = snapC
+		s.indexSnapMap.Set(indexSnapMap)
 		s.notifySnapshotCreation(is)
 	} else {
 		logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Adding Nil Snapshot.",
@@ -1801,16 +1949,6 @@ func copyIndexSnapMap(inMap IndexSnapMap) IndexSnapMap {
 
 	outMap := make(IndexSnapMap)
 	for k, v := range inMap {
-		outMap[k] = CloneIndexSnapshot(v)
-	}
-	return outMap
-
-}
-
-func copyIndexSnapMap2(inMap IndexSnapMap2) IndexSnapMap2 {
-
-	outMap := make(IndexSnapMap2)
-	for k, v := range inMap {
 		outMap[k] = v
 	}
 	return outMap
@@ -1820,7 +1958,9 @@ func copyIndexSnapMap2(inMap IndexSnapMap2) IndexSnapMap2 {
 func destroyIndexSnapMap(ism IndexSnapMap) {
 
 	for _, v := range ism {
-		DestroyIndexSnapshot(v)
+		v.Lock()
+		DestroyIndexSnapshot(v.snap)
+		v.Unlock()
 	}
 
 }
