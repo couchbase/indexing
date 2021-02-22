@@ -1,15 +1,18 @@
 package indexer
 
-import "net/http"
-import "strings"
-import re "regexp"
-import "path/filepath"
-import "fmt"
+import (
+	"net/http"
+	"strings"
 
-import log "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/manager"
-import "github.com/couchbase/cbauth"
+	"fmt"
+	re "regexp"
+
+	log "github.com/couchbase/indexing/secondary/logging"
+
+	"github.com/couchbase/cbauth"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/manager"
+)
 
 type target struct {
 	version    string
@@ -71,7 +74,7 @@ func (api *restServer) routeRequest(
 	if !ok {
 		return
 	}
-	url := filepath.Clean(r.URL.Path) // Remove trailing space
+	url := strings.TrimSpace(r.URL.Path) // Remove trailing space.
 	segs := strings.Split(url, "/")
 	var req request
 	var handler reqHandler
@@ -84,6 +87,7 @@ func (api *restServer) routeRequest(
 			version := segs[2]
 			segs = append(segs[:2], segs[3:]...)
 			url = strings.Join(segs, "/")
+
 			req = request{
 				w:       w,
 				r:       r,
@@ -96,6 +100,7 @@ func (api *restServer) routeRequest(
 	} else { // Use the default version
 		segs := strings.Split(url, "/")
 		if fun, ok := staticRoutes[segs[2]]; ok {
+
 			req = request{
 				w:       w,
 				r:       r,
