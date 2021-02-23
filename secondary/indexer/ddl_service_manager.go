@@ -329,19 +329,18 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 
 			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skip command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
-			// If there is a create token, then do not process the drop token.  Let the create token being dropped first to avoid
-			// any unexpected raise condition.  This is more for safety than necessity.
+			// If there is a create token, then do not process the drop token.
+			// Let the create token be deleted first to avoid any unexpected
+			// race condition.  This is more for safety than necessity.
 			exist, err := mc.CreateCommandTokenExist(command.DefnId)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
 				continue
 			}
-
-			// If a create token exist, then skip processing the drop token.
 			if exist {
 				logging.Warnf("DDLServiceMgr: Create token exist for %v.  Skip processing drop token %v.", command.DefnId, entry.Path)
 				continue
@@ -363,7 +362,7 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 					return
 				}
 
-				if err := MetakvDel(entry.Path); err != nil {
+				if err := common.MetakvDel(entry.Path); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove delete index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove delete index token %v.", entry.Path)
@@ -439,7 +438,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 
 			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to clean build index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to clean build index token upon rebalancing.  Skip command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -476,7 +475,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 
 			// Remove token
 			if cleanup {
-				if err := MetakvDel(entry.Path); err != nil {
+				if err := common.MetakvDel(entry.Path); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove build index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove build index token %v.", entry.Path)
@@ -511,7 +510,9 @@ func (m *DDLServiceMgr) buildTokenCleaner() {
 
 func (m *DDLServiceMgr) cleanupCreateCommand() {
 
-	// get all create token from metakv
+	// Get all virtual paths of create tokens from metakv. Since they are
+	// big value tokens there are no values stored directly in these paths,
+	// so entries[i].Path is all that is used here; entries[i].Value will be nil.
 	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Failed to fetch token from metakv.  Internal Error = %v", err)
@@ -556,6 +557,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 			continue
 		}
 
+		// Retrieve the current (big value) create token
 		token, err := mc.FetchCreateCommandToken(defnId, requestId)
 		if err != nil {
 			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
@@ -981,10 +983,6 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
 		return
 	}
 
-	if len(entries) == 0 {
-		return
-	}
-
 	for _, entry := range entries {
 
 		if strings.Contains(entry.Path, mc.DropInstanceDDLCommandTokenPath) && entry.Value != nil {
@@ -993,20 +991,19 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
 
 			command, err := mc.UnmarshallDropInstanceCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to clean delete index instance token upon rebalancing.  Skp command %v.  Internal Error = %v.",
+				logging.Warnf("DDLServiceMgr: Failed to clean delete index instance token upon rebalancing.  Skip command %v.  Internal Error = %v.",
 					entry.Path, err)
 				continue
 			}
 
-			// If there is a create token, then do not process the drop token.  Let the create token being dropped first to avoid
-			// any unexpected raise condition.  This is more for safety than necessity.
+			// If there is a create token, then do not process the drop token.
+			// Let the create token be deleted first to avoid any unexpected
+			// race condition.  This is more for safety than necessity.
 			exist, err := mc.CreateCommandTokenExist(command.DefnId)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
 				continue
 			}
-
-			// If a create token exist, then skip processing the drop token.
 			if exist {
 				logging.Warnf("DDLServiceMgr: Create token exist for %v.  Skip processing drop token %v.", command.DefnId, entry.Path)
 				continue
@@ -1035,7 +1032,7 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
 				}
 
 				// There is no index in the cluster,  remove token
-				if err := MetakvDel(entry.Path); err != nil {
+				if err := common.MetakvDel(entry.Path); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove delete index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove delete index token %v.", entry.Path)

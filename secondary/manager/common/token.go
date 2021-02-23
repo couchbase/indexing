@@ -401,29 +401,25 @@ func DeleteCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 }
 
 //
-// Return the list of delete token
+// ListDeleteCommandToken returns all delete tokens for this indexer host.
+// Result is nil if no tokens.
 //
 func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
-
-	paths, err := c.MetakvList(DeleteDDLCommandTokenPath)
+	entries, err := c.MetakvList(DeleteDDLCommandTokenPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var result []*DeleteCommandToken
-
-	if len(paths) != 0 {
-		result = make([]*DeleteCommandToken, 0, len(paths))
-		for _, path := range paths {
-			token := &DeleteCommandToken{}
-			exist, err := c.MetakvGet(path, token)
+	if len(entries) != 0 {
+		result = make([]*DeleteCommandToken, 0, len(entries))
+		for _, entry := range entries {
+			token := new(DeleteCommandToken)
+			err = json.Unmarshal(entry.Value, token)
 			if err != nil {
 				return nil, err
 			}
-
-			if exist {
-				result = append(result, token)
-			}
+			result = append(result, token)
 		}
 	}
 

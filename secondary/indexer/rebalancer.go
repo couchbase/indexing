@@ -1155,7 +1155,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		r.updateMasterTokenState(ttid, c.TransferTokenCommit)
 
 	case c.TransferTokenDeleted:
-		err := MetakvDel(RebalanceMetakvDir + ttid)
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Fatalf("Rebalancer::processTokenAsMaster Unable to set TransferToken In "+
 				"Meta Storage. %v. Err %v", tt, err)
@@ -1210,7 +1210,7 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 		if r > 0 {
 			l.Warnf("Rebalancer::setTransferTokenInMetakv error=%v Retrying (%d)", err, r)
 		}
-		err = MetakvSet(RebalanceMetakvDir+ttid, tt)
+		err = c.MetakvSet(RebalanceMetakvDir+ttid, tt)
 		return err
 	}
 
