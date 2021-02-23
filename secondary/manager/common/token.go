@@ -449,28 +449,24 @@ func DeleteCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
 //
 // ListDeleteCommandToken returns all delete tokens for this indexer host.
+// Result is nil if no tokens.
 //
 func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
-
-	paths, err := ListDeleteCommandTokenPaths()
+	entries, err := c.MetakvList(DeleteDDLCommandTokenPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var result []*DeleteCommandToken
-
-	if len(paths) != 0 {
-		result = make([]*DeleteCommandToken, 0, len(paths))
-		for _, path := range paths {
-			token := &DeleteCommandToken{}
-			exist, err := c.MetakvGet(path, token)
+	if len(entries) != 0 {
+		result = make([]*DeleteCommandToken, 0, len(entries))
+		for _, entry := range entries {
+			token := new(DeleteCommandToken)
+			err = json.Unmarshal(entry.Value, token)
 			if err != nil {
 				return nil, err
 			}
-
-			if exist {
-				result = append(result, token)
-			}
+			result = append(result, token)
 		}
 	}
 
@@ -479,10 +475,19 @@ func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
 
 //
 // ListDeleteCommandTokenPaths returns the metakv paths (keys)
-// of all delete tokens for this indexer host.
+// of all delete tokens for this indexer host. It does not
+// bother unmarhsalling the values as caller doesn't need them.
 //
 func ListDeleteCommandTokenPaths() ([]string, error) {
-	return c.MetakvList(DeleteDDLCommandTokenPath)
+	entries, err := c.MetakvList(DeleteDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, entry.Path)
+	}
+	return result, nil
 }
 
 //
@@ -550,28 +555,24 @@ func MarshallTokenPathList(r *TokenPathList) ([]byte, error) {
 	return buf, nil
 }
 
+// FetchIndexDefnToDeleteCommandTokensMap retrieves all delete
+// tokens from metakv into a map with key token.DefnId.
 func FetchIndexDefnToDeleteCommandTokensMap() (map[c.IndexDefnId]*DeleteCommandToken, error) {
-	paths, err := c.MetakvList(DeleteDDLCommandTokenPath)
+	entries, err := c.MetakvList(DeleteDDLCommandTokenPath)
 	if err != nil {
 		return nil, err
 	}
 
 	// Do not return a nil result, even if there aren't any tokens.
-	result := make(map[c.IndexDefnId]*DeleteCommandToken)
-	if len(paths) != 0 {
-		for _, path := range paths {
-			token := &DeleteCommandToken{}
-			exist, err := c.MetakvGet(path, token)
-			if err != nil {
-				return nil, err
-			}
-
-			if exist {
-				result[token.DefnId] = token
-			}
+	result := make(map[c.IndexDefnId]*DeleteCommandToken, len(entries))
+	for _, entry := range entries {
+		token := new(DeleteCommandToken)
+		err = json.Unmarshal(entry.Value, token)
+		if err != nil {
+			return nil, err
 		}
+		result[token.DefnId] = token
 	}
-
 	return result, nil
 }
 
@@ -632,26 +633,23 @@ func MarshallBuildCommandToken(r *BuildCommandToken) ([]byte, error) {
 	return buf, nil
 }
 
+// FetchIndexDefnToBuildCommandTokensMap retrieves all build
+// tokens from metakv into a map with key token.DefnId.
 func FetchIndexDefnToBuildCommandTokensMap() (map[c.IndexDefnId]*BuildCommandToken, error) {
-	paths, err := c.MetakvList(BuildDDLCommandTokenPath)
+	entries, err := c.MetakvList(BuildDDLCommandTokenPath)
 	if err != nil {
 		return nil, err
 	}
 
 	// Do not return a nil result, even if there aren't any tokens.
-	result := make(map[c.IndexDefnId]*BuildCommandToken)
-	if len(paths) != 0 {
-		for _, path := range paths {
-			token := &BuildCommandToken{}
-			exist, err := c.MetakvGet(path, token)
-			if err != nil {
-				return nil, err
-			}
-
-			if exist {
-				result[token.DefnId] = token
-			}
+	result := make(map[c.IndexDefnId]*BuildCommandToken, len(entries))
+	for _, entry := range entries {
+		token := new(BuildCommandToken)
+		err = json.Unmarshal(entry.Value, token)
+		if err != nil {
+			return nil, err
 		}
+		result[token.DefnId] = token
 	}
 
 	return result, nil
@@ -1193,27 +1191,24 @@ func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int6
 	return c.MetakvSet(StopScheduleCreateTokenPath+path, token)
 }
 
+// ListAllStopScheduleCreateTokens retrieves all stop schedule create tokens
+// from metakv into a slice of token pointers. Result is nil if no tokens.
 func ListAllStopScheduleCreateTokens() ([]*StopScheduleCreateToken, error) {
-
-	paths, err := c.MetakvList(StopScheduleCreateTokenPath)
+	entries, err := c.MetakvList(StopScheduleCreateTokenPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var result []*StopScheduleCreateToken
-
-	if len(paths) != 0 {
-		result = make([]*StopScheduleCreateToken, 0, len(paths))
-		for _, path := range paths {
-			token := &StopScheduleCreateToken{}
-			exist, err := c.MetakvGet(path, token)
+	if len(entries) != 0 {
+		result = make([]*StopScheduleCreateToken, 0, len(entries))
+		for _, entry := range entries {
+			token := new(StopScheduleCreateToken)
+			err = json.Unmarshal(entry.Value, token)
 			if err != nil {
 				return nil, err
 			}
-
-			if exist {
-				result = append(result, token)
-			}
+			result = append(result, token)
 		}
 	}
 
