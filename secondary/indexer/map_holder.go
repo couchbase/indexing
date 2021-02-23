@@ -66,3 +66,50 @@ func (ipm *IndexPartnMapHolder) Clone() IndexPartnMap {
 		return make(IndexPartnMap)
 	}
 }
+
+// Holder for StreamKeyspaceIdInstList
+type StreamKeyspaceIdInstListHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (s *StreamKeyspaceIdInstListHolder) Init() {
+	s.ptr = new(unsafe.Pointer)
+}
+
+func (s *StreamKeyspaceIdInstListHolder) Set(streamKeyspaceIdInstList StreamKeyspaceIdInstList) {
+	atomic.StorePointer(s.ptr, unsafe.Pointer(&streamKeyspaceIdInstList))
+}
+
+func (s *StreamKeyspaceIdInstListHolder) Get() StreamKeyspaceIdInstList {
+	if ptr := atomic.LoadPointer(s.ptr); ptr != nil {
+		return *(*StreamKeyspaceIdInstList)(ptr)
+	} else {
+		return make(StreamKeyspaceIdInstList)
+	}
+}
+
+func (s *StreamKeyspaceIdInstListHolder) Clone() StreamKeyspaceIdInstList {
+	if ptr := atomic.LoadPointer(s.ptr); ptr != nil {
+		currList := *(*StreamKeyspaceIdInstList)(ptr)
+		return CopyStreamKeyspaceIdInstList(currList)
+	} else {
+		return make(StreamKeyspaceIdInstList)
+	}
+}
+
+func CopyStreamKeyspaceIdInstList(inList StreamKeyspaceIdInstList) StreamKeyspaceIdInstList {
+
+	outList := make(StreamKeyspaceIdInstList)
+	for streamId, keyspaceIdInstList := range inList {
+
+		cloneKeyspaceIdInstList := make(KeyspaceIdInstList)
+		for keyspaceId, instList := range keyspaceIdInstList {
+			for _, instId := range instList {
+				cloneKeyspaceIdInstList[keyspaceId] = append(cloneKeyspaceIdInstList[keyspaceId], instId)
+			}
+		}
+
+		outList[streamId] = cloneKeyspaceIdInstList
+	}
+	return outList
+}
