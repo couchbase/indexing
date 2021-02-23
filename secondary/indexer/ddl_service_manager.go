@@ -63,6 +63,10 @@ type DDLServiceMgr struct {
 
 	commandListener *mc.CommandListener
 	listenerDonech  chan bool
+	btCleanerStopCh chan bool
+	buildCleanupLck sync.Mutex
+	dtCleanerStopCh chan bool
+	dropCleanupLck  sync.Mutex
 }
 
 //
@@ -104,8 +108,6 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	numReplica := int32(config["settings.num_replica"].Int())
 	settings := &ddlSettings{numReplica: numReplica}
 
-	donech := make(chan bool)
-
 	mgr := &DDLServiceMgr{
 		indexerId:       indexerId,
 		supvCmdch:       supvCmdch,
@@ -117,9 +119,11 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 		donech:          nil,
 		killch:          make(chan bool),
 		allowDDL:        true,
-		commandListener: mc.NewCommandListener(donech, true, false, false, false, false, false),
-		listenerDonech:  donech,
+		btCleanerStopCh: make(chan bool),
+		dtCleanerStopCh: make(chan bool),
 	}
+
+	mgr.startCommandListner()
 
 	mgr.config.Store(config)
 
@@ -139,6 +143,9 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()
 	gDDLServiceMgr = mgr
+
+	go mgr.buildTokenCleaner()
+	go mgr.dropTokenCleaner()
 
 	logging.Infof("DDLServiceMgr: intialized. Local nodeUUID %v", mgr.nodeID)
 
@@ -173,6 +180,9 @@ loop:
 				if cmd.GetMsgType() == ADMIN_MGR_SHUTDOWN {
 					logging.Infof("DDL Rebalance Manager: Shutting Down")
 					close(m.killch)
+					m.commandListener.Close()
+					close(m.btCleanerStopCh)
+					close(m.dtCleanerStopCh)
 					m.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -273,9 +283,9 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	}
 
 	m.cleanupCreateCommand()
-	m.cleanupDropCommand()
+	m.cleanupDropCommand(false, m.provider)
 	m.cleanupDropInstanceCommand()
-	m.cleanupBuildCommand()
+	m.cleanupBuildCommand(false, m.provider)
 	m.handleClusterStorageMode(httpAddrMap)
 }
 
@@ -304,7 +314,10 @@ func (m *DDLServiceMgr) startProcessDDL() {
 //
 // Recover drop index command
 //
-func (m *DDLServiceMgr) cleanupDropCommand() {
+func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.MetadataProvider) {
+
+	m.dropCleanupLck.Lock()
+	defer m.dropCleanupLck.Unlock()
 
 	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
@@ -313,6 +326,20 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 	}
 
 	if len(entries) == 0 {
+		return
+	}
+
+	if provider == nil {
+		// Use latest metadata provider.
+		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDropCommand")
+		if err != nil {
+			logging.Errorf("DDLServiceMgr: cleanupDropCommand error in newMetadataProvider %v. Skip cleanup.", err)
+			return
+		}
+	}
+
+	if provider == nil {
+		logging.Errorf("DDLServiceMgr: cleanupDropCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -363,8 +390,13 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 			//    provider is not connected to the indexer at the exact moment when this call is made.
 			//
 			//
-			if m.provider.FindIndexIgnoreStatus(command.DefnId) == nil {
+			if provider.FindIndexIgnoreStatus(command.DefnId) == nil {
 				// There is no index in the cluster,  remove token
+
+				if checkDDL && !m.canProcessDDL() {
+					return
+				}
+
 				if err := MetakvDel(entry.Path); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove delete index token %v. Error = %v", entry.Path, err)
 				} else {
@@ -377,6 +409,25 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 	}
 }
 
+func (m *DDLServiceMgr) dropTokenCleaner() {
+
+	ticker := time.NewTicker(10 * time.Minute)
+	logging.Infof("DDLServiceMgr: starting dropTokenCleaner ...")
+	for {
+		select {
+
+		case <-ticker.C:
+			if m.canProcessDDL() {
+				m.cleanupDropCommand(true, nil)
+			}
+
+		case <-m.dtCleanerStopCh:
+			logging.Infof("DDLServiceMgr: stopping dropTokenCleaner ...")
+			return
+		}
+	}
+}
+
 //////////////////////////////////////////////////////////////
 // Build Token
 //////////////////////////////////////////////////////////////
@@ -384,11 +435,32 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 //
 // Recover build index command
 //
-func (m *DDLServiceMgr) cleanupBuildCommand() {
+func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.MetadataProvider) {
+
+	m.buildCleanupLck.Lock()
+	defer m.buildCleanupLck.Unlock()
 
 	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Failed to cleanup build index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
+		return
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	if provider == nil {
+		// Use latest metadata provider.
+		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupBuildCommand")
+		if err != nil {
+			logging.Errorf("DDLServiceMgr: cleanupBuildCommand error in newMetadataProvider %v. Skip cleanup.", err)
+			return
+		}
+	}
+
+	if provider == nil {
+		logging.Errorf("DDLServiceMgr: cleanupBuildCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -410,7 +482,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand() {
 			// provider is not connected to the indexer at the exact moment when this call is made.
 			//
 			cleanup := true
-			if index := m.provider.FindIndexIgnoreStatus(command.DefnId); index != nil {
+			if index := provider.FindIndexIgnoreStatus(command.DefnId); index != nil {
 				for _, inst := range index.Instances {
 					if inst.State == common.INDEX_STATE_READY || inst.State == common.INDEX_STATE_CREATED {
 						// no need to clean up if there is still instance to be built
@@ -430,6 +502,11 @@ func (m *DDLServiceMgr) cleanupBuildCommand() {
 				}
 			}
 
+			// Just for extra safety.
+			if checkDDL && !m.canProcessDDL() {
+				return
+			}
+
 			// Remove token
 			if cleanup {
 				if err := MetakvDel(entry.Path); err != nil {
@@ -438,6 +515,25 @@ func (m *DDLServiceMgr) cleanupBuildCommand() {
 					logging.Infof("DDLServiceMgr: Remove build index token %v.", entry.Path)
 				}
 			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) buildTokenCleaner() {
+
+	ticker := time.NewTicker(10 * time.Minute)
+	logging.Infof("DDLServiceMgr: starting buildTokenCleaner ...")
+	for {
+		select {
+
+		case <-ticker.C:
+			if m.canProcessDDL() {
+				m.cleanupBuildCommand(true, nil)
+			}
+
+		case <-m.btCleanerStopCh:
+			logging.Infof("DDLServiceMgr: stopping buildTokenCleaner ...")
+			return
 		}
 	}
 }
@@ -896,13 +992,11 @@ func (m *DDLServiceMgr) processCreateCommand() {
 
 		case _, ok := <-m.listenerDonech:
 			if !ok {
-				m.listenerDonech = make(chan bool)
-				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false, false, false, false)
+				m.startCommandListner()
 				m.commandListener.ListenTokens()
 			}
 
 		case <-m.killch:
-			m.commandListener.Close()
 			logging.Infof("author: Index author go-routine terminates.")
 			return
 		}
@@ -1593,6 +1687,12 @@ func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) boo
 		w.Write([]byte("401 Unauthorized\n"))
 	}
 	return valid
+}
+
+func (m *DDLServiceMgr) startCommandListner() {
+	donech := make(chan bool)
+	m.commandListener = mc.NewCommandListener(donech, true, true, true, false, false, false)
+	m.listenerDonech = donech
 }
 
 //////////////////////////////////////////////////////////////
