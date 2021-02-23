@@ -336,6 +336,7 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 			logging.Errorf("DDLServiceMgr: cleanupDropCommand error in newMetadataProvider %v. Skip cleanup.", err)
 			return
 		}
+		defer provider.Close()
 	}
 
 	if provider == nil {
@@ -457,6 +458,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 			logging.Errorf("DDLServiceMgr: cleanupBuildCommand error in newMetadataProvider %v. Skip cleanup.", err)
 			return
 		}
+		defer provider.Close()
 	}
 
 	if provider == nil {
