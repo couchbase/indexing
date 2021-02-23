@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -1031,6 +1032,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
+		start := time.Now().UnixNano()
 		flusher := NewFlusher(config, stats)
 		sts := Timestamp(ts.Seqnos)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, keyspaceId,
@@ -1062,6 +1064,10 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 				keyspaceId: keyspaceId,
 				ts:         ts,
 				aborted:    true}
+		}
+		keyspaceStats := m.stats.GetKeyspaceStats(streamId, keyspaceId)
+		if keyspaceStats != nil {
+			keyspaceStats.flushLatDist.Add(time.Now().UnixNano() - start)
 		}
 	}(m.config)
 

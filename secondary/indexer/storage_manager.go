@@ -287,6 +287,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, instIdList []common.IndexInstId,
 	stats *IndexerStats, flushWasAborted bool, hasAllSB bool) {
 
+	startTime := time.Now().UnixNano()
 	var needsCommit bool
 	var forceCommit bool
 	snapType := tsVbuuid.GetSnapType()
@@ -475,7 +476,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 			} else {
 				DestroyIndexSnapshot(is)
 			}
-			s.updateSnapIntervalStat(idxStats)
+			s.updateSnapIntervalStat(idxStats, startTime)
 
 		}(idxInstId)
 	}
@@ -580,7 +581,7 @@ func (s *storageMgr) flushDone(streamId common.StreamId, keyspaceId string,
 		aborted:    flushWasAborted}
 }
 
-func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
+func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats, startTime int64) {
 
 	// Compute avgTsInterval
 	last := idxStats.lastTsTime.Value()
@@ -592,6 +593,8 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 		idxStats.avgTsInterval.Set(avg)
 		idxStats.sinceLastSnapshot.Set(curr - last)
 	}
+	idxStats.snapLatDist.Add(curr - last)
+	idxStats.snapGenLatDist.Add(curr - startTime)
 	idxStats.lastTsTime.Set(curr)
 
 	idxStats.updateAllPartitionStats(

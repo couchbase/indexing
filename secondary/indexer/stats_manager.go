@@ -48,6 +48,14 @@ const APPROX_METRIC_COUNT = 25
 
 var METRICS_PREFIX = "index_"
 
+// 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-Inf
+var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100}
+
+// end-end scan request latency
+// 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
+// 1000ms-5000ms, 5000ms-10000ms, 10000ms-50000ms, 50000ms-Inf
+var scanReqLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 50000}
+
 func init() {
 	uptime = time.Now()
 	num_cpu_core = runtime.NumCPU()
@@ -66,6 +74,7 @@ type KeyspaceStats struct {
 	numRollbacks       stats.Int64Val
 	numRollbacksToZero stats.Int64Val
 	tsQueueSize        stats.Int64Val
+	flushLatDist       stats.Histogram
 }
 
 // KeyspaceStats.Init initializes a per-keyspace stats object.
@@ -77,6 +86,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.numMutationsQueued.Init()
 	s.tsQueueSize.Init()
 	s.numNonAlignTS.Init()
+	s.flushLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 }
 
 func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
@@ -86,6 +96,7 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_mutations_queued", &s.numMutationsQueued)
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
 	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
+	statMap.AddStatValueFiltered("flush_latency_dist", &s.flushLatDist)
 
 	bucket := GetBucketFromKeyspaceId(s.keyspaceId)
 	if st := common.BucketSeqsTiming(bucket); st != nil {
@@ -256,6 +267,12 @@ type IndexStats struct {
 	avgArrLenHolder  stats.Int64Val
 	keySizeDist      stats.MapVal
 	arrKeySizeDist   stats.MapVal
+
+	scanReqInitLatDist stats.Histogram
+	scanReqWaitLatDist stats.Histogram
+	scanReqLatDist     stats.Histogram
+	snapGenLatDist     stats.Histogram
+	snapLatDist        stats.Histogram
 }
 
 type IndexerStatsHolder struct {
@@ -489,6 +506,13 @@ func (s *IndexStats) Init() {
 	s.avgArrLenHolder.Init()
 	s.keySizeDist.Init()
 	s.arrKeySizeDist.Init()
+
+	s.scanReqInitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.scanReqWaitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.scanReqLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+
+	s.snapGenLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.snapLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
 
@@ -1709,8 +1733,14 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		statMap.AddStatValueFiltered("avg_array_length", &s.avgArrLenHolder)
 	}
 
+	statMap.AddStatValueFiltered("avg_scan_request_init_latency", &s.scanReqInitLat)
+	statMap.AddStatValueFiltered("scan_req_init_latency_dist", &s.scanReqInitLatDist)
+	statMap.AddStatValueFiltered("scan_req_wait_latency_dist", &s.scanReqWaitLatDist)
+	statMap.AddStatValueFiltered("scan_req_latency_dist", &s.scanReqWaitLatDist)
+	statMap.AddStatValueFiltered("snapshot_gen_latency_dist", &s.snapGenLatDist)
+	statMap.AddStatValueFiltered("snapshot_latency_dist", &s.snapLatDist)
+
 	if !spec.essential {
-		statMap.AddStatValueFiltered("avg_scan_request_init_latency", &s.scanReqInitLat)
 		statMap.AddStatValueFiltered("avg_scan_request_alloc_latency", &s.scanReqAllocLat)
 	}
 
@@ -1756,6 +1786,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.cacheHitPercent, s.partnAvgInt64Stats)
 
+	statMap.AddAggrTimingStatFiltered("timings/dcp_getseqs",
+		func(ss *IndexStats) *stats.TimingStat {
+			return &ss.Timings.dcpSeqs
+		},
+		&s.Timings.dcpSeqs, s.partnTimingStats)
+
 	// TODO:
 	// Right now, there aren't any consumer specific stats that are essential.
 	// But there needs a better way to handle this. May be a separate consumer
@@ -1767,11 +1803,6 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		// If timing stat is partitioned, the final value
 		// is aggreated across the partitions (sum, count, sumOfSq).
 		// ------------------------------------------------------------
-		statMap.AddAggrTimingStatFiltered("timings/dcp_getseqs",
-			func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.dcpSeqs
-			},
-			&s.Timings.dcpSeqs, s.partnTimingStats)
 
 		statMap.AddAggrTimingStatFiltered("timings/storage_clone_handle",
 			func(ss *IndexStats) *stats.TimingStat {
