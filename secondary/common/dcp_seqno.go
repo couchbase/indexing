@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"math"
 	"math/rand"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1030,17 +1029,9 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 		logging.Errorf("%v\n", err)
 		return nil, err
 	}
-	// sort them
-	vbnos := make([]int, 0, dcp_buckets_seqnos.numVbs)
-	for vbno := range seqnos {
-		vbnos = append(vbnos, int(vbno))
-	}
-	sort.Ints(vbnos)
-	// gather seqnos.
-	l_seqnos = make([]uint64, 0, dcp_buckets_seqnos.numVbs)
-	for _, vbno := range vbnos {
-		l_seqnos = append(l_seqnos, seqnos[uint16(vbno)])
-	}
+
+	l_seqnos = make([]uint64, len(seqnos))
+	copy(l_seqnos, seqnos)
 
 	return l_seqnos, nil
 }
@@ -1334,17 +1325,9 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 		logging.Errorf("%v\n", err)
 		return nil, err
 	}
-	// sort them
-	vbnos := make([]int, 0, dcp_buckets_seqnos.numVbs)
-	for vbno := range seqnos {
-		vbnos = append(vbnos, int(vbno))
-	}
-	sort.Ints(vbnos)
-	// gather seqnos.
-	l_seqnos = make([]uint64, 0, dcp_buckets_seqnos.numVbs)
-	for _, vbno := range vbnos {
-		l_seqnos = append(l_seqnos, seqnos[uint16(vbno)])
-	}
+
+	l_seqnos = make([]uint64, len(seqnos))
+	copy(l_seqnos, seqnos)
 	return l_seqnos, nil
 }
 

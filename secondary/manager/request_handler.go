@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -3037,7 +3036,7 @@ func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 }
 
 func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.Request, creds cbauth.Creds) {
-	url := filepath.Clean(r.URL.Path)
+	url := strings.TrimSpace(r.URL.Path)
 	logging.Debugf("bucketReqHandler: url %v", url)
 
 	segs := strings.Split(url, "/")

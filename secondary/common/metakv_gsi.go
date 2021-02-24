@@ -80,33 +80,21 @@ func MetakvRecurciveDel(dirpath string) error {
 	return err
 }
 
-func MetakvList(dirpath string) ([]string, error) {
-
+// MetakvList returns a slice of all entries (tokens) stored in dirpath in metakv.
+// The key of each token is in entry.Path and the token itself is the byte slice
+// entry.Value which can be unmarshalled into a token of the appropriate type.
+func MetakvList(dirpath string) ([]metakv.KVEntry, error) {
 	if len(dirpath) == 0 {
 		return nil, fmt.Errorf("Empty metakv path")
 	}
-
 	if string(dirpath[len(dirpath)-1]) != "/" {
-		dirpath = fmt.Sprintf("%v/", dirpath)
+		dirpath = dirpath + "/"
 	}
-
-	entries, err := metakv.ListAllChildren(dirpath)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
-	var result []string
-	for _, entry := range entries {
-		result = append(result, entry.Path)
-	}
-
-	return result, nil
+	return metakv.ListAllChildren(dirpath)
 }
 
+// MetakvBigValueSet stores large tokens by breaking them up into pieces of max size
+// METAKV_SIZE_LIMIT and storing the pieces under keys path/0, path/1, ....
 func MetakvBigValueSet(path string, v interface{}) error {
 
 	if len(path) == 0 {
@@ -161,6 +149,9 @@ func MetakvBigValueDel(path string) error {
 	return MetakvRecurciveDel(path)
 }
 
+// MetakvBigValueGet takes the virtual path of a big value token and
+// retrieves and reassembles all its metakv pieces (stored as values of
+// children /0, /1, /2, ... of the virtual path) into the original token.
 func MetakvBigValueGet(path string, value interface{}) (bool, error) {
 
 	if len(path) == 0 {
@@ -216,7 +207,12 @@ func MetakvBigValueGet(path string, value interface{}) (bool, error) {
 	return true, nil
 }
 
-// prefix must end with '/'
+// MetakvBigValueList lists the virtual paths of each big value token stored
+// under dirpath. There are no metakv values associated with these virtual
+// paths as each big value token is divided into multiple metakv values
+// as children /0, /1, /2, ... of its virtual path. The caller must do a
+// separate MetakvBigValueGet for each virtual path returned to retrieve and
+// reassemble all the child pieces of the associated big value token.
 func MetakvBigValueList(dirpath string) ([]string, error) {
 
 	if len(dirpath) == 0 {

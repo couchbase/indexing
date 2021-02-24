@@ -1,16 +1,19 @@
 package projector
 
-import "sync"
-import "time"
-import "fmt"
-import "sort"
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"sync"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/stats"
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+
+	"github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 const seqsReqChanSize = 20000
 const seqsBufSize = 64 * 1024
@@ -399,17 +402,14 @@ func CollectSeqnos(kvfeeds map[string]*kvConn, cid string) (l_seqnos []uint64, e
 		logging.Errorf("%v\n", err)
 		return nil, err
 	}
-	// sort them
-	vbnos := make([]int, 0, dcp_buckets_seqnos.numVbs)
-	for vbno := range seqnos {
-		vbnos = append(vbnos, int(vbno))
-	}
-	sort.Ints(vbnos)
-	// gather seqnos.
-	l_seqnos = make([]uint64, 0, dcp_buckets_seqnos.numVbs)
-	for _, vbno := range vbnos {
-		l_seqnos = append(l_seqnos, seqnos[uint16(vbno)])
-	}
+
+	// Since projector only gets the seqnos from local node,
+	// and `seqnos` return sequence number of all vbuckets,
+	// initialize the `l_seqnos` for all vbuckets even though
+	// some of the values would be empty
+	l_seqnos = make([]uint64, len(seqnos))
+	copy(l_seqnos, seqnos)
+
 	return l_seqnos, nil
 }
 
