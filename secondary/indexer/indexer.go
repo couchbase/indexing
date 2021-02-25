@@ -3850,8 +3850,10 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	indexList := make([]common.IndexInst, 0)
 	for _, instId := range instIdList {
 		index := idx.indexInstMap[instId]
+		if index.Stream == streamId {
+			indexList = append(indexList, index)
+		}
 		idx.cleanupIndexData(index, nil)
-		indexList = append(indexList, index)
 	}
 
 	idx.removeIndexesFromStream(indexList, keyspaceId,
