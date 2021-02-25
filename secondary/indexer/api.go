@@ -74,8 +74,13 @@ func (api *restServer) routeRequest(
 	if !ok {
 		return
 	}
+
 	url := strings.TrimSpace(r.URL.Path) // Remove trailing space.
+	if url[len(url)-1] == byte('/') {
+		url = url[:len(url)-1]
+	}
 	segs := strings.Split(url, "/")
+
 	var req request
 	var handler reqHandler
 	if len(segs) < 3 {
