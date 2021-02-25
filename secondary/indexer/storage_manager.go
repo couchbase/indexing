@@ -45,9 +45,9 @@ type storageMgr struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
 
-	snapshotReqCh MsgChannel // Channel to listen for snapshot requests from scan coordinator
+	snapshotReqCh []MsgChannel // Channel to listen for snapshot requests from scan coordinator
 
-	snapshotNotifych chan IndexSnapshot
+	snapshotNotifych []chan IndexSnapshot
 
 	indexInstMap  IndexInstMapHolder
 	indexPartnMap IndexPartnMapHolder
@@ -109,8 +109,8 @@ func (w *snapshotWaiter) Error(err error) {
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych chan IndexSnapshot,
-	snapshotReqCh MsgChannel) (StorageManager, Message) {
+	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych []chan IndexSnapshot,
+	snapshotReqCh []MsgChannel) (StorageManager, Message) {
 
 	//Init the storageMgr struct
 	s := &storageMgr{
@@ -143,13 +143,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	numSnapshotReqWrkrs := config["settings.snapshotRequestWorkers"].Int()
-	if numSnapshotReqWrkrs <= 0 {
-		numSnapshotReqWrkrs = 1
-	}
-
-	for i := 0; i < numSnapshotReqWrkrs; i++ {
-		go s.listenSnapshotReqs()
+	for i := 0; i < len(s.snapshotReqCh); i++ {
+		go s.listenSnapshotReqs(i)
 	}
 
 	//start Storage Manager loop which listens to commands from its supervisor
@@ -172,7 +167,9 @@ loop:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
 					logging.Infof("StorageManager::run Shutting Down")
-					close(s.snapshotNotifych)
+					for i := 0; i < len(s.snapshotNotifych); i++ {
+						close(s.snapshotNotifych[i])
+					}
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -1082,7 +1079,8 @@ func (s *storageMgr) notifySnapshotDeletion(instId common.IndexInstId) {
 		instId: instId,
 		ts:     nil, // signal deletion with nil timestamp
 	}
-	s.snapshotNotifych <- snap
+	index := uint64(instId) % uint64(len(s.snapshotNotifych))
+	s.snapshotNotifych[int(index)] <- snap
 }
 
 func (s *storageMgr) notifySnapshotCreation(is IndexSnapshot) {
@@ -1092,7 +1090,8 @@ func (s *storageMgr) notifySnapshotCreation(is IndexSnapshot) {
 		}
 	}()
 
-	s.snapshotNotifych <- CloneIndexSnapshot(is)
+	index := uint64(is.IndexInstId()) % uint64(len(s.snapshotNotifych))
+	s.snapshotNotifych[index] <- CloneIndexSnapshot(is)
 }
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
@@ -1215,11 +1214,13 @@ func (s *storageMgr) handleUpdateKeyspaceStatsMap(cmd Message) {
 // available.
 func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
-	s.snapshotReqCh <- cmd
+	instId := cmd.(*MsgIndexSnapRequest).GetIndexId()
+	index := uint64(instId) % uint64(len(s.snapshotReqCh))
+	s.snapshotReqCh[int(index)] <- cmd
 }
 
-func (s *storageMgr) listenSnapshotReqs() {
-	for cmd := range s.snapshotReqCh {
+func (s *storageMgr) listenSnapshotReqs(index int) {
+	for cmd := range s.snapshotReqCh[index] {
 		func() {
 			req := cmd.(*MsgIndexSnapRequest)
 			inst, found := s.indexInstMap.Get()[req.GetIndexId()]

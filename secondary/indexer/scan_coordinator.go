@@ -48,8 +48,8 @@ type ScanCoordinator interface {
 type scanCoordinator struct {
 	supvCmdch        MsgChannel //supervisor sends commands on this channel
 	supvMsgch        MsgChannel //channel to send any async message to supervisor
-	snapshotNotifych chan IndexSnapshot
-	snapshotReqCh    MsgChannel
+	snapshotNotifych []chan IndexSnapshot
+	snapshotReqCh    []MsgChannel
 	lastSnapshot     IndexSnapMapHolder
 	rollbackTimes    unsafe.Pointer
 
@@ -79,8 +79,8 @@ type scanCoordinator struct {
 // Any async message to supervisor is sent to supvMsgch.
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
-	config common.Config, snapshotNotifych chan IndexSnapshot,
-	snapshotReqCh MsgChannel, stats *IndexerStats) (ScanCoordinator, Message) {
+	config common.Config, snapshotNotifych []chan IndexSnapshot,
+	snapshotReqCh []MsgChannel, stats *IndexerStats) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
@@ -113,13 +113,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	s.setIndexerState(common.INDEXER_BOOTSTRAP)
 	s.stats.Set(stats)
 
-	numSnapshotNotifWrkrs := config["settings.snapshotListeners"].Int()
-	if numSnapshotNotifWrkrs <= 0 {
-		numSnapshotNotifWrkrs = 1
-	}
-
-	for i := 0; i < numSnapshotNotifWrkrs; i++ {
-		go s.listenSnapshot()
+	for i := 0; i < len(s.snapshotNotifych); i++ {
+		go s.listenSnapshot(i)
 	}
 
 	// main loop
@@ -138,7 +133,9 @@ loop:
 				if cmd.GetMsgType() == SCAN_COORD_SHUTDOWN {
 					logging.Infof("ScanCoordinator: Shutting Down")
 					s.serv.Close()
-					close(s.snapshotReqCh)
+					for i := 0; i < len(s.snapshotReqCh); i++ {
+						close(s.snapshotReqCh[i])
+					}
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -151,8 +148,8 @@ loop:
 	}
 }
 
-func (s *scanCoordinator) listenSnapshot() {
-	for snapshot := range s.snapshotNotifych {
+func (s *scanCoordinator) listenSnapshot(index int) {
+	for snapshot := range s.snapshotNotifych[index] {
 		func(ss IndexSnapshot) {
 
 			lastSnapshot := s.lastSnapshot.Get()
@@ -725,7 +722,8 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	}
 
 	// Block wait until a ts is available for fullfilling the request
-	s.snapshotReqCh <- snapReqMsg
+	index := uint64(r.IndexInstId) % uint64(len(s.snapshotReqCh))
+	s.snapshotReqCh[int(index)] <- snapReqMsg
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
@@ -1212,7 +1210,8 @@ func (s *scanCoordinator) updateItemsCount(instId common.IndexInstId, idxStats *
 		idxInstId: instId,
 	}
 
-	s.snapshotReqCh <- snapReqMsg
+	index := uint64(instId) % uint64(len(s.snapshotReqCh))
+	s.snapshotReqCh[int(index)] <- snapReqMsg
 	msg := <-snapResch
 
 	// Index snapshot is not available yet (non-active index or empty index)

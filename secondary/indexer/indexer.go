@@ -339,9 +339,19 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	snapListners := idx.getSnapshotListeners()
+	snapshotNotifych := make([]chan IndexSnapshot, snapListners)
+	for i := 0; i < snapListners; i++ {
+		snapshotNotifych[i] = make(chan IndexSnapshot, 5000)
+	}
+
+	snapReqWorkers := idx.getSnapshotReqWorkers()
+	snapshotReqCh := make([]MsgChannel, snapReqWorkers)
+	for i := 0; i < snapReqWorkers; i++ {
+		snapshotReqCh[i] = make(MsgChannel, 5000)
+	}
+
 	//Start Scan Coordinator
-	snapshotNotifych := make(chan IndexSnapshot, 100000)
-	snapshotReqCh := make(MsgChannel, 100000)
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh,
 		idx.config, snapshotNotifych, snapshotReqCh, idx.stats.Clone())
 	if res.GetMsgType() != MSG_SUCCESS {
@@ -6118,7 +6128,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	return false
 }
 
-func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot, snapshotReqCh MsgChannel) error {
+func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotReqCh []MsgChannel) error {
 
 	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
@@ -9351,4 +9361,20 @@ func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string
 	}
 	return true
 
+}
+
+func (idx *indexer) getSnapshotListeners() int {
+	snapListners := idx.config["settings.snapshotListeners"].Int()
+	if snapListners <= 0 {
+		return 1
+	}
+	return snapListners
+}
+
+func (idx *indexer) getSnapshotReqWorkers() int {
+	snapReqWorkers := idx.config["settings.snapshotRequestWorkers"].Int()
+	if snapReqWorkers <= 0 {
+		return 1
+	}
+	return snapReqWorkers
 }
