@@ -4618,7 +4618,7 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 	builder := &builder{
 		manager:         mgr,
 		pendings:        make(map[string][]uint64),
-		notifych:        make(chan *common.IndexDefn, 10000),
+		notifych:        make(chan *common.IndexDefn, 50000),
 		batchSize:       int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
 		commandListener: mc.NewCommandListener(donech, false, true, false, false, false, false),
 		listenerDonech:  donech,
