@@ -19,6 +19,14 @@ func Size() uint64 {
 	return ee.Size()
 }
 
+func AllocSize() uint64 {
+	return ee.AllocSize()
+}
+
 func Stats() string {
 	return ee.Stats()
+}
+
+func GetAllocStats() (uint64, uint64) {
+	return ee.GetAllocStats()
 }

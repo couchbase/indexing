@@ -567,6 +567,10 @@ func (m *MemDB) MemoryInUse() int64 {
 }
 
 func (m *MemDB) Close() {
+	m.Close2(1)
+}
+
+func (m *MemDB) Close2(concurr int) {
 	// Wait until all snapshot iterators have finished
 	for s := m.snapshots.GetStats(); int(s.NodeCount) != 0; s = m.snapshots.GetStats() {
 		time.Sleep(time.Millisecond)
@@ -588,38 +592,182 @@ func (m *MemDB) Close() {
 	dbInstances.Delete(unsafe.Pointer(m), CompareMemDB, buf, &dbInstances.Stats)
 
 	if m.useMemoryMgmt {
-		buf := m.snapshots.MakeBuf()
-		defer m.snapshots.FreeBuf(buf)
-
 		m.shutdownWg1.Wait()
 		close(m.freechan)
 		m.shutdownWg2.Wait()
 
 		// Manually free up all nodes
-		iter := m.store.NewIterator(m.iterCmp, buf)
-		defer iter.Close()
-		var lastNode *skiplist.Node
-
-		iter.SeekFirst()
-		if iter.Valid() {
-			lastNode = iter.GetNode()
-			iter.Next()
-		}
-
-		for lastNode != nil {
-			m.freeItem((*Item)(lastNode.Item()))
-			m.store.FreeNode(lastNode, &m.store.Stats)
-			lastNode = nil
-
-			if iter.Valid() {
-				lastNode = iter.GetNode()
-				iter.Next()
-			}
+		if err := m.FreeNodesConcurrent(concurr); err != nil {
+			m.FreeNodesSerial()
 		}
 	}
 
 	m.store.FreeNode(m.store.HeadNode(), &m.store.Stats)
 	m.store.FreeNode(m.store.TailNode(), &m.store.Stats)
+}
+
+func (m *MemDB) FreeNodesConcurrent(concurr int) error {
+	var bufs []*skiplist.ActionBuffer
+	defer func() {
+		for _, b := range bufs {
+			m.store.FreeBuf(b)
+		}
+	}()
+
+	var itrs []*skiplist.Iterator
+	defer func() {
+		for _, itr := range itrs {
+			itr.Close()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var pivotItems []unsafe.Pointer
+
+	// Get pivot items
+	func() {
+		barrier := m.store.GetAccesBarrier()
+		token := barrier.Acquire()
+		defer barrier.Release(token)
+
+		pivotItems = m.store.GetRangeSplitItems(concurr)
+	}()
+
+	// Add first iterator from first node
+	buf := m.store.MakeBuf()
+	bufs = append(bufs, buf)
+
+	itr := m.store.NewIterator(m.iterCmp, buf)
+	itrs = append(itrs, itr)
+
+	itr.SeekFirst()
+	if !itr.Valid() {
+		return fmt.Errorf("Couldn't seek to valid first node")
+	}
+
+	pivotNodes := append([]*skiplist.Node{}, itr.GetNode())
+	itr.Next()
+
+	// Init buffers and iterators for the pivot items
+	for _, startItm := range pivotItems {
+		b := m.store.MakeBuf()
+		itr := m.store.NewIterator(m.iterCmp, b)
+
+		cleanup := func() {
+			itr.Close()
+			m.store.FreeBuf(b)
+		}
+
+		if itr.Seek(startItm) {
+			if itr.Valid() {
+				currItrStartItm := itr.GetNode().Item()
+				prevItrStartItm := itrs[len(itrs)-1].GetNode().Item()
+
+				// Use iterator only if it is at a greater position
+				if m.iterCmp(currItrStartItm, prevItrStartItm) >= 0 {
+					bufs = append(bufs, b)
+					itrs = append(itrs, itr)
+
+					pivotNodes = append(pivotNodes, itr.GetNode())
+					itr.Next()
+				} else {
+					// cleanup and try iterator with the next pivot
+					cleanup()
+				}
+
+			} else {
+				cleanup()
+
+				itm := (*Item)(startItm)
+				return fmt.Errorf("Couldn't seek to valid start itm itm=[%v]", itm)
+			}
+		} else {
+			cleanup()
+
+			itm := (*Item)(startItm)
+			return fmt.Errorf("Couldn't seek to pivot itm itm=[%v]", itm)
+		}
+	}
+
+	pivotNodes = append(pivotNodes, nil)
+
+	// Assert correct number of iterators and pivot nodes
+	if len(pivotNodes) != 1 + len(itrs) {
+		return fmt.Errorf("Number of iterators and pivot nodes do not match")
+	}
+
+	// Free nodes manually starting from pivot item in separate goroutines
+	for i, itr := range itrs {
+		wg.Add(1)
+		go func(it *skiplist.Iterator, endNode *skiplist.Node) {
+			defer wg.Done()
+
+			var end unsafe.Pointer
+			if endNode != nil {
+				end = endNode.Item()
+			}
+
+			var lastNode *skiplist.Node
+
+			if it.Valid() {
+				lastNode = it.GetNode()
+				it.Next()
+			}
+
+			for lastNode != nil {
+				if end != nil && m.iterCmp(lastNode.Item(), end) >= 0 {
+					return
+				}
+
+				m.freeItem((*Item)(lastNode.Item()))
+				m.store.FreeNode(lastNode, &m.store.Stats)
+				lastNode = nil
+
+				if it.Valid() {
+					lastNode = it.GetNode()
+					it.Next()
+				}
+			}
+		}(itr, pivotNodes[i+1])
+	}
+	wg.Wait()
+
+	// Free pivot nodes
+	for _, node := range pivotNodes[:len(pivotNodes)-1] {
+		itm := node.Item()
+
+		m.freeItem((*Item)(itm))
+		m.store.FreeNode(node, &m.store.Stats)
+	}
+
+	return nil
+}
+
+func (m *MemDB) FreeNodesSerial() {
+	buf := m.snapshots.MakeBuf()
+	defer m.snapshots.FreeBuf(buf)
+
+	iter := m.store.NewIterator(m.iterCmp, buf)
+	defer iter.Close()
+
+	var lastNode *skiplist.Node
+
+	iter.SeekFirst()
+	if iter.Valid() {
+		lastNode = iter.GetNode()
+		iter.Next()
+	}
+
+	for lastNode != nil {
+		m.freeItem((*Item)(lastNode.Item()))
+		m.store.FreeNode(lastNode, &m.store.Stats)
+		lastNode = nil
+
+		if iter.Valid() {
+			lastNode = iter.GetNode()
+			iter.Next()
+		}
+	}
 }
 
 func (m *MemDB) GetCurrSn() uint32 {
