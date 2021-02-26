@@ -646,7 +646,7 @@ func (m *MemDB) FreeNodesConcurrent(concurr int) error {
 	}
 
 	pivotNodes := append([]*skiplist.Node{}, itr.GetNode())
-	itr.Next()
+	itr.NextForFree()
 
 	// Init buffers and iterators for the pivot items
 	for _, startItm := range pivotItems {
@@ -669,7 +669,7 @@ func (m *MemDB) FreeNodesConcurrent(concurr int) error {
 					itrs = append(itrs, itr)
 
 					pivotNodes = append(pivotNodes, itr.GetNode())
-					itr.Next()
+					itr.NextForFree()
 				} else {
 					// cleanup and try iterator with the next pivot
 					cleanup()
@@ -711,7 +711,7 @@ func (m *MemDB) FreeNodesConcurrent(concurr int) error {
 
 			if it.Valid() {
 				lastNode = it.GetNode()
-				it.Next()
+				it.NextForFree()
 			}
 
 			for lastNode != nil {
@@ -725,7 +725,7 @@ func (m *MemDB) FreeNodesConcurrent(concurr int) error {
 
 				if it.Valid() {
 					lastNode = it.GetNode()
-					it.Next()
+					it.NextForFree()
 				}
 			}
 		}(itr, pivotNodes[i+1])

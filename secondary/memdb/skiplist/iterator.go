@@ -108,6 +108,20 @@ retry:
 	}
 }
 
+// NextForFree will advance the iterator without skipping the nodes marked for delete.
+// When encountering a node marked for delete, do not call helpDelete and findPath.
+func (it *Iterator) NextForFree() {
+	if it.deleted {
+		it.deleted = false
+		return
+	}
+
+	it.valid = true
+	next, _ := it.curr.getNext(0)
+	it.prev = it.curr
+	it.curr = next
+}
+
 func (it *Iterator) Close() {
 	it.s.barrier.Release(it.bs)
 }
