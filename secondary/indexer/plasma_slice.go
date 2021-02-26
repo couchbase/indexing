@@ -360,6 +360,7 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.EvictMinThreshold = slice.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
 	mCfg.EvictMaxThreshold = slice.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
 	mCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
+	mCfg.EvictDirtyPercent = slice.sysconf["plasma.mainIndex.evictDirtyPercent"].Float64()
 	mCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
 	mCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
 	mCfg.EvictUseMemEstimate = slice.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
@@ -379,6 +380,7 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.EvictMinThreshold = slice.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
 	bCfg.EvictMaxThreshold = slice.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
 	bCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
+	bCfg.EvictDirtyPercent = slice.sysconf["plasma.backIndex.evictDirtyPercent"].Float64()
 	bCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
 	bCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
 	bCfg.EvictUseMemEstimate = slice.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
@@ -2269,6 +2271,7 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MTunerOvershootRatio = cfg["plasma.memtuner.overshootRatio"].Float64()
 	plasma.MTunerIncrCeilPercent = cfg["plasma.memtuner.incrCeilPercent"].Float64()
 	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
+	plasma.MFragThreshold = cfg["plasma.memFragThreshold"].Float64()
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
@@ -2297,6 +2300,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
 	mdb.mainstore.EvictMaxThreshold = mdb.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
 	mdb.mainstore.EvictDirtyOnPersistRatio = mdb.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
+	mdb.mainstore.EvictDirtyPercent = mdb.sysconf["plasma.mainIndex.evictDirtyPercent"].Float64()
 	mdb.mainstore.EvictSweepInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
 	mdb.mainstore.EvictRunInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
 	mdb.mainstore.EvictUseMemEstimate = mdb.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
@@ -2348,6 +2352,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
 		mdb.backstore.EvictMaxThreshold = mdb.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
 		mdb.backstore.EvictDirtyOnPersistRatio = mdb.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
+		mdb.backstore.EvictDirtyPercent = mdb.sysconf["plasma.backIndex.evictDirtyPercent"].Float64()
 		mdb.backstore.EvictSweepInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
 		mdb.backstore.EvictRunInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
 		mdb.backstore.EvictUseMemEstimate = mdb.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
