@@ -218,7 +218,17 @@ func CountItems(snap *Snapshot) int {
 	return count
 }
 
+func ValidateNoMemLeaks() {
+	a, b := mm.GetAllocStats()
+	if a-b != 0 {
+		fmt.Printf("0: Found memory leak of %d allocs. allocs[%d] frees[%d]\n", a-b, a, b)
+		panic("Fatal Error: TEST STOPPED. Please fix memory leak first")
+	}
+}
+
 func TestLoadStoreDisk(t *testing.T) {
+	defer ValidateNoMemLeaks()
+
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
@@ -294,6 +304,8 @@ func TestConcurrentLoadCloseFragmentationEmpty(t *testing.T) {
 }
 
 func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
+	defer ValidateNoMemLeaks()
+
 	os.RemoveAll("db.dump")
 
 	var wg sync.WaitGroup

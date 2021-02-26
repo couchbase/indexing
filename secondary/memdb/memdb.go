@@ -1415,6 +1415,10 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	if assembledStore == nil {
 		return nil, ErrCorruptSnapshot
 	}
+
+	m.store.FreeNode(m.store.HeadNode(), &m.store.Stats)
+	m.store.FreeNode(m.store.TailNode(), &m.store.Stats)
+
 	m.store = assembledStore
 
 	// Delta processing
