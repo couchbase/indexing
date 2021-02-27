@@ -3037,9 +3037,12 @@ func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 
 func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.Request, creds cbauth.Creds) {
 	url := strings.TrimSpace(r.URL.Path)
-	logging.Debugf("bucketReqHandler: url %v", url)
-
+	if url[len(url)-1] == byte('/') {
+		url = url[:len(url)-1]
+	}
 	segs := strings.Split(url, "/")
+	logging.Debugf("bucketReqHandler: url %v, segs:%v", url, segs)
+
 	if len(segs) != 6 {
 		switch r.Method {
 

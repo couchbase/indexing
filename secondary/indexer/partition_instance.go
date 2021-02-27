@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"fmt"
+
 	"github.com/couchbase/indexing/secondary/common"
 )
 
