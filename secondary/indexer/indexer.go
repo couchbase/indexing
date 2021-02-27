@@ -6296,13 +6296,15 @@ func (idx *indexer) cleanupOrphanIndexes() {
 		orphanIndexList = append(orphanIndexList, f)
 	}
 
-	for _, f := range orphanIndexList {
-		if err := DestroySlice(mode, storageDir, f); err != nil {
-			logging.Warnf("Error %v while removing orphan index data for %v.", err, f)
-		} else {
-			logging.Infof("Cleaned up the orphan index slice %v.", f)
+	go func() {
+		for _, f := range orphanIndexList {
+			if err := DestroySlice(mode, storageDir, f); err != nil {
+				logging.Warnf("Error %v while removing orphan index data for %v.", err, f)
+			} else {
+				logging.Infof("Cleaned up the orphan index slice %v.", f)
+			}
 		}
-	}
+	}()
 }
 
 func (idx *indexer) handleStorageWarmupDone(msg Message) {
