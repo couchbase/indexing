@@ -1478,9 +1478,6 @@ func (mdb *memdbSlice) Close() {
 	prev := atomic.LoadUint64(&mdb.committedCount)
 	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 
-	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
-		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
-
 	//signal shutdown for command handler routines
 	for i := 0; i < mdb.numWriters; i++ {
 		mdb.stopCh[i] <- true
@@ -1489,6 +1486,8 @@ func (mdb *memdbSlice) Close() {
 
 	if mdb.refCount > 0 {
 		mdb.isSoftClosed = true
+		logging.Infof("MemDBSlice::Close Soft Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
+			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 	} else {
 		go tryClosememdbSlice(mdb)
 	}
@@ -1501,8 +1500,10 @@ func (mdb *memdbSlice) Destroy() {
 	defer mdb.lock.Unlock()
 
 	if mdb.refCount > 0 {
-		logging.Infof("MemDBSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, PartitionId %v, "+
-			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
+		openSnaps := mdb.idxStats.numOpenSnapshots.Value()
+		logging.Infof("MemDBSlice::Destroy Soft deleted Slice Id %v, IndexInstId %v, PartitionId %v, "+
+			"IndexDefnId %v, RefCount %v, NumOpenSnapshots %v", mdb.id, mdb.idxInstId, mdb.idxPartnId,
+			mdb.idxDefnId, mdb.refCount, openSnaps)
 		mdb.isSoftDeleted = true
 	} else {
 		tryDeletememdbSlice(mdb)
@@ -1676,7 +1677,12 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 	//cleanup the disk directory
 	if err := os.RemoveAll(mdb.path); err != nil {
 		logging.Errorf("MemDBSlice::Destroy Error Cleaning Up Slice Id %v, "+
-			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
+			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id,
+			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
+	} else {
+		logging.Errorf("MemDBSlice::Destroy Cleaned Up Slice Id %v, "+
+			"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
+			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 	}
 }
 
@@ -1687,6 +1693,9 @@ func tryClosememdbSlice(mdb *memdbSlice) {
 			mdb.back[i].Close()
 		}
 	}
+	logging.Errorf("MemDBSlice::Close Closed Slice Id %v, "+
+		"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
+		mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
