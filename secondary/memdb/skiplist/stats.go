@@ -1,7 +1,9 @@
 package skiplist
 
-import "fmt"
-import "sync/atomic"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 type StatsReport struct {
 	ReadConflicts       uint64
@@ -91,6 +93,24 @@ func (s *Stats) Merge(sts *Stats) {
 			sts.levelNodesCount[i] = 0
 		}
 	}
+}
+
+func (s StatsReport) Map() map[string]interface{} {
+	mp := make(map[string]interface{})
+	mp["node_count"] = s.NodeCount
+	mp["soft_deletes"] = s.SoftDeletes
+	mp["read_conflicts"] = s.ReadConflicts
+	mp["insert_conflicts"] = s.InsertConflicts
+	mp["next_pointers_per_node"] = s.NextPointersPerNode
+	mp["memory_used"] = s.Memory
+	mp["node_allocs"] = s.NodeAllocs
+	mp["node_frees"] = s.NodeFrees
+	lmap := make(map[string]interface{})
+	for i, c := range s.NodeDistribution {
+		lmap[fmt.Sprintf("level%d", i)] = c
+	}
+	mp["level_node_distribution"] = lmap
+	return mp
 }
 
 func (s StatsReport) String() string {

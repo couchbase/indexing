@@ -160,6 +160,10 @@ func (s IndexStorageStats) GetInternalData() []string {
 	return s.Stats.InternalData
 }
 
+func (s IndexStorageStats) GetInternalDataMap() map[string]interface{} {
+	return s.Stats.InternalDataMap
+}
+
 type VbStatus uint64
 
 const (

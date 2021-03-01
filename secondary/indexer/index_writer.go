@@ -10,8 +10,9 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 // Fragementation is calculated based on DataSizeOnDisk and LogSpace stat
@@ -38,7 +39,8 @@ type StorageStatistics struct {
 
 	NeedUpgrade bool
 
-	InternalData []string
+	InternalData    []string
+	InternalDataMap map[string]interface{}
 }
 
 type IndexWriter interface {

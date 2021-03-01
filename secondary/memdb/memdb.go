@@ -1565,6 +1565,10 @@ func (m *MemDB) DumpStats() string {
 	return m.aggrStoreStats().String()
 }
 
+func (m *MemDB) DumpStatsMap() map[string]interface{} {
+	return m.aggrStoreStats().Map()
+}
+
 func (m *MemDB) aggrStoreStats() skiplist.StatsReport {
 	sts := m.store.GetStats()
 	for w := m.wlist; w != nil; w = w.next {
