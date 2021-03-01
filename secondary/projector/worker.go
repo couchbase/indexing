@@ -18,6 +18,7 @@
 package projector
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"sync"
@@ -36,6 +37,8 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 )
+
+var transactionMutationPrefix = []byte("_txn:")
 
 // VbucketWorker is immutable structure defined for each vbucket.
 type VbucketWorker struct {
@@ -585,11 +588,13 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 
 		}
 
+		isTxn := (m.Opcode == mcd.DCP_MUTATION) && !m.IsJSON() && m.HasXATTR() && bytes.HasPrefix(m.Key, transactionMutationPrefix)
+
 		// If the mutation belongs to a collection other than the
 		// ones that are being processed at worker, send UpdateSeqno
 		// message to indexer
 		// The else case should get executed only incase of MAINT_STREAM
-		if collEngines, ok := allEngines[m.CollectionID]; ok {
+		if collEngines, ok := allEngines[m.CollectionID]; ok && !isTxn {
 			processMutation(collEngines)
 		} else {
 			// Generate updateSeqno message and propagate it to indexer
