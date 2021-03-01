@@ -4,27 +4,50 @@ import (
 	"fmt"
 	"math"
 	"sync/atomic"
+	"time"
 )
 
 type Histogram struct {
 	buckets    []int64
 	vals       []int64
 	humanizeFn func(int64) string
+	bitmap     uint64
 }
 
 func (h *Histogram) Init(buckets []int64, humanizeFn func(int64) string) {
 	l := len(buckets)
 	h.buckets = make([]int64, l+2)
-	copy(h.buckets[1:l], buckets)
+	copy(h.buckets[1:l+1], buckets)
 	h.buckets[0] = math.MinInt64
-	h.buckets[l] = math.MaxInt64
-	h.vals = make([]int64, l)
+	h.buckets[l+1] = math.MaxInt64
+	h.vals = make([]int64, l+1)
 
 	if humanizeFn == nil {
 		humanizeFn = func(v int64) string { return fmt.Sprint(v) }
 	}
 
 	h.humanizeFn = humanizeFn
+
+	h.bitmap = AllStatsFilter
+}
+
+func (h *Histogram) InitLatency(buckets []int64, humanizeFn func(int64) string) {
+	l := len(buckets)
+	h.buckets = make([]int64, l+2)
+	for i := 1; i <= l; i++ {
+		h.buckets[i] = buckets[i-1] * int64(time.Millisecond)
+	}
+	h.buckets[0] = math.MinInt64
+	h.buckets[l+1] = math.MaxInt64
+	h.vals = make([]int64, l+1)
+
+	if humanizeFn == nil {
+		humanizeFn = func(v int64) string { return fmt.Sprint(v) }
+	}
+
+	h.humanizeFn = humanizeFn
+
+	h.bitmap = AllStatsFilter
 }
 
 func (h *Histogram) Add(val int64) {
@@ -46,7 +69,7 @@ func (h *Histogram) findBucket(val int64) int {
 	return 0
 }
 
-func (h Histogram) String() string {
+func (h *Histogram) String() string {
 	s := "\""
 	l := len(h.vals)
 	for i := 0; i < l; i++ {
@@ -63,6 +86,34 @@ func (h Histogram) String() string {
 	return s
 }
 
-func (h Histogram) MarshalJSON() ([]byte, error) {
+func (h *Histogram) MarshalJSON() ([]byte, error) {
 	return []byte(h.String()), nil
+}
+
+func (h *Histogram) AddFilter(bitmap uint64) {
+	h.bitmap |= bitmap
+}
+
+func (h *Histogram) Map(bitmap uint64) bool {
+	return (h.bitmap & bitmap) != 0
+}
+
+func (h *Histogram) GetValue() interface{} {
+	out := make(map[string]interface{})
+	for i := 0; i < len(h.buckets)-1; i++ {
+
+		low := h.humanizeFn(h.buckets[i])
+		hi := h.humanizeFn(h.buckets[i+1])
+
+		var key string
+		if h.buckets[i] == math.MinInt64 {
+			key = fmt.Sprintf("(-Inf-%v)", hi)
+		} else if h.buckets[i+1] == math.MaxInt64 {
+			key = fmt.Sprintf("(%v-Inf)", low)
+		} else {
+			key = fmt.Sprintf("(%v-%v)", low, hi)
+		}
+		out[key] = h.vals[i]
+	}
+	return out
 }
