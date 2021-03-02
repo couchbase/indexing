@@ -1631,8 +1631,8 @@ func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) 
 	internalData := fmt.Sprintf("{\n"+
 		"\"items_count\":%v,\n"+
 		"\"data_size\":%v\n}",
-		mdb.mainstore.MemoryInUse(),
-		mdb.mainstore.ItemsCount())
+		mdb.mainstore.ItemsCount(),
+		mdb.mainstore.MemoryInUse())
 	sts.InternalData = []string{internalData}
 	return sts, nil
 }
