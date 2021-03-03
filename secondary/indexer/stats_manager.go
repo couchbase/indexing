@@ -1225,7 +1225,6 @@ func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 					}
 				}
 				found = true
-				break
 			}
 		}
 	}
