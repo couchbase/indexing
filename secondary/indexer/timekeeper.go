@@ -1042,11 +1042,24 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+	node := cmd.(*MsgStream).GetNode()
 
 	defer meta.Free()
 
-	logging.Infof("TK StreamBegin %v %v %v %v %v %v", streamId, meta.keyspaceId,
-		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque)
+	var host string
+	if node != nil {
+		nodeUUID := fmt.Sprintf("%s", node)
+		stats := tk.stats.Get()
+		if stats != nil {
+			nodeToHostMap := stats.nodeToHostMap.Get()
+			if nodeToHostMap != nil {
+				host = nodeToHostMap[nodeUUID]
+			}
+		}
+	}
+
+	logging.Infof("TK StreamBegin %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
+		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, host)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()

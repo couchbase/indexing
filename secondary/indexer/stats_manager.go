@@ -1736,7 +1736,7 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 	statMap.AddStatValueFiltered("avg_scan_request_init_latency", &s.scanReqInitLat)
 	statMap.AddStatValueFiltered("scan_req_init_latency_dist", &s.scanReqInitLatDist)
 	statMap.AddStatValueFiltered("scan_req_wait_latency_dist", &s.scanReqWaitLatDist)
-	statMap.AddStatValueFiltered("scan_req_latency_dist", &s.scanReqWaitLatDist)
+	statMap.AddStatValueFiltered("scan_req_latency_dist", &s.scanReqLatDist)
 	statMap.AddStatValueFiltered("snapshot_gen_latency_dist", &s.snapGenLatDist)
 	statMap.AddStatValueFiltered("snapshot_latency_dist", &s.snapLatDist)
 

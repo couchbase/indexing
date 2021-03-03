@@ -543,6 +543,9 @@ func (idx IndexInstList) String() string {
 		str += fmt.Sprintf("RState: %v ", index.RState)
 		str += fmt.Sprintf("Version: %v ", index.Version)
 		str += fmt.Sprintf("ReplicaId: %v ", index.ReplicaId)
+		if index.RealInstId != 0 {
+			str += fmt.Sprintf("RealInstId: %v ", index.RealInstId)
+		}
 		str += "\n"
 	}
 	return str

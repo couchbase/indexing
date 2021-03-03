@@ -352,6 +352,8 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 						InstId:       index.InstId,
 						IndexInst:    *index.Instance,
 						TransferMode: common.TokenTransferModeMove,
+						SourceHost:   index.initialNode.NodeId,
+						DestHost:     index.destNode.NodeId,
 					}
 
 					token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
@@ -410,6 +412,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 						InstId:       index.InstId,
 						IndexInst:    *index.Instance,
 						TransferMode: common.TokenTransferModeCopy,
+						DestHost:     index.destNode.NodeId,
 					}
 
 					token.IndexInst.Defn.InstVersion = 1

@@ -1624,6 +1624,8 @@ func (idx *indexer) handleMergePartition(msg Message) {
 	rebalState := msg.(*MsgMergePartition).GetRebalanceState()
 	respch := msg.(*MsgMergePartition).GetResponseChannel()
 
+	logging.Infof("Indexer::handleMergePartition Source %v Target %v", srcInstId, tgtInstId)
+
 	if err := idx.preValidateMergePartition(srcInstId, tgtInstId); err != nil {
 		if respch != nil {
 			respch <- err
@@ -3304,8 +3306,8 @@ func (idx *indexer) doResetIndexesOnRollback(keyspaceId string,
 func (idx *indexer) resetSingleIndexOnRollback(inst *common.IndexInst,
 	wg *sync.WaitGroup) {
 
-	logging.Infof("Indexer::resetSingleIndexOnRollback Reset index %v %v %v %v",
-		inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection, inst.Defn.Name)
+	logging.Infof("Indexer::resetSingleIndexOnRollback Reset index %v %v %v %v %v",
+		inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection, inst.Defn.Name, inst.InstId)
 
 	// update metadata
 	respch := make(chan error)
@@ -7741,6 +7743,7 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 		idxInst := idx.indexInstMap[instId]
 		if reqCtx.ReqSource == common.DDLRequestSourceRebalance && idxInst.Version != 0 {
 			idxInst.RState = common.REBAL_PENDING
+			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to PENDING", instId)
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE
 			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", instId)

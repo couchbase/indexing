@@ -111,6 +111,10 @@ type TransferToken struct {
 	Error        string
 	BuildSource  TokenBuildSource
 	TransferMode TokenTransferMode
+
+	//used for logging
+	SourceHost string
+	DestHost   string
 }
 
 func (tt TransferToken) Clone() TransferToken {
@@ -128,6 +132,9 @@ func (tt TransferToken) Clone() TransferToken {
 	ttc.BuildSource = tt.BuildSource
 	ttc.TransferMode = tt.TransferMode
 
+	ttc.SourceHost = tt.SourceHost
+	ttc.DestHost = tt.DestHost
+
 	return ttc
 
 }
@@ -136,7 +143,13 @@ func (tt TransferToken) String() string {
 
 	str := fmt.Sprintf(" MasterId: %v ", tt.MasterId)
 	str += fmt.Sprintf("SourceId: %v ", tt.SourceId)
+	if len(tt.SourceHost) != 0 {
+		str += fmt.Sprintf("(%v) ", tt.SourceHost)
+	}
 	str += fmt.Sprintf("DestId: %v ", tt.DestId)
+	if len(tt.DestHost) != 0 {
+		str += fmt.Sprintf("(%v) ", tt.DestHost)
+	}
 	str += fmt.Sprintf("RebalId: %v ", tt.RebalId)
 	str += fmt.Sprintf("State: %v ", tt.State)
 	str += fmt.Sprintf("BuildSource: %v ", tt.BuildSource)

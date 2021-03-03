@@ -1963,14 +1963,14 @@ func (mdb *plasmaSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
-		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
-
 	//signal shutdown for command handler routines
 	mdb.cleanupWritersOnClose()
 
 	if mdb.refCount > 0 {
 		mdb.isSoftClosed = true
+		logging.Infof("plasmaSlice::Close Soft Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
+			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
+
 	} else {
 		tryCloseplasmaSlice(mdb)
 	}
@@ -1991,8 +1991,10 @@ func (mdb *plasmaSlice) Destroy() {
 	defer mdb.lock.Unlock()
 
 	if mdb.refCount > 0 {
-		logging.Infof("plasmaSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, PartitionId %v "+
-			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
+		openSnaps := mdb.idxStats.numOpenSnapshots.Value()
+		logging.Infof("plasmaSlice::Destroy Soft deleted Slice Id %v, IndexInstId %v, PartitionId %v "+
+			"IndexDefnId %v RefCount %v NumOpenSnapshots %v", mdb.id, mdb.idxInstId, mdb.idxPartnId,
+			mdb.idxDefnId, mdb.refCount, openSnaps)
 		mdb.isSoftDeleted = true
 	} else {
 		tryDeleteplasmaSlice(mdb)
@@ -2401,11 +2403,16 @@ func (mdb *plasmaSlice) String() string {
 }
 
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
-	//cleanup the disk directory
 
+	//cleanup the disk directory
 	if err := destroyPlasmaSlice(mdb.storageDir, mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
-			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
+			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id,
+			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
+	} else {
+		logging.Errorf("plasmaSlice::Destroy Cleaned Up Slice Id %v, "+
+			"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
+			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 	}
 }
 
@@ -2416,6 +2423,10 @@ func tryCloseplasmaSlice(mdb *plasmaSlice) {
 	if !mdb.isPrimary {
 		mdb.backstore.Close()
 	}
+
+	logging.Errorf("plasmaSlice::Close Closed Slice Id %v, "+
+		"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
+		mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 }
 
 func (mdb *plasmaSlice) getCmdsCount() int {

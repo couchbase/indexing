@@ -1341,7 +1341,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	for _, tt := range r.transferTokens {
 		state := tt.State
 		// All states not tested in the if-else if are treated as 0% progress
-		if  state == c.TransferTokenReady  || state == c.TransferTokenMerge ||
+		if state == c.TransferTokenReady || state == c.TransferTokenMerge ||
 			state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100.00
 		} else if state == c.TransferTokenInProgress {
