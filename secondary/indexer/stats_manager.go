@@ -1160,7 +1160,6 @@ func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 				s.scope == t.scope &&
 				s.collection == t.collection {
 				addToStatsMap(s)
-				break
 			}
 		}
 	}
