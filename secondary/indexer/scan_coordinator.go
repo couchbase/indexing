@@ -305,11 +305,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
-	if err == common.ErrScanTimedOut && req.Stats != nil {
-		req.Stats.numScanTimeouts.Add(1)
-	}
-	if s.tryRespondWithError(w, req, err) {
-		return
+	if err != nil {
+		logging.Infof("%s Error in getRequestedIndexSnapshot %v", req.LogPrefix, err)
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
 	}
 
 	defer DestroyIndexSnapshot(is)
