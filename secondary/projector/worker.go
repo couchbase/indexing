@@ -74,17 +74,18 @@ type VbucketWorker struct {
 }
 
 type WorkerStats struct {
-	closed      stats.BoolVal
-	datach      chan []interface{}
-	outgoingMut stats.Uint64Val // Number of mutations consumed from this worker
-	updateSeqno stats.Uint64Val // Number of updateSeqno messages sent by this worker
-
+	closed       stats.BoolVal
+	datach       chan []interface{}
+	outgoingMut  stats.Uint64Val // Number of mutations consumed from this worker
+	updateSeqno  stats.Uint64Val // Number of updateSeqno messages sent by this worker
+	txnSystemMut stats.Uint64Val // Number of mutations skipped for transactions
 }
 
 func (stats *WorkerStats) Init() {
 	stats.closed.Init()
 	stats.outgoingMut.Init()
 	stats.updateSeqno.Init()
+	stats.txnSystemMut.Init()
 }
 
 func (stats *WorkerStats) IsClosed() bool {
@@ -589,6 +590,9 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 
 		isTxn := (m.Opcode == mcd.DCP_MUTATION) && !m.IsJSON() && m.HasXATTR() && bytes.HasPrefix(m.Key, transactionMutationPrefix)
+		if isTxn {
+			worker.stats.txnSystemMut.Add(1)
+		}
 
 		// If the mutation belongs to a collection other than the
 		// ones that are being processed at worker, send UpdateSeqno
