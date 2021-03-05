@@ -1142,6 +1142,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.memFragThreshold": ConfigValue{
+		float64(0.15),
+		"Percentage of memory fragmentation",
+		float64(0.15),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
 		plasmaLogSegSize(),
 		"LSS log segment maxsize per file",
@@ -1301,6 +1308,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.evictDirtyPercent": ConfigValue{
+		0.95,
+		"Memory usage relative to quota for enabling periodic evict to purge dirty page",
+		0.95,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.evictSweepInterval": ConfigValue{
 		300,
 		"Time interval to sweep through all pages in an index (in sec)",
@@ -1417,6 +1431,13 @@ var SystemConfig = Config{
 		1.2,
 		"see indexer.plasma.mainIndex.evictDirtyOnPersistRatio",
 		1.2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictDirtyPercent": ConfigValue{
+		0.95,
+		"Memory usage relative to quota for enabling periodic evict to purge dirty page",
+		0.95,
 		false, // mutable
 		false, // case-insensitive
 	},

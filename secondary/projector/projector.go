@@ -95,6 +95,7 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	c.CrashOnError(err)
 	p.cinfoClient = cic
 	p.cinfoClient.SetUserAgent("projector")
+	p.cinfoClient.WatchRebalanceChanges()
 
 	p.stats = NewProjectorStats()
 	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
