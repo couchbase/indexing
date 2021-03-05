@@ -114,3 +114,13 @@ const DEFAULT_COLLECTION_ID = "0"
 const NON_PARTITION_ID = PartitionId(0)
 
 var NULL = []byte("null")
+
+// HTTP header fields
+const HTTP_KEY_CONTENT_TYPE = "Content-Type"  // usually application/json
+const HTTP_KEY_ETAG_REQUEST = "If-None-Match" // http.Request checksum field
+const HTTP_KEY_ETAG_RESPONSE = "ETag"         // http.Response checksum field
+
+// Magic values of HTTP header fields and related constants
+const HTTP_VAL_APPLICATION_JSON = "application/json"  // for HTTP_KEY_CONTENT_TYPE
+const HTTP_VAL_ETAG_BASE = 16 // base (hex) of string-form ETag values in HTTP headers
+const HTTP_VAL_ETAG_INVALID = 0 // ETag value of 0 is treated as invalid or missing
