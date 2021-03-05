@@ -50,7 +50,7 @@ func NewVbucket(
 }
 
 func (v *Vbucket) makeStreamBeginData(
-	engines map[uint32]map[uint64]*Engine, status byte, code byte) (data interface{}) {
+	engines map[uint32]EngineMap, status byte, code byte) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -82,7 +82,7 @@ func (v *Vbucket) makeStreamBeginData(
 	return nil
 }
 
-func (v *Vbucket) makeSyncData(engines map[uint32]map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeSyncData(engines map[uint32]EngineMap) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x sync crashed: %v\n"
@@ -113,7 +113,7 @@ func (v *Vbucket) makeSyncData(engines map[uint32]map[uint64]*Engine) (data inte
 var ssFormat = "%v ##%x received snapshot %v %v (type %x)\n"
 
 func (v *Vbucket) makeSnapshotData(
-	m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+	m *mc.DcpEvent, engines map[uint32]EngineMap) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -149,7 +149,7 @@ func (v *Vbucket) makeSnapshotData(
 
 var seFormat = "%v ##%x received system event %v %v %v (type %v)\n"
 
-func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint32]EngineMap) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x system event crashed: %v\n"
@@ -183,7 +183,7 @@ func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint32]map[uin
 
 var usFormat = "%v ##%x UpdateSeqno %v %v\n"
 
-func (v *Vbucket) makeUpdateSeqnoData(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeUpdateSeqnoData(m *mc.DcpEvent, engines map[uint32]EngineMap) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x UpdateSeqno crashed: %v\n"
@@ -217,7 +217,7 @@ func (v *Vbucket) makeUpdateSeqnoData(m *mc.DcpEvent, engines map[uint32]map[uin
 
 var seqnoFormat = "%v ##%x received SeqnoAdvanced %v %v %v\n"
 
-func (v *Vbucket) makeSeqnoAdvancedEvent(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeSeqnoAdvancedEvent(m *mc.DcpEvent, engines map[uint32]EngineMap) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x SeqnoAdvanced crashed: %v\n"
@@ -250,7 +250,7 @@ func (v *Vbucket) makeSeqnoAdvancedEvent(m *mc.DcpEvent, engines map[uint32]map[
 
 var osoFormat = "%v ##%x received OSOSnapshot %v %v %v\n"
 
-func (v *Vbucket) makeOSOSnapshotEvent(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeOSOSnapshotEvent(m *mc.DcpEvent, engines map[uint32]EngineMap) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x OSOSnapshot crashed: %v\n"
@@ -282,7 +282,7 @@ func (v *Vbucket) makeOSOSnapshotEvent(m *mc.DcpEvent, engines map[uint32]map[ui
 }
 
 func (v *Vbucket) makeStreamEndData(
-	engines map[uint32]map[uint64]*Engine) (data interface{}) {
+	engines map[uint32]EngineMap) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
