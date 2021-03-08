@@ -186,6 +186,8 @@ type indexer struct {
 
 	keyspaceIdResetList                map[string]resetList
 	keyspaceIdObserveFlushDoneForReset map[string]MsgChannel
+
+	pendingReset map[common.IndexInstId]bool
 }
 
 type kvRequest struct {
@@ -276,6 +278,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 		keyspaceIdResetList:                make(map[string]resetList),
 		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
+
+		pendingReset: make(map[common.IndexInstId]bool),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -3300,6 +3304,8 @@ func (idx *indexer) doResetIndexesOnRollback(keyspaceId string,
 		common.CrashOnError(err)
 	}
 
+	idx.addPendingReset(updatedInstances)
+
 	go idx.waitForIndexReset(keyspaceId, sessionId, &wg)
 }
 
@@ -3892,6 +3898,7 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
 	deleteFreeWriters(indexInst.InstId)
+	idx.deletePendingReset(indexInstId)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexInstMap.AppendDeletedInstIds([]common.IndexInstId{indexInstId})
@@ -5221,6 +5228,8 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 		idx.indexInstMap[index.InstId] = index
 	}
 
+	idx.updateRStateForPendingReset(indexList)
+
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexInstMap.AppendUpdatedInsts(indexList)
@@ -5402,6 +5411,8 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	for _, index := range indexList {
 		idx.indexInstMap[index.InstId] = index
 	}
+
+	idx.updateRStateForPendingReset(indexList)
 
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -9380,4 +9391,31 @@ func (idx *indexer) getSnapshotReqWorkers() int {
 		return 1
 	}
 	return snapReqWorkers
+}
+
+func (idx *indexer) addPendingReset(instances []common.IndexInst) {
+
+	for _, inst := range instances {
+		idx.pendingReset[inst.InstId] = true
+	}
+}
+
+func (idx *indexer) updateRStateForPendingReset(instances []common.IndexInst) {
+
+	for _, inst := range instances {
+		if _, ok := idx.pendingReset[inst.InstId]; ok {
+			if !inst.IsProxy() &&
+				inst.RState != common.REBAL_ACTIVE {
+				logging.Infof("Indexer::updateRStateForPendingReset Index Instance %v "+
+					"rstate moved to ACTIVE", inst.InstId)
+				inst.RState = common.REBAL_ACTIVE
+				idx.indexInstMap[inst.InstId] = inst
+			}
+			delete(idx.pendingReset, inst.InstId)
+		}
+	}
+}
+
+func (idx *indexer) deletePendingReset(instId common.IndexInstId) {
+	delete(idx.pendingReset, instId)
 }
