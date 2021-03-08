@@ -239,6 +239,17 @@ func (endpoint *RouterEndpoint) Send(data interface{}) error {
 	return c.FailsafeOpNoblock(endpoint.ch, cmd, endpoint.finch)
 }
 
+// Send KeyVersions to other end, asynchronous call.
+// Asynchronous call. Return ErrorChannelFull that can be used by caller.
+// Returns ErrorAbort if abortCh is closed on callers side
+func (endpoint *RouterEndpoint) Send2(data interface{}, abortCh chan bool) error {
+	cmd := []interface{}{endpCmdSend, data}
+	if endpoint.block {
+		return c.FailsafeOpAsync2(endpoint.ch, cmd, endpoint.finch, abortCh)
+	}
+	return c.FailsafeOpNoblock(endpoint.ch, cmd, endpoint.finch)
+}
+
 // GetStatistics for this endpoint, synchronous call.
 func (endpoint *RouterEndpoint) GetStatistics() map[string]interface{} {
 	respch := make(chan []interface{}, 1)

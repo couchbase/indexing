@@ -17,6 +17,9 @@ var ErrorUnexpectedPayload = errors.New("secondary.unexpectedPayload")
 // ErrorClosed
 var ErrorClosed = errors.New("genServer.closed")
 
+// ErrorAborted
+var ErrorAborted = errors.New("genServer.aborted")
+
 // ErrorChannelFull
 var ErrorChannelFull = errors.New("secondary.channelFull")
 
