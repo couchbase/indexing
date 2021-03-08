@@ -18,6 +18,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
@@ -1210,6 +1211,8 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 
 	m.Unlock()
 
+	snapCnt := snap.Count()
+
 	manifestdir := dir
 	datadir := filepath.Join(dir, "data")
 	os.MkdirAll(datadir, 0755)
@@ -1270,6 +1273,36 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		}()
 	}
 
+	cntPerShard := make([]int64, shards)
+	szPerShard := make([]int64, shards)
+	var totalCnt, totalSz int64
+	var lastLogTime time.Time
+
+	// Disk size will be proportional to the memory size
+	storeStats := m.aggrStoreStats()
+	dataSz := storeStats.Memory
+
+	defer func () {
+		logging.Infof("memdb.StoreToDisk: Done dir [%v] disk snapshot - count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
+			dir, cntPerShard, totalCnt, snapCnt, szPerShard, totalSz, dataSz)
+	}()
+
+	// Add to local stats and log the if they exceed expected values
+	maybeLog := func(itm *Item, shard int) {
+		cntPerShard[shard]++
+		sz := int64(itm.dataLen)
+		szPerShard[shard] += sz
+
+		if ts, tc := atomic.AddInt64(&totalSz, sz), atomic.AddInt64(&totalCnt, 1); (ts > dataSz || tc > snapCnt) &&
+			time.Since(lastLogTime) > 5 * time.Minute {
+
+			logging.Infof("memdb.StoreToDisk: Unexpected amount of data being persisted dir [%v] count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
+				dir, cntPerShard, tc, snapCnt, szPerShard, ts, dataSz)
+
+			lastLogTime = time.Now()
+		}
+	}
+
 	visitorCallback := func(itm *Item, shard int) error {
 		if m.hasShutdown {
 			return ErrShutdown
@@ -1279,6 +1312,8 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		if err := w.WriteItem(itm); err != nil {
 			return err
 		}
+
+		maybeLog(itm, shard)
 
 		if itmCallback != nil {
 			itmCallback(&ItemEntry{itm: itm, n: nil})
