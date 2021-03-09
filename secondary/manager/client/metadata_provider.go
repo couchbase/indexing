@@ -55,6 +55,7 @@ type Settings interface {
 	AllowPartialQuorum() bool
 	AllowScheduleCreate() bool
 	AllowScheduleCreateRebal() bool
+	WaitForScheduledIndex() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -895,6 +896,105 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 	return ErrWaitScheduleTimeout
 }
 
+func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
+
+	// By this time, the schedule create token is seen at least once in waitForScheduleCreateToken.
+	// So, it is safe to assume that the waiting can be stopped once one of the following events
+	// occur.
+	// 1. Index gets created (state depends on defer build flag).
+	// 2. Stop schedule create token is posted.
+	// 3. Schedule create token gets deleted.
+	//    Note that the schedule create token can get deleted due to two reasons
+	//    1. index got created.
+	//    2. index got deleted.
+	//    Here, it is not possible to know the reason of schedule create token getting
+	//    deleted. Checking for DeleteCommandToken can race with DeleteCommandToken
+	//    cleanup.
+
+	var states []c.IndexState
+	if idxDefn.Deferred {
+		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	} else {
+		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	}
+
+	// Use nil topolgy as at this point the topology is unknown. This can lead
+	// to false notification in case of restart of unrelated indexer process.
+	event := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil}
+	if !o.repo.registerEvent(event) {
+		// This means that the event has already occurred.
+		return nil
+	}
+
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+
+		for {
+			select {
+
+			case <-t.C:
+				exists, err := mc.ScheduleCreateTokenExist(idxDefn.DefnId)
+				if err != nil {
+					o.repo.cancelEvent(idxDefn.DefnId, err)
+					return
+				}
+
+				if !exists {
+					o.repo.cancelEvent(idxDefn.DefnId, nil)
+					return
+				}
+
+				token, err1 := mc.GetStopScheduleCreateToken(idxDefn.DefnId)
+				if err1 != nil {
+					o.repo.cancelEvent(idxDefn.DefnId, err1)
+					return
+				}
+
+				if token != nil {
+					o.repo.cancelEvent(idxDefn.DefnId, fmt.Errorf("%v", token.Reason))
+					return
+				}
+			}
+		}
+	}()
+
+	// Wait for the notification
+	err, _ := <-event.notifyCh
+	if err != nil {
+		return err
+	}
+
+	// By this time, the index is either crearted or deleted. The notification
+	// may have been sent by the cancelEvent or by the actual index state update.
+	// If the defer_build was false, then wait until the index becomes active.
+	if idxDefn.Deferred {
+		return nil
+	}
+
+	func() {
+		o.repo.RLock()
+		defer o.repo.RUnlock()
+
+		states = []c.IndexState{c.INDEX_STATE_CREATED, c.INDEX_STATE_READY,
+			c.INDEX_STATE_INITIAL, c.INDEX_STATE_CATCHUP}
+
+		if !o.repo.hasWellFormedInstMatchingStatusNoLock(idxDefn.DefnId, states) {
+			// The index may have been deleted or errored or became active.
+			err = o.repo.getDefnErrorIgnoreStatusNoLock(idxDefn.DefnId)
+		}
+	}()
+
+	if err != nil {
+		return err
+	}
+
+	// Use nil topolgy for the sake of simplicity. This can lead
+	// to false notification in case of restart of unrelated indexer process.
+	states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	return o.repo.waitForEvent(idxDefn.DefnId, states, nil)
+}
+
 // This should be called for the defn, that is not yet persisted in index metadata.
 // This function doesn't trigger the index build, even if the deferred flag is false.
 func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
@@ -985,6 +1085,15 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		if sched {
 			scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 			if scheduleErr == nil {
+				if o.settings.WaitForScheduledIndex() && !rebalRunning {
+					err := o.waitForScheduledIndex(idxDefn)
+					if err != nil {
+						return err
+					}
+
+					return nil
+				}
+
 				message := "The index is scheduled for background creation. " + msg
 				if rebalRunning {
 					message = message + " The index will be created in the background after the ongoing rebalance."

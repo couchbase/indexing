@@ -720,6 +720,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.waitForScheduledIndex": ConfigValue{
+		false,
+		"Do not return the index creation request until the scheduled index is created",
+		false,
+		false,
+		false,
+	},
 	"indexer.allowPartialQuorum": ConfigValue{
 		false,
 		"This boolean flag, when set, allows index creation with partial quorum. " +
