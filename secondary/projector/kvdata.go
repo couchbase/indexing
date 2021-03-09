@@ -834,6 +834,10 @@ func getKVTs(bucket, cluster, kvaddr, cid string) ([]uint64, error) {
 
 	select {
 	case <-time.After(time.Duration(5 * time.Second)):
+		go func() {
+			//read the response to ensure termination
+			<-respch
+		}()
 		return nil, errors.New("Timeout in retrieving seqnos")
 	case resp := <-respch:
 		if resp[1] != nil {
