@@ -5026,6 +5026,24 @@ func (r *metadataRepo) notifyIndexerClose(indexerId c.IndexerId) {
 	}
 }
 
+func (r *metadataRepo) cancelEvent(defnId c.IndexDefnId, err error) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	event, ok := r.notifiers[defnId]
+	if !ok {
+		return
+	}
+
+	delete(r.notifiers, defnId)
+
+	if err != nil {
+		event.notifyCh <- err
+	} else {
+		close(event.notifyCh)
+	}
+}
+
 ///////////////////////////////////////////////////////
 // private function : IndexMetadata
 ///////////////////////////////////////////////////////
