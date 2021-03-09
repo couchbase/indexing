@@ -6272,7 +6272,7 @@ func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
 func (idx *indexer) cleanupOrphanIndexes() {
 	storageDir := idx.config["storage_dir"].String()
 
-	mode := common.GetStorageMode()
+	mode := idx.getLocalStorageMode(idx.config)
 	flist, err := ListSlices(mode, storageDir)
 	if err != nil {
 		logging.Warnf("Error %v during cleaning up the orphan indexes.", err)
