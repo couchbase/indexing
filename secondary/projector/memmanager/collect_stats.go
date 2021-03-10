@@ -23,7 +23,8 @@ func (mgr *MemManager) runStatsCollection() {
 	count := 0
 
 	for range ticker.C {
-		if time.Since(lastCollectionTime) > time.Duration(atomic.LoadInt64(&mgr.statsCollectionInterval)*int64(time.Second))-1 {
+		statsCollectionInterval := GetStatsCollectionInterval()
+		if time.Since(lastCollectionTime) > time.Duration(statsCollectionInterval*int64(time.Second))-1 {
 			pid, cpu, err := mgr.stats.ProcessCpuPercent()
 			if err != nil {
 				logging.Debugf("Fail to get cpu percentage. Err=%v", err)

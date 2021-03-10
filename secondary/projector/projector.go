@@ -217,6 +217,14 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.systemStatsCollectionInterval"]; ok {
 		memmanager.SetStatsCollectionInterval(int64(cv.Int()))
 	}
+
+	if cv, ok := config["projector.usedMemThreshold"]; ok {
+		memmanager.SetUsedMemThreshold(cv.Float64())
+	}
+
+	if cv, ok := config["projector.rssThreshold"]; ok {
+		memmanager.SetRSSThreshold(cv.Float64())
+	}
 	p.config = p.config.Override(config)
 
 	// CPU-profiling
