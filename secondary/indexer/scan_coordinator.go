@@ -1407,13 +1407,17 @@ func (s *scanCoordinator) isBootstrapMode() bool {
 	return s.getIndexerState() == common.INDEXER_BOOTSTRAP
 }
 
-func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs int, cid string) (seqnos []uint64, err error) {
+func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs int, cid string, useBucketSeqnos bool) (seqnos []uint64, err error) {
 	fn := func(r int, err error) error {
 		if r > 0 {
 			logging.Errorf("%s BucketSeqnos(%s): failed with error (%v)...Retrying (%d)",
 				logPrefix, bucket, err, r)
 		}
-		seqnos, err = common.GetSeqnos(cluster, "default", bucket, cid)
+		if useBucketSeqnos {
+			seqnos, err = common.BucketSeqnos(cluster, "default", bucket)
+		} else {
+			seqnos, err = common.GetSeqnos(cluster, "default", bucket, cid)
+		}
 
 		if err == nil && len(seqnos) < numVbs {
 			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)

@@ -63,9 +63,11 @@ type KVData struct {
 
 	reqTsMutex *sync.RWMutex
 	// Closing genServerStopCh will stop all incoming requests to the control path
-	genServerStopCh chan bool
-	genServerFinCh  chan bool
-	runScatterFinCh chan bool
+	genServerStopCh  chan bool
+	genServerFinCh   chan bool
+	runScatterFinCh  chan bool
+	runScatterDoneCh chan bool
+	runScatterDone   bool
 	// misc.
 	syncTimeout time.Duration // in milliseconds
 	logPrefix   string
@@ -238,10 +240,11 @@ func NewKVData(
 		// control calls on this feed.
 		sbch: make(chan []interface{}, 16),
 
-		reqTsMutex:      &sync.RWMutex{},
-		genServerStopCh: make(chan bool),
-		genServerFinCh:  make(chan bool),
-		runScatterFinCh: make(chan bool),
+		reqTsMutex:       &sync.RWMutex{},
+		genServerStopCh:  make(chan bool),
+		genServerFinCh:   make(chan bool),
+		runScatterFinCh:  make(chan bool),
+		runScatterDoneCh: make(chan bool),
 
 		stats:   &KvdataStats{},
 		kvaddr:  kvaddr,
@@ -408,6 +411,7 @@ func (kvdata *KVData) runScatter(
 			logging.Errorf("%s", logging.StackTrace())
 		}
 
+		close(kvdata.runScatterDoneCh)
 		// Close genServerFinCh to terminate genServer() incase runScatter() exits first
 		close(kvdata.genServerFinCh)
 
@@ -447,19 +451,22 @@ func (kvdata *KVData) genServer(reqTs *protobuf.TsVbuuid) {
 			logging.Errorf("%s", logging.StackTrace())
 		}
 
+		if !kvdata.runScatterDone {
+			kvdata.StopScatter()
+			// shutdown workers
+			for _, worker := range kvdata.workers {
+				worker.Close()
+			}
+			close(kvdata.runScatterFinCh)
+			<-kvdata.runScatterDoneCh
+			kvdata.workers = nil
+		}
 		// Close genServerStopCh so that any syncronous control message waiting
 		// for response will return
 		close(kvdata.genServerStopCh)
 
-		// Close runScatterFinCh to stop the datapath
-		close(kvdata.runScatterFinCh)
-
 		kvdata.publishStreamEnd()
-		// shutdown workers
-		for _, worker := range kvdata.workers {
-			worker.Close()
-		}
-		kvdata.workers = nil
+
 		kvdata.feed.PostFinKVdata(kvdata.keyspaceId, kvdata.uuid)
 
 		//Update closed in stats object and log the stats before exiting
@@ -619,9 +626,14 @@ func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid) bo
 		respch <- []interface{}{nil}
 
 	case kvCmdClose:
+		// Stop scattering all mutations
+		kvdata.StopScatter()
 		for _, worker := range kvdata.workers {
 			worker.Close()
 		}
+		close(kvdata.runScatterFinCh)
+		<-kvdata.runScatterDoneCh
+		kvdata.runScatterDone = true
 		kvdata.workers = nil
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{nil}
@@ -834,6 +846,10 @@ func getKVTs(bucket, cluster, kvaddr, cid string) ([]uint64, error) {
 
 	select {
 	case <-time.After(time.Duration(5 * time.Second)):
+		go func() {
+			//read the response to ensure termination
+			<-respch
+		}()
 		return nil, errors.New("Timeout in retrieving seqnos")
 	case resp := <-respch:
 		if resp[1] != nil {

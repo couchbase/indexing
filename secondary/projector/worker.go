@@ -62,7 +62,9 @@ type VbucketWorker struct {
 
 	genServerStopCh chan bool
 	genServerFinCh  chan bool
-	runFinCh        chan bool
+	runFinCh        chan bool // This channel will signal run() to close
+	runDoneCh       chan bool // Once run() method exits, this channel will be closed
+	runFinished     bool
 	// config params
 	logPrefix   string
 	mutChanSize int
@@ -117,6 +119,7 @@ func NewVbucketWorker(
 		genServerStopCh: make(chan bool),
 		genServerFinCh:  make(chan bool),
 		runFinCh:        make(chan bool),
+		runDoneCh:       make(chan bool),
 		encodeBuf:       make([]byte, 0, encodeBufSize),
 		stats:           &WorkerStats{},
 		opaque2:         opaque2,
@@ -148,14 +151,14 @@ const (
 // Event will post an DcpEvent, asychronous call.
 func (worker *VbucketWorker) Event(m *mc.DcpEvent) error {
 	cmd := []interface{}{vwCmdEvent, m}
-	return c.FailsafeOpAsync(worker.datach, cmd, worker.genServerStopCh)
+	return c.FailsafeOpAsync(worker.datach, cmd, worker.runFinCh)
 }
 
 // SyncPulse will trigger worker to generate a sync pulse for all its
 // vbuckets, asychronous call.
 func (worker *VbucketWorker) SyncPulse() error {
 	cmd := []interface{}{vwCmdSyncPulse}
-	return c.FailsafeOpAsync(worker.datach, cmd, worker.genServerStopCh)
+	return c.FailsafeOpAsync(worker.datach, cmd, worker.runFinCh)
 }
 
 // GetVbuckets will return the list of active vbuckets managed by this
@@ -235,12 +238,16 @@ func (worker *VbucketWorker) run(datach chan []interface{}) {
 			logging.Fatalf(fmsg, logPrefix, worker.opaque, r)
 			logging.Errorf("%v", logging.StackTrace())
 		}
+		// No more mutations from upstream will be processed by
+		// the worker
+		close(worker.runDoneCh)
+
 		engines := worker.engines.Get()
 		vbuckets := worker.vbuckets.Get()
 		// call out a STREAM-END for active vbuckets.
 		for _, v := range vbuckets {
 			if data := v.makeStreamEndData(engines); data != nil {
-				worker.broadcast2Endpoints(data)
+				worker.broadcast2Endpoints(data, nil)
 			} else {
 				fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
 				logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
@@ -284,7 +291,7 @@ loop:
 						atomic.AddUint64(&v.syncCount, 1)
 						fmsg := "%v ##%x sync count %v\n"
 						logging.Tracef(fmsg, v.logPrefix, v.opaque, v.syncCount)
-						worker.broadcast2Endpoints(data)
+						worker.broadcast2Endpoints(data, worker.runFinCh)
 
 					} else {
 						fmsg := "%v ##%x Sync NOT PUBLISHED for %v\n"
@@ -309,10 +316,14 @@ func (worker *VbucketWorker) genServer(sbch chan []interface{}) {
 			logging.Errorf("%v", logging.StackTrace())
 		}
 
+		if !worker.runFinished {
+			close(worker.runFinCh)
+			<-worker.runDoneCh
+		}
 		// Close genServerStopCh so that all new incoming messages
 		// will return
 		close(worker.genServerStopCh)
-		close(worker.runFinCh)
+
 		logging.Infof("%v ##%x ##%v genServer()... stopped\n", logPrefix,
 			worker.opaque, worker.opaque2)
 	}()
@@ -417,6 +428,11 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 		respch <- []interface{}{nil}
 
 	case vwCmdClose:
+
+		close(worker.runFinCh)
+		<-worker.runDoneCh // Wait for run() method to exit
+		worker.runFinished = true
+
 		logging.Infof("%v ##%x closed\n", worker.logPrefix, worker.opaque)
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{nil}
@@ -496,7 +512,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 
 		if data := v.makeStreamBeginData(allEngines,
 			byte(v.mcStatus2StreamStatus(m.Status)), byte(m.Status)); data != nil {
-			worker.broadcast2Endpoints(data)
+			worker.broadcast2Endpoints(data, worker.runFinCh)
 		} else {
 			fmsg := "%v ##%x StreamBeginData NOT PUBLISHED for vbucket %v\n"
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
@@ -510,7 +526,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			return v
 		}
 		if data := v.makeSnapshotData(m, allEngines); data != nil {
-			worker.broadcast2Endpoints(data)
+			worker.broadcast2Endpoints(data, worker.runFinCh)
 			atomic.AddUint64(&v.sshotCount, 1)
 		} else {
 			fmsg := "%v ##%x Snapshot NOT PUBLISHED for vbucket %v\n"
@@ -569,9 +585,12 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 					// management, we will allow the feed to block.
 					// Otherwise, send might fail due to ErrorChannelFull
 					// or ErrorClosed
-					if err := endpoint.Send(data); err != nil {
+					if err := endpoint.Send2(data, worker.runFinCh); err != nil {
 						fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
 						logging.Debugf(fmsg, logPrefix, worker.opaque, raddr, err)
+						if err == c.ErrorAborted { // return if worker is aborted
+							return
+						}
 						func() {
 							worker.mutex.Lock()
 							defer worker.mutex.Unlock()
@@ -604,7 +623,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			// Generate updateSeqno message and propagate it to indexer
 			worker.stats.updateSeqno.Add(1)
 			if data := v.makeUpdateSeqnoData(m, allEngines); data != nil {
-				worker.broadcast2Endpoints(data)
+				worker.broadcast2Endpoints(data, worker.runFinCh)
 			} else {
 				fmsg := "%v ##%x SYSTEM_EVENT: %v NOT PUBLISHED for vbucket %v\n"
 				logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
@@ -619,7 +638,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 		atomic.StoreUint64(&v.seqno, m.Seqno) // update seqno for system event
 		if data := v.makeSystemEventData(m, allEngines); data != nil {
-			worker.broadcast2Endpoints(data)
+			worker.broadcast2Endpoints(data, worker.runFinCh)
 		} else {
 			fmsg := "%v ##%x SYSTEM_EVENT: %v NOT PUBLISHED for vbucket %v\n"
 			logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
@@ -633,7 +652,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 		atomic.StoreUint64(&v.seqno, m.Seqno) // update seqno for seqno advanced
 		if data := v.makeSeqnoAdvancedEvent(m, allEngines); data != nil {
-			worker.broadcast2Endpoints(data)
+			worker.broadcast2Endpoints(data, worker.runFinCh)
 		} else {
 			fmsg := "%v ##%x SEQNO_ADVANCED: %v NOT PUBLISHED for vbucket %v\n"
 			logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
@@ -646,7 +665,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			return v
 		}
 		if data := v.makeOSOSnapshotEvent(m, allEngines); data != nil {
-			worker.broadcast2Endpoints(data)
+			worker.broadcast2Endpoints(data, worker.runFinCh)
 		} else {
 			fmsg := "%v ##%x OSO_SNAPSHOT: %v NOT PUBLISHED for vbucket %v\n"
 			logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
@@ -659,7 +678,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			return v
 		}
 		if data := v.makeStreamEndData(allEngines); data != nil {
-			worker.broadcast2Endpoints(data)
+			worker.broadcast2Endpoints(data, worker.runFinCh)
 		} else {
 			fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
 			logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
@@ -672,7 +691,8 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 }
 
 // send to all endpoints.
-func (worker *VbucketWorker) broadcast2Endpoints(data interface{}) {
+// Abort sending data to upstream incase run() method is terminated
+func (worker *VbucketWorker) broadcast2Endpoints(data interface{}, runFinCh chan bool) {
 	endpoints := worker.endpoints.Get()
 
 	for raddr, endpoint := range endpoints {
@@ -680,9 +700,18 @@ func (worker *VbucketWorker) broadcast2Endpoints(data interface{}) {
 		// management, we will allow the feed to block.
 		// Otherwise, send might fail due to ErrorChannelFull
 		// or ErrorClosed
-		if err := endpoint.Send(data); err != nil {
+		var err error
+		if runFinCh != nil {
+			err = endpoint.Send2(data, runFinCh)
+		} else {
+			err = endpoint.Send(data)
+		}
+		if err != nil {
 			fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
 			logging.Debugf(fmsg, worker.logPrefix, worker.opaque, raddr, err)
+			if err == c.ErrorAborted { // return if worker is aborted
+				return
+			}
 
 			func() {
 				worker.mutex.Lock()

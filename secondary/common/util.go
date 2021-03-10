@@ -26,8 +26,8 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/cbauthimpl"
 	"github.com/couchbase/indexing/secondary/common/collections"
-	"github.com/couchbase/indexing/secondary/dcp"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -191,6 +191,22 @@ func FailsafeOpAsync(
 	case reqch <- cmd:
 	case <-finch:
 		return ErrorClosed
+	}
+	return nil
+}
+
+// FailsafeOpAsync2 is same as FailsafeOpAsync that can be used for
+// asynchronous operation, that is, caller does not wait for response.
+// This method aborts send if abortCh is closed on callers side
+func FailsafeOpAsync2(
+	reqch chan []interface{}, cmd []interface{}, finch, abortCh chan bool) error {
+
+	select {
+	case reqch <- cmd:
+	case <-finch:
+		return ErrorClosed
+	case <-abortCh:
+		return ErrorAborted
 	}
 	return nil
 }

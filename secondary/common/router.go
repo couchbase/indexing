@@ -59,6 +59,10 @@ type RouterEndpoint interface {
 	// Send will post data to endpoint client, asynchronous call.
 	Send(data interface{}) error
 
+	// Send2 will post data to endpoint client, asynchronous call.
+	// Will abort the send if the abortCh is closed on the callers side
+	Send2(data interface{}, abortCh chan bool) error
+
 	// GetStatistics to gather statistics information from endpoint,
 	// synchronous call.
 	GetStatistics() map[string]interface{}

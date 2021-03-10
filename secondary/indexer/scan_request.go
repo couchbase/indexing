@@ -1157,7 +1157,8 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 		r.Ts = &common.TsVbuuid{}
 		t0 := time.Now()
 		r.Ts.Seqnos, localErr = bucketSeqsWithRetry(cfg["settings.scan_getseqnos_retries"].Int(),
-			r.LogPrefix, cluster, r.Bucket, cfg["numVbuckets"].Int(), r.CollectionId)
+			r.LogPrefix, cluster, r.Bucket, cfg["numVbuckets"].Int(), r.CollectionId,
+			cfg["use_bucket_seqnos"].Bool())
 		if localErr == nil && r.Stats != nil {
 			r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 		}

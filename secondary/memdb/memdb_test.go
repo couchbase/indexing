@@ -218,7 +218,17 @@ func CountItems(snap *Snapshot) int {
 	return count
 }
 
+func ValidateNoMemLeaks() {
+	a, b := mm.GetAllocStats()
+	if a-b != 0 {
+		fmt.Printf("0: Found memory leak of %d allocs. allocs[%d] frees[%d]\n", a-b, a, b)
+		panic("Fatal Error: TEST STOPPED. Please fix memory leak first")
+	}
+}
+
 func TestLoadStoreDisk(t *testing.T) {
+	defer ValidateNoMemLeaks()
+
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
 	db := NewWithConfig(testConf)
@@ -269,6 +279,78 @@ func TestLoadStoreDisk(t *testing.T) {
 		t.Errorf("Count mismatch on snapshot. Expected %d, got %d", n, count)
 	}
 	fmt.Println(db.DumpStats())
+}
+
+func frag() float64 {
+	mm.FreeOSMemory()
+	rss := float64(mm.Size())
+	all := float64(mm.AllocSize())
+	fragPercent := (1.0-all/rss)*100
+	fmt.Printf("frag = %.2f%%\n", fragPercent)
+
+	return fragPercent
+}
+
+func TestConcurrentLoadCloseFragmentation(t *testing.T) {
+	testConcurrentLoadCloseFragmentation(t, 2000000)
+}
+
+func TestConcurrentLoadCloseFragmentationSmall(t *testing.T) {
+	testConcurrentLoadCloseFragmentation(t, 10)
+}
+
+func TestConcurrentLoadCloseFragmentationEmpty(t *testing.T) {
+	testConcurrentLoadCloseFragmentation(t, 0)
+}
+
+func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
+	defer ValidateNoMemLeaks()
+
+	os.RemoveAll("db.dump")
+
+	var wg sync.WaitGroup
+
+	db := NewWithConfig(testConf)
+
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		wg.Add(1)
+		go doInsert(db, &wg, n/runtime.GOMAXPROCS(0), true, true)
+	}
+	wg.Wait()
+	fmt.Printf("Done Inserting %v items\n", n)
+
+	initialFrag := frag()
+
+	concurr := runtime.GOMAXPROCS(0)
+
+	snap, _ := db.NewSnapshot()
+	db.PreparePersistence("db.dump", snap)
+	db.StoreToDisk("db.dump", snap, concurr, nil)
+	fmt.Printf("Done Storing to disk\n")
+	snap.Close()
+	if f := frag(); f > initialFrag * 1.5 {
+		fmt.Println("WARNING: expected less fragmentation")
+	}
+
+	wg.Add(1)
+	go func () {
+		defer wg.Done()
+		db.Close2(concurr)
+		fmt.Println("Done Closing")
+	}()
+
+	db2 := NewWithConfig(testConf)
+	defer db2.Close2(concurr)
+
+	snap2, _ := db2.LoadFromDisk("db.dump", concurr, nil)
+	defer snap2.Close()
+	fmt.Printf("Done Loading from disk\n")
+
+	wg.Wait()
+
+	if f := frag(); f > initialFrag * 3 {
+		fmt.Println("WARNING: expected less fragmentation")
+	}
 }
 
 func TestStoreDiskShutdown(t *testing.T) {

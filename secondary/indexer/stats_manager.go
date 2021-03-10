@@ -2368,6 +2368,7 @@ const ST_TYPE_INDEXER = "indexer"
 const ST_TYPE_INDEX = "index_"
 const ST_TYPE_KEYSPACE = "keyspace"
 const ST_TYPE_PROJ_LAT = "projlat"
+const ST_TYPE_INDEXSTORAGE = "indexstorage_"
 
 type statLogger struct {
 	s              *statsManager
@@ -2380,6 +2381,16 @@ func newStatLogger(s *statsManager, enableStatsLogger bool, sLogger logstats.Log
 		s:              s,
 		enableStatsLog: enableStatsLogger,
 		sLogger:        sLogger,
+	}
+}
+func (l *statLogger) writeIndexStorageStat(spec *statsSpec) {
+	res := l.s.getStorageStatsMap(spec)
+	for k, r := range res {
+		sType := fmt.Sprintf("%s%s", ST_TYPE_INDEXSTORAGE, k)
+		err := l.sLogger.Write(sType, r.(map[string]interface{}))
+		if err != nil {
+			logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", sType, err)
+		}
 	}
 }
 
@@ -2450,7 +2461,14 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 
 	var storageStats string
 	if writeStorageStats { //log storage stats every 15mins
-		if common.GetStorageMode() != common.FORESTDB {
+		storageMode := common.GetStorageMode()
+		if storageMode == common.MOI {
+			if l.enableStatsLog {
+				l.writeIndexStorageStat(nil)
+			} else {
+				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
+			}
+		} else if storageMode == common.PLASMA {
 			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
 		} else if logging.IsEnabled(logging.Timing) {
 			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
@@ -2748,6 +2766,35 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
 	}
+}
+
+func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{} {
+	result := make(map[string]interface{})
+	replych := make(chan []IndexStorageStats)
+	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
+	s.supvMsgch <- statReq
+	res := <-replych
+
+	for _, sts := range res {
+		key1 := ""
+		scope := sts.Scope
+		collection := sts.Collection
+		if scope == common.DEFAULT_SCOPE && collection == common.DEFAULT_COLLECTION {
+			key1 = fmt.Sprintf("%s:%s", sts.Bucket, sts.Name)
+		} else if scope == "" && collection == "" {
+			key1 = fmt.Sprintf("%s:%s", sts.Bucket, sts.Name)
+		} else {
+			key1 = fmt.Sprintf("%s:%s:%s:%s", sts.Bucket, sts.Scope, sts.Collection, sts.Name)
+		}
+		key := fmt.Sprintf("%s:%v:%v", key1, sts.InstId, sts.PartnId)
+		dmap := sts.GetInternalDataMap()
+		if dmap == nil || len(sts.GetInternalDataMap()) == 0 {
+			logging.Errorf("Error in getStorageStatsMap found InternalStatsMap nil or zero length for %v, skipping stats...", key)
+			continue
+		}
+		result[key] = dmap
+	}
+	return result
 }
 
 func (s *statsManager) getStorageStats(spec *statsSpec) string {

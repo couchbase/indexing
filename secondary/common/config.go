@@ -2385,6 +2385,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.use_bucket_seqnos": ConfigValue{
+		true,
+		"For session consistent scans, use BucketSeqnos " +
+			"to avoid contention while retrieving seqnos",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.settings.num_replica": ConfigValue{
 		0,
 		"Number of additional replica for each index.",

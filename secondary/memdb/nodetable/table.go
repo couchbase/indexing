@@ -12,9 +12,12 @@ package nodetable
 // which is the slow table. Slow table has multiple entries which are mapped
 // by the same crc32 key.
 
-import "unsafe"
-import "fmt"
-import "github.com/couchbase/indexing/secondary/memdb/skiplist"
+import (
+	"fmt"
+	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/memdb/skiplist"
+)
 
 var emptyResult ntResult
 
@@ -85,6 +88,15 @@ func (nt *NodeTable) Stats() string {
 		`"Conflicts":   %d,`+"\n"+
 		`"MemoryInUse": %d`+"\n}",
 		nt.fastHTCount, nt.slowHTCount, nt.conflicts, nt.MemoryInUse())
+}
+
+func (nt *NodeTable) StatsMap() map[string]interface{} {
+	mp := make(map[string]interface{})
+	mp["FastHTCount"] = nt.fastHTCount
+	mp["SlowHTCount"] = nt.slowHTCount
+	mp["Conflicts"] = nt.conflicts
+	mp["MemoryInUse"] = nt.MemoryInUse()
+	return mp
 }
 
 func (nt *NodeTable) MemoryInUse() int64 {

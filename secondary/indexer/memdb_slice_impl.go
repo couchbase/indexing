@@ -1168,7 +1168,7 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 
 func (mdb *memdbSlice) resetStores() {
 	// This is blocking call if snap refcounts != 0
-	go mdb.mainstore.Close()
+	go mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
 			mdb.back[i].Close()
@@ -1582,27 +1582,34 @@ func (mdb *memdbSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	if consumerFilter == statsMgmt.N1QLStorageStatsFilter {
 		return mdb.handleN1QLStorageStatistics()
 	}
-
 	var sts StorageStatistics
 
+	internalDataMap := make(map[string]interface{})
 	var internalData []string
-
 	var ntMemUsed int64
 
 	itemsCount := mdb.mainstore.ItemsCount()
 	docidCount := itemsCount
 
+	internalDataMap["MainStore"] = mdb.mainstore.DumpStatsMap()
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\": %s", mdb.mainstore.DumpStats()))
-
 	if !mdb.isPrimary {
 		docidCount = 0
 		for i := 0; i < mdb.numWriters; i++ {
 			internalData = append(internalData, ",\n")
 			internalData = append(internalData, fmt.Sprintf(`"BackStore_%d": %s`, i, mdb.back[i].Stats()))
+			internalDataMap[fmt.Sprintf("BackStore_%d", i)] = mdb.back[i].StatsMap()
 			ntMemUsed += mdb.back[i].MemoryInUse()
 			docidCount += mdb.back[i].ItemsCount()
 		}
 	}
+	internalDataMap["data_size"] = mdb.mainstore.MemoryInUse()
+	internalDataMap["items_count"] = itemsCount
+	internalDataMap["lastGCSn"] = mdb.mainstore.GetLastGCSn()
+	internalDataMap["currSn"] = mdb.mainstore.GetCurrSn()
+
+	sts.InternalDataMap = internalDataMap
+
 	internalData = append(internalData, ",\n")
 	internalData = append(internalData, fmt.Sprintf(`"data_size": %v`, mdb.mainstore.MemoryInUse()))
 	internalData = append(internalData, ",\n")
@@ -1634,6 +1641,10 @@ func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) 
 		mdb.mainstore.ItemsCount(),
 		mdb.mainstore.MemoryInUse())
 	sts.InternalData = []string{internalData}
+	internalDataMap := make(map[string]interface{})
+	internalDataMap["items_count"] = mdb.mainstore.ItemsCount()
+	internalDataMap["data_size"] = mdb.mainstore.MemoryInUse()
+	sts.InternalDataMap = internalDataMap
 	return sts, nil
 }
 
@@ -1687,7 +1698,7 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 }
 
 func tryClosememdbSlice(mdb *memdbSlice) {
-	mdb.mainstore.Close()
+	mdb.mainstore.Close2(runtime.GOMAXPROCS(0))
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
 			mdb.back[i].Close()

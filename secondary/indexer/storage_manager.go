@@ -1426,6 +1426,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 
 		for _, partnInst := range partnMap {
 			var internalData []string
+			internalDataMap := make(map[string]interface{})
 			var dataSz, dataSzOnDisk, logSpace, diskSz, memUsed, extraSnapDataSize int64
 			var getBytes, insertBytes, deleteBytes int64
 			var nslices int64
@@ -1433,7 +1434,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
-			for _, slice := range slices {
+			for i, slice := range slices {
 
 				// Prepare stats once
 				if doPrepare {
@@ -1456,7 +1457,9 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 				deleteBytes += sts.DeleteBytes
 				extraSnapDataSize += sts.ExtraSnapDataSize
 				internalData = append(internalData, sts.InternalData...)
-
+				if sts.InternalDataMap != nil && len(sts.InternalDataMap) != 0 {
+					internalDataMap[fmt.Sprintf("slice_%d", i)] = sts.InternalDataMap
+				}
 				needUpgrade = needUpgrade || sts.NeedUpgrade
 			}
 
@@ -1480,6 +1483,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 						ExtraSnapDataSize: extraSnapDataSize,
 						NeedUpgrade:       needUpgrade,
 						InternalData:      internalData,
+						InternalDataMap:   internalDataMap,
 					},
 				}
 

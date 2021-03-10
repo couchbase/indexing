@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth"
+	// cannot import indexing/secondary/common: import cycle
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -497,12 +498,20 @@ type RequestParams struct {
 }
 
 //
-// HTTP Get with Basic Auth.  If encryption is enabled, the request is made over HTTPS.
-// This function will make use of encrypt port mapping to translate non-SSL
-// port to SSL port.
+// GetWithAuth performs an HTTP(S) GET request with optional URL parameters
+// and Basic Authentication.
 //
 func GetWithAuth(u string, params *RequestParams) (*http.Response, error) {
+	return GetWithAuthAndETag(u, params, "")
+}
 
+//
+// GetWithAuthAndETag performs an HTTP(S) GET with Basic Auth and optional ETag header field.
+// If encryption is enabled, the request is made over HTTPS. This function will make use of
+// encrypt port mapping to translate non-SSL port to SSL port. params may be nil. eTag may
+// be the empty string, in which case it is not transmitted.
+//
+func GetWithAuthAndETag(u string, params *RequestParams, eTag string) (*http.Response, error) {
 	url, err := GetURL(u)
 	if err != nil {
 		return nil, err
@@ -516,6 +525,10 @@ func GetWithAuth(u string, params *RequestParams) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	if eTag != "" {
+		req.Header.Set("If-None-Match", eTag)  // common.HTTP_KEY_ETAG_REQUEST
 	}
 
 	if params != nil && params.UserAgent != "" {
