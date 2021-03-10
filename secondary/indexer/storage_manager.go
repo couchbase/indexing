@@ -295,13 +295,19 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		forceCommit = true
 	}
 
+	numSnapshotWorkers := s.getNumSnapshotWorkers()
+	waitCh := make(chan bool, numSnapshotWorkers)
+
 	var wg sync.WaitGroup
 	//for every index managed by this indexer
 	for _, idxInstId := range instIdList {
 		// Create snapshots for all indexes in parallel
 		wg.Add(1)
+		waitCh <- true
 		go func(idxInstId common.IndexInstId) {
-
+			defer func() {
+				<-waitCh
+			}()
 			idxInst := indexInstMap[idxInstId]
 			//process only if index belongs to the flushed keyspaceId and stream
 			if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId ||
@@ -2031,4 +2037,13 @@ func (s *IndexStorageStats) getPlasmaFragmentation() float64 {
 	}
 
 	return fragPercent
+}
+
+func (s *storageMgr) getNumSnapshotWorkers() int {
+	numSnapshotWorkers := s.config["numSnapshotWorkers"].Int()
+	if numSnapshotWorkers < 1 {
+		//Since indexer supports upto 10000 indexes in a cluster as of 7.0
+		numSnapshotWorkers = 10000
+	}
+	return numSnapshotWorkers
 }

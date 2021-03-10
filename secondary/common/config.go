@@ -850,6 +850,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.numSnapshotWorkers": ConfigValue{
+		runtime.GOMAXPROCS(0) * 10,
+		"Number of workers each keyspaceId in a stream will spawn to create snapshots",
+		runtime.GOMAXPROCS(0) * 10,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.enableManager": ConfigValue{
 		false,
 		"Enable index manager",
