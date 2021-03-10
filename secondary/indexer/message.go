@@ -12,6 +12,7 @@ package indexer
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -1955,6 +1956,23 @@ type MsgClustMgrUpdate struct {
 	streamId      common.StreamId
 	syncUpdate    bool
 	respCh        chan error
+}
+
+func (m *MsgClustMgrUpdate) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "mType: %v ", m.mType)
+	fmt.Fprintf(&b, "indexList: [")
+	for _, i := range m.indexList {
+		fmt.Fprintf(&b, "%v\n", i)
+	}
+	fmt.Fprintf(&b, "] ")
+	fmt.Fprintf(&b, "bucket: %v ", m.bucket)
+	fmt.Fprintf(&b, "scope: %v ", m.scope)
+	fmt.Fprintf(&b, "collection: %v ", m.collection)
+	fmt.Fprintf(&b, "streamId: %v ", m.streamId)
+	fmt.Fprintf(&b, "syncUpdate: %v ", m.syncUpdate)
+	fmt.Fprintf(&b, "respCh: %v ", m.respCh)
+	return b.String()
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
