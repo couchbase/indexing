@@ -412,6 +412,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.systemStatsCollectionInterval": ConfigValue{
+		5, // 5 seconds
+		"The period with which projector updates the system level stats",
+		5,     // 5 seconds
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent
 		"set GOGC percent",

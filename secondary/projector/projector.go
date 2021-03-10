@@ -21,6 +21,7 @@ import (
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	projC "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/couchbase/indexing/secondary/projector/memmanager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/golang/protobuf/proto"
@@ -96,6 +97,9 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	p.cinfoClient = cic
 	p.cinfoClient.SetUserAgent("projector")
 	p.cinfoClient.WatchRebalanceChanges()
+
+	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
+	memmanager.Init(systemStatsCollectionInterval) // Initialize memory manager
 
 	p.stats = NewProjectorStats()
 	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
@@ -208,6 +212,10 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.evalStatLoggingThreshold"]; ok {
 		value := cv.Int()
 		p.statsCmdCh <- []interface{}{EVAL_STAT_LOGGING_THRESHOLD, value}
+	}
+
+	if cv, ok := config["projector.systemStatsCollectionInterval"]; ok {
+		memmanager.SetStatsCollectionInterval(int64(cv.Int()))
 	}
 	p.config = p.config.Override(config)
 

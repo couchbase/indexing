@@ -10,6 +10,7 @@ import (
 	"github.com/couchbase/indexing/secondary/dataport"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/projector/memmanager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
 
@@ -134,6 +135,7 @@ func NewProjectorStats() *ProjectorStats {
 	ps.lastVbseqnosLogTime = time.Now().UnixNano()
 	ps.evalStatsLogTime = time.Now().UnixNano()
 	ps.statsLogTime = time.Now().UnixNano()
+
 	return ps
 }
 
@@ -419,6 +421,8 @@ func (sm *statsManager) logger() {
 					}
 				}
 			}
+			logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v}",
+				memmanager.GetCpuPercent(), memmanager.GetRSS(), memmanager.GetMemFree(), memmanager.GetMemTotal())
 		}
 		if atomic.LoadInt32(&sm.stopLogger) == 1 {
 			return
