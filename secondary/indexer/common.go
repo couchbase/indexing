@@ -134,14 +134,14 @@ type IndexStorageStats struct {
 	Stats      StorageStatistics
 }
 
-func (s IndexStorageStats) String() string {
+func (s *IndexStorageStats) String() string {
 	return fmt.Sprintf("IndexInstId: %v Data:%v, Disk:%v, "+
 		"ExtraSnapshotData:%v, Fragmentation:%v%%",
 		s.InstId, s.Stats.DataSize, s.Stats.DiskSize,
 		s.Stats.ExtraSnapDataSize, s.GetFragmentation())
 }
 
-func (s IndexStorageStats) GetFragmentation() float64 {
+func (s *IndexStorageStats) GetFragmentation() float64 {
 	var fragPercent float64
 
 	var wastedSpace int64
@@ -156,11 +156,11 @@ func (s IndexStorageStats) GetFragmentation() float64 {
 	return fragPercent
 }
 
-func (s IndexStorageStats) GetInternalData() []string {
+func (s *IndexStorageStats) GetInternalData() []string {
 	return s.Stats.InternalData
 }
 
-func (s IndexStorageStats) GetInternalDataMap() map[string]interface{} {
+func (s *IndexStorageStats) GetInternalDataMap() map[string]interface{} {
 	return s.Stats.InternalDataMap
 }
 
