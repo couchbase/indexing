@@ -40,6 +40,19 @@ const (
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
+// Create the 2KB ECMA input table for crc64 checksums once ever,
+// instead of every time a checksum is computed.
+var crc64ECMA *crc64.Table
+func init() {
+	crc64ECMA = crc64.MakeTable(crc64.ECMA)
+}
+
+// Crc64Checksum computes the CRC64 checksum of a byte
+// slice using the highly recommended ECMA polynomial.
+func Crc64Checksum(bytes []byte) uint64 {
+	return crc64.Checksum(bytes, crc64ECMA)
+}
+
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
 func ExcludeStrings(strs []string, excludes []string) []string {
@@ -941,7 +954,7 @@ func HashVbuuid(vbuuids []uint64) uint64 {
 	bytes_sl.Data = vbuuids_sl.Data
 	bytes_sl.Len = vbuuids_sl.Len * 8
 	bytes_sl.Cap = vbuuids_sl.Cap * 8
-	return crc64.Checksum(bytes, crc64.MakeTable(crc64.ECMA))
+	return crc64.Checksum(bytes, crc64ECMA)
 }
 
 func IsValidIndexName(n string) error {

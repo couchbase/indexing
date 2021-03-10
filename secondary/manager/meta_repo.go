@@ -54,18 +54,28 @@ type RepoRef interface {
 	deleteLocalValue(name string) error
 	close()
 	resetConnections() error
+	isMetaDirty() bool
+	clearMetaDirty()
 }
 
+// RemoteRepoRef implements the RepoRef interface for a remote metadata repo.
 type RemoteRepoRef struct {
 	remoteReqAddr string
 	repository    *repo.Repository
 	watcher       *watcher
 }
 
+// LocalRepoRef implements the RepoRef interface for a local metadata repo.
+// This is the concrete type accessed by the HTTP(S) server in request_handler.go.
 type LocalRepoRef struct {
-	server   *gometa.EmbeddedServer
-	eventMgr *eventManager
-	notifier MetadataNotifier
+	server         *gometa.EmbeddedServer
+	eventMgr       *eventManager
+	notifier       MetadataNotifier
+
+	// metaDirty is a dirty flag for the index metadata of this host. This is
+	// periodically reset when request_handler crosses its ETag expiry time.
+	metaDirty      bool         // indexer metadata changed?
+	metaDirtyMutex sync.RWMutex // sync for metaDirty
 }
 
 type MetaIterator struct {
@@ -98,10 +108,12 @@ const (
 	KIND_STABILITY_TIMESTAMP
 )
 
+
 ///////////////////////////////////////////////////////
 //  Public Function : MetadataRepo
 ///////////////////////////////////////////////////////
 
+// NewMetadataRepo creates a MetaRepo object for a REMOTE repo only.
 func NewMetadataRepo(requestAddr string,
 	leaderAddr string,
 	config string,
@@ -128,6 +140,7 @@ func NewMetadataRepo(requestAddr string,
 	return repo, nil
 }
 
+// NewLocalMetadataRepo creates a MetaRepo object for a local repo.
 func NewLocalMetadataRepo(msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
@@ -219,6 +232,18 @@ func (c *MetadataRepo) Close() {
 func (c *MetadataRepo) ResetConnections() error {
 
 	return c.repo.resetConnections()
+}
+
+// IsMetaDirty reports whether metadata is dirty to caller. This will only
+// ever be false for a local repo, as dirty flag is not kept for remote repos.
+func (c *MetadataRepo) IsMetaDirty() bool {
+	return c.repo.isMetaDirty()
+}
+
+// ClearMetaDirty clears the metadata dirty flag used in conjunction with ETags.
+// Only implemented for local repos, as dirty flag is not kept for remote repos.
+func (c *MetadataRepo) ClearMetaDirty() {
+	c.repo.clearMetaDirty()
 }
 
 ///////////////////////////////////////////////////////
@@ -766,6 +791,7 @@ func (c *LocalRepoRef) getMeta(name string) ([]byte, error) {
 }
 
 func (c *LocalRepoRef) setMeta(name string, value []byte) error {
+	c.setMetaDirty()
 	if err := c.server.Set(name, value); err != nil {
 		return err
 	}
@@ -790,6 +816,7 @@ func (c *LocalRepoRef) broadcast(name string, value []byte) error {
 }
 
 func (c *LocalRepoRef) deleteMeta(name string) error {
+	c.setMetaDirty()
 	if err := c.server.Delete(name); err != nil {
 		return err
 	}
@@ -812,7 +839,7 @@ func (c *LocalRepoRef) close() {
 
 func (c *LocalRepoRef) resetConnections() error {
 
-	// c.server.Terminate() is idempotent
+	// c.server.resetConnections() is idempotent
 	return c.server.ResetConnections()
 }
 
@@ -834,15 +861,39 @@ func (c *LocalRepoRef) registerNotifier(notifier MetadataNotifier) {
 }
 
 func (c *LocalRepoRef) setLocalValue(key string, value string) error {
+	c.setMetaDirty()
 	return c.server.SetConfigValue(key, value)
 }
 
 func (c *LocalRepoRef) deleteLocalValue(key string) error {
+	c.setMetaDirty()
 	return c.server.DeleteConfigValue(key)
 }
 
 func (c *LocalRepoRef) getLocalValue(key string) (string, error) {
 	return c.server.GetConfigValue(key)
+}
+
+// isMetaDirty reports the state of the dirty flag for index metadata
+// of this indexer host, used in ETag lifecycles.
+func (c *LocalRepoRef) isMetaDirty() bool {
+	c.metaDirtyMutex.RLock()
+	defer c.metaDirtyMutex.RUnlock()
+	return c.metaDirty
+}
+
+// clearMetaDirty clears the dirty flag for index metadata.
+func (c *LocalRepoRef) clearMetaDirty() {
+	c.metaDirtyMutex.Lock()
+	c.metaDirty = false
+	c.metaDirtyMutex.Unlock()
+}
+
+// setMetaDirty sets the dirty flag for index metadata.
+func (c *LocalRepoRef) setMetaDirty() {
+	c.metaDirtyMutex.Lock()
+	c.metaDirty = true
+	c.metaDirtyMutex.Unlock()
 }
 
 ///////////////////////////////////////////////////////
@@ -1009,6 +1060,17 @@ func (c *RemoteRepoRef) deleteLocalValue(key string) error {
 
 func (c *RemoteRepoRef) getLocalValue(key string) (string, error) {
 	panic("Function not supported")
+}
+
+// isMetaDirty always returns true for RemoteRepoRef as the metadata dirty
+// flag is not implemented for remote repos.
+func (c *RemoteRepoRef) isMetaDirty() bool {
+	return true
+}
+
+// clearMetaDirty is a no-op for RemoteRepoRef as the metadata dirty
+// flag is not implemented for remote repos.
+func (c *RemoteRepoRef) clearMetaDirty() {
 }
 
 ///////////////////////////////////////////////////////

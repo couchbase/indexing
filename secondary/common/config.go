@@ -2116,6 +2116,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.settings.eTagPeriod": ConfigValue{
+		240,
+		"Average ETag expiration period in seconds",
+		240,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.max_array_seckey_size": ConfigValue{
 		10240,
 		"Maximum size of secondary index key size for array index",
