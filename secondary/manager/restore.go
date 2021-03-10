@@ -813,6 +813,7 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 
 	// Find new home for all the replicas and partitions of the schedule create tokens.
 	defnMap := make(map[common.IndexDefnId]map[string]*common.IndexDefn)
+	instIdMap := make(map[common.IndexDefnId]map[int]common.IndexInstId)
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if token, ok := m.tokToRestore[index.DefnId]; ok {
@@ -830,11 +831,22 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 				}
 
 				if defn, ok := indexerMap[indexer.RestUrl]; !ok {
-					instId, err := common.NewIndexInstId()
-					if err != nil {
-						logging.Errorf("RestoreContext: Cannot restore schedule create token for (%v, %v, %v, %v, %v) at indexer %v due to error in NewIndexInstId %v.",
-							token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, index.PartnId, indexer, err)
-						continue
+					if _, ok := instIdMap[index.DefnId]; !ok {
+						instIdMap[index.DefnId] = make(map[int]common.IndexInstId)
+					}
+
+					instId, ok := instIdMap[index.DefnId][index.Instance.ReplicaId]
+					if !ok {
+						var err error
+
+						instId, err = common.NewIndexInstId()
+						if err != nil {
+							logging.Errorf("RestoreContext: Cannot restore schedule create token for (%v, %v, %v, %v, %v) at indexer %v due to error in NewIndexInstId %v.",
+								token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, index.PartnId, indexer, err)
+							continue
+						}
+
+						instIdMap[index.DefnId][index.Instance.ReplicaId] = instId
 					}
 
 					defn := &token.Definition
