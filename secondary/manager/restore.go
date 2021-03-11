@@ -116,6 +116,11 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 		return nil, err
 	}
 
+	if len(m.idxToRestore) == 0 && len(m.tokToRestore) == 0 {
+		logging.Infof("RestoreContext: nothing to restore")
+		return nil, nil
+	}
+
 	// associate indexer from image to current cluster
 	m.buildIndexerMapping()
 
