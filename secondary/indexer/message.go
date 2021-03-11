@@ -1088,15 +1088,19 @@ func (m *MsgClustMgrCleanupPartition) UpdateStatusOnly() bool {
 }
 
 func (m *MsgClustMgrCleanupPartition) GetString() string {
+	var b strings.Builder
+	b.WriteString("\n\tMessage: MsgCleanupPartition")
+	fmt.Fprintf(&b, "\n\tType: %v", CLUST_MGR_CLEANUP_PARTITION)
+	fmt.Fprintf(&b, "\n\tIndex defn Id: %v", m.defn.DefnId)
+	fmt.Fprintf(&b, "\n\tIndex inst Id: %v", m.instId)
+	fmt.Fprintf(&b, "\n\tIndex partition Id: %v", m.partnId)
+	fmt.Fprintf(&b, "\n\tIndex replica Id: %v", m.replicaId)
+	fmt.Fprintf(&b, "\n\tUpdate Status Only: %v", m.updateStatusOnly)
+	return b.String()
+}
 
-	str := "\n\tMessage: MsgCleanupPartition"
-	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_CLEANUP_PARTITION)
-	str += fmt.Sprintf("\n\tIndex defn Id: %v", m.defn.DefnId)
-	str += fmt.Sprintf("\n\tIndex inst Id: %v", m.instId)
-	str += fmt.Sprintf("\n\tIndex partition Id: %v", m.partnId)
-	str += fmt.Sprintf("\n\tIndex replica Id: %v", m.replicaId)
-	str += fmt.Sprintf("\n\tUpdate Status Only: %v", m.updateStatusOnly)
-	return str
+func (m *MsgClustMgrCleanupPartition) String() string {
+	return m.GetString()
 }
 
 // CLUST_MGR_MERGE_PARTITION
@@ -1904,6 +1908,10 @@ func (m *MsgClustMgrResetIndexOnUpgrade) GetIndex() common.IndexInst {
 	return m.inst
 }
 
+func (m *MsgClustMgrResetIndexOnUpgrade) String() string {
+	return fmt.Sprintf("inst : %v", m.inst)
+}
+
 //CLUST_MGR_RESET_INDEX_ON_ROLLBACK
 type MsgClustMgrResetIndexOnRollback struct {
 	inst   common.IndexInst
@@ -1920,6 +1928,13 @@ func (m *MsgClustMgrResetIndexOnRollback) GetIndex() common.IndexInst {
 
 func (m *MsgClustMgrResetIndexOnRollback) GetRespch() chan error {
 	return m.respch
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "inst : %v ", m.inst)
+	fmt.Fprintf(&b, "respch : %v", m.respch)
+	return b.String()
 }
 
 //INDEXER_RESET_INDEX_DONE
@@ -2022,6 +2037,15 @@ func (m *MsgClustMgrTopology) GetMsgType() MsgType {
 
 func (m *MsgClustMgrTopology) GetInstMap() common.IndexInstMap {
 	return m.indexInstMap
+}
+
+func (m *MsgClustMgrTopology) String() string {
+	var b strings.Builder
+	b.WriteString("indexInstMap : \n")
+	for k, v := range m.indexInstMap {
+		fmt.Fprintf(&b, "%v:%v\n", k, v)
+	}
+	return b.String()
 }
 
 //CLUST_MGR_GET_LOCAL
