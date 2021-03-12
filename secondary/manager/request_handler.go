@@ -79,13 +79,15 @@ type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
 	StorageMode      string             `json:"storageMode,omitempty"`
-	Timestamp        int64              `json:"timestamp,omitempty"`
 	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
 	IndexTopologies  []IndexTopology    `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 
-	ETag             uint64             `json:"eTag,omitempty"`
-	AllIndexesActive bool               `json:"allIndexesActive"`
+	// Pseudofields that should not be checksummed for ETags
+	Timestamp        int64  `json:"timestamp,omitempty"`        // UnixNano meta repo retrieval time; not stored therein
+	ETag             uint64 `json:"eTag,omitempty"`             // checksum (HTTP entity tag); 0 is HTTP_VAL_ETAG_INVALID
+	ETagExpiry       int64  `json:"eTagExpiry,omitempty"`       // ETag expiration UnixNano time
+	AllIndexesActive bool   `json:"allIndexesActive,omitempty"` // all indexes *included in this object* are active
 }
 
 type ClusterIndexMetadata struct {
@@ -196,6 +198,8 @@ type requestHandlerContext struct {
 	clusterUrl  string // this node's full URL
 	hostname    string // this node's host:httpPort
 	hostKey     string // this node's mem+disk cache key
+	eTagPeriod  time.Duration // for computing ETag expiries on rounded time boundaries
+
 
 	///////////////////////////////////////////////////////////////////////////
 	// IndexStatus caches of info from all indexer nodes. New info is written
@@ -245,11 +249,13 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		handlerContext.clusterUrl = config["clusterAddr"].String()
 		handlerContext.hostname = getHostname(handlerContext.clusterUrl)
 		handlerContext.hostKey = host2key(handlerContext.hostname)
+		handlerContext.eTagPeriod = time.Duration(config["settings.eTagPeriod"].Int()) * time.Second
 
 		// Scatter-gather endpoints. These are the entry points to a single indexer that will
 		// scatter the request to all indexers and gather the results to return to the caller.
 		mux.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
 		mux.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
+		mux.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest) // delegates to getIndexStatus
 
 		// Single-indexer endpoints (non-scatter-gather).
 		mux.HandleFunc("/createIndex", handlerContext.createIndexRequest)
@@ -258,7 +264,6 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		mux.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
 		mux.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
-		mux.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
 		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
 		mux.HandleFunc("/settings/planner", handlerContext.handlePlannerRequest)
@@ -468,8 +473,12 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 // Index Status
 ///////////////////////////////////////////////////////
 
+// handleIndexStatusRequest services the /getIndexStatus REST endpoint and returns statuses
+// for (possibly a subset of) indexes on every indexer node. The caller can request status
+// of only a subset of indexes; additionally any indexes they do not have permissions for
+// will be filtered out. (ns_server calls this enpoint every 5 sec on every indexer node to
+// get statues for all indexes, but it is not the only caller.)
 func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, r *http.Request) {
-
 	defer func() {
 		if r := recover(); r != nil {
 			count := atomic.AddUint64(&m.stReqRecCount, 1)
@@ -504,16 +513,16 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		getAll = true
 	}
 
-	list, failedNodes, err := m.getIndexStatus(creds, t, getAll)
+	indexStatuses, failedNodes, eTag, err := m.getIndexStatus(creds, t, getAll)
 	if err == nil && len(failedNodes) == 0 {
-		sort.Sort(indexStatusSorter(list))
-		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
-		send(http.StatusOK, w, resp) // kjc TODO - sendNotModified with ETag (to external caller)
+		sort.Sort(indexStatusSorter(indexStatuses))
+		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
+		sendWithETag(http.StatusOK, w, resp, eTag)
 	} else {
 		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
-		sort.Sort(indexStatusSorter(list))
+		sort.Sort(indexStatusSorter(indexStatuses))
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
-			Status: list, FailedNodes: failedNodes}
+			Status: indexStatuses, FailedNodes: failedNodes}
 		send(http.StatusInternalServerError, w, resp)
 	}
 }
@@ -614,12 +623,15 @@ func addHost(defnId common.IndexDefnId, hostAddr string, defnToHostMap map[commo
 // added in common.INDEXER_65_VERSION.) Status consists of two parts:
 //   1. LocalIndexMetadata
 //   2. A subset of IndexStats (currently: buildProgress, completionProgress, lastScanTime)
-func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) (
+	indexStatuses []IndexStatus, failedNodes []string, eTag uint64, err error) {
+
 	var cinfo *common.ClusterInfoCache
 	cinfo = m.mgr.reqcic.GetClusterInfoCache()
 
 	if cinfo == nil {
-		return nil, nil, errors.New("ClusterInfoCache unavailable in IndexManager")
+		return nil, nil, common.HTTP_VAL_ETAG_INVALID,
+			errors.New("ClusterInfoCache unavailable in IndexManager")
 	}
 
 	cinfo.RLock()
@@ -630,8 +642,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	defns := make(map[common.IndexDefnId]common.IndexDefn)
-	list := make([]IndexStatus, 0) // return 1: flat list of statuses
-	failedNodes := make([]string, 0) // return 2: flat list of unreachable indexer nodes
+	indexStatuses = make([]IndexStatus, 0) // return 1: flat list of statuses
+	failedNodes = make([]string, 0)        // return 2: flat list of unreachable indexer nodes
 
 	// IndexStatus pieces by node to cache to local disk, corresponding to metaCache and statsCache
 	metaToCache := make(map[string]*LocalIndexMetadata)
@@ -670,6 +682,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		keepKeys = append(keepKeys, hostKey)
 		stale := false
 		metaToCache[hostKey] = nil
+
+		// kjc TODO - Outstanding ETag items:
+		// - Compute checksum for full getIndexStatus results
+		// - Maintain current host's ETag and ETagExpiry for full getIndexStats
+		// - sendNotModified() for full getIndexStat where global ETag is valid
+		// - Performance: don't write to disk cache if we responded from cache
 
 		//
 		// Get metadata for all indexes of current node
@@ -723,7 +741,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				// Do not cache partial results
 				metaToCache[hostKey] = nil
 				statsToCache[hostKey] = nil
-				localMeta.AllIndexesActive = false // for safety; should not get cached
 				continue
 			}
 			accessAllowed := permissionCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection, "list")
@@ -731,7 +748,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				// Do not cache partial results
 				metaToCache[hostKey] = nil
 				statsToCache[hostKey] = nil
-				localMeta.AllIndexesActive = false // for safety; should not get cached
 				continue
 			}
 			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
@@ -854,7 +870,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 							LastScanTime: lastScanTime,
 						}
 
-						list = append(list, status)
+						indexStatuses = append(indexStatuses, status)
 					}
 				}
 			}
@@ -863,6 +879,13 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 		// Memory cache the data if it is a full set
 		if metaToCache[hostKey] != nil && statsToCache[hostKey] != nil {
+			if hostKey == m.hostKey { // fresh info being cached is for *current host*
+				// Ideally clearing the dirty flag would have been done in setETagLocalIndexMetadata,
+				// but we don't know what code path entered it so its data might never be cached.
+				// Thought of doing the caching there too but if triggered by a different code path
+				// it then would not match what we cache on disk.
+				m.mgr.getMetadataRepo().ClearMetaDirty()
+			}
 			m.memCacheLocalIndexMetadata(hostKey, metaToCache[hostKey])
 			m.memCacheStats(hostKey, statsToCache[hostKey])
 		}
@@ -872,11 +895,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	m.cleanupMemoryCaches(keepKeys)
 
 	//Fix replica count
-	for i, index := range list {
+	for i, index := range indexStatuses {
 		if counter, ok := numReplicas[index.DefnId]; ok {
 			numReplica, exist := counter.Value()
 			if exist {
-				list[i].NumReplica = int(numReplica)
+				indexStatuses[i].NumReplica = int(numReplica)
 			}
 		}
 	}
@@ -892,7 +915,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	// If the index resides only on one node, the "nodes" clause is
 	// populated on UI only if the index definition is explicitly
 	// defined with "nodes" clause
-	for i, index := range list {
+	for i, index := range indexStatuses {
 		defnId := index.DefnId
 		defn := defns[defnId]
 		if len(defnToHostMap[defnId]) > 1 || defn.Nodes != nil {
@@ -901,12 +924,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 			// For the non-rebalanced index, it can either be true or false depending on
 			// how it was created
 			defn.Deferred = isInstanceDeferred[index.InstId]
-			list[i].Definition = common.IndexStatement(defn, int(defn.NumPartitions), index.NumReplica, true)
+			indexStatuses[i].Definition = common.IndexStatement(defn, int(defn.NumPartitions), index.NumReplica, true)
 		}
 	}
 
 	if !getAll {
-		list = m.consolideIndexStatus(list)
+		indexStatuses = m.consolideIndexStatus(indexStatuses)
 	}
 
 	schedIndexes := m.schedTokenMon.getIndexes()
@@ -919,13 +942,13 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		schedIndexList = append(schedIndexList, *idx)
 	}
 
-	list = append(list, schedIndexList...)
+	indexStatuses = append(indexStatuses, schedIndexList...)
 
 	// Stage local metadata and stats subset for persisting to disk cache
 	m.metaCh <- metaToCache
 	m.statsCh <- statsToCache
 
-	return list, failedNodes, nil
+	return indexStatuses, failedNodes, eTag, nil // kjc TODO eTag == 0 (not computed yet)
 }
 
 func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []IndexStatus {
@@ -1000,6 +1023,10 @@ func (m *requestHandlerContext) consolideStateStr(str1 string, str2 string) stri
 // Index Statement
 ///////////////////////////////////////////////////////
 
+// handleIndexStatementRequest services the /getIndexStatement REST endpoint and returns
+// the "create index" statements for (possibly a subset of) indexes on every indexer node.
+// The caller can request statements for only a subset of indexes; additionally any indexes
+// they do not have permissions for will be filtered out.
 func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := doAuth(r, w)
@@ -1020,23 +1047,26 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 		return
 	}
 
-	list, err := m.getIndexStatement(creds, t)
+	list, eTag, err := m.getIndexStatement(creds, t)
 	if err == nil {
 		sort.Strings(list)
-		send(http.StatusOK, w, list)
+		sendWithETag(http.StatusOK, w, list, eTag)
 	} else {
 		send(http.StatusInternalServerError, w, err.Error())
 	}
 }
 
-func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) ([]string, error) {
+// getIndexStatement is a helper for handleIndexStatementRequest. It delegates to getIndexStatus,
+// then cherry picks the "create index" statements out of the results.
+func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) ([]string, uint64, error) {
 
-	indexes, failedNodes, err := m.getIndexStatus(creds, t, false)
+	indexes, failedNodes, eTag, err := m.getIndexStatus(creds, t, false)
 	if err != nil {
-		return nil, err
+		return nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
 	if len(failedNodes) != 0 {
-		return nil, errors.New(fmt.Sprintf("Failed to connect to indexer nodes %v", failedNodes))
+		return nil, common.HTTP_VAL_ETAG_INVALID,
+			errors.New(fmt.Sprintf("Failed to connect to indexer nodes %v", failedNodes))
 	}
 
 	defnMap := make(map[common.IndexDefnId]bool)
@@ -1048,7 +1078,7 @@ func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target)
 		}
 	}
 
-	return statements, nil
+	return statements, eTag, nil
 }
 
 ///////////////////////////////////////////////////////
@@ -1056,7 +1086,6 @@ func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target)
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
-
 	creds, ok := doAuth(r, w)
 	if !ok {
 		return
@@ -1300,6 +1329,8 @@ func getFilters(r *http.Request, bucket string) (map[string]bool, string, error)
 	return filters, filterType, nil
 }
 
+// applyFilters returns true iff an IndexDefn's (idxBucket, scope, collection, name)
+// are selected by (bucket, filters, filterType).
 func applyFilters(bucket, idxBucket, scope, collection, name string,
 	filters map[string]bool, filterType string) bool {
 
@@ -1414,32 +1445,6 @@ func getRestoreRemapParam(r *http.Request) (map[string]string, error) {
 // LocalIndexMetadata
 ///////////////////////////////////////////////////////
 
-// eTagIsValidLocalIndexMetadata determines whether the given LocalIndexMetadata
-// Etag is still valid. This depends on the dirty flag, time expiry, and whether
-// it matches the cached ETag. An ETag of 0 is always invalid.
-func (m *requestHandlerContext) eTagIsValidLocalIndexMetadata(eTag uint64) bool {
-
-	return false
-/*****
-  	// kjc TODO implement real version of this function
-	// Outstanding items not marked elsewhere:
-	// - Maintaining dirty flag (meta_repo.go)
-	// - Computing checksums (only for full results)
-	// - Maintaining current node's checksum expiry
-	// - Don't write to disk cache if we responded from cache (performance)
-
-	if eTag == 0 || m.metaIsDirty || time.Now() > m.metaExpiry {
-		return false
-	}
-
-	localMeta, err := m.getLocalIndexMetadataFromCache(m.hostKey)
-	if err != nil || eTag != localMeta.ETag {
-		return false
-	}
-	return true
- *****/
-}
-
 // handleLocalIndexMetadataRequest handles incoming requests for the /getLocalIndexMetadata
 // REST endpoint. If the optional ETag request header field is set, this is the checksum of
 // the previously returned results to the caller. If this checksum is still valid, return
@@ -1450,13 +1455,18 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		return
 	}
 
-	// If caller provided a still-valid ETag, respond 304 Not Modified with the same ETag.
-	// eTagRequest will be 0 == common.HTTP_VAL_ETAG_INVALID if missing or garbage.
-	eTagRequest, _ := strconv.ParseUint(r.Header.Get(common.HTTP_KEY_ETAG_REQUEST),
-		common.HTTP_VAL_ETAG_BASE, 64)
-	if m.eTagIsValidLocalIndexMetadata(eTagRequest) {
-		sendNotModified(w, eTagRequest)
-		return
+	// If metadata not dirty, can avoid collection and marshaling if caller passed a still-valid ETag
+	if (!m.mgr.getMetadataRepo().IsMetaDirty()) {
+		eTagRequest, _ := strconv.ParseUint(r.Header.Get(common.HTTP_KEY_ETAG_REQUEST),
+			common.HTTP_VAL_ETAG_BASE, 64)
+		if (eTagRequest != common.HTTP_VAL_ETAG_INVALID) { // also ...INVALID if missing or garbage
+			cachedMeta, err := m.getLocalIndexMetadataFromCache(m.hostKey)
+			if err == nil && eTagRequest == cachedMeta.ETag && time.Now().UnixNano() < cachedMeta.ETagExpiry {
+				// Valid ETag; respond 304 Not Modified with the same ETag
+				sendNotModified(w, eTagRequest)
+				return
+			}
+		}
 	}
 
 	// Need to respond with the full local index metadata
@@ -1504,16 +1514,18 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 	meta, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType)
 	if err == nil {
-		var eTagResponse uint64 = 0 // kjc TODO getETag() -- do not let callers who didn't send eTag cause expiry
-		sendWithETag(http.StatusOK, w, meta, eTagResponse)
+		sendWithETag(http.StatusOK, w, meta, meta.ETag)
 	} else {
 		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
 		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
 	}
 }
 
+// getLocalIndexMetadata gets index metadata from the local metadata repo and,
+// iff it is a full set, sets its ETag info.
 func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
-	bucket string, filters map[string]bool, filterType string) (meta *LocalIndexMetadata, err error) {
+		bucket string, filters map[string]bool, filterType string) (
+	meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
 	permissionsCache := initPermissionsCache()
@@ -1534,7 +1546,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	meta.StorageMode = string(common.StorageModeToIndexType(common.GetStorageMode()))
 	meta.LocalSettings = make(map[string]string)
 
-	meta.Timestamp = time.Now().UnixNano()
+	retrievalTs := time.Now().UnixNano() // don't set in meta yet; breaks ETag checksum
 
 	if exclude, err := m.mgr.GetLocalValue("excludeNode"); err == nil {
 		meta.LocalSettings["excludeNode"] = exclude
@@ -1547,12 +1559,14 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	defer iter.Close()
 
 	var defn *common.IndexDefn
+	fullSet := true // do final results include all defns?
 	_, defn, err = iter.Next()
 	for err == nil {
-		if applyFilters(bucket, defn.Bucket, defn.Scope, defn.Collection, defn.Name, filters, filterType) {
-			if permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection, "list") {
+		if	applyFilters(bucket, defn.Bucket, defn.Scope, defn.Collection, defn.Name, filters, filterType) &&
+			permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection, "list") {
 				meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
-			}
+		} else {
+			fullSet = false
 		}
 		_, defn, err = iter.Next()
 	}
@@ -1566,15 +1580,61 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		if applyFilters(bucket, topology.Bucket, topology.Scope, topology.Collection, "", filters, filterType) {
-			if permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection, "list") {
+		if	applyFilters(bucket, topology.Bucket, topology.Scope, topology.Collection, "", filters, filterType) &&
+			permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection, "list") {
 				meta.IndexTopologies = append(meta.IndexTopologies, *topology)
-			}
+		} else {
+			fullSet = false
 		}
 		topology, err = iter1.Next()
 	}
 
+	if fullSet {
+		m.setETagLocalIndexMetadata(meta)
+	}
+	meta.Timestamp = retrievalTs
 	return meta, nil
+}
+
+// setETagLocalIndexMetadata should only be called on a LocalIndexMetadata
+// that inludes info about all IndexDefns of this host, as we never cache partial
+// sets. It computes the ETag checksum and sets that ETag and its expiry in the
+// object. It sets invalid ETag HTTP_VAL_ETAG_INVALID if the input could not be
+// marshaled. The expiry will be the next future rounded-to-S-seconds time that
+// is at least S/2 seconds away, where S is specified by config variable
+// indexer.settings.eTagPeriod (currently 240). The expiry will thus average S
+// seconds in the future but can be anything between S/2 and 3S/2. The rounding
+// is done to try to keep expiry times aligned across all nodes (unfortunately
+// jittered by any internode clock differences), so getIndexStatus for many nodes
+// will likely have either all or none of its individual LocalIndexMetadata ETags
+// unexpired, as if even one's ETag is expired we must send full results to caller.
+func (m *requestHandlerContext) setETagLocalIndexMetadata(meta *LocalIndexMetadata) {
+
+	var bytes []byte // data to checksum
+	var err error
+
+	// If-else intentionally avoids creating metaCopy variable when not
+	// needed (normal case) to avoid Go overhead of zeroing it out.
+	if meta.Timestamp == 0 && meta.ETag == common.HTTP_VAL_ETAG_INVALID &&
+			meta.ETagExpiry == 0 && !meta.AllIndexesActive {
+		// Pseudo-fields are zero; checksum the original
+		bytes, err = json.Marshal(meta)
+	} else {
+		// Pseudo-field(s) are set; shallow copy to zero them so they don't affect checksum
+		metaCopy := *meta
+		metaCopy.Timestamp = 0
+		metaCopy.ETag = common.HTTP_VAL_ETAG_INVALID
+		metaCopy.ETagExpiry = 0
+		metaCopy.AllIndexesActive = false
+		bytes, err = json.Marshal(metaCopy)
+	}
+	if err != nil {
+		logging.Errorf("setETagLocalIndexMetadata: marshal metadata failed. Error: %v", err)
+		meta.ETag = common.HTTP_VAL_ETAG_INVALID
+		return
+	}
+	meta.ETag = common.Crc64Checksum(bytes)
+	meta.ETagExpiry = time.Now().Add(m.eTagPeriod).Round(m.eTagPeriod).UnixNano()
 }
 
 // shouldProcess is a helper for getIndexStatus that determines whether a given index
@@ -1604,6 +1664,7 @@ func initPermissionsCache() *permissionsCache {
 	return p
 }
 
+// isAllowed returns true iff a caller's (creds, op) allow access to IndexDefn (bucket, scope, collection).
 func (p *permissionsCache) isAllowed(creds cbauth.Creds, bucket, scope, collection, op string) bool {
 
 	checkAndAddBucketLevelPermission := func(bucket string) bool {
@@ -2305,8 +2366,8 @@ func (m *requestHandlerContext) getLocalIndexMetadataFromREST(addr string, hostn
 	}()
 
 	if err == nil {
-		// StatusNotModified can only occur if metaCached was retrieved from cache,
-		// as that is the only time we may send an ETag in the request to trigger it.
+		// StatusNotModified can only occur if metaCached was retrieved from cache, as
+		// that is the only time we may send a valid ETag in the request to trigger it.
 		if resp.StatusCode == http.StatusNotModified {
 			return metaCached, true, nil
 		}

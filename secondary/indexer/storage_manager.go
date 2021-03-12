@@ -2018,7 +2018,7 @@ func destroyIndexSnapMap(ism IndexSnapMap) {
 
 }
 
-func (s IndexStorageStats) getPlasmaFragmentation() float64 {
+func (s *IndexStorageStats) getPlasmaFragmentation() float64 {
 	var fragPercent float64
 
 	var wastedSpace int64

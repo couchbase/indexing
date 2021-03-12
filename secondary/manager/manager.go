@@ -121,7 +121,7 @@ func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr 
 }
 
 //
-// Create a new IndexManager
+// Create a new IndexManager that wraps a LocalMetadataRepo (not a RemoteMetadataRepo).
 //
 func NewIndexManagerInternal(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
