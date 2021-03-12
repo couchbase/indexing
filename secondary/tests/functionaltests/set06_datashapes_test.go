@@ -74,6 +74,46 @@ func TestFieldsWithSpecialCharacters(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
+func TestLargeKeyLookup(t *testing.T) {
+	if secondaryindex.IndexUsing == "forestdb" {
+		log.Printf("Skipping test TestLargeKeyLookup() for forestdb")
+		return
+	}
+	log.Printf("In TestLargeKeyLookup()")
+
+	var bucketName = "default"
+	var indexName = "index_largeKeyLookup"
+	var field = "str"
+
+	docsToCreate := generateDocsWithSpecialCharacters(1000, "users.prod", field)
+	chars := []string{"\t", "&", "<", ">", "a", "1"}
+	for k, v := range docsToCreate {
+		json := v.(map[string]interface{})
+		json["str"] = splstr(randomNum(4000, 5000), chars)
+		docsToCreate[k] = json
+	}
+	UpdateKVDocs(docsToCreate, docs)
+
+	var valueToLookup string
+	for _, v := range docsToCreate {
+		json := v.(map[string]interface{})
+		valueToLookup = json[field].(string)
+		break
+	}
+
+	kvutility.SetKeyValues(docsToCreate, bucketName, "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	log.Printf("Looking up for a large key")
+	docScanResults := datautility.ExpectedScanResponse_string(docs, field, valueToLookup, valueToLookup, 3)
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{valueToLookup}, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+}
+
 func TestIndexNameValidation(t *testing.T) {
 	log.Printf("In TestIndexNameValidation()")
 

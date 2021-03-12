@@ -374,12 +374,12 @@ func (k *primaryKey) String() string {
 
 type secondaryKey []byte
 
-func NewSecondaryKey(key []byte, buf []byte, maxSecKeyLen int) (IndexKey, error) {
+func NewSecondaryKey(key []byte, buf []byte, allowLargeKeys bool, maxSecKeyLen int) (IndexKey, error) {
 	if isNilJsonKey(key) {
 		return &NilIndexKey{}, nil
 	}
 
-	if len(key) > maxSecKeyLen {
+	if !allowLargeKeys && len(key) > maxSecKeyLen {
 		return nil, errors.New(fmt.Sprintf("Secondary key is too long (> %d)", maxSecKeyLen))
 	}
 
