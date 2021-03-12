@@ -163,6 +163,13 @@ var SystemConfig = Config{
 		false,    // mutable
 		false,    // case-insensitive
 	},
+	"projector.encodeBufResizeInterval": ConfigValue{
+		60, // 60 Minutes
+		"Period (in Minutes) with which projector would resize its encodeBuf",
+		60,    // 60 Minutes,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.feedChanSize": ConfigValue{
 		100,
 		"channel size for feed's control path, " +

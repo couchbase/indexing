@@ -105,7 +105,7 @@ func (engine *Engine) StreamEndData(
 func (engine *Engine) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	numIndexes int, opaque2 uint64, oso bool) ([]byte, error) {
+	numIndexes int, opaque2 uint64, oso bool) ([]byte, int, error) {
 
 	return engine.evaluator.TransformRoute(
 		vbuuid, m, data, encodeBuf, docval, context, numIndexes, opaque2, oso,

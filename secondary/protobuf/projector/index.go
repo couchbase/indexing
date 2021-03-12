@@ -347,7 +347,7 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	numIndexes int, opaque2 uint64, oso bool) ([]byte, error) {
+	numIndexes int, opaque2 uint64, oso bool) ([]byte, int, error) {
 
 	var err error
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
@@ -376,7 +376,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		ie.stats.ErrSkipAll.Add(1)
 	}
 
-	return newBuf, err
+	return newBuf, len(nkey), err
 }
 
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,

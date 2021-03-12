@@ -2292,6 +2292,7 @@ func FeedConfigParams() []string {
 		"feedWaitStreamReqTimeout",
 		"mutationChanSize",
 		"encodeBufSize",
+		"encodeBufResizeInterval",
 		"routerEndpointFactory",
 		"syncTimeout",
 		// dcp configuration
