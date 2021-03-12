@@ -157,11 +157,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.encodeBufSize": ConfigValue{
-		1024 * 1024,
+		2 * 1024, // 2KB
 		"Collatejson encode buffer size",
-		1024 * 1024,
-		false, // mutable
-		false, // case-insensitive
+		2 * 1024, // 2KB
+		false,    // mutable
+		false,    // case-insensitive
 	},
 	"projector.feedChanSize": ConfigValue{
 		100,
