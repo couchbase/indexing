@@ -1310,6 +1310,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 	//node level stats
 	var numStorageInstances int64
 	var totalDataSize, totalDiskSize, sumResidentPercent int64
+	var avgMutationRate, avgDrainRate, avgDiskBps int64
 
 	stats := s.stats.Get()
 	indexInstMap := s.indexInstMap.Get()
@@ -1371,11 +1372,17 @@ func (s *storageMgr) handleStats(cmd Message) {
 			totalDataSize += st.Stats.DataSize
 			totalDiskSize += st.Stats.DiskSize
 			sumResidentPercent += idxStats.residentPercent.Value()
+			avgMutationRate += idxStats.avgMutationRate.Value()
+			avgDrainRate += idxStats.avgDrainRate.Value()
+			avgDiskBps += idxStats.avgDiskBps.Value()
 		}
 	}
 
 	stats.totalDataSize.Set(totalDataSize)
 	stats.totalDiskSize.Set(totalDiskSize)
+	stats.avgMutationRate.Set(avgMutationRate)
+	stats.avgDrainRate.Set(avgDrainRate)
+	stats.avgDiskBps.Set(avgDiskBps)
 	stats.numStorageInstances.Set(numStorageInstances)
 	if numStorageInstances > 0 {
 		stats.avgResidentPercent.Set(sumResidentPercent / numStorageInstances)
