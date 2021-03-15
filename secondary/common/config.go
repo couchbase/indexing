@@ -2721,9 +2721,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.allowScheduleCreateRebal": ConfigValue{
-		true,
+		false,
 		"Allow scheduling of index creation in the background during rebalance",
-		true,
+		false,
 		false,
 		false,
 	},
