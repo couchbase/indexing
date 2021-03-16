@@ -988,8 +988,8 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		for id, idxStats := range stats.indexes {
 			err := s.updateItemsCount(id, idxStats)
 			if err != nil {
-				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
-					idxStats.bucket, idxStats.name, err)
+				logging.Errorf("%v: Unable to compute index items_count for %v/%v/%v state %v (%v)", s.logPrefix,
+					idxStats.bucket, idxStats.name, id, idxStats.indexState.Value(), err)
 			}
 
 			// compute scan rate
