@@ -295,13 +295,19 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		forceCommit = true
 	}
 
+	numSnapshotWorkers := s.getNumSnapshotWorkers()
+	waitCh := make(chan bool, numSnapshotWorkers)
+
 	var wg sync.WaitGroup
 	//for every index managed by this indexer
 	for _, idxInstId := range instIdList {
 		// Create snapshots for all indexes in parallel
 		wg.Add(1)
+		waitCh <- true
 		go func(idxInstId common.IndexInstId) {
-
+			defer func() {
+				<-waitCh
+			}()
 			idxInst := indexInstMap[idxInstId]
 			//process only if index belongs to the flushed keyspaceId and stream
 			if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId ||
@@ -1303,7 +1309,8 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 	//node level stats
 	var numStorageInstances int64
-	var totalDataSize, totalDiskSize, sumResidentPercent int64
+	var totalDataSize, totalDiskSize, totalRecsInMem, totalRecsOnDisk int64
+	var avgMutationRate, avgDrainRate, avgDiskBps int64
 
 	stats := s.stats.Get()
 	indexInstMap := s.indexInstMap.Get()
@@ -1364,15 +1371,22 @@ func (s *storageMgr) handleStats(cmd Message) {
 			//compute node level stats
 			totalDataSize += st.Stats.DataSize
 			totalDiskSize += st.Stats.DiskSize
-			sumResidentPercent += idxStats.residentPercent.Value()
+			totalRecsInMem += idxStats.numRecsInMem.Value()
+			totalRecsOnDisk += idxStats.numRecsOnDisk.Value()
+			avgMutationRate += idxStats.avgMutationRate.Value()
+			avgDrainRate += idxStats.avgDrainRate.Value()
+			avgDiskBps += idxStats.avgDiskBps.Value()
 		}
 	}
 
 	stats.totalDataSize.Set(totalDataSize)
 	stats.totalDiskSize.Set(totalDiskSize)
 	stats.numStorageInstances.Set(numStorageInstances)
+	stats.avgMutationRate.Set(avgMutationRate)
+	stats.avgDrainRate.Set(avgDrainRate)
+	stats.avgDiskBps.Set(avgDiskBps)
 	if numStorageInstances > 0 {
-		stats.avgResidentPercent.Set(sumResidentPercent / numStorageInstances)
+		stats.avgResidentPercent.Set(common.ComputePercent(totalRecsInMem, totalRecsOnDisk))
 	} else {
 		stats.avgResidentPercent.Set(0)
 	}
@@ -2031,4 +2045,13 @@ func (s *IndexStorageStats) getPlasmaFragmentation() float64 {
 	}
 
 	return fragPercent
+}
+
+func (s *storageMgr) getNumSnapshotWorkers() int {
+	numSnapshotWorkers := s.config["numSnapshotWorkers"].Int()
+	if numSnapshotWorkers < 1 {
+		//Since indexer supports upto 10000 indexes in a cluster as of 7.0
+		numSnapshotWorkers = 10000
+	}
+	return numSnapshotWorkers
 }

@@ -53,6 +53,12 @@ func Crc64Checksum(bytes []byte) uint64 {
 	return crc64.Checksum(bytes, crc64ECMA)
 }
 
+// Crc64Update incrementally updates an existing CRC64 checksum with more bytes.
+// The order in which original checksum and updates are made affects the result.
+func Crc64Update(checksum uint64, bytes []byte) uint64 {
+	return crc64.Update(checksum, crc64ECMA, bytes)
+}
+
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
 func ExcludeStrings(strs []string, excludes []string) []string {

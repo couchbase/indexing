@@ -714,6 +714,9 @@ type IndexerStats struct {
 	numIndexes          stats.Int64Val
 	numStorageInstances stats.Int64Val
 	avgResidentPercent  stats.Int64Val
+	avgMutationRate     stats.Int64Val
+	avgDrainRate        stats.Int64Val
+	avgDiskBps          stats.Int64Val
 	totalDataSize       stats.Int64Val
 	totalDiskSize       stats.Int64Val
 
@@ -753,6 +756,9 @@ func (s *IndexerStats) Init() {
 	s.numIndexes.Init()
 	s.numStorageInstances.Init()
 	s.avgResidentPercent.Init()
+	s.avgMutationRate.Init()
+	s.avgDrainRate.Init()
+	s.avgDiskBps.Init()
 	s.totalDataSize.Init()
 	s.totalDiskSize.Init()
 
@@ -793,6 +799,9 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.numCPU.AddFilter(stats.SummaryFilter)
 	s.cpuUtilization.AddFilter(stats.SummaryFilter)
 	s.avgResidentPercent.AddFilter(stats.SummaryFilter)
+	s.avgMutationRate.AddFilter(stats.SummaryFilter)
+	s.avgDrainRate.AddFilter(stats.SummaryFilter)
+	s.avgDiskBps.AddFilter(stats.SummaryFilter)
 	s.totalDataSize.AddFilter(stats.SummaryFilter)
 	s.totalDiskSize.AddFilter(stats.SummaryFilter)
 	s.numStorageInstances.AddFilter(stats.SummaryFilter)
@@ -977,6 +986,9 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("needs_restart", &is.needsRestart)
 	statMap.AddStatValueFiltered("num_cpu_core", &is.numCPU)
 	statMap.AddStatValueFiltered("avg_resident_percent", &is.avgResidentPercent)
+	statMap.AddStatValueFiltered("avg_mutation_rate", &is.avgMutationRate)
+	statMap.AddStatValueFiltered("avg_drain_rate", &is.avgDrainRate)
+	statMap.AddStatValueFiltered("avg_disk_bps", &is.avgDiskBps)
 	statMap.AddStatValueFiltered("total_data_size", &is.totalDataSize)
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)

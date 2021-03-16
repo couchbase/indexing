@@ -2415,13 +2415,18 @@ func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id,
 			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
 	} else {
-		logging.Errorf("plasmaSlice::Destroy Cleaned Up Slice Id %v, "+
+		logging.Infof("plasmaSlice::Destroy Cleaned Up Slice Id %v, "+
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
 			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 	}
 }
 
 func tryCloseplasmaSlice(mdb *plasmaSlice) {
+
+	logging.Infof("plasmaSlice::Close Closed Slice Id %v, "+
+		"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
+		mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
+
 	mdb.waitForPersistorThread()
 	mdb.mainstore.Close()
 
@@ -2429,9 +2434,6 @@ func tryCloseplasmaSlice(mdb *plasmaSlice) {
 		mdb.backstore.Close()
 	}
 
-	logging.Errorf("plasmaSlice::Close Closed Slice Id %v, "+
-		"IndexInstId %v, PartitionId %v, IndexDefnId %v.", mdb.id,
-		mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 }
 
 func (mdb *plasmaSlice) getCmdsCount() int {

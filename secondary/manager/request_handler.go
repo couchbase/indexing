@@ -221,6 +221,11 @@ type requestHandlerContext struct {
 	statsMutex sync.RWMutex // statsCache mutex
 	///////////////////////////////////////////////////////////////////////////
 
+	// Current ETag info for /getIndexStatus global results
+	getIndexStatusETag       uint64 // current valid checksum of cached getIndexStatus full results
+	getIndexStatusETagExpiry int64 // getIndexStatusETag expiration UnixNano time
+	getIndexStatusMutex      sync.RWMutex // sync for the above ETag info
+
 	doneCh chan bool
 	schedTokenMon *schedTokenMonitor
 	stReqRecCount uint64
@@ -513,11 +518,17 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		getAll = true
 	}
 
-	indexStatuses, failedNodes, eTag, err := m.getIndexStatus(creds, t, getAll)
+	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, t, getAll)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(indexStatuses))
-		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
-		sendWithETag(http.StatusOK, w, resp, eTag)
+		eTagRequest := getETagFromHttpHeader(r)
+		if eTagRequest == eTagResponse { // eTagResponse is always fresh
+			// Valid ETag; respond 304 Not Modified with the same ETag
+			sendNotModified(w, eTagRequest)
+		} else {
+			resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
+			sendWithETag(http.StatusOK, w, resp, eTagResponse)
+		}
 	} else {
 		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
 		sort.Sort(indexStatusSorter(indexStatuses))
@@ -624,14 +635,14 @@ func addHost(defnId common.IndexDefnId, hostAddr string, defnToHostMap map[commo
 //   1. LocalIndexMetadata
 //   2. A subset of IndexStats (currently: buildProgress, completionProgress, lastScanTime)
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) (
-	indexStatuses []IndexStatus, failedNodes []string, eTag uint64, err error) {
+	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
 
-	var cinfo *common.ClusterInfoCache
-	cinfo = m.mgr.reqcic.GetClusterInfoCache()
-
+	cinfo := m.mgr.reqcic.GetClusterInfoCache()
 	if cinfo == nil {
-		return nil, nil, common.HTTP_VAL_ETAG_INVALID,
-			errors.New("ClusterInfoCache unavailable in IndexManager")
+		errMsg := "RequestHandler::getIndexStatus ClusterInfoCache unavailable in IndexManager"
+		logging.Errorf(errMsg)
+		err = errors.New(errMsg)
+		return nil, nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
 
 	cinfo.RLock()
@@ -648,6 +659,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	// IndexStatus pieces by node to cache to local disk, corresponding to metaCache and statsCache
 	metaToCache := make(map[string]*LocalIndexMetadata)
 	statsToCache := make(map[string]*common.Statistics)
+	fullSet := true // do the results contain all index defns?
+	allFromCache := true // are all results from local cache?
 
 	defnToHostMap := make(map[common.IndexDefnId][]string)
 	isInstanceDeferred := make(map[common.IndexInstId]bool)
@@ -683,12 +696,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		stale := false
 		metaToCache[hostKey] = nil
 
-		// kjc TODO - Outstanding ETag items:
-		// - Compute checksum for full getIndexStatus results
-		// - Maintain current host's ETag and ETagExpiry for full getIndexStats
-		// - sendNotModified() for full getIndexStat where global ETag is valid
-		// - Performance: don't write to disk cache if we responded from cache
-
 		//
 		// Get metadata for all indexes of current node
 		//
@@ -702,6 +709,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		}
 		if !latest {
 			stale = true
+		}
+		if !localMetaIsFromCache {
+			allFromCache = false
 		}
 		metaToCache[hostKey] = localMeta
 		topoMap := buildTopologyMapPerCollection(localMeta.IndexTopologies)
@@ -726,6 +736,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 			if !latest {
 				stale = true
 			}
+			allFromCache = false
 		}
 		statsToCache[hostKey] = stats
 
@@ -741,6 +752,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				// Do not cache partial results
 				metaToCache[hostKey] = nil
 				statsToCache[hostKey] = nil
+				fullSet = false
 				continue
 			}
 			accessAllowed := permissionCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection, "list")
@@ -748,6 +760,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				// Do not cache partial results
 				metaToCache[hostKey] = nil
 				statsToCache[hostKey] = nil
+				fullSet = false
 				continue
 			}
 			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
@@ -944,11 +957,94 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 	indexStatuses = append(indexStatuses, schedIndexList...)
 
-	// Stage local metadata and stats subset for persisting to disk cache
-	m.metaCh <- metaToCache
-	m.statsCh <- statsToCache
+	// If anything changed since cached, stage latest data for persisting
+	// to disk cache. Changed data already went to memory cache above.
+	if !allFromCache {
+		m.metaCh <- metaToCache
+		m.statsCh <- statsToCache
+	}
 
-	return indexStatuses, failedNodes, eTag, nil // kjc TODO eTag == 0 (not computed yet)
+	// Compute eTagResponse
+	// 1. If got full set of index statuses (the only thing we compute getIndexStatus ETags for):
+	//    a. If got all results from local cache AND current expiry time not passed, use current ETag
+	//    b. Else compute and save new global getIndexStatus ETag and expiry
+	// 2. Else partial set: leave eTagResponse as original zero value == common.HTTP_VAL_ETAG_INVALID
+	if fullSet {
+		eTagCurr, eTagExpiry := m.getGetIndexStatusETagInfo()
+		if allFromCache && time.Now().UnixNano() < eTagExpiry {
+			eTagResponse = eTagCurr
+		} else {
+			eTagResponse, err = m.setETagGetIndexStatus(metaToCache, statsToCache)
+			if err != nil {
+				return nil, nil, common.HTTP_VAL_ETAG_INVALID, err
+			}
+		}
+	}
+	return indexStatuses, failedNodes, eTagResponse, nil
+}
+
+// generateETagExpiry returns the next expiration UnixNano time of ETags based on
+// the current time. The expiry will be the next future rounded-to-S-seconds time
+// that is at least S/2 seconds away, where S is specified by config variable
+// indexer.settings.eTagPeriod (currently 240). The expiry will thus average S
+// seconds in the future but can be anything between S/2 and 3S/2. (Most of the
+// time it will be very close to S because ns_server calls getIndexStatus much more
+// frequently, triggering new ETag creations soon after the prior expiry.) The rounding
+// is done to try to keep expiry times aligned across all nodes (unfortunately
+// jittered by any internode clock differences), so getIndexStatus for many nodes
+// will likely have either all or none of its individual LocalIndexMetadata ETags
+// unexpired, as if even one's ETag is expired we must send full results to caller.
+func (m *requestHandlerContext) generateETagExpiry() int64 {
+	return time.Now().Add(m.eTagPeriod).Round(m.eTagPeriod).UnixNano()
+}
+
+// getGetIndexStatusETag returns the current ETag and expiry for global getIndexStatus results.
+func (m *requestHandlerContext) getGetIndexStatusETagInfo() (eTag uint64, expiry int64) {
+	m.getIndexStatusMutex.RLock()
+	defer m.getIndexStatusMutex.RUnlock()
+	return m.getIndexStatusETag, m.getIndexStatusETagExpiry
+}
+
+// setGetIndexStatusETag sets a new ETag and expiry for global getIndexStatus results.
+func (m *requestHandlerContext) setGetIndexStatusETag(eTag uint64) {
+	m.getIndexStatusMutex.Lock()
+	m.getIndexStatusETag = eTag
+	m.getIndexStatusETagExpiry = m.generateETagExpiry()
+	m.getIndexStatusMutex.Unlock()
+}
+
+// setETagGetIndexStatus computes and sets a new ETag and expiry for global getIndexStatus
+// results and returns the new ETag.
+func (m *requestHandlerContext) setETagGetIndexStatus(
+	metaToCache map[string]*LocalIndexMetadata, statsToCache map[string]*common.Statistics) (uint64, error) {
+
+	// 1. Checksum (into eTag) the LocalIndexMetadata checksums
+	var sb strings.Builder
+	sbPtr := &sb // for reuse efficiency
+	for _, localMeta := range metaToCache {
+		if localMeta.ETag == common.HTTP_VAL_ETAG_INVALID { // should never happen
+			errMsg := fmt.Sprintf("RequestHandler::setETagGetIndexStatus invalid localMeta ETag: %x for IndexerId: %v",
+				localMeta.ETag, localMeta.IndexerId)
+			logging.Errorf(errMsg)
+			err := errors.New(errMsg)
+			return common.HTTP_VAL_ETAG_INVALID, err
+		}
+		fmt.Fprintf(sbPtr, "%016x", localMeta.ETag)
+	}
+	bytes := []byte(sb.String())
+	eTag := common.Crc64Checksum(bytes)
+
+	// Add the stats to the eTag checksum
+	bytes, err := json.Marshal(statsToCache)
+	if err != nil {
+		logging.Errorf("RequestHandler::setETagGetIndexStatus json.Marshal failed: %v", err.Error())
+		return common.HTTP_VAL_ETAG_INVALID, err
+	}
+	eTag = common.Crc64Update(eTag, bytes)
+
+	// Set the new global getIndexStatus ETag and expiry
+	m.setGetIndexStatusETag(eTag)
+	return eTag, nil
 }
 
 func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []IndexStatus {
@@ -1047,10 +1143,16 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 		return
 	}
 
-	list, eTag, err := m.getIndexStatement(creds, t)
+	statements, eTagResponse, err := m.getIndexStatement(creds, t)
 	if err == nil {
-		sort.Strings(list)
-		sendWithETag(http.StatusOK, w, list, eTag)
+		sort.Strings(statements)
+		eTagRequest := getETagFromHttpHeader(r)
+		if eTagRequest == eTagResponse { // eTagResponse is always fresh
+			// Valid ETag; respond 304 Not Modified with the same ETag
+			sendNotModified(w, eTagRequest)
+		} else {
+			sendWithETag(http.StatusOK, w, statements, eTagResponse)
+		}
 	} else {
 		send(http.StatusInternalServerError, w, err.Error())
 	}
@@ -1058,9 +1160,10 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 
 // getIndexStatement is a helper for handleIndexStatementRequest. It delegates to getIndexStatus,
 // then cherry picks the "create index" statements out of the results.
-func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) ([]string, uint64, error) {
+func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) (
+	statements []string, eTagResponse uint64, err error) {
 
-	indexes, failedNodes, eTag, err := m.getIndexStatus(creds, t, false)
+	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, t, false)
 	if err != nil {
 		return nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
@@ -1070,15 +1173,15 @@ func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target)
 	}
 
 	defnMap := make(map[common.IndexDefnId]bool)
-	statements := ([]string)(nil)
-	for _, index := range indexes {
+	statements = ([]string)(nil)
+	for _, index := range indexStatuses {
 		if _, ok := defnMap[index.DefnId]; !ok {
 			defnMap[index.DefnId] = true
 			statements = append(statements, index.Definition)
 		}
 	}
 
-	return statements, eTag, nil
+	return statements, eTagResponse, nil
 }
 
 ///////////////////////////////////////////////////////
@@ -1445,6 +1548,22 @@ func getRestoreRemapParam(r *http.Request) (map[string]string, error) {
 // LocalIndexMetadata
 ///////////////////////////////////////////////////////
 
+// getETagFromHttpHeader returns the ETag from an HTTP request header, if present. It is
+// expected to be a uint64 represented in hex. If it is missing or garbage, the parse
+// returns 0, which (intentionally) is HTTP_KEY_ETAG_INVALID, so errors are ignored.
+func getETagFromHttpHeader(req *http.Request) uint64 {
+	eTagRequest, _ := strconv.ParseUint(req.Header.Get(common.HTTP_KEY_ETAG_REQUEST),
+		common.HTTP_VAL_ETAG_BASE, 64)
+	return eTagRequest
+}
+
+// eTagValid returns whether an ETag from an HTTP request is still valid by comparing it
+// to the current ETag and the current time to the expiration time. (Order of first two
+// arguments is actually arbitrary.)
+func eTagValid(eTagRequest uint64, eTagCurrent uint64, eTagExpiry int64) bool {
+	return eTagRequest == eTagCurrent && time.Now().UnixNano() < eTagExpiry
+}
+
 // handleLocalIndexMetadataRequest handles incoming requests for the /getLocalIndexMetadata
 // REST endpoint. If the optional ETag request header field is set, this is the checksum of
 // the previously returned results to the caller. If this checksum is still valid, return
@@ -1457,11 +1576,10 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 	// If metadata not dirty, can avoid collection and marshaling if caller passed a still-valid ETag
 	if (!m.mgr.getMetadataRepo().IsMetaDirty()) {
-		eTagRequest, _ := strconv.ParseUint(r.Header.Get(common.HTTP_KEY_ETAG_REQUEST),
-			common.HTTP_VAL_ETAG_BASE, 64)
+		eTagRequest := getETagFromHttpHeader(r)
 		if (eTagRequest != common.HTTP_VAL_ETAG_INVALID) { // also ...INVALID if missing or garbage
 			cachedMeta, err := m.getLocalIndexMetadataFromCache(m.hostKey)
-			if err == nil && eTagRequest == cachedMeta.ETag && time.Now().UnixNano() < cachedMeta.ETagExpiry {
+			if err == nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
 				// Valid ETag; respond 304 Not Modified with the same ETag
 				sendNotModified(w, eTagRequest)
 				return
@@ -1600,14 +1718,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 // that inludes info about all IndexDefns of this host, as we never cache partial
 // sets. It computes the ETag checksum and sets that ETag and its expiry in the
 // object. It sets invalid ETag HTTP_VAL_ETAG_INVALID if the input could not be
-// marshaled. The expiry will be the next future rounded-to-S-seconds time that
-// is at least S/2 seconds away, where S is specified by config variable
-// indexer.settings.eTagPeriod (currently 240). The expiry will thus average S
-// seconds in the future but can be anything between S/2 and 3S/2. The rounding
-// is done to try to keep expiry times aligned across all nodes (unfortunately
-// jittered by any internode clock differences), so getIndexStatus for many nodes
-// will likely have either all or none of its individual LocalIndexMetadata ETags
-// unexpired, as if even one's ETag is expired we must send full results to caller.
+// marshaled.
 func (m *requestHandlerContext) setETagLocalIndexMetadata(meta *LocalIndexMetadata) {
 
 	var bytes []byte // data to checksum
@@ -1634,7 +1745,7 @@ func (m *requestHandlerContext) setETagLocalIndexMetadata(meta *LocalIndexMetada
 		return
 	}
 	meta.ETag = common.Crc64Checksum(bytes)
-	meta.ETagExpiry = time.Now().Add(m.eTagPeriod).Round(m.eTagPeriod).UnixNano()
+	meta.ETagExpiry = m.generateETagExpiry()
 }
 
 // shouldProcess is a helper for getIndexStatus that determines whether a given index
@@ -2147,10 +2258,10 @@ func sendWithETag(status int, w http.ResponseWriter, res interface{}, eTag uint6
 }
 
 // sendNotModified sends an HTTP(S) 304 Not Modified response and the current ETag again.
-func sendNotModified(w http.ResponseWriter, eTag uint64) {
+func sendNotModified(w http.ResponseWriter, eTagResponse uint64) {
 	header := w.Header()
 	header[common.HTTP_KEY_CONTENT_TYPE] = []string{common.HTTP_VAL_APPLICATION_JSON}
-	header[common.HTTP_KEY_ETAG_RESPONSE] = []string{strconv.FormatUint(eTag, common.HTTP_VAL_ETAG_BASE)}
+	header[common.HTTP_KEY_ETAG_RESPONSE] = []string{strconv.FormatUint(eTagResponse, common.HTTP_VAL_ETAG_BASE)}
 
 	w.WriteHeader(http.StatusNotModified)
 	logging.Tracef("RequestHandler::sendNotModified: sending StatusNotModified %v response back to caller.",
