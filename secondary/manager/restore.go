@@ -17,7 +17,6 @@ import (
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
 	"strings"
-	"unsafe"
 )
 
 //////////////////////////////////////////////////////////////
@@ -178,15 +177,16 @@ func (m *RestoreContext) convertImage() error {
 		return err
 	}
 
-	for _, meta := range m.image.Metadata {
+	for _, metadata := range m.image.Metadata {
+
+		meta := transformMeta(&metadata)
+
 		for _, defn := range meta.IndexDefinitions {
 
 			defn.SetCollectionDefaults()
-
 			// If the index is in CREATED state, this will return nil.  So if there is any create index in flight,
 			// it could be excluded by restore.
-			indexes, err := planner.ConvertToIndexUsage(config, &defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)),
-				buildTokens, delTokens)
+			indexes, err := planner.ConvertToIndexUsage(config, &defn, meta, buildTokens, delTokens)
 			if err != nil {
 				return err
 			}
@@ -1290,4 +1290,23 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	// TODO: Set storage mode correcly.
 
 	return &spec
+}
+
+//
+// Copy metadata from type LocalIndexMetadata to planner.LocalIndexMetadata
+//
+func transformMeta(metadata *LocalIndexMetadata) *planner.LocalIndexMetadata {
+	meta := new(planner.LocalIndexMetadata)
+	meta.IndexerId = metadata.IndexerId
+	meta.NodeUUID = metadata.NodeUUID
+	meta.StorageMode = metadata.StorageMode
+	meta.LocalSettings = metadata.LocalSettings
+	meta.IndexDefinitions = metadata.IndexDefinitions
+
+	meta.IndexTopologies = make([]mc.IndexTopology, 0)
+	for _, topology := range metadata.IndexTopologies {
+		meta.IndexTopologies = append(meta.IndexTopologies, *transformTopology(&topology))
+	}
+
+	return meta
 }
