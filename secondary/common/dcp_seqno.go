@@ -187,7 +187,15 @@ func newWorker(workerid int, bucket string, dispCh chan *workerDoneMsg,
 // 3. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) processRequest() {
 
-	processResponse := func(resp *workerResult) {
+	respondWithError := func(req *vbSeqnosRequest) {
+		resp := &vbSeqnosResponse{
+			seqnos: nil,
+			err:    errors.New("vbSeqnosWorker is closed. Retry the operation"),
+		}
+		req.Reply(resp)
+	}
+
+	processResponse := func(resp *workerResult, closed bool) {
 		cid := resp.cid
 		queuedReqs := w.workerMap[cid]
 		delete(w.workerMap, cid)
@@ -206,6 +214,14 @@ func (w *worker) processRequest() {
 		for i := 0; i < resp.numQueued; i++ {
 			queuedReqs[i].Reply(response)
 		}
+
+		//if the worker is closed, respond to all queued reqs
+		if closed {
+			pendReqs := queuedReqs[resp.numQueued:]
+			for _, req := range pendReqs {
+				respondWithError(req)
+			}
+		}
 	}
 
 	defer func() {
@@ -214,16 +230,19 @@ func (w *worker) processRequest() {
 
 		// Respond back to all out-standing requests in internalCh
 		for response := range w.internalCh {
-			processResponse(response)
+			processResponse(response, true)
+		}
+
+		//Respond back to all out-standing requests in workerMap
+		for _, queuedReqs := range w.workerMap {
+			for _, req := range queuedReqs {
+				respondWithError(req)
+			}
 		}
 
 		// Respond back to all out-standing requests in worker reqCh
 		for req := range w.reqCh {
-			resp := &vbSeqnosResponse{
-				seqnos: nil,
-				err:    errors.New("vbSeqnosWorker is closed. Retry the operation"),
-			}
-			req.Reply(resp)
+			respondWithError(req)
 		}
 
 		w.wg.Done()
@@ -248,7 +267,7 @@ loop:
 		case resp, ok := <-w.internalCh:
 			if ok {
 				queuedReqs := w.workerMap[resp.cid]
-				processResponse(resp)
+				processResponse(resp, false)
 
 				newQueuedReqs := queuedReqs[resp.numQueued:]
 				l := len(newQueuedReqs)
