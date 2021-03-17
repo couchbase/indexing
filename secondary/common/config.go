@@ -2421,6 +2421,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vbseqnos.workers_per_reader": ConfigValue{
+		10,
+		"Number of workers each vbSeqnosReader will spawn to " +
+			"retrieve Seqnos from KV nodes. Changing this value" +
+			"will close existing connections and new connections " +
+			" will be established with latest number of workers",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	"indexer.settings.num_replica": ConfigValue{
 		0,
