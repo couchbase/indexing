@@ -157,9 +157,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.encodeBufSize": ConfigValue{
-		1024 * 1024,
+		2 * 1024, // 2KB
 		"Collatejson encode buffer size",
-		1024 * 1024,
+		2 * 1024, // 2KB
+		false,    // mutable
+		false,    // case-insensitive
+	},
+	"projector.encodeBufResizeInterval": ConfigValue{
+		60, // 60 Minutes
+		"Period (in Minutes) with which projector would resize its encodeBuf",
+		60,    // 60 Minutes,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -712,6 +719,13 @@ var SystemConfig = Config{
 		120,   // default
 		false, // mutable
 		false, // case-insensitive
+	},
+	"queryport.client.waitForScheduledIndex": ConfigValue{
+		false,
+		"Do not return the index creation request until the scheduled index is created",
+		false,
+		false,
+		false,
 	},
 	"indexer.allowPartialQuorum": ConfigValue{
 		false,

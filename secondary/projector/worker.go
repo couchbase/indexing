@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	qexpr "github.com/couchbase/query/expression"
 	qvalue "github.com/couchbase/query/value"
@@ -71,6 +72,11 @@ type VbucketWorker struct {
 	opaque2     uint64 //client opaque
 	osoSnapshot bool
 
+	// For resizing encodeBuf periodically
+	lastBufferSizeCheckTime        time.Time
+	maxEncodedKeyLenInLastInterval int
+	configuredEncodeBufSize        int
+
 	encodeBuf []byte
 	stats     *WorkerStats
 }
@@ -103,26 +109,27 @@ func NewVbucketWorker(
 	encodeBufSize := config["encodeBufSize"].Int()
 
 	worker := &VbucketWorker{
-		id:              id,
-		feed:            feed,
-		cluster:         feed.cluster,
-		topic:           feed.topic,
-		bucket:          bucket,
-		keyspaceId:      keyspaceId,
-		opaque:          opaque,
-		config:          config,
-		vbuckets:        &VbucketMapHolder{},
-		engines:         &CollectionsEngineMapHolder{},
-		endpoints:       &EndpointMapHolder{},
-		sbch:            make(chan []interface{}, mutChanSize),
-		datach:          make(chan []interface{}, mutChanSize),
-		genServerStopCh: make(chan bool),
-		genServerFinCh:  make(chan bool),
-		runFinCh:        make(chan bool),
-		runDoneCh:       make(chan bool),
-		encodeBuf:       make([]byte, 0, encodeBufSize),
-		stats:           &WorkerStats{},
-		opaque2:         opaque2,
+		id:                      id,
+		feed:                    feed,
+		cluster:                 feed.cluster,
+		topic:                   feed.topic,
+		bucket:                  bucket,
+		keyspaceId:              keyspaceId,
+		opaque:                  opaque,
+		config:                  config,
+		vbuckets:                &VbucketMapHolder{},
+		engines:                 &CollectionsEngineMapHolder{},
+		endpoints:               &EndpointMapHolder{},
+		sbch:                    make(chan []interface{}, mutChanSize),
+		datach:                  make(chan []interface{}, mutChanSize),
+		genServerStopCh:         make(chan bool),
+		genServerFinCh:          make(chan bool),
+		runFinCh:                make(chan bool),
+		runDoneCh:               make(chan bool),
+		encodeBuf:               make([]byte, 0, encodeBufSize),
+		configuredEncodeBufSize: encodeBufSize,
+		stats:                   &WorkerStats{},
+		opaque2:                 opaque2,
 	}
 	worker.stats.Init()
 	worker.stats.datach = worker.datach
@@ -261,6 +268,7 @@ func (worker *VbucketWorker) run(datach chan []interface{}) {
 			worker.opaque, worker.opaque2)
 	}()
 
+	ticker := time.NewTicker(1 * time.Minute)
 loop:
 	for {
 		select {
@@ -299,6 +307,10 @@ loop:
 					}
 				}
 			}
+
+		case <-ticker.C:
+			worker.resizeEncodeBuf()
+
 		case <-worker.runFinCh:
 			break loop
 		}
@@ -424,7 +436,10 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 		respch <- []interface{}{stats}
 
 	case vwCmdResetConfig:
-		_, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+		worker.mutex.Lock()
+		worker.config = config
+		worker.mutex.Unlock()
 		respch <- []interface{}{nil}
 
 	case vwCmdClose:
@@ -563,7 +578,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				// slices with number of indexes instead of expanding the slice
 				// due to lack of size. This helps to reduce the re-allocs and
 				// therefore reduces the garbage generated.
-				newBuf, err := engine.TransformRoute(
+				newBuf, newKeyLen, err := engine.TransformRoute(
 					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
 					len(collEngines), worker.opaque2, worker.osoSnapshot,
 				)
@@ -572,9 +587,11 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 					logging.Errorf(fmsg, logPrefix, m.Opaque, err, engine.GetIndexName(),
 						logging.TagStrUD(m.Key))
 				}
-				// TODO: Shrink the buffer periodically or as needed
 				if cap(newBuf) > cap(worker.encodeBuf) {
 					worker.encodeBuf = newBuf[:0]
+				}
+				if newKeyLen > worker.maxEncodedKeyLenInLastInterval {
+					worker.maxEncodedKeyLenInLastInterval = newKeyLen
 				}
 			}
 			endpoints := worker.endpoints.Get()
@@ -742,5 +759,33 @@ func (worker *VbucketWorker) printCtrl(v interface{}) {
 				logging.Tracef(fmsg, worker.logPrefix, worker.opaque, cid, uuid)
 			}
 		}
+	}
+}
+
+func (worker *VbucketWorker) resizeEncodeBuf() {
+	// Config updates happen in control path. Hence, acquire RLock to read config variables
+	worker.mutex.Lock()
+	checkInterval := worker.config["encodeBufResizeInterval"].Int()
+	confEncBufSize := worker.config["encodeBufSize"].Int()
+	worker.mutex.Unlock()
+
+	if worker.configuredEncodeBufSize != confEncBufSize {
+		worker.encodeBuf = make([]byte, 0, confEncBufSize)
+		worker.configuredEncodeBufSize = confEncBufSize
+		return
+	}
+
+	if time.Since(worker.lastBufferSizeCheckTime) > time.Duration(checkInterval*int(time.Minute)) {
+		// Get the max length of encode buffer since last time shrink happened
+		maxLen := worker.maxEncodedKeyLenInLastInterval
+		prevCap := cap(worker.encodeBuf)
+		if maxLen > confEncBufSize && prevCap-maxLen > 1024 {
+			worker.encodeBuf = make([]byte, 0, maxLen)
+			logging.Debugf("%v ##%v ##%v Resizing encodeBuf size to: %v from: %v", worker.logPrefix, worker.opaque, worker.opaque2, maxLen, prevCap)
+		} else if maxLen < confEncBufSize {
+			worker.encodeBuf = make([]byte, 0, confEncBufSize)
+			logging.Debugf("%v ##%v ##%v Resizing encodeBuf size to: %v from: %v", worker.logPrefix, worker.opaque, worker.opaque2, maxLen, confEncBufSize)
+		}
+		worker.lastBufferSizeCheckTime = time.Now()
 	}
 }

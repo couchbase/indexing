@@ -142,6 +142,7 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
 		cfg.LogConfig(p.logPrefix)
 		p.ResetConfig(cfg)
+		p.ResetFeedConfig()
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))
 
@@ -253,6 +254,20 @@ func (p *Projector) ResetConfig(config c.Config) {
 	logging.Infof("%v\n", c.LogRuntime())
 }
 
+// ResetConfig accepts a full-set or subset of global configuration
+// and updates projector related fields.
+func (p *Projector) ResetFeedConfig() {
+	config := p.GetFeedConfig()
+
+	// update feed settings
+	for _, feed := range p.GetFeeds() {
+		if err := feed.ResetConfig(config); err != nil {
+			fmsg := "%v feed(`%v`).ResetConfig: %v"
+			logging.Errorf(fmsg, p.logPrefix, feed.topic, err)
+		}
+	}
+}
+
 // GetFeedConfig from current configuration settings.
 func (p *Projector) GetFeedConfig() c.Config {
 	p.rw.Lock()
@@ -265,6 +280,7 @@ func (p *Projector) GetFeedConfig() c.Config {
 	for _, key := range FeedConfigParams() {
 		config.Set(key, pconfig[key])
 	}
+
 	return config
 }
 
@@ -834,14 +850,7 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 		config, _ := c.NewConfig(newConfig)
 		config.LogConfig(p.logPrefix)
 		p.ResetConfig(config)
-		// update feed settings
-		feedConfig := config.SectionConfig("projector.", true /*trim*/)
-		for _, feed := range p.GetFeeds() {
-			if err := feed.ResetConfig(feedConfig); err != nil {
-				fmsg := "%v feed(`%v`).ResetConfig: %v"
-				logging.Errorf(fmsg, p.logPrefix, feed.topic, err)
-			}
-		}
+		p.ResetFeedConfig()
 
 	default:
 		http.Error(w, "only GET POST supported", http.StatusMethodNotAllowed)

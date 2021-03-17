@@ -44,6 +44,7 @@ type ClientSettings struct {
 	listSchedIndexes     uint32
 
 	allowScheduleCreateRebal uint32
+	waitForScheduledIndex    uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -230,6 +231,18 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.listSchedIndexes, 1)
 	}
 
+	waitForScheduledIndex, ok := config["queryport.client.waitForScheduledIndex"]
+	if ok {
+		if waitForScheduledIndex.Bool() {
+			atomic.StoreUint32(&s.waitForScheduledIndex, 1)
+		} else {
+			atomic.StoreUint32(&s.waitForScheduledIndex, 0)
+		}
+	} else {
+		logging.Errorf("ClientSettings: missing waitForScheduledIndex")
+		atomic.StoreUint32(&s.waitForScheduledIndex, 1)
+	}
+
 	usePlanner, ok := config["queryport.client.usePlanner"]
 	if ok {
 		if usePlanner.Bool() {
@@ -330,4 +343,8 @@ func (s *ClientSettings) AllowScheduleCreateRebal() bool {
 
 func (s *ClientSettings) UsePlanner() bool {
 	return atomic.LoadUint32(&s.usePlanner) == 1
+}
+
+func (s *ClientSettings) WaitForScheduledIndex() bool {
+	return atomic.LoadUint32(&s.waitForScheduledIndex) == 1
 }

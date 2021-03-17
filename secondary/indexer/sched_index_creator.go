@@ -20,8 +20,8 @@ import (
 	"unsafe"
 )
 
-var SCHED_TOKEN_CHECK_INTERVAL = 5000   // Milliseconds
-var SCHED_TOKEN_PROCESS_INTERVAL = 5000 // Milliseconds
+var SCHED_TOKEN_CHECK_INTERVAL = 2000   // Milliseconds
+var SCHED_TOKEN_PROCESS_INTERVAL = 2000 // Milliseconds
 var STOP_TOKEN_CLEANER_INITERVAL = 60   // Seconds
 var TOKEN_MOVER_INTERVAL = 60           // Seconds
 var STOP_TOKEN_RETENTION_TIME = 600     // Seconds
