@@ -1562,6 +1562,10 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
 	if partnInstMap, _, err = idx.initPartnInstance(indexInst, clientCh, false); err != nil {
+		for _, partnDefn := range partitions {
+			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
+		}
+		idx.stats.RemoveIndexStats(indexInst)
 		return
 	}
 
