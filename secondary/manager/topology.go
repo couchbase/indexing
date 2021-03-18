@@ -12,6 +12,7 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -759,3 +760,103 @@ func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint6
 	return result, nil
 }
 */
+
+func transformTopology(topology *IndexTopology) *mc.IndexTopology {
+	topo := new(mc.IndexTopology)
+	topo.Version = topology.Version
+	topo.Bucket = topology.Bucket
+	topo.Scope = topology.Scope
+	topo.Collection = topology.Collection
+
+	topo.Definitions = make([]mc.IndexDefnDistribution, 0)
+	for _, distribution := range topology.Definitions {
+		topo.Definitions = append(topo.Definitions, *transformDefnDist(&distribution))
+	}
+
+	return topo
+}
+
+func transformDefnDist(distribution *IndexDefnDistribution) *mc.IndexDefnDistribution {
+	dist := new(mc.IndexDefnDistribution)
+	dist.Bucket = distribution.Bucket
+	dist.Scope = distribution.Scope
+	dist.Collection = distribution.Collection
+	dist.Name = distribution.Name
+	dist.DefnId = distribution.DefnId
+
+	dist.Instances = make([]mc.IndexInstDistribution, 0)
+	for _, inst := range distribution.Instances {
+		dist.Instances = append(dist.Instances, *transformInsts(&inst))
+	}
+
+	return dist
+}
+
+func transformInsts(instances *IndexInstDistribution) *mc.IndexInstDistribution {
+	inst := new(mc.IndexInstDistribution)
+	inst.InstId = instances.InstId
+	inst.State = instances.State
+	inst.StreamId = instances.StreamId
+	inst.Error = instances.Error
+	inst.NumPartitions = instances.NumPartitions
+	inst.RState = instances.RState
+	inst.Version = instances.Version
+	inst.ReplicaId = instances.ReplicaId
+	inst.Scheduled = instances.Scheduled
+	inst.StorageMode = instances.StorageMode
+	inst.OldStorageMode = instances.OldStorageMode
+	inst.RealInstId = instances.RealInstId
+
+	inst.Partitions = make([]mc.IndexPartDistribution, 0)
+	for _, partn := range instances.Partitions {
+		inst.Partitions = append(inst.Partitions, *transformPartnDist(&partn))
+	}
+
+	return inst
+}
+
+func transformPartnDist(partitions *IndexPartDistribution) *mc.IndexPartDistribution {
+	partn := new(mc.IndexPartDistribution)
+	partn.PartId = partitions.PartId
+	partn.Version = partitions.Version
+	partn.SinglePartition = *transformSinglePartn(&partitions.SinglePartition)
+	partn.KeyPartition = *transformKeyPartitions(&partitions.KeyPartition)
+
+	return partn
+}
+
+func transformSinglePartn(singlePartition *IndexSinglePartDistribution) *mc.IndexSinglePartDistribution {
+	singlePartn := new(mc.IndexSinglePartDistribution)
+
+	singlePartn.Slices = make([]mc.IndexSliceLocator, 0)
+	for _, slice := range singlePartition.Slices {
+		singlePartn.Slices = append(singlePartn.Slices, *transformSlice(&slice))
+	}
+
+	return singlePartn
+}
+
+func transformKeyPartitions(keyPartitions *IndexKeyPartDistribution) *mc.IndexKeyPartDistribution {
+	keyPartns := new(mc.IndexKeyPartDistribution)
+
+	keyPartns.Keys = make([]string, 0)
+	for _, k := range keyPartitions.Keys {
+		keyPartns.Keys = append(keyPartns.Keys, k)
+	}
+
+	keyPartns.SinglePartitions = make([]mc.IndexSinglePartDistribution, 0)
+	for _, partn := range keyPartitions.SinglePartitions {
+		keyPartns.SinglePartitions = append(keyPartns.SinglePartitions, *transformSinglePartn(&partn))
+	}
+
+	return keyPartns
+}
+
+func transformSlice(slice *IndexSliceLocator) *mc.IndexSliceLocator {
+	sl := new(mc.IndexSliceLocator)
+	sl.SliceId = slice.SliceId
+	sl.State = slice.State
+	sl.IndexerId = slice.IndexerId
+
+	return sl
+}
