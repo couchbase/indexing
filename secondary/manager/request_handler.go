@@ -1646,8 +1646,12 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		}
 	}
 
-	meta, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType, useETag)
+	meta, timingStr, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType, useETag)
 	if err == nil {
+		if timingStr != "" {
+			logging.Warnf("RequestHandler::handleLocalIndexMetadataRequest req %v, %v", common.GetHTTPReqInfo(r), timingStr)
+		}
+
 		sendWithETag(http.StatusOK, w, meta, meta.ETag)
 	} else {
 		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
@@ -1657,9 +1661,12 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 // getLocalIndexMetadata gets index metadata from the local metadata repo and,
 // iff it is a full set, sets its ETag info.
+
 func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 		bucket string, filters map[string]bool, filterType string,
-		useETag bool) (meta *LocalIndexMetadata, err error) {
+		useETag bool) (meta *LocalIndexMetadata, timingStr string, err error) {
+
+	t0 := time.Now()
 
 	repo := m.mgr.getMetadataRepo()
 	permissionsCache := initPermissionsCache()
@@ -1667,13 +1674,13 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	meta = &LocalIndexMetadata{IndexTopologies: nil, IndexDefinitions: nil}
 	indexerId, err := repo.GetLocalIndexerId()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	meta.IndexerId = string(indexerId)
 
 	nodeUUID, err := repo.GetLocalNodeUUID()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	meta.NodeUUID = string(nodeUUID)
 
@@ -1686,9 +1693,11 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 		meta.LocalSettings["excludeNode"] = exclude
 	}
 
+	t1 := time.Now()
+
 	iter, err := repo.NewIterator()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer iter.Close()
 
@@ -1696,27 +1705,29 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	fullSet := true // do final results include all defns?
 	_, defn, err = iter.Next()
 	for err == nil {
-		if	applyFilters(bucket, defn.Bucket, defn.Scope, defn.Collection, defn.Name, filters, filterType) &&
+		if applyFilters(bucket, defn.Bucket, defn.Scope, defn.Collection, defn.Name, filters, filterType) &&
 			permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection, "list") {
-				meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
+			meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
 		} else {
 			fullSet = false
 		}
 		_, defn, err = iter.Next()
 	}
 
+	t2 := time.Now()
+
 	iter1, err := repo.NewTopologyIterator()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer iter1.Close()
 
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		if	applyFilters(bucket, topology.Bucket, topology.Scope, topology.Collection, "", filters, filterType) &&
+		if applyFilters(bucket, topology.Bucket, topology.Scope, topology.Collection, "", filters, filterType) &&
 			permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection, "list") {
-				meta.IndexTopologies = append(meta.IndexTopologies, *topology)
+			meta.IndexTopologies = append(meta.IndexTopologies, *topology)
 		} else {
 			fullSet = false
 		}
@@ -1726,8 +1737,16 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	if fullSet && useETag {
 		m.setETagLocalIndexMetadata(meta)
 	}
+
+	d0 := time.Since(t0)
+	d1 := time.Since(t1)
+	d2 := time.Since(t2)
+	if int64(d2) > int64(20*time.Second) || int64(d1) > int64(20*time.Second) || int64(d0) > int64(20*time.Second) {
+		timingStr = fmt.Sprintf("timings total %v, Iter %v, topoIter %v", d0, d1, d2)
+	}
+
 	meta.Timestamp = retrievalTs
-	return meta, nil
+	return meta, timingStr, nil
 }
 
 // setETagLocalIndexMetadata should only be called on a LocalIndexMetadata
