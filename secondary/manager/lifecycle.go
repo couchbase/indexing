@@ -4230,17 +4230,14 @@ func (s *builder) run() {
 
 	// start listener
 	s.commandListener.ListenTokens()
-	time.Sleep(time.Minute)
-
-	// wait for indexer bootstrap to complete before recover
-	s.recover()
 
 	// Sleep before checking for index to build.  When a recovered node starts up, it needs to wait until
 	// the rebalancing token is saved.  This is to avoid the bulider to get ahead of the rebalancer.
 	// Otherwise, rebalancer could fail if builder has issued an index build ahead of the rebalancer.
 	func() {
-		timer := time.NewTimer(time.Second * 120)
+		timer := time.NewTimer(time.Second * 60)
 		defer timer.Stop()
+
 		select {
 		case <-timer.C:
 		case <-s.manager.killch:
@@ -4249,6 +4246,9 @@ func (s *builder) run() {
 			return
 		}
 	}()
+
+	//builder is called only after indexer bootstrap completes
+	s.recover()
 
 	// check if there is any pending index build every second
 	ticker := time.NewTicker(time.Millisecond * 200)
