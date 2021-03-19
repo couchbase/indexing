@@ -505,6 +505,10 @@ func (s *storageMgr) flushDone(streamId common.StreamId, keyspaceId string,
 			return true
 		}
 
+		// TODO (Collections): It is not optimal to iterate over
+		// entire instIdList when there are large number of indexes on
+		// a node in MAINT_STREAM. This logic needs to be optimised further
+		// when writer tuning is enabled
 		for _, instId := range instIdList {
 			inst, ok := indexInstMap[instId]
 			if ok && inst.Stream == streamId &&
@@ -528,8 +532,8 @@ func (s *storageMgr) flushDone(streamId common.StreamId, keyspaceId string,
 
 	if common.GetStorageMode() == common.PLASMA {
 
-		if time.Now().UnixNano()-s.lastFlushDone > checkInterval() &&
-			s.config["plasma.writer.tuning.enable"].Bool() {
+		if s.config["plasma.writer.tuning.enable"].Bool() &&
+			time.Now().UnixNano()-s.lastFlushDone > checkInterval() {
 
 			var wg sync.WaitGroup
 
