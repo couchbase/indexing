@@ -482,6 +482,12 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 		}
 	}
 
+	if val, ok := newConfig["indexer.vbseqnos.workers_per_reader"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("indexer.vbseqnos.workers_per_reader Setting should be an integer greater than 0")
+		}
+	}
+
 	if !internal {
 		if val, ok := newConfig["indexer.settings.storage_mode"]; ok {
 			if len(val.String()) != 0 {

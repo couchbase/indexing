@@ -1364,6 +1364,14 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		newConfig["plasma.minNumShard"] = value
 	}
 
+	if workersPerReader, ok := newConfig["vbseqnos.workers_per_reader"]; ok {
+		if newConfig["vbseqnos.workers_per_reader"].Int() !=
+			idx.config["vbseqnos.workers_per_reader"].Int() {
+			common.UpdateVbSeqnosWorkersPerReader(int32(workersPerReader.Int()))
+			common.ResetBucketSeqnos()
+		}
+	}
+
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
 	idx.config = newConfig

@@ -32,7 +32,7 @@ const GLOBAL_TOPOLOGY_KEY = "GlobalIndexTopology"
 
 type MetadataRepo struct {
 	repo      RepoRef
-	mutex     sync.Mutex
+	mutex     sync.RWMutex
 	isClosed  bool
 	defnCache map[common.IndexDefnId]*common.IndexDefn
 
@@ -304,8 +304,8 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 
 func (c *MetadataRepo) GetIndexDefnByName(bucket, scope, collection, name string) (*common.IndexDefn, error) {
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	for _, defn := range c.defnCache {
 		if defn.Name == name && defn.Bucket == bucket &&
@@ -707,8 +707,8 @@ func (c *MetadataRepo) loadTopology() error {
 //
 func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	iter := &MetaIterator{pos: 0, arr: nil}
 	for _, defn := range c.defnCache {
@@ -737,8 +737,8 @@ func (i *MetaIterator) Close() {
 // Create a new topology iterator
 //
 func (c *MetadataRepo) NewTopologyIterator() (*TopologyIterator, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	iter := &TopologyIterator{pos: 0, arr: nil}
 	for _, topo := range c.topoCache {

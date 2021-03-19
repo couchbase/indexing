@@ -502,7 +502,7 @@ func (r *ScanRequest) newKey(k []byte) (IndexKey, error) {
 	if r.isPrimary {
 		return NewPrimaryKey(k)
 	} else {
-		return NewSecondaryKey(k, r.getKeyBuffer(), r.keySzCfg.maxSecKeyLen)
+		return NewSecondaryKey(k, r.getKeyBuffer(3*len(k)), r.keySzCfg.allowLargeKeys, r.keySzCfg.maxSecKeyLen)
 	}
 }
 
@@ -1873,11 +1873,17 @@ func (r ScanRequest) String() string {
 	return str
 }
 
-func (r *ScanRequest) getKeyBuffer() []byte {
+func (r *ScanRequest) getKeyBuffer(minSize int) []byte {
 	if r.indexKeyBuffer == nil {
 		buf := secKeyBufPool.Get()
-		r.keyBufList = append(r.keyBufList, buf)
-		r.indexKeyBuffer = *buf
+		if minSize != 0 {
+			newBuf := resizeEncodeBuf(*buf, minSize, true)
+			r.keyBufList = append(r.keyBufList, &newBuf)
+			r.indexKeyBuffer = newBuf
+		} else {
+			r.keyBufList = append(r.keyBufList, buf)
+			r.indexKeyBuffer = *buf
+		}
 	}
 	return r.indexKeyBuffer
 }

@@ -25,8 +25,7 @@ import (
 const seqsReqChanSize = 20000
 const seqsBufSize = 64 * 1024
 
-//TODO (Collections): Should number of workers be configurable?
-const workersPerReader = 10
+var workersPerReader int32 = 10
 
 const BUCKET_ID string = ""
 
@@ -367,12 +366,13 @@ type vbSeqnosReader struct {
 func newVbSeqnosReader(cluster, pooln, bucket string,
 	kvfeeds map[string]*kvConn) (*vbSeqnosReader, error) {
 
+	numWorkers := atomic.LoadInt32(&workersPerReader)
 	r := &vbSeqnosReader{
 		bucket:        bucket,
 		requestCh:     make(chan interface{}, seqsReqChanSize),
 		donech:        make(chan bool),
-		workers:       make([]*worker, workersPerReader),
-		workerRespCh:  make(chan *workerDoneMsg, 100),
+		workers:       make([]*worker, numWorkers),
+		workerRespCh:  make(chan *workerDoneMsg, numWorkers*10),
 		dispatcherMap: make(map[string]int),
 		kvfeeds:       kvfeeds,
 		minSeqReqCh:   make(chan *vbMinSeqnosRequest, seqsReqChanSize),
@@ -381,11 +381,11 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 	r.seqsTiming.Init()
 
 	mu := &sync.Mutex{}
-	errSlice := make([]error, workersPerReader)
+	errSlice := make([]error, numWorkers)
 	var wg sync.WaitGroup
 
 	// Init the workers
-	for i := 0; i < workersPerReader; i++ {
+	for i := 0; i < int(numWorkers); i++ {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
@@ -1580,4 +1580,9 @@ func WatchClusterVersionChanges(clusterAddr string) {
 
 func GetClusterVersion() int64 {
 	return atomic.LoadInt64(&clusterVersion)
+}
+
+func UpdateVbSeqnosWorkersPerReader(numWorkers int32) {
+	atomic.StoreInt32(&workersPerReader, numWorkers)
+	logging.Infof("UpdateVbSeqnosWorkersPerReader: Updated the number of workers per reader to: %v", numWorkers)
 }
