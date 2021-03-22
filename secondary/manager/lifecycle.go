@@ -64,6 +64,7 @@ type LifecycleMgr struct {
 	lastSendClientStats *client.IndexStats2
 	clientStatsMutex    sync.Mutex
 	acceptedNames       map[string]*indexNameRequest
+	accIgnoredIds       map[common.IndexDefnId]bool
 }
 
 type requestHolder struct {
@@ -170,6 +171,7 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 		lastSendClientStats:        &client.IndexStats2{},
 		clientStatsRefreshInterval: 5000,
 		acceptedNames:              make(map[string]*indexNameRequest),
+		accIgnoredIds:              make(map[common.IndexDefnId]bool),
 	}
 
 	mgr.cinfoClient, err = common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
@@ -753,6 +755,7 @@ func (m *LifecycleMgr) checkDuplicateIndex(req *client.PrepareCreateRequest) (ex
 	// Check for duplicate index name only if name and bucket name
 	// are specified in the request
 	if req.Name == "" || req.Bucket == "" {
+		m.accIgnoredIds[req.DefnId] = true
 		return exists, nil
 	}
 
@@ -796,10 +799,13 @@ func (m *LifecycleMgr) verifyDuplicateIndexCommit(commitCreateIndex *client.Comm
 
 	key := ""
 
+	var defnId common.IndexDefnId
+
 loop:
 	for _, defns := range commitCreateIndex.Definitions {
 		// Assuming that the index name and keyspace doesn't change across definitions.
 		for _, defn := range defns {
+			defnId = defn.DefnId
 			key = fmt.Sprintf("%v:%v:%v:%v", defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 			break loop
 		}
@@ -807,6 +813,11 @@ loop:
 
 	if key == "" {
 		return "of missing index definitions in commit request."
+	}
+
+	if _, ok := m.accIgnoredIds[defnId]; ok {
+		delete(m.accIgnoredIds, defnId)
+		return ""
 	}
 
 	accReq, ok := m.acceptedNames[key]
