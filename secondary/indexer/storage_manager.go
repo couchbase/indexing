@@ -336,7 +336,18 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	}
 
 	wg.Wait()
-	s.lastFlushDone = time.Now().UnixNano()
+
+	keyspaceStats := s.stats.GetKeyspaceStats(streamId, keyspaceId)
+	end := time.Now().UnixNano()
+	if keyspaceStats != nil {
+		if keyspaceStats.lastSnapDone.Value() == 0 {
+			keyspaceStats.lastSnapDone.Set(end)
+		}
+		keyspaceStats.snapLatDist.Add(end - keyspaceStats.lastSnapDone.Value())
+		keyspaceStats.lastSnapDone.Set(end)
+	}
+
+	s.lastFlushDone = end
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId:   streamId,
@@ -632,7 +643,6 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats, startTime int6
 		idxStats.avgTsInterval.Set(avg)
 		idxStats.sinceLastSnapshot.Set(curr - last)
 	}
-	idxStats.snapLatDist.Add(curr - last)
 	idxStats.snapGenLatDist.Add(curr - startTime)
 	idxStats.lastTsTime.Set(curr)
 
