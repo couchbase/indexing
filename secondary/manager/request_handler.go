@@ -522,7 +522,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(indexStatuses))
 		eTagRequest := getETagFromHttpHeader(r)
-		if eTagRequest == eTagResponse { // eTagResponse is always fresh
+		if eTagRequest == eTagResponse && eTagResponse != common.HTTP_VAL_ETAG_INVALID {
 			// Valid ETag; respond 304 Not Modified with the same ETag
 			sendNotModified(w, eTagRequest)
 		} else {
@@ -891,7 +891,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		}
 
 		// Memory cache the data if it is a full set
-		if metaToCache[hostKey] != nil && statsToCache[hostKey] != nil {
+		metaToCacheHost := metaToCache[hostKey]
+		statsToCacheHost := statsToCache[hostKey]
+		if metaToCacheHost != nil && statsToCacheHost != nil {
 			if hostKey == m.hostKey { // fresh info being cached is for *current host*
 				// Ideally clearing the dirty flag would have been done in setETagLocalIndexMetadata,
 				// but we don't know what code path entered it so its data might never be cached.
@@ -899,8 +901,14 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				// it then would not match what we cache on disk.
 				m.mgr.getMetadataRepo().ClearMetaDirty()
 			}
-			m.memCacheLocalIndexMetadata(hostKey, metaToCache[hostKey])
-			m.memCacheStats(hostKey, statsToCache[hostKey])
+			// If LocalIndexMetadata came from a pre-Cheshire-Cat node, it won't have computed the
+			// ETag and ETagExpiry fields, so do it here. This can still prevent having to send full
+			// result back to external caller, though not the re-getting of the LIM each time.
+			if metaToCacheHost.ETag == common.HTTP_VAL_ETAG_INVALID {
+				m.setETagLocalIndexMetadata(metaToCacheHost)
+			}
+			m.memCacheLocalIndexMetadata(hostKey, metaToCacheHost)
+			m.memCacheStats(hostKey, statsToCacheHost)
 		}
 	} // for each nid
 
