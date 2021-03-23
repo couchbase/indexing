@@ -1582,15 +1582,23 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		return
 	}
 
-	// If metadata not dirty, can avoid collection and marshaling if caller passed a still-valid ETag
-	if (!m.mgr.getMetadataRepo().IsMetaDirty()) {
-		eTagRequest := getETagFromHttpHeader(r)
-		if (eTagRequest != common.HTTP_VAL_ETAG_INVALID) { // also ...INVALID if missing or garbage
-			cachedMeta, _ := m.getLocalIndexMetadataFromCache(m.hostKey)
-			if cachedMeta != nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
-				// Valid ETag; respond 304 Not Modified with the same ETag
-				sendNotModified(w, eTagRequest)
-				return
+	// By default use ETag.
+	useETag := true
+	if r.FormValue("useETag") == "false" {
+		useETag = false
+	}
+
+	if useETag {
+		// If metadata not dirty, can avoid collection and marshaling if caller passed a still-valid ETag
+		if (!m.mgr.getMetadataRepo().IsMetaDirty()) {
+			eTagRequest := getETagFromHttpHeader(r)
+			if (eTagRequest != common.HTTP_VAL_ETAG_INVALID) { // also ...INVALID if missing or garbage
+				cachedMeta, err := m.getLocalIndexMetadataFromCache(m.hostKey)
+				if err == nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
+					// Valid ETag; respond 304 Not Modified with the same ETag
+					sendNotModified(w, eTagRequest)
+					return
+				}
 			}
 		}
 	}
@@ -1638,7 +1646,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		}
 	}
 
-	meta, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType)
+	meta, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType, useETag)
 	if err == nil {
 		sendWithETag(http.StatusOK, w, meta, meta.ETag)
 	} else {
@@ -1650,8 +1658,8 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 // getLocalIndexMetadata gets index metadata from the local metadata repo and,
 // iff it is a full set, sets its ETag info.
 func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
-		bucket string, filters map[string]bool, filterType string) (
-	meta *LocalIndexMetadata, err error) {
+		bucket string, filters map[string]bool, filterType string,
+		useETag bool) (meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
 	permissionsCache := initPermissionsCache()
@@ -1715,7 +1723,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 		topology, err = iter1.Next()
 	}
 
-	if fullSet {
+	if fullSet && useETag {
 		m.setETagLocalIndexMetadata(meta)
 	}
 	meta.Timestamp = retrievalTs
