@@ -522,7 +522,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(indexStatuses))
 		eTagRequest := getETagFromHttpHeader(r)
-		if eTagRequest == eTagResponse { // eTagResponse is always fresh
+		if eTagRequest == eTagResponse && eTagResponse != common.HTTP_VAL_ETAG_INVALID {
 			// Valid ETag; respond 304 Not Modified with the same ETag
 			sendNotModified(w, eTagRequest)
 		} else {
@@ -720,13 +720,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		// Get stats subset for all indexes of current node
 		//
 		statsToCache[hostKey] = nil
-		var stats *common.Statistics
-		err = nil
-		tryCache := localMetaIsFromCache && localMeta.AllIndexesActive
-		if tryCache {
-			stats, err = m.getStatsFromCache(hostKey)
+		var stats *common.Statistics = nil
+		if localMetaIsFromCache && localMeta.AllIndexesActive { // try cache
+			stats, _ = m.getStatsFromCache(hostKey)
 		}
-		if !tryCache || err != nil { // full-bore stats retrieval needed
+		if stats == nil { // full-bore stats retrieval needed
 			stats, latest, err = m.getStatsForNode(addr, hostname, cinfo)
 			if stats == nil || err != nil {
 				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
@@ -891,7 +889,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		}
 
 		// Memory cache the data if it is a full set
-		if metaToCache[hostKey] != nil && statsToCache[hostKey] != nil {
+		metaToCacheHost := metaToCache[hostKey]
+		statsToCacheHost := statsToCache[hostKey]
+		if metaToCacheHost != nil && statsToCacheHost != nil {
 			if hostKey == m.hostKey { // fresh info being cached is for *current host*
 				// Ideally clearing the dirty flag would have been done in setETagLocalIndexMetadata,
 				// but we don't know what code path entered it so its data might never be cached.
@@ -899,8 +899,14 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				// it then would not match what we cache on disk.
 				m.mgr.getMetadataRepo().ClearMetaDirty()
 			}
-			m.memCacheLocalIndexMetadata(hostKey, metaToCache[hostKey])
-			m.memCacheStats(hostKey, statsToCache[hostKey])
+			// If LocalIndexMetadata came from a pre-Cheshire-Cat node, it won't have computed the
+			// ETag and ETagExpiry fields, so do it here. This can still prevent having to send full
+			// result back to external caller, though not the re-getting of the LIM each time.
+			if metaToCacheHost.ETag == common.HTTP_VAL_ETAG_INVALID {
+				m.setETagLocalIndexMetadata(metaToCacheHost)
+			}
+			m.memCacheLocalIndexMetadata(hostKey, metaToCacheHost)
+			m.memCacheStats(hostKey, statsToCacheHost)
 		}
 	} // for each nid
 
@@ -1022,14 +1028,16 @@ func (m *requestHandlerContext) setETagGetIndexStatus(
 	var sb strings.Builder
 	sbPtr := &sb // for reuse efficiency
 	for _, localMeta := range metaToCache {
-		if localMeta.ETag == common.HTTP_VAL_ETAG_INVALID { // should never happen
-			errMsg := fmt.Sprintf("RequestHandler::setETagGetIndexStatus invalid localMeta ETag: %x for IndexerId: %v",
-				localMeta.ETag, localMeta.IndexerId)
-			logging.Errorf(errMsg)
-			err := errors.New(errMsg)
-			return common.HTTP_VAL_ETAG_INVALID, err
+		if localMeta != nil {
+			if localMeta.ETag == common.HTTP_VAL_ETAG_INVALID { // should never happen
+				errMsg := fmt.Sprintf("RequestHandler::setETagGetIndexStatus invalid localMeta ETag: %x for IndexerId: %v",
+					localMeta.ETag, localMeta.IndexerId)
+				logging.Errorf(errMsg)
+				err := errors.New(errMsg)
+				return common.HTTP_VAL_ETAG_INVALID, err
+			}
+			fmt.Fprintf(sbPtr, "%016x", localMeta.ETag)
 		}
-		fmt.Fprintf(sbPtr, "%016x", localMeta.ETag)
 	}
 	bytes := []byte(sb.String())
 	eTag := common.Crc64Checksum(bytes)
@@ -1578,8 +1586,8 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	if (!m.mgr.getMetadataRepo().IsMetaDirty()) {
 		eTagRequest := getETagFromHttpHeader(r)
 		if (eTagRequest != common.HTTP_VAL_ETAG_INVALID) { // also ...INVALID if missing or garbage
-			cachedMeta, err := m.getLocalIndexMetadataFromCache(m.hostKey)
-			if err == nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
+			cachedMeta, _ := m.getLocalIndexMetadataFromCache(m.hostKey)
+			if cachedMeta != nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
 				// Valid ETag; respond 304 Not Modified with the same ETag
 				sendNotModified(w, eTagRequest)
 				return
@@ -1836,7 +1844,7 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 	host = strings.Trim(host, "\"")
 
 	meta, err := m.getLocalIndexMetadataFromCache(host2key(host))
-	if meta != nil && err == nil {
+	if meta != nil {
 		newMeta := *meta
 		newMeta.IndexDefinitions = make([]common.IndexDefn, 0, len(meta.IndexDefinitions))
 		newMeta.IndexTopologies = make([]IndexTopology, 0, len(meta.IndexTopologies))
@@ -1856,8 +1864,9 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 		send(http.StatusOK, w, newMeta)
 
 	} else {
-		logging.Debugf("RequestHandler::handleCachedLocalIndexMetadataRequest: err %v", err)
-		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
+		logging.Debugf("RequestHandler::handleCachedLocalIndexMetadataRequest: host %v, err %v", host, err)
+		msg := fmt.Sprintf("No cached LocalIndexMetadata available for %v", host)
+		sendHttpError(w, msg, http.StatusNotFound)
 	}
 }
 
@@ -1872,11 +1881,12 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 	host = strings.Trim(host, "\"")
 
 	stats, err := m.getStatsFromCache(host2key(host))
-	if stats != nil && err == nil {
+	if stats != nil {
 		send(http.StatusOK, w, stats)
 	} else {
-		logging.Debugf("RequestHandler::handleCachedStats: err %v", err)
-		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
+		logging.Debugf("RequestHandler::handleCachedStats: host %v, err %v", host, err)
+		msg := fmt.Sprintf("No cached stats available for %v", host)
+		sendHttpError(w, msg, http.StatusNotFound)
 	}
 }
 
@@ -2464,8 +2474,8 @@ func (m *requestHandlerContext) getLocalIndexMetadataFromREST(addr string, hostn
 	localMeta *LocalIndexMetadata, isFromCache bool, err error) {
 
 	var eTag uint64 // 0 = missing or invalid
-	metaCached, err := m.getLocalIndexMetadataFromCache(host2key(hostname))
-	if err == nil {
+	metaCached, _ := m.getLocalIndexMetadataFromCache(host2key(hostname))
+	if metaCached != nil {
 		eTag = metaCached.ETag
 	}
 
@@ -2475,11 +2485,10 @@ func (m *requestHandlerContext) getLocalIndexMetadataFromREST(addr string, hostn
 			resp.Body.Close()
 		}
 	}()
-
 	if err == nil {
 		// StatusNotModified can only occur if metaCached was retrieved from cache, as
 		// that is the only time we may send a valid ETag in the request to trigger it.
-		if resp.StatusCode == http.StatusNotModified {
+		if metaCached != nil && resp.StatusCode == http.StatusNotModified {
 			return metaCached, true, nil
 		}
 
@@ -2534,7 +2543,8 @@ func (m *requestHandlerContext) getLocalIndexMetadataFromCache(hostKey string) (
 
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
-		logging.Errorf("getLocalIndexMetadataFromCache: fail to read metadata from file %v.  Error %v", filepath, err)
+		// Log only as Debug as the file may not exist since the data may not yet have been cached
+		logging.Debugf("getLocalIndexMetadataFromCache: fail to read metadata from file %v.  Error %v", filepath, err)
 		return nil, err
 	}
 
@@ -2774,7 +2784,8 @@ func (m *requestHandlerContext) getStatsFromCache(hostKey string) (*common.Stati
 
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
-		logging.Errorf("getStatsFromCache: fail to read stats from file %v.  Error %v", filepath, err)
+		// Log only as Debug as the file may not exist since the data may not yet have been cached
+		logging.Debugf("getStatsFromCache: fail to read stats from file %v.  Error %v", filepath, err)
 		return nil, err
 	}
 
