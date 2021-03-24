@@ -728,9 +728,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.waitForScheduledIndex": ConfigValue{
-		false,
+		true,
 		"Do not return the index creation request until the scheduled index is created",
-		false,
+		true,
 		false,
 		false,
 	},
