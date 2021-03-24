@@ -4454,6 +4454,7 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 				abortRecovery: true,
 			}
 			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+			idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
 			isRemoveKeyspace = true
 		}
 
@@ -9074,7 +9075,16 @@ func (idx *indexer) deleteStreamKeyspaceIdCurrRequest(
 
 	var req *currRequest
 	if bCurrRequest, ok := idx.streamKeyspaceIdCurrRequest[streamId]; ok {
-		req = bCurrRequest[keyspaceId]
+		req, ok = bCurrRequest[keyspaceId]
+		if !ok {
+			logging.Infof("Indexer::deleteStreamKeyspaceIdCurrRequest CurrRequest for keyspaceId Not Present "+
+				"SessionId %v StreamId %v KeyspaceId %v cmd %v ", sessionId, streamId, keyspaceId, cmd)
+			return
+		}
+	} else {
+		logging.Infof("Indexer::deleteStreamKeyspaceIdCurrRequest CurrRequest Not Present for stream"+
+			"SessionId %v StreamId %v KeyspaceId %v cmd %v ", sessionId, streamId, keyspaceId, cmd)
+		return
 	}
 
 	//allow the caller to reset state if stopCh matches
