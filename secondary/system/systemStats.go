@@ -80,6 +80,22 @@ func (h *SystemStats) FreeMem() (uint64, error) {
 }
 
 //
+// Get Actual Free memory
+// FreeMem() does not account for kernel buffer cache
+// Hence, using sigar_mem_t::actual_free which accounts for kernel
+// buffer cache when computing free memory
+//
+func (h *SystemStats) ActualFreeMem() (uint64, error) {
+
+	var mem C.sigar_mem_t
+	if err := C.sigar_mem_get(h.handle, &mem); err != C.SIGAR_OK {
+		return uint64(0), errors.New(fmt.Sprintf("Fail to get free memory.  Err=%v", C.sigar_strerror(h.handle, err)))
+	}
+
+	return uint64(mem.actual_free), nil
+}
+
+//
 // Get Total memory
 //
 func (h *SystemStats) TotalMem() (uint64, error) {

@@ -412,6 +412,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.systemStatsCollectionInterval": ConfigValue{
+		5, // 5 seconds
+		"The period with which projector updates the system level stats",
+		5,     // 5 seconds
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent
 		"set GOGC percent",
@@ -721,9 +728,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.waitForScheduledIndex": ConfigValue{
-		false,
+		true,
 		"Do not return the index creation request until the scheduled index is created",
-		false,
+		true,
 		false,
 		false,
 	},

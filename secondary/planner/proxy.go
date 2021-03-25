@@ -931,7 +931,7 @@ func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, 
 //
 func getLocalMetadataResp(addr string) (*http.Response, error) {
 
-	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
+	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata?useETag=false")
 	if err != nil {
 		logging.Errorf("Planner::getLocalMetadataResp: Failed to get local index metadata from node: %v, err: %v", addr, err)
 		return nil, err
