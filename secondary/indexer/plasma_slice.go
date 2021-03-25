@@ -626,7 +626,6 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
-			atomic.AddInt64(&mdb.qCount, -1)
 
 			if mdb.enableWriterTuning {
 				atomic.AddInt64(&mdb.drainTime, elapsed.Nanoseconds())
@@ -722,12 +721,17 @@ func (mdb *plasmaSlice) logErrorsToConsole() {
 
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
 	init bool, meta *MutationMeta) int {
+
+	defer func() {
+		atomic.AddInt64(&mdb.qCount, -1)
+	}()
+
 	var nmut int
 
 	if mdb.isPrimary {
 		nmut = mdb.insertPrimaryIndex(key, docid, workerId)
 	} else if len(key) == 0 {
-		nmut = mdb.delete(docid, workerId)
+		nmut = mdb.delete2(docid, workerId)
 	} else {
 		if mdb.idxDefn.IsArrayIndex {
 			nmut = mdb.insertSecArrayIndex(key, docid, workerId, init, meta)
@@ -1087,6 +1091,17 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 }
 
 func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
+
+	defer func() {
+		atomic.AddInt64(&mdb.qCount, -1)
+	}()
+
+	return mdb.delete2(docid, workerId)
+
+}
+
+func (mdb *plasmaSlice) delete2(docid []byte, workerId int) int {
+
 	var nmut int
 
 	if mdb.isPrimary {

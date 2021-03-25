@@ -433,7 +433,6 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
-			atomic.AddInt64(&mdb.qCount, -1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -518,12 +517,17 @@ func (mdb *memdbSlice) logErrorsToConsole() {
 }
 
 func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
+
+	defer func() {
+		atomic.AddInt64(&mdb.qCount, -1)
+	}()
+
 	var nmut int
 
 	if mdb.isPrimary {
 		nmut = mdb.insertPrimaryIndex(key, docid, workerId)
 	} else if len(key) == 0 {
-		nmut = mdb.delete(docid, workerId)
+		nmut = mdb.delete2(docid, workerId)
 	} else {
 		if mdb.idxDefn.IsArrayIndex {
 			nmut = mdb.insertSecArrayIndex(key, docid, workerId, meta)
@@ -749,6 +753,17 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 }
 
 func (mdb *memdbSlice) delete(docid []byte, workerId int) int {
+
+	defer func() {
+		atomic.AddInt64(&mdb.qCount, -1)
+	}()
+
+	return mdb.delete2(docid, workerId)
+
+}
+
+func (mdb *memdbSlice) delete2(docid []byte, workerId int) int {
+
 	var nmut int
 
 	if mdb.isPrimary {
