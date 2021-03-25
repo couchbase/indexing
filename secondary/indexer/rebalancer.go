@@ -44,9 +44,14 @@ type Callbacks struct {
 }
 
 type Rebalancer struct {
-	transferTokens map[string]*c.TransferToken
-	acceptedTokens map[string]*c.TransferToken
-	sourceTokens   map[string]*c.TransferToken
+	// Transfer token maps from ttid to token
+	transferTokens map[string]*c.TransferToken // all TTs for this rebalance
+	acceptedTokens map[string]*c.TransferToken // accepted TTs
+	sourceTokens   map[string]*c.TransferToken // TTs for which a source index exists (move case)
+	mu sync.RWMutex // for transferTokens, acceptedTokens, sourceTokens, currBatchTokens
+
+	currBatchTokens      []string // ttids of all TTs in current batch
+	transferTokenBatches [][]string // slice of all TT batches (2nd dimension is ttid)
 
 	drop         map[string]bool
 	pendingBuild int32
@@ -62,13 +67,10 @@ type Rebalancer struct {
 	done   chan struct{}
 	isDone int32
 
-	metakvCancel chan struct{}
+	metakvCancel chan struct{} // close this to end metakv.RunObserveChildren callbacks
+	muCleanup sync.RWMutex // for metakvCancel
 
 	supvMsgch MsgChannel
-
-	mu sync.RWMutex
-
-	muCleanup sync.RWMutex
 
 	localaddr string
 
@@ -88,12 +90,13 @@ type Rebalancer struct {
 	change     *service.TopologyChange
 	runPlanner bool
 
-	transferTokenBatches [][]string
-	currBatchTokens      []string
-
 	runParam *runParams
 }
 
+// NewRebalancer creates the Rebalancer object that will master a rebalance and starts
+// go routines that perform it asynchronously. If this is a worker node it launches
+// an observeRebalance go routine that does the token processing for this node. If this
+// is the master that will be launched later by initRebalAsync --> doRebalance.
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeId string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, change *service.TopologyChange,
@@ -148,6 +151,9 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 	return r
 }
 
+// initRebalAsync runs as a helper go routine for NewRebalancer on the rebalance
+// master. It calls the planner if needed, then launches a separate go routine,
+// doRebalance, to manage the fine-grained steps of the rebalance.
 func (r *Rebalancer) initRebalAsync() {
 
 	//short circuit
@@ -276,6 +282,9 @@ func (r *Rebalancer) isFinish() bool {
 	return atomic.LoadInt32(&r.isDone) == 1
 }
 
+// cancelMetakv closes the metakvCancel channel, thus terminating metakv's
+// transfer token callback loop that was initiated by metakv.RunObserveChildren.
+// Must be done when rebalance finishes (successful or not).
 func (r *Rebalancer) cancelMetakv() {
 
 	r.muCleanup.Lock()
@@ -302,6 +311,11 @@ func (r *Rebalancer) addToWaitGroup() bool {
 
 }
 
+// doRebalance runs as a go routine helper to initRebalanceAsync that manages
+// the fine-grained steps of a rebalance. It creates the transfer token batches
+// and publishes the first one. (If more than one batch exists the others will
+// be published later by processTokenAsMaster.) Then it launches an
+// observeRebalance go routine that does the real rebalance work for the master.
 func (r *Rebalancer) doRebalance() {
 
 	if r.transferTokens != nil {
@@ -330,6 +344,8 @@ func (r *Rebalancer) doRebalance() {
 
 }
 
+// createTransferBatches is a helper for doRebalance (master node only) that creates
+// all the transfer token batches.
 func (r *Rebalancer) createTransferBatches() {
 
 	cfg := r.config.Load()
@@ -355,6 +371,9 @@ func (r *Rebalancer) createTransferBatches() {
 	l.Infof("Rebalancer::createTransferBatches Transfer Batches %v", r.transferTokenBatches)
 }
 
+// publishTransferTokenBatch publishes the next batch of transfer tokens into
+// metakv so they will start being processed. For batches other than the first,
+// it is only called once the prior batch completes.
 func (r *Rebalancer) publishTransferTokenBatch() {
 
 	r.mu.Lock()
@@ -371,6 +390,11 @@ func (r *Rebalancer) publishTransferTokenBatch() {
 
 }
 
+// observeRebalance runs as a go routine on both master and worker nodes of a rebalance.
+// It registers the processTokens function as a callback in metakv on the rebalance
+// transfer token (TT) directory. Metakv will call the callback function on each TT and
+// on each mutation of a TT until an error occurs or its stop channel is closed. These
+// callbacks trigger the individual index movement steps of the rebalance.
 func (r *Rebalancer) observeRebalance() {
 
 	l.Infof("Rebalancer::observeRebalance %v master:%v", r.rebalToken, r.master)
@@ -387,6 +411,9 @@ func (r *Rebalancer) observeRebalance() {
 
 }
 
+// processTokens is the callback registered on the metakv transfer token directory for
+// a rebalance and gets called by metakv for each token and each change to a token.
+// This decodes the token and hands it off to processTransferToken.
 func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) error {
 
 	if path == RebalanceTokenPath || path == MoveIndexTokenPath {
@@ -414,6 +441,11 @@ func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) e
 
 }
 
+// processTransferTokens performs the work needed from this node, if any, for a
+// transfer token. The work is split into three helpers for work specific to
+// 1) the master (non-movement bookkeeping, including publishing the next token
+// batch when the prior one completes), 2) source of an index move, 3) destination
+// of a move.
 func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 
 	if !r.addToWaitGroup() {
@@ -427,6 +459,8 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 		return
 	}
 
+	// "processed" var ensures only the incoming token state gets processed by this
+	// call, as metakv will call parent processTokens again for each TT state change.
 	var processed bool
 	if tt.MasterId == r.nodeId {
 		processed = r.processTokenAsMaster(ttid, tt)
@@ -439,9 +473,13 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 	if tt.DestId == r.nodeId && !processed {
 		processed = r.processTokenAsDest(ttid, tt)
 	}
-
 }
 
+// processTokenAsSource performs the work of the source node of an index move
+// reflected by the transfer token, which is to queue up the source index drops
+// for later processing. It handles only TT state TransferTokenReady. Returns
+// true iff it is considered to have processed this token (including handling
+// some error cases).
 func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool {
 
 	if tt.RebalId != r.rebalToken.RebalId {
@@ -570,6 +608,23 @@ func (r *Rebalancer) dropIndexWhenReady() {
 	}
 }
 
+// isMissingBSC determines whether an error message is due to a bucket, scope,
+// or collection not existing. These can be dropped after a TT referencing them
+// was created, in which case we will set the TT forward to TransferTokenCommit
+// state to abort the index move without failing the rebalance.
+func isMissingBSC(errMsg string) bool {
+	if  errMsg == common.ErrCollectionNotFound.Error() ||
+		errMsg == common.ErrScopeNotFound.Error() ||
+		errMsg == common.ErrBucketNotFound.Error() {
+
+		return true
+	}
+	return false
+}
+
+// dropIndexWhenIdle performs the source index drop asynchronously. This is the last real
+// action of an index move during rebalance; the remainder are token bookkeeping operations.
+// Changes the TT state to TransferTokenCommit when the drop is completed.
 func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifych chan bool) {
 	defer r.wg.Done()
 	defer func() {
@@ -665,6 +720,7 @@ loop:
 			url := "/dropIndex"
 			resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
 			if err != nil {
+				// Error from HTTP layer, not from index processing code
 				l.Errorf("Rebalancer::dropIndexWhenIdle Error drop index on %v %v", r.localaddr+url, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return
@@ -678,11 +734,14 @@ loop:
 			}
 
 			if response.Code == manager.RESP_ERROR {
-				l.Errorf("Rebalancer::dropIndexWhenIdle Error dropping index %v %v", r.localaddr+url, response.Error)
-				r.setTransferTokenError(ttid, tt, response.Error)
-				return
+				// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
+				if !isMissingBSC(response.Error) {
+					l.Errorf("Rebalancer::dropIndexWhenIdle Error dropping index %v %v", r.localaddr+url, response.Error)
+					r.setTransferTokenError(ttid, tt, response.Error)
+					return
+				}
+				// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
 			}
-
 			tt.State = c.TransferTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
 
@@ -726,6 +785,12 @@ func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
 	return true
 }
 
+// processTokenAsDest performs the work of the destination node of an index
+// move reflected by the transfer token. It directly handles TT states
+// TransferTokenCreated and TransferTokenInitiate, and indirectly (via token
+// tokenMergeOrReady call here or in buildAcceptedIndexes --> waitForIndexBuild)
+// states TransferTokenInProgress and TransferTokenMerge. Returns true iff it is
+// considered to have processed this token (including handling some error cases).
 func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 
 	if tt.RebalId != r.rebalToken.RebalId {
@@ -762,6 +827,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		url := "/createIndexRebalance"
 		resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
 		if err != nil {
+			// Error from HTTP layer, not from index processing code
 			l.Errorf("Rebalancer::processTokenAsDest Error register clone index on %v %v", r.localaddr+url, err)
 			r.setTransferTokenError(ttid, tt, err.Error())
 			return true
@@ -774,19 +840,24 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			return true
 		}
 		if response.Code == manager.RESP_ERROR {
-			l.Errorf("Rebalancer::processTokenAsDest Error cloning index %v %v", r.localaddr+url, response.Error)
-			r.setTransferTokenError(ttid, tt, response.Error)
-			return true
+			// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
+			if !isMissingBSC(response.Error) {
+				l.Errorf("Rebalancer::processTokenAsDest Error cloning index %v %v", r.localaddr+url, response.Error)
+				r.setTransferTokenError(ttid, tt, response.Error)
+				return true
+			}
+			// Ok: failed to create dest index because b/s/c was dropped. Skip to TransferTokenCommit state.
+			tt.State = c.TransferTokenCommit
+		} else {
+			tt.State = c.TransferTokenAccepted
 		}
-
-		tt.State = c.TransferTokenAccepted
 		setTransferTokenInMetakv(ttid, tt)
 
 		r.mu.Lock()
 		r.acceptedTokens[ttid] = tt
 		r.mu.Unlock()
 
-	case c.TransferTokenInitate:
+	case c.TransferTokenInitiate:
 
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -817,10 +888,10 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		}
 
 	case c.TransferTokenInProgress:
-		//Nothing to do
+		// Nothing to do here; TT state transitions done in tokenMergeOrReady
 
 	case c.TransferTokenMerge:
-		//Nothing to do
+		// Nothing to do here; TT state transitions done in tokenMergeOrReady
 
 	default:
 		return false
@@ -907,6 +978,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 
 	resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
 	if err != nil {
+		// Error from HTTP layer, not from index processing code
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index on %v %v", r.localaddr+url, err)
 		errStr = err.Error()
 		goto cleanup
@@ -918,6 +990,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		goto cleanup
 	}
 	if response.Code == manager.RESP_ERROR {
+		// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error cloning index %v %v", r.localaddr+url, response.Error)
 		errStr = response.Error
 		goto cleanup
@@ -934,9 +1007,10 @@ cleanup:
 	}
 	r.mu.Unlock()
 	return
-
 }
 
+// waitForIndexBuild waits for index build to complete. Transfer token state changes
+// and some processing are delegated to tokenMergeOrReady.
 func (r *Rebalancer) waitForIndexBuild() {
 
 	allTokensReady := true
@@ -1061,12 +1135,9 @@ loop:
 				l.Infof("Rebalancer::waitForIndexBuild Batch Done")
 				break loop
 			}
-
 			time.Sleep(3 * time.Second)
 		}
-
 	}
-
 } // waitForIndexBuild
 
 func (r *Rebalancer) checkIndexReadyToDrop() bool {
@@ -1074,9 +1145,17 @@ func (r *Rebalancer) checkIndexReadyToDrop() bool {
 	return atomic.LoadInt32(&r.pendingBuild) == 0
 }
 
+// tokenMergeOrReady handles dest TT transitions from TransferTokenInProgress,
+// possibly through TransferTokenMerge, and then to TransferTokenReady (move
+// case) or TransferTokenCommit (non-move case == replica repair; no source
+// index to delete). TransferTokenMerge state is for partitioned indexes where
+// a partn is being moved to a node that already has another partn of the same
+// index. There cannot be two IndexDefns of the same index, so in this situation
+// the moving partition (called a "proxy") gets a "fake" IndexDefn that later
+// must "merge" with the "real" IndexDefn once it has completed its move.
 func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 
-	// There is no proxy
+	// There is no proxy (no merge needed)
 	if tt.RealInstId == 0 {
 
 		respch := make(chan error)
@@ -1090,7 +1169,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 		if tt.TransferMode == c.TokenTransferModeMove {
 			tt.State = c.TransferTokenReady
 		} else {
-			tt.State = c.TransferTokenCommit
+			tt.State = c.TransferTokenCommit // no source to delete in non-move case
 		}
 		setTransferTokenInMetakv(ttid, tt)
 		atomic.AddInt32(&r.pendingBuild, -1)
@@ -1098,7 +1177,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 		r.dropIndexWhenReady()
 
 	} else {
-		// There is a proxy. The proxy partitions need to be move
+		// There is a proxy (merge needed). The proxy partitions need to be move
 		// to the real index instance before Token can move to Ready state.
 		tt.State = c.TransferTokenMerge
 		setTransferTokenInMetakv(ttid, tt)
@@ -1140,7 +1219,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 			if tt.TransferMode == c.TokenTransferModeMove {
 				tt.State = c.TransferTokenReady
 			} else {
-				tt.State = c.TransferTokenCommit
+				tt.State = c.TransferTokenCommit // no source to delete in non-move case
 			}
 			setTransferTokenInMetakv(ttid, &tt)
 
@@ -1161,6 +1240,10 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 	}
 }
 
+// processTokenAsMaster performs master node TT bookkeeping for a rebalance. It
+// handles transfer token states TransferTokenAccepted, TransferTokenCommit,
+// TransferTokenDeleted, and NO-OP TransferTokenRefused. Returns true iff it is
+// considered to have processed this token (including handling some error cases).
 func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool {
 
 	if tt.RebalId != r.rebalToken.RebalId {
@@ -1180,7 +1263,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 	switch tt.State {
 
 	case c.TransferTokenAccepted:
-		tt.State = c.TransferTokenInitate
+		tt.State = c.TransferTokenInitiate
 		setTransferTokenInMetakv(ttid, tt)
 
 		if r.cb.progress != nil {
@@ -1223,7 +1306,6 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		return false
 	}
 	return true
-
 }
 
 func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err string) {
@@ -1246,6 +1328,9 @@ func (r *Rebalancer) updateMasterTokenState(ttid string, state c.TokenState) boo
 	return true
 }
 
+// setTransferTokenInMetakv stores a transfer token in metakv with several retries before
+// failure. Creation and changes to a token in metakv will trigger the next step of token
+// processing via callback from metakv to LifecycleMgr set by its prior OnNewRequest call.
 func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 
 	fn := func(r int, err error) error {
@@ -1264,9 +1349,9 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 			"Meta Storage. %v %v. Err %v", ttid, tt, err)
 		c.CrashOnError(err)
 	}
-
 }
 
+// decodeTransferToken unmarshals a transfer token received in a callback from metakv.
 func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.TransferToken, error) {
 
 	ttidpos := strings.Index(path, TransferTokenTag)
@@ -1286,6 +1371,8 @@ func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.
 
 }
 
+// updateProgress runs in a master-node go routine to update the progress of processing
+// a single transfer token. It is started when the TransferTokenAccepted state is processed.
 func (r *Rebalancer) updateProgress() {
 
 	if !r.addToWaitGroup() {
@@ -1373,6 +1460,8 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 	return true
 }
 
+// checkCurrBatchDone returns true iff all transfer tokens in the current
+// batch have finished processing (reached TransferTokenDeleted state).
 func (r *Rebalancer) checkCurrBatchDone() bool {
 
 	r.mu.RLock()

@@ -316,18 +316,23 @@ func getHostname(url string) string {
 // Create / Drop Index
 ///////////////////////////////////////////////////////
 
+// createIndexRequest handles /createIndex REST endpoint. Called for non-rebalance index creations.
 func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *http.Request) {
 
 	m.doCreateIndex(w, r, false)
 
 }
 
+// createIndexRequestRebalance handles /createIndexRebalance REST endpoint. Called by Rebalancer to
+// create index on destination node.
 func (m *requestHandlerContext) createIndexRequestRebalance(w http.ResponseWriter, r *http.Request) {
 
 	m.doCreateIndex(w, r, true)
 
 }
 
+// doCreateIndex creates an index via REST. isRebalReq arg is true if called from Rebalancer, else false.
+// It delegates to IndexManager to do the real work.
 func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Request, isRebalReq bool) {
 
 	creds, ok := doAuth(r, w)
@@ -366,9 +371,11 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 	}
 
 	// call the index manager to handle the DDL
-	logging.Debugf("RequestHandler::createIndexRequest: invoke IndexManager for create index bucket %s name %s",
-		indexDefn.Bucket, indexDefn.Name)
-
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf(
+			"RequestHandler::doCreateIndex: calling IndexManager to create index %v:%v:%v:%v",
+			indexDefn.Bucket, indexDefn.Scope, indexDefn.Collection, indexDefn.Name)
+	}
 	if err := m.mgr.HandleCreateIndexDDL(&indexDefn, isRebalReq); err == nil {
 		// No error, return success
 		sendIndexResponse(w)
@@ -376,9 +383,9 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 		// report failure
 		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
 	}
-
 }
 
+// dropIndexRequest handles the /dropIndex REST endpoint.
 func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := doAuth(r, w)

@@ -43,10 +43,13 @@ type LifecycleMgr struct {
 	cinfoClient      *common.ClusterInfoClient
 	notifier         MetadataNotifier
 	clusterURL       string
-	incomings        chan *requestHolder
-	expedites        chan *requestHolder
-	bootstraps       chan *requestHolder
-	outgoings        chan c.Packet
+
+	// Request queues from and to gometa intermediary layer
+	incomings        chan *requestHolder // normal priority DDL requests from clients
+	expedites        chan *requestHolder // high priority DDL-related requests from clients
+	bootstraps       chan *requestHolder // bootstrap-related requests from clients
+	outgoings        chan c.Packet // responses back to clients
+
 	killch           chan bool
 	indexerReady     bool
 	builder          *builder
@@ -209,11 +212,18 @@ func (m *LifecycleMgr) Terminate() {
 	}
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Gometa CustomRequestHandler interface methods (in: OnNewRequest,
+// out: GetResponseChannel). These form the gometa communication bridge between
+// IndexManager (manager.go) and LifecycleMgr (lifecycle.go).
+///////////////////////////////////////////////////////////////////////////////
+
+// OnNewRequest implements a gometa CustomRequestHandler interface method.
+// It is the input side of the gometa bridge between IndexManager and LifecycleMgr.
 //
 // This is the main event processing loop.  It is important not to having any blocking
 // call in this function (e.g. mutex).  If this function is blocked, it will also
 // block gometa event processing loop.
-//
 func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 
 	req := &requestHolder{request: request, fid: fid}
@@ -278,9 +288,16 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 	}
 }
 
+// GetResponseChannel implements a gometa CustomRequestHandler interface method.
+// It is the output side of the gometa bridge between IndexManager and LifecycleMgr.
 func (m *LifecycleMgr) GetResponseChannel() <-chan c.Packet {
 	return (<-chan c.Packet)(m.outgoings)
 }
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Regular methods
+///////////////////////////////////////////////////////////////////////////////
 
 func (m *LifecycleMgr) processRequest() {
 
@@ -290,7 +307,7 @@ func (m *LifecycleMgr) processRequest() {
 	m.done.Add(1)
 	defer m.done.Done()
 
-	// process any requests form the boostrap phase.   Once indexer is ready, this channel
+	// Process any requests from the boostrap phase. Once indexer is ready, this channel
 	// will be closed, and this go-routine will proceed to process regular message.
 END_BOOTSTRAP:
 	for {
@@ -311,7 +328,9 @@ END_BOOTSTRAP:
 
 	logging.Debugf("LifecycleMgr.processRequest(): indexer is ready to process new client request.")
 
-	dispatchExpediates := func() bool {
+	// dispatchExpdites is a processRequest helper that drains the expedites queue before returning.
+	// Returns true unless its channel closed; then it returns false so caller will shut down.
+	dispatchExpedites := func() bool {
 		for {
 			select {
 			case request, ok := <-m.expedites:
@@ -343,7 +362,7 @@ END_BOOTSTRAP:
 			}
 		case request, ok := <-m.incomings:
 			if ok {
-				if dispatchExpediates() {
+				if dispatchExpedites() {
 					// TOOD: deal with error
 					m.dispatchRequest(request, factory)
 				} else {
@@ -362,6 +381,8 @@ END_BOOTSTRAP:
 	}
 }
 
+// dispatchRequest dispatches requests from the bootstrap, expidites, and incomings queues of client
+// requests, as well as the special case OPCODE_SERVICE_MAP operation.
 func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.ConcreteMsgFactory) {
 
 	reqId := request.request.GetReqId()
@@ -433,7 +454,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_REBALANCE_RUNNING:
 		err = m.handleRebalanceRunning(content)
 	case client.OPCODE_CREATE_INDEX_DEFER_BUILD:
-		err = m.handleCreateIndex(key, content, common.NewUserRequestContext())
+		err = m.handleCreateIndexDeferBuild(key, content, common.NewUserRequestContext())
 	case client.OPCODE_DROP_INSTANCE:
 		err = m.handleDropInstance(content, common.NewUserRequestContext())
 	case client.OPCODE_UPDATE_REPLICA_COUNT:
@@ -1229,11 +1250,12 @@ func (m *LifecycleMgr) handleCheckTokenExist(content []byte) ([]byte, error) {
 // Create Index
 //-----------------------------------------------------------
 
-func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, reqCtx *common.MetadataRequestContext) error {
+// handleCreateIndexDeferBuild handles only create index for deferred builds (OPCODE_CREATE_INDEX_DEFER_BUILD).
+func (m *LifecycleMgr) handleCreateIndexDeferBuild(key string, content []byte, reqCtx *common.MetadataRequestContext) error {
 
 	defn, err := common.UnmarshallIndexDefn(content)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Unable to unmarshall index definition. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.handleCreateIndexDeferBuild() : createIndex fails. Unable to unmarshal index definition. Reason = %v", err)
 		return err
 	}
 	defn.SetCollectionDefaults()
@@ -1241,6 +1263,8 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, reqCtx *com
 	return m.CreateIndexOrInstance(defn, false, reqCtx, false)
 }
 
+// handleCreateIndexScheduledBuild handles both normal and rebalance create index requests
+// (OPCODE_CREATE_INDEX, OPCODE_CREATE_INDEX_REBAL).
 func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byte,
 	reqCtx *common.MetadataRequestContext) error {
 
@@ -1261,12 +1285,12 @@ func (m *LifecycleMgr) CreateIndexOrInstance(defn *common.IndexDefn, scheduled b
 	if common.GetBuildMode() != common.ENTERPRISE {
 		if defn.NumReplica != 0 {
 			err := errors.New("Index Replica not supported in non-Enterprise Edition")
-			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+			logging.Errorf("LifecycleMgr.CreateIndexOrInstance() : createIndex fails. Reason = %v", err)
 			return err
 		}
 		if common.IsPartitioned(defn.PartitionScheme) {
 			err := errors.New("Index Partitining is not supported in non-Enterprise Edition")
-			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+			logging.Errorf("LifecycleMgr.CreateIndexOrInstance() : createIndex fails. Reason = %v", err)
 			return err
 		}
 	}
@@ -1786,6 +1810,8 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 // Build Index
 //-----------------------------------------------------------
 
+// handleBuildIndexes handles all kinds of build index requests
+// (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
 func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext, retry bool) error {
 
 	list, err := client.UnmarshallIndexIdList(content)
@@ -1975,6 +2001,8 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 // Delete Index
 //-----------------------------------------------------------
 
+// handleDeleteIndex handles both normal and rebalance drop index operations
+// (OPCODE_DROP_INDEX, OPCODE_DROP_INDEX_REBAL).
 func (m *LifecycleMgr) handleDeleteIndex(key string, reqCtx *common.MetadataRequestContext) error {
 
 	id, err := indexDefnId(key)

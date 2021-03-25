@@ -386,6 +386,10 @@ func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
 	return topology, nil
 }
 
+// PrepareTopologyChange is called on all indexer nodes by ns_server directly, to
+// prepare for a rebalance or failover that will later be started by StartTopologyChange
+// on the rebalance/failover master indexer node.
+//
 //All errors need to be reported as return value. Status of prepared task is not
 //considered for failure reporting.
 func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error {
@@ -585,6 +589,9 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 	return nil
 }
 
+// StartTopologyChange is called on the indexer master node by ns_server directly,
+// to initiate a rebalance or failover that has already been prepared via
+// PrepareTopologyChange calls on all indexer nodes.
 func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -644,6 +651,12 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 	return nil
 }
 
+// startRebalance is a helper for StartTopologyChange. It first cleans up orphan
+// tokens (those whose master or owner node is not part of the cluster), then
+// verifies there is not already an existing rebalance token or move token. If
+// these pass it registers the rebalance token and creates the Rebalancer object
+// that will master the rebalance. This object launhes go routines to perform the
+// rebalance asynchronously.
 func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 	var runPlanner bool
@@ -760,6 +773,10 @@ func (m *ServiceMgr) checkRebalanceRunning() bool {
 	return m.rebalanceRunning
 }
 
+// checkExistingGlobalRToken is a helper for startRebalance (master node only). It
+// checks for an existing rebalance token or, if not found, an existing move token.
+// If one is found it is returned, else nil is returned. Errors are only returned
+// if an existing token is found but cannot be retrieved.
 func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
 
 	var rtoken RebalanceToken
@@ -880,6 +897,10 @@ func (m *ServiceMgr) cleanupGlobalRToken(path string) error {
 	return nil
 }
 
+// cleanupOrphanTokens is a helper for startRebalance (master node only). It deletes
+// Rebalance Tokens (RT) and Move Tokens (MT) whose master nodes are not alive, and
+// Transfer Tokens (TT) whose current owners are not alive. "Alive" means the node is
+// in the topology change.KeepNodes list.
 func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 
 	rtokens, err := m.getCurrRebalTokens()
@@ -1070,7 +1091,7 @@ func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferTok
 	switch tt.State {
 
 	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
-		c.TransferTokenInitate, c.TransferTokenInProgress:
+		c.TransferTokenInitiate, c.TransferTokenInProgress:
 		return cleanup()
 
 	case c.TransferTokenMerge:
@@ -1265,6 +1286,9 @@ func (m *ServiceMgr) rebalanceJanitor() {
 
 }
 
+// initStartPhase is a helper for startRebalance (master node only). It generates and
+// registers the rebalance token. If there was a problem registering the global token
+// it returns true as its second return value, indicating the rebalance should be skipped.
 func (m *ServiceMgr) initStartPhase(change service.TopologyChange) (error, bool) {
 
 	var err error
@@ -1919,13 +1943,16 @@ func (m *ServiceMgr) checkGlobalCleanupPending() bool {
 	return false
 }
 
+// getTransferTokenOwner returns the node ID of the token's owning node. Owner
+// defined for each state here should match those processed by/under rebalancer
+// functions processTokenAsMaster, processTokenAsSource, and processTokenAsDest.
 func (m *ServiceMgr) getTransferTokenOwner(tt *c.TransferToken) string {
 
 	switch tt.State {
 	case c.TransferTokenReady:
 		return tt.SourceId
 	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
-		c.TransferTokenInitate, c.TransferTokenInProgress, c.TransferTokenMerge:
+		c.TransferTokenInitiate, c.TransferTokenInProgress, c.TransferTokenMerge:
 		return tt.DestId
 	case c.TransferTokenCommit, c.TransferTokenDeleted:
 		return tt.MasterId
