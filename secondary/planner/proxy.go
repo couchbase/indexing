@@ -192,16 +192,12 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	list := make([]*IndexerNode, 0)
 	numIndexes := 0
 
-	resp, err := restHelperNoLock(getLocalMetadataResp, hosts, nil, cinfo)
-
-	defer closeRespMap(resp)
-
+	resp, err := restHelperNoLock(getLocalMetadataResp, hosts, nil, cinfo, "LocalMetadataResp")
 	if err != nil {
 		return nil, err
 	}
 
 	for nid, res := range resp {
-		delete(resp, nid)
 
 		// create an empty indexer object using the indexer host name
 		node, err := createIndexerNode(cinfo, nid)
@@ -210,11 +206,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 			return nil, err
 		}
 
-		localMeta := new(LocalIndexMetadata)
-		if err := convertResponse(res, localMeta); err != nil {
-			logging.Errorf("Planner::getIndexLayout: Error when converting localMeta from node: %v, err: %v", node.NodeId, err)
-			return nil, err
-		}
+		localMeta := res.meta
 
 		// assign server group
 		node.ServerGroup = cinfo.GetServerGroup(nid)
@@ -430,16 +422,12 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		return errors.New("No indexing service available.")
 	}
 
-	resp, err := restHelperNoLock(getLocalStatsResp, nil, plan.Placement, cinfo)
-
-	defer closeRespMap(resp)
-
+	resp, err := restHelperNoLock(getLocalStatsResp, nil, plan.Placement, cinfo, "LocalStatsResp")
 	if err != nil {
 		return err
 	}
 
 	for nid, res := range resp {
-		delete(resp, nid)
 
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
@@ -447,11 +435,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			return err
 		}
 
-		stats := new(common.Statistics)
-		if err := convertResponse(res, stats); err != nil {
-			logging.Errorf("Planner::getIndexStats: Error when converting response from node: %v, err: %v", nodeId, err)
-			return err
-		}
+		stats := res.stats
 
 		// look up the corresponding indexer object based on the nodeId
 		indexer := findIndexerByNodeId(plan.Placement, nodeId)
@@ -834,28 +818,14 @@ func getIndexSettings(plan *Plan) error {
 		return errors.New("No indexing service available.")
 	}
 
-	resp, err := restHelperNoLock(getLocalSettingsResp, nil, plan.Placement, cinfo)
-
-	defer closeRespMap(resp)
-
+	resp, err := restHelperNoLock(getLocalSettingsResp, nil, plan.Placement, cinfo, "LocalSettingsResp")
 	if err != nil {
 		return err
 	}
 
-	for nid, res := range resp {
-		delete(resp, nid)
+	for _, res := range resp {
 
-		host, err := getIndexerHost(cinfo, nid)
-		if err != nil {
-			logging.Errorf("Planner::getLocalSettings: Error when trying to get indexer host for nodeId: %v, err: %v", nid, err)
-			return err
-		}
-
-		settings := make(map[string]interface{})
-		if err := convertResponse(res, &settings); err != nil {
-			logging.Errorf("Planner::getIndexSettings. Error observed when converting response from node: %v, err: %v", host, err)
-			return err
-		}
+		settings := res.settings
 
 		// Find the cpu quota from setting.  If it is set to 0, then find out avail core on the node.
 		quota, ok := settings["indexer.settings.max_cpu_percent"]
@@ -1201,8 +1171,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 	// If there is no node that can provide the token,
 	// 1) the planner will not consider those pending-create index for planning
 	// 2) the planner will not move those pending-create index from the out-node.
-	resp, err := restHelperNoLock(getLocalCreateTokensResp, nil, indexers, cinfo)
-	defer closeRespMap(resp)
+	resp, err := restHelperNoLock(getLocalCreateTokensResp, nil, indexers, cinfo, "LocalCreateTokensResp")
 	if err != nil {
 		return err
 	}
@@ -1217,11 +1186,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 			return err
 		}
 
-		tokens := new(mc.CreateCommandTokenList)
-		if err := convertResponse(res, tokens); err != nil {
-			logging.Errorf("Planner::processCreateToken: Error when converting response from node: %v, err: %v", nodeId, err)
-			return err
-		}
+		tokens := res.createTokens
 
 		// nothing to do
 		if len(tokens.Tokens) == 0 {
@@ -1312,7 +1277,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 // metakv path (key) of a delete token.
 func getDefnIdFromDeleteTokenPath(path string) (common.IndexDefnId, error) {
 	pieces := strings.Split(path, "/") // even empty string will return one piece
-	defnId, err := strconv.ParseUint(pieces[len(pieces) - 1], 10, 64)
+	defnId, err := strconv.ParseUint(pieces[len(pieces)-1], 10, 64)
 	if err != nil {
 		return 0, err
 	}
@@ -1339,14 +1304,16 @@ func processDeleteToken(indexers []*IndexerNode) error {
 	// If there is no node that can provide the token,
 	// 1) the planner will not consider those pending-delete index for planning
 	// 2) the planner could end up repairing replica for those definitions
-	var getterFunc func(addr string) (*http.Response, error)  // fn to retrieve token paths or tokens
+	var getterFunc func(addr string) (*http.Response, error) // fn to retrieve token paths or tokens
+	var respType string
 	if clusterVersion >= common.INDEXER_70_VERSION {
 		getterFunc = getLocalDeleteTokenPathsResp
+		respType = "LocalDeleteTokenPathsResp"
 	} else {
 		getterFunc = getLocalDeleteTokensResp
+		respType = "LocalDeleteTokensResp"
 	}
-	resp, err := restHelperNoLock(getterFunc, nil, indexers, cinfo)
-	defer closeRespMap(resp)
+	resp, err := restHelperNoLock(getterFunc, nil, indexers, cinfo, respType)
 	if err != nil {
 		return err
 	}
@@ -1400,10 +1367,10 @@ func processDeleteToken(indexers []*IndexerNode) error {
 // keys are the DefnIds of indexes deleted by the delete tokens. In a pre-7.0
 // cluster it has to retrieve full tokens to fill this, but starting in 7.0 it
 // retrieves only token paths, as these have the DefnId as the last field.
-func getDeletedDefnIds(res *http.Response, clusterVersion uint64, nodeId string) (
+func getDeletedDefnIds(res *RestResponse, clusterVersion uint64, nodeId string) (
 	map[common.IndexDefnId]bool, error) {
 
-	var tokenPaths *mc.TokenPathList // delete token paths in 7.0 and up
+	var tokenPaths *mc.TokenPathList      // delete token paths in 7.0 and up
 	var tokens *mc.DeleteCommandTokenList // delete tokens in pre-7.0
 	var err error
 
@@ -1411,11 +1378,9 @@ func getDeletedDefnIds(res *http.Response, clusterVersion uint64, nodeId string)
 
 	// Extract token paths or full tokens from HTTP response
 	if clusterVersion >= common.INDEXER_70_VERSION {
-		tokenPaths = new(mc.TokenPathList)
-		err = convertResponse(res, tokenPaths)
+		tokenPaths = res.delTokenPaths
 	} else {
-		tokens = new(mc.DeleteCommandTokenList)
-		err = convertResponse(res, tokens)
+		tokens = res.delTokens
 	}
 	if err != nil {
 		logging.Errorf("Planner::getDeletedDefnIds: Error when converting response from node: %v, err: %v", nodeId, err)
@@ -1470,14 +1435,12 @@ func processDropInstanceToken(indexers []*IndexerNode,
 	// 1) the planner will not consider those pending-delete index for planning
 	// 2) the planner could end up repairing replica for those definitions
 	// 3) when handling drop replica, it may not drop an already deleted replica
-	resp, err := restHelperNoLock(getLocalDropInstanceTokensResp, nil, indexers, cinfo)
-	defer closeRespMap(resp)
+	resp, err := restHelperNoLock(getLocalDropInstanceTokensResp, nil, indexers, cinfo, "LocalDropInstanceTokensResp")
 	if err != nil {
 		return err
 	}
 
 	for nid, res := range resp {
-		delete(resp, nid)
 
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
@@ -1486,11 +1449,7 @@ func processDropInstanceToken(indexers []*IndexerNode,
 			return err
 		}
 
-		tokens := new(mc.DropInstanceCommandTokenList)
-		if err := convertResponse(res, tokens); err != nil {
-			logging.Errorf("Planner::processDropInstanceToken: Error when converting response from node: %v, err: %v", nodeId, err)
-			return err
-		}
+		tokens := res.dropInstTokens
 
 		// nothing to do
 		if len(tokens.Tokens) == 0 {
@@ -1547,17 +1506,13 @@ func getIndexNumReplica(plan *Plan) error {
 		return nil
 	}
 
-	resp, err := restHelperNoLock(getLocalNumReplicasResp, nil, plan.Placement, cinfo)
-
-	defer closeRespMap(resp)
-
+	resp, err := restHelperNoLock(getLocalNumReplicasResp, nil, plan.Placement, cinfo, "LocalNumReplicasResp")
 	if err != nil {
 		return err
 	}
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	for nid, res := range resp {
-		delete(resp, nid)
 
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
@@ -1566,11 +1521,7 @@ func getIndexNumReplica(plan *Plan) error {
 			return err
 		}
 
-		localNumReplicas := make(map[common.IndexDefnId]common.Counter)
-		if err := convertResponse(res, &localNumReplicas); err != nil {
-			logging.Errorf("Planner::getIndexNumReplica: Error when converting response from node: %v, err: %v", nodeId, err)
-			return err
-		}
+		localNumReplicas := res.numReplicas
 
 		for defnId, numReplica1 := range localNumReplicas {
 			if numReplica2, ok := numReplicas[defnId]; !ok {
@@ -1618,6 +1569,111 @@ func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]
 	return result
 }
 
+type RestResponse struct {
+	meta           *LocalIndexMetadata
+	stats          *common.Statistics
+	settings       map[string]interface{}
+	createTokens   *mc.CreateCommandTokenList
+	delTokens      *mc.DeleteCommandTokenList
+	delTokenPaths  *mc.TokenPathList
+	dropInstTokens *mc.DropInstanceCommandTokenList
+	numReplicas    map[common.IndexDefnId]common.Counter
+
+	respType string
+}
+
+func NewRestResponse(respType string) (*RestResponse, error) {
+
+	r := &RestResponse{
+		respType: respType,
+	}
+
+	switch respType {
+
+	case "LocalMetadataResp":
+		r.meta = new(LocalIndexMetadata)
+
+	case "LocalStatsResp":
+		r.stats = new(common.Statistics)
+
+	case "LocalSettingsResp":
+		m := make(map[string]interface{})
+		r.settings = m
+
+	case "LocalCreateTokensResp":
+		r.createTokens = new(mc.CreateCommandTokenList)
+
+	case "LocalDeleteTokensResp":
+		r.delTokens = new(mc.DeleteCommandTokenList)
+
+	case "LocalDeleteTokenPathsResp":
+		r.delTokenPaths = new(mc.TokenPathList)
+
+	case "LocalDropInstanceTokensResp":
+		r.dropInstTokens = new(mc.DropInstanceCommandTokenList)
+
+	case "LocalNumReplicasResp":
+		m := make(map[common.IndexDefnId]common.Counter)
+		r.numReplicas = m
+
+	default:
+		return nil, fmt.Errorf("NewRestResponse: Unexpected HTTP Response Type")
+	}
+
+	return r, nil
+}
+
+func (r *RestResponse) SetResponse(res *http.Response) error {
+
+	switch r.respType {
+
+	case "LocalMetadataResp":
+		if err := convertResponse(res, r.meta); err != nil {
+			return err
+		}
+
+	case "LocalStatsResp":
+		if err := convertResponse(res, r.stats); err != nil {
+			return err
+		}
+
+	case "LocalSettingsResp":
+		if err := convertResponse(res, &r.settings); err != nil {
+			return err
+		}
+
+	case "LocalCreateTokensResp":
+		if err := convertResponse(res, r.createTokens); err != nil {
+			return err
+		}
+
+	case "LocalDeleteTokensResp":
+		if err := convertResponse(res, r.delTokens); err != nil {
+			return err
+		}
+
+	case "LocalDeleteTokenPathsResp":
+		if err := convertResponse(res, r.delTokenPaths); err != nil {
+			return err
+		}
+
+	case "LocalDropInstanceTokensResp":
+		if err := convertResponse(res, r.dropInstTokens); err != nil {
+			return err
+		}
+
+	case "LocalNumReplicasResp":
+		if err := convertResponse(res, &r.numReplicas); err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("SetResponse: Unexpected HTTP Response Type")
+	}
+
+	return nil
+}
+
 //
 // Helper function for sending REST requests in parallel to indexer nodes.
 // This function assumes that the cinfoClient is already initialised and
@@ -1626,7 +1682,8 @@ func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]
 // IMP: Note that the callers of this function should hold cinfo lock
 //
 func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
-	indexers []*IndexerNode, cinfo *common.ClusterInfoCache) (map[common.NodeId]*http.Response, error) {
+	indexers []*IndexerNode, cinfo *common.ClusterInfoCache,
+	respType string) (map[common.NodeId]*RestResponse, error) {
 
 	// Find all nodes that has a index http service
 	// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
@@ -1692,7 +1749,7 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 	var wg sync.WaitGroup
 
 	errMap := make(map[common.NodeId]error)
-	respMap := make(map[common.NodeId]*http.Response)
+	respMap := make(map[common.NodeId]*RestResponse)
 
 	for _, nid := range nids {
 		// obtain the admin port for the indexer node
@@ -1704,7 +1761,26 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 
 		restCall := func(nid common.NodeId, addr string) {
 			defer wg.Done()
-			resp, err := rest(addr)
+
+			var resp *http.Response
+			restResp, err := NewRestResponse(respType)
+			if err == nil {
+				t0 := time.Now()
+
+				resp, err = rest(addr)
+
+				dur := time.Since(t0)
+				if dur > 30*time.Second || err != nil {
+					logging.Warnf("Planner::restHelperNoLock %v took %v for addr %v with err %v", respType, dur, addr, err)
+				}
+			}
+
+			if err == nil {
+				err = restResp.SetResponse(resp)
+				if err != nil {
+					logging.Errorf("Planner::restHelperNoLock SetResponse %v for addr %v with err %v", respType, addr, err)
+				}
+			}
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -1713,7 +1789,7 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 				errMap[nid] = err
 				respMap[nid] = nil
 			} else {
-				respMap[nid] = resp
+				respMap[nid] = restResp
 			}
 		}
 
@@ -1733,15 +1809,4 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 	}
 
 	return respMap, nil
-}
-
-func closeRespMap(respMap map[common.NodeId]*http.Response) {
-	for _, resp := range respMap {
-		if resp != nil && resp.Body != nil {
-			defer resp.Body.Close()
-
-			buf := new(bytes.Buffer)
-			_, _ = buf.ReadFrom(resp.Body)
-		}
-	}
 }
