@@ -358,7 +358,6 @@ loop:
 
 			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			fdb.idxStats.numDocsIndexed.Add(1)
-			atomic.AddInt64(&fdb.qCount, -1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
@@ -385,6 +384,11 @@ func (fdb *fdbSlice) updateSliceBuffers() keySizeConfig {
 
 //insert does the actual insert in forestdb
 func (fdb *fdbSlice) insert(key []byte, rawKey []byte, docid []byte, workerId int) int {
+
+	defer func() {
+		atomic.AddInt64(&fdb.qCount, -1)
+	}()
+
 	var nmut int
 
 	if fdb.isPrimary {
@@ -710,6 +714,11 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 //delete does the actual delete in forestdb
 func (fdb *fdbSlice) delete(docid []byte, workerId int) int {
+
+	defer func() {
+		atomic.AddInt64(&fdb.qCount, -1)
+	}()
+
 	var nmut int
 
 	if fdb.isPrimary {
