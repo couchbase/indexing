@@ -642,26 +642,21 @@ func (p *Pool) getTerseBucket(bucketn string) (bool, *Bucket, error) {
 	return retry, nb, nil
 }
 
-func (p *Pool) getCollectionManifest(bucketn string, version uint32) (retry bool,
+// Note: Call this only when cluster version is atleast 7.0
+// It is allowed to query the collections endpoint only if all
+// the nodes in the cluster are upgraded to 7.0 version or later
+func (p *Pool) getCollectionManifest(bucketn string) (retry bool,
 	manifest *collections.CollectionManifest, err error) {
-
-	// It is allowed to query the collections endpoint only if all
-	// the nodes in the cluster are upgraded to 7.0 version or later
-	if version >= 7 {
-		// For each bucket, update collection manifest
-		manifest = &collections.CollectionManifest{}
-		err = p.client.parseURLResponse("pools/default/buckets/"+bucketn+"/scopes", manifest)
-		if err != nil {
-			// bucket list is out of sync with cluster bucket list
-			// bucket might have got deleted.
-			if strings.Contains(err.Error(), "HTTP error 404") {
-				retry = true
-				return
-			}
+	manifest = &collections.CollectionManifest{}
+	err = p.client.parseURLResponse("pools/default/buckets/"+bucketn+"/scopes", manifest)
+	if err != nil {
+		// bucket list is out of sync with cluster bucket list
+		if strings.Contains(err.Error(), "HTTP error 404") {
+			retry = true
 			return
 		}
+		return
 	}
-
 	return
 }
 
@@ -719,17 +714,16 @@ loop:
 		b.init(nb)
 		p.BucketMap[b.Name] = b
 
-		retry, manifest, err := p.getCollectionManifest(b.Name, version)
-		if retry {
-			logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for getBucketManifest..", b.Name)
-			time.Sleep(5 * time.Millisecond)
-			goto loop
-		}
-		if err != nil {
-			return err
-		}
-
 		if version >= 7 {
+			retry, manifest, err := p.getCollectionManifest(b.Name)
+			if retry {
+				logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for getBucketManifest..", b.Name)
+				time.Sleep(5 * time.Millisecond)
+				goto loop
+			}
+			if err != nil {
+				return err
+			}
 			p.Manifest[b.Name] = manifest
 		}
 	}
@@ -739,24 +733,22 @@ loop:
 
 func (p *Pool) RefreshManifest(bucket string) error {
 	retryCount := 0
+	// Compute the minimum version among all the nodes
+	version := p.getVersion()
 retry:
-	manifest := &collections.CollectionManifest{}
-	err := p.client.parseURLResponse("pools/default/buckets/"+bucket+"/scopes", manifest)
-	if err != nil {
-		// bucket list is out of sync with cluster bucket list
-		// bucket might have got deleted.
-		if strings.Contains(err.Error(), "HTTP error 404") {
-			logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", bucket)
-			time.Sleep(1 * time.Millisecond)
+	if version >= 7 {
+		retry, manifest, err := p.getCollectionManifest(bucket)
+		if retry && retryCount <= 5 {
 			retryCount++
-			if retryCount > 5 {
-				return err
-			}
+			logging.Warnf("cluster_info: Retrying to getBucketManifest for bucket %s", bucket)
+			time.Sleep(1 * time.Millisecond)
 			goto retry
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		p.Manifest[bucket] = manifest
 	}
-	p.Manifest[bucket] = manifest
 	return nil
 }
 

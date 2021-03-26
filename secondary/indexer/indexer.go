@@ -7173,7 +7173,7 @@ func (idx *indexer) validateIndexInstMap() {
 			}
 		}
 
-		if clusterVer >= common.INDEXER_65_VERSION {
+		if clusterVer >= common.INDEXER_70_VERSION {
 
 			keyspace := strings.Join([]string{index.Defn.Bucket,
 				index.Defn.Scope, index.Defn.Collection}, ":")
