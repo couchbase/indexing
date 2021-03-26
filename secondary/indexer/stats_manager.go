@@ -51,6 +51,10 @@ var METRICS_PREFIX = "index_"
 // 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-Inf
 var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100}
 
+// 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
+// 1000ms-5000ms, 5000ms-10000ms, 10000ms-Inf
+var snapLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000}
+
 // end-end scan request latency
 // 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-1000ms,
 // 1000ms-5000ms, 5000ms-10000ms, 10000ms-50000ms, 50000ms-Inf
@@ -89,7 +93,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.tsQueueSize.Init()
 	s.numNonAlignTS.Init()
 	s.flushLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.snapLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.snapLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.lastSnapDone.Init()
 }
 
@@ -514,7 +518,7 @@ func (s *IndexStats) Init() {
 	s.scanReqInitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.scanReqWaitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.scanReqLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.snapGenLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.snapGenLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
 
