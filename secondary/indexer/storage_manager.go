@@ -33,6 +33,9 @@ var (
 type KeyspaceIdInstList map[string][]common.IndexInstId
 type StreamKeyspaceIdInstList map[common.StreamId]KeyspaceIdInstList
 
+type KeyspaceIdInstsPerWorker map[string][][]common.IndexInstId
+type StreamKeyspaceIdInstsPerWorker map[common.StreamId]KeyspaceIdInstsPerWorker
+
 //StorageManager manages the snapshots for the indexes and responsible for storing
 //indexer metadata in a config database
 
@@ -52,7 +55,8 @@ type storageMgr struct {
 	indexInstMap  IndexInstMapHolder
 	indexPartnMap IndexPartnMapHolder
 
-	streamKeyspaceIdInstList StreamKeyspaceIdInstListHolder
+	streamKeyspaceIdInstList       StreamKeyspaceIdInstListHolder
+	streamKeyspaceIdInstsPerWorker StreamKeyspaceIdInstsPerWorkerHolder
 
 	// Latest readable index snapshot for each index instance
 	indexSnapMap IndexSnapMapHolder
@@ -126,6 +130,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	s.waitersMap.Init()
 
 	s.streamKeyspaceIdInstList.Init()
+	s.streamKeyspaceIdInstsPerWorker.Init()
 
 	//if manager is not enabled, create meta file
 	if config["enableManager"].Bool() == false {
@@ -251,6 +256,24 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	streamKeyspaceIdInstList := s.streamKeyspaceIdInstList.Get()
 	instIdList := streamKeyspaceIdInstList[streamId][keyspaceId]
 
+	streamKeyspaceIdInstsPerWorker := s.streamKeyspaceIdInstsPerWorker.Get()
+	instsPerWorker := streamKeyspaceIdInstsPerWorker[streamId][keyspaceId]
+	// The num_snapshot_workers config has changed. Re-adjust the
+	// streamKeyspaceIdInstsPerWorker map according to new snapshot workers
+	numSnapshotWorkers := s.getNumSnapshotWorkers()
+	if len(instsPerWorker) != numSnapshotWorkers {
+		func() {
+			s.muSnap.Lock()
+			defer s.muSnap.Unlock()
+
+			newStreamKeyspaceIdInstsPerWorker := getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList, numSnapshotWorkers)
+			s.streamKeyspaceIdInstsPerWorker.Set(newStreamKeyspaceIdInstsPerWorker)
+			instsPerWorker = newStreamKeyspaceIdInstsPerWorker[streamId][keyspaceId]
+			logging.Infof("StorageMgr::handleCreateSnapshot Re-adjusting the streamKeyspaceIdInstsPerWorker map to %v workers. "+
+				"StreamId: %v, keyspaceId: %v", numSnapshotWorkers, streamId, keyspaceId)
+		}()
+	}
+
 	if snapType == common.NO_SNAP || snapType == common.NO_SNAP_OSO {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, keyspaceId, snapType)
@@ -275,13 +298,14 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, instIdList, stats, flushWasAborted, hasAllSB)
+		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats, flushWasAborted, hasAllSB)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, instIdList []common.IndexInstId,
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	instIdList []common.IndexInstId, instsPerWorker [][]common.IndexInstId,
 	stats *IndexerStats, flushWasAborted bool, hasAllSB bool) {
 
 	startTime := time.Now().UnixNano()
@@ -296,14 +320,16 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	}
 
 	var wg sync.WaitGroup
-	//for every index managed by this indexer
-	for _, idxInstId := range instIdList {
-		// Create snapshots for all indexes in parallel
-		wg.Add(1)
-		go s.createSnapshotForIndex(streamId, keyspaceId, indexInstMap,
-			indexPartnMap, indexSnapMap, numVbuckets, idxInstId, tsVbuuid,
-			stats, hasAllSB, flushWasAborted, needsCommit, forceCommit,
-			&wg, startTime)
+	wg.Add(len(instIdList))
+	for _, instListPerWorker := range instsPerWorker {
+		go func(instList []common.IndexInstId) {
+			for _, idxInstId := range instList {
+				s.createSnapshotForIndex(streamId, keyspaceId, indexInstMap,
+					indexPartnMap, indexSnapMap, numVbuckets, idxInstId, tsVbuuid,
+					stats, hasAllSB, flushWasAborted, needsCommit, forceCommit,
+					&wg, startTime)
+			}
+		}(instListPerWorker)
 	}
 
 	wg.Wait()
@@ -1125,6 +1151,9 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	streamKeyspaceIdInstList := getStreamKeyspaceIdInstListFromInstMap(indexInstMap)
 	s.streamKeyspaceIdInstList.Set(streamKeyspaceIdInstList)
+
+	streamKeyspaceIdInstsPerWorker := getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList, s.getNumSnapshotWorkers())
+	s.streamKeyspaceIdInstsPerWorker.Set(streamKeyspaceIdInstsPerWorker)
 
 	// Initialize waitersContainer for newly created instances
 	for instId, inst := range indexInstMap {
@@ -2015,6 +2044,22 @@ func getStreamKeyspaceIdInstListFromInstMap(indexInstMap common.IndexInstMap) St
 			out[stream] = make(KeyspaceIdInstList)
 		}
 		out[stream][keyspaceId] = append(out[stream][keyspaceId], instId)
+	}
+	return out
+}
+
+func getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList StreamKeyspaceIdInstList, numSnapshotWorkers int) StreamKeyspaceIdInstsPerWorker {
+	out := make(StreamKeyspaceIdInstsPerWorker)
+	for streamId, keyspaceIdInstList := range streamKeyspaceIdInstList {
+		out[streamId] = make(KeyspaceIdInstsPerWorker)
+		for keyspaceId, instList := range keyspaceIdInstList {
+			out[streamId][keyspaceId] = make([][]common.IndexInstId, numSnapshotWorkers)
+			//for every index managed by this indexer
+			for i, idxInstId := range instList {
+				index := i % numSnapshotWorkers
+				out[streamId][keyspaceId][index] = append(out[streamId][keyspaceId][index], idxInstId)
+			}
+		}
 	}
 	return out
 }

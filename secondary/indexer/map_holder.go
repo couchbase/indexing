@@ -113,3 +113,52 @@ func CopyStreamKeyspaceIdInstList(inList StreamKeyspaceIdInstList) StreamKeyspac
 	}
 	return outList
 }
+
+// Holder for StreamKeyspaceIdInstList
+type StreamKeyspaceIdInstsPerWorkerHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (s *StreamKeyspaceIdInstsPerWorkerHolder) Init() {
+	s.ptr = new(unsafe.Pointer)
+}
+
+func (s *StreamKeyspaceIdInstsPerWorkerHolder) Set(streamKeyspaceIdInstsPerWorker StreamKeyspaceIdInstsPerWorker) {
+	atomic.StorePointer(s.ptr, unsafe.Pointer(&streamKeyspaceIdInstsPerWorker))
+}
+
+func (s *StreamKeyspaceIdInstsPerWorkerHolder) Get() StreamKeyspaceIdInstsPerWorker {
+	if ptr := atomic.LoadPointer(s.ptr); ptr != nil {
+		return *(*StreamKeyspaceIdInstsPerWorker)(ptr)
+	} else {
+		return make(StreamKeyspaceIdInstsPerWorker)
+	}
+}
+
+func (s *StreamKeyspaceIdInstsPerWorkerHolder) Clone() StreamKeyspaceIdInstsPerWorker {
+	if ptr := atomic.LoadPointer(s.ptr); ptr != nil {
+		currList := *(*StreamKeyspaceIdInstsPerWorker)(ptr)
+		return CopyStreamKeyspaceIdInstsPerWorker(currList)
+	} else {
+		return make(StreamKeyspaceIdInstsPerWorker)
+	}
+}
+
+func CopyStreamKeyspaceIdInstsPerWorker(inList StreamKeyspaceIdInstsPerWorker) StreamKeyspaceIdInstsPerWorker {
+
+	outList := make(StreamKeyspaceIdInstsPerWorker)
+	for streamId, keyspaceIdInstsPerWorker := range inList {
+
+		cloneKeyspaceIdInstsPerWorker := make(KeyspaceIdInstsPerWorker)
+		for keyspaceId, instsPerWorker := range keyspaceIdInstsPerWorker {
+			cloneKeyspaceIdInstsPerWorker[keyspaceId] = make([][]common.IndexInstId, len(instsPerWorker))
+			for workerId, instList := range instsPerWorker {
+				cloneKeyspaceIdInstsPerWorker[keyspaceId][workerId] = make([]common.IndexInstId, len(instList))
+				copy(cloneKeyspaceIdInstsPerWorker[keyspaceId][workerId], instList)
+			}
+		}
+
+		outList[streamId] = cloneKeyspaceIdInstsPerWorker
+	}
+	return outList
+}
