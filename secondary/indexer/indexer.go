@@ -2969,6 +2969,8 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		}
 
 		if rollbackTs != nil {
+			logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v SessionId %v "+
+				"RollbackTs %v", streamId, keyspaceId, sessionId, rollbackTs)
 			idx.setRollbackTs(streamId, keyspaceId, rollbackTs)
 		}
 

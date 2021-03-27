@@ -751,7 +751,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	keyspaceId := cmd.(*MsgRollback).GetKeyspaceId()
 	sessionId := cmd.(*MsgRollback).GetSessionId()
 
-	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
+	logging.Infof("StorageMgr::handleRollback %v %v rollbackTs %v", streamId, keyspaceId, rollbackTs)
 
 	var err error
 	var restartTs *common.TsVbuuid
