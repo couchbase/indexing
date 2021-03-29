@@ -230,6 +230,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case INDEXER_ACTIVE:
 		s.handleRecoveryDone()
+
+	case CONFIG_SETTINGS_UPDATE:
+		s.handleConfigUpdate(cmd)
 	}
 }
 
@@ -1552,6 +1555,13 @@ func (s *storageMgr) handleRecoveryDone() {
 	if common.GetStorageMode() == common.PLASMA {
 		RecoveryDone()
 	}
+}
+
+func (s *storageMgr) handleConfigUpdate(cmd Message) {
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	s.config = cfgUpdate.GetConfig()
+
+	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
