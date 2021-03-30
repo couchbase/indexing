@@ -1395,6 +1395,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.schedIdxCreatorCmdCh
 	idx.clustMgrAgentCmdCh <- msg
 	<-idx.clustMgrAgentCmdCh
+	idx.storageMgrCmdCh <- msg
+	<-idx.storageMgrCmdCh
 	idx.updateSliceWithConfig(newConfig)
 }
 

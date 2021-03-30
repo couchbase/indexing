@@ -33,6 +33,9 @@ var (
 type KeyspaceIdInstList map[string][]common.IndexInstId
 type StreamKeyspaceIdInstList map[common.StreamId]KeyspaceIdInstList
 
+type KeyspaceIdInstsPerWorker map[string][][]common.IndexInstId
+type StreamKeyspaceIdInstsPerWorker map[common.StreamId]KeyspaceIdInstsPerWorker
+
 //StorageManager manages the snapshots for the indexes and responsible for storing
 //indexer metadata in a config database
 
@@ -52,7 +55,8 @@ type storageMgr struct {
 	indexInstMap  IndexInstMapHolder
 	indexPartnMap IndexPartnMapHolder
 
-	streamKeyspaceIdInstList StreamKeyspaceIdInstListHolder
+	streamKeyspaceIdInstList       StreamKeyspaceIdInstListHolder
+	streamKeyspaceIdInstsPerWorker StreamKeyspaceIdInstsPerWorkerHolder
 
 	// Latest readable index snapshot for each index instance
 	indexSnapMap IndexSnapMapHolder
@@ -126,6 +130,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	s.waitersMap.Init()
 
 	s.streamKeyspaceIdInstList.Init()
+	s.streamKeyspaceIdInstsPerWorker.Init()
 
 	//if manager is not enabled, create meta file
 	if config["enableManager"].Bool() == false {
@@ -225,6 +230,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case INDEXER_ACTIVE:
 		s.handleRecoveryDone()
+
+	case CONFIG_SETTINGS_UPDATE:
+		s.handleConfigUpdate(cmd)
 	}
 }
 
@@ -251,6 +259,24 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	streamKeyspaceIdInstList := s.streamKeyspaceIdInstList.Get()
 	instIdList := streamKeyspaceIdInstList[streamId][keyspaceId]
 
+	streamKeyspaceIdInstsPerWorker := s.streamKeyspaceIdInstsPerWorker.Get()
+	instsPerWorker := streamKeyspaceIdInstsPerWorker[streamId][keyspaceId]
+	// The num_snapshot_workers config has changed. Re-adjust the
+	// streamKeyspaceIdInstsPerWorker map according to new snapshot workers
+	numSnapshotWorkers := s.getNumSnapshotWorkers()
+	if len(instsPerWorker) != numSnapshotWorkers {
+		func() {
+			s.muSnap.Lock()
+			defer s.muSnap.Unlock()
+
+			newStreamKeyspaceIdInstsPerWorker := getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList, numSnapshotWorkers)
+			s.streamKeyspaceIdInstsPerWorker.Set(newStreamKeyspaceIdInstsPerWorker)
+			instsPerWorker = newStreamKeyspaceIdInstsPerWorker[streamId][keyspaceId]
+			logging.Infof("StorageMgr::handleCreateSnapshot Re-adjusting the streamKeyspaceIdInstsPerWorker map to %v workers. "+
+				"StreamId: %v, keyspaceId: %v", numSnapshotWorkers, streamId, keyspaceId)
+		}()
+	}
+
 	if snapType == common.NO_SNAP || snapType == common.NO_SNAP_OSO {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, keyspaceId, snapType)
@@ -275,13 +301,14 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, instIdList, stats, flushWasAborted, hasAllSB)
+		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats, flushWasAborted, hasAllSB)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, instIdList []common.IndexInstId,
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	instIdList []common.IndexInstId, instsPerWorker [][]common.IndexInstId,
 	stats *IndexerStats, flushWasAborted bool, hasAllSB bool) {
 
 	startTime := time.Now().UnixNano()
@@ -295,197 +322,32 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		forceCommit = true
 	}
 
-	numSnapshotWorkers := s.getNumSnapshotWorkers()
-	waitCh := make(chan bool, numSnapshotWorkers)
-
 	var wg sync.WaitGroup
-	//for every index managed by this indexer
-	for _, idxInstId := range instIdList {
-		// Create snapshots for all indexes in parallel
-		wg.Add(1)
-		waitCh <- true
-		go func(idxInstId common.IndexInstId) {
-			defer func() {
-				<-waitCh
-			}()
-			idxInst := indexInstMap[idxInstId]
-			//process only if index belongs to the flushed keyspaceId and stream
-			if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId ||
-				idxInst.Stream != streamId ||
-				idxInst.State == common.INDEX_STATE_DELETED {
-				wg.Done()
-				return
+	wg.Add(len(instIdList))
+	for _, instListPerWorker := range instsPerWorker {
+		go func(instList []common.IndexInstId) {
+			for _, idxInstId := range instList {
+				s.createSnapshotForIndex(streamId, keyspaceId, indexInstMap,
+					indexPartnMap, indexSnapMap, numVbuckets, idxInstId, tsVbuuid,
+					stats, hasAllSB, flushWasAborted, needsCommit, forceCommit,
+					&wg, startTime)
 			}
-
-			idxStats := stats.indexes[idxInst.InstId]
-			snapC := indexSnapMap[idxInstId]
-			snapC.Lock()
-			lastIndexSnap := CloneIndexSnapshot(snapC.snap)
-			defer DestroyIndexSnapshot(lastIndexSnap)
-			snapC.Unlock()
-
-			// Signal the wait group first before destroying the snapshot
-			// inorder to avoid the cost of destroying the snapshot in the
-			// snapshot generation code path
-			defer wg.Done()
-
-			// List of snapshots for reading current timestamp
-			var isSnapCreated bool = true
-
-			partnSnaps := make(map[common.PartitionId]PartitionSnapshot)
-			hasNewSnapshot := false
-
-			partnMap := indexPartnMap[idxInstId]
-			//for all partitions managed by this indexer
-			for _, partnInst := range partnMap {
-				partnId := partnInst.Defn.GetPartitionId()
-
-				var lastPartnSnap PartitionSnapshot
-
-				if lastIndexSnap != nil && len(lastIndexSnap.Partitions()) != 0 {
-					lastPartnSnap = lastIndexSnap.Partitions()[partnId]
-				}
-				sc := partnInst.Sc
-
-				sliceSnaps := make(map[SliceId]SliceSnapshot)
-				//create snapshot for all the slices
-				for _, slice := range sc.GetAllSlices() {
-
-					if flushWasAborted {
-						slice.IsDirty()
-						return
-					}
-
-					//if TK has seen all Stream Begins after stream restart,
-					//the MTR after rollback can be considered successful.
-					//All snapshots become eligible to retry for next rollback.
-					if hasAllSB {
-						slice.SetLastRollbackTs(nil)
-					}
-
-					var latestSnapshot Snapshot
-					if lastPartnSnap != nil {
-						lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
-						latestSnapshot = lastSliceSnap.Snapshot()
-					}
-
-					//if flush timestamp is greater than last
-					//snapshot timestamp, create a new snapshot
-					var snapTs Timestamp
-					if latestSnapshot != nil {
-						snapTsVbuuid := latestSnapshot.Timestamp()
-						snapTs = Timestamp(snapTsVbuuid.Seqnos)
-					} else {
-						snapTs = NewTimestamp(numVbuckets)
-					}
-
-					// Get Seqnos from TsVbuuid
-					ts := Timestamp(tsVbuuid.Seqnos)
-
-					//if flush is active for an instance and the flush TS is
-					// greater than the last snapshot TS and slice has some changes.
-					// Skip only in-memory snapshot in case of unchanged data.
-					if latestSnapshot == nil ||
-						((slice.IsDirty() || needsCommit) && ts.GreaterThan(snapTs)) ||
-						forceCommit {
-
-						newTsVbuuid := tsVbuuid
-						var err error
-						var info SnapshotInfo
-						var newSnapshot Snapshot
-
-						logging.Tracef("StorageMgr::handleCreateSnapshot Creating New Snapshot "+
-							"Index: %v PartitionId: %v SliceId: %v Commit: %v Force: %v", idxInstId, partnId, slice.Id(), needsCommit, forceCommit)
-
-						if forceCommit {
-							needsCommit = forceCommit
-						}
-
-						slice.FlushDone()
-
-						snapCreateStart := time.Now()
-						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
-							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot Error "+
-								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-								slice.Id(), err)
-							isSnapCreated = false
-							common.CrashOnError(err)
-							continue
-						}
-						snapCreateDur := time.Since(snapCreateStart)
-
-						hasNewSnapshot = true
-
-						snapOpenStart := time.Now()
-						if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
-							logging.Errorf("StorageMgr::handleCreateSnapshot Error Creating Snapshot "+
-								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-								slice.Id(), err)
-							isSnapCreated = false
-							common.CrashOnError(err)
-							continue
-						}
-						snapOpenDur := time.Since(snapOpenStart)
-
-						if needsCommit {
-							logging.Infof("StorageMgr::handleCreateSnapshot Added New Snapshot Index: %v "+
-								"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
-						}
-						ss := &sliceSnapshot{
-							id:   slice.Id(),
-							snap: newSnapshot,
-						}
-						sliceSnaps[slice.Id()] = ss
-					} else {
-						// Increment reference
-						latestSnapshot.Open()
-						ss := &sliceSnapshot{
-							id:   slice.Id(),
-							snap: latestSnapshot,
-						}
-						sliceSnaps[slice.Id()] = ss
-
-						if logging.IsEnabled(logging.Debug) {
-							logging.Debugf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
-								"PartitionId %v SliceId %v. No New Mutations. IsDirty %v", idxInstId, partnId, slice.Id(), slice.IsDirty())
-							logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
-						}
-						continue
-					}
-				}
-
-				ps := &partitionSnapshot{
-					id:     partnId,
-					slices: sliceSnaps,
-				}
-				partnSnaps[partnId] = ps
-			}
-
-			if hasNewSnapshot {
-				idxStats.numSnapshots.Add(1)
-				if needsCommit {
-					idxStats.numCommits.Add(1)
-				}
-			}
-
-			is := &indexSnapshot{
-				instId: idxInstId,
-				ts:     tsVbuuid,
-				partns: partnSnaps,
-			}
-
-			if isSnapCreated {
-				s.updateSnapMapAndNotify(is, idxStats)
-			} else {
-				DestroyIndexSnapshot(is)
-			}
-			s.updateSnapIntervalStat(idxStats, startTime)
-
-		}(idxInstId)
+		}(instListPerWorker)
 	}
 
 	wg.Wait()
-	s.lastFlushDone = time.Now().UnixNano()
+
+	keyspaceStats := s.stats.GetKeyspaceStats(streamId, keyspaceId)
+	end := time.Now().UnixNano()
+	if keyspaceStats != nil {
+		if keyspaceStats.lastSnapDone.Value() == 0 {
+			keyspaceStats.lastSnapDone.Set(end)
+		}
+		keyspaceStats.snapLatDist.Add(end - keyspaceStats.lastSnapDone.Value())
+		keyspaceStats.lastSnapDone.Set(end)
+	}
+
+	s.lastFlushDone = end
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId:   streamId,
@@ -493,6 +355,187 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		ts:         tsVbuuid,
 		aborted:    flushWasAborted}
 
+}
+
+func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
+	keyspaceId string, indexInstMap common.IndexInstMap,
+	indexPartnMap IndexPartnMap, indexSnapMap IndexSnapMap, numVbuckets int,
+	idxInstId common.IndexInstId, tsVbuuid *common.TsVbuuid, stats *IndexerStats,
+	hasAllSB bool, flushWasAborted bool, needsCommit bool,
+	forceCommit bool, wg *sync.WaitGroup, startTime int64) {
+
+	idxInst := indexInstMap[idxInstId]
+	//process only if index belongs to the flushed keyspaceId and stream
+	if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId ||
+		idxInst.Stream != streamId ||
+		idxInst.State == common.INDEX_STATE_DELETED {
+		wg.Done()
+		return
+	}
+
+	idxStats := stats.indexes[idxInst.InstId]
+	snapC := indexSnapMap[idxInstId]
+	snapC.Lock()
+	lastIndexSnap := CloneIndexSnapshot(snapC.snap)
+	defer DestroyIndexSnapshot(lastIndexSnap)
+	snapC.Unlock()
+
+	// Signal the wait group first before destroying the snapshot
+	// inorder to avoid the cost of destroying the snapshot in the
+	// snapshot generation code path
+	defer wg.Done()
+
+	// List of snapshots for reading current timestamp
+	var isSnapCreated bool = true
+
+	partnSnaps := make(map[common.PartitionId]PartitionSnapshot)
+	hasNewSnapshot := false
+
+	partnMap := indexPartnMap[idxInstId]
+	//for all partitions managed by this indexer
+	for _, partnInst := range partnMap {
+		partnId := partnInst.Defn.GetPartitionId()
+
+		var lastPartnSnap PartitionSnapshot
+
+		if lastIndexSnap != nil && len(lastIndexSnap.Partitions()) != 0 {
+			lastPartnSnap = lastIndexSnap.Partitions()[partnId]
+		}
+		sc := partnInst.Sc
+
+		sliceSnaps := make(map[SliceId]SliceSnapshot)
+		//create snapshot for all the slices
+		for _, slice := range sc.GetAllSlices() {
+
+			if flushWasAborted {
+				slice.IsDirty()
+				return
+			}
+
+			//if TK has seen all Stream Begins after stream restart,
+			//the MTR after rollback can be considered successful.
+			//All snapshots become eligible to retry for next rollback.
+			if hasAllSB {
+				slice.SetLastRollbackTs(nil)
+			}
+
+			var latestSnapshot Snapshot
+			if lastPartnSnap != nil {
+				lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
+				latestSnapshot = lastSliceSnap.Snapshot()
+			}
+
+			//if flush timestamp is greater than last
+			//snapshot timestamp, create a new snapshot
+			var snapTs Timestamp
+			if latestSnapshot != nil {
+				snapTsVbuuid := latestSnapshot.Timestamp()
+				snapTs = Timestamp(snapTsVbuuid.Seqnos)
+			} else {
+				snapTs = NewTimestamp(numVbuckets)
+			}
+
+			// Get Seqnos from TsVbuuid
+			ts := Timestamp(tsVbuuid.Seqnos)
+
+			//if flush is active for an instance and the flush TS is
+			// greater than the last snapshot TS and slice has some changes.
+			// Skip only in-memory snapshot in case of unchanged data.
+			if latestSnapshot == nil ||
+				((slice.IsDirty() || needsCommit) && ts.GreaterThan(snapTs)) ||
+				forceCommit {
+
+				newTsVbuuid := tsVbuuid
+				var err error
+				var info SnapshotInfo
+				var newSnapshot Snapshot
+
+				logging.Tracef("StorageMgr::handleCreateSnapshot Creating New Snapshot "+
+					"Index: %v PartitionId: %v SliceId: %v Commit: %v Force: %v", idxInstId, partnId, slice.Id(), needsCommit, forceCommit)
+
+				if forceCommit {
+					needsCommit = forceCommit
+				}
+
+				slice.FlushDone()
+
+				snapCreateStart := time.Now()
+				if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
+					logging.Errorf("handleCreateSnapshot::handleCreateSnapshot Error "+
+						"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+						slice.Id(), err)
+					isSnapCreated = false
+					common.CrashOnError(err)
+					continue
+				}
+				snapCreateDur := time.Since(snapCreateStart)
+
+				hasNewSnapshot = true
+
+				snapOpenStart := time.Now()
+				if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
+					logging.Errorf("StorageMgr::handleCreateSnapshot Error Creating Snapshot "+
+						"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+						slice.Id(), err)
+					isSnapCreated = false
+					common.CrashOnError(err)
+					continue
+				}
+				snapOpenDur := time.Since(snapOpenStart)
+
+				if needsCommit {
+					logging.Infof("StorageMgr::handleCreateSnapshot Added New Snapshot Index: %v "+
+						"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
+				}
+				ss := &sliceSnapshot{
+					id:   slice.Id(),
+					snap: newSnapshot,
+				}
+				sliceSnaps[slice.Id()] = ss
+			} else {
+				// Increment reference
+				latestSnapshot.Open()
+				ss := &sliceSnapshot{
+					id:   slice.Id(),
+					snap: latestSnapshot,
+				}
+				sliceSnaps[slice.Id()] = ss
+
+				if logging.IsEnabled(logging.Debug) {
+					logging.Debugf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
+						"PartitionId %v SliceId %v. No New Mutations. IsDirty %v", idxInstId, partnId, slice.Id(), slice.IsDirty())
+					logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
+				}
+				continue
+			}
+		}
+
+		ps := &partitionSnapshot{
+			id:     partnId,
+			slices: sliceSnaps,
+		}
+		partnSnaps[partnId] = ps
+	}
+
+	if hasNewSnapshot {
+		idxStats.numSnapshots.Add(1)
+		if needsCommit {
+			idxStats.numCommits.Add(1)
+		}
+	}
+
+	is := &indexSnapshot{
+		instId: idxInstId,
+		ts:     tsVbuuid,
+		partns: partnSnaps,
+	}
+
+	if isSnapCreated {
+		s.updateSnapMapAndNotify(is, idxStats)
+	} else {
+		DestroyIndexSnapshot(is)
+	}
+	s.updateSnapIntervalStat(idxStats, startTime)
 }
 
 func (s *storageMgr) flushDone(streamId common.StreamId, keyspaceId string,
@@ -600,7 +643,6 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats, startTime int6
 		idxStats.avgTsInterval.Set(avg)
 		idxStats.sinceLastSnapshot.Set(curr - last)
 	}
-	idxStats.snapLatDist.Add(curr - last)
 	idxStats.snapGenLatDist.Add(curr - startTime)
 	idxStats.lastTsTime.Set(curr)
 
@@ -1123,6 +1165,9 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	streamKeyspaceIdInstList := getStreamKeyspaceIdInstListFromInstMap(indexInstMap)
 	s.streamKeyspaceIdInstList.Set(streamKeyspaceIdInstList)
 
+	streamKeyspaceIdInstsPerWorker := getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList, s.getNumSnapshotWorkers())
+	s.streamKeyspaceIdInstsPerWorker.Set(streamKeyspaceIdInstsPerWorker)
+
 	// Initialize waitersContainer for newly created instances
 	for instId, inst := range indexInstMap {
 		if _, ok := waitersMap[instId]; !ok && inst.State != common.INDEX_STATE_DELETED {
@@ -1520,6 +1565,13 @@ func (s *storageMgr) handleRecoveryDone() {
 	if common.GetStorageMode() == common.PLASMA {
 		RecoveryDone()
 	}
+}
+
+func (s *storageMgr) handleConfigUpdate(cmd Message) {
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	s.config = cfgUpdate.GetConfig()
+
+	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
@@ -2012,6 +2064,22 @@ func getStreamKeyspaceIdInstListFromInstMap(indexInstMap common.IndexInstMap) St
 			out[stream] = make(KeyspaceIdInstList)
 		}
 		out[stream][keyspaceId] = append(out[stream][keyspaceId], instId)
+	}
+	return out
+}
+
+func getStreamKeyspaceIdInstsPerWorker(streamKeyspaceIdInstList StreamKeyspaceIdInstList, numSnapshotWorkers int) StreamKeyspaceIdInstsPerWorker {
+	out := make(StreamKeyspaceIdInstsPerWorker)
+	for streamId, keyspaceIdInstList := range streamKeyspaceIdInstList {
+		out[streamId] = make(KeyspaceIdInstsPerWorker)
+		for keyspaceId, instList := range keyspaceIdInstList {
+			out[streamId][keyspaceId] = make([][]common.IndexInstId, numSnapshotWorkers)
+			//for every index managed by this indexer
+			for i, idxInstId := range instList {
+				index := i % numSnapshotWorkers
+				out[streamId][keyspaceId][index] = append(out[streamId][keyspaceId][index], idxInstId)
+			}
+		}
 	}
 	return out
 }

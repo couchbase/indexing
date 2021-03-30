@@ -22,16 +22,34 @@ import (
 type TokenState byte
 
 const (
-	TransferTokenCreated TokenState = iota
-	TransferTokenAccepted
-	TransferTokenRefused
-	TransferTokenInitate
-	TransferTokenInProgress
-	TransferTokenReady
-	TransferTokenCommit
-	TransferTokenDeleted
-	TransferTokenError
-	TransferTokenMerge
+	//
+	// Transfer token states labeled with their flow sequence #s (or "x" for unused)
+	// and categorized as Master (non-move bookkeeping), move Source, or move Dest.
+	// Owners are defined by function getTransferTokenOwner. Processing and state changes
+	// are mainly in functions processTokenAsMaster, processTokenAsSource,
+	// processTokenAsDest, and tokenMergeOrReady.
+	//
+	TransferTokenCreated TokenState = iota // 1. Dest: Clone source index metadata into
+		// local metadata; change state to TTAccepted. (Original design is first check
+		// if enough resources and if not, change state to TTRefused and rerun planner,
+		// but this is not implemented.)
+	TransferTokenAccepted // 2. Master: Launch progress updater. Change state to TTInitiate.
+	TransferTokenRefused // x. Master (but really unused): No-op.
+	TransferTokenInitiate // 3. Dest: Initiate index build if non-deferred and change state.
+		// to TTInProgress; if build is deferred it may change state to TTTokenMerge instead.
+	TransferTokenInProgress // 4. Dest: No-op in processTokenAsDest; processed in
+		// tokenMergeOrReady. Build in progress. May pass through state TTMerge. Change state
+		// to TTReady when done.
+	TransferTokenReady // 5. Source: Ready to delete source idx (dest idx now taking all
+		// traffic). Queue source index for later async drop. Drop processing will change
+		// state to TTCommit after the drop is complete.
+	TransferTokenCommit // 6. Master: Source index is deleted. Change master's in-mem token
+		// state to TTCommit amd metakv token state to TTDeleted.
+	TransferTokenDeleted // 7. Master: All TT processing done. Delete the TT from metakv.
+	TransferTokenError // x. Unused; kept so down-level iotas match.
+	TransferTokenMerge // 4.5 Dest (partitioned indexes only): No-op in processTokenAsDest;
+		// processed in tokenMergeOrReady. Tells indexer to merge dest partn's temp "proxy"
+		// IndexDefn w/ "real" IndexDefn for that index. Change state to TTReady when done.
 )
 
 func (ts TokenState) String() string {
@@ -43,8 +61,8 @@ func (ts TokenState) String() string {
 		return "TransferTokenAccepted"
 	case TransferTokenRefused:
 		return "TransferTokenRefused"
-	case TransferTokenInitate:
-		return "TransferTokenInitate"
+	case TransferTokenInitiate:
+		return "TransferTokenInitiate"
 	case TransferTokenInProgress:
 		return "TransferTokenInProgress"
 	case TransferTokenReady:
@@ -84,8 +102,8 @@ func (bs TokenBuildSource) String() string {
 type TokenTransferMode byte
 
 const (
-	TokenTransferModeMove TokenTransferMode = iota
-	TokenTransferModeCopy
+	TokenTransferModeMove TokenTransferMode = iota // moving idx from source to dest
+	TokenTransferModeCopy // no source node; idx created on dest during rebalance (replica repair)
 )
 
 func (tm TokenTransferMode) String() string {

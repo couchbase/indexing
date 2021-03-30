@@ -75,6 +75,8 @@ type KeyspaceStats struct {
 	numRollbacksToZero stats.Int64Val
 	tsQueueSize        stats.Int64Val
 	flushLatDist       stats.Histogram
+	snapLatDist        stats.Histogram
+	lastSnapDone       stats.Int64Val
 }
 
 // KeyspaceStats.Init initializes a per-keyspace stats object.
@@ -87,6 +89,8 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.tsQueueSize.Init()
 	s.numNonAlignTS.Init()
 	s.flushLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.snapLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
+	s.lastSnapDone.Init()
 }
 
 func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
@@ -97,6 +101,7 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
 	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
 	statMap.AddStatValueFiltered("flush_latency_dist", &s.flushLatDist)
+	statMap.AddStatValueFiltered("snapshot_latency_dist", &s.snapLatDist)
 
 	bucket := GetBucketFromKeyspaceId(s.keyspaceId)
 	if st := common.BucketSeqsTiming(bucket); st != nil {
@@ -272,7 +277,6 @@ type IndexStats struct {
 	scanReqWaitLatDist stats.Histogram
 	scanReqLatDist     stats.Histogram
 	snapGenLatDist     stats.Histogram
-	snapLatDist        stats.Histogram
 }
 
 type IndexerStatsHolder struct {
@@ -510,9 +514,7 @@ func (s *IndexStats) Init() {
 	s.scanReqInitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.scanReqWaitLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.scanReqLatDist.InitLatency(scanReqLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-
 	s.snapGenLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
-	s.snapLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
 
@@ -1749,7 +1751,6 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 	statMap.AddStatValueFiltered("scan_req_wait_latency_dist", &s.scanReqWaitLatDist)
 	statMap.AddStatValueFiltered("scan_req_latency_dist", &s.scanReqLatDist)
 	statMap.AddStatValueFiltered("snapshot_gen_latency_dist", &s.snapGenLatDist)
-	statMap.AddStatValueFiltered("snapshot_latency_dist", &s.snapLatDist)
 
 	if !spec.essential {
 		statMap.AddStatValueFiltered("avg_scan_request_alloc_latency", &s.scanReqAllocLat)
