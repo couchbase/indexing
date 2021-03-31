@@ -124,7 +124,7 @@ type builder struct {
 	manager   *LifecycleMgr
 	pendings  map[string][]uint64 // Map of bucket/scope/collection to list of index defns
 	notifych  chan *common.IndexDefn
-	batchSize int32
+	batchSize int32 // max number of indexes to build per iteration of builder.run; <= 0 means unlimited
 	disable   int32
 
 	commandListener *mc.CommandListener
@@ -4310,7 +4310,6 @@ func (s *builder) run() {
 			//built using single Build Index, user can see duplicate
 			//build error if builder initiates few requests.
 			if processed {
-
 				func() {
 					timer := time.NewTimer(time.Second * 30)
 					defer timer.Stop()
@@ -4326,9 +4325,11 @@ func (s *builder) run() {
 
 			if len(s.pendings) > 0 {
 				buildList, quota := s.getBuildList()
-
 				for _, key := range buildList {
-					quota = s.tryBuildIndex(key, quota)
+					quota = s.tryBuildIndex(key, quota) // submits defnId builds and reduces quota by number submitted
+					if quota <= 0 {
+						break
+					}
 				}
 			}
 
@@ -4345,12 +4346,14 @@ func (s *builder) run() {
 	}
 }
 
+// getBuildList returns a filtered version of the pendings list that removes already building keys and orders the
+// remainder into a preferred build order. It also returns the max number of indexes to build in this iteration (quota).
 func (s *builder) getBuildList() ([]string, int32) {
 
-	// get quota
+	// quota is max index builds to start; skipList is keyspaces that have at least one instance already building
 	quota, skipList := s.getQuota()
 
-	// filter collection that is not available
+	// Initialize buildList with all pending keyspaces that do not already have builds ongoing
 	buildList := ([]string)(nil)
 	for key, _ := range s.pendings {
 		if _, ok := skipList[key]; !ok {
@@ -4358,7 +4361,7 @@ func (s *builder) getBuildList() ([]string, int32) {
 		}
 	}
 
-	// sort buildList by ascending order
+	// Primary sort buildList ascending by number of pending indexes for each key (to prevent starvation)
 	for i := 0; i < len(buildList)-1; i++ {
 		for j := i + 1; j < len(buildList); j++ {
 			key_i := buildList[i]
@@ -4372,7 +4375,7 @@ func (s *builder) getBuildList() ([]string, int32) {
 		}
 	}
 
-	// sort buildList based on closest to quota
+	// Secondary sort buildList from closest to farthest from quota (same distance over or under quota equally weighted)
 	for i := 0; i < len(buildList)-1; i++ {
 		for j := i + 1; j < len(buildList); j++ {
 			key_i := buildList[i]
@@ -4401,29 +4404,32 @@ func (s *builder) addPending(bucket, scope, collection string, id uint64) bool {
 	return true
 }
 
+// tryBuildIndex starts as many index builds as possible for keyspace pendingKey w.r.t. the quota argument
+// (which is per index, not per instance). It returns the remaining quota (original minus number of builds started).
 func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 
 	bucket, scope, collection := getCollectionFromKey(pendingKey)
-	newQuota := quota
+	quotaRemaining := quota // original quota minus number of index builds started here
 
-	defnIds := s.pendings[pendingKey]
+	defnIds := s.pendings[pendingKey] // all indexes needing builds for keyspace pendingKey
 	if len(defnIds) != 0 {
 		// This is a pre-cautionary check if there is any index being
 		// built for the collection. The authortative check is done by indexer.
 		if s.manager.canBuildIndex(bucket, scope, collection) {
 
-			buildList := ([]uint64)(nil)
-			buildMap := make(map[uint64]bool)
+			buildList := ([]uint64)(nil) // defnIds to start building
+			isDisableBuild := s.disableBuild() // is background index building disabled?
 
-			pendingList := make([]uint64, len(defnIds))
+			pendingList := make([]uint64, len(defnIds)) // defnIds not built here
 			copy(pendingList, defnIds)
 
 			for _, defnId := range defnIds {
-
-				if newQuota == 0 {
+				if quotaRemaining <= 0 {
 					break
 				}
 
+				buildDefnId := false // submit this defnId for build?
+				foundReady := false // found any instId of this defnId in INDEX_STATE_READY state?
 				pendingList = pendingList[1:]
 
 				defn, err := s.manager.repo.GetIndexDefnById(common.IndexDefnId(defnId))
@@ -4438,39 +4444,44 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 					continue
 				}
 
+				// If any inst of defnId is ready or has old storage mode, add that defnId to buildList if possible
 				for _, inst := range insts {
-
-					if newQuota == 0 {
+					if quotaRemaining <= 0 {
 						break
 					}
 
 					if inst.State == uint32(common.INDEX_STATE_READY) {
-						if !s.disableBuild() || len(inst.OldStorageMode) != 0 {
-							// build index if
-							// 1) background index build is enabled
-							// 2) index build is due to upgrade
-							if _, ok := buildMap[defnId]; !ok {
+						foundReady = true
+						// build index if
+						// 1) background index build is enabled
+						// 2) index build is due to upgrade
+						if !isDisableBuild || len(inst.OldStorageMode) != 0 {
+							if !buildDefnId {
+								buildDefnId = true
 								buildList = append(buildList, defnId)
-								buildMap[defnId] = true
+								quotaRemaining--
 							}
-							newQuota = newQuota - 1
-						} else {
-							// put it back to the pending list if index build is disable
-							pendingList = append(pendingList, defnId)
-							logging.Warnf("builder: Background build is disabled.  Will retry building index (%v, %v) in next iteration.", defnId, bucket)
 						}
-					} else {
-						logging.Warnf("builder: Index instance (%v, %v) is not in READY state.  Skipping.", defnId, bucket)
 					}
+				}
+				if !foundReady {
+					logging.Warnf("builder: Index (%v, %v) has no instances in READY state.  Skipping.", defnId, bucket)
+				} else if !buildDefnId {
+					// put it back to the pending list if index build is disable
+					pendingList = append(pendingList, defnId)
+					logging.Warnf("builder: Background build is disabled.  Will retry building index (%v, %v) in next iteration.", defnId, bucket)
 				}
 			}
 
+			// Clean up pendings map.  If there is any index that needs retry, they will be put into the notifych again.
+			// Once this function is done, the map will be populated again from the notifych.
 			if len(pendingList) == 0 {
 				pendingList = nil
 			}
+			s.pendings[pendingKey] = pendingList
 
+			// Submit the defnIds to be built, if any
 			if len(buildList) != 0 {
-
 				idList := &client.IndexIdList{DefnIds: buildList}
 				key := fmt.Sprintf("%d", idList.DefnIds[0])
 				content, err := client.MarshallIndexIdList(idList)
@@ -4478,13 +4489,8 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 					logging.Warnf("builder: Failed to marshall index defnIds during index build.  Error = %v. Retry later.", err)
 					return quota
 				}
-
 				logging.Infof("builder: Try build index for bucket: %v, scope: %v, collection: %v. Index %v",
 					bucket, scope, collection, idList)
-
-				// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
-				// Once this function is done, the map will be populated again from the notifych.
-				s.pendings[pendingKey] = pendingList
 
 				// If any of the index cannot be built, those index will be skipped by lifecycle manager, so it
 				// will send the rest of the indexes to the indexer.  An index cannot be built if it does not have
@@ -4492,25 +4498,22 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 				if err := s.manager.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_RETRY, key, content); err != nil {
 					logging.Warnf("builder: Failed to build index.  Error = %v.", err)
 				}
-
-				logging.Infof("builder: pending definitons to be build %v.", pendingList)
-
-			} else {
-
-				// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
-				// Once this function is done, the map will be populated again from the notifych.
-				s.pendings[pendingKey] = pendingList
+				logging.Infof("builder: defnIds still pending to be built: %v.", pendingList)
 			}
 		}
 	}
-
-	return newQuota
+	return quotaRemaining
 }
 
+// getQuota returns the number of new index builds that can be started now (quota) as the batchSize minus
+// number of indexes already building, plus a list of "b/s/c" keys (skipList) of the ones already building.
 func (s *builder) getQuota() (int32, map[string]bool) {
 
 	quota := atomic.LoadInt32(&s.batchSize)
-	skipList := make(map[string]bool)
+	if quota <= 0 { // unlimited quota (documented as batchSize of -1 in config.go)
+		quota = math.MaxInt32
+	}
+	skipList := make(map[string]bool) // keyspaces w/ index(es) now building; can't start new build on these till current one completes
 
 	metaIter, err := s.manager.repo.NewIterator()
 	if err != nil {
@@ -4528,15 +4531,20 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 			continue
 		}
 
+		// Check if any instances of this index are already currently building
 		for _, inst := range insts {
 			if inst.State == uint32(common.INDEX_STATE_INITIAL) || inst.State == uint32(common.INDEX_STATE_CATCHUP) {
-				quota = quota - 1
+				quota-- // an index already building reduces the quota for new build starts
 				key := getPendingKey(defn.Bucket, defn.Scope, defn.Collection)
 				skipList[key] = true
+				break // only decrement quota once for the whole index, not for each building instance
 			}
 		}
 	}
 
+	if quota < 0 { // can happen if batchSize gets reduced
+		quota = 0
+	}
 	return quota, skipList
 }
 
