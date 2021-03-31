@@ -406,7 +406,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	}
 
-	if clusterVersion < c.INDEXER_55_VERSION || (!o.settings.UsePlanner() && !c.IsPartitioned(idxDefn.PartitionScheme)) {
+	if clusterVersion < c.INDEXER_55_VERSION || (!o.settings.UsePlanner()) {
 		if err := o.createIndex(idxDefn, plan); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
@@ -1236,14 +1236,21 @@ func (o *MetadataProvider) canSkipPlanner(watcherMap map[c.IndexerId]int,
 func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.IndexerId]int,
 	idxDefn *c.IndexDefn, allowLostReplica bool, actualNumReplica uint32) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
 
-	var indexerIds []c.IndexerId
+	var watchers []*watcher
 	if len(idxDefn.Nodes) == 0 {
-		indexerIds = make([]c.IndexerId, 0, len(watcherMap))
+		watchers = make([]*watcher, 0, len(watcherMap))
 		for indexerId, _ := range watcherMap {
-			indexerIds = append(indexerIds, indexerId)
+			watcher, err := o.findWatcherByIndexerId(indexerId)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			watchers = append(watchers, watcher)
 		}
 	} else {
 		names := make(map[string]*watcher)
+
+		o.mutex.Lock()
 		for _, watcher := range o.watchers {
 			if watcher.serviceMap.ExcludeNode != "in" &&
 				watcher.serviceMap.ExcludeNode != "inout" {
@@ -1251,20 +1258,23 @@ func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.Indexer
 				names[strings.ToLower(watcher.getNodeAddr())] = watcher
 			}
 		}
+		o.mutex.Unlock()
 
 		for _, node := range idxDefn.Nodes {
-			if watcher, ok := names[strings.ToLower(node)]; !ok {
+			var watcher *watcher
+			var ok bool
+			if watcher, ok = names[strings.ToLower(node)]; !ok {
 				fmtMsg := "Indexer node (%v) not found. The node may be failed or " +
 					"under rebalance or network partitioned from query process."
 
 				return nil, nil, errors.New(fmt.Sprintf(fmtMsg, node))
 			} else {
-				indexerIds = append(indexerIds, watcher.getIndexerId())
+				watchers = append(watchers, watcher)
 			}
 		}
 	}
 
-	layout := o.createLayoutWithRoundRobin(idxDefn, indexerIds)
+	layout := o.createLayoutWithRoundRobin(idxDefn, watchers)
 	definitions, err := o.getDefinitionsFromLayout(layout, idxDefn, allowLostReplica, actualNumReplica)
 	if err != nil {
 		return nil, nil, err
@@ -1330,17 +1340,15 @@ func (o *MetadataProvider) validateNodes(nodes []string) (bool, error) {
 //
 // This function builds the index layout using round robin.
 //
-func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn, indexerIds []c.IndexerId) map[int]map[c.IndexerId][]c.PartitionId {
+func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn,
+	watchers []*watcher) map[int]map[c.IndexerId][]c.PartitionId {
 
 	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
-	addLayout := func(replicaId int, indexerId c.IndexerId, partitions []c.PartitionId) {
-		if _, ok := layout[replicaId]; !ok {
-			layout[replicaId] = make(map[c.IndexerId][]c.PartitionId)
-		}
-		layout[replicaId][indexerId] = partitions
-	}
 
-	shuffle := func(indexerIds []c.IndexerId) []c.IndexerId {
+	//
+	// Functions to shuffle nodes and node lists
+	//
+	shuffleNodes := func(indexerIds []c.IndexerId) []c.IndexerId {
 		num := len(indexerIds)
 		result := make([]c.IndexerId, num)
 
@@ -1356,41 +1364,114 @@ func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn, inde
 		}
 		return result
 	}
-	indexerIds = shuffle(indexerIds)
 
-	for replicaId := 0; replicaId < int(idxDefn.NumReplica+1); replicaId++ {
+	shuffleNodeList := func(input [][]c.IndexerId) [][]c.IndexerId {
 
-		if c.IsPartitioned(idxDefn.PartitionScheme) {
-
-			partitionPerWatcher := int(idxDefn.NumPartitions) / len(indexerIds)
-			if int(idxDefn.NumPartitions)%len(indexerIds) != 0 {
-				partitionPerWatcher += 1
-			}
-
-			partnId := int(1)
-			endPartnId := partnId + int(idxDefn.NumPartitions)
-
-			for _, indexerId := range indexerIds {
-
-				var partitions []c.PartitionId
-				count := 0
-				for partnId < endPartnId && count < partitionPerWatcher {
-					partitions = append(partitions, c.PartitionId(partnId))
-					count++
-					partnId++
-				}
-
-				if len(partitions) != 0 {
-					addLayout(replicaId, indexerId, partitions)
+		// shuffle the list of lists
+		num := len(input)
+		result := make([][]c.IndexerId, num)
+		for _, nodes := range input {
+			found := false
+			for !found {
+				n := rand.Intn(num)
+				if result[n] == nil {
+					result[n] = nodes
+					found = true
 				}
 			}
-
-			// shuffle the watcher
-			indexerIds = append(indexerIds[1:], indexerIds[:1]...)
-
-		} else {
-			addLayout(replicaId, indexerIds[replicaId], []c.PartitionId{c.NON_PARTITION_ID})
 		}
+
+		// shuffle individual lists
+		final := make([][]c.IndexerId, num)
+		for i, nodes := range result {
+			final[i] = shuffleNodes(nodes)
+		}
+
+		return final
+	}
+
+	//
+	// Function to add partition to the layout.
+	//
+	addPartition := func(replicaId int, indexerId c.IndexerId, partnId c.PartitionId) {
+		if _, ok := layout[replicaId]; !ok {
+			layout[replicaId] = make(map[c.IndexerId][]c.PartitionId)
+		}
+
+		if _, ok := layout[replicaId][indexerId]; !ok {
+			layout[replicaId][indexerId] = make([]c.PartitionId, 0)
+		}
+
+		layout[replicaId][indexerId] = append(layout[replicaId][indexerId], partnId)
+	}
+
+	//
+	// Generate a list of node lists based on server group
+	//
+	serverGroupIdxMap := make(map[string]int)
+	i := 0
+	for _, w := range watchers {
+		sg := w.getServerGroup()
+		if _, ok := serverGroupIdxMap[sg]; !ok {
+			serverGroupIdxMap[sg] = i
+			i++
+		}
+	}
+
+	maxNodesInServerGroup := 0
+
+	nodeList := make([][]c.IndexerId, len(serverGroupIdxMap))
+	for _, w := range watchers {
+		sg := w.getServerGroup()
+		idx := serverGroupIdxMap[sg]
+		nodeList[idx] = append(nodeList[idx], w.getIndexerId())
+		if maxNodesInServerGroup < len(nodeList[idx]) {
+			maxNodesInServerGroup = len(nodeList[idx])
+		}
+	}
+
+	//
+	// Function to flatten the node list ordered by server group
+	//
+	flattenNodeList := func(input [][]c.IndexerId) []c.IndexerId {
+		output := make([]c.IndexerId, 0)
+		for i := 0; i < maxNodesInServerGroup; i++ {
+			for j := 0; j < len(input); j++ {
+				if i < len(input[j]) {
+					output = append(output, input[j][i])
+				}
+			}
+		}
+
+		return output
+	}
+
+	numInstances := int(idxDefn.NumReplica) + 1
+
+	//
+	// Place the index partitions in ordered manner where partition ids will be
+	// placed in increasing order and the partition ids of all replicas are
+	// grouped together.
+	//
+	// Example for 3 partitions, num instances 3:
+	// (p0, r0), (p0, r1), (p0, r2), (p1, r0), (p1, r1), (p1, r2), (p2, r0), (p2, r1), (p2, r2)
+	//
+	placeAllReplicas := func(partnId c.PartitionId) {
+		nodeList = shuffleNodeList(nodeList)
+		nodes := flattenNodeList(nodeList)
+		idx := 0
+		for replicaId := 0; replicaId < numInstances; replicaId++ {
+			addPartition(replicaId, nodes[idx], partnId)
+			idx++
+		}
+	}
+
+	if c.IsPartitioned(idxDefn.PartitionScheme) {
+		for partnId := 1; partnId <= int(idxDefn.NumPartitions); partnId++ {
+			placeAllReplicas(c.PartitionId(partnId))
+		}
+	} else {
+		placeAllReplicas(c.NON_PARTITION_ID)
 	}
 
 	return layout
@@ -1418,12 +1499,7 @@ func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]int
 		return errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", idxDefn.NumReplica))
 	}
 
-	indexerIds := make([]c.IndexerId, 0, len(watchers))
-	for _, watcher := range watchers {
-		indexerIds = append(indexerIds, watcher.getIndexerId())
-	}
-
-	layout := o.createLayoutWithRoundRobin(idxDefn, indexerIds)
+	layout := o.createLayoutWithRoundRobin(idxDefn, watchers)
 
 	return o.makeCreateIndexRequest(idxDefn, layout)
 }
