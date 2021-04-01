@@ -2563,18 +2563,19 @@ func (m *requestHandlerContext) getCachedLocalIndexMetadataFromREST(addr string,
 // hostKey is host2key(host:httpPort).
 func (m *requestHandlerContext) getLocalIndexMetadataFromCache(hostKey string) (*LocalIndexMetadata, error) {
 
+	// Look in memory cache
 	m.metaMutex.RLock()
-	if meta, ok := m.metaCache[hostKey]; ok && meta != nil {
-		m.metaMutex.RUnlock()
+	localMeta, ok := m.metaCache[hostKey]
+	m.metaMutex.RUnlock()
+	if ok && localMeta != nil {
 		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("getLocalIndexMetadataFromCache: found metadata in memory cache %v", hostKey)
 		}
-		return meta, nil
+		return localMeta, nil
 	}
-	m.metaMutex.RUnlock()
 
+	// Not found in mem cache; look in disk cache
 	filepath := path.Join(m.metaDir, hostKey)
-
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		// Log only as Debug as the file may not exist since the data may not yet have been cached
@@ -2582,7 +2583,7 @@ func (m *requestHandlerContext) getLocalIndexMetadataFromCache(hostKey string) (
 		return nil, err
 	}
 
-	localMeta := new(LocalIndexMetadata)
+	localMeta = new(LocalIndexMetadata)
 	if err := json.Unmarshal(content, localMeta); err != nil {
 		logging.Errorf("getLocalIndexMetadataFromCache: fail to unmarshal metadata from file %v.  Error %v", filepath, err)
 		return nil, err
@@ -2804,18 +2805,19 @@ func (m *requestHandlerContext) getCachedStatsFromREST(addr string, host string)
 // hostKey is host2Key(host:httpPort).
 func (m *requestHandlerContext) getStatsFromCache(hostKey string) (*common.Statistics, error) {
 
+	// Look in memory cache
 	m.statsMutex.RLock()
-	if stats, ok := m.statsCache[hostKey]; ok && stats != nil {
-		m.statsMutex.RUnlock()
+	stats, ok := m.statsCache[hostKey]
+	m.statsMutex.RUnlock()
+	if ok && stats != nil {
 		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("getStatsFromCache: found stats in memory cache %v", hostKey)
 		}
 		return stats, nil
 	}
-	defer m.statsMutex.RUnlock()
 
+	// Not found in mem cache; look in disk cache
 	filepath := path.Join(m.statsDir, hostKey)
-
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		// Log only as Debug as the file may not exist since the data may not yet have been cached
@@ -2823,7 +2825,7 @@ func (m *requestHandlerContext) getStatsFromCache(hostKey string) (*common.Stati
 		return nil, err
 	}
 
-	stats := new(common.Statistics)
+	stats = new(common.Statistics)
 	if err := json.Unmarshal(content, stats); err != nil {
 		logging.Errorf("getStatsFromCache: fail to unmarshal stats from file %v.  Error %v", filepath, err)
 		return nil, err
