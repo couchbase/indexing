@@ -168,12 +168,13 @@ func (s *scanCoordinator) listenSnapshot(index int) {
 					snapContainer.snap = nil
 				}
 			} else {
-				// No-op here
 				// If an instance does not exist in indexInstMap, then
 				// it will not exist in lastSnapshot map as well as both
 				// the map's get updated at the same time.
 				// Scan will not proceed if an index does not exist in
-				// indexInstMap. Hence, just ignore the snapshot
+				// indexInstMap. Destroy the snapshot coming from the
+				// storage manager.
+				DestroyIndexSnapshot(ss)
 			}
 		}(snapshot)
 	}
