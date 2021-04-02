@@ -162,10 +162,20 @@ func (s *scanCoordinator) listenSnapshot(index int) {
 					DestroyIndexSnapshot(oldSnap)
 				}
 
-				if ss.Timestamp() != nil {
-					snapContainer.snap = ss
+				if !snapContainer.deleted {
+					if ss.Timestamp() != nil {
+						snapContainer.snap = ss
+					} else {
+						snapContainer.snap = nil
+					}
 				} else {
-					snapContainer.snap = nil
+					//If the snap container has been marked deleted,
+					//it indicates the index was deleted concurrently,
+					//while this method had read lastSnapshot already.
+					//At this point, the snapshot coming from storage
+					//doesn't need to be stored in the snapshot container
+					//and can be destroyed.
+					DestroyIndexSnapshot(ss)
 				}
 			} else {
 				// If an instance does not exist in indexInstMap, then
@@ -1379,7 +1389,12 @@ func (s *scanCoordinator) updateLastSnapshotMap() {
 					sc.snap = nil
 				}
 
+				//set sc.deleted to true to indicate to concurrent readers
+				//that this snap container should no longer be used to
+				//add new snapshots.
+				sc.deleted = true
 				delete(lastSnapshot, instId)
+
 			}()
 		}
 	}
