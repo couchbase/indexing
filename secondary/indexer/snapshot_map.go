@@ -12,7 +12,8 @@ type IndexSnapMap map[common.IndexInstId]*IndexSnapshotContainer
 
 type IndexSnapshotContainer struct {
 	sync.Mutex
-	snap IndexSnapshot
+	snap    IndexSnapshot
+	deleted bool
 }
 
 type IndexSnapMapHolder struct {
