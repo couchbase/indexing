@@ -613,13 +613,17 @@ func (r *Rebalancer) dropIndexWhenReady() {
 // was created, in which case we will set the TT forward to TransferTokenCommit
 // state to abort the index move without failing the rebalance.
 func isMissingBSC(errMsg string) bool {
-	if  errMsg == common.ErrCollectionNotFound.Error() ||
-		errMsg == common.ErrScopeNotFound.Error() ||
-		errMsg == common.ErrBucketNotFound.Error() {
+	return errMsg == common.ErrCollectionNotFound.Error() ||
+		   errMsg == common.ErrScopeNotFound.Error() ||
+		   errMsg == common.ErrBucketNotFound.Error()
+}
 
-		return true
-	}
-	return false
+// isIndexNotFoundRebal checks whether a build error returned for rebalance is the
+// special error ErrIndexNotFoundRebal indicating the key returned for this error
+// is the originally submitted defnId instead of an instId because the metadata
+// for defnId could not be found. This error should only be used for this purpose.
+func isIndexNotFoundRebal(errMsg string) bool {
+	return errMsg == common.ErrIndexNotFoundRebal.Error()
 }
 
 // dropIndexWhenIdle performs the source index drop asynchronously. This is the last real
@@ -741,6 +745,7 @@ loop:
 					return
 				}
 				// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
+				l.Infof("Rebalancer::dropIndexWhenIdle Source index already dropped due to bucket/scope/collection dropped. tt %v.", tt)
 			}
 			tt.State = c.TransferTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
@@ -847,6 +852,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 				return true
 			}
 			// Ok: failed to create dest index because b/s/c was dropped. Skip to TransferTokenCommit state.
+			l.Infof("Rebalancer::processTokenAsDest Create destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
 			tt.State = c.TransferTokenCommit
 		} else {
 			tt.State = c.TransferTokenAccepted
@@ -948,18 +954,24 @@ func (r *Rebalancer) checkIndexReadyToBuild() bool {
 
 }
 
+// buildAcceptedIndexes runs in a go routine and submits a request to Indexer to build all indexes
+// for accepted transfer tokens that are ready to start building. The builds occur asynchronously
+// in Indexer handleBuildIndex. This function calls waitForIndexBuild to wait for them to finish.
 func (r *Rebalancer) buildAcceptedIndexes() {
 
 	defer r.wg.Done()
 
-	var idList client.IndexIdList
+	var idList client.IndexIdList // defnIds of the indexes to build
+	ttMap := make(map[string]*common.TransferToken) // ttids to tts of the building indexes
 	var errStr string
 	r.mu.Lock()
-	for _, tt := range r.acceptedTokens {
+	for ttid, tt := range r.acceptedTokens {
 		if tt.State != c.TransferTokenReady &&
 			tt.State != c.TransferTokenCommit &&
 			tt.State != c.TransferTokenMerge {
+
 			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
+			ttMap[ttid] = tt
 		}
 	}
 	r.mu.Unlock()
@@ -970,7 +982,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	}
 
 	response := new(manager.IndexResponse)
-	url := "/buildIndex"
+	url := "/buildIndexRebalance"
 
 	ir := manager.IndexRequest{IndexIds: idList}
 	body, _ := json.Marshal(&ir)
@@ -990,17 +1002,61 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		goto cleanup
 	}
 	if response.Code == manager.RESP_ERROR {
-		// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
+		// Error from index processing code. For rebalance this returns either ErrMarshalFailed.Error
+		// or a JSON string of a marshaled map[IndexInstId]string of error messages per instance ID. The
+		// keys for any entries having magic error string ErrIndexNotFoundRebal.Error are the submitted
+		// defnIds instead of instIds, as the metadata could not be found for these.
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error cloning index %v %v", r.localaddr+url, response.Error)
 		errStr = response.Error
-		goto cleanup
+		if errStr == common.ErrMarshalFailed.Error() { // no detailed error info available
+			goto cleanup
+		}
+
+		// Unmarshal the detailed error info
+		var errMap map[c.IndexInstId]string
+		err = json.Unmarshal([]byte(errStr), &errMap)
+		if err != nil {
+			errStr = c.ErrUnmarshalFailed.Error()
+			goto cleanup
+		}
+
+		// Deal with the individual errors
+		for id, errStr := range errMap {
+			if isMissingBSC(errStr) {
+				// id is an instId. Move the TT for this instId to TransferTokenCommit
+				r.mu.Lock()
+				for ttid, tt := range ttMap {
+					if id == tt.IndexInst.InstId {
+						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+						break
+					}
+				}
+				r.mu.Unlock()
+			} else if isIndexNotFoundRebal(errStr) {
+				// id is a defnId. Move all TTs for this defnId to TransferTokenCommit
+				defnId := c.IndexDefnId(id)
+				r.mu.Lock()
+				for ttid, tt := range ttMap {
+					if defnId == tt.IndexInst.Defn.DefnId {
+						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", tt)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+					}
+				}
+				r.mu.Unlock()
+			} else {
+				goto cleanup // unrecoverable error
+			}
+		}
 	}
 
 	r.waitForIndexBuild()
 
 	return
 
-cleanup:
+cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 	r.mu.Lock()
 	for ttid, tt := range r.acceptedTokens {
 		r.setTransferTokenError(ttid, tt, errStr)
@@ -1009,8 +1065,9 @@ cleanup:
 	return
 }
 
-// waitForIndexBuild waits for index build to complete. Transfer token state changes
-// and some processing are delegated to tokenMergeOrReady.
+// waitForIndexBuild waits for all currently running rebalamnce-initiated index
+// builds to complete. Transfer token state changes and some processing are
+// delegated to tokenMergeOrReady.
 func (r *Rebalancer) waitForIndexBuild() {
 
 	buildStartTime := time.Now()

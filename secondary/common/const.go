@@ -44,6 +44,9 @@ var ErrScanTimedOut = errors.New("Index scan timed out")
 // Index not found
 var ErrIndexNotFound = errors.New("Index not found")
 
+var ErrIndexNotFoundRebal = errors.New("Index not found (rebalance)") // magic string;
+	// do not use other than in lifecycle.go buildIndexesLifecycleMgr
+
 // Index not ready
 var ErrIndexNotReady = errors.New("Index not ready for serving queries")
 
@@ -51,6 +54,9 @@ var ErrIndexNotReady = errors.New("Index not ready for serving queries")
 var ErrClientCancel = errors.New("Client requested cancel")
 
 var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry the request later.")
+
+var ErrMarshalFailed = errors.New("json.Marshal failed")
+var ErrUnmarshalFailed = errors.New("json.Unmarshal failed")
 
 //
 // List of errors leading to failure of index creation

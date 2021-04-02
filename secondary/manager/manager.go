@@ -113,7 +113,7 @@ type RequestServer interface {
 ///////////////////////////////////////////////////////
 
 //
-// Create a new IndexManager
+// Create a new IndexManager. It is a singleton owned by the ClustMgrAgent object, which is owned by Indexer.
 //
 func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
@@ -121,7 +121,7 @@ func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr 
 }
 
 //
-// Create a new IndexManager that wraps a LocalMetadataRepo (not a RemoteMetadataRepo).
+// Create a new IndexManager singleton that wraps a LocalMetadataRepo (not a RemoteMetadataRepo).
 //
 func NewIndexManagerInternal(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
@@ -165,7 +165,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	mgr.reqcic.SetUserAgent("IndexRequestHandler")
 
 	// Initialize LifecycleMgr.
-	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL)
+	lifecycleMgr, err := NewLifecycleMgr(mgr.clusterURL)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -214,18 +214,6 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 
 	return mgr, nil
 }
-
-/*
-//
-// Create a new IndexManager
-//
-func NewIndexManager(requestAddr string,
-    leaderAddr string,
-    config string) (mgr *IndexManager, err error) {
-
-    return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
-}
-*/
 
 func (mgr *IndexManager) RegisterRestEndpoints(mux *http.ServeMux, config common.Config) {
 	// register request handler
@@ -472,7 +460,9 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 	return nil
 }
 
-func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
+// HandleBuildIndexRebalDDL synchronously handles a request to build usually multiple indexes from
+// rebalance only. It delegates to gometa using opcode OPCODE_BUILD_INDEX_REBAL.
+func (m *IndexManager) HandleBuildIndexRebalDDL(indexIds client.IndexIdList) error {
 
 	key := fmt.Sprintf("%d", indexIds.DefnIds[0])
 	content, _ := client.MarshallIndexIdList(&indexIds)

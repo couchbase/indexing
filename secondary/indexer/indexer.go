@@ -160,7 +160,7 @@ type indexer struct {
 
 	stats *IndexerStats
 
-	enableManager bool
+	enableManager bool  // forced to true in cmd/indexer/main.go, overriding default false in config.go
 	cpuProfFd     *os.File
 
 	rebalanceRunning bool
@@ -2581,6 +2581,8 @@ func (idx *indexer) updateStreamForRebalance(force bool) {
 	}
 }
 
+// handleBuildIndex performs index builds. These can be due to normal create index or rebalance.
+// It constructs an error map (errMap) from instId to error and sends it back to the caller.
 func (idx *indexer) handleBuildIndex(msg Message) {
 
 	instIdList := msg.(*MsgBuildIndex).GetIndexList()
@@ -2640,7 +2642,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 
 	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
-	errMap := make(map[common.IndexInstId]error)
+	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
 
@@ -2769,7 +2771,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 
 	if idx.enableManager {
-		clientCh <- &MsgBuildIndexResponse{errMap: errMap}
+		clientCh <- &MsgBuildIndexResponse{errMap: errMap} // return instId-specific build errors to caller
 	} else {
 		clientCh <- &MsgSuccess{}
 	}
