@@ -419,6 +419,24 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.usedMemThreshold": ConfigValue{
+		0.5, // 0.5 or 50%
+		"Projector starts to take memory management decisions if " +
+			"the overall used memory (across all processes) in the system " +
+			"goes above this fraction of total availble memory in the system",
+		0.5,   // 0.5 or 50%
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.rssThreshold": ConfigValue{
+		0.1, // 0.1 or 10%
+		"Projector starts to take memory management decisions if " +
+			"the process RSS is greater than this fraction of  " +
+			"total availble memory in the system",
+		0.1,   // 0.1 or 10%
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent
 		"set GOGC percent",
