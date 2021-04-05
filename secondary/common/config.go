@@ -437,6 +437,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.relaxGCThreshold": ConfigValue{
+		0.01, // 0.01 or 1%
+		"Projector will relax GC percent if RSS is below this value. " +
+			"Set to '0' to disable relaxing GC percentage",
+		0.01,  // 0.01 or 1%
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent
 		"set GOGC percent",

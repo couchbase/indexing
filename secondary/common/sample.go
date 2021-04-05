@@ -68,6 +68,18 @@ func (s *Sample) pop() {
 	}
 }
 
+// Calculate Max
+func (s *Sample) Max() float64 {
+
+	var max float64
+	for i := 0; i < s.count; i++ {
+		if s.buf[i] > max {
+			max = s.buf[i]
+		}
+	}
+	return max
+}
+
 //
 // Calcuate Mean
 //

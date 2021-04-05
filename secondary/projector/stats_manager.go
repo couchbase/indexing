@@ -421,8 +421,9 @@ func (sm *statsManager) logger() {
 					}
 				}
 			}
-			logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v}",
-				memmanager.GetCpuPercent(), memmanager.GetRSS(), memmanager.GetMemFree(), memmanager.GetMemTotal())
+			logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,"+
+				"\"gc_percent\":%v}", memmanager.GetCpuPercent(), memmanager.GetRSS(), memmanager.GetMemFree(),
+				memmanager.GetMemTotal(), memmanager.GetGCPercent())
 		}
 		if atomic.LoadInt32(&sm.stopLogger) == 1 {
 			return
