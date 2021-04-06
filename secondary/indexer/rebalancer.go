@@ -762,13 +762,13 @@ func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
 		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Local Meta %v %v", r.localaddr, err)
 		return true
 	}
-	status, errStr := getIndexStatusFromMeta(tt, localMeta)
+	indexState, errStr := getIndexStatusFromMeta(tt, localMeta)
 	if errStr != "" {
 		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Index Status %v %v", r.localaddr, errStr)
 		return true
 	}
 
-	if status == c.INDEX_STATE_NIL {
+	if indexState == c.INDEX_STATE_NIL {
 		//if index cannot be found in metadata, most likely its drop has already succeeded.
 		//instead of waiting indefinitely, it is better to assume success and proceed.
 		l.Infof("Rebalancer::dropIndexWhenIdle Missing Metadata for %v. Assume success and abort retry", tt.IndexInst)
@@ -1013,10 +1013,7 @@ cleanup:
 // and some processing are delegated to tokenMergeOrReady.
 func (r *Rebalancer) waitForIndexBuild() {
 
-	allTokensReady := true
-
 	buildStartTime := time.Now()
-
 	cfg := r.config.Load()
 	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
 
@@ -1063,7 +1060,7 @@ loop:
 			}
 
 			r.mu.Lock()
-			allTokensReady = true
+			allTokensReady := true
 			for ttid, tt := range r.acceptedTokens {
 				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 					continue
@@ -1074,8 +1071,13 @@ loop:
 					continue
 				}
 
-				status, err := getIndexStatusFromMeta(tt, localMeta)
-				if err != "" {
+				indexState, err := getIndexStatusFromMeta(tt, localMeta)
+				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					l.Infof("Rebalancer::waitForIndexBuild Could not get index status; bucket/scope/collection likely dropped. Skipping. indexState %v, err %v, tt %v.",
+						indexState, err, tt)
+					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+					setTransferTokenInMetakv(ttid, tt)
+				} else if err != "" {
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
 					break
 				}
@@ -1108,9 +1110,7 @@ loop:
 				}
 
 				processing_rate := num_processed / elapsed
-
 				remainingBuildTime := maxRemainingBuildTime
-
 				if processing_rate != 0 {
 					remainingBuildTime = uint64(tot_remaining / processing_rate)
 				}
@@ -1121,11 +1121,10 @@ loop:
 
 				l.Infof("Rebalancer::waitForIndexBuild Index: %v:%v:%v:%v State: %v"+
 					" Pending: %v EstTime: %v Partitions: %v Destination: %v",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name, c.IndexState(status),
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 					tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 
-				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-
+				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 					r.tokenMergeOrReady(ttid, tt)
 				}
 			}
@@ -1141,7 +1140,6 @@ loop:
 } // waitForIndexBuild
 
 func (r *Rebalancer) checkIndexReadyToDrop() bool {
-
 	return atomic.LoadInt32(&r.pendingBuild) == 0
 }
 
@@ -1487,6 +1485,11 @@ func (r *Rebalancer) checkDDLRunning() (bool, error) {
 	return false, nil
 }
 
+// getIndexStatusFromMeta gets the index state and error message, if present, for the
+// index referenced by a transfer token from index metadata (topology tree). It returns
+// state INDEX_STATE_NIL if the metadata is not found (e.g. if the index has been
+// dropped). If an error message is returned with a state other than INDEX_STATE_NIL,
+// the metadata was found and the message is from a field in the topology tree itself.
 func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
 
 	inst := tt.IndexInst
@@ -1497,12 +1500,12 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 			inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	}
 
-	state, msg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)
+	state, errMsg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)
 	if state == c.INDEX_STATE_NIL && tt.RealInstId != 0 {
 		return topology.GetStatusByInst(inst.Defn.DefnId, tt.RealInstId)
 	}
 
-	return state, msg
+	return state, errMsg
 }
 
 // getDestNode returns the key of the partitionMap entry whose value

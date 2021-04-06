@@ -3726,6 +3726,8 @@ func (idx *indexer) handleMTRFail(msg Message) {
 
 }
 
+// handleKeyspaceNotFound will delete the metadata for indexes in the missing keyspace,
+// or if recovery already in progress recovery will do the cleanup so this will skip it.
 func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
@@ -3760,8 +3762,8 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	//validating the keyspaceId and taking corrective action.
 	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
-	if state == STREAM_INACTIVE ||
-		state == STREAM_PREPARE_RECOVERY {
+	if state == STREAM_INACTIVE || state == STREAM_PREPARE_RECOVERY {
+		// Recovery already in progress so it will do the cleanup
 		logging.Infof("Indexer::handleKeyspaceNotFound Skip %v %v %v",
 			streamId, keyspaceId, state)
 		return
@@ -3832,9 +3834,7 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	logging.Infof("Indexer::processCollectionDrop %v %v %v %v", streamId,
 		keyspaceId, scopeId, collectionId)
 
-	// Get bucket from keyspaceId
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
 	bucketUUID, _ := idx.clusterInfoClient.GetBucketUUID(bucket)
 
 	//get the collection name from index inst map(this may already be gone from manifest)
@@ -3845,6 +3845,7 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 			index.State != common.INDEX_STATE_DELETED &&
 			index.Defn.Bucket == bucket &&
 			(bucketUUID == common.BUCKET_UUID_NIL || bucketUUID == index.Defn.BucketUUID) {
+
 			collection = index.Defn.Collection
 			scope = index.Defn.Scope
 			bucketUUID = index.Defn.BucketUUID
@@ -4121,7 +4122,7 @@ func (idx *indexer) Shutdown() Message {
 // all other cases.)
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
 	buildStream common.StreamId, keyspaceId string, cid string,
-	clusterVer uint64, buildTs Timestamp, clientCh MsgChannel) bool {
+	clusterVer uint64, buildTs Timestamp, clientCh MsgChannel) {
 
 	var cmd Message
 	var indexList []common.IndexInst
@@ -4221,7 +4222,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					keyspaceId: keyspaceId,
 					inMTR:      true,
 					sessionId:  sessionId}
-				break retryloop
+				break retryloop // recovery will delete the index metadata
 			}
 			idx.sendMsgToKVSender(cmd)
 
@@ -4230,9 +4231,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS_OPEN_STREAM:
-
-					idx.injectRandomDelay(10)
-
+					idx.injectRandomDelay(10) // no-op unless enabled
 					logging.Infof("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
 						"Stream %v KeyspaceId %v Cid %v SessionId %v", buildStream, keyspaceId, cid, sessionId)
 
@@ -4252,7 +4251,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 						sessionId:  sessionId,
 						reqCh:      stopCh,
 					}
-					break retryloop
+					break retryloop // success
 
 				case INDEXER_ROLLBACK:
 					//an initial build request should never receive rollback message
@@ -4261,7 +4260,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					common.CrashOnError(ErrKVRollbackForInitRequest)
 
 				default:
-					//log and retry for all other responses
+					// Locally retriable cases will be retried by next retryloop iteration.
+					// The rest will be retried by recovery (by sending MsgRecovery below),
+					// which will restart the streams and repair any issues.
 					respErr := resp.(*MsgError).GetError()
 					count++
 
@@ -4279,7 +4280,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							requestCh:  stopCh,
 							sessionId:  sessionId}
 
-						break retryloop
+						break retryloop // recovery will retry
 
 					} else if count > MAX_PROJ_RETRY {
 						// Start recovery if max retries has reached. If the projector
@@ -4305,7 +4306,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 								sessionId:  sessionId,
 							}
 						}
-						break retryloop
+						break retryloop // recovery will retry
 					} else {
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v KeyspaceId %v "+
 							"SessionId %v. Error from Projector %v. Retrying %v.", buildStream, keyspaceId,
@@ -4317,9 +4318,6 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 			}
 		}
 	}(reqLock)
-
-	return true
-
 }
 
 func (idx *indexer) makeCollectionIdForStreamRequest(streamId common.StreamId,
@@ -7755,6 +7753,8 @@ func (idx *indexer) getUpdatedInsts(instIdList []common.IndexInstId) []common.In
 	return updInsts
 }
 
+// bulkUpdateState sets the states of a set of index instances specified
+// by instIdList to the value of the state arg.
 func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
 	state common.IndexState) {
 
@@ -7780,6 +7780,8 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 	}
 }
 
+// bulkUpdateStream sets the streams of a set of index instances specified
+// by instIdList to the value of the stream arg.
 func (idx *indexer) bulkUpdateStream(instIdList []common.IndexInstId,
 	stream common.StreamId) {
 
@@ -9041,9 +9043,9 @@ func (idx *indexer) validateSessionId(
 
 }
 
-//injects random delay upto max seconds
+// injectRandomDelay injects random delay up to max seconds if config
+// randomDelayInjection flag is set (for debug), else it is a no-op.
 func (idx *indexer) injectRandomDelay(max int) {
-
 	if idx.config["debug.randomDelayInjection"].Bool() {
 		time.Sleep(time.Duration(rand.Intn(max)) * time.Second)
 	}

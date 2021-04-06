@@ -123,10 +123,11 @@ func GetRealIndexInstId(inst *common.IndexInst) common.IndexInstId {
 	return instId
 }
 
+// GetCurrentKVTs gets the current KV timestamp vector for the specified number of vBuckets.
 func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVbs int) (Timestamp, error) {
 
 	var seqnos []uint64
-	bucketn, _, _ := SplitKeyspaceId(keyspaceId)
+	bucketn := GetBucketFromKeyspaceId(keyspaceId)
 
 	fn := func(r int, err error) error {
 		if r > 0 {
@@ -143,7 +144,11 @@ func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVbs int) (Timesta
 		return err
 	}
 
-	start := time.Now()
+	verbose := logging.IsEnabled(logging.Verbose)
+	var start time.Time
+	if verbose {
+		start = time.Now()
+	}
 	rh := common.NewRetryHelper(MAX_GETSEQS_RETRIES, time.Millisecond, 1, fn)
 	err := rh.Run()
 
@@ -163,8 +168,9 @@ func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVbs int) (Timesta
 		ts[i] = seqnos[i]
 	}
 
-	elapsed := time.Since(start)
-	logging.Verbosef("Indexer::getCurrentKVTs Time Taken %v", elapsed)
+	if verbose {
+		logging.Verbosef("Indexer::getCurrentKVTs Time Taken %v", time.Since(start))
+	}
 	return ts, err
 }
 
