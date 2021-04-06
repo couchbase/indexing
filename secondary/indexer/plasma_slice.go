@@ -1337,7 +1337,10 @@ type plasmaSnapshot struct {
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
 func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+	mainSnap := mdb.mainstore.NewSnapshot()
+
 	snapInfo := info.(*plasmaSnapshotInfo)
+	snapInfo.Count = mainSnap.Count()
 
 	s := &plasmaSnapshot{slice: mdb,
 		idxDefnId:  mdb.idxDefnId,
@@ -1346,7 +1349,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		info:       snapInfo,
 		ts:         snapInfo.Timestamp(),
 		committed:  info.IsCommitted(),
-		MainSnap:   mdb.mainstore.NewSnapshot(),
+		MainSnap:   mainSnap,
 	}
 
 	if !mdb.isPrimary {
@@ -1940,7 +1943,6 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 	newSnapshotInfo := &plasmaSnapshotInfo{
 		Ts:        ts,
 		Committed: commit,
-		Count:     mdb.mainstore.ItemsCount(),
 	}
 
 	return newSnapshotInfo, nil
