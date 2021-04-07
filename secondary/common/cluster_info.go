@@ -398,6 +398,19 @@ func (c *ClusterInfoCache) FetchManifestInfo(bucketName string) error {
 	return pool.RefreshManifest(bucketName)
 }
 
+// Note: This function does not update c.pool.nodes but updates
+// c.pool.BucketMap[bucketName] and hence the bucket's nodelist it is
+// assumed that c.Fetch() is called atleast once after a new server is
+// added. So nodelist received from terseBucket endpoint will be a subset
+// of nodes received from poolsStreaming endpoint previously.
+func (c *ClusterInfoCache) FetchBucketInfo(bucketName string) error {
+	c.Lock()
+	defer c.Unlock()
+
+	pool := &c.pool
+	return pool.RefreshBucket(bucketName, false)
+}
+
 func (c *ClusterInfoCache) buildEncryptPortMapping() {
 	mapping := make(map[string]string)
 

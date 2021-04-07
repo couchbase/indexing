@@ -1340,6 +1340,12 @@ loop:
 func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, error) {
 
 	cinfo := k.cInfoClient.GetClusterInfoCache()
+
+	err := cinfo.FetchBucketInfo(bucket)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
@@ -1392,6 +1398,12 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]string, error) {
 
 	cinfo := k.cInfoClient.GetClusterInfoCache()
+
+	err := cinfo.FetchBucketInfo(bucket)
+	if err != nil {
+		return nil, err
+	}
+
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
