@@ -544,6 +544,20 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) (error, bool) 
 		return err, false
 	}
 
+	// check if ScheduleCreateToken still exists - drop index may have deleted ScheduleCreateToken
+	exists, err = mc.ScheduleCreateTokenExist(index.token.Definition.DefnId)
+	if err != nil {
+		logging.Errorf("schedIndexCreator:tryCreateIndex error (%v) in getting schedule create command token for %v",
+			err, index.token.Definition.DefnId)
+		return err, false
+	}
+
+	if !exists {
+		logging.Infof("schedIndexCreator:tryCreateIndex create command token does not exists for %v",
+			index.token.Definition.DefnId)
+		return nil, false
+	}
+
 	// Following check is an effort to check if index was created but the
 	// schedule create token was not deleted.
 	if provider.FindIndexIgnoreStatus(index.token.Definition.DefnId) != nil {
