@@ -357,19 +357,19 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dataport.bufferSize": ConfigValue{
-		10,
+		100,
 		"number of entries to buffer before flushing it, where each entry " +
 			"is for a vbucket's set of mutations that was flushed, " +
 			"by the endpoint, does not affect existing feeds.",
-		10,
+		100,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"projector.dataport.bufferTimeout": ConfigValue{
-		5,
+		1, // 1ms
 		"timeout in milliseconds, to flush vbucket-mutations from, " +
 			"endpoint, does not affect existing feeds.",
-		5,     // 5ms
+		1,     // 1ms
 		false, // mutable
 		false, // case-insensitive
 	},

@@ -325,8 +325,12 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 
 	messageCount := 0
 	flushBuffers := func() (err error) {
-		fmsg := "%v sent %v mutations to %q\n"
-		logging.Tracef(fmsg, endpoint.logPrefix, messageCount, raddr)
+
+		logging.LazyTrace(func() string {
+			fmsg := "%v sent %v mutations to %q\n"
+			return fmt.Sprintf(fmsg, endpoint.logPrefix, messageCount, raddr)
+		})
+
 		if messageCount > 0 {
 			err = buffers.flushBuffers(endpoint, endpoint.conn, endpoint.pkt)
 			if err != nil {
@@ -357,9 +361,11 @@ loop:
 				buffers.addKeyVersions(
 					data.KeyspaceId, data.Vbno, data.Vbuuid,
 					data.Opaque2, data.OSO, kv, endpoint)
-				logging.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
-					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
-					kv.Commands, buffers.raddr)
+				logging.LazyTrace(func() string {
+					return fmt.Sprintf("%v added %v keyversions <%v:%v:%v> to %q\n",
+						endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
+						kv.Commands, buffers.raddr)
+				})
 
 				messageCount++ // count queued up mutations.
 				if messageCount > endpoint.bufferSize {
