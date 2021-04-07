@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -23,6 +24,8 @@ import (
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 	Stats "github.com/couchbase/indexing/secondary/stats"
 )
+
+var transactionMutationPrefix = []byte("_txn:")
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations
 //in mutation queue. This is the only component writing to a mutation queue.
@@ -822,7 +825,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 		case common.UpdateSeqno, common.SeqnoAdvanced:
 
 			//TODO Collections remove these logs after integration testing
-			if byte(cmd) == common.UpdateSeqno && w.streamId == common.INIT_STREAM {
+			if byte(cmd) == common.UpdateSeqno && w.streamId == common.INIT_STREAM && !bytes.HasPrefix(kv.GetDocid(), transactionMutationPrefix) {
 
 				logging.Fatalf("MutationStreamReader::handleSingleKeyVersion %v %v Unexpected UpdateSeqno "+
 					"%v %v", w.streamId, keyspaceId, meta, kv.GetDocid())
