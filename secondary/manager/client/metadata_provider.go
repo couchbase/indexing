@@ -570,7 +570,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				cond.Signal()
 			}()
 
-			logging.Infof("send commit create request to watcher %v", w.getAdminAddr())
+			logging.Infof("send commit create request to watcher %v defnID %v", w.getAdminAddr(), idxDefn.DefnId)
 
 			// if there is a network partitioning between the metadata provider and indexer,
 			// makeRequest would not return until timeout.
