@@ -589,8 +589,10 @@ func (p *Pool) getTerseBucket(bucketn string) (bool, *Bucket, error) {
 }
 
 // refreshBucket only calls terseBucket endpoint to fetch the bucket info.
-func (p *Pool) refreshBucket(bucketn string) error {
-	p.BucketMap = make(map[string]Bucket)
+func (p *Pool) RefreshBucket(bucketn string, resetBucketMap bool) error {
+	if resetBucketMap {
+		p.BucketMap = make(map[string]Bucket)
+	}
 	retryCount := 0
 loop:
 	retry, nb, err := p.getTerseBucket(bucketn)
@@ -683,7 +685,7 @@ func (c *Client) GetPoolWithBucket(name string, bucketn string) (p Pool, err err
 
 	p.client = *c
 
-	err = p.refreshBucket(bucketn)
+	err = p.RefreshBucket(bucketn, true)
 	return
 }
 

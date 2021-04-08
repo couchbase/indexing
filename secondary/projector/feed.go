@@ -1619,6 +1619,13 @@ func (feed *Feed) getLocalKVAddrs(
 	if err != nil {
 		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`): %v\n"
 		logging.Errorf(fmsg, prefix, opaque, err)
+
+		// Force fetch cluster info cache incase it was not syncronized properly,
+		// so that next call to this method can succeed
+		cinfo.RUnlock()
+		cinfo.FetchWithLock()
+		cinfo.RLock()
+
 		return "", projC.ErrorClusterInfo
 	}
 	return kvaddr, nil
@@ -1631,6 +1638,21 @@ func (feed *Feed) getLocalVbuckets(
 
 	// Fetch the clusterInfoCache from clusterInfoClient at projector
 	cinfo := feed.projector.cinfoClient.GetClusterInfoCache()
+
+	err := cinfo.FetchBucketInfo(bucketn)
+	if err != nil {
+		// If bucket is deleted GetVBuckets will fail. If err is transient vbmap is refreshed.
+		fmsg := "%v ##%x cinfo.FetchBucketInfo(%s): %v\n"
+		logging.Warnf(fmsg, prefix, opaque, bucketn, err)
+
+		// Force fetch cluster info cache incase it was not syncronized properly,
+		// so that next call to this method can succeed
+		err = cinfo.FetchWithLock()
+		if err != nil {
+			return nil, projC.ErrorClusterInfo
+		}
+	}
+
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
@@ -1639,6 +1661,13 @@ func (feed *Feed) getLocalVbuckets(
 	if err != nil {
 		fmsg := "%v ##%x cinfo.GetVBuckets(%d, `%v`): %v\n"
 		logging.Errorf(fmsg, prefix, opaque, nodeID, bucketn, err)
+
+		// Force fetch cluster info cache incase it was not syncronized properly,
+		// so that next call to this method can succeed
+		cinfo.RUnlock()
+		cinfo.FetchWithLock()
+		cinfo.RLock()
+
 		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
