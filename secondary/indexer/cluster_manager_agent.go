@@ -40,6 +40,8 @@ type clustMgrAgent struct {
 	statsCount uint64
 }
 
+// NewClustMgrAgent creates a new ClustMgrAgent. This is a singleton owned by the Indexer.
+// It creates a singleton child IndexMgr object stored in the mgr field of the ClustMgrAgent.
 func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config, storageMode common.StorageMode) (
 	ClustMgrAgent, Message) {
 
@@ -695,6 +697,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 
 	return nil
 }
+
 func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
 	buckets []string, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
 

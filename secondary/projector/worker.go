@@ -634,6 +634,8 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		// ones that are being processed at worker, send UpdateSeqno
 		// message to indexer
 		// The else case should get executed only incase of MAINT_STREAM
+		// (or) when a transactional mutation is being processed in
+		// INIT_STREAM
 		if collEngines, ok := allEngines[m.CollectionID]; ok && !isTxn {
 			processMutation(collEngines)
 		} else {

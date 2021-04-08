@@ -37,11 +37,13 @@ import (
 // concrete type/struct
 //////////////////////////////////////////////////////////////
 
+// LifecycleMgr is a singleton created as a child of the IndexManager singleton (manager.go).
+// Singleton chain: Indexer -> ClustMgrAgent -> IndexManager -> LifecycleMgr
 type LifecycleMgr struct {
 	repo             *MetadataRepo
 	cinfo            *common.ClusterInfoCache
 	cinfoClient      *common.ClusterInfoClient
-	notifier         MetadataNotifier
+	notifier         MetadataNotifier // object to call Indexer to perform index DDL
 	clusterURL       string
 
 	// Request queues from and to gometa intermediary layer
@@ -65,7 +67,7 @@ type LifecycleMgr struct {
 	clientStatsRefreshInterval uint64
 
 	lastSendClientStats *client.IndexStats2
-	clientStatsMutex    sync.Mutex
+	clientStatsMutex    sync.Mutex // for lastSendClientStats
 	acceptedNames       map[string]*indexNameRequest
 	accIgnoredIds       map[common.IndexDefnId]bool
 }
@@ -122,8 +124,8 @@ type mergePartition struct {
 
 type builder struct {
 	manager   *LifecycleMgr
-	pendings  map[string][]uint64 // Map of bucket/scope/collection to list of index defns
-	notifych  chan *common.IndexDefn
+	pendings  map[string][]uint64 // map of "bucket/scope/collection" to list of index defnIds pending build
+	notifych  chan *common.IndexDefn // incoming requests to build indexes
 	batchSize int32 // max number of indexes to build per iteration of builder.run; <= 0 means unlimited
 	disable   int32
 
@@ -153,7 +155,9 @@ type updator struct {
 // Lifecycle Mgr - event processing
 //////////////////////////////////////////////////////////////
 
-func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMgr, error) {
+// NewLifecycleMgr constructs a new LifecycleMgr object. The Indexer creates a singleton
+// ClustMgrAgent which owns a singleton LifecycleMgr as a child.
+func NewLifecycleMgr(clusterURL string) (*LifecycleMgr, error) {
 
 	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "NewLifecycleMgr")
 	if err != nil {
@@ -161,9 +165,10 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 	}
 	cinfo.SetUserAgent("LifecycleMgr")
 
-	mgr := &LifecycleMgr{repo: nil,
+	mgr := &LifecycleMgr{
+		repo:                       nil,
 		cinfo:                      cinfo,
-		notifier:                   notifier,
+		notifier:                   nil, // set later via RegisterNotifier API
 		clusterURL:                 clusterURL,
 		incomings:                  make(chan *requestHolder, 100000),
 		expedites:                  make(chan *requestHolder, 100000),
@@ -219,7 +224,8 @@ func (m *LifecycleMgr) Terminate() {
 ///////////////////////////////////////////////////////////////////////////////
 
 // OnNewRequest implements a gometa CustomRequestHandler interface method.
-// It is the input side of the gometa bridge between IndexManager and LifecycleMgr.
+// It is the input side of the gometa bridge between IndexManager and LifecycleMgr
+// and will be invoked for each new request.
 //
 // This is the main event processing loop.  It is important not to having any blocking
 // call in this function (e.g. mutex).  If this function is blocked, it will also
@@ -381,8 +387,10 @@ END_BOOTSTRAP:
 	}
 }
 
-// dispatchRequest dispatches requests from the bootstrap, expidites, and incomings queues of client
-// requests, as well as the special case OPCODE_SERVICE_MAP operation.
+// dispatchRequest *synchronously* executes requests from the bootstrap, expidites, and incomings
+// queues of client requests, as well as the special case OPCODE_SERVICE_MAP operation for which
+// this function is called in its own go routine and thus effectively runs asynchronously. It then
+// constructs a response message (which may contain an error message) and queues it to outgoings channel.
 func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.ConcreteMsgFactory) {
 
 	reqId := request.request.GetReqId()
@@ -412,7 +420,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key, common.NewUserRequestContext())
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), true)
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
@@ -426,11 +434,11 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_CREATE_INDEX_REBAL:
 		err = m.handleCreateIndexScheduledBuild(key, content, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
-		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext(), false)
+		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext(), true)
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_RETRY:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), true)
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleNotifyStats(content)
 	case client.OPCODE_RESET_INDEX:
@@ -894,7 +902,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 
 		if !definitions[0].Deferred && len(definitions) == 1 && !asyncCreate {
 			// If there is only one definition, then try to do the build as well.
-			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defnId}, reqCtx, false)
+			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
@@ -1434,7 +1442,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndex() : start Index Build")
 
-			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
+			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
 				return errors.New("Failed to build index.  Index build will be retried in background.")
@@ -1812,11 +1820,11 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 
 // handleBuildIndexes handles all kinds of build index requests
 // (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
-func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext, retry bool) error {
+func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext, isRebal bool) error {
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Unable to unmarshall index list. Reason = %v", err)
+		logging.Errorf("LifecycleMgr::handleBuildIndexes: buildIndex fails. Unable to unmarshal index list. Reason = %v", err)
 		return err
 	}
 
@@ -1825,98 +1833,120 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 		input[i] = common.IndexDefnId(id)
 	}
 
-	retryList, skipList, errList := m.BuildIndexes(input, reqCtx, retry)
+	retryList, skipList, errList, errMap := m.buildIndexesLifecycleMgr(input, reqCtx, isRebal)
+	var errMsg string
+	if !isRebal {
+		if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 { // at least one reportable error
+			errMsg = "Build index fails."
 
-	if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 {
-		msg := "Build index fails."
+			if len(retryList) == 1 {
+				errMsg += fmt.Sprintf(" %v", retryList[0])
+			}
 
-		if len(retryList) == 1 {
-			msg += fmt.Sprintf(" %v", retryList[0])
+			if len(errList) == 1 {
+				errMsg += fmt.Sprintf(" %v.", errList[0])
+			}
+
+			if len(retryList) > 1 {
+				errMsg += " Some index will be retried building in the background."
+			}
+
+			if len(errList) > 1 {
+				errMsg += " Some index cannot be built due to errors."
+			}
+
+			if len(skipList) != 0 {
+				errMsg += " Some index cannot be built since it may not exist.  Please check if the list of indexes are valid."
+			}
+
+			if len(errList) > 1 || len(retryList) > 1 {
+				errMsg += " For more details, please check index status."
+			}
+
+			return errors.New(errMsg)
 		}
-
-		if len(errList) == 1 {
-			msg += fmt.Sprintf(" %v.", errList[0])
+	} else { // rebalance
+		if len(errMap) != 0 { // at least one reportable error
+			// Convert errMap to a JSON string as errMsg to preserve the instance-specific error messages.
+			// Rebalance should check for ErrMarshalFailed message before trying to unmarshal.
+			errMsgBytes, err := json.Marshal(errMap)
+			if err != nil {
+				errMsg = common.ErrMarshalFailed.Error()
+			} else {
+				errMsg = string(errMsgBytes)
+			}
+			return errors.New(errMsg)
 		}
-
-		if len(retryList) > 1 {
-			msg += " Some index will be retried building in the background."
-		}
-
-		if len(errList) > 1 {
-			msg += " Some index cannot be built due to errors."
-		}
-
-		if len(skipList) != 0 {
-			msg += " Some index cannot be built since it may not exist.  Please check if the list of indexes are valid."
-		}
-
-		if len(errList) > 1 || len(retryList) > 1 {
-			msg += " For more details, please check index status."
-		}
-
-		return errors.New(msg)
 	}
-
 	return nil
 }
 
-func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
-	reqCtx *common.MetadataRequestContext, retry bool) ([]error, []common.IndexDefnId, []error) {
+// buildIndexesLifecycleMgr builds the set of indexes specified by "defnIds". Return values:
+//   1. retryErrList -- decorated errors from failed build attempts that WILL be retried
+//   2. skipList -- index defnIds not built and not retried because their metadata could not be found
+//   3. errList -- decorated errors from failed build attempts that will NOT be retried
+//   4. errMap -- undecorated error strings by instId from Indexer for entries in retryErrList and errList;
+//      messages added here for failures in skipList since Indexer was never called for these
+//      (and the keys for these will be defnId instead of instId as we don't have the latter)
+func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
+	reqCtx *common.MetadataRequestContext, isRebal bool) (
+	retryErrList []error, skipList []common.IndexDefnId, errList []error, errMap map[common.IndexInstId]string) {
 
-	retryList := ([]*common.IndexDefn)(nil)
-	retryErrList := ([]error)(nil)
-	errList := ([]error)(nil)
-	skipList := ([]common.IndexDefnId)(nil)
-
+	errMap = make(map[common.IndexInstId]string)
+	retryList := ([]*common.IndexDefn)(nil) // retryable builds that failed; will go into notifych
 	instIdList := []common.IndexInstId(nil)
 	defnIdMap := make(map[common.IndexDefnId]bool)
 	buckets := []string(nil)
 	inst2DefnMap := make(map[common.IndexInstId]common.IndexDefnId)
 
-	for _, id := range ids {
+	for _, defnId := range defnIds {
 
-		if defnIdMap[id] {
-			logging.Infof("LifecycleMgr.handleBuildIndexes() : Duplicate index definition in the build list. Skip this index %v.", id)
+		if defnIdMap[defnId] {
+			logging.Infof("LifecycleMgr::handleBuildIndexes: Duplicate index definition in the build list. Skip this index %v.", defnId)
 			continue
 		}
-		defnIdMap[id] = true
+		defnIdMap[defnId] = true
 
-		defn, err := m.repo.GetIndexDefnById(id)
+		// Get index definition from meta_repo; failures here add entries to skipList and errMap[defnId]
+		defn, err := m.repo.GetIndexDefnById(defnId)
 		if err != nil {
-			logging.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v. Skip this index.", err)
-			skipList = append(skipList, id)
+			logging.Errorf("LifecycleMgr::handleBuildIndexes: Failed to find index definition for defnId %v, error: %v. Skipping this index.", defnId, err)
+			errMap[common.IndexInstId(defnId)] = common.ErrIndexNotFoundRebal.Error()
+			skipList = append(skipList, defnId)
 			continue
 		}
 		if defn == nil {
-			logging.Warnf("LifecycleMgr.handleBuildIndexes() : index %v does not exist. Skip this index.", id)
-			skipList = append(skipList, id)
+			logging.Warnf("LifecycleMgr::handleBuildIndexes: Index defnId %v is nil. Skipping this index.", defnId)
+			errMap[common.IndexInstId(defnId)] = common.ErrIndexNotFoundRebal.Error()
+			skipList = append(skipList, defnId)
 			continue
 		}
-
-		insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
+		insts, err := m.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId)
 		if len(insts) == 0 || err != nil {
-			logging.Errorf("LifecycleMgr.handleBuildIndexes: Failed to find index instance (%v, %v, %v, %v).  Skip this index.", defn.Name, defn.Bucket, defn.Scope, defn.Collection)
-			skipList = append(skipList, id)
+			logging.Errorf("LifecycleMgr::handleBuildIndexes: Failed to find index instances for index (%v, %v, %v, %v) for defnId %v. Skipping this index.",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, defnId)
+			errMap[common.IndexInstId(defnId)] = common.ErrIndexNotFoundRebal.Error()
+			skipList = append(skipList, defnId)
 			continue
 		}
 
 		for _, inst := range insts {
 
 			if inst.State != uint32(common.INDEX_STATE_READY) {
-				logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance (%v, %v, %v) is not in ready state.  Skip this index.",
-					defn.Name, defn.Bucket, inst.ReplicaId)
+				logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance (%v, %v, %v, %v, %v) is not in ready state.  Skip this index.",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 				continue
 			}
 
 			//Schedule the build
-			if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, id, common.IndexInstId(inst.InstId), true); err != nil {
-				msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v).",
-					defn.Name, defn.Bucket, defn.Scope, defn.Collection)
+			if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
+				msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 				logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
 			}
 
 			// Reset any previous error
-			m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
+			m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
 				inst.RState, nil, nil, -1)
 
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
@@ -1937,43 +1967,45 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 
 	if m.notifier != nil && len(instIdList) != 0 {
 
-		if errMap := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx); len(errMap) != 0 {
-			logging.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", errMap)
+		if errMap2 := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx); len(errMap2) != 0 {
+			logging.Errorf("LifecycleMgr::handleBuildIndexes: received build errors for instIds %v", errMap2)
 
-			for instId, build_err := range errMap {
+			// Handle all the errors from the build attempt(s)
+			for instId, build_err := range errMap2 {
+				errMap[instId] = build_err.Error() // add to return map
 
 				defnId, ok := inst2DefnMap[instId]
 				if !ok {
-					logging.Warnf("LifecycleMgr.handleBuildIndexes() : Cannot find index defn for index inst %v when processing build error.")
+					logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
 					continue
 				}
 
 				defn, err := m.repo.GetIndexDefnById(defnId)
 				if err != nil || defn == nil {
-					logging.Warnf("LifecycleMgr.handleBuildIndexes() : Cannot find index defn for index inst %v when processing build error.")
+					logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
 					continue
 				}
 
 				inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId, instId)
 				if inst != nil && err == nil {
-					if m.canRetryBuildError(inst, build_err, retry) {
+					if m.canRetryBuildError(inst, build_err, isRebal) {
 						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
 					}
 					m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
 						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1)
 				} else {
-					logging.Infof("LifecycleMgr.handleBuildIndexes() : Failed to persist, error in index instance (%v, %v, %v, %v, %v).",
+					logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist, error in index instance (%v, %v, %v, %v, %v).",
 						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 				}
 
-				if m.canRetryBuildError(inst, build_err, retry) {
-					logging.Infof("LifecycleMgr.handleBuildIndexes() : Encountered build error.  Retry building index (%v, %v, %v) at later time.",
-						defn.Bucket, defn.Name, inst.ReplicaId)
+				if m.canRetryBuildError(inst, build_err, isRebal) {
+					logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 
 					if inst != nil && !inst.Scheduled {
 						if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
 							msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
-								defn.Name, defn.Bucket, defn.Scope, defn.Collection, inst.ReplicaId)
+								defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 							logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
 						}
 					}
@@ -1985,16 +2017,14 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 				}
 			}
 
-			// schedule index for retry
+			// Schedule retriable failed index builds for retry
 			for _, defn := range retryList {
 				m.builder.notifych <- defn
 			}
 		}
 	}
-
-	logging.Debugf("LifecycleMgr.handleBuildIndexes() : buildIndex completes")
-
-	return retryErrList, skipList, errList
+	logging.Debugf("LifecycleMgr.buildIndexesLifecycleMgr() : buildIndexRebalance completes")
+	return retryErrList, skipList, errList, errMap
 }
 
 //-----------------------------------------------------------
@@ -2035,7 +2065,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 	// 2) Cannot create another index of the same name until all insts are marked deleted
 	// 3) Deleted instances will be removed during bootstrap
 	//
-	insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
+	insts, err := m.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -2061,7 +2091,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 	}
 
 	if notify && m.notifier != nil {
-		insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
+		insts, err := m.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 		if err != nil {
 			// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 			// proceed without letting indexer to clean up.
@@ -2810,9 +2840,7 @@ func (m *LifecycleMgr) handleResetIndexOnRollback(content []byte) error {
 
 		//notify builder
 		m.builder.notifych <- defn
-
 	}
-
 	return nil
 }
 
@@ -2959,7 +2987,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndexInstance() : start Index Build")
 
-			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
+			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
 				return errors.New("Failed to build index.  Index build will be retried in background.")
@@ -3164,7 +3192,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 		return nil
 	}
 
-	insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
+	insts, err := m.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -3455,7 +3483,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
 	defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
 
-	insts, err := m.FindAllLocalIndexInst(bucket, scope, collection, defnId)
+	insts, err := m.findAllLocalIndexInst(bucket, scope, collection, defnId)
 	if err != nil {
 		return -1, err
 	}
@@ -3470,9 +3498,11 @@ func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
 	return count, nil
 }
 
-func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, retry bool) bool {
+// canRetryBuildError determines whether a particular build error can be retried.
+// Index builds are never retried in rebalance as Rebalancer would never learn their fates.
+func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, isRebal bool) bool {
 
-	if inst == nil || inst.RState != uint32(common.REBAL_ACTIVE) {
+	if inst == nil || isRebal || inst.RState != uint32(common.REBAL_ACTIVE) {
 		return false
 	}
 
@@ -3484,7 +3514,6 @@ func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error
 	if indexerErr.Code == common.IndexNotExist ||
 		indexerErr.Code == common.InvalidBucket ||
 		indexerErr.Code == common.BucketEphemeral ||
-		(!retry && indexerErr.Code == common.RebalanceInProgress) ||
 		indexerErr.Code == common.IndexAlreadyExist ||
 		indexerErr.Code == common.IndexInvalidState {
 		return false
@@ -3613,12 +3642,12 @@ func (m *LifecycleMgr) SetScheduledFlag(bucket, scope, collection string, defnId
 	return nil
 }
 
-func (m *LifecycleMgr) FindAllLocalIndexInst(bucket, scope, collection string,
+func (m *LifecycleMgr) findAllLocalIndexInst(bucket, scope, collection string,
 	defnId common.IndexDefnId) ([]IndexInstDistribution, error) {
 
 	topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.FindAllLocalIndexInst() : Cannot read topology metadata. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.findAllLocalIndexInst() : Cannot read topology metadata. Reason = %v", err)
 		return nil, err
 	}
 	if topology == nil {
@@ -3631,7 +3660,7 @@ func (m *LifecycleMgr) FindAllLocalIndexInst(bucket, scope, collection string,
 func (m *LifecycleMgr) FindLocalIndexInst(bucket, scope, collection string,
 	defnId common.IndexDefnId, instId common.IndexInstId) (*IndexInstDistribution, error) {
 
-	insts, err := m.FindAllLocalIndexInst(bucket, scope, collection, defnId)
+	insts, err := m.findAllLocalIndexInst(bucket, scope, collection, defnId)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.FindLocalIndexInst() : Cannot read topology metadata. Reason = %v", err)
 		return nil, err
@@ -4145,7 +4174,7 @@ func (m *janitor) cleanup() {
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
-		insts, err := m.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
+		insts, err := m.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if err != nil {
 			logging.Warnf("janitor: Failed to find index instance (%v, %v) during cleanup. Internal error = %v.  Skipping.", defn.Bucket, defn.Name, err)
 			continue
@@ -4198,6 +4227,7 @@ func (m *janitor) deleteScheduleTokens(defnID common.IndexDefnId) error {
 	return nil
 }
 
+// janitor.run runs as a go routine *per request*.
 func (m *janitor) run() {
 
 	m.manager.done.Add(1)
@@ -4262,6 +4292,8 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 // corrupted.
 //////////////////////////////////////////////////////////////
 
+// builder.run runs as a go routine *per request*. It asynchronously builds indexes both from requests
+// arriving via builder.notifych and those retrieved from tokens.
 func (s *builder) run() {
 
 	s.manager.done.Add(1)
@@ -4289,19 +4321,22 @@ func (s *builder) run() {
 	//builder is called only after indexer bootstrap completes
 	s.recover()
 
-	// check if there is any pending index build every second
+	// check if there is any pending index build every tick
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case defn := <-s.notifych:
+			// This case just adds incoming defnIds to the pendings map
 			logging.Infof("builder:  Received new index build request %v.  "+
 				"Schedule to build index for bucket: %v, scope: %v, collection: %v",
 				defn.DefnId, defn.Bucket, defn.Scope, defn.Collection)
 			s.addPending(defn.Bucket, defn.Scope, defn.Collection, uint64(defn.DefnId))
 
 		case <-ticker.C:
+			// This case submits index builds for as many defnIds in the pendings map as allowed
+			// (batchSize minus number already building).
 			processed := s.processBuildToken(false)
 
 			//when building from build tokens, sleep for 30 seconds,
@@ -4392,15 +4427,17 @@ func (s *builder) getBuildList() ([]string, int32) {
 	return buildList, quota
 }
 
-func (s *builder) addPending(bucket, scope, collection string, id uint64) bool {
+// addPending adds the defnId to the list of pending index builds for the given b/s/c
+// if it was not already there. Returns true if it added id, else false (duplicate).
+func (s *builder) addPending(bucket, scope, collection string, defnId uint64) bool {
 	key := getPendingKey(bucket, scope, collection)
-	for _, id2 := range s.pendings[key] {
-		if id2 == id {
+	for _, defnId2 := range s.pendings[key] {
+		if defnId2 == defnId {
 			return false
 		}
 	}
 
-	s.pendings[key] = append(s.pendings[key], uint64(id))
+	s.pendings[key] = append(s.pendings[key], uint64(defnId))
 	return true
 }
 
@@ -4438,7 +4475,7 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 					continue
 				}
 
-				insts, err := s.manager.FindAllLocalIndexInst(bucket, scope, collection, common.IndexDefnId(defnId))
+				insts, err := s.manager.findAllLocalIndexInst(bucket, scope, collection, common.IndexDefnId(defnId))
 				if len(insts) == 0 || err != nil {
 					logging.Warnf("builder: Failed to find index instance (%v, %v).  Skipping.", defnId, bucket)
 					continue
@@ -4524,7 +4561,7 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
-		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
+		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if len(insts) == 0 || err != nil {
 			logging.Warnf("builder.getQuota: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping index for quota check",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
@@ -4568,7 +4605,7 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 			continue
 		}
 
-		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
+		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if err != nil {
 			retryList[entry] = command
 			logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
@@ -4618,7 +4655,7 @@ func (s *builder) recover() {
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
-		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
+		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if len(insts) == 0 || err != nil {
 			logging.Errorf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
@@ -4658,6 +4695,7 @@ func (s *builder) disableBuild() bool {
 	return false
 }
 
+// newBuilder constructs a new builder object. The singleton LifecycleMgr has a singleton builder as a child.
 func newBuilder(mgr *LifecycleMgr) *builder {
 
 	donech := make(chan bool)
@@ -4680,10 +4718,13 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 	return builder
 }
 
+// getPendingKey constructs a key literal "bucket/scope/collection".
 func getPendingKey(bucket, scope, collection string) string {
 	return bucket + "/" + scope + "/" + collection
 }
 
+// getCollectionFromKey extracts and returns the bucket, scope, and
+// collection from a key of the form "bucket/scope/collection".
 func getCollectionFromKey(pendingKey string) (string, string, string) {
 	input := strings.Split(pendingKey, "/")
 	if len(input) == 3 {
@@ -4705,6 +4746,7 @@ func newUpdator(mgr *LifecycleMgr) *updator {
 	return updator
 }
 
+// updator.run runs as a go routine *per request*.
 func (m *updator) run() {
 
 	m.manager.done.Add(1)

@@ -613,13 +613,17 @@ func (r *Rebalancer) dropIndexWhenReady() {
 // was created, in which case we will set the TT forward to TransferTokenCommit
 // state to abort the index move without failing the rebalance.
 func isMissingBSC(errMsg string) bool {
-	if  errMsg == common.ErrCollectionNotFound.Error() ||
-		errMsg == common.ErrScopeNotFound.Error() ||
-		errMsg == common.ErrBucketNotFound.Error() {
+	return errMsg == common.ErrCollectionNotFound.Error() ||
+		   errMsg == common.ErrScopeNotFound.Error() ||
+		   errMsg == common.ErrBucketNotFound.Error()
+}
 
-		return true
-	}
-	return false
+// isIndexNotFoundRebal checks whether a build error returned for rebalance is the
+// special error ErrIndexNotFoundRebal indicating the key returned for this error
+// is the originally submitted defnId instead of an instId because the metadata
+// for defnId could not be found. This error should only be used for this purpose.
+func isIndexNotFoundRebal(errMsg string) bool {
+	return errMsg == common.ErrIndexNotFoundRebal.Error()
 }
 
 // dropIndexWhenIdle performs the source index drop asynchronously. This is the last real
@@ -741,6 +745,7 @@ loop:
 					return
 				}
 				// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
+				l.Infof("Rebalancer::dropIndexWhenIdle Source index already dropped due to bucket/scope/collection dropped. tt %v.", tt)
 			}
 			tt.State = c.TransferTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
@@ -762,13 +767,13 @@ func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
 		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Local Meta %v %v", r.localaddr, err)
 		return true
 	}
-	status, errStr := getIndexStatusFromMeta(tt, localMeta)
+	indexState, errStr := getIndexStatusFromMeta(tt, localMeta)
 	if errStr != "" {
 		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Index Status %v %v", r.localaddr, errStr)
 		return true
 	}
 
-	if status == c.INDEX_STATE_NIL {
+	if indexState == c.INDEX_STATE_NIL {
 		//if index cannot be found in metadata, most likely its drop has already succeeded.
 		//instead of waiting indefinitely, it is better to assume success and proceed.
 		l.Infof("Rebalancer::dropIndexWhenIdle Missing Metadata for %v. Assume success and abort retry", tt.IndexInst)
@@ -847,6 +852,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 				return true
 			}
 			// Ok: failed to create dest index because b/s/c was dropped. Skip to TransferTokenCommit state.
+			l.Infof("Rebalancer::processTokenAsDest Create destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
 			tt.State = c.TransferTokenCommit
 		} else {
 			tt.State = c.TransferTokenAccepted
@@ -948,18 +954,24 @@ func (r *Rebalancer) checkIndexReadyToBuild() bool {
 
 }
 
+// buildAcceptedIndexes runs in a go routine and submits a request to Indexer to build all indexes
+// for accepted transfer tokens that are ready to start building. The builds occur asynchronously
+// in Indexer handleBuildIndex. This function calls waitForIndexBuild to wait for them to finish.
 func (r *Rebalancer) buildAcceptedIndexes() {
 
 	defer r.wg.Done()
 
-	var idList client.IndexIdList
+	var idList client.IndexIdList // defnIds of the indexes to build
+	ttMap := make(map[string]*common.TransferToken) // ttids to tts of the building indexes
 	var errStr string
 	r.mu.Lock()
-	for _, tt := range r.acceptedTokens {
+	for ttid, tt := range r.acceptedTokens {
 		if tt.State != c.TransferTokenReady &&
 			tt.State != c.TransferTokenCommit &&
 			tt.State != c.TransferTokenMerge {
+
 			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
+			ttMap[ttid] = tt
 		}
 	}
 	r.mu.Unlock()
@@ -970,7 +982,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	}
 
 	response := new(manager.IndexResponse)
-	url := "/buildIndex"
+	url := "/buildIndexRebalance"
 
 	ir := manager.IndexRequest{IndexIds: idList}
 	body, _ := json.Marshal(&ir)
@@ -990,17 +1002,61 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		goto cleanup
 	}
 	if response.Code == manager.RESP_ERROR {
-		// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
+		// Error from index processing code. For rebalance this returns either ErrMarshalFailed.Error
+		// or a JSON string of a marshaled map[IndexInstId]string of error messages per instance ID. The
+		// keys for any entries having magic error string ErrIndexNotFoundRebal.Error are the submitted
+		// defnIds instead of instIds, as the metadata could not be found for these.
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error cloning index %v %v", r.localaddr+url, response.Error)
 		errStr = response.Error
-		goto cleanup
+		if errStr == common.ErrMarshalFailed.Error() { // no detailed error info available
+			goto cleanup
+		}
+
+		// Unmarshal the detailed error info
+		var errMap map[c.IndexInstId]string
+		err = json.Unmarshal([]byte(errStr), &errMap)
+		if err != nil {
+			errStr = c.ErrUnmarshalFailed.Error()
+			goto cleanup
+		}
+
+		// Deal with the individual errors
+		for id, errStr := range errMap {
+			if isMissingBSC(errStr) {
+				// id is an instId. Move the TT for this instId to TransferTokenCommit
+				r.mu.Lock()
+				for ttid, tt := range ttMap {
+					if id == tt.IndexInst.InstId {
+						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+						break
+					}
+				}
+				r.mu.Unlock()
+			} else if isIndexNotFoundRebal(errStr) {
+				// id is a defnId. Move all TTs for this defnId to TransferTokenCommit
+				defnId := c.IndexDefnId(id)
+				r.mu.Lock()
+				for ttid, tt := range ttMap {
+					if defnId == tt.IndexInst.Defn.DefnId {
+						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", tt)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+					}
+				}
+				r.mu.Unlock()
+			} else {
+				goto cleanup // unrecoverable error
+			}
+		}
 	}
 
 	r.waitForIndexBuild()
 
 	return
 
-cleanup:
+cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 	r.mu.Lock()
 	for ttid, tt := range r.acceptedTokens {
 		r.setTransferTokenError(ttid, tt, errStr)
@@ -1009,14 +1065,12 @@ cleanup:
 	return
 }
 
-// waitForIndexBuild waits for index build to complete. Transfer token state changes
-// and some processing are delegated to tokenMergeOrReady.
+// waitForIndexBuild waits for all currently running rebalamnce-initiated index
+// builds to complete. Transfer token state changes and some processing are
+// delegated to tokenMergeOrReady.
 func (r *Rebalancer) waitForIndexBuild() {
 
-	allTokensReady := true
-
 	buildStartTime := time.Now()
-
 	cfg := r.config.Load()
 	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
 
@@ -1063,7 +1117,7 @@ loop:
 			}
 
 			r.mu.Lock()
-			allTokensReady = true
+			allTokensReady := true
 			for ttid, tt := range r.acceptedTokens {
 				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 					continue
@@ -1074,8 +1128,13 @@ loop:
 					continue
 				}
 
-				status, err := getIndexStatusFromMeta(tt, localMeta)
-				if err != "" {
+				indexState, err := getIndexStatusFromMeta(tt, localMeta)
+				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					l.Infof("Rebalancer::waitForIndexBuild Could not get index status; bucket/scope/collection likely dropped. Skipping. indexState %v, err %v, tt %v.",
+						indexState, err, tt)
+					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+					setTransferTokenInMetakv(ttid, tt)
+				} else if err != "" {
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
 					break
 				}
@@ -1108,9 +1167,7 @@ loop:
 				}
 
 				processing_rate := num_processed / elapsed
-
 				remainingBuildTime := maxRemainingBuildTime
-
 				if processing_rate != 0 {
 					remainingBuildTime = uint64(tot_remaining / processing_rate)
 				}
@@ -1121,11 +1178,10 @@ loop:
 
 				l.Infof("Rebalancer::waitForIndexBuild Index: %v:%v:%v:%v State: %v"+
 					" Pending: %v EstTime: %v Partitions: %v Destination: %v",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name, c.IndexState(status),
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 					tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 
-				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-
+				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 					r.tokenMergeOrReady(ttid, tt)
 				}
 			}
@@ -1141,7 +1197,6 @@ loop:
 } // waitForIndexBuild
 
 func (r *Rebalancer) checkIndexReadyToDrop() bool {
-
 	return atomic.LoadInt32(&r.pendingBuild) == 0
 }
 
@@ -1487,6 +1542,11 @@ func (r *Rebalancer) checkDDLRunning() (bool, error) {
 	return false, nil
 }
 
+// getIndexStatusFromMeta gets the index state and error message, if present, for the
+// index referenced by a transfer token from index metadata (topology tree). It returns
+// state INDEX_STATE_NIL if the metadata is not found (e.g. if the index has been
+// dropped). If an error message is returned with a state other than INDEX_STATE_NIL,
+// the metadata was found and the message is from a field in the topology tree itself.
 func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
 
 	inst := tt.IndexInst
@@ -1497,12 +1557,12 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 			inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	}
 
-	state, msg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)
+	state, errMsg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)
 	if state == c.INDEX_STATE_NIL && tt.RealInstId != 0 {
 		return topology.GetStatusByInst(inst.Defn.DefnId, tt.RealInstId)
 	}
 
-	return state, msg
+	return state, errMsg
 }
 
 // getDestNode returns the key of the partitionMap entry whose value

@@ -195,6 +195,7 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.gogc"]; ok {
 		gogc := cv.Int()
 		oldGogc := debug.SetGCPercent(gogc)
+		memmanager.SetDefaultGCPercent(gogc)
 		fmsg := "%v changing GOGC percentage from %v to %v\n"
 		logging.Infof(fmsg, p.logPrefix, oldGogc, gogc)
 	}
@@ -224,6 +225,10 @@ func (p *Projector) ResetConfig(config c.Config) {
 
 	if cv, ok := config["projector.rssThreshold"]; ok {
 		memmanager.SetRSSThreshold(cv.Float64())
+	}
+
+	if cv, ok := config["projector.relaxGCThreshold"]; ok {
+		memmanager.SetRelaxGCThreshold(cv.Float64())
 	}
 	p.config = p.config.Override(config)
 

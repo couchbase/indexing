@@ -14,6 +14,11 @@ import (
 
 var defaultUsedMemThreshold = 0.5
 var defaultRSSThreshold = 0.1
+var defaultRelaxGCThreshold = 0.01
+
+// The configured value is updated based on projector.gogc config
+// Defaulted at 100%
+var configuredGCPercent uint64 = 100
 
 var memMgr *MemManager // Global variable. Initialized by projector
 
@@ -40,10 +45,15 @@ type MemManager struct {
 	recentSamples *common.Sample
 	olderSamples  *common.Sample
 
+	// For adjusting GC percent when RSS is too low
+	currGCPercent      uint64
+	lastGCAdjustedTime time.Time
+
 	// Config related
 	statsCollectionInterval int64
 	usedMemThreshold        uint64
 	rssThreshold            uint64
+	relaxGCThreshold        uint64
 
 	stats *system.SystemStats
 }
@@ -72,6 +82,9 @@ func Init(statsCollectionInterval int64) error {
 	SetStatsCollectionInterval(statsCollectionInterval)
 	SetUsedMemThreshold(defaultUsedMemThreshold)
 	SetRSSThreshold(defaultRSSThreshold)
+	SetRelaxGCThreshold(defaultRelaxGCThreshold)
+
+	memMgr.currGCPercent = configuredGCPercent
 
 	// start stats collection
 	go memMgr.runStatsCollection()
@@ -112,6 +125,8 @@ func (memMgr *MemManager) monitorMemUsage() {
 			}
 
 			lastCollectionTime = time.Now()
+
+			memMgr.adjustGCPercent()
 		}
 	}
 }
@@ -164,6 +179,55 @@ func (memMgr *MemManager) thresholdExceeded(memRSS, memFree, memTotal uint64) bo
 	return memUsed > uint64(usedMemThreshold*float64(memTotal)) && memRSS > uint64(rssThreshold*float64(memTotal))
 }
 
+// This method will relax GC in those cases where the projector RSS
+// is very less consistently and GC has been running frequently due
+// to the garbage generated.
+//
+// This method is very pessimistic when adjusting GC percent. It will
+// increase GC percent only when the maximum value of RSS observed
+// was less than thresholds during the last 60 seconds. Even if a
+// single spike in RSS with RSS >2% is observed, this method would
+// re-adjust the GC to the default value of 100%
+func (memMgr *MemManager) adjustGCPercent() {
+	// Get max value from olderSamples
+	max := memMgr.olderSamples.Max()
+	lowThreshold := GetRelaxGCThreshold()
+	gcConfigured := atomic.LoadUint64(&configuredGCPercent)
+
+	// Tuning of GC percent is disabled. Reset to default and return
+	if lowThreshold == 0 {
+		if atomic.LoadUint64(&memMgr.currGCPercent) != gcConfigured {
+			debug.SetGCPercent(int(gcConfigured))
+			atomic.StoreUint64(&memMgr.currGCPercent, uint64(gcConfigured))
+			logging.Infof("MemMgr::adjustGCPercent Setting projector GC percent at: %v", gcConfigured)
+		}
+		return
+	}
+
+	gcPercent := GetGCPercent() // Current GC percent
+
+	// This check happens every 60 seconds
+	if (time.Since(memMgr.lastGCAdjustedTime) > 60*time.Second) && (max < lowThreshold*float64(memMgr.memTotal)) {
+		switch {
+		case max < (lowThreshold * float64(memMgr.memTotal) / 4): // 0.25% * lowThreshold of memTotal
+			gcPercent = 4 * gcConfigured
+		case max < (lowThreshold * float64(memMgr.memTotal) / 2): // 0.5% * lowThreshold of memTotal
+			gcPercent = 3 * gcConfigured
+		case max < lowThreshold*float64(memMgr.memTotal): // 1 % of memTotal
+			gcPercent = 2 * gcConfigured
+		}
+		memMgr.lastGCAdjustedTime = time.Now()
+	} else if max > 2*lowThreshold*float64(memMgr.memTotal) { // This check happens every 5 sec
+		gcPercent = gcConfigured // Reset to configured value
+	}
+
+	if atomic.LoadUint64(&memMgr.currGCPercent) != uint64(gcPercent) {
+		debug.SetGCPercent(int(gcPercent))
+		atomic.StoreUint64(&memMgr.currGCPercent, uint64(gcPercent))
+		logging.Infof("MemMgr::adjustGCPercent Setting projector GC percent at: %v", gcPercent)
+	}
+}
+
 func GetStatsCollectionInterval() int64 {
 	return atomic.LoadInt64(&memMgr.statsCollectionInterval)
 }
@@ -192,5 +256,24 @@ func GetRSSThreshold() float64 {
 func SetRSSThreshold(f float64) {
 	val := math.Float64bits(f)
 	atomic.StoreUint64(&memMgr.rssThreshold, val)
-	logging.Infof("MemManager::SetStatsCollectionInterval Updating RSS threshold to: %v", f)
+	logging.Infof("MemManager::SetRSSThreshold Updating RSS threshold to: %v", f)
+}
+
+func SetRelaxGCThreshold(f float64) {
+	val := math.Float64bits(f)
+	atomic.StoreUint64(&memMgr.relaxGCThreshold, val)
+	logging.Infof("MemManager::SetRelaxGCThreshold Updating Relax GC threshold to: %v", f)
+}
+
+func GetRelaxGCThreshold() float64 {
+	val := atomic.LoadUint64(&memMgr.relaxGCThreshold)
+	return math.Float64frombits(val)
+}
+
+func GetGCPercent() uint64 {
+	return atomic.LoadUint64(&memMgr.currGCPercent)
+}
+
+func SetDefaultGCPercent(gc int) {
+	atomic.StoreUint64(&configuredGCPercent, uint64(gc))
 }

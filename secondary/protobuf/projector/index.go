@@ -242,7 +242,7 @@ func (ie *IndexEvaluator) UpdateSeqnoData(
 	opaque2 uint64) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
-	kv := c.NewKeyVersions(seqno, nil, 1, 0)
+	kv := c.NewKeyVersions(seqno, m.Key, 1, 0)
 	kv.AddUpdateSeqno()
 	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
 }

@@ -482,14 +482,16 @@ func (s StreamId) String() string {
 	}
 }
 
+// RebalanceState (or "RState") gives the state of an *index instance*, NOT the state of rebalance,
+// which may not even be going on. Instances whose RebalanceState is something *other than*
+// REBAL_ACTIVE are currently involved in a rebalance.
 type RebalanceState int
-
 const (
-	REBAL_ACTIVE RebalanceState = iota
-	REBAL_PENDING
-	REBAL_NIL
-	REBAL_MERGED
-	REBAL_PENDING_DELETE
+	REBAL_ACTIVE RebalanceState = iota // 0 = instance is active (normal state); rebalance is NOT manipulating this inst
+	REBAL_PENDING // rebalance instance move not yet complete
+	REBAL_NIL // rebalance action canceled but instance not returned to active state
+	REBAL_MERGED // instance is a proxy that has already been merged to the real instance
+	REBAL_PENDING_DELETE // tombstone for deleted partition
 )
 
 func (s RebalanceState) String() string {

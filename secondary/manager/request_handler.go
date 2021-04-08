@@ -266,7 +266,7 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		mux.HandleFunc("/createIndex", handlerContext.createIndexRequest)
 		mux.HandleFunc("/createIndexRebalance", handlerContext.createIndexRequestRebalance)
 		mux.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
-		mux.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
+		mux.HandleFunc("/buildIndexRebalance", handlerContext.buildIndexRequestRebalance)
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
 		mux.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
 		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
@@ -430,7 +430,39 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	}
 }
 
-func (m *requestHandlerContext) buildIndexRequest(w http.ResponseWriter, r *http.Request) {
+//
+// buildIndexRequestRebalance handles the /buildIndexRebalance REST endpoint used only by Rebalancer via
+// local REST call, which can specify multiple indexes to build. The builds happen asynchronously under
+// Indexer.handleBuildIndex, which returns per-instance error information in the form of an error map
+// that is then lightly edited by LifecycleMgr.buildIndexesLifecycleMgr and received and processed by
+// Rebalancer.buildAcceptedIndexes.
+//
+// The full call chain of the request processing is long and hard to deduce from code. At time of writing it was:
+//   rebalancer.go
+//     processTokenAsDest
+//     go buildAcceptedIndexes
+//       REST call POST to /buildIndexRebalance
+//       waitForIndexBuild
+//   request_handler.go
+//     buildIndexRequestRebalance -- this function
+//   manager.go
+//     HandleBuildIndexRebalDDL
+//   gometa/server/embeddedServer.go
+//     MakeRequest -- OPCODE_BUILD_INDEX_REBAL (part of RequestServer interface defined by manager.go that
+//       gometa/server/embeddedServer.go implements)
+//   lifecycle.go
+//     OnNewRequest (impl of a method of gometa/protocol/common.go CustomRequestHandler iface) -- add to incomings queue
+//     go processRequest -- pulls from incomings queue
+//     dispatchRequest -- eventually puts the return message into outgoings queue
+//     handleBuildIndexes
+//     buildIndexesLifecycleMgr
+//   cluster_manager_agent.go
+//     OnIndexBuild -- sends MsgBuildIndex to Indexer
+//   indexer.go
+//     handleAdminMsgs -- receives MsgBuildIndex
+//     handleBuildIndex -- sends MsgBuildIndexResponse containing the error map back to cluster_manager_agent OnIndexBuild
+//
+func (m *requestHandlerContext) buildIndexRequestRebalance(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := doAuth(r, w)
 	if !ok {
@@ -451,7 +483,7 @@ func (m *requestHandlerContext) buildIndexRequest(w http.ResponseWriter, r *http
 
 	// call the index manager to handle the DDL
 	indexIds := request.IndexIds
-	if err := m.mgr.HandleBuildIndexDDL(indexIds); err == nil {
+	if err := m.mgr.HandleBuildIndexRebalDDL(indexIds); err == nil {
 		// No error, return success
 		sendIndexResponse(w)
 	} else {

@@ -612,9 +612,10 @@ func (t *IndexTopology) ChangeStateForIndexInst(defnId common.IndexDefnId, instI
 	}
 }
 
-//
-// Update Index Status on instance
-//
+// GetStatusByInst gets the index instance state and error message, if present, from
+// index metadata (topology tree). It returns state INDEX_STATE_NIL if the metadata
+// is not found (e.g. if the instance has been dropped). Any error message returned
+// is from the instance's entry in the topology tree itself.
 func (t *IndexTopology) GetStatusByInst(defnId common.IndexDefnId, instId common.IndexInstId) (common.IndexState, string) {
 
 	for i, _ := range t.Definitions {
