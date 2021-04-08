@@ -2980,6 +2980,15 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 			idx.setRetryTsForRecovery(streamId, keyspaceId, retryTs)
 		}
 
+		//if there is any pending build done for this stream/keyspace,
+		//that needs to be cleared. As part of recovery stream will be restarted
+		//and build done will be evaluated again.
+		if _, ok := idx.streamKeyspaceIdPendBuildDone[streamId][keyspaceId]; ok {
+			logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v SessionId %v. "+
+				"Clear pendBuildDone due to recovery.", streamId, keyspaceId, sessionId)
+			delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+		}
+
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_PREPARE_RECOVERY)
 
 		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v State %v "+
