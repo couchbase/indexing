@@ -468,19 +468,7 @@ func (m *IndexManager) HandleBuildIndexRebalDDL(indexIds client.IndexIdList) err
 	content, _ := client.MarshallIndexIdList(&indexIds)
 	//TODO handle err
 
-	/*
-		if USE_MASTER_REPO {
-
-			if !m.coordinator.NewRequest(uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
-				// TODO: double check if it exists in the dictionary
-				return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
-					fmt.Sprintf("Fail to complete processing build index statement for index id = '%d'", defnId))
-			}
-		} else {
-	*/
 	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_REBAL, key, content)
-
-	return nil
 }
 
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
