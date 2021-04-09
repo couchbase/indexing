@@ -17,10 +17,11 @@ package common
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/couchbase/cbauth/metakv"
-	"github.com/couchbase/indexing/secondary/logging"
 	"strconv"
 	"strings"
+
+	"github.com/couchbase/cbauth/metakv"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const (

@@ -201,12 +201,8 @@ func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID, scopeId, collectio
 func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
 	id := fmt.Sprintf("%v", defnId)
-	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath + id)
-	if err != nil {
-		return false, err
-	}
-
-	return len(paths) != 0, nil
+	commandToken := &CreateCommandToken{}
+	return c.MetakvBigValueGet(CreateDDLCommandTokenPath+id, commandToken)
 }
 
 //
@@ -320,6 +316,7 @@ func ListAndFetchCreateCommandToken(defnId c.IndexDefnId) ([]*CreateCommandToken
 
 	var result []*CreateCommandToken
 	if len(paths) > 0 {
+
 		result = make([]*CreateCommandToken, 0, len(paths))
 		for _, path := range paths {
 			token := &CreateCommandToken{}
