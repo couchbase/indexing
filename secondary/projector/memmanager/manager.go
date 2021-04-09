@@ -192,6 +192,10 @@ func (memMgr *MemManager) adjustGCPercent() {
 	// Get max value from olderSamples
 	max := memMgr.olderSamples.Max()
 	lowThreshold := GetRelaxGCThreshold()
+
+	lowThrMem := math.Max(200*1024*1024, lowThreshold*float64(memMgr.memTotal))
+	highThrMem := math.Max(400*1024*1024, 2*lowThreshold*float64(memMgr.memTotal))
+
 	gcConfigured := atomic.LoadUint64(&configuredGCPercent)
 
 	// Tuning of GC percent is disabled. Reset to default and return
@@ -207,17 +211,17 @@ func (memMgr *MemManager) adjustGCPercent() {
 	gcPercent := GetGCPercent() // Current GC percent
 
 	// This check happens every 60 seconds
-	if (time.Since(memMgr.lastGCAdjustedTime) > 60*time.Second) && (max < lowThreshold*float64(memMgr.memTotal)) {
+	if (time.Since(memMgr.lastGCAdjustedTime) > 60*time.Second) && (max < lowThrMem) {
 		switch {
-		case max < (lowThreshold * float64(memMgr.memTotal) / 4): // 0.25% * lowThreshold of memTotal
+		case max < (lowThrMem / 4):
 			gcPercent = 4 * gcConfigured
-		case max < (lowThreshold * float64(memMgr.memTotal) / 2): // 0.5% * lowThreshold of memTotal
+		case max < (lowThrMem / 2):
 			gcPercent = 3 * gcConfigured
-		case max < lowThreshold*float64(memMgr.memTotal): // 1 % of memTotal
+		case max < lowThrMem:
 			gcPercent = 2 * gcConfigured
 		}
 		memMgr.lastGCAdjustedTime = time.Now()
-	} else if max > 2*lowThreshold*float64(memMgr.memTotal) { // This check happens every 5 sec
+	} else if max > highThrMem { // This check happens every 5 sec
 		gcPercent = gcConfigured // Reset to configured value
 	}
 
