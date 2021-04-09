@@ -1660,7 +1660,7 @@ func getLocalStats(addr string, partitioned bool) (*c.Statistics, error) {
 
 func getLocalMeta(addr string) (*manager.LocalIndexMetadata, error) {
 
-	url := "/getLocalIndexMetadata"
+	url := "/getLocalIndexMetadata?useETag=false"
 	resp, err := getWithAuth(addr + url)
 	if err != nil {
 		l.Errorf("Rebalancer::getLocalMeta Error getting local metadata %v %v", addr+url, err)
