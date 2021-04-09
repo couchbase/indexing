@@ -10,6 +10,7 @@ import (
 	"github.com/couchbase/indexing/secondary/dataport"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/projector/memmanager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
@@ -422,8 +423,8 @@ func (sm *statsManager) logger() {
 				}
 			}
 			logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,"+
-				"\"gc_percent\":%v}", memmanager.GetCpuPercent(), memmanager.GetRSS(), memmanager.GetMemFree(),
-				memmanager.GetMemTotal(), memmanager.GetGCPercent())
+				"\"gc_percent\":%v, \"throttle_level\":%v}", memmanager.GetCpuPercent(), memmanager.GetRSS(), memmanager.GetMemFree(),
+				memmanager.GetMemTotal(), memmanager.GetGCPercent(), memThrottler.GetThrottleLevel())
 		}
 		if atomic.LoadInt32(&sm.stopLogger) == 1 {
 			return

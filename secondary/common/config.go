@@ -445,6 +445,22 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.memThrottle": ConfigValue{
+		true,
+		"Slows down ingestion from DCP feed if the projector " +
+			"RSS goes beyond projector.rssThreshold value. Throttles " +
+			"both INIT and MAINT streams by default",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.maintStreamMemThrottle": ConfigValue{
+		true,
+		"When set to false, disables the throttling on MAINT_STREAM",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent
 		"set GOGC percent",

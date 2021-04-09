@@ -21,6 +21,7 @@ import (
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	projC "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/projector/memmanager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/security"
@@ -230,6 +231,15 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.relaxGCThreshold"]; ok {
 		memmanager.SetRelaxGCThreshold(cv.Float64())
 	}
+
+	if cv, ok := config["projector.memThrottle"]; ok {
+		memThrottler.SetMemThrottle(cv.Bool())
+	}
+
+	if cv, ok := config["projector.maintStreamMemThrottle"]; ok {
+		memThrottler.SetMaintStreamMemThrottle(cv.Bool())
+	}
+
 	p.config = p.config.Override(config)
 
 	// CPU-profiling
