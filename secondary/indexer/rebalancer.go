@@ -48,9 +48,9 @@ type Rebalancer struct {
 	transferTokens map[string]*c.TransferToken // all TTs for this rebalance
 	acceptedTokens map[string]*c.TransferToken // accepted TTs
 	sourceTokens   map[string]*c.TransferToken // TTs for which a source index exists (move case)
-	mu sync.RWMutex // for transferTokens, acceptedTokens, sourceTokens, currBatchTokens
+	mu             sync.RWMutex                // for transferTokens, acceptedTokens, sourceTokens, currBatchTokens
 
-	currBatchTokens      []string // ttids of all TTs in current batch
+	currBatchTokens      []string   // ttids of all TTs in current batch
 	transferTokenBatches [][]string // slice of all TT batches (2nd dimension is ttid)
 
 	drop         map[string]bool
@@ -68,7 +68,7 @@ type Rebalancer struct {
 	isDone int32
 
 	metakvCancel chan struct{} // close this to end metakv.RunObserveChildren callbacks
-	muCleanup sync.RWMutex // for metakvCancel
+	muCleanup    sync.RWMutex  // for metakvCancel
 
 	supvMsgch MsgChannel
 
@@ -614,8 +614,8 @@ func (r *Rebalancer) dropIndexWhenReady() {
 // state to abort the index move without failing the rebalance.
 func isMissingBSC(errMsg string) bool {
 	return errMsg == common.ErrCollectionNotFound.Error() ||
-		   errMsg == common.ErrScopeNotFound.Error() ||
-		   errMsg == common.ErrBucketNotFound.Error()
+		errMsg == common.ErrScopeNotFound.Error() ||
+		errMsg == common.ErrBucketNotFound.Error()
 }
 
 // isIndexNotFoundRebal checks whether a build error returned for rebalance is the
@@ -961,7 +961,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 
 	defer r.wg.Done()
 
-	var idList client.IndexIdList // defnIds of the indexes to build
+	var idList client.IndexIdList                   // defnIds of the indexes to build
 	ttMap := make(map[string]*common.TransferToken) // ttids to tts of the building indexes
 	var errStr string
 	r.mu.Lock()
@@ -1052,7 +1052,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		}
 	}
 
-	r.waitForIndexBuild()
+	r.waitForIndexBuild(ttMap)
 
 	return
 
@@ -1068,7 +1068,7 @@ cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 // waitForIndexBuild waits for all currently running rebalamnce-initiated index
 // builds to complete. Transfer token state changes and some processing are
 // delegated to tokenMergeOrReady.
-func (r *Rebalancer) waitForIndexBuild() {
+func (r *Rebalancer) waitForIndexBuild(buildTokens map[string]*common.TransferToken) {
 
 	buildStartTime := time.Now()
 	cfg := r.config.Load()
@@ -1118,7 +1118,7 @@ loop:
 
 			r.mu.Lock()
 			allTokensReady := true
-			for ttid, tt := range r.acceptedTokens {
+			for ttid, tt := range buildTokens {
 				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 					continue
 				}
