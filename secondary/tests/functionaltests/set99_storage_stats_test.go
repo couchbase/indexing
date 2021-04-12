@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,43 +42,6 @@ func waitTillIndexBecomesActive(indexName, bucketName, indexManagementAddress st
 
 		return nil
 	}
-}
-
-func verifyDeletedPath(Pth string) error {
-	var err error
-	_, errStat := os.Stat(Pth)
-	if errStat == nil {
-		err = errors.New("os.Stat was successful for deleted directory")
-		return err
-	}
-
-	if !os.IsNotExist(errStat) {
-		errMsg := fmt.Sprintf("errStat = %v", errStat)
-		err = errors.New("Directory may exists even if it was expected to be deleted." + errMsg)
-		return err
-	}
-
-	return nil
-}
-
-func verifyPathExists(Pth string) (bool, error) {
-	_, errStat := os.Stat(Pth)
-	if errStat == nil {
-		return true, nil
-	}
-
-	if os.IsNotExist(errStat) {
-		return false, nil
-	}
-
-	return false, errStat
-}
-
-func forceKillIndexer() {
-	// restart the indexer
-	fmt.Println("Restarting indexer process ...")
-	tc.KillIndexer()
-	time.Sleep(20 * time.Second)
 }
 
 func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {

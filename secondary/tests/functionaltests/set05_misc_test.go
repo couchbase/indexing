@@ -3,7 +3,6 @@ package functionaltests
 import (
 	"errors"
 	"log"
-	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,9 +14,6 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 )
-
-var seed int
-var proddir, bagdir string
 
 // After bucket delete:-
 // 1) query for old index before loading bucket
@@ -607,61 +603,6 @@ func generateLargePrimaryKeyDocs(numDocs int, fieldName string) tc.KeyValues {
 		docs[str] = v
 	}
 	return largePrimaryKeyDocs
-}
-
-func randomBool() bool {
-	rand.Seed(time.Now().UnixNano())
-	switch randomNum(0, 2) {
-	case 0:
-		return false
-	case 1:
-		return true
-	}
-	return true
-}
-
-func randomNum(min, max float64) int {
-	rand.Seed(time.Now().UnixNano())
-	return int(rand.Float64()*(max-min) + min)
-}
-
-func randString(n int) string {
-	chars := []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,#")
-	rand.Seed(time.Now().UnixNano())
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
-	}
-	return string(b)
-}
-
-func randSpecialString(n int) string {
-	chars := []rune("0123vwxyz€ƒ†Š™š£§©®¶µß,#")
-	rand.Seed(time.Now().UnixNano())
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
-	}
-	return string(b)
-}
-
-func random_char() string {
-	chars := []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	return string(chars[rand.Intn(len(chars))])
-}
-
-// Copy newDocs to docs
-func UpdateKVDocs(newDocs, docs tc.KeyValues) {
-	for k, v := range newDocs {
-		docs[k] = v
-	}
-}
-
-func generateDocs(numDocs int, prodFileName string) tc.KeyValues {
-	seed++
-	prodfile := filepath.Join(proddir, prodFileName)
-	docsToCreate := GenerateJsons(numDocs, seed, prodfile, bagdir)
-	return docsToCreate
 }
 
 func DeleteFieldMutations(num int, field string) {
