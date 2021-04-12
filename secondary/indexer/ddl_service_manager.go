@@ -1754,7 +1754,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 			if err == nil {
 
-				resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
+				resp, err := getWithAuth(addr + "/getLocalIndexMetadata?useETag=false")
 				if err != nil {
 					continue
 				}
