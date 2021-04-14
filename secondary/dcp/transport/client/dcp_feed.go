@@ -72,6 +72,7 @@ type DcpFeed struct {
 	// Collections
 	collectionsAware bool
 	osoSnapshot      bool
+	isIncrBuild      bool // Set to true for Incremental builds (only from 7.0 cluster version)
 	// stats
 	toAckBytes         uint32    // bytes client has read
 	maxAckBytes        uint32    // Max buffer control ack bytes
@@ -132,6 +133,7 @@ func NewDcpFeed(
 
 	if _, ok := config["collectionsAware"]; ok {
 		feed.collectionsAware = config["collectionsAware"].(bool)
+		feed.isIncrBuild = feed.collectionsAware
 	}
 
 	if _, ok := config["osoSnapshot"]; ok {
@@ -959,11 +961,13 @@ func (feed *DcpFeed) doDcpRequestStream(
 			requestValue.ManifestUID = manifestUID
 			requestValue.ScopeID = scopeId
 			requestValue.CollectionIDs = collectionIds
+			feed.isIncrBuild = feed.isIncrBuild && false
 		} else {
 			// ScopeId being empty and no collectionId specified will
 			// open the stream for entire bucket. For such a
 			// scenario, only manifestUID is required to be specified
 			// in request body.
+			feed.isIncrBuild = feed.isIncrBuild && true
 			requestValue.ManifestUID = manifestUID
 		}
 		body, _ := json.Marshal(requestValue)
@@ -1725,9 +1729,9 @@ loop:
 		// This is done to make sure that the downstream would eventually consume all the
 		// mutations and the projector process RSS will eventually come down. Once the RSS
 		// comes below 10% of total system memory, then the feed would not throttle.
-
-		// TODO: Update the function argument to true for MAINT_STREAM
-		memThrottler.DoThrottle(false)
+		if feed.collectionsAware {
+			memThrottler.DoThrottle(feed.isIncrBuild)
+		}
 
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
