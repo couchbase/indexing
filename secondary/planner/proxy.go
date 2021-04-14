@@ -1056,8 +1056,8 @@ func convertError(r *http.Response) error {
 			defer r.Body.Close()
 
 			buf := new(bytes.Buffer)
-			if cause, err := buf.ReadFrom(r.Body); err == nil {
-				return fmt.Errorf("response status:%v cause:%v", r.StatusCode, string(cause))
+			if _, err := buf.ReadFrom(r.Body); err == nil {
+				return fmt.Errorf("response status:%v cause:%v", r.StatusCode, string(buf.Bytes()))
 			}
 		}
 		return fmt.Errorf("response status:%v cause:Unknown", r.StatusCode)
