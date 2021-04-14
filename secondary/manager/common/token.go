@@ -308,17 +308,25 @@ func ListCreateCommandToken() ([]string, error) {
 
 func ListAndFetchCreateCommandToken(defnId c.IndexDefnId) ([]*CreateCommandToken, error) {
 
-	id := fmt.Sprintf("%v", defnId)
-	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath + id)
+	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var result []*CreateCommandToken
 	if len(paths) > 0 {
-
 		result = make([]*CreateCommandToken, 0, len(paths))
 		for _, path := range paths {
+			defnId2, _, err := GetDefnIdFromCreateCommandTokenPath(path)
+			if err != nil {
+				logging.Errorf("ListAndFetchCreateCommandToken: Error parsing definationid and requestid for path %v, err %v", path, err)
+				return nil, err
+			}
+
+			if defnId2 != defnId {
+				continue
+			}
+
 			token := &CreateCommandToken{}
 			exists, err := c.MetakvBigValueGet(path, token)
 			if err != nil {
@@ -331,7 +339,6 @@ func ListAndFetchCreateCommandToken(defnId c.IndexDefnId) ([]*CreateCommandToken
 			}
 		}
 	}
-
 	return result, nil
 }
 
