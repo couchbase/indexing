@@ -228,6 +228,10 @@ func (p *Projector) ResetConfig(config c.Config) {
 		memmanager.SetRSSThreshold(cv.Float64())
 	}
 
+	if cv, ok := config["projector.forceGCOnThreshold"]; ok {
+		memmanager.SetForceGCOnThreshold(cv.Bool())
+	}
+
 	if cv, ok := config["projector.relaxGCThreshold"]; ok {
 		memmanager.SetRelaxGCThreshold(cv.Float64())
 	}

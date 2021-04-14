@@ -428,6 +428,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.forceGCOnThreshold": ConfigValue{
+		true,
+		"When set to true, projector forces a GC if RSS > 16% of memTotal and " +
+			" heapIdle is significant when compared to heapReleased and " +
+			"heapIdle-heapReleased > 30% of RSS",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.rssThreshold": ConfigValue{
 		0.1, // 0.1 or 10%
 		"Projector starts to take memory management decisions if " +
