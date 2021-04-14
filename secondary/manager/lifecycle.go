@@ -1482,8 +1482,9 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 		if err == nil {
 			err = common.ErrBucketNotFound
 		}
-		return fmt.Errorf("Bucket does not exist or temporarily unavailable for creating new index."+
-			" Please retry the operation at a later time (err=%v).", err)
+		// Error msg returned to user. *KEEP [%v] FOR ORIGINAL ERROR STRING* so we can detect it without ambiguity.
+		return fmt.Errorf("[%v] Bucket %v does not exist or temporarily unavailable for creating new index." +
+			" Please retry the operation at a later time.", err, defn.Bucket)
 	}
 
 	if len(defn.BucketUUID) != 0 && defn.BucketUUID != bucketUUID {
@@ -1520,15 +1521,17 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 	}
 
 	if scopeId == collections.SCOPE_ID_NIL {
-		err = common.ErrScopeNotFound
-		return fmt.Errorf("Error encountered while retrieving ScopeID. Bucket = %v Scope = %v"+
-			". Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, err)
+		// Error msg returned to user. *KEEP [%v] FOR ORIGINAL ERROR STRING* so we can detect it without ambiguity.
+		return fmt.Errorf("[%v] Error retrieving scope ID." +
+			" Bucket: %v, Scope: %v. Possibly dropped, else please retry later.",
+			common.ErrScopeNotFound, defn.Bucket, defn.Scope)
 	}
 
 	if collectionId == collections.COLLECTION_ID_NIL {
-		err = common.ErrCollectionNotFound
-		return fmt.Errorf("Error encountered while retrieving CollectionID. Bucket = %v Scope = %v Collection = %v"+
-			" Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, defn.Collection, err)
+		// Error msg returned to user. *KEEP [%v] FOR ORIGINAL ERROR STRING* so we can detect it without ambiguity.
+		return fmt.Errorf("[%v] Error retrieving collection ID." +
+			" Bucket: %v, Scope: %v, Collection: %v. Possibly dropped, else please retry later.",
+			common.ErrCollectionNotFound, defn.Bucket, defn.Scope, defn.Collection)
 	}
 
 	if len(defn.ScopeId) != 0 && defn.ScopeId != scopeId {

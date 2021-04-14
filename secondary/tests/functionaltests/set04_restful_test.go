@@ -6,7 +6,6 @@ import "encoding/json"
 import "bytes"
 import "time"
 import "strings"
-import "strconv"
 import "io/ioutil"
 import "io"
 import "log"
@@ -274,15 +273,6 @@ func postCreate(dst map[string]interface{}) (string, error) {
 	return result["id"].(string), nil
 }
 
-func makeurl(path string) (string, error) {
-	indexers, _ := sifw.GetIndexerNodesHttpAddresses(indexManagementAddress)
-	if len(indexers) == 0 {
-		return "", fmt.Errorf("no indexer node")
-	}
-	return fmt.Sprintf("http://%s:%s@%v%v",
-		clusterconfig.Username, clusterconfig.Password, indexers[0], path), nil
-}
-
 func noauthurl(path string) (string, error) {
 	indexers, _ := sifw.GetIndexerNodesHttpAddresses(indexManagementAddress)
 	if len(indexers) == 0 {
@@ -290,60 +280,6 @@ func noauthurl(path string) (string, error) {
 	}
 	return fmt.Sprintf("http://%s:%s@%v%v",
 		"nouser", "nopwd", indexers[0], path), nil
-}
-
-// doHttpRequest is a helper that makes an HTTP request, then consumes and closes the body of the
-// response to avoid leaking the TCP connection.
-func doHttpRequest(req *http.Request) (resp *http.Response, err error) {
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return resp, err
-	}
-	defer resp.Body.Close()
-	_, err = ioutil.ReadAll(resp.Body)
-
-	return resp, err
-}
-
-// doHttpRequestReturnBody is a helper that makes an HTTP request, then retrieves the contents of and
-// closes the body of the response to avoid leaking the TCP connection. On success both the response
-// and the contents of the body are returned.
-func doHttpRequestReturnBody(req *http.Request) (resp *http.Response, respbody []byte, err error) {
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return resp, nil, err
-	}
-	defer resp.Body.Close()
-	respbody, err = ioutil.ReadAll(resp.Body)
-
-	return resp, respbody, err
-}
-
-func restful_getall() (map[string]interface{}, error) {
-	url, err := makeurl("/internal/indexes")
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("GET all indexes\n")
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	log.Printf("%v\n", resp.Status)
-	if restful_checkstatus(resp.Status) == true {
-		return nil, fmt.Errorf("restful_getall() status: %v", resp.Status)
-	}
-	indexes := make(map[string]interface{}, 0)
-	respbody, _ := ioutil.ReadAll(resp.Body)
-	if len(respbody) == 0 {
-		return nil, nil
-	}
-	err = json.Unmarshal(respbody, &indexes)
-	if err != nil {
-		return nil, err
-	}
-	return indexes, nil
 }
 
 func restful_drop(ids []string) error {
@@ -1197,23 +1133,6 @@ func restful_countscan(ids []string) error {
 	return nil
 }
 
-func restful_clonebody(src map[string]interface{}) map[string]interface{} {
-	dst := make(map[string]interface{})
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
-
-func restful_checkstatus(status string) bool {
-	st := strings.ToLower(status)
-	x := strings.Contains(st, strconv.Itoa(http.StatusBadRequest))
-	x = x || strings.Contains(st, strconv.Itoa(http.StatusInternalServerError))
-	x = x || strings.Contains(st, strconv.Itoa(http.StatusMethodNotAllowed))
-	x = x || strings.Contains(st, strconv.Itoa(http.StatusNotFound))
-	return x
-}
-
 func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
 	out := make(tc.ScanResponse)
 	for _, entry := range entries {
@@ -1274,75 +1193,6 @@ func waitforindex(id string) (error, bool) {
 	}
 }
 
-func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
-	url, err := makeurl(fmt.Sprintf("/internal/index/%v?multiscan=true", id))
-	if err != nil {
-		return nil, err
-	}
-	data, _ := json.Marshal(body)
-	req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	log.Printf("getscans status : %v\n", resp.Status)
-
-	dec := json.NewDecoder(resp.Body)
-	entries := make([]interface{}, 0)
-	for {
-		var result interface{}
-		if err := dec.Decode(&result); err != nil && err != io.EOF {
-			return nil, err
-		} else if result == nil {
-			break
-		}
-		switch resval := result.(type) {
-		case []interface{}:
-			// log.Printf("GOT CHUNK: %v\n", len(resval))
-			entries = append(entries, resval...)
-		default:
-			err := fmt.Errorf("ERROR CHUNK: %v\n", result)
-			return nil, err
-		}
-	}
-	return entries, nil
-}
-
-func getscanscount(id string, body map[string]interface{}) (int, error) {
-	url, err := makeurl(fmt.Sprintf("/internal/index/%v?multiscancount=true", id))
-	if err != nil {
-		return 0, err
-	}
-	data, _ := json.Marshal(body)
-	req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
-	if err != nil {
-		return 0, err
-	}
-	resp, respbody, err := doHttpRequestReturnBody(req)
-	if err != nil {
-		return 0, err
-	}
-	log.Printf("Status : %v\n", resp.Status)
-
-	var result interface{}
-
-	if len(respbody) == 0 {
-		return 0, nil
-	}
-	err = json.Unmarshal(respbody, &result)
-	if err != nil {
-		return 0, err
-	}
-	if count, ok := result.(float64); ok {
-		return int(count), nil
-	}
-	return 0, nil
-}
-
 var reqcreate = map[string]interface{}{
 	"name":      "myindex",
 	"bucket":    "default",
@@ -1383,22 +1233,3 @@ var reqcount = map[string]interface{}{
 	"stale":     "ok",
 }
 
-var reqscans = map[string]interface{}{
-	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
-	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
-	"distinct":   false,
-	"limit":      1000000,
-	"reverse":    false,
-	"offset":     int64(0),
-	"stale":      "ok",
-}
-
-var reqscanscount = map[string]interface{}{
-	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
-	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
-	"distinct":   false,
-	"limit":      1000000,
-	"reverse":    false,
-	"offset":     int64(0),
-	"stale":      "ok",
-}

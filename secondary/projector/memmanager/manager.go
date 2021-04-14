@@ -9,6 +9,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/system"
 )
 
@@ -86,6 +87,8 @@ func Init(statsCollectionInterval int64) error {
 
 	memMgr.currGCPercent = configuredGCPercent
 
+	memThrottler.Init()
+
 	// start stats collection
 	go memMgr.runStatsCollection()
 	go memMgr.monitorMemUsage()
@@ -104,6 +107,8 @@ func (memMgr *MemManager) monitorMemUsage() {
 	var lastCollectionTime time.Time
 
 	for range ticker.C {
+		var currRSS, currFreeMem uint64
+
 		statsCollectionInterval := GetStatsCollectionInterval()
 		if time.Since(lastCollectionTime) > time.Duration(statsCollectionInterval*int64(time.Second))-1 {
 			if rssBef, freeMemBef, needsgc := memMgr.needsGC(); needsgc {
@@ -121,8 +126,16 @@ func (memMgr *MemManager) monitorMemUsage() {
 				logging.Infof("MemManager::monitorMemUsage ForceGC Done. MemRSS -  Before: %v, after: %v. FreeMem - Before: %v, after: %v. Time Taken %v",
 					rssBef, rssAfter, freeMemBef, freeMemAfter, elapsed)
 
-				// TODO: Based on the memory statistics, enabling throttling
+				currRSS, currFreeMem = rssAfter, freeMemAfter
+			} else {
+				currRSS, currFreeMem = rssBef, freeMemBef
 			}
+
+			throttleLevel := computeThrottleLevel(currRSS, currFreeMem, memMgr.memTotal)
+			if throttleLevel > memThrottler.THROTTLE_LEVEL_10 {
+				throttleLevel = memThrottler.THROTTLE_LEVEL_10
+			}
+			memThrottler.SetThrottleLevel(throttleLevel)
 
 			lastCollectionTime = time.Now()
 
@@ -230,6 +243,24 @@ func (memMgr *MemManager) adjustGCPercent() {
 		atomic.StoreUint64(&memMgr.currGCPercent, uint64(gcPercent))
 		logging.Infof("MemMgr::adjustGCPercent Setting projector GC percent at: %v", gcPercent)
 	}
+}
+
+func computeThrottleLevel(memRSS, memFree, memTotal uint64) int {
+	// RSS after which projector starts to throttle - With default
+	// settings, this would be when projector RSS exceeds 10% of memTotal
+	memUsed := memTotal - memFree
+	usedMemThreshold := GetUsedMemThreshold()
+	if memUsed < uint64(usedMemThreshold*float64(memTotal)) {
+		return memThrottler.THROTTLE_NONE
+	}
+	baseThrottleRSS := uint64(GetRSSThreshold() * float64(memTotal))
+	rssDiffPercentage := 0.02 // Throttle level will be adjusted for every 2% change in RSS
+
+	if memRSS > baseThrottleRSS {
+		level := int(float64(memRSS-baseThrottleRSS)/(rssDiffPercentage*float64(memTotal))) + 1
+		return level
+	}
+	return memThrottler.THROTTLE_NONE
 }
 
 func GetStatsCollectionInterval() int64 {

@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/stats"
 )
 
@@ -1715,6 +1716,18 @@ loop:
 		logging.LazyTrace(func() string {
 			return fmt.Sprintf("%v packet received %#v", feed.logPrefix, logging.TagUD(pkt))
 		})
+
+		// If the projector RSS is beyond rssThreshod * maxSystemMemory (by default 10% of RSS)
+		// and the used memory in the system is greater than usedMemThreshold * maxSystemMemory
+		// (by default 50% of RSS), then the DCP feed will reduce the rate at which it consumes
+		// mutations from KV by sleeping for some time if required
+		//
+		// This is done to make sure that the downstream would eventually consume all the
+		// mutations and the projector process RSS will eventually come down. Once the RSS
+		// comes below 10% of total system memory, then the feed would not throttle.
+
+		// TODO: Update the function argument to true for MAINT_STREAM
+		memThrottler.DoThrottle(false)
 
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true

@@ -611,11 +611,16 @@ func (r *Rebalancer) dropIndexWhenReady() {
 // isMissingBSC determines whether an error message is due to a bucket, scope,
 // or collection not existing. These can be dropped after a TT referencing them
 // was created, in which case we will set the TT forward to TransferTokenCommit
-// state to abort the index move without failing the rebalance.
+// state to abort the index move without failing the rebalance. In some cases
+// the target error string will be contained inside brackets within a more
+// detailed user-visible errMsg.
 func isMissingBSC(errMsg string) bool {
 	return errMsg == common.ErrCollectionNotFound.Error() ||
 		errMsg == common.ErrScopeNotFound.Error() ||
-		errMsg == common.ErrBucketNotFound.Error()
+		errMsg == common.ErrBucketNotFound.Error() ||
+		strings.Contains(errMsg, "[" + common.ErrCollectionNotFound.Error() + "]") ||
+		strings.Contains(errMsg, "[" + common.ErrScopeNotFound.Error() + "]") ||
+		strings.Contains(errMsg, "[" + common.ErrBucketNotFound.Error() + "]")
 }
 
 // isIndexNotFoundRebal checks whether a build error returned for rebalance is the
