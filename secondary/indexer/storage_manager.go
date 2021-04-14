@@ -1513,10 +1513,17 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 			var getBytes, insertBytes, deleteBytes int64
 			var nslices int64
 			var needUpgrade = false
+			var hasStats = false
 
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
 			for i, slice := range slices {
+
+				// Increment the ref count before gathering stats. This is to ensure that
+				// the instance is not deleted in the middle of gathering stats.
+				if !slice.CheckAndIncrRef() {
+					continue
+				}
 
 				// Prepare stats once
 				if doPrepare {
@@ -1525,6 +1532,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 				}
 
 				sts, err = slice.Statistics(consumerFilter)
+				slice.DecrRef()
+
 				if err != nil {
 					break
 				}
@@ -1543,9 +1552,11 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 					internalDataMap[fmt.Sprintf("slice_%d", i)] = sts.InternalDataMap
 				}
 				needUpgrade = needUpgrade || sts.NeedUpgrade
+
+				hasStats = true
 			}
 
-			if err == nil {
+			if hasStats && err == nil {
 				stat := IndexStorageStats{
 					InstId:     idxInstId,
 					PartnId:    partnInst.Defn.GetPartitionId(),

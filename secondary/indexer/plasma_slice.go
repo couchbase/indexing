@@ -82,6 +82,7 @@ type plasmaSlice struct {
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
+	isClosed      bool
 	numPartitions int
 	isCompacting  bool
 
@@ -539,6 +540,19 @@ func (mdb *plasmaSlice) IncrRef() {
 	mdb.refCount++
 }
 
+func (mdb *plasmaSlice) CheckAndIncrRef() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+
+	if mdb.isClosed {
+		return false
+	}
+
+	mdb.refCount++
+
+	return true
+}
+
 func (mdb *plasmaSlice) DecrRef() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
@@ -546,6 +560,7 @@ func (mdb *plasmaSlice) DecrRef() {
 	mdb.refCount--
 	if mdb.refCount == 0 {
 		if mdb.isSoftClosed {
+			mdb.isClosed = true
 			tryCloseplasmaSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
@@ -1991,6 +2006,7 @@ func (mdb *plasmaSlice) Close() {
 			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 
 	} else {
+		mdb.isClosed = true
 		tryCloseplasmaSlice(mdb)
 	}
 }

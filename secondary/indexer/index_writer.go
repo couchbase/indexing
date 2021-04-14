@@ -89,6 +89,7 @@ type IndexWriter interface {
 	// Reference counting operators
 	IncrRef()
 	DecrRef()
+	CheckAndIncrRef() bool
 
 	//Destroy/Wipe the index completely
 	Destroy()
