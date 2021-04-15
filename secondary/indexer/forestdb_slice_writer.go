@@ -236,6 +236,7 @@ type fdbSlice struct {
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
+	isClosed      bool
 	isCompacting  bool
 
 	cmdCh  chan interface{} //internal channel to buffer commands
@@ -272,6 +273,19 @@ func (fdb *fdbSlice) IncrRef() {
 	fdb.refCount++
 }
 
+func (fdb *fdbSlice) CheckAndIncrRef() bool {
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
+
+	if fdb.isClosed {
+		return false
+	}
+
+	fdb.refCount++
+
+	return true
+}
+
 func (fdb *fdbSlice) DecrRef() {
 	fdb.lock.Lock()
 	defer fdb.lock.Unlock()
@@ -279,6 +293,7 @@ func (fdb *fdbSlice) DecrRef() {
 	fdb.refCount--
 	if fdb.refCount == 0 {
 		if fdb.isSoftClosed {
+			fdb.isClosed = true
 			tryCloseFdbSlice(fdb)
 		}
 		if fdb.isSoftDeleted {
@@ -1288,6 +1303,7 @@ func (fdb *fdbSlice) Close() {
 			go fdb.cancelCompact()
 		}
 	} else {
+		fdb.isClosed = true
 		tryCloseFdbSlice(fdb)
 	}
 }

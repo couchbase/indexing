@@ -138,6 +138,7 @@ type memdbSlice struct {
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
+	isClosed      bool
 
 	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
@@ -352,6 +353,19 @@ func (mdb *memdbSlice) IncrRef() {
 	mdb.refCount++
 }
 
+func (mdb *memdbSlice) CheckAndIncrRef() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+
+	if mdb.isClosed {
+		return false
+	}
+
+	mdb.refCount++
+
+	return true
+}
+
 func (mdb *memdbSlice) DecrRef() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
@@ -359,6 +373,7 @@ func (mdb *memdbSlice) DecrRef() {
 	mdb.refCount--
 	if mdb.refCount == 0 {
 		if mdb.isSoftClosed {
+			mdb.isClosed = true
 			go tryClosememdbSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
@@ -1504,6 +1519,7 @@ func (mdb *memdbSlice) Close() {
 		logging.Infof("MemDBSlice::Close Soft Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
 			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 	} else {
+		mdb.isClosed = true
 		go tryClosememdbSlice(mdb)
 	}
 }

@@ -55,6 +55,7 @@ type MemManager struct {
 	usedMemThreshold        uint64
 	rssThreshold            uint64
 	relaxGCThreshold        uint64
+	forceGCOnThreshold      uint64
 
 	stats *system.SystemStats
 }
@@ -148,13 +149,14 @@ func (memMgr *MemManager) needsGC() (uint64, uint64, bool) {
 	memFree := GetMemFree()
 	memTotal := GetMemTotal()
 	memRSS := GetRSS()
+	forceGCOnThreshold := GetForceGCOnThreshold()
+
 	memMgr.recentSamples.Update(float64(memRSS))
 	memMgr.olderSamples.Update(float64(memRSS))
 
-	if memMgr.thresholdExceeded(memRSS, memFree, memTotal) {
+	if forceGCOnThreshold && memMgr.thresholdExceeded(memRSS, memFree, memTotal) {
 		// Compute HeapIdle and HeapReleased and decide the need for
 		// force GC based on HeapIdle and HeapReleased
-
 		recentAvg := memMgr.recentSamples.Mean()
 		olderAvg := memMgr.olderSamples.Mean()
 
@@ -184,8 +186,6 @@ func (memMgr *MemManager) thresholdExceeded(memRSS, memFree, memTotal uint64) bo
 	// slow-down the DCP feeds. If the memory does not come
 	// under control even after slowing down DCP feed's, only
 	// then make an attempt to force a GC
-
-	// TODO: Implement the slowing down of DCP feed part
 	rssThreshold := GetRSSThreshold() + 0.06
 	memUsed := memTotal - memFree
 
@@ -311,4 +311,17 @@ func GetGCPercent() uint64 {
 
 func SetDefaultGCPercent(gc int) {
 	atomic.StoreUint64(&configuredGCPercent, uint64(gc))
+}
+
+func SetForceGCOnThreshold(val bool) {
+	if val {
+		atomic.StoreUint64(&memMgr.forceGCOnThreshold, 1)
+	} else {
+		atomic.StoreUint64(&memMgr.forceGCOnThreshold, 0)
+	}
+	logging.Infof("MemManager::SetForceGCOnThreshold Updating Force GC on threshold to: %v", val)
+}
+
+func GetForceGCOnThreshold() bool {
+	return atomic.LoadUint64(&memMgr.forceGCOnThreshold) > 0
 }
