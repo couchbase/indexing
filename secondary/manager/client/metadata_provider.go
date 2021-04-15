@@ -140,7 +140,7 @@ type watcher struct {
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
 	loggedReqs   map[common.Txnid]*protocol.RequestHandle
 
-	clientStats IndexStats2Holder
+	clientStats IndexStats2Holder // local cached complete version showing all buckets and indexes that exist
 }
 
 // With partitioning, index instance is distributed among indexer nodes.
@@ -5090,6 +5090,7 @@ func (r *metadataRepo) resolveIndexStats(indexerId c.IndexerId, stats c.Statisti
 	return result
 }
 
+// resolveIndexStats2 extracts statistics of the requested indexerId from stats (the Stats field of an IndexStats2 obj).
 func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[string]*DedupedIndexStats) map[c.IndexInstId]map[c.PartitionId]c.Statistics {
 
 	r.mutex.RLock()
@@ -5105,15 +5106,16 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 	for _, meta := range r.indices {
 		for _, inst := range meta.Instances {
 
-			prefix := c.GetStatsPrefix(meta.Definition.Bucket, meta.Definition.Scope,
-				meta.Definition.Collection, meta.Definition.Name, int(inst.ReplicaId), 0, false)
 
-			prefix = prefix[0 : len(prefix)-1] // Get the fully qualified index name
+			// Get the fully qualified index name
+			indexName := c.GetStatsPrefix(meta.Definition.Bucket, meta.Definition.Scope,
+				meta.Definition.Collection, meta.Definition.Name, int(inst.ReplicaId), 0, false)
+			indexName = indexName[0 : len(indexName)-1] // strip off trailing colon
 
 			if dedupedIndexStats, ok := stats[meta.Definition.Bucket]; !ok {
 				return result
 			} else {
-				if _, exists := dedupedIndexStats.Indexes[prefix]; exists {
+				if _, exists := dedupedIndexStats.Indexes[indexName]; exists {
 					for partitionId, indexerId2 := range inst.IndexerId {
 						if indexerId == indexerId2 {
 							if _, ok := result[inst.InstId]; !ok {
@@ -5479,39 +5481,66 @@ func (w *watcher) updateIndexStatsNoLock(indexerId c.IndexerId, indexStats *Inde
 	return stats
 }
 
-func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *IndexStats2) map[c.IndexInstId]map[c.PartitionId]c.Statistics {
+// updateIndexStats2NoLock does two things:
+//   1. Update the local w.clientStats cache with the indexStats2 that was just received from periodic broadcast iff it
+//      is a complete copy. Incomplete copies are never cached. The cache is only referenced for bucket-index layouts.
+//   2. Return the most recent bucket-level stats for indexerId (multiplexed to [instId][partitionId]) from indexStats2.
+//
+// #1 is silently skipped if the received indexStats2 is incomplete. This occurs whenever no buckets or indexes have
+// been created or dropped since the prior broadcast. In this case all DedupedIndexStats.Indexes map entries of the
+// indexStats2.Stats top-level map will be nil to save on payload (otherwise none of them will be nil, though they can
+// be empty if there are no indexes for the corresponding buckets).
+//
+// #2 is done by retrieving the stats from the indexStats2 object and multiplexing them to the output format of a map
+// per [instId][partitionId]. This can only be accomplished if we have a complete version of this object so that the
+// Indexes map entries exist, as the keys of these maps tell what indexes exist in each bucket; otherwise we can't do
+// the multiplexing for the output map. (Currently the values are just empty structs.) Thus #2 is only performed if
+// either a full indexStats2 came in or we already have one in the w.clientStats cache. In the latter case we copy the
+// Indexes entries from the cached copy into the incoming indexStats2 object, then use this patched-up object to extract
+// the stats from, as its stats are fresh while the cached ones are stale.
+//
+// At client startup this function is in a race with function getClientStats to initialize the w.clientStats cache. That
+// function is called only once when the client is started and requests a full set of stats from the indexer to
+// initially populate the local w.clientStats cache, otherwise we would never get a complete indexStats2 object from the
+// server unless something changes. If the current function receives a complete indexStats2 first, it can populate the
+// cache, and then getClientStats will avoid doing so as its copy might be older and thus cause later bucket lookup
+// misses in the cached copy if a bucket was added after that version.
+func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *IndexStats2) (
+	map[c.IndexInstId]map[c.PartitionId]c.Statistics) {
 
+	// Check if the received indexStats2 is incomplete, in which case try to use the cached ones instead
 	useCached := false
 	for _, dedupedIndexStats := range indexStats2.Stats {
-		if len(dedupedIndexStats.Indexes) == 0 {
+		if dedupedIndexStats == nil || len(dedupedIndexStats.Indexes) == 0 {
 			useCached = true
 			break
 		}
 	}
 
-	// Check if the cached client stats are updated from OPCODE_CLIENT_STATS
-	// It is possible that client is yet to receive the response to OPCODE_CLIENT_STATS
-	// while watcher has already got a notification for stats (a corner case)
-	clientStats := w.clientStats.Get()
-	if useCached == true {
-		if len(clientStats.Stats) == 0 {
-			return nil
-		} else {
-			for _, clientIndexStats := range clientStats.Stats {
-				if len(clientIndexStats.Indexes) == 0 {
-					return nil
-				}
-			}
-		}
-	}
-
 	if useCached {
-		// Update the Indexes list from cached version
-		for bucket, dedupedIndexStats := range indexStats2.Stats {
-			dedupedIndexStats.Indexes = clientStats.Stats[bucket].Indexes
+		// Check if clientStats entry exists yet. It is possible that getClientStats is yet to receive the response
+		// to OPCODE_CLIENT_STATS, while the current function already got one from periodic broadcast (a corner case).
+		clientStatsPtr := w.clientStats.Get()
+		if clientStatsPtr == nil {
+			return nil
 		}
+
+		// Copy index information from cached version to indexStats2 received from broadcast
+		for bucket, dedupedIndexStats := range indexStats2.Stats {
+			if dedupedIndexStats == nil || clientStatsPtr.Stats[bucket] == nil {
+				logging.Errorf("watcher.updateIndexStats2NoLock: unexpected nil *DedupedIndexStats." +
+					" bucket %v, dedupedIndexStats %v, clientStatsPtr.Stats[bucket] %v",
+					bucket, dedupedIndexStats, clientStatsPtr.Stats[bucket])
+				return nil
+			}
+			dedupedIndexStats.Indexes = clientStatsPtr.Stats[bucket].Indexes // map of index names for this bucket
+		}
+	} else {
+		// Update the cached value with indexStats2
+		w.clientStats.Set(indexStats2)
 	}
 
+	// We have a (possibly patched-up) complete indexStats2, so extract the stats for indexerId from it
 	stats := (map[c.IndexInstId]map[c.PartitionId]c.Statistics)(nil)
 	if indexStats2 != nil && len(indexStats2.Stats) != 0 {
 		stats = w.provider.repo.resolveIndexStats2(indexerId, indexStats2.Stats)
@@ -5519,11 +5548,6 @@ func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *In
 			stats = nil
 		}
 	}
-
-	if useCached == false {
-		w.clientStats.Set(indexStats2.Clone())
-	}
-
 	return stats
 }
 
@@ -5683,6 +5707,10 @@ func (w *watcher) refreshServiceMap() error {
 	return nil
 }
 
+// getClientStats requests a complete set of IndexStats2 from the Indexer, including the Indexes maps children
+// of the DedupedIndexStats entries of the top-level map. This function is called only at bootstrap of the
+// client to initialize the w.clientStats cache. This call is in a race with the ongoing event-handling loop
+// that calls updateIndexStats2NoLock, so it must guard against overwriting newer stats with older ones.
 func (w *watcher) getClientStats() error {
 
 	content, err := w.makeRequest(OPCODE_CLIENT_STATS, "Client Stats", []byte(""))
@@ -5697,8 +5725,8 @@ func (w *watcher) getClientStats() error {
 		return err
 	}
 
-	w.clientStats.Set(clientStats)
-
+	// Avoid overwriting the cache if updateIndexStats2NoLock already received and cached a clientStats object
+	w.clientStats.CAS(clientStats) // never nil
 	return nil
 }
 

@@ -174,6 +174,7 @@ type IndexStats struct {
 ////////////////////////////////////////////////////////////////////////
 
 type IndexStats2 struct {
+	// Stats map key: bucket
 	Stats map[string]*DedupedIndexStats `json:"stats,omitempty"`
 }
 
@@ -182,6 +183,8 @@ type DedupedIndexStats struct {
 	NumDocsQueued    float64                   `json:"num_docs_queued,omitempty"`
 	LastRollbackTime string                    `json:"last_rollback_time,omitempty"`
 	ProgressStatTime string                    `json:"progress_stat_time,omitempty"`
+
+	// Indexes map key: fully qualified index name (<keyspace>:index).
 	Indexes          map[string]*PerIndexStats `json:"indexes,omitempty"`
 }
 
@@ -206,6 +209,13 @@ func (p *IndexStats2Holder) Set(s *IndexStats2) {
 	atomic.StorePointer(&p.ptr, unsafe.Pointer(s))
 }
 
+// IndexStats2Holder.CAS only stores s if the existing pointer is nil. Used at bootstrap
+// to avoid overwriting a possibly newer version already received from periodic broadcast.
+func (p *IndexStats2Holder) CAS(s *IndexStats2) {
+	atomic.CompareAndSwapPointer(&p.ptr, nil, unsafe.Pointer(s))
+}
+
+/***** Unused
 func (p *PerIndexStats) Clone() *PerIndexStats {
 	// TODO: Update when adding stats to PerIndexStats
 	return nil
@@ -232,6 +242,7 @@ func (s *IndexStats2) Clone() *IndexStats2 {
 	}
 	return clone
 }
+*****/
 
 /////////////////////////////////////////////////////////////////////////
 // Create/Alter Index
@@ -356,7 +367,9 @@ func MarshallIndexIdList(list *IndexIdList) ([]byte, error) {
 
 func UnmarshallServiceMap(data []byte) (*ServiceMap, error) {
 
-	logging.Debugf("UnmarshallServiceMap: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallServiceMap: %v", string(data))
+	}
 
 	list := new(ServiceMap)
 	if err := json.Unmarshal(data, list); err != nil {
@@ -373,14 +386,18 @@ func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
 		return nil, err
 	}
 
-	logging.Debugf("MarshallServiceMap: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallServiceMap: %v", string(buf))
+	}
 
 	return buf, nil
 }
 
 func UnmarshallIndexStats(data []byte) (*IndexStats, error) {
 
-	logging.Debugf("UnmarshallIndexStats: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallIndexStats: %v", string(data))
+	}
 
 	stats := new(IndexStats)
 	if err := json.Unmarshal(data, stats); err != nil {
@@ -392,7 +409,9 @@ func UnmarshallIndexStats(data []byte) (*IndexStats, error) {
 
 func UnmarshallIndexStats2(data []byte) (*IndexStats2, error) {
 
-	logging.Debugf("UnmarshallIndexStats: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallIndexStats: %v", string(data))
+	}
 
 	stats := new(IndexStats2)
 	if err := json.Unmarshal(data, stats); err != nil {
@@ -409,7 +428,9 @@ func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
 		return nil, err
 	}
 
-	logging.Debugf("MarshallIndexStats: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallIndexStats: %v", string(buf))
+	}
 
 	return buf, nil
 }
@@ -421,14 +442,18 @@ func MarshallIndexStats2(stats *IndexStats2) ([]byte, error) {
 		return nil, err
 	}
 
-	logging.Debugf("MarshallIndexStats2: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallIndexStats2: %v", string(buf))
+	}
 
 	return buf, nil
 }
 
 func UnmarshallPrepareCreateRequest(data []byte) (*PrepareCreateRequest, error) {
 
-	logging.Debugf("UnmarshallPrepareCreateRequest: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallPrepareCreateRequest: %v", string(data))
+	}
 
 	prepareCreateRequest := new(PrepareCreateRequest)
 	if err := json.Unmarshal(data, prepareCreateRequest); err != nil {
@@ -445,14 +470,18 @@ func MarshallPrepareCreateRequest(prepareCreateRequest *PrepareCreateRequest) ([
 		return nil, err
 	}
 
-	logging.Debugf("MarshallPrepareCreateRequest: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallPrepareCreateRequest: %v", string(buf))
+	}
 
 	return buf, nil
 }
 
 func UnmarshallPrepareCreateResponse(data []byte) (*PrepareCreateResponse, error) {
 
-	logging.Debugf("UnmarshallPrepareCreateResponse: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallPrepareCreateResponse: %v", string(data))
+	}
 
 	prepareCreateResponse := new(PrepareCreateResponse)
 	if err := json.Unmarshal(data, prepareCreateResponse); err != nil {
@@ -469,14 +498,18 @@ func MarshallPrepareCreateResponse(prepareCreateResponse *PrepareCreateResponse)
 		return nil, err
 	}
 
-	logging.Debugf("MarshallPrepareCreateResponse: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallPrepareCreateResponse: %v", string(buf))
+	}
 
 	return buf, nil
 }
 
 func UnmarshallCommitCreateRequest(data []byte) (*CommitCreateRequest, error) {
 
-	logging.Debugf("UnmarshallCommitCreateRequest: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallCommitCreateRequest: %v", string(data))
+	}
 
 	commitCreateRequest := new(CommitCreateRequest)
 	if err := json.Unmarshal(data, commitCreateRequest); err != nil {
@@ -493,14 +526,18 @@ func MarshallCommitCreateRequest(commitCreateRequest *CommitCreateRequest) ([]by
 		return nil, err
 	}
 
-	logging.Debugf("MarshallCommitCreateRequest: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallCommitCreateRequest: %v", string(buf))
+	}
 
 	return buf, nil
 }
 
 func UnmarshallCommitCreateResponse(data []byte) (*CommitCreateResponse, error) {
 
-	logging.Debugf("UnmarshallCommitCreateResponse: %v", string(data))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("UnmarshallCommitCreateResponse: %v", string(data))
+	}
 
 	commitCreateResponse := new(CommitCreateResponse)
 	if err := json.Unmarshal(data, commitCreateResponse); err != nil {
@@ -517,7 +554,9 @@ func MarshallCommitCreateResponse(commitCreateResponse *CommitCreateResponse) ([
 		return nil, err
 	}
 
-	logging.Debugf("MarshallCommitCreateResponse: %v", string(buf))
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("MarshallCommitCreateResponse: %v", string(buf))
+	}
 
 	return buf, nil
 }
