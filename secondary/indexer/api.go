@@ -24,6 +24,7 @@ type target struct {
 	skipEmpty  bool
 	partition  bool
 	pretty     bool
+	creds      cbauth.Creds
 }
 
 type restServer struct {
@@ -139,7 +140,7 @@ func (api *restServer) statsHandler(req request) {
 		stats := api.statsMgr.stats.Get()
 		segs := strings.Split(req.url, "/")
 		t := &target{version: req.version, skipEmpty: skipEmpty,
-			partition: partition, pretty: pretty}
+			partition: partition, pretty: pretty, creds: req.creds}
 		switch req.version {
 		case "v1":
 			if len(segs) == 3 { // Indexer node level stats
@@ -196,7 +197,7 @@ func (api *restServer) statsHandler(req request) {
 					return
 				}
 			}
-			if !api.authorizeStats(req, t) {
+			if t.level != "indexer" && !api.authorizeStats(req, t) {
 				return
 			}
 			if bytes, err := stats.VersionedJSON(t); err != nil {
@@ -218,6 +219,8 @@ func (api *restServer) statsHandler(req request) {
 	}
 }
 
+// Dont use this function for indexer level stats. For indexer level stats
+// we must check permissions for every index.
 func (api *restServer) authorizeStats(req request, t *target) bool {
 
 	permissions := ([]string)(nil)
