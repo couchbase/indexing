@@ -160,7 +160,7 @@ type indexer struct {
 
 	stats *IndexerStats
 
-	enableManager bool  // forced to true in cmd/indexer/main.go, overriding default false in config.go
+	enableManager bool // forced to true in cmd/indexer/main.go, overriding default false in config.go
 	cpuProfFd     *os.File
 
 	rebalanceRunning bool
@@ -5800,7 +5800,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		logging.Infof("Indexer::startKeyspaceIdStream Nothing to Start. Stream: %v KeyspaceId: %v",
 			streamId, keyspaceId)
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
-		//TODO Collections add safety check if pendBuildDone exists
+
+		//process any pending build done
+		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 		return
 	}
 
