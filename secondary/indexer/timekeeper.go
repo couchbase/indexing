@@ -3153,6 +3153,8 @@ func (tk *timekeeper) changeIndexStateForKeyspaceId(keyspaceId string, state com
 	//for all indexes in this keyspaceId, change the state
 	for _, bi := range tk.indexBuildInfo {
 		if bi.indexInst.Defn.KeyspaceId(bi.indexInst.Stream) == keyspaceId {
+			logging.Infof("Timekeeper::changeIndexStateForKeyspaceId %v %v %v %v", bi.indexInst.Stream,
+				keyspaceId, bi.indexInst.InstId, state)
 			bi.indexInst.State = state
 		}
 	}
@@ -3170,8 +3172,9 @@ func (tk *timekeeper) setAddInstPending(streamId common.StreamId, keyspaceId str
 		if idx.Defn.KeyspaceId(idx.Stream) == keyspaceId &&
 			idx.Stream == streamId &&
 			idx.State == common.INDEX_STATE_CATCHUP {
+			logging.Infof("Timekeeper::setAddInstPending %v %v %v %v", streamId, keyspaceId,
+				idx.InstId, val)
 			buildInfo.addInstPending = val
-
 		}
 	}
 }
@@ -4167,6 +4170,9 @@ func (tk *timekeeper) setMergeTs(streamId common.StreamId, keyspaceId string,
 		if buildInfo.indexInst.Defn.KeyspaceId(streamId) == keyspaceId &&
 			buildInfo.indexInst.State == common.INDEX_STATE_CATCHUP &&
 			buildInfo.addInstPending == false {
+
+			logging.Infof("Timekeeper::setMergeTs %v %v %v", streamId, keyspaceId, buildInfo.indexInst.InstId)
+
 			buildInfo.buildDoneAckReceived = true
 			//set minMergeTs. stream merge can only happen at or above this
 			//TS as projector guarantees new index definitions have been applied
