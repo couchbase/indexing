@@ -66,7 +66,7 @@ type LifecycleMgr struct {
 
 	clientStatsRefreshInterval uint64
 
-	lastSendClientStats *client.IndexStats2
+	lastSendClientStats *client.IndexStats2 // always full stats; send will filter out index list if unchanged
 	clientStatsMutex    sync.Mutex // for lastSendClientStats
 	acceptedNames       map[string]*indexNameRequest
 	accIgnoredIds       map[common.IndexDefnId]bool
@@ -2550,8 +2550,12 @@ func (m *LifecycleMgr) handleNotifyStats(buf []byte) {
 	}
 }
 
-// Broadcast stats in a go-routine
+// broadcastStats runs in a go routine and periodically broadcasts stats. If any buckets or indexes have changed since
+// the prior boroadcast, it sends the full stats including the Indexes maps; otherwise it sends a version with the
+// Indexes maps set to nil to save on comm payload, except that it will force a full resend every 5 minutes so new
+// recipients can recover if their initial bootstrap request for full stats timed out or got corrupted.
 func (m *LifecycleMgr) broadcastStats() {
+	const RESEND_INTERVAL time.Duration = time.Duration(5 * time.Minute) // interval to force full resend
 
 	// stats_manager refreshes progress stats every "client_stats_refresh_interval"
 	// and this method also broadcasts stats for the same period. To avoid any race
@@ -2563,26 +2567,37 @@ func (m *LifecycleMgr) broadcastStats() {
 	m.done.Add(1)
 	defer m.done.Done()
 
-	refreshInterval := atomic.LoadUint64(&m.clientStatsRefreshInterval)
-	ticker := time.NewTicker(time.Millisecond * time.Duration(refreshInterval))
+	refreshMs := atomic.LoadUint64(&m.clientStatsRefreshInterval)
+	refreshInterval := time.Duration(refreshMs) * time.Millisecond
+	resendFullTicks := int64(RESEND_INTERVAL / refreshInterval) // # ticks before force full send
+
+	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
 
+	shortSends := int64(1) // number of sends since last complete set with Indexes maps
 	for {
 		select {
 		case <-ticker.C:
 
 			clusterVersion := common.GetClusterVersion()
 
-			filtered := m.stats.Get()
-			if filtered != nil {
+			stats := m.stats.Get()
+			if stats != nil {
 				if clusterVersion < (int64)(common.INDEXER_70_VERSION) {
-					idxStats := &client.IndexStats{Stats: *filtered}
+					idxStats := &client.IndexStats{Stats: *stats}
 					if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
 						logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
 					}
 				} else {
-					idxStats2 := convertToIndexStats2(*filtered)
-					statsToBroadCast := m.GetDiffFromLastSent(idxStats2)
+					idxStats2 := convertToIndexStats2(*stats)
+					var statsToBroadCast *client.IndexStats2
+					if shortSends < resendFullTicks {
+						statsToBroadCast = m.getDiffFromLastSent(idxStats2)
+						shortSends++
+					} else {
+						statsToBroadCast = idxStats2
+						shortSends = 1
+					}
 
 					m.clientStatsMutex.Lock()
 					m.lastSendClientStats = idxStats2
@@ -2594,9 +2609,15 @@ func (m *LifecycleMgr) broadcastStats() {
 				}
 			}
 
-			if refreshInterval != atomic.LoadUint64(&m.clientStatsRefreshInterval) {
+			refreshMsNew := atomic.LoadUint64(&m.clientStatsRefreshInterval)
+			if refreshMs != refreshMsNew {
+				refreshMs = refreshMsNew
+				refreshInterval = time.Duration(refreshMs) * time.Millisecond
+				resendFullTicks = int64(RESEND_INTERVAL / refreshInterval)
+
+
 				ticker.Stop()
-				ticker = time.NewTicker(time.Millisecond * time.Duration(atomic.LoadUint64(&m.clientStatsRefreshInterval)))
+				ticker = time.NewTicker(refreshInterval)
 			}
 
 		case <-m.killch:
@@ -2607,12 +2628,14 @@ func (m *LifecycleMgr) broadcastStats() {
 	}
 }
 
+// getDiffFromLastSent returns a set of stats to broadcast. If there has been any change in buckets
+// or indexes per bucket since prior send, it returns the input currStats (full set of stats), else
+// it returns a version with the Indexes maps all set to nil to save on communication payload.
+//
 // TODO: This method can further be optimized to broadcast only incremental changes.
 // The IndexStats2 data structure must be modified to contain deleted indexes list
 // and current indexes map with storage stats
-// Currently, this method broadcasts full set of stats if there is any change in buckets
-// or indexes per bucket
-func (m *LifecycleMgr) GetDiffFromLastSent(currStats *client.IndexStats2) *client.IndexStats2 {
+func (m *LifecycleMgr) getDiffFromLastSent(currStats *client.IndexStats2) *client.IndexStats2 {
 	m.clientStatsMutex.Lock()
 	defer m.clientStatsMutex.Unlock()
 
