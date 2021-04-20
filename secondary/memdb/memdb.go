@@ -1158,6 +1158,26 @@ func (m *MemDB) changeDeltaWrState(state int,
 
 func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
 
+	m.Lock()
+
+	if m.hasShutdown {
+		m.Unlock()
+		return ErrShutdown
+	}
+
+	if m.useMemoryMgmt {
+		// Closing snap can cause MemDB.Close to proceed, so add to shutdownWg1 here
+		m.shutdownWg1.Add(1)
+
+		defer func() {
+			if err != nil {
+				m.shutdownWg1.Done()
+			}
+		}()
+	}
+
+	m.Unlock()
+
 	// Initialize and setup delta processing
 	if m.useDeltaFiles {
 		m.deltaWriters = make([]FileWriter, m.numWriters())
@@ -1199,14 +1219,14 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	}()
 
 	m.Lock()
+
+	if m.useMemoryMgmt {
+		defer m.shutdownWg1.Done()
+	}
+
 	if m.hasShutdown {
 		m.Unlock()
 		return ErrShutdown
-	}
-
-	if m.useMemoryMgmt {
-		m.shutdownWg1.Add(1)
-		defer m.shutdownWg1.Done()
 	}
 
 	m.Unlock()
