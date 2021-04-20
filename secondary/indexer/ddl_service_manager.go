@@ -411,7 +411,8 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 
 func (m *DDLServiceMgr) dropTokenCleaner() {
 
-	ticker := time.NewTicker(10 * time.Minute)
+	ticker := time.NewTicker(24 * time.Hour)
+	// drop token cleaner will run every 24 hours.
 	logging.Infof("DDLServiceMgr: starting dropTokenCleaner ...")
 	for {
 		select {
