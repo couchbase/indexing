@@ -2505,6 +2505,7 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 
 	//if INIT_STREAM has not caught upto minMergeTs
 	flushedPastMinMergeTs := tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId]
+
 	if !flushedPastMinMergeTs {
 		//check and set the flag
 		if initTsSeq.GreaterThanEqual(minMergeTsSeq) {
@@ -4199,20 +4200,13 @@ func (tk *timekeeper) resetWaitForRecovery(streamId common.StreamId, keyspaceId 
 func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,
 	keyspaceId string) bool {
 
+	//7.0 and above, init build can only happen in init stream
 	if streamId == common.INIT_STREAM {
 		return true
+	} else {
+		return false
 	}
 
-	for _, buildInfo := range tk.indexBuildInfo {
-		//if index belongs to the flushed keyspaceId and in INITIAL state
-		idx := buildInfo.indexInst
-		if idx.Defn.KeyspaceId(idx.Stream) == keyspaceId &&
-			idx.Stream == streamId &&
-			idx.State == common.INDEX_STATE_INITIAL {
-			return true
-		}
-	}
-	return false
 }
 
 //calc skip factor for in-mem snapshots based on the
