@@ -2305,6 +2305,12 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				tk.setAddInstPending(streamId, keyspaceId, true)
 				tk.ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId] = false
 
+				//reset numNonAlignTS for catchup phase
+				keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
+				if keyspaceStats != nil {
+					keyspaceStats.numNonAlignTS.Set(0)
+				}
+
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
 					"Stream: %v KeyspaceId: %v Session: %v BuildTS: %v", idx.InstId, streamId,
 					keyspaceId, sessionId, buildInfo.buildTs)
@@ -2981,12 +2987,15 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 				tk.ss.streamKeyspaceIdHasInMemSnap[streamId][keyspaceId] = true
 			}
 		}
-	} else {
+	}
+
+	if !flushTs.IsSnapAligned() {
 		keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 		if keyspaceStats != nil {
 			keyspaceStats.numNonAlignTS.Add(1)
 		}
 	}
+
 }
 
 //checkMergeCandidateTs check if a TS is a candidate for merge with
