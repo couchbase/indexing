@@ -3004,31 +3004,11 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 		return false
 	}
 
-	//if the flushTs is past the lastFlushTs of this keyspaceId in MAINT_STREAM,
-	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
-	//it is important to use that for comparison as after merge MAINT_STREAM will
-	//include merged indexes after the in progress flush finishes.
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-	var lastFlushedTsVbuuid *common.TsVbuuid
-	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
-		lastFlushedTsVbuuid = lts
-	} else {
-		lastFlushedTsVbuuid = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
-	}
+	//merge candidate cannot be evaluated by comparing
+	//the seqno of collection vs bucket. It is better to generate in-mem
+	//snapshot for all snap aligned timestamps.
 
-	mergeCandidate := false
-	//if no flush has happened yet, its a merge candidate
-	if lastFlushedTsVbuuid == nil {
-		mergeCandidate = true
-	} else {
-		lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
-		ts := getSeqTsFromTsVbuuid(flushTs)
-		if ts.GreaterThanEqual(lastFlushedTs) {
-			mergeCandidate = true
-		}
-	}
-
-	return mergeCandidate
+	return true
 }
 
 //mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
