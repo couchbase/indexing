@@ -197,6 +197,20 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		return nil, err
 	}
 
+	var delTokens map[common.IndexDefnId]*mc.DeleteCommandToken
+	delTokens, err = mc.FetchIndexDefnToDeleteCommandTokensMap()
+	if err != nil {
+		logging.Errorf("Planner::getIndexLayout: Error in FetchIndexDefnToDeleteCommandTokensMap %v", err)
+		return nil, err
+	}
+
+	var buildTokens map[common.IndexDefnId]*mc.BuildCommandToken
+	buildTokens, err = mc.FetchIndexDefnToBuildCommandTokensMap()
+	if err != nil {
+		logging.Errorf("Planner::getIndexLayout: Error in FetchIndexDefnToBuildCommandTokensMap %v", err)
+		return nil, err
+	}
+
 	for nid, res := range resp {
 
 		// create an empty indexer object using the indexer host name
@@ -226,7 +240,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		node.exclude = localMeta.LocalSettings["excludeNode"]
 
 		// convert from LocalIndexMetadata to IndexUsage
-		indexes, err := ConvertToIndexUsages(config, localMeta, node)
+		indexes, err := ConvertToIndexUsages(config, localMeta, node, buildTokens, delTokens)
 		if err != nil {
 			logging.Errorf("Planner::getIndexLayout: Error for converting index metadata to index usage for node %v, err: %v", node.NodeId, err)
 			return nil, err
@@ -253,7 +267,9 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 //
 // This function convert index defintions from a single metadatda repository to a list of IndexUsage.
 //
-func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, node *IndexerNode) ([]*IndexUsage, error) {
+func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, node *IndexerNode,
+	buildTokens map[common.IndexDefnId]*mc.BuildCommandToken,
+	delTokens map[common.IndexDefnId]*mc.DeleteCommandToken) ([]*IndexUsage, error) {
 
 	list := ([]*IndexUsage)(nil)
 
@@ -263,7 +279,7 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 		defn := &localMeta.IndexDefinitions[i]
 		defn.SetCollectionDefaults()
 
-		indexes, err := ConvertToIndexUsage(config, defn, localMeta, nil, nil)
+		indexes, err := ConvertToIndexUsage(config, defn, localMeta, buildTokens, delTokens)
 		if err != nil {
 			return nil, err
 		}

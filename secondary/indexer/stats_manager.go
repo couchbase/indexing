@@ -1127,6 +1127,7 @@ func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 
 func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	statsMap := make(map[string]interface{})
+
 	var found bool
 
 	addToStatsMap := func(s *IndexStats) {
@@ -1145,9 +1146,15 @@ func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	}
 
 	if t.level == "indexer" {
-		statsMap["indexer"] = is.constructIndexerStats(t.skipEmpty, t.version)
+		querySystemCatalog, _ := t.creds.IsAllowed("cluster.n1ql.meta!read")
+		if querySystemCatalog {
+			statsMap["indexer"] = is.constructIndexerStats(t.skipEmpty, t.version)
+		}
+		permissionCache := common.NewSessionPermissionsCache(t.creds)
 		for _, s := range is.indexes {
-			addToStatsMap(s)
+			if querySystemCatalog || permissionCache.IsAllowed(s.bucket, s.scope, s.collection, "list") {
+				addToStatsMap(s)
+			}
 		}
 		found = true
 	} else if t.level == "bucket" {
