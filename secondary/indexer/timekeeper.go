@@ -3077,6 +3077,7 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 	// because it may be waiting for a seqno that never exist in mutation queue.
 	if lts, ok := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && lts != nil {
 
+		var sumDcpSnapSize uint64
 		for i, s := range flushTs.Seqnos {
 
 			enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
@@ -3102,6 +3103,16 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 				flushTs.Snapshots[i][0] = lts.Snapshots[i][0]
 				flushTs.Snapshots[i][1] = lts.Snapshots[i][1]
 			}
+
+			sumDcpSnapSize += flushTs.Snapshots[i][1] - flushTs.Snapshots[i][0]
+		}
+
+		//avgDcpSnapSize is a point in time stat computed for each flushTs per stream/keyspace
+		//average is computed by sum(snapEnd - snapStart)/numVbuckets
+		keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
+		if keyspaceStats != nil {
+			numVb := uint64(len(flushTs.Seqnos))
+			keyspaceStats.avgDcpSnapSize.Set(sumDcpSnapSize / numVb)
 		}
 	}
 

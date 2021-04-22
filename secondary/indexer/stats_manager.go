@@ -72,6 +72,7 @@ type KeyspaceStats struct {
 	keyspaceId string
 
 	// Statistics in alphabetical order
+	avgDcpSnapSize     stats.Uint64Val
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
 	numNonAlignTS      stats.Int64Val
@@ -92,6 +93,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.numMutationsQueued.Init()
 	s.tsQueueSize.Init()
 	s.numNonAlignTS.Init()
+	s.avgDcpSnapSize.Init()
 	s.flushLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.snapLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.lastSnapDone.Init()
@@ -104,6 +106,7 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_mutations_queued", &s.numMutationsQueued)
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
 	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
+	statMap.AddStatValueFiltered("avg_dcp_snap_size", &s.avgDcpSnapSize)
 	statMap.AddStatValueFiltered("flush_latency_dist", &s.flushLatDist)
 	statMap.AddStatValueFiltered("snapshot_latency_dist", &s.snapLatDist)
 
