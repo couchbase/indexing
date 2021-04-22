@@ -2902,7 +2902,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 	lastPersistTime := tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId]
 
 	//for init build, if there is no snapshot option set
-	if tk.hasInitStateIndex(streamId, keyspaceId) {
+	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 		if flushTs.GetSnapType() == common.NO_SNAP {
 			isMergeCandidate := false
 
@@ -3030,7 +3030,7 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		return
 	}
 
-	if tk.hasInitStateIndex(streamId, keyspaceId) {
+	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 		return
 	}
 
@@ -4207,6 +4207,33 @@ func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,
 		return false
 	}
 
+}
+
+//hasInitStateIndexNoCatchup returns true if the stream/keyspace has
+//index in initial build except for catchup phase
+func (tk *timekeeper) hasInitStateIndexNoCatchup(streamId common.StreamId,
+	keyspaceId string) bool {
+
+	//index build doesn't happen in MAINT_STREAM
+	if streamId == common.MAINT_STREAM {
+		return false
+	}
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		//if index belongs to the flushed keyspaceId and in INITIAL state
+		idx := buildInfo.indexInst
+		if idx.Defn.KeyspaceId(idx.Stream) == keyspaceId &&
+			idx.Stream == streamId {
+			//all indexes in a stream/keyspace have the same state
+			//first qualfying check is sufficient to determine the answer
+			if idx.State == common.INDEX_STATE_CATCHUP {
+				return false
+			} else if idx.State == common.INDEX_STATE_INITIAL {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 //calc skip factor for in-mem snapshots based on the
