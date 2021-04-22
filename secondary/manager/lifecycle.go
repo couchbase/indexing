@@ -40,17 +40,17 @@ import (
 // LifecycleMgr is a singleton created as a child of the IndexManager singleton (manager.go).
 // Singleton chain: Indexer -> ClustMgrAgent -> IndexManager -> LifecycleMgr
 type LifecycleMgr struct {
-	repo             *MetadataRepo
-	cinfo            *common.ClusterInfoCache
-	cinfoClient      *common.ClusterInfoClient
-	notifier         MetadataNotifier // object to call Indexer to perform index DDL
-	clusterURL       string
+	repo        *MetadataRepo
+	cinfo       *common.ClusterInfoCache
+	cinfoClient *common.ClusterInfoClient
+	notifier    MetadataNotifier // object to call Indexer to perform index DDL
+	clusterURL  string
 
 	// Request queues from and to gometa intermediary layer
-	incomings        chan *requestHolder // normal priority DDL requests from clients
-	expedites        chan *requestHolder // high priority DDL-related requests from clients
-	bootstraps       chan *requestHolder // bootstrap-related requests from clients
-	outgoings        chan c.Packet // responses back to clients
+	incomings  chan *requestHolder // normal priority DDL requests from clients
+	expedites  chan *requestHolder // high priority DDL-related requests from clients
+	bootstraps chan *requestHolder // bootstrap-related requests from clients
+	outgoings  chan c.Packet       // responses back to clients
 
 	killch           chan bool
 	indexerReady     bool
@@ -67,7 +67,7 @@ type LifecycleMgr struct {
 	clientStatsRefreshInterval uint64
 
 	lastSendClientStats *client.IndexStats2 // always full stats; send will filter out index list if unchanged
-	clientStatsMutex    sync.Mutex // for lastSendClientStats
+	clientStatsMutex    sync.Mutex          // for lastSendClientStats
 	acceptedNames       map[string]*indexNameRequest
 	accIgnoredIds       map[common.IndexDefnId]bool
 }
@@ -124,9 +124,9 @@ type mergePartition struct {
 
 type builder struct {
 	manager   *LifecycleMgr
-	pendings  map[string][]uint64 // map of "bucket/scope/collection" to list of index defnIds pending build
+	pendings  map[string][]uint64    // map of "bucket/scope/collection" to list of index defnIds pending build
 	notifych  chan *common.IndexDefn // incoming requests to build indexes
-	batchSize int32 // max number of indexes to build per iteration of builder.run; <= 0 means unlimited
+	batchSize int32                  // max number of indexes to build per iteration of builder.run; <= 0 means unlimited
 	disable   int32
 
 	commandListener *mc.CommandListener
@@ -136,10 +136,13 @@ type builder struct {
 type janitor struct {
 	manager *LifecycleMgr
 
-	commandListener *mc.CommandListener
-	listenerDonech  chan bool
-	runch           chan bool
+	commandListener  *mc.CommandListener
+	listenerDonech   chan bool
+	runch            chan bool
+	deleteTokenCache map[common.IndexDefnId]int64 // unixnano timestamp
 }
+
+const DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL = 24 * time.Hour
 
 type updator struct {
 	manager        *LifecycleMgr
@@ -299,7 +302,6 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 func (m *LifecycleMgr) GetResponseChannel() <-chan c.Packet {
 	return (<-chan c.Packet)(m.outgoings)
 }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Regular methods
@@ -1483,7 +1485,7 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 			err = common.ErrBucketNotFound
 		}
 		// Error msg returned to user. *KEEP [%v] FOR ORIGINAL ERROR STRING* so we can detect it without ambiguity.
-		return fmt.Errorf("[%v] Bucket %v does not exist or temporarily unavailable for creating new index." +
+		return fmt.Errorf("[%v] Bucket %v does not exist or temporarily unavailable for creating new index."+
 			" Please retry the operation at a later time.", err, defn.Bucket)
 	}
 
@@ -1522,14 +1524,14 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 
 	if scopeId == collections.SCOPE_ID_NIL {
 		// Error msg returned to user. *KEEP [%v] FOR ORIGINAL ERROR STRING* so we can detect it without ambiguity.
-		return fmt.Errorf("[%v] Error retrieving scope ID." +
+		return fmt.Errorf("[%v] Error retrieving scope ID."+
 			" Bucket: %v, Scope: %v. Possibly dropped, else please retry later.",
 			common.ErrScopeNotFound, defn.Bucket, defn.Scope)
 	}
 
 	if collectionId == collections.COLLECTION_ID_NIL {
 		// Error msg returned to user. *KEEP [%v] FOR ORIGINAL ERROR STRING* so we can detect it without ambiguity.
-		return fmt.Errorf("[%v] Error retrieving collection ID." +
+		return fmt.Errorf("[%v] Error retrieving collection ID."+
 			" Bucket: %v, Scope: %v, Collection: %v. Possibly dropped, else please retry later.",
 			common.ErrCollectionNotFound, defn.Bucket, defn.Scope, defn.Collection)
 	}
@@ -2614,7 +2616,6 @@ func (m *LifecycleMgr) broadcastStats() {
 				refreshMs = refreshMsNew
 				refreshInterval = time.Duration(refreshMs) * time.Millisecond
 				resendFullTicks = int64(RESEND_INTERVAL / refreshInterval)
-
 
 				ticker.Stop()
 				ticker = time.NewTicker(refreshInterval)
@@ -4077,8 +4078,27 @@ func (m *janitor) cleanup() {
 		}
 
 		// index may already be deleted or does not exist in this node
+		// delayed processing of drop commands when index defn is null
+		// to avoid some corner cases with scheduled index creation and droping of those indexes.
+		// this effectively delays almost every drop token cleanup by janitor by 24 hours.
 		if defn == nil {
+			var timestamp int64
+			timestamp, ok := m.deleteTokenCache[command.DefnId]
+			if !ok {
+				timestamp = time.Now().UnixNano()
+				m.deleteTokenCache[command.DefnId] = timestamp
+			}
+			if time.Duration(time.Now().UnixNano()-timestamp) <= time.Duration(DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL) {
+				retryList[entry] = command
+			} else {
+				delete(m.deleteTokenCache, command.DefnId)
+				logging.Debugf("Janitor: finishing cleanup for index %v", command.DefnId)
+			}
 			continue
+		} else {
+			// defn was nil earlier hence we added DefnId to deleteTokenCache in previous iteration
+			// and defn is now available so remove the entry from cache.
+			delete(m.deleteTokenCache, command.DefnId)
 		}
 
 		// Queue up the cleanup request.  The request wont' happen until bootstrap is ready.
@@ -4302,10 +4322,11 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 	donech := make(chan bool)
 
 	janitor := &janitor{
-		manager:         mgr,
-		commandListener: mc.NewCommandListener(donech, false, false, true, true, false, false),
-		listenerDonech:  donech,
-		runch:           make(chan bool),
+		manager:          mgr,
+		commandListener:  mc.NewCommandListener(donech, false, false, true, true, false, false),
+		listenerDonech:   donech,
+		runch:            make(chan bool),
+		deleteTokenCache: make(map[common.IndexDefnId]int64),
 	}
 
 	return janitor
@@ -4480,7 +4501,7 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 		// built for the collection. The authortative check is done by indexer.
 		if s.manager.canBuildIndex(bucket, scope, collection) {
 
-			buildList := ([]uint64)(nil) // defnIds to start building
+			buildList := ([]uint64)(nil)       // defnIds to start building
 			isDisableBuild := s.disableBuild() // is background index building disabled?
 
 			pendingList := make([]uint64, len(defnIds)) // defnIds not built here
@@ -4492,7 +4513,7 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 				}
 
 				buildDefnId := false // submit this defnId for build?
-				foundReady := false // found any instId of this defnId in INDEX_STATE_READY state?
+				foundReady := false  // found any instId of this defnId in INDEX_STATE_READY state?
 				pendingList = pendingList[1:]
 
 				defn, err := s.manager.repo.GetIndexDefnById(common.IndexDefnId(defnId))
