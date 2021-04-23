@@ -240,6 +240,14 @@ func (p *Projector) ResetConfig(config c.Config) {
 		memThrottler.SetMemThrottle(cv.Bool())
 	}
 
+	if cv, ok := config["projector.memThrottle.init_build.start_level"]; ok {
+		memThrottler.SetInitBuildThrottleStartLevel(cv.Int())
+	}
+
+	if cv, ok := config["projector.memThrottle.incr_build.start_level"]; ok {
+		memThrottler.SetIncrBuildThrottleStartLevel(cv.Int())
+	}
+
 	if cv, ok := config["projector.maintStreamMemThrottle"]; ok {
 		memThrottler.SetMaintStreamMemThrottle(cv.Bool())
 	}
