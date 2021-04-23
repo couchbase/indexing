@@ -268,6 +268,17 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 
 	logging.Infof("DDLServiceMgr: handling rebalacne done")
 
+	nodes := getNodesInfo(change, isCancel)
+
+	// nodes can be empty but it cannot be nil.
+	// If emtpy, then no node will be considered.
+	// If nil, all nodes will be considered.
+	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr")
+	if err != nil {
+		logging.Errorf("DDLServiceMgr:rebalanceDone(): Failed to initialize metadata provider.  Error=%v.", err)
+		return
+	}
+
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()
 
@@ -279,18 +290,37 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 		}
 	}()
 
-	// Refresh metadata provider on topology change
-	httpAddrMap, err := m.refreshOnTopologyChange(change, isCancel)
-	if err != nil {
-		logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
-		return
+	m.nodes = nodes
+
+	// Close the current provider and update new provider
+	if m.provider != nil {
+		m.provider.Close()
+		m.provider = nil
 	}
 
+	m.provider = provider
+
+	// TODO: Investigate if gDDLServiceMgrLck has to be held for the
+	// below methods
 	m.cleanupCreateCommand()
 	m.cleanupDropCommand(false, m.provider)
 	m.cleanupDropInstanceCommand()
 	m.cleanupBuildCommand(false, m.provider)
 	m.handleClusterStorageMode(httpAddrMap)
+}
+
+func getNodesInfo(change *service.TopologyChange, isCancel bool) map[service.NodeID]bool {
+	nodes := make(map[service.NodeID]bool)
+	for _, node := range change.KeepNodes {
+		nodes[node.NodeInfo.NodeID] = true
+	}
+
+	if isCancel {
+		for _, node := range change.EjectNodes {
+			nodes[node.NodeID] = true
+		}
+	}
+	return nodes
 }
 
 func (m *DDLServiceMgr) stopProcessDDL() {
