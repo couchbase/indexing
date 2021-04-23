@@ -1435,6 +1435,11 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		return err
 	}
 
+	instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
+	if instState != common.INDEX_STATE_READY {
+		logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
+			"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
+	}
 	/////////////////////////////////////////////////////
 	// Build Index
 	/////////////////////////////////////////////////////
@@ -1468,6 +1473,18 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	logging.Debugf("LifecycleMgr.CreateIndex() : createIndex completes")
 
 	return nil
+}
+
+func (m *LifecycleMgr) getInstStateFromTopology(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId) common.IndexState {
+	inst, err := m.FindLocalIndexInst(bucket, scope, collection, defnId, instId)
+	if inst == nil || err != nil {
+		logging.Fatalf("LifecycleMgr.getInstStateFromTopology Error observed while retrieving inst state from topology. "+
+			"InstId: %v (%v, %v, %v, %v). Inst: %+v, err: %v", instId, bucket, scope, collection, defnId, inst, err)
+	}
+	if inst != nil {
+		return common.IndexState(inst.State)
+	}
+	return common.INDEX_STATE_NIL // As instance is not found
 }
 
 func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
@@ -1938,8 +1955,31 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 		for _, inst := range insts {
 
 			if inst.State != uint32(common.INDEX_STATE_READY) {
-				logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance (%v, %v, %v, %v, %v) is not in ready state.  Skip this index.",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
+				logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in ready state. Inst state: %v. Skip this index.",
+					inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
+
+				// Instance can exist in any state but not in INDEX_STATE_CREATED
+				// This code path can get executed only after an index is successfully created
+				// On a successful index creation, index state would be in INDEX_STATE_READY or higher
+				if inst.State == uint32(common.INDEX_STATE_CREATED) {
+					logging.Fatalf("LifecycleMgr.handleBuildIndexes: Index instance: %+v is in state: INDEX_STATE_CREATED", inst)
+
+					// It could be possible that the in-memory topoCache is corrupt(?) - a guess at this point
+					// Retrieve the topology directly from meta and log the instance to understand the state in meta store
+					topoFromMeta, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
+					if err == nil {
+						for i, _ := range topoFromMeta.Definitions {
+							if topoFromMeta.Definitions[i].DefnId == uint64(defn.DefnId) {
+								for j, _ := range topoFromMeta.Definitions[i].Instances {
+									if inst.InstId == topoFromMeta.Definitions[i].Instances[j].InstId {
+										logging.Fatalf("LifecycleMgr.handleBuildIndexes: Value of index instance: %+v in metastore", inst)
+									}
+								}
+							}
+						}
+					}
+					logging.Errorf("LifecycleMgr.handleBuildIndexes: Error while retrieving topology from meta, err: %v", err)
+				}
 				continue
 			}
 
@@ -3003,6 +3043,12 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 		logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 		m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 		return err
+	}
+
+	instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
+	if instState != common.INDEX_STATE_READY {
+		logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
+			"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
 	}
 
 	/////////////////////////////////////////////////////
