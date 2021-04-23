@@ -41,23 +41,20 @@ func (v *Int64Val) Set(nv int64) {
 	atomic.StoreInt64(v.val, nv)
 }
 
-func (v Int64Val) MarshalJSON() ([]byte, error) {
-	value := atomic.LoadInt64(v.val)
-	return []byte(fmt.Sprint(value)), nil
+func (v *Int64Val) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprint(atomic.LoadInt64(v.val))), nil
 }
 
 func (v *Int64Val) CAS(old, new int64) bool {
 	return atomic.CompareAndSwapInt64(v.val, old, new)
 }
 
-func (v Int64Val) Value() int64 {
-	value := atomic.LoadInt64(v.val)
-	return value
+func (v *Int64Val) Value() int64 {
+	return atomic.LoadInt64(v.val)
 }
 
-func (v Int64Val) GetValue() interface{} {
-	value := atomic.LoadInt64(v.val)
-	return value
+func (v *Int64Val) GetValue() interface{} {
+	return atomic.LoadInt64(v.val)
 }
 
 func (v *Int64Val) AddFilter(filter uint64) {
@@ -88,19 +85,16 @@ func (v *Uint64Val) Set(nv uint64) {
 	atomic.StoreUint64(v.val, nv)
 }
 
-func (v Uint64Val) MarshalJSON() ([]byte, error) {
-	value := atomic.LoadUint64(v.val)
-	return []byte(fmt.Sprint(value)), nil
+func (v *Uint64Val) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprint(atomic.LoadUint64(v.val))), nil
 }
 
-func (v Uint64Val) Value() uint64 {
-	value := atomic.LoadUint64(v.val)
-	return value
+func (v *Uint64Val) Value() uint64 {
+	return atomic.LoadUint64(v.val)
 }
 
-func (v Uint64Val) GetValue() interface{} {
-	value := atomic.LoadUint64(v.val)
-	return value
+func (v *Uint64Val) GetValue() interface{} {
+	return atomic.LoadUint64(v.val)
 }
 
 func (v *Uint64Val) AddFilter(filter uint64) {
@@ -135,23 +129,20 @@ func (v *BoolVal) Set(nv bool) {
 	atomic.StoreInt32(v.val, x)
 }
 
-func (v BoolVal) MarshalJSON() ([]byte, error) {
+func (v *BoolVal) MarshalJSON() ([]byte, error) {
 	value := atomic.LoadInt32(v.val)
 	if value == 1 {
 		return []byte("true"), nil
 	}
-
 	return []byte("false"), nil
 }
 
-func (v BoolVal) Value() bool {
-	value := atomic.LoadInt32(v.val)
-	return value == 1
+func (v *BoolVal) Value() bool {
+	return 1 == atomic.LoadInt32(v.val)
 }
 
-func (v BoolVal) GetValue() interface{} {
-	value := atomic.LoadInt32(v.val)
-	return value == 1
+func (v *BoolVal) GetValue() interface{} {
+	return 1 == atomic.LoadInt32(v.val)
 }
 
 func (v *BoolVal) AddFilter(filter uint64) {
@@ -178,18 +169,16 @@ func (v *TimeVal) Set(nv int64) {
 	atomic.StoreInt64(v.val, nv)
 }
 
-func (v TimeVal) MarshalJSON() ([]byte, error) {
+func (v *TimeVal) MarshalJSON() ([]byte, error) {
 	return []byte(v.Value()), nil
 }
 
-func (v TimeVal) Value() string {
-	value := atomic.LoadInt64(v.val)
-	return fmt.Sprint(value)
+func (v *TimeVal) Value() string {
+	return fmt.Sprint(atomic.LoadInt64(v.val))
 }
 
-func (v TimeVal) GetValue() interface{} {
-	value := atomic.LoadInt64(v.val)
-	return fmt.Sprint(value)
+func (v *TimeVal) GetValue() interface{} {
+	return fmt.Sprint(atomic.LoadInt64(v.val))
 }
 
 func (v *TimeVal) AddFilter(filter uint64) {

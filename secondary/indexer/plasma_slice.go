@@ -2268,11 +2268,11 @@ func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error)
 
 	pstats := mdb.mainstore.GetPreparedStats()
 	var avg_item_size, avg_page_size int64
-	if atomic.LoadInt64(&pstats.ItemCnt) > 0 {
-		avg_item_size = atomic.LoadInt64(&pstats.PageBytes) / atomic.LoadInt64(&pstats.ItemCnt)
+	if itemCnt := atomic.LoadInt64(&pstats.ItemCnt); itemCnt > 0 {
+		avg_item_size = atomic.LoadInt64(&pstats.PageBytes) / itemCnt
 	}
-	if atomic.LoadInt64(&pstats.PageCnt) > 0 {
-		avg_page_size = atomic.LoadInt64(&pstats.PageBytes) / atomic.LoadInt64(&pstats.PageCnt)
+	if pageCnt := atomic.LoadInt64(&pstats.PageCnt); pageCnt > 0 {
+		avg_page_size = atomic.LoadInt64(&pstats.PageBytes) / pageCnt
 	}
 	internalData := fmt.Sprintf("{\n\"MainStore\":\n"+
 		"{\n"+
