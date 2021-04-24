@@ -1233,6 +1233,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		buildTokens, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in ListAllChildren for BuildDDLCommandTokenPath. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1240,6 +1241,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		deleteTokens, err1 := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 		if err1 != nil {
+			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in ListAllChildren for DeleteDDLCommandTokenPath. req: %v", err1, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err1.Error() + "\n"))
 			return
@@ -1247,6 +1249,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		createTokens, err2 := mc.ListCreateCommandToken()
 		if err2 != nil {
+			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in ListCreateCommandToken. req: %v", err2, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err2.Error() + "\n"))
 			return
@@ -1254,6 +1257,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		scheduleTokens, err3 := mc.ListAllScheduleCreateTokens()
 		if err3 != nil {
+			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in ListAllScheduleCreateTokens. req: %v", err3, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err3.Error() + "\n"))
 			return
@@ -1261,6 +1265,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		stopScheduleTokens, err4 := mc.ListAllStopScheduleCreateTokens()
 		if err4 != nil {
+			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in ListAllStopScheduleCreateTokens req: %v", err4, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err4.Error() + "\n"))
 			return
@@ -1291,6 +1296,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 			defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
 			if err != nil {
+				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in GetDefnIdFromCreateCommandTokenPath for %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1298,6 +1304,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 			token, err := mc.FetchCreateCommandToken(defnId, requestId)
 			if err != nil {
+				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in FetchCreateCommandToken for %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1305,6 +1312,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 			buf, err := json.Marshal(token)
 			if err != nil {
+				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in json marshal for %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1322,6 +1330,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 			path := mc.GetScheduleCreateTokenPathFromDefnId(token.Definition.DefnId)
 
+			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in GetScheduleCreateTokenPathFromDefnId for %v. req: %v", err, token.Definition.DefnId, common.GetHTTPReqInfo(r))
 			buf, err := json.Marshal(token)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -1343,6 +1352,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 			buf, err := json.Marshal(token)
 			if err != nil {
+				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in GetScheduleCreateTokenPathFromDefnId for %v. req: %v", err, token.DefnId, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1370,6 +1380,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		createTokens, err := mc.ListCreateCommandToken()
 		if err != nil {
+			logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in ListCreateCommandToken. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1381,6 +1392,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 			defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
 			if err != nil {
+				logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in GetDefnIdFromCreateCommandTokenPath for entry %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				continue
@@ -1388,6 +1400,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 			token, err := mc.FetchCreateCommandToken(defnId, requestId)
 			if err != nil {
+				logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in FetchCreateCommandToken for entry %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1400,6 +1413,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		buf, err := mc.MarshallCreateCommandTokenList(list)
 		if err != nil {
+			logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in MarshallCreateCommandTokenList. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1425,7 +1439,7 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 
 		deleteTokens, err := mc.ListDeleteCommandToken()
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListDeleteTokens error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListDeleteTokens error %v in ListDeleteCommandToken. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1440,7 +1454,7 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 
 		buf, err := mc.MarshallDeleteCommandTokenList(list)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListDeleteTokens error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListDeleteTokens error %v in MarshallDeleteCommandTokenList. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1469,7 +1483,7 @@ func (m *DDLServiceMgr) handleListGenericTokenPaths(w http.ResponseWriter,
 
 		tokenPaths, err := listerFunc()
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths caller %v, error %v", callerName, err)
+			logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths caller %v, error %v in listerFunc. req: %v", callerName, err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1484,7 +1498,7 @@ func (m *DDLServiceMgr) handleListGenericTokenPaths(w http.ResponseWriter,
 
 		buf, err := mc.MarshallTokenPathList(list)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths caller %v, error %v", callerName, err)
+			logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths caller %v, error %v in MarshallTokenPathList. req: %v", callerName, err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1518,7 +1532,7 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 
 		deleteTokens, err := mc.ListAndFetchAllDropInstanceCommandToken()
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v in ListAndFetchAllDropInstanceCommandToken. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1533,7 +1547,7 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 
 		buf, err := mc.MarshallDropInstanceCommandTokenList(list)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v in MarshallDropInstanceCommandTokenList. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1564,7 +1578,7 @@ func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r 
 
 		scheduleTokens, err := mc.ListAllScheduleCreateTokens()
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Error %v in ListAllScheduleCreateTokens. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1579,7 +1593,7 @@ func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r 
 
 		buf, err := mc.MarshallScheduleCreateTokenList(list)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Error %v in MarshallScheduleCreateTokenList. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1603,7 +1617,7 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 
 		scheduleTokens, err := mc.ListAllStopScheduleCreateTokens()
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Error %v in ListAllStopScheduleCreateTokens. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1618,7 +1632,7 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 
 		buf, err := mc.MarshallStopScheduleCreateTokenList(list)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Error %v in MarshallStopScheduleCreateTokenList. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return

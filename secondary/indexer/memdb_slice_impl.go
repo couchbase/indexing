@@ -995,7 +995,15 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		mdb.confLock.RUnlock()
 
 		// Prepare for persistence.
-		mdb.mainstore.PreparePersistence(tmpdir, s.info.MainSnap)
+		if err := mdb.mainstore.PreparePersistence(tmpdir, s.info.MainSnap); err != nil {
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
+				" prepare persistence for create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
+
+			os.RemoveAll(tmpdir)
+			os.RemoveAll(dir)
+
+			return
+		}
 
 		// StoreToDisk call below will spawn 'concurrency' go routines to write
 		// and will wait for this group to complete.

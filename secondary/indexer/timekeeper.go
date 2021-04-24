@@ -2305,6 +2305,12 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				tk.setAddInstPending(streamId, keyspaceId, true)
 				tk.ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId] = false
 
+				//reset numNonAlignTS for catchup phase
+				keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
+				if keyspaceStats != nil {
+					keyspaceStats.numNonAlignTS.Set(0)
+				}
+
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
 					"Stream: %v KeyspaceId: %v Session: %v BuildTS: %v", idx.InstId, streamId,
 					keyspaceId, sessionId, buildInfo.buildTs)
@@ -2505,6 +2511,7 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 
 	//if INIT_STREAM has not caught upto minMergeTs
 	flushedPastMinMergeTs := tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId]
+
 	if !flushedPastMinMergeTs {
 		//check and set the flag
 		if initTsSeq.GreaterThanEqual(minMergeTsSeq) {
@@ -2895,7 +2902,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 	lastPersistTime := tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId]
 
 	//for init build, if there is no snapshot option set
-	if tk.hasInitStateIndex(streamId, keyspaceId) {
+	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 		if flushTs.GetSnapType() == common.NO_SNAP {
 			isMergeCandidate := false
 
@@ -2980,12 +2987,15 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 				tk.ss.streamKeyspaceIdHasInMemSnap[streamId][keyspaceId] = true
 			}
 		}
-	} else {
+	}
+
+	if !flushTs.IsSnapAligned() {
 		keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 		if keyspaceStats != nil {
 			keyspaceStats.numNonAlignTS.Add(1)
 		}
 	}
+
 }
 
 //checkMergeCandidateTs check if a TS is a candidate for merge with
@@ -3003,31 +3013,11 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 		return false
 	}
 
-	//if the flushTs is past the lastFlushTs of this keyspaceId in MAINT_STREAM,
-	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
-	//it is important to use that for comparison as after merge MAINT_STREAM will
-	//include merged indexes after the in progress flush finishes.
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-	var lastFlushedTsVbuuid *common.TsVbuuid
-	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
-		lastFlushedTsVbuuid = lts
-	} else {
-		lastFlushedTsVbuuid = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
-	}
+	//merge candidate cannot be evaluated by comparing
+	//the seqno of collection vs bucket. It is better to generate in-mem
+	//snapshot for all snap aligned timestamps.
 
-	mergeCandidate := false
-	//if no flush has happened yet, its a merge candidate
-	if lastFlushedTsVbuuid == nil {
-		mergeCandidate = true
-	} else {
-		lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
-		ts := getSeqTsFromTsVbuuid(flushTs)
-		if ts.GreaterThanEqual(lastFlushedTs) {
-			mergeCandidate = true
-		}
-	}
-
-	return mergeCandidate
+	return true
 }
 
 //mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
@@ -3040,7 +3030,7 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		return
 	}
 
-	if tk.hasInitStateIndex(streamId, keyspaceId) {
+	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 		return
 	}
 
@@ -3087,6 +3077,7 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 	// because it may be waiting for a seqno that never exist in mutation queue.
 	if lts, ok := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && lts != nil {
 
+		var sumDcpSnapSize uint64
 		for i, s := range flushTs.Seqnos {
 
 			enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
@@ -3112,6 +3103,16 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 				flushTs.Snapshots[i][0] = lts.Snapshots[i][0]
 				flushTs.Snapshots[i][1] = lts.Snapshots[i][1]
 			}
+
+			sumDcpSnapSize += flushTs.Snapshots[i][1] - flushTs.Snapshots[i][0]
+		}
+
+		//avgDcpSnapSize is a point in time stat computed for each flushTs per stream/keyspace
+		//average is computed by sum(snapEnd - snapStart)/numVbuckets
+		keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
+		if keyspaceStats != nil {
+			numVb := uint64(len(flushTs.Seqnos))
+			keyspaceStats.avgDcpSnapSize.Set(sumDcpSnapSize / numVb)
 		}
 	}
 
@@ -4199,17 +4200,37 @@ func (tk *timekeeper) resetWaitForRecovery(streamId common.StreamId, keyspaceId 
 func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,
 	keyspaceId string) bool {
 
+	//7.0 and above, init build can only happen in init stream
 	if streamId == common.INIT_STREAM {
 		return true
+	} else {
+		return false
+	}
+
+}
+
+//hasInitStateIndexNoCatchup returns true if the stream/keyspace has
+//index in initial build except for catchup phase
+func (tk *timekeeper) hasInitStateIndexNoCatchup(streamId common.StreamId,
+	keyspaceId string) bool {
+
+	//index build doesn't happen in MAINT_STREAM
+	if streamId == common.MAINT_STREAM {
+		return false
 	}
 
 	for _, buildInfo := range tk.indexBuildInfo {
 		//if index belongs to the flushed keyspaceId and in INITIAL state
 		idx := buildInfo.indexInst
 		if idx.Defn.KeyspaceId(idx.Stream) == keyspaceId &&
-			idx.Stream == streamId &&
-			idx.State == common.INDEX_STATE_INITIAL {
-			return true
+			idx.Stream == streamId {
+			//all indexes in a stream/keyspace have the same state
+			//first qualfying check is sufficient to determine the answer
+			if idx.State == common.INDEX_STATE_CATCHUP {
+				return false
+			} else if idx.State == common.INDEX_STATE_INITIAL {
+				return true
+			}
 		}
 	}
 	return false

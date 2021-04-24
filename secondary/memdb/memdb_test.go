@@ -250,7 +250,11 @@ func TestLoadStoreDisk(t *testing.T) {
 	fmt.Println(fmt.Sprintf("snap count = %v", n))
 
 	t0 = time.Now()
-	db.PreparePersistence("db.dump", snap)
+	if err := db.PreparePersistence("db.dump", snap); err != nil {
+		t.Errorf("Error while preparing %v", err)
+		return
+	}
+
 	err := db.StoreToDisk("db.dump", snap, 8, nil)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
@@ -324,7 +328,12 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 	concurr := runtime.GOMAXPROCS(0)
 
 	snap, _ := db.NewSnapshot()
-	db.PreparePersistence("db.dump", snap)
+
+	if err := db.PreparePersistence("db.dump", snap); err != nil {
+		t.Errorf("Error while preparing %v", err)
+		return
+	}
+
 	db.StoreToDisk("db.dump", snap, concurr, nil)
 	fmt.Printf("Done Storing to disk\n")
 	snap.Close()
@@ -375,7 +384,11 @@ func TestStoreDiskShutdown(t *testing.T) {
 	t0 = time.Now()
 	errch := make(chan error, 1)
 	go func() {
-		db.PreparePersistence("db.dump", snap)
+		if err := db.PreparePersistence("db.dump", snap); err != nil {
+			fmt.Println("Prepare returns error: ", err)
+			errch <- err
+			return
+		}
 		errch <- db.StoreToDisk("db.dump", snap, 8, nil)
 	}()
 
@@ -702,7 +715,12 @@ func TestLoadDeltaStoreDisk(t *testing.T) {
 	fmt.Println(fmt.Sprintf("snap count = %v", n))
 
 	t0 := time.Now()
-	db.PreparePersistence("db.dump", snap)
+
+	if err := db.PreparePersistence("db.dump", snap); err != nil {
+		t.Errorf("Error while preparing %v", err)
+		return
+	}
+
 	err := db.StoreToDisk("db.dump", snap, 8, callb)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)
@@ -842,7 +860,12 @@ func TestDiskCorruption(t *testing.T) {
 	fmt.Println(db.DumpStats())
 
 	t0 = time.Now()
-	db.PreparePersistence("db.dump", snap)
+
+	if err := db.PreparePersistence("db.dump", snap); err != nil {
+		t.Errorf("Error while preparing %v", err)
+		return
+	}
+
 	err := db.StoreToDisk("db.dump", snap, 8, nil)
 	if err != nil {
 		t.Errorf("Expected no error. got=%v", err)

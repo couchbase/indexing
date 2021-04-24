@@ -453,7 +453,8 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 				var newSnapshot Snapshot
 
 				logging.Tracef("StorageMgr::handleCreateSnapshot Creating New Snapshot "+
-					"Index: %v PartitionId: %v SliceId: %v Commit: %v Force: %v", idxInstId, partnId, slice.Id(), needsCommit, forceCommit)
+					"Index: %v PartitionId: %v SliceId: %v Commit: %v Force: %v", idxInstId,
+					partnId, slice.Id(), needsCommit, forceCommit)
 
 				if forceCommit {
 					needsCommit = forceCommit
@@ -487,7 +488,10 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 
 				if needsCommit {
 					logging.Infof("StorageMgr::handleCreateSnapshot Added New Snapshot Index: %v "+
-						"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
+						"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapType %v SnapAligned %v "+
+						"SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(),
+						tsVbuuid.Crc64, info, tsVbuuid.GetSnapType(), tsVbuuid.IsSnapAligned(),
+						snapCreateDur, snapOpenDur)
 				}
 				ss := &sliceSnapshot{
 					id:   slice.Id(),
