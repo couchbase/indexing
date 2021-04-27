@@ -1501,7 +1501,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		return err
 	}
 	cinfo.SetUserAgent("updateIndexerList")
-	if err := cinfo.Fetch(); err != nil {
+	if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
 		return err
 	}
 
