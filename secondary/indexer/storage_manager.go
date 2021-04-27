@@ -920,8 +920,9 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 		latestSnapInfo := s.GetLatest()
 
 		if latestSnapInfo == nil || lastRollbackTs == nil {
-			logging.Infof("StorageMgr::handleRollback latestSnapInfo %v "+
-				"lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
+			logging.Infof("StorageMgr::handleRollback %v latestSnapInfo %v "+
+				"lastRollbackTs %v. Use latest snapshot.", slice.IndexInstId(), latestSnapInfo,
+				lastRollbackTs)
 			snapInfo = latestSnapInfo
 		} else {
 			slist := s.List()
@@ -930,19 +931,20 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 					//if there are more snapshots, use the next one
 					if len(slist) >= i+2 {
 						snapInfo = slist[i+1]
-						logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
-							"Snapshot %v. Using Next snapshot %v", si, snapInfo)
+						logging.Infof("StorageMgr::handleRollback %v Discarding Already Used "+
+							"Snapshot %v. Using Next snapshot %v", slice.IndexInstId(), si, snapInfo)
 					} else {
-						logging.Infof("StorageMgr::handleRollback Unable to find a snapshot "+
-							"older than last used Snapshot %v. Use nil snapshot.", latestSnapInfo)
+						logging.Infof("StorageMgr::handleRollback %v Unable to find a snapshot "+
+							"older than last used Snapshot %v. Use nil snapshot.", slice.IndexInstId(),
+							latestSnapInfo)
 						snapInfo = nil
 					}
 					break
 				} else {
 					//if lastRollbackTs is set(i.e. MTR after rollback wasn't completely successful)
 					//use only snapshots lower than lastRollbackTs
-					logging.Infof("StorageMgr::handleRollback Discarding Snapshot %v. Need older "+
-						"than last used snapshot %v.", si, lastRollbackTs)
+					logging.Infof("StorageMgr::handleRollback %v Discarding Snapshot %v. Need older "+
+						"than last used snapshot %v.", slice.IndexInstId(), si, lastRollbackTs)
 				}
 			}
 		}

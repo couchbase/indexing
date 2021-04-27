@@ -2433,7 +2433,11 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 				//disable flush for MAINT_STREAM for this keyspace, so it doesn't
 				//move ahead till merge is complete
-				tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+				if mStatus == STREAM_ACTIVE {
+					if flushEnabled, ok := tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket]; ok && flushEnabled {
+						tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+					}
+				}
 
 				//if keyspace in INIT_STREAM is going to merge, disable flush. No need to waste
 				//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
