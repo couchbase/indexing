@@ -119,7 +119,6 @@ type Bucket struct {
 	vBucketServerMap unsafe.Pointer // *VBucketServerMap
 	nodeList         unsafe.Pointer // *[]Node
 
-	AuthType            string                 `json:"authType"`
 	Capabilities        []string               `json:"bucketCapabilities"`
 	CapabilitiesVersion string                 `json:"bucketCapabilitiesVer"`
 	Type                string                 `json:"bucketType"`
@@ -127,7 +126,6 @@ type Bucket struct {
 	NodeLocator         string                 `json:"nodeLocator"`
 	Quota               map[string]float64     `json:"quota,omitempty"`
 	Replicas            int                    `json:"replicaNumber"`
-	Password            string                 `json:"saslPassword"`
 	URI                 string                 `json:"uri"`
 	StreamingURI        string                 `json:"streamingUri"`
 	LocalRandomKeyURI   string                 `json:"localRandomKeyUri,omitempty"`
@@ -551,8 +549,7 @@ func Connect(baseU string) (Client, error) {
 
 //Get SASL buckets
 type BucketInfo struct {
-	Name     string // name of bucket
-	Password string // SASL password of bucket
+	Name string // name of bucket
 }
 
 func GetBucketList(baseU string) (bInfo []BucketInfo, err error) {
@@ -571,7 +568,7 @@ func GetBucketList(baseU string) (bInfo []BucketInfo, err error) {
 	}
 	bInfo = make([]BucketInfo, 0)
 	for _, bucket := range buckets {
-		bucketInfo := BucketInfo{Name: bucket.Name, Password: bucket.Password}
+		bucketInfo := BucketInfo{Name: bucket.Name}
 		bInfo = append(bInfo, bucketInfo)
 	}
 	return bInfo, err

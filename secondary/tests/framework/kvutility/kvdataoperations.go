@@ -122,7 +122,7 @@ func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, host
 func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota, proxyPort string) {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/buckets"
-	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}, "authType": {authenticationType}, "saslPassword": {saslBucketPassword}, "flushEnabled": {"1"}, "replicaNumber": {"1"}}
+	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}, "flushEnabled": {"1"}, "replicaNumber": {"1"}}
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
