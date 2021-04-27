@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -8385,6 +8386,20 @@ kvtsloop:
 				err = errors.New(fmt.Sprintf("Bucket %v does not exist anymore.", bucket))
 				logging.Errorf("Indexer::computeBucketBuildTs Error: %v", err)
 				return
+			}
+
+			//validate collection
+			if cid != "" {
+				collId := ""
+				bucket, scope, coll := SplitKeyspaceId(keyspaceId)
+				collId, err = common.GetCollectionID(clustAddr, bucket, scope, coll)
+				if err == nil && collId == collections.COLLECTION_ID_NIL {
+					err = errors.New(fmt.Sprintf("Keyspace %v does not exist anymore.", keyspaceId))
+					logging.Errorf("Indexer::computeBucketBuildTs Error: %v", err)
+					return
+
+				}
+
 			}
 			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 		} else {
