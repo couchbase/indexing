@@ -149,6 +149,51 @@ func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
 
 }
 
+func (c *ClusterInfoCache) Connect() (err error) {
+	cl, err := couchbase.Connect(c.url)
+	if err != nil {
+		return err
+	}
+	c.client = cl
+
+	c.client.SetUserAgent(c.userAgent)
+	return nil
+}
+
+// Note: This function does not fetch BucketMap data in c.pool
+func (c *ClusterInfoCache) FetchNodesData() (err error) {
+	p, err := c.client.CallPoolURI(c.poolName)
+	if err != nil {
+		return err
+	}
+	c.pool = p
+
+	c.updateNodesData()
+
+	found := false
+	for _, node := range c.nodes {
+		if node.ThisNode {
+			found = true
+		}
+	}
+
+	if !found {
+		return errors.New("Current node's cluster membership is not active")
+	}
+	return nil
+}
+
+func (c *ClusterInfoCache) FetchNodeSvsData() (err error) {
+	ps, err := c.client.GetPoolServices(c.poolName)
+	if err != nil {
+		return err
+	}
+
+	c.nodesvs = ps.NodesExt
+	c.buildEncryptPortMapping()
+	return nil
+}
+
 func (c *ClusterInfoCache) Fetch() error {
 
 	fn := func(r int, err error) error {
@@ -362,6 +407,54 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 				goto retry
 			} else {
 				logging.Infof("%vValidation Failed for cluster info.. %v",
+					c.logPrefix, c)
+				return ErrValidationFailed
+			}
+		}
+
+		return nil
+	}
+
+	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	return rh.Run()
+}
+
+func (c *ClusterInfoCache) FetchNodesAndSvsInfoWithLock() (err error) {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.FetchNodesAndSvsInfo()
+}
+
+func (c *ClusterInfoCache) FetchNodesAndSvsInfo() (err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Infof("%vError occured during nodes and nodesvs update (%v) .. Retrying(%d)",
+				c.logPrefix, err, r)
+		}
+
+		vretry := 0
+	retry:
+		if err = c.Connect(); err != nil {
+			return err
+		}
+
+		if err = c.FetchNodesData(); err != nil {
+			return err
+		}
+
+		if err = c.FetchNodeSvsData(); err != nil {
+			return err
+		}
+
+		if !c.validateCache(c.client.Info.IsIPv6) {
+			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
+				vretry++
+				logging.Infof("%vValidation Failed while updating nodes and nodesvs.. Retrying(%d)",
+					c.logPrefix, vretry)
+				goto retry
+			} else {
+				logging.Errorf("%vValidation Failed while updating nodes and nodesvs.. %v",
 					c.logPrefix, c)
 				return ErrValidationFailed
 			}
