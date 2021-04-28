@@ -120,10 +120,11 @@ type indexer struct {
 	keyspaceIdCreateClientChMap map[string]MsgChannel
 
 	wrkrRecvCh          MsgChannel //channel to receive messages from workers
-	internalRecvCh      MsgChannel //buffered channel to queue worker requests
-	adminRecvCh         MsgChannel //channel to receive admin messages
-	internalAdminRecvCh MsgChannel //internal channel to receive admin messages
-	internalAdminRespCh MsgChannel //internal channel to respond admin messages
+	                               //   (SettingsManager, MutationManager, KVSender, Timekeeper)
+	internalRecvCh      MsgChannel //buffered channel to queue worker requests (most MsgXyz messages)
+	adminRecvCh         MsgChannel //channel to receive admin messages (ClustMgrAgent)
+	internalAdminRecvCh MsgChannel //internal channel to receive admin messages (DDL; unbuffered channel)
+	internalAdminRespCh MsgChannel //internal channel to respond admin messages (DDL; unbuffered channel)
 	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
 	shutdownCompleteCh  MsgChannel //indicate shutdown completion
 
@@ -859,88 +860,165 @@ func (idx *indexer) releaseStreamRequestLock(req *kvRequest) {
 	}
 }
 
+const MSG_LOOP_MARKER string = "msg_loop" // to grep for all the following logXyz messages
+const MSG_PROCESSING_SLOW time.Duration = time.Minute  // threshold for warning of slow message processing
+
+// logProcessingTime logs the time it took to process a message. To avoid log flooding, this logs at levels
+//   Warn  -- if time taken is long, regardless of forceLog flag
+//   Info  -- if time taken is short but forceLog flag is true (admin messages = DDL)
+//   Debug -- if time taken is short and forceLog flag is false
+// classMethod is logging prefix of form "class::method".
+func logProcessingTime(classMethod string, msg Message, channel string, timeTaken time.Duration, forceLog bool) {
+
+	if timeTaken > MSG_PROCESSING_SLOW {
+		logging.Warnf("%v:%v: %v message from %v channel processing took %v > %v",
+			classMethod, MSG_LOOP_MARKER, msg.GetMsgType().String(), channel, timeTaken, MSG_PROCESSING_SLOW)
+		return
+	}
+
+	var loggingFunc func(format string, v ...interface{})
+	if forceLog {
+		loggingFunc = logging.Infof
+	} else if logging.IsEnabled(logging.Debug) {
+		loggingFunc = logging.Debugf
+	}
+	if loggingFunc != nil {
+		loggingFunc("%v:%v: %v message from %v channel processing took %v",
+			classMethod, MSG_LOOP_MARKER, msg.GetMsgType().String(), channel, timeTaken)
+	}
+}
+
+// logStreamRequestLockTime logs the time consumed waiting for stream request locks in drop processing.
+// If this is slow it logs at Warn level, else Info.
+// classMethod is logging prefix of form "class::method".
+func logStreamRequestLockTime(classMethod string, msg Message, channel string, timeTaken time.Duration) {
+	if timeTaken <= MSG_PROCESSING_SLOW {
+		logging.Infof("%v:%v: %v message from %v channel stream request lock waits took %v",
+			classMethod, MSG_LOOP_MARKER, msg.GetMsgType().String(), channel, timeTaken)
+	} else {
+		logging.Warnf("%v:%v: %v message from %v channel stream request lock waits took %v > %v",
+			classMethod, MSG_LOOP_MARKER, msg.GetMsgType().String(), channel, timeTaken, MSG_PROCESSING_SLOW)
+	}
+}
+
+// logShutdownStart logs a shutdown starting message for a non-trivial message processing loop shutdown.
+// classMethod is logging prefix of form "class::method".
+func logShutdownStart(classMethod string) {
+	logging.Infof("%v:%v: shutdown starting",
+		classMethod, MSG_LOOP_MARKER)
+}
+
+// logShutdownComplete logs a standard shutdown complete message for a message procesing loop.
+// classMethod is logging prefix of form "class::method".
+func logShutdownComplete(classMethod string) {
+	logging.Infof("%v:%v: shutdown complete",
+		classMethod, MSG_LOOP_MARKER)
+}
+
 //run starts the main loop for the indexer
 func (idx *indexer) run() {
+	const classMethod string = "Indexer::run" // for logging
 
-	go idx.listenWorkerMsgs()
-	go idx.listenAdminMsgs()
+	go idx.listenWorkerMsgs() // wrkrRecvCh
+	go idx.listenAdminMsgs() // adminRecvCh
 
 	for {
+		var msg Message
+		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
+		var receiveTime time.Time // time msg was received
+		var channel string // name of channel msg came from
+		var forceLog bool // admin messages force logging of processing time
 
+		// internalRecvCh and internalAdminRecvCh chosen at random per Go official behavior
 		select {
 
-		case msg, ok := <-idx.internalRecvCh:
+		case msg, ok = <-idx.internalRecvCh:
 			if ok {
+				receiveTime = time.Now()
+				channel = "internalRecvCh"
+				forceLog = false
 				idx.handleWorkerMsgs(msg)
 			}
 
-		case msg, ok := <-idx.internalAdminRecvCh:
+		case msg, ok = <-idx.internalAdminRecvCh:
 			if ok {
+				receiveTime = time.Now()
+				channel = "internalAdminRecvCh"
+				forceLog = true
 				resp := idx.handleAdminMsgs(msg)
 				idx.internalAdminRespCh <- resp
 			}
 
 		case <-idx.shutdownInitCh:
-			//send shutdown to all workers
+			logShutdownStart(classMethod)
 
+			//send shutdown to all workers
 			idx.shutdownWorkers()
 			//close the shutdown complete channel to indicate
 			//all workers are shutdown
 			close(idx.shutdownCompleteCh)
-			return
 
+			logShutdownComplete(classMethod)
+			return
 		}
 
+		logProcessingTime(classMethod, msg, channel, time.Since(receiveTime), forceLog)
 	}
-
 }
 
-//run starts the main loop for the indexer
+// listenAdminMsgs is the message processing loop for the adminRecvCh channel.
 func (idx *indexer) listenAdminMsgs() {
-
-	waitForStream := true
+	const classMethod string = "Indexer::listenAdminMsgs" // for logging
 
 	for {
+		var msg Message
+		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
+		var receiveTime time.Time // time msg was received
+
 		select {
-		case msg, ok := <-idx.adminRecvCh:
+		case msg, ok = <-idx.adminRecvCh:
 			if ok {
+				receiveTime = time.Now()
+
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
 				idx.internalAdminRecvCh <- msg
 				resp := <-idx.internalAdminRespCh
 
-				if waitForStream {
-					// now that indexer has processed the message.  Let's make sure that
-					// the stream request is finished before processing the next admin
-					// msg.  This is done by acquiring a lock on the stream request for each
-					// bucket (on both streams).   The lock is FIFO, so if this function
-					// can get a lock, it will mean that previous stream request would have
-					// been cleared.
+				// now that indexer has processed the message.  Let's make sure that
+				// the stream request is finished before processing the next admin
+				// msg.  This is done by acquiring a lock on the stream request for each
+				// bucket (on both streams).   The lock is FIFO, so if this function
+				// can get a lock, it will mean that previous stream request would have
+				// been cleared.
 
-					//create and build don't need to be checked
-					//create doesn't take stream lock. build only works
-					//on a fresh stream.
-					if msg.GetMsgType() == CLUST_MGR_DROP_INDEX_DDL ||
-						msg.GetMsgType() == CLUST_MGR_PRUNE_PARTITION {
+				//create and build don't need to be checked
+				//create doesn't take stream lock. build only works
+				//on a fresh stream.
+				if msg.GetMsgType() == CLUST_MGR_DROP_INDEX_DDL ||
+					msg.GetMsgType() == CLUST_MGR_PRUNE_PARTITION {
 
-						if resp.GetMsgType() == MSG_SUCCESS_DROP {
-							streamId := resp.(*MsgSuccessDrop).GetStreamId()
-							keyspaceId := resp.(*MsgSuccessDrop).GetKeyspaceId()
+					if resp.GetMsgType() == MSG_SUCCESS_DROP {
+						streamId := resp.(*MsgSuccessDrop).GetStreamId()
+						keyspaceId := resp.(*MsgSuccessDrop).GetKeyspaceId()
 
-							f := func(streamId common.StreamId, keyspaceId string) {
-								lock := idx.acquireStreamRequestLock(keyspaceId, streamId)
-								defer idx.releaseStreamRequestLock(lock)
-								idx.waitStreamRequestLock(lock)
-							}
-
-							f(streamId, keyspaceId)
+						f := func(streamId common.StreamId, keyspaceId string) {
+							lock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+							defer idx.releaseStreamRequestLock(lock)
+							idx.waitStreamRequestLock(lock)
 						}
+
+						startStreamRequestLockTime := time.Now()
+						f(streamId, keyspaceId)
+						logStreamRequestLockTime(classMethod, msg, "adminRecvCh", time.Since(startStreamRequestLockTime))
 					}
 				}
 			}
 		case <-idx.shutdownInitCh:
+			logShutdownComplete(classMethod)
 			return
 		}
+		logProcessingTime(classMethod, msg, "adminRecvCh", time.Since(receiveTime), true)
 	}
 }
 
@@ -964,15 +1042,22 @@ func (idx *indexer) getKeyspaceIdForAdminMsg(msg Message) []string {
 	}
 }
 
+// listenWorkerMsgs is the message processing loop for the wrkrRecvCh channel.
 func (idx *indexer) listenWorkerMsgs() {
+	const classMethod string = "Indexer::listenWorkerMsgs" // for logging
 
 	//listen to worker messages
 	for {
+		var msg Message
+		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
+		var receiveTime time.Time // time msg was received
 
 		select {
 
-		case msg, ok := <-idx.wrkrRecvCh:
+		case msg, ok = <-idx.wrkrRecvCh:
 			if ok {
+				receiveTime = time.Now()
+
 				//handle high priority messages
 				switch msg.GetMsgType() {
 				case MSG_ERROR:
@@ -986,10 +1071,11 @@ func (idx *indexer) listenWorkerMsgs() {
 
 		case <-idx.shutdownInitCh:
 			//exit the loop
+			logShutdownComplete(classMethod)
 			return
 		}
+		logProcessingTime(classMethod, msg, "wrkrRecvCh", time.Since(receiveTime), false)
 	}
-
 }
 
 func (idx *indexer) handleWorkerMsgs(msg Message) {
