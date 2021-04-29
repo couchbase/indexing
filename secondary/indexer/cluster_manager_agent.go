@@ -407,15 +407,38 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 	defer metaIter.Close()
 
 	indexInstMap := make(common.IndexInstMap)
+	topoCache := make(map[string]map[string]map[string]*manager.IndexTopology)
+
+	var delTokens map[common.IndexDefnId]*mc.DeleteCommandToken
+	delTokens, err = mc.FetchIndexDefnToDeleteCommandTokensMap()
+	if err != nil {
+		logging.Warnf("ClustMgr:handleGetGlobalTopology: Error in FetchIndexDefnToDeleteCommandTokensMap %v", err)
+	}
+
+	var dropTokens map[common.IndexDefnId][]*mc.DropInstanceCommandToken
+	dropTokens, err = mc.FetchIndexDefnToDropInstanceCommandTokenMap()
+	if err != nil {
+		logging.Warnf("ClustMgr:handleGetGlobalTopology: Error in FetchIndexDefnToDropInstanceCommandTokenMap %v", err)
+	}
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
 		var idxDefn common.IndexDefn
 		idxDefn = *defn
 
-		t, e := c.mgr.GetTopologyByCollection(idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
-		if e != nil {
-			common.CrashOnError(e)
+		t := topoCache[idxDefn.Bucket][idxDefn.Scope][idxDefn.Collection]
+		if t == nil {
+			t, err = c.mgr.GetTopologyByCollection(idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
+			if err != nil {
+				common.CrashOnError(err)
+			}
+			if _, ok := topoCache[idxDefn.Bucket]; !ok {
+				topoCache[idxDefn.Bucket] = make(map[string]map[string]*manager.IndexTopology)
+			}
+			if _, ok := topoCache[idxDefn.Bucket][idxDefn.Scope]; !ok {
+				topoCache[idxDefn.Bucket][idxDefn.Scope] = make(map[string]*manager.IndexTopology)
+			}
+			topoCache[idxDefn.Bucket][idxDefn.Scope][idxDefn.Collection] = t
 		}
 		if t == nil {
 			logging.Warnf("ClustMgr:handleGetGlobalTopology Index Instance Not "+
@@ -464,14 +487,31 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			}
 
 			if idxInst.State != common.INDEX_STATE_DELETED {
-				exist1, err := mc.DeleteCommandTokenExist(idxDefn.DefnId)
-				if err != nil {
-					logging.Warnf("Error when reading delete command token for defn %v", idxDefn.DefnId)
+				var exist1, exist2 bool
+				var err error
+
+				if delTokens != nil {
+					_, exist1 = delTokens[idxDefn.DefnId]
+				} else {
+					exist1, err = mc.DeleteCommandTokenExist(idxDefn.DefnId)
+					if err != nil {
+						logging.Warnf("Error when reading delete command token for defn %v", idxDefn.DefnId)
+					}
 				}
 
-				exist2, err := mc.DropInstanceCommandTokenExist(idxDefn.DefnId, idxInst.InstId)
-				if err != nil {
-					logging.Warnf("Error when reading delete command token for index (%v, %v)", idxDefn.DefnId, idxInst.InstId)
+				if dropTokens != nil {
+					dropTokenList := dropTokens[idxDefn.DefnId]
+					for _, dropToken := range dropTokenList {
+						if dropToken.InstId == idxDefn.InstId {
+							exist2 = true
+							break
+						}
+					}
+				} else {
+					exist2, err = mc.DropInstanceCommandTokenExist(idxDefn.DefnId, idxInst.InstId)
+					if err != nil {
+						logging.Warnf("Error when reading drop command token for index (%v, %v)", idxDefn.DefnId, idxInst.InstId)
+					}
 				}
 
 				if exist1 || exist2 {

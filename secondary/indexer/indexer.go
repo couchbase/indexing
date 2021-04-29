@@ -6211,13 +6211,14 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 
 	idx.recoverRebalanceState()
 
+	start := time.Now()
 	err := idx.recoverIndexInstMap()
 	if err != nil {
 		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
 		return err
 	}
 
-	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
+	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
 
 	idx.validateIndexInstMap()
 
