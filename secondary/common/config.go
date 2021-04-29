@@ -463,6 +463,24 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.memThrottle.init_build.start_level": ConfigValue{
+		0,
+		"Ranges from 0-10.  if value is >=10, defaulted to 10. Defaulted to 0, if value <= 0. " +
+			"Projector initiates throttling for this stream when the throttle level " +
+			"computed by memManager reaches this value",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.memThrottle.incr_build.start_level": ConfigValue{
+		0,
+		"Ranges from 0-10.  if value is >=10, defaulted to 10. Defaulted to 0, if value <= 0. " +
+			"Projector initiates throttling for this stream when the throttle level " +
+			"computed by memManager reaches this value",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.maintStreamMemThrottle": ConfigValue{
 		true,
 		"When set to false, disables the throttling on MAINT_STREAM",

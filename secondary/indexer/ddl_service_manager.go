@@ -61,13 +61,16 @@ type DDLServiceMgr struct {
 	allowDDL    bool
 	mutex       sync.Mutex
 
-	commandListener *mc.CommandListener
-	listenerDonech  chan bool
-	btCleanerStopCh chan bool
-	buildCleanupLck sync.Mutex
-	dtCleanerStopCh chan bool
-	dropCleanupLck  sync.Mutex
+	commandListener  *mc.CommandListener
+	listenerDonech   chan bool
+	btCleanerStopCh  chan bool
+	buildCleanupLck  sync.Mutex
+	dtCleanerStopCh  chan bool
+	dropCleanupLck   sync.Mutex
+	deleteTokenCache map[common.IndexDefnId]int64 // unixnano timestamp
 }
+
+const DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL = 24 * time.Hour
 
 //
 // DDL related settings
@@ -109,18 +112,19 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	settings := &ddlSettings{numReplica: numReplica}
 
 	mgr := &DDLServiceMgr{
-		indexerId:       indexerId,
-		supvCmdch:       supvCmdch,
-		supvMsgch:       supvMsgch,
-		localAddr:       localaddr,
-		clusterAddr:     addr,
-		nodeID:          nodeId,
-		settings:        settings,
-		donech:          nil,
-		killch:          make(chan bool),
-		allowDDL:        true,
-		btCleanerStopCh: make(chan bool),
-		dtCleanerStopCh: make(chan bool),
+		indexerId:        indexerId,
+		supvCmdch:        supvCmdch,
+		supvMsgch:        supvMsgch,
+		localAddr:        localaddr,
+		clusterAddr:      addr,
+		nodeID:           nodeId,
+		settings:         settings,
+		donech:           nil,
+		killch:           make(chan bool),
+		allowDDL:         true,
+		btCleanerStopCh:  make(chan bool),
+		dtCleanerStopCh:  make(chan bool),
+		deleteTokenCache: make(map[common.IndexDefnId]int64),
 	}
 
 	mgr.startCommandListner()
@@ -264,6 +268,17 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 
 	logging.Infof("DDLServiceMgr: handling rebalacne done")
 
+	nodes := getNodesInfo(change, isCancel)
+
+	// nodes can be empty but it cannot be nil.
+	// If emtpy, then no node will be considered.
+	// If nil, all nodes will be considered.
+	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr")
+	if err != nil {
+		logging.Errorf("DDLServiceMgr:rebalanceDone(): Failed to initialize metadata provider.  Error=%v.", err)
+		return
+	}
+
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()
 
@@ -275,18 +290,37 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 		}
 	}()
 
-	// Refresh metadata provider on topology change
-	httpAddrMap, err := m.refreshOnTopologyChange(change, isCancel)
-	if err != nil {
-		logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
-		return
+	m.nodes = nodes
+
+	// Close the current provider and update new provider
+	if m.provider != nil {
+		m.provider.Close()
+		m.provider = nil
 	}
 
+	m.provider = provider
+
+	// TODO: Investigate if gDDLServiceMgrLck has to be held for the
+	// below methods
 	m.cleanupCreateCommand()
 	m.cleanupDropCommand(false, m.provider)
 	m.cleanupDropInstanceCommand()
 	m.cleanupBuildCommand(false, m.provider)
 	m.handleClusterStorageMode(httpAddrMap)
+}
+
+func getNodesInfo(change *service.TopologyChange, isCancel bool) map[service.NodeID]bool {
+	nodes := make(map[service.NodeID]bool)
+	for _, node := range change.KeepNodes {
+		nodes[node.NodeInfo.NodeID] = true
+	}
+
+	if isCancel {
+		for _, node := range change.EjectNodes {
+			nodes[node.NodeID] = true
+		}
+	}
+	return nodes
 }
 
 func (m *DDLServiceMgr) stopProcessDDL() {
@@ -396,6 +430,26 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 				if checkDDL && !m.canProcessDDL() {
 					return
 				}
+				var timestamp int64
+				timestamp, ok := m.deleteTokenCache[command.DefnId]
+				if !ok {
+					timestamp = time.Now().UnixNano()
+					m.deleteTokenCache[command.DefnId] = timestamp
+				}
+				if time.Duration(time.Now().UnixNano()-timestamp) <= time.Duration(DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL) {
+					//logging.Debugf("DDLServiceMgr: skipping delete token processing due to delayed processing. %v", entry.Path)
+					continue
+				}
+
+				// MetakvDel failures are assumed to be rare and hence priortizing map cleanup because
+				// In case of error
+				// a) if error was before metakv marked the token as deleted. Next iteration of cleanupDropCommand
+				// would find the same delete token and will process the request after another 24 hours
+				// b) if error is a after metakv marked the token as deleted and during the phase of sending response of delete operation to caller
+				// then metakv has deleted the toekn and hence it will not appear in next iteration of cleanupDropCommand
+				// in such cases we will leak the command.DefnId entry in deleteTokenCache map.
+				// Hence not worrying about the rare case of error on MetakvDel for token deletion and priortizing map cleanup.
+				delete(m.deleteTokenCache, command.DefnId)
 
 				if err := common.MetakvDel(entry.Path); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove delete index token %v. Error = %v", entry.Path, err)
@@ -411,8 +465,8 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 
 func (m *DDLServiceMgr) dropTokenCleaner() {
 
-	ticker := time.NewTicker(24 * time.Hour)
-	// drop token cleaner will run every 24 hours.
+	ticker := time.NewTicker(10 * time.Minute)
+	// drop token cleaner will run every 10 minutes.
 	logging.Infof("DDLServiceMgr: starting dropTokenCleaner ...")
 	for {
 		select {

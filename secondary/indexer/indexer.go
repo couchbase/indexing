@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -188,6 +189,8 @@ type indexer struct {
 	keyspaceIdObserveFlushDoneForReset map[string]MsgChannel
 
 	pendingReset map[common.IndexInstId]bool
+
+	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
 }
 
 type kvRequest struct {
@@ -280,6 +283,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
 
 		pendingReset: make(map[common.IndexInstId]bool),
+
+		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1074,6 +1079,13 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.mergePartitionForIdleKeyspaceIds()
 		idx.prunePartitions(keyspaceId, streamId)
 		idx.prunePartitionForIdleKeyspaceIds()
+
+		//process any pending collection drop
+		if instIdList, ok := idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId]; ok &&
+			len(instIdList) != 0 {
+			idx.cleanupIndexDataForCollectionDrop(streamId, keyspaceId, instIdList)
+			delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
+		}
 
 		idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] = false
 
@@ -3892,19 +3904,35 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 		common.CrashOnError(err)
 	}
 
-	//cleanup index data for all indexes in the keyspace
+	if !idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] {
+		idx.cleanupIndexDataForCollectionDrop(streamId, keyspaceId, instIdList)
+	} else {
+		logging.Infof("Indexer::processCollectionDrop %v %v Add to pending list %v", streamId,
+			keyspaceId, instIdList)
+		currList := idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId]
+		currList = append(currList, instIdList...)
+		idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId] = currList
+	}
+}
+
+func (idx *indexer) cleanupIndexDataForCollectionDrop(streamId common.StreamId,
+	keyspaceId string,
+	instIdList []common.IndexInstId) {
+
+	logging.Infof("Indexer::cleanupIndexDataForCollectionDrop %v %v", streamId, keyspaceId)
+
+	var bucketUUID string
+
 	indexList := make([]common.IndexInst, 0)
 	for _, instId := range instIdList {
 		index := idx.indexInstMap[instId]
-		if index.Stream == streamId {
-			indexList = append(indexList, index)
-		}
+		bucketUUID = index.Defn.BucketUUID
+		indexList = append(indexList, index)
 		idx.cleanupIndexData(index, nil)
 	}
 
 	idx.removeIndexesFromStream(indexList, keyspaceId,
 		bucketUUID, streamId, common.INDEX_STATE_ACTIVE, nil)
-
 }
 
 func (idx *indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
@@ -6090,6 +6118,7 @@ func (idx *indexer) initStreamPendBuildDone() {
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdPendBuildDone[common.StreamId(i)] = make(map[string]*buildDoneSpec)
 		idx.streamKeyspaceIdPendStart[common.StreamId(i)] = make(map[string]bool)
+		idx.streamKeyspaceIdPendCollectionDrop[common.StreamId(i)] = make(map[string][]common.IndexInstId)
 	}
 }
 
@@ -8358,6 +8387,20 @@ kvtsloop:
 				logging.Errorf("Indexer::computeBucketBuildTs Error: %v", err)
 				return
 			}
+
+			//validate collection
+			if cid != "" {
+				collId := ""
+				bucket, scope, coll := SplitKeyspaceId(keyspaceId)
+				collId, err = common.GetCollectionID(clustAddr, bucket, scope, coll)
+				if err == nil && collId == collections.COLLECTION_ID_NIL {
+					err = errors.New(fmt.Sprintf("Keyspace %v does not exist anymore.", keyspaceId))
+					logging.Errorf("Indexer::computeBucketBuildTs Error: %v", err)
+					return
+
+				}
+
+			}
 			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 		} else {
 			break kvtsloop
@@ -9173,6 +9216,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdPendStart[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
 }
 
 func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
