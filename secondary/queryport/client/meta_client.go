@@ -1501,7 +1501,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		return err
 	}
 	cinfo.SetUserAgent("updateIndexerList")
-	if err := cinfo.Fetch(); err != nil {
+	if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
 		return err
 	}
 
@@ -2038,14 +2038,16 @@ func (b *metadataClient) watchClusterChanges() {
 	ch := scn.GetNotifyCh()
 	for {
 		select {
-		case _, ok := <-ch:
+		case n, ok := <-ch:
 			if !ok {
 				selfRestart()
 				return
-			} else if err := b.updateIndexerList(false); err != nil {
-				logging.Errorf("updateIndexerList(): %v\n", err)
-				selfRestart()
-				return
+			} else if n.Type != common.CollectionManifestChangeNotification {
+				if err := b.updateIndexerList(false); err != nil {
+					logging.Errorf("updateIndexerList(): %v\n", err)
+					selfRestart()
+					return
+				}
 			}
 		case _, ok := <-b.mdNotifyCh:
 			if ok {

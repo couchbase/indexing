@@ -150,6 +150,51 @@ func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
 
 }
 
+func (c *ClusterInfoCache) Connect() (err error) {
+	c.client, err = couchbase.Connect(c.url)
+	if err != nil {
+		return err
+	}
+
+	c.client.SetUserAgent(c.userAgent)
+	return nil
+}
+
+// Note: This function does not fetch BucketMap and Manifest data in c.pool
+func (c *ClusterInfoCache) FetchNodesData() (err error) {
+	c.pool, err = c.client.CallPoolURI(c.poolName)
+	if err != nil {
+		return err
+	}
+
+	c.updateNodesData()
+
+	found := false
+	for _, node := range c.nodes {
+		if node.ThisNode {
+			found = true
+		}
+	}
+
+	if !found {
+		return errors.New("Current node's cluster membership is not active")
+	}
+	return nil
+}
+
+func (c *ClusterInfoCache) FetchNodeSvsData() (err error) {
+	var poolServs couchbase.PoolServices
+
+	poolServs, err = c.client.GetPoolServices(c.poolName)
+	if err != nil {
+		return err
+	}
+
+	c.nodesvs = poolServs.NodesExt
+	c.buildEncryptPortMapping()
+	return nil
+}
+
 // TODO: In many places (e.g. lifecycle manager), cluster info cache
 // refresh is required only for one bucket. It is sub-optimal to update
 // the cluster info for all the buckets. Add a new method
@@ -366,6 +411,54 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 				goto retry
 			} else {
 				logging.Infof("%vValidation Failed for cluster info.. %v",
+					c.logPrefix, c)
+				return ErrValidationFailed
+			}
+		}
+
+		return nil
+	}
+
+	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	return rh.Run()
+}
+
+func (c *ClusterInfoCache) FetchNodesAndSvsInfoWithLock() (err error) {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.FetchNodesAndSvsInfo()
+}
+
+func (c *ClusterInfoCache) FetchNodesAndSvsInfo() (err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Infof("%vError occured during nodes and nodesvs update (%v) .. Retrying(%d)",
+				c.logPrefix, err, r)
+		}
+
+		vretry := 0
+	retry:
+		if err = c.Connect(); err != nil {
+			return err
+		}
+
+		if err = c.FetchNodesData(); err != nil {
+			return err
+		}
+
+		if err = c.FetchNodeSvsData(); err != nil {
+			return err
+		}
+
+		if !c.validateCache(c.client.Info.IsIPv6) {
+			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
+				vretry++
+				logging.Infof("%vValidation Failed while updating nodes and nodesvs.. Retrying(%d)",
+					c.logPrefix, vretry)
+				goto retry
+			} else {
+				logging.Errorf("%vValidation Failed while updating nodes and nodesvs.. %v",
 					c.logPrefix, c)
 				return ErrValidationFailed
 			}
