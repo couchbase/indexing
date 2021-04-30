@@ -72,9 +72,10 @@ const (
 const gcchanBufSize = 256
 
 var (
-	dbInstances      *skiplist.Skiplist
-	dbInstancesCount int64
-	gWriteBarrier    *writeBarrier
+	dbInstances              *skiplist.Skiplist
+	dbInstancesCount         int64
+	gWriteBarrier            *writeBarrier
+	gWriteBarrierInitializer sync.Once
 )
 
 func init() {
@@ -161,7 +162,7 @@ func (m *MemDB) initWriteBarrier(concurrency float64) {
 		}
 	}
 
-	m.initializer.Do(init)
+	gWriteBarrierInitializer.Do(init)
 }
 
 func (w *writeBarrier) get() bool {
@@ -471,8 +472,6 @@ type MemDB struct {
 	deltaFiles   []string
 	persistSnap  Snapshot
 
-	initializer sync.Once
-
 	Config
 	restoreStats
 }
@@ -693,7 +692,7 @@ func (m *MemDB) FreeNodesConcurrent(concurr int) error {
 	pivotNodes = append(pivotNodes, nil)
 
 	// Assert correct number of iterators and pivot nodes
-	if len(pivotNodes) != 1 + len(itrs) {
+	if len(pivotNodes) != 1+len(itrs) {
 		return fmt.Errorf("Number of iterators and pivot nodes do not match")
 	}
 
@@ -1302,7 +1301,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	storeStats := m.aggrStoreStats()
 	dataSz := storeStats.Memory
 
-	defer func () {
+	defer func() {
 		logging.Infof("memdb.StoreToDisk: Done dir [%v] disk snapshot - count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
 			dir, cntPerShard, totalCnt, snapCnt, szPerShard, totalSz, dataSz)
 	}()
@@ -1314,7 +1313,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		szPerShard[shard] += sz
 
 		if ts, tc := atomic.AddInt64(&totalSz, sz), atomic.AddInt64(&totalCnt, 1); (ts > dataSz || tc > snapCnt) &&
-			time.Since(lastLogTime) > 5 * time.Minute {
+			time.Since(lastLogTime) > 5*time.Minute {
 
 			logging.Infof("memdb.StoreToDisk: Unexpected amount of data being persisted dir [%v] count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
 				dir, cntPerShard, tc, snapCnt, szPerShard, ts, dataSz)
