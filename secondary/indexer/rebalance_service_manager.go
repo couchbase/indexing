@@ -66,9 +66,10 @@ type ServiceMgr struct {
 
 	monitorStopCh StopChannel
 
-	config    c.ConfigHolder
-	supvCmdch MsgChannel //supervisor sends commands on this channel
-	supvMsgch MsgChannel //channel to send any message to supervisor
+	config        c.ConfigHolder
+	supvCmdch     MsgChannel //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
+	supvMsgch     MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
+	supvPrioMsgch MsgChannel //channel to send msg to supervisor for high-priority handling (idx.wrkrPrioRecvCh)
 
 	cinfo *c.ClusterInfoCache
 
@@ -128,7 +129,8 @@ var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress an
 
 var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 
-func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config,
+// NewRebalanceMgr is the RebalanceMgr constructor.
+func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch MsgChannel, config c.Config,
 	rebalanceRunning bool, rebalanceToken *RebalanceToken) (RebalanceMgr, Message) {
 
 	l.Infof("RebalanceMgr::NewRebalanceMgr %v %v ", rebalanceRunning, rebalanceToken)
@@ -136,11 +138,12 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	mu := &sync.RWMutex{}
 
 	mgr := &ServiceMgr{
-		mu:           mu,
-		state:        NewState(),
-		supvCmdch:    supvCmdch,
-		supvMsgch:    supvMsgch,
-		moveStatusCh: make(chan error),
+		mu:            mu,
+		state:         NewState(),
+		supvCmdch:     supvCmdch,
+		supvMsgch:     supvMsgch,
+		supvPrioMsgch: supvPrioMsgch,
+		moveStatusCh:  make(chan error),
 	}
 
 	mgr.config.Store(config)
@@ -436,6 +439,7 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 	return nil
 }
 
+// prepareFailover does sanity checks for the failover case under PrepareTopologyChange.
 func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
 	if !m.indexerReady {
@@ -518,6 +522,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
 }
 
+// prepareRebalance does sanity checks for the rebalance case under PrepareTopologyChange.
 func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 
 	var err error
@@ -758,10 +763,15 @@ func (m *ServiceMgr) isNoOpRebal(change service.TopologyChange) bool {
 
 }
 
+// checkDDLRunning is called under PrepareTopologyChange for rebalance and asks
+// indexer if there is DDL running via its high-priority message channel so it will
+// get a quick reply even if indexer is processing other work, to try to avoid causing
+// a rebalance timeout failure. It returns true and a slice of index names currently
+// in DDL processing if DDL is currently running, else false and an empty slice.
 func (m *ServiceMgr) checkDDLRunning() (bool, []string) {
 
 	respCh := make(MsgChannel)
-	m.supvMsgch <- &MsgCheckDDLInProgress{respCh: respCh}
+	m.supvPrioMsgch <- &MsgCheckDDLInProgress{respCh: respCh}
 	msg := <-respCh
 
 	ddlInProgress := msg.(*MsgDDLInProgressResponse).GetDDLInProgress()
@@ -818,17 +828,6 @@ func (m *ServiceMgr) initPreparePhaseRebalance() error {
 
 	go m.monitorStartPhaseInit(m.monitorStopCh)
 
-	return nil
-}
-
-func (m *ServiceMgr) initPreparePhaseFailover() error {
-
-	err := m.registerRebalanceRunning(false)
-	if err != nil {
-		return err
-	}
-
-	m.rebalanceRunning = true
 	return nil
 }
 
@@ -1334,9 +1333,12 @@ func (m *ServiceMgr) genRebalanceToken() error {
 	return nil
 }
 
+// registerRebalanceRunning is called under PrepareTopologyChange so uses the
+// indexer's high-priority message channel to get a quick reply even if indexer
+// is processing other work, to try to avoid causing a rebalance timeout failure.
 func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 	respch := make(MsgChannel)
-	m.supvMsgch <- &MsgClustMgrLocal{
+	m.supvPrioMsgch <- &MsgClustMgrLocal{
 		mType:    CLUST_MGR_SET_LOCAL,
 		key:      RebalanceRunning,
 		value:    "",

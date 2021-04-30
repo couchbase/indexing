@@ -121,10 +121,13 @@ type indexer struct {
 
 	wrkrRecvCh          MsgChannel //channel to receive messages from workers
 	                               //   (SettingsManager, MutationManager, KVSender, Timekeeper)
+	wrkrPrioRecvCh      MsgChannel // buffered channel for high-priority worker requests
 	internalRecvCh      MsgChannel //buffered channel to queue worker requests (most MsgXyz messages)
+
 	adminRecvCh         MsgChannel //channel to receive admin messages (ClustMgrAgent)
 	internalAdminRecvCh MsgChannel //internal channel to receive admin messages (DDL; unbuffered channel)
 	internalAdminRespCh MsgChannel //internal channel to respond admin messages (DDL; unbuffered channel)
+
 	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
 	shutdownCompleteCh  MsgChannel //indicate shutdown completion
 
@@ -230,10 +233,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
 		wrkrRecvCh:          make(MsgChannel, WORKER_RECV_QUEUE_LEN),
+		wrkrPrioRecvCh:      make(MsgChannel, WORKER_RECV_QUEUE_LEN),
 		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+
 		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		internalAdminRecvCh: make(MsgChannel),
 		internalAdminRespCh: make(MsgChannel),
+
 		shutdownInitCh:      make(MsgChannel),
 		shutdownCompleteCh:  make(MsgChannel),
 
@@ -433,7 +439,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Rebalance Manager
-	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
+	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.wrkrPrioRecvCh,
+		idx.config, idx.rebalanceRunning, idx.rebalanceToken)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
 		return nil, res
@@ -927,10 +934,38 @@ func (idx *indexer) run() {
 		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
 		var receiveTime time.Time // time msg was received
 		var channel string // name of channel msg came from
-		var forceLog bool // admin messages force logging of processing time
+		var forceLog bool // admin and high-priority messages force logging of processing time
 
-		// internalRecvCh and internalAdminRecvCh chosen at random per Go official behavior
+		// Process everything in high-priority channel first
+		for ; len(idx.wrkrPrioRecvCh) > 0; {
+			select {
+
+			case msg, ok = <-idx.wrkrPrioRecvCh:
+				if ok {
+					receiveTime = time.Now()
+					idx.handleWorkerMsgs(msg)
+					logProcessingTime(classMethod, msg, "wrkrPrioRecvCh", time.Since(receiveTime), true)
+				}
+
+			case <-idx.shutdownInitCh:
+				logShutdownStart(classMethod)
+				idx.shutdownWorkers()
+				close(idx.shutdownCompleteCh)
+				logShutdownComplete(classMethod)
+				return
+			}
+		}
+
+		// Process next message to arrive in any channel
 		select {
+
+		case msg, ok = <-idx.wrkrPrioRecvCh:
+			if ok {
+				receiveTime = time.Now()
+				channel = "wrkrPrioRecvCh"
+				forceLog = true
+				idx.handleWorkerMsgs(msg)
+			}
 
 		case msg, ok = <-idx.internalRecvCh:
 			if ok {
@@ -961,7 +996,6 @@ func (idx *indexer) run() {
 			logShutdownComplete(classMethod)
 			return
 		}
-
 		logProcessingTime(classMethod, msg, channel, time.Since(receiveTime), forceLog)
 	}
 }
@@ -971,14 +1005,10 @@ func (idx *indexer) listenAdminMsgs() {
 	const classMethod string = "Indexer::listenAdminMsgs" // for logging
 
 	for {
-		var msg Message
-		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
-		var receiveTime time.Time // time msg was received
-
 		select {
-		case msg, ok = <-idx.adminRecvCh:
+		case msg, ok := <-idx.adminRecvCh:
 			if ok {
-				receiveTime = time.Now()
+				receiveTime := time.Now()
 
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
@@ -1013,12 +1043,12 @@ func (idx *indexer) listenAdminMsgs() {
 						logStreamRequestLockTime(classMethod, msg, "adminRecvCh", time.Since(startStreamRequestLockTime))
 					}
 				}
+				logProcessingTime(classMethod, msg, "adminRecvCh", time.Since(receiveTime), true)
 			}
 		case <-idx.shutdownInitCh:
 			logShutdownComplete(classMethod)
 			return
 		}
-		logProcessingTime(classMethod, msg, "adminRecvCh", time.Since(receiveTime), true)
 	}
 }
 
@@ -1048,25 +1078,19 @@ func (idx *indexer) listenWorkerMsgs() {
 
 	//listen to worker messages
 	for {
-		var msg Message
-		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
-		var receiveTime time.Time // time msg was received
-
 		select {
 
-		case msg, ok = <-idx.wrkrRecvCh:
+		case msg, ok := <-idx.wrkrRecvCh:
 			if ok {
-				receiveTime = time.Now()
-
-				//handle high priority messages
-				switch msg.GetMsgType() {
-				case MSG_ERROR:
+				receiveTime := time.Now()
+				if msg.GetMsgType() == MSG_ERROR {
 					err := msg.(*MsgError).GetError()
 					if err.code == ERROR_MUT_MGR_PANIC {
 						close(idx.mutMgrExitCh)
 					}
 				}
 				idx.internalRecvCh <- msg
+				logProcessingTime(classMethod, msg, "wrkrRecvCh", time.Since(receiveTime), false)
 			}
 
 		case <-idx.shutdownInitCh:
@@ -1074,10 +1098,10 @@ func (idx *indexer) listenWorkerMsgs() {
 			logShutdownComplete(classMethod)
 			return
 		}
-		logProcessingTime(classMethod, msg, "wrkrRecvCh", time.Since(receiveTime), false)
 	}
 }
 
+// handleWorkerMsgs handles worker messages (wrkrPrioRecvCh, internalRecvCh).
 func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	switch msg.GetMsgType() {
@@ -1498,6 +1522,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	idx.updateSliceWithConfig(newConfig)
 }
 
+// handleAdminMsgs handles admin (DDL) messages (internalAdminRecvCh).
 func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 
 	switch msg.GetMsgType() {
@@ -4987,6 +5012,8 @@ func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 	return true
 }
 
+// handleCheckDDLInProgress handles MsgCheckDDLInProgress
+// (MsgType INDEXER_CHECK_DDL_IN_PROGRESS).
 func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
@@ -5000,6 +5027,8 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 	return
 }
 
+// checkDDLInProgress returns true and a slice of index names currently in DDL
+// processing if DDL is currently running, else false and an empty slice.
 func (idx *indexer) checkDDLInProgress() (bool, []string) {
 
 	ddlInProgress := false
