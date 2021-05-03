@@ -83,6 +83,9 @@ type StreamState struct {
 	streamKeyspaceIdEnableOSO map[common.StreamId]KeyspaceIdEnableOSO
 
 	streamKeyspaceIdHWTOSO map[common.StreamId]KeyspaceIdHWTOSO
+
+	//only used to log debug information for pending builds(INIT_STREAM only)
+	keyspaceIdPendBuildDebugLogTime map[string]uint64
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -197,6 +200,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdVBMap:                  make(map[common.StreamId]KeyspaceIdVBMap),
 		streamKeyspaceIdEnableOSO:              make(map[common.StreamId]KeyspaceIdEnableOSO),
 		streamKeyspaceIdHWTOSO:                 make(map[common.StreamId]KeyspaceIdHWTOSO),
+		keyspaceIdPendBuildDebugLogTime:        make(map[string]uint64),
 	}
 
 	return ss
@@ -382,6 +386,10 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 
+	if streamId == common.INIT_STREAM {
+		ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
+	}
+
 	ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_ACTIVE
 
 	logging.Infof("StreamState::initKeyspaceIdInStream New KeyspaceId %v Added for "+
@@ -435,6 +443,10 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdVBMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdEnableOSO[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdHWTOSO[streamId], keyspaceId)
+
+	if streamId == common.INIT_STREAM {
+		delete(ss.keyspaceIdPendBuildDebugLogTime, keyspaceId)
+	}
 
 	if donech, ok := ss.streamKeyspaceIdFlushDone[streamId][keyspaceId]; ok && donech != nil {
 		close(donech)

@@ -2325,6 +2325,30 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					sessionId:  sessionId}
 
 				return true
+			} else {
+				var lenInitTs int
+				tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
+				if tsList != nil {
+					lenInitTs = tsList.Len()
+				}
+
+				forceLog := false
+				now := uint64(time.Now().UnixNano())
+				sinceLastLog := now - tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId]
+
+				//log more debug information if build is not able to complete
+				//but doesn't have pending mutations
+				if lenInitTs == 0 && sinceLastLog > uint64(300*time.Second) {
+					forceLog = true
+					tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+				}
+
+				if forceLog || logging.IsEnabled(logging.Verbose) {
+					tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+					hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+					logging.Verbosef("Timekeeper::checkInitialBuildDone Index: %v Stream: %v KeyspaceId: %v"+
+						" FlushTs %v\n HWT %v", idx.InstId, streamId, keyspaceId, flushTs, hwt)
+				}
 			}
 		}
 	}
@@ -2378,9 +2402,21 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
 			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
 			"MAINT PendTsCount %v.", keyspaceId, lenInitTs, lenMaintTs)
-		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
-		})
+
+		forceLog := false
+		now := uint64(time.Now().UnixNano())
+		sinceLastLog := now - tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId]
+
+		//log more debug information if INIT_STREAM is waiting for long time to merge
+		//but doesn't have pending mutations
+		if lenInitTs == 0 && sinceLastLog > uint64(300*time.Second) {
+			forceLog = true
+			tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+		}
+
+		if forceLog || logging.IsEnabled(logging.Verbose) {
+			logging.Verbosef("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+		}
 		return false
 	}
 
