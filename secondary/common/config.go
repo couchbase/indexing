@@ -2705,9 +2705,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.planner.variationThreshold": ConfigValue{
-		0.01,
-		"acceptance threshold on resource variation. 0.01 means 1% variation from mean.",
-		0.01,
+		0.25,
+		"acceptance threshold on resource variation. 0.25 means 25% variation from mean.",
+		0.25,
 		false, // mutable
 		false, // case-insensitive
 	},
