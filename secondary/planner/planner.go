@@ -4951,14 +4951,15 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		// for balancing resource consumption.
 		weight := c.dataCostWeight * (1 - usageCost)
 		movementCost = float64(c.DataMoved) / float64(c.TotalData) * weight
-		count++
 	}
 
 	if c.dataCostWeight > 0 && c.TotalIndex != 0 {
 		weight := c.dataCostWeight * (1 - usageCost)
 		indexCost = float64(c.IndexMoved) / float64(c.TotalIndex) * weight
-		count++
 	}
+
+	avgIndexMovementCost := (indexCost + movementCost) / 2
+	avgResourceCost := (memCost + emptyIdxCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
 
 	//logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v disk cost %v drain %v scan %v count %v",
 	//	memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, drainCost, scanCost, count)
@@ -4966,7 +4967,7 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		memCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, drainCost, scanCost, count)
 
 	//return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
-	return (memCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
+	return (avgResourceCost + avgIndexMovementCost) / 2
 }
 
 //
