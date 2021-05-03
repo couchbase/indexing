@@ -49,15 +49,15 @@ type RebalanceMgr interface {
 }
 
 type ServiceMgr struct {
-	mu *sync.RWMutex
+	state
+	mu *sync.RWMutex // protects state field and possibly others such as rebalanceRunning, rebalanceToken
+
+	waiters   waiters       // set of channels of states for go routines waiting for next state change
+	waitersMu *sync.RWMutex // protects waiters field; may be taken *after* mu mutex
 
 	rebalancer   *Rebalancer
 	rebalancerF  *Rebalancer //follower rebalancer handle
 	rebalanceCtx *rebalanceContext
-
-	waiters waiters
-
-	state
 
 	nodeInfo *service.NodeInfo
 
@@ -109,6 +109,7 @@ type state struct {
 	rebalanceTask *service.Task
 }
 
+// NewState constructs a zero-value state object.
 func NewState() state {
 	return state{
 		rev:           0,
@@ -135,11 +136,13 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 
 	l.Infof("RebalanceMgr::NewRebalanceMgr %v %v ", rebalanceRunning, rebalanceToken)
 
-	mu := &sync.RWMutex{}
-
 	mgr := &ServiceMgr{
-		mu:            mu,
-		state:         NewState(),
+		state: NewState(),
+		mu:    &sync.RWMutex{},
+
+		waiters:   make(waiters),
+		waitersMu: &sync.RWMutex{},
+
 		supvCmdch:     supvCmdch,
 		supvMsgch:     supvMsgch,
 		supvPrioMsgch: supvPrioMsgch,
@@ -163,7 +166,6 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 	mgr.cinfo = cinfo
 
 	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
-	mgr.waiters = make(waiters)
 
 	mgr.nodeInfo = &service.NodeInfo{
 		NodeID:   service.NodeID(config["nodeuuid"].String()),
@@ -322,6 +324,9 @@ func (m *ServiceMgr) Shutdown() error {
 	return nil
 }
 
+// GetTaskList is an external API called by ns_server (via cbauth).
+// If rev is non-nil, respond only when the revision changes from that,
+// else respond immediately.
 func (m *ServiceMgr) GetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
 
@@ -338,11 +343,12 @@ func (m *ServiceMgr) GetTaskList(rev service.Revision,
 	return taskList, nil
 }
 
+// CancelTask is an external API called by ns_server (via cbauth).
 func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
+	l.Infof("ServiceMgr::CancelTask %v %v", id, rev)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	l.Infof("ServiceMgr::CancelTask %v %v", id, rev)
 
 	tasks := stateToTaskList(m.state).Tasks
 	task := (*service.Task)(nil)
@@ -372,6 +378,9 @@ func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
 	return m.cancelActualTaskLOCKED(task)
 }
 
+// GetCurrentTopology is an external API called by ns_server (via cbauth).
+// If rev is non-nil, respond only when the revision changes from that,
+// else respond immediately.
 func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
 	cancel service.Cancel) (*service.Topology, error) {
 
@@ -389,17 +398,17 @@ func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
 	return topology, nil
 }
 
-// PrepareTopologyChange is called on all indexer nodes by ns_server directly, to
-// prepare for a rebalance or failover that will later be started by StartTopologyChange
+// PrepareTopologyChange is an external API called by ns_server (via cbauth) on all indexer nodes
+// to prepare for a rebalance or failover that will later be started by StartTopologyChange
 // on the rebalance/failover master indexer node.
 //
 //All errors need to be reported as return value. Status of prepared task is not
 //considered for failure reporting.
 func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error {
+	l.Infof("ServiceMgr::PrepareTopologyChange %v", change)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	l.Infof("ServiceMgr::PrepareTopologyChange %v", change)
 
 	if m.state.rebalanceID != "" {
 		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v", service.ErrConflict, m.state.rebalanceID)
@@ -594,14 +603,14 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 	return nil
 }
 
-// StartTopologyChange is called on the indexer master node by ns_server directly,
-// to initiate a rebalance or failover that has already been prepared via
-// PrepareTopologyChange calls on all indexer nodes.
+// StartTopologyChange is an external API called by ns_server (via cbauth) only on the
+// GSI master node to initiate a rebalance or failover that has already been prepared
+// via PrepareTopologyChange calls on all indexer nodes.
 func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
+	l.Infof("ServiceMgr::StartTopologyChange %v", change)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	l.Infof("ServiceMgr::StartTopologyChange %v", change)
 
 	if m.state.rebalanceID != change.ID || m.rebalancer != nil {
 		l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v %v", service.ErrConflict,
@@ -831,6 +840,7 @@ func (m *ServiceMgr) initPreparePhaseRebalance() error {
 	return nil
 }
 
+// runCleanupPhaseLOCKED caller should be holding mutex mu write(?) locked.
 func (m *ServiceMgr) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 
 	l.Infof("ServiceMgr::runCleanupPhase path %v isMaster %v", path, isMaster)
@@ -1262,10 +1272,8 @@ func (m *ServiceMgr) rebalanceJanitor() {
 	for {
 		time.Sleep(time.Second * 30)
 
-		m.mu.Lock()
-
 		l.Infof("ServiceMgr::rebalanceJanitor Running Periodic Cleanup")
-
+		m.mu.Lock()
 		if !m.rebalanceRunning {
 			rtokens, err := m.getCurrRebalTokens()
 			if err != nil {
@@ -1570,6 +1578,7 @@ func (m *ServiceMgr) rebalanceProgressCallback(progress float64, cancel <-chan s
 	})
 }
 
+// updateRebalanceProgressLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 	rev := m.rebalanceCtx.incRev()
 	changeID := m.rebalanceCtx.change.ID
@@ -1606,6 +1615,7 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 	})
 }
 
+// onRebalanceDoneLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 	logPrefix := "ServiceMgr::onRebalanceDoneLOCKED"
 	l.Infof("%s Rebalance Done, cancel: %v, err: %v", logPrefix, cancelRebalance, err)
@@ -1658,38 +1668,42 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 	l.Infof("%s isBalanced: %v, isMaster: %v", logPrefix, m.isBalanced, isMaster)
 }
 
+// notifyWaitersLOCKED sends the current (new) state to all state waiters.
+// Caller should be holding mutex mu at least read locked.
 func (m *ServiceMgr) notifyWaitersLOCKED() {
 	s := m.copyStateLOCKED()
+
+	m.waitersMu.Lock()
 	for ch := range m.waiters {
 		if ch != nil {
 			ch <- s
 		}
 	}
-
-	m.waiters = make(waiters)
+	m.waiters = make(waiters) // reinit to the empty set
+	m.waitersMu.Unlock()
 }
 
-func (m *ServiceMgr) addWaiterLOCKED() waiter {
+// addWaiter creates and returns a state notification channel of type
+// waiter (for the current go routine) and adds it to the waiters list.
+func (m *ServiceMgr) addWaiter() waiter {
 	ch := make(waiter, 1)
+
+	m.waitersMu.Lock()
 	m.waiters[ch] = struct{}{}
+	m.waitersMu.Unlock()
 
 	return ch
 }
 
+// removeWaiter removes the channel of type waiter (for the current
+// go routine) from the waiters list.
 func (m *ServiceMgr) removeWaiter(w waiter) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.waitersMu.Lock()
 	delete(m.waiters, w)
+	m.waitersMu.Unlock()
 }
 
-func (m *ServiceMgr) updateState(body func(state *state)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.updateStateLOCKED(body)
-}
-
+// updateStateLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) updateStateLOCKED(body func(state *state)) {
 	body(&m.state)
 	m.state.rev++
@@ -1697,27 +1711,33 @@ func (m *ServiceMgr) updateStateLOCKED(body func(state *state)) {
 	m.notifyWaitersLOCKED()
 }
 
+// wait returns the current state immediately if it is newer than what the
+// caller (ultimately ns_server, from GetTaskList or GetTopologyChange APIs)
+// already has or if caller passed a nil rev. Otherwise it waits until the
+// revision changes and returns the new state. ns_server's cbauth API stub
+// may cancel the wait before that happens by closing the cancel channel, in
+// which case this returns a zero-value state structure and an ErrCanceled
+// error. cbauth will then send a nil-rev follow-up call immediately. Note
+// that this follow-up call will not be sent until indexer first replies to
+// the cancel.
 func (m *ServiceMgr) wait(rev service.Revision,
 	cancel service.Cancel) (state, error) {
 
-	m.mu.Lock()
-
-	unlock := NewCleanup(func() { m.mu.Unlock() })
-	defer unlock.Run()
-
+	m.mu.RLock()
 	currState := m.copyStateLOCKED()
+	m.mu.RUnlock()
 
 	if rev == nil {
 		return currState, nil
 	}
 
 	haveRev := DecodeRev(rev)
-	if haveRev != m.rev {
+	if haveRev != currState.rev {
 		return currState, nil
 	}
 
-	ch := m.addWaiterLOCKED()
-	unlock.Run()
+	// Caller has current revision so wait for the next one before replying
+	ch := m.addWaiter()
 
 	select {
 	case <-cancel:
@@ -1728,12 +1748,12 @@ func (m *ServiceMgr) wait(rev service.Revision,
 	}
 }
 
+// copyStateLOCKED caller should be holding mutex mu at least read locked.
 func (m *ServiceMgr) copyStateLOCKED() state {
-	s := m.state
-
-	return s
+	return m.state
 }
 
+// cancelActualTaskLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelActualTaskLOCKED(task *service.Task) error {
 	if m.rebalancer != nil {
 		change := &m.rebalanceCtx.change
@@ -1752,6 +1772,7 @@ func (m *ServiceMgr) cancelActualTaskLOCKED(task *service.Task) error {
 	}
 }
 
+// cancelPrepareTaskLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 	if m.rebalancer != nil {
 		return service.ErrConflict
@@ -1771,6 +1792,7 @@ func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 	return nil
 }
 
+// cancelRebalanceTaskLOCKED should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
 	switch task.Status {
 	case service.TaskStatusRunning:
@@ -1782,6 +1804,7 @@ func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
 	}
 }
 
+// cancelRunningRebalanceTaskLOCKED should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
 	m.rebalancer.Cancel()
 	m.onRebalanceDoneLOCKED(nil, true)
@@ -1789,6 +1812,7 @@ func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
 	return nil
 }
 
+// cancelFailedRebalanceTaskLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelFailedRebalanceTaskLOCKED() error {
 	m.updateStateLOCKED(func(s *state) {
 		s.rebalanceTask = nil
@@ -2830,6 +2854,7 @@ func (m *ServiceMgr) moveIndexDoneCallback(err error, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() { m.onMoveIndexDoneLOCKED(err) })
 }
 
+// onMoveIndexDoneLOCKED caller should be holding mutex mu write(?) locked.
 func (m *ServiceMgr) onMoveIndexDoneLOCKED(err error) {
 
 	if err != nil {
