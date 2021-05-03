@@ -4070,8 +4070,11 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 
 			if buildInfo.buildTs != nil {
 				//if flushTs is greater than or equal to buildTs
+				//and is snap aligned(except if buildTs is 0)
 				ts := getSeqTsFromTsVbuuid(flushTs)
-				if ts.GreaterThanEqual(buildInfo.buildTs) {
+				if buildInfo.buildTs.IsZeroTs() ||
+					(ts.GreaterThanEqual(buildInfo.buildTs) &&
+						flushTs.IsSnapAligned()) {
 					return true
 				}
 			}
