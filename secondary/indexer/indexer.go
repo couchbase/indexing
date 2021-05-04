@@ -3339,10 +3339,11 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 
 	//if index in MAINT_STREAM rollback to 0, reset state to created and
 	//schedule the build again
-	//if restartTs == nil && streamId == common.MAINT_STREAM {
-	//	idx.resetIndexesOnRollback(streamId, keyspaceId, sessionId)
-	//	return
-	//}
+	resetOnRollback := idx.config["recovery.reset_index_on_rollback"].Bool()
+	if resetOnRollback && (restartTs == nil && streamId == common.MAINT_STREAM) {
+		idx.resetIndexesOnRollback(streamId, keyspaceId, sessionId)
+		return
+	}
 
 	idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, false, false, sessionId)
 	go idx.collectProgressStats(true)
