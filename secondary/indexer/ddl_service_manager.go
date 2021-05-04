@@ -1434,7 +1434,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		createTokens, err := mc.ListCreateCommandToken()
 		if err != nil {
-			logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in ListCreateCommandToken. req: %v", err, common.GetHTTPReqInfo(r))
+			logging.Errorf("DDLServiceMgr::handleListCreateTokens error %v in ListCreateCommandToken. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
@@ -1446,15 +1446,40 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 			defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
 			if err != nil {
-				logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in GetDefnIdFromCreateCommandTokenPath for entry %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
+				logging.Errorf("DDLServiceMgr::handleListCreateTokens error %v in GetDefnIdFromCreateCommandTokenPath for entry %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				continue
 			}
 
-			token, err := mc.FetchCreateCommandToken(defnId, requestId)
+			//
+			// Use retry helper for fetching create command token.
+			// Metakv consistency model may not return a complete set of children
+			// on ListAllChildren, if all the children are not available at the
+			// time of calling. So, wait for sometime and retry.
+			//
+			// mc.FetchCreateCommandToken is a complete function in itself which
+			// internally gets all the sub-paths and consolidates and unmarshals
+			// the create command token. In case of half-baked token, internal
+			// json unmarshal will return error.
+			//
+			var token *mc.CreateCommandToken
+
+			fn := func(retryAttempt int, lastErr error) error {
+				var err error
+
+				token, err = mc.FetchCreateCommandToken(defnId, requestId)
+				if err != nil {
+					logging.Errorf("DDLServiceMgr::handleListCreateTokens error %v in FetchCreateCommandToken for entry %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
+				}
+
+				return err
+			}
+
+			rh := common.NewRetryHelper(8, 2*time.Second, 1, fn)
+			err = rh.Run()
+
 			if err != nil {
-				logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in FetchCreateCommandToken for entry %v. req: %v", err, entry, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1467,7 +1492,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		buf, err := mc.MarshallCreateCommandTokenList(list)
 		if err != nil {
-			logging.Infof("DDLServiceMgr::handleListCreateTokens error %v in MarshallCreateCommandTokenList. req: %v", err, common.GetHTTPReqInfo(r))
+			logging.Errorf("DDLServiceMgr::handleListCreateTokens error %v in MarshallCreateCommandTokenList. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
