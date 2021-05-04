@@ -2325,6 +2325,30 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					sessionId:  sessionId}
 
 				return true
+			} else {
+				var lenInitTs int
+				tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
+				if tsList != nil {
+					lenInitTs = tsList.Len()
+				}
+
+				forceLog := false
+				now := uint64(time.Now().UnixNano())
+				sinceLastLog := now - tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId]
+
+				//log more debug information if build is not able to complete
+				//but doesn't have pending mutations
+				if lenInitTs == 0 && sinceLastLog > uint64(300*time.Second) {
+					forceLog = true
+					tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+				}
+
+				if forceLog || logging.IsEnabled(logging.Verbose) {
+					tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+					hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+					logging.Verbosef("Timekeeper::checkInitialBuildDone Index: %v Stream: %v KeyspaceId: %v"+
+						" FlushTs %v\n HWT %v", idx.InstId, streamId, keyspaceId, flushTs, hwt)
+				}
 			}
 		}
 	}
@@ -2378,9 +2402,21 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
 			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
 			"MAINT PendTsCount %v.", keyspaceId, lenInitTs, lenMaintTs)
-		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
-		})
+
+		forceLog := false
+		now := uint64(time.Now().UnixNano())
+		sinceLastLog := now - tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId]
+
+		//log more debug information if INIT_STREAM is waiting for long time to merge
+		//but doesn't have pending mutations
+		if lenInitTs == 0 && sinceLastLog > uint64(300*time.Second) {
+			forceLog = true
+			tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+		}
+
+		if forceLog || logging.IsEnabled(logging.Verbose) {
+			logging.Verbosef("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+		}
 		return false
 	}
 
@@ -2433,7 +2469,11 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 				//disable flush for MAINT_STREAM for this keyspace, so it doesn't
 				//move ahead till merge is complete
-				tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+				if mStatus == STREAM_ACTIVE {
+					if flushEnabled, ok := tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket]; ok && flushEnabled {
+						tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+					}
+				}
 
 				//if keyspace in INIT_STREAM is going to merge, disable flush. No need to waste
 				//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
@@ -4066,8 +4106,11 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 
 			if buildInfo.buildTs != nil {
 				//if flushTs is greater than or equal to buildTs
+				//and is snap aligned(except if buildTs is 0)
 				ts := getSeqTsFromTsVbuuid(flushTs)
-				if ts.GreaterThanEqual(buildInfo.buildTs) {
+				if buildInfo.buildTs.IsZeroTs() ||
+					(ts.GreaterThanEqual(buildInfo.buildTs) &&
+						flushTs.IsSnapAligned()) {
 					return true
 				}
 			}

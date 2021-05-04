@@ -119,14 +119,17 @@ type indexer struct {
 	//TODO Remove this once cbq bridge support goes away
 	keyspaceIdCreateClientChMap map[string]MsgChannel
 
-	wrkrRecvCh          MsgChannel //channel to receive messages from workers
-	                               //   (SettingsManager, MutationManager, KVSender, Timekeeper)
-	internalRecvCh      MsgChannel //buffered channel to queue worker requests (most MsgXyz messages)
+	wrkrRecvCh MsgChannel //channel to receive messages from workers
+	//   (SettingsManager, MutationManager, KVSender, Timekeeper)
+	wrkrPrioRecvCh MsgChannel // buffered channel for high-priority worker requests
+	internalRecvCh MsgChannel //buffered channel to queue worker requests (most MsgXyz messages)
+
 	adminRecvCh         MsgChannel //channel to receive admin messages (ClustMgrAgent)
 	internalAdminRecvCh MsgChannel //internal channel to receive admin messages (DDL; unbuffered channel)
 	internalAdminRespCh MsgChannel //internal channel to respond admin messages (DDL; unbuffered channel)
-	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
-	shutdownCompleteCh  MsgChannel //indicate shutdown completion
+
+	shutdownInitCh     MsgChannel //internal shutdown channel for indexer
+	shutdownCompleteCh MsgChannel //indicate shutdown completion
 
 	mutMgrCmdCh          MsgChannel //channel to send commands to mutation manager
 	storageMgrCmdCh      MsgChannel //channel to send commands to storage manager
@@ -229,13 +232,16 @@ type resetList []common.IndexInstId
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
-		wrkrRecvCh:          make(MsgChannel, WORKER_RECV_QUEUE_LEN),
-		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+		wrkrRecvCh:     make(MsgChannel, WORKER_RECV_QUEUE_LEN),
+		wrkrPrioRecvCh: make(MsgChannel, WORKER_RECV_QUEUE_LEN),
+		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+
 		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		internalAdminRecvCh: make(MsgChannel),
 		internalAdminRespCh: make(MsgChannel),
-		shutdownInitCh:      make(MsgChannel),
-		shutdownCompleteCh:  make(MsgChannel),
+
+		shutdownInitCh:     make(MsgChannel),
+		shutdownCompleteCh: make(MsgChannel),
 
 		mutMgrCmdCh:          make(MsgChannel),
 		storageMgrCmdCh:      make(MsgChannel),
@@ -433,7 +439,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Rebalance Manager
-	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
+	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.wrkrPrioRecvCh,
+		idx.config, idx.rebalanceRunning, idx.rebalanceToken)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
 		return nil, res
@@ -860,8 +867,8 @@ func (idx *indexer) releaseStreamRequestLock(req *kvRequest) {
 	}
 }
 
-const MSG_LOOP_MARKER string = "msg_loop" // to grep for all the following logXyz messages
-const MSG_PROCESSING_SLOW time.Duration = time.Minute  // threshold for warning of slow message processing
+const MSG_LOOP_MARKER string = "msg_loop"             // to grep for all the following logXyz messages
+const MSG_PROCESSING_SLOW time.Duration = time.Minute // threshold for warning of slow message processing
 
 // logProcessingTime logs the time it took to process a message. To avoid log flooding, this logs at levels
 //   Warn  -- if time taken is long, regardless of forceLog flag
@@ -920,17 +927,45 @@ func (idx *indexer) run() {
 	const classMethod string = "Indexer::run" // for logging
 
 	go idx.listenWorkerMsgs() // wrkrRecvCh
-	go idx.listenAdminMsgs() // adminRecvCh
+	go idx.listenAdminMsgs()  // adminRecvCh
 
 	for {
 		var msg Message
-		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
+		var ok bool               // needed as "msg, ok := <-" shadows msg when creating ok
 		var receiveTime time.Time // time msg was received
-		var channel string // name of channel msg came from
-		var forceLog bool // admin messages force logging of processing time
+		var channel string        // name of channel msg came from
+		var forceLog bool         // admin messages force logging of processing time
 
-		// internalRecvCh and internalAdminRecvCh chosen at random per Go official behavior
+		// Process everything in high-priority channel first
+		for len(idx.wrkrPrioRecvCh) > 0 {
+			select {
+
+			case msg, ok = <-idx.wrkrPrioRecvCh:
+				if ok {
+					receiveTime = time.Now()
+					idx.handleWorkerMsgs(msg)
+					logProcessingTime(classMethod, msg, "wrkrPrioRecvCh", time.Since(receiveTime), true)
+				}
+
+			case <-idx.shutdownInitCh:
+				logShutdownStart(classMethod)
+				idx.shutdownWorkers()
+				close(idx.shutdownCompleteCh)
+				logShutdownComplete(classMethod)
+				return
+			}
+		}
+
+		// Process next message to arrive in any channel
 		select {
+
+		case msg, ok = <-idx.wrkrPrioRecvCh:
+			if ok {
+				receiveTime = time.Now()
+				channel = "wrkrPrioRecvCh"
+				forceLog = true
+				idx.handleWorkerMsgs(msg)
+			}
 
 		case msg, ok = <-idx.internalRecvCh:
 			if ok {
@@ -961,7 +996,6 @@ func (idx *indexer) run() {
 			logShutdownComplete(classMethod)
 			return
 		}
-
 		logProcessingTime(classMethod, msg, channel, time.Since(receiveTime), forceLog)
 	}
 }
@@ -971,14 +1005,10 @@ func (idx *indexer) listenAdminMsgs() {
 	const classMethod string = "Indexer::listenAdminMsgs" // for logging
 
 	for {
-		var msg Message
-		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
-		var receiveTime time.Time // time msg was received
-
 		select {
-		case msg, ok = <-idx.adminRecvCh:
+		case msg, ok := <-idx.adminRecvCh:
 			if ok {
-				receiveTime = time.Now()
+				receiveTime := time.Now()
 
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
@@ -1013,12 +1043,12 @@ func (idx *indexer) listenAdminMsgs() {
 						logStreamRequestLockTime(classMethod, msg, "adminRecvCh", time.Since(startStreamRequestLockTime))
 					}
 				}
+				logProcessingTime(classMethod, msg, "adminRecvCh", time.Since(receiveTime), true)
 			}
 		case <-idx.shutdownInitCh:
 			logShutdownComplete(classMethod)
 			return
 		}
-		logProcessingTime(classMethod, msg, "adminRecvCh", time.Since(receiveTime), true)
 	}
 }
 
@@ -1048,25 +1078,19 @@ func (idx *indexer) listenWorkerMsgs() {
 
 	//listen to worker messages
 	for {
-		var msg Message
-		var ok bool // needed as "msg, ok := <-" shadows msg when creating ok
-		var receiveTime time.Time // time msg was received
-
 		select {
 
-		case msg, ok = <-idx.wrkrRecvCh:
+		case msg, ok := <-idx.wrkrRecvCh:
 			if ok {
-				receiveTime = time.Now()
-
-				//handle high priority messages
-				switch msg.GetMsgType() {
-				case MSG_ERROR:
+				receiveTime := time.Now()
+				if msg.GetMsgType() == MSG_ERROR {
 					err := msg.(*MsgError).GetError()
 					if err.code == ERROR_MUT_MGR_PANIC {
 						close(idx.mutMgrExitCh)
 					}
 				}
 				idx.internalRecvCh <- msg
+				logProcessingTime(classMethod, msg, "wrkrRecvCh", time.Since(receiveTime), false)
 			}
 
 		case <-idx.shutdownInitCh:
@@ -1074,10 +1098,10 @@ func (idx *indexer) listenWorkerMsgs() {
 			logShutdownComplete(classMethod)
 			return
 		}
-		logProcessingTime(classMethod, msg, "wrkrRecvCh", time.Since(receiveTime), false)
 	}
 }
 
+// handleWorkerMsgs handles worker messages (wrkrPrioRecvCh, internalRecvCh).
 func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	switch msg.GetMsgType() {
@@ -1498,6 +1522,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	idx.updateSliceWithConfig(newConfig)
 }
 
+// handleAdminMsgs handles admin (DDL) messages (internalAdminRecvCh).
 func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 
 	switch msg.GetMsgType() {
@@ -3303,9 +3328,19 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	//NOTE - Reset Index functionality allows to support collection flush easily.
+	//As collection flush is not supported in 7.0, rollback to 0 means
+	//to clear out the data of all indexes in MAINT_STREAM and rebuild.
+	//For 7.0, it is okay to follow the pre-7.0 model of letting the
+	//indexes use the MAINT_STREAM to rebuild from 0. This keeps index
+	//stream management simple. The only other behavior change would be
+	//that indexes remain in Active state after rollback to 0(dcp rollback
+	//or bucket flush) which is same as pre 7.0 behavior.
+
 	//if index in MAINT_STREAM rollback to 0, reset state to created and
 	//schedule the build again
-	if restartTs == nil && streamId == common.MAINT_STREAM {
+	resetOnRollback := idx.config["recovery.reset_index_on_rollback"].Bool()
+	if resetOnRollback && (restartTs == nil && streamId == common.MAINT_STREAM) {
 		idx.resetIndexesOnRollback(streamId, keyspaceId, sessionId)
 		return
 	}
@@ -3370,6 +3405,18 @@ func (idx *indexer) resetIndexesOnRollback(streamId common.StreamId,
 
 	if rList != nil {
 		idx.doResetIndexesOnRollback(keyspaceId, sessionId, rList)
+	} else {
+
+		//if no indexes need to be reset, set the stream to INACTIVE
+		//stream is already stopped as reset happens during rollback
+		logging.Infof("Indexer::resetIndexesOnRollback %v %v. No Index Found For Reset. Setting state %v",
+			streamId, keyspaceId, STREAM_INACTIVE)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+		idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
+
+		//process any pending build done.
+		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+
 	}
 
 }
@@ -3521,7 +3568,9 @@ func (idx *indexer) handleResetIndexDone(msg Message) {
 		common.CrashOnError(ErrInconsistentState)
 	}
 
+	//stream is already stopped as reset happens during rollback
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+	idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
 
 	//TODO check if it is possible for deleted state indexes to
 	//be in the stream, if so handle the case
@@ -3564,24 +3613,60 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	//TODO Collections is this check required as indexes can be dropped during recovery?
-	//if only a deleted index remains in the stream, how will pendBuild work
 	//during recovery, if all indexes of a keyspace gets dropped,
 	//the stream needs to be stopped for that keyspace.
 	if !idx.checkKeyspaceIdExistsInStream(keyspaceId, streamId, true) {
-		if idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_INACTIVE {
-			logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v "+
-				"State %v. No Index Found. Cleaning up.", streamId, keyspaceId,
-				idx.getStreamKeyspaceIdState(streamId, keyspaceId))
-			idx.stopKeyspaceIdStream(streamId, keyspaceId)
 
-			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
-			idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+		//for MAINT_STREAM, keep the stream running if catchup state index
+		//exist for INIT_STREAM
+		catchupPending := false
+		if streamId == common.MAINT_STREAM {
+			catchupPending = idx.checkCatchupPendingForStream(streamId, keyspaceId)
+		}
+
+		if !catchupPending {
+			if idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_INACTIVE {
+				logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v "+
+					"State %v. No Index Found. Cleaning up.", streamId, keyspaceId,
+					idx.getStreamKeyspaceIdState(streamId, keyspaceId))
+				idx.stopKeyspaceIdStream(streamId, keyspaceId)
+
+				idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+				idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
+				idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+			}
 		}
 	} else {
 		//change status to Active
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_ACTIVE)
-		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+
+		//for MAINT_STREAM, check if there is any pendingBuildDone for an
+		//INIT_STREAM of the same bucket
+		if streamId == common.MAINT_STREAM {
+			idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+		} else {
+			//for INIT_STREAM, if MAINT_STREAM is not running
+			//i. all indexes dropped
+			//ii. all indexes get reset due to rollback to 0
+			//it needs to be started here
+
+			maintStreamId := common.MAINT_STREAM
+			bucket := GetBucketFromKeyspaceId(keyspaceId)
+			state := idx.getStreamKeyspaceIdState(maintStreamId, bucket)
+			catchupPending := idx.checkCatchupPendingForStream(maintStreamId, bucket)
+			if state == STREAM_INACTIVE && catchupPending {
+				if idx.streamKeyspaceIdPendStart[maintStreamId][bucket] {
+					logging.Infof("Indexer::handleRecoveryDone Skip Start Inactive Stream %v %v %v"+
+						" due to pending start.", maintStreamId, bucket, state)
+				} else {
+					logging.Infof("Indexer::handleRecoveryDone Start Inactive Stream %v %v %v",
+						maintStreamId, bucket, state)
+
+					restartTs := msg.(*MsgRecovery).GetRestartTs()
+					idx.restartMaintStreamForCatchup(bucket, restartTs)
+				}
+			}
+		}
 	}
 
 	logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v SessionId %v %v",
@@ -3650,6 +3735,22 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		return
 	}
 
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	//if MAINT_STREAM is not running
+	//i. all indexes dropped
+	//ii. all indexes get reset due to rollback to 0
+	//it needs to be started here
+	if idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v",
+			streamId, keyspaceId, sessionId)
+		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
+		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
+
+		mergeTs := msg.(*MsgTKInitBuildDone).GetMergeTs()
+		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
+		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, false, false, sid)
+	}
+
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
 		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
@@ -3704,12 +3805,30 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 		bucket := GetBucketFromKeyspaceId(keyspaceId)
 		state := idx.getStreamKeyspaceIdState(mergeStreamId, bucket)
 
-		if state == STREAM_INACTIVE ||
-			state == STREAM_PREPARE_RECOVERY ||
+		if state == STREAM_PREPARE_RECOVERY ||
 			state == STREAM_RECOVERY {
 			logging.Infof("Indexer::handleAddInstanceFail Skip Recovery %v %v %v",
 				mergeStreamId, bucket, state)
 			return
+		} else if state == STREAM_INACTIVE {
+
+			//if MAINT_STREAM is not running
+			//i. all indexes dropped
+			//ii. all indexes get reset due to rollback to 0
+			//it needs to be started here
+
+			if idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][bucket] {
+				logging.Infof("Indexer::handleAddInstanceFail Skip Start Inactive Stream %v %v %v due to pending start.",
+					mergeStreamId, bucket, state)
+				return
+			}
+
+			logging.Infof("Indexer::handleAddInstanceFail Start Inactive Stream %v %v %v",
+				mergeStreamId, bucket, state)
+
+			flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
+			idx.restartMaintStreamForCatchup(bucket, flushTs)
+
 		} else {
 			//use the current sessionId for MAINT_STREAM
 			maintSessionId := idx.getCurrentSessionId(mergeStreamId, bucket)
@@ -3737,19 +3856,6 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
 		streamId, keyspaceId, sessionId)
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-	//if MAINT_STREAM is not running(e.g. last index dropped), it needs to be started here
-	if idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
-			streamId, keyspaceId, sessionId)
-		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
-		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
-
-		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
-		//TODO Collections verify async flag
-		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, false, false, sid)
-	}
-
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, false); !ok {
 		logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
@@ -3770,6 +3876,26 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
 				streamId, keyspaceId, state)
 			return
+		}
+
+		//if MAINT_STREAM is not running
+		//i. all indexes dropped
+		//ii. all indexes get reset due to rollback to 0
+		//it needs to be started here
+
+		mergeStreamId := common.MAINT_STREAM
+		bucket := GetBucketFromKeyspaceId(keyspaceId)
+		mstate := idx.getStreamKeyspaceIdState(mergeStreamId, bucket)
+		if mstate == STREAM_INACTIVE {
+			if idx.streamKeyspaceIdPendStart[mergeStreamId][bucket] {
+				logging.Infof("Indexer::handleMergeStreamAck Skip Start Inactive Stream %v %v %v due to pending start.",
+					mergeStreamId, bucket, mstate)
+			} else {
+				logging.Infof("Indexer::handleMergeStreamAck Start Inactive Stream %v %v %v",
+					mergeStreamId, bucket, mstate)
+
+				idx.restartMaintStreamForCatchup(bucket, mergeTs)
+			}
 		}
 
 		//send the ack to timekeeper
@@ -4108,6 +4234,13 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 				}
 			}
 		}
+	}
+
+	// When dropping an index in INIT_STREAM, check if the MAINT_STREAM
+	// is no longer required. This happens if MAINT_STREAM was started by
+	// catchup phase and there is no index on this bucket
+	if indexInst.Stream == common.INIT_STREAM {
+		idx.cleanupEmptyMaintStream(indexInst.Defn.Bucket)
 	}
 
 	if clientCh != nil {
@@ -4987,6 +5120,8 @@ func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 	return true
 }
 
+// handleCheckDDLInProgress handles MsgCheckDDLInProgress
+// (MsgType INDEXER_CHECK_DDL_IN_PROGRESS).
 func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
@@ -5000,6 +5135,8 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 	return
 }
 
+// checkDDLInProgress returns true and a slice of index names currently in DDL
+// processing if DDL is currently running, else false and an empty slice.
 func (idx *indexer) checkDDLInProgress() (bool, []string) {
 
 	ddlInProgress := false
@@ -5085,7 +5222,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][bucket] = true
 		idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, flushTs)
 	} else {
-		idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId)
+		idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId, flushTs)
 	}
 
 }
@@ -5141,7 +5278,7 @@ func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
 				idx.processBuildDoneNoCatchup(pendStreamId, keyspaceId, spec.sessionId, spec.flushTs)
 				delete(idx.streamKeyspaceIdPendBuildDone[pendStreamId], keyspaceId)
 			} else {
-				idx.processBuildDoneCatchup(pendStreamId, keyspaceId, spec.sessionId)
+				idx.processBuildDoneCatchup(pendStreamId, keyspaceId, spec.sessionId, spec.flushTs)
 				delete(idx.streamKeyspaceIdPendBuildDone[pendStreamId], keyspaceId)
 			}
 			//process one pending build at a time
@@ -5150,7 +5287,8 @@ func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
 	}
 }
 
-func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId string, sessionId uint64) {
+func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
+	keyspaceId string, sessionId uint64, flushTs *common.TsVbuuid) {
 
 	logging.Infof("Indexer::processBuildDoneCatchup %v %v %v", streamId, keyspaceId,
 		sessionId)
@@ -5318,12 +5456,13 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 								streamId:   streamId,
 								keyspaceId: keyspaceId,
 								sessionId:  sessionId,
+								flushTs:    flushTs,
 							}
 							break retryloop
 						}
 					} else {
 						logging.Errorf("Indexer::processBuildDoneCatchup Stream %v KeyspaceId %v SessionId %v."+
-							"Error from Projector %v. Retrying.", streamId, keyspaceId, sessionId, respErr.cause)
+							"Error from Projector %v. Retrying %v.", streamId, keyspaceId, sessionId, respErr.cause, count)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
@@ -5481,7 +5620,6 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 	sessionId := idx.genNextSessionId(newStream, bucket)
 
 	idx.setStreamKeyspaceIdState(newStream, bucket, STREAM_ACTIVE)
-	//TODO Collections veirfy async flag
 	idx.startKeyspaceIdStream(newStream, bucket, flushTs, nil, nil, false, false, sessionId)
 }
 
@@ -5693,6 +5831,37 @@ func (idx *indexer) cleanupMaintStream(keyspaceId string) {
 	}
 }
 
+// cleanupEmptyMaintStream cleanes up MAINT_STREAM for a given keyspaceId(bucket)
+// if there are no indexes in INIT_STREAM for the bucket
+func (idx *indexer) cleanupEmptyMaintStream(bucket string) {
+
+	streamId := common.MAINT_STREAM
+
+	//if MAINT_STREAM is not active, nothing to do
+	//recovery will detect that stream doesn't need to be started if there
+	//are no eligible indexes
+	if idx.getStreamKeyspaceIdState(streamId, bucket) != STREAM_ACTIVE {
+		return
+	}
+
+	//if there no indexes left on this bucket
+	found := false
+	for _, indexInst := range idx.indexInstMap {
+		if indexInst.Defn.KeyspaceId(streamId) == bucket {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		logging.Infof("Indexer::cleanupEmptyMaintStream %v %v. Stop empty stream.", streamId, bucket)
+		idx.stopKeyspaceIdStream(streamId, bucket)
+		idx.setStreamKeyspaceIdState(streamId, bucket, STREAM_INACTIVE)
+		idx.cleanupAllStreamKeyspaceIdState(streamId, bucket)
+	}
+
+}
+
 // checkKeyspaceIdExistsInStream determines whether the stream has any index we need DCP records for.
 func (idx *indexer) checkKeyspaceIdExistsInStream(keyspaceId string, streamId common.StreamId, checkDelete bool) bool {
 
@@ -5764,6 +5933,28 @@ func (idx *indexer) getIndexListForKeyspaceIdAndStream(streamId common.StreamId,
 
 	return indexList
 
+}
+
+//checkCatchupPendingForStream return true if there is any index in INIT_STREAM and catchup
+//state for the input keyspaceId in MAINT_STREAM
+func (idx *indexer) checkCatchupPendingForStream(streamId common.StreamId,
+	keyspaceId string) bool {
+
+	//catch is only possible for MAINT_STREAM
+	if streamId != common.MAINT_STREAM {
+		return false
+	}
+
+	//check if any index of the given keyspaceId is in the Stream
+	for _, index := range idx.indexInstMap {
+
+		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == common.INIT_STREAM &&
+			index.State == common.INDEX_STATE_CATCHUP {
+			return true
+		}
+	}
+
+	return false
 }
 
 // stopKeyspaceIdStream removes the request to receive DCP records of given keyspaceId
@@ -9590,4 +9781,18 @@ func (idx *indexer) updateRStateForPendingReset(instances []common.IndexInst) {
 
 func (idx *indexer) deletePendingReset(instId common.IndexInstId) {
 	delete(idx.pendingReset, instId)
+}
+
+//restartMaintStreamForCatchup starts the MAINT_STREAM for the given bucket using the
+//input restarTs and sets the stream state to STREAM_ACTIVE. It is currently used to
+//restart an inactive MAINT_STREAM if a Catchup state index exists in INIT_STREAM to
+//facilitate stream merge.
+func (idx *indexer) restartMaintStreamForCatchup(bucket string, restartTs *common.TsVbuuid) {
+
+	streamId := common.MAINT_STREAM
+	logging.Infof("Indexer::restartMaintStreamForCatchup %v %v %v", streamId, bucket, STREAM_ACTIVE)
+	idx.prepareStreamKeyspaceIdForFreshStart(streamId, bucket)
+	idx.setStreamKeyspaceIdState(streamId, bucket, STREAM_ACTIVE)
+	maintSessionId := idx.genNextSessionId(streamId, bucket)
+	idx.startKeyspaceIdStream(streamId, bucket, restartTs, nil, nil, false, false, maintSessionId)
 }

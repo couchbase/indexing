@@ -2841,6 +2841,17 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.recovery.reset_index_on_rollback": ConfigValue{
+		false,
+		"This flag controls the rollback to 0 behavior of indexes in MAINT_STREAM. " +
+			"If true, the indexes get reset on rollback to 0(flush, DCP rollback) i.e. the " +
+			"state of indexes will be moved to Created(Ready for LifecyleManager) and rebuilt " +
+			"by the builder in batches. If false, the indexes will rollback to 0 and rebuild in " +
+			"MAINT_STREAM(pre 7.0 behavior).",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
