@@ -726,7 +726,7 @@ func ListAndFetchDropInstanceCommandToken(defnId c.IndexDefnId) ([]*DropInstance
 
 // ListAndFetchAllDropInstanceCommandToken returns all drop instance
 // tokens for this indexer host.
-func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, error) {
+func ListAndFetchAllDropInstanceCommandToken(retries int) ([]*DropInstanceCommandToken, error) {
 
 	paths, err := ListDropInstanceCommandTokenPaths()
 	if err != nil {
@@ -738,9 +738,24 @@ func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, err
 		result = make([]*DropInstanceCommandToken, 0, len(paths))
 		for _, path := range paths {
 			token := &DropInstanceCommandToken{}
-			exists, err := c.MetakvBigValueGet(path, token)
+			var exists bool
+
+			fn := func(retryAttempt int, lastErr error) error {
+				var err error
+
+				exists, err = c.MetakvBigValueGet(path, token)
+				if err != nil {
+					logging.Errorf("ListAllDropInstanceCommandToken: path %v err %v", path, err)
+					return err
+				}
+
+				return err
+			}
+
+			rh := c.NewRetryHelper(retries, time.Second, 1, fn)
+			err = rh.Run()
+
 			if err != nil {
-				logging.Errorf("ListAllDropInstanceCommandToken: path %v err %v", path, err)
 				return nil, err
 			}
 
