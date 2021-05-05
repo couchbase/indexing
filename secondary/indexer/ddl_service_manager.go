@@ -68,6 +68,9 @@ type DDLServiceMgr struct {
 	dtCleanerStopCh  chan bool
 	dropCleanupLck   sync.Mutex
 	deleteTokenCache map[common.IndexDefnId]int64 // unixnano timestamp
+
+	dropInstTokCleanerStopCh chan bool
+	dropInstTokCleanupLck    sync.Mutex
 }
 
 const DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL = 24 * time.Hour
@@ -112,19 +115,20 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	settings := &ddlSettings{numReplica: numReplica}
 
 	mgr := &DDLServiceMgr{
-		indexerId:        indexerId,
-		supvCmdch:        supvCmdch,
-		supvMsgch:        supvMsgch,
-		localAddr:        localaddr,
-		clusterAddr:      addr,
-		nodeID:           nodeId,
-		settings:         settings,
-		donech:           nil,
-		killch:           make(chan bool),
-		allowDDL:         true,
-		btCleanerStopCh:  make(chan bool),
-		dtCleanerStopCh:  make(chan bool),
-		deleteTokenCache: make(map[common.IndexDefnId]int64),
+		indexerId:                indexerId,
+		supvCmdch:                supvCmdch,
+		supvMsgch:                supvMsgch,
+		localAddr:                localaddr,
+		clusterAddr:              addr,
+		nodeID:                   nodeId,
+		settings:                 settings,
+		donech:                   nil,
+		killch:                   make(chan bool),
+		allowDDL:                 true,
+		btCleanerStopCh:          make(chan bool),
+		dtCleanerStopCh:          make(chan bool),
+		deleteTokenCache:         make(map[common.IndexDefnId]int64),
+		dropInstTokCleanerStopCh: make(chan bool),
 	}
 
 	mgr.startCommandListner()
@@ -150,6 +154,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 
 	go mgr.buildTokenCleaner()
 	go mgr.dropTokenCleaner()
+	go mgr.dropInstTokenCleaner()
 
 	logging.Infof("DDLServiceMgr: intialized. Local nodeUUID %v", mgr.nodeID)
 
@@ -187,6 +192,7 @@ loop:
 					m.commandListener.Close()
 					close(m.btCleanerStopCh)
 					close(m.dtCleanerStopCh)
+					close(m.dropInstTokCleanerStopCh)
 					m.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -304,7 +310,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	// below methods
 	m.cleanupCreateCommand()
 	m.cleanupDropCommand(false, m.provider)
-	m.cleanupDropInstanceCommand()
+	m.cleanupDropInstanceCommand(false, m.provider)
 	m.cleanupBuildCommand(false, m.provider)
 	m.handleClusterStorageMode(httpAddrMap)
 }
@@ -1069,11 +1075,34 @@ func (m *DDLServiceMgr) processCreateCommand() {
 //
 // Recover drop instance command
 //
-func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
+func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *client.MetadataProvider) {
+
+	m.dropInstTokCleanupLck.Lock()
+	defer m.dropInstTokCleanupLck.Unlock()
 
 	entries, err := metakv.ListAllChildren(mc.DropInstanceDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Failed to cleanup delete index instance token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
+		return
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	if provider == nil {
+		// Use latest metadata provider.
+		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDropInstanceCommand")
+		if err != nil {
+			logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand error in newMetadataProvider %v. Skip cleanup.", err)
+			return
+		}
+
+		defer provider.Close()
+	}
+
+	if provider == nil {
+		logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -1112,17 +1141,21 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
 			//    provider is not connected to the indexer at the exact moment when this call is made.
 			//
 			//
-			if m.provider.FindIndexInstanceIgnoreStatus(command.DefnId, command.InstId) == nil {
+			if provider.FindIndexInstanceIgnoreStatus(command.DefnId, command.InstId) == nil {
 				var defn common.IndexDefn
 				defn.DefnId = command.DefnId
 				defn.NumReplica2 = command.Defn.NumReplica2
 
 				logging.Infof("DDLServiceMgr: Update Replica Count.  Index Defn %v replica Count %v", defn.DefnId, defn.NumReplica2)
 
-				if err := m.provider.BroadcastAlterReplicaCountRequest(&defn); err != nil {
+				if err := provider.BroadcastAlterReplicaCountRequest(&defn); err != nil {
 					// All errors received from alter replica count are expected to be recoverable.
 					logging.Warnf("DDLServiceMgr: Failed to alter replica count. Error = %v.", err)
 					continue
+				}
+
+				if checkDDL && !m.canProcessDDL() {
+					return
 				}
 
 				// There is no index in the cluster,  remove token
@@ -1134,6 +1167,26 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
 			} else {
 				logging.Infof("DDLServiceMgr: Indexer still holding index definiton.  Skip removing delete index token %v.", entry.Path)
 			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) dropInstTokenCleaner() {
+
+	ticker := time.NewTicker(10 * time.Minute)
+	// drop token cleaner will run every 10 minutes.
+	logging.Infof("DDLServiceMgr: starting dropInstTokenCleaner ...")
+	for {
+		select {
+
+		case <-ticker.C:
+			if m.canProcessDDL() {
+				m.cleanupDropInstanceCommand(true, nil)
+			}
+
+		case <-m.dropInstTokCleanerStopCh:
+			logging.Infof("DDLServiceMgr: stopping dropInstTokenCleaner ...")
+			return
 		}
 	}
 }
