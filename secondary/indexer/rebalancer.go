@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -618,9 +619,9 @@ func isMissingBSC(errMsg string) bool {
 	return errMsg == common.ErrCollectionNotFound.Error() ||
 		errMsg == common.ErrScopeNotFound.Error() ||
 		errMsg == common.ErrBucketNotFound.Error() ||
-		strings.Contains(errMsg, "[" + common.ErrCollectionNotFound.Error() + "]") ||
-		strings.Contains(errMsg, "[" + common.ErrScopeNotFound.Error() + "]") ||
-		strings.Contains(errMsg, "[" + common.ErrBucketNotFound.Error() + "]")
+		strings.Contains(errMsg, "["+common.ErrCollectionNotFound.Error()+"]") ||
+		strings.Contains(errMsg, "["+common.ErrScopeNotFound.Error()+"]") ||
+		strings.Contains(errMsg, "["+common.ErrBucketNotFound.Error()+"]")
 }
 
 // isIndexNotFoundRebal checks whether a build error returned for rebalance is the
@@ -824,23 +825,67 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		indexDefn.InstId = tt.InstId
 		indexDefn.RealInstId = tt.RealInstId
 
-		ir := manager.IndexRequest{Index: indexDefn}
-		body, err := json.Marshal(&ir)
-		if err != nil {
-			l.Errorf("Rebalancer::processTokenAsDest Error marshal clone index %v", err)
-			r.setTransferTokenError(ttid, tt, err.Error())
+		getReqBody := func() (*bytes.Buffer, bool) {
+
+			ir := manager.IndexRequest{Index: indexDefn}
+			body, err := json.Marshal(&ir)
+			if err != nil {
+				l.Errorf("Rebalancer::processTokenAsDest Error marshal clone index %v", err)
+				r.setTransferTokenError(ttid, tt, err.Error())
+				return nil, true
+			}
+
+			bodybuf := bytes.NewBuffer(body)
+			return bodybuf, false
+		}
+
+		bodybuf, isErr := getReqBody()
+		if isErr {
 			return true
 		}
 
-		bodybuf := bytes.NewBuffer(body)
-
+		var resp *http.Response
+		var err error
 		url := "/createIndexRebalance"
-		resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
+		resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
 		if err != nil {
 			// Error from HTTP layer, not from index processing code
 			l.Errorf("Rebalancer::processTokenAsDest Error register clone index on %v %v", r.localaddr+url, err)
-			r.setTransferTokenError(ttid, tt, err.Error())
-			return true
+			// If the error is io.EOF, then it is possible that server side
+			// may have closed the connection while client is about the send the request.
+			// Though this is extremely unlikely, this is observed for multiple users
+			// in golang community. See: https://github.com/golang/go/issues/19943,
+			// https://groups.google.com/g/golang-nuts/c/A46pBUjdgeM/m/jrn35_IxAgAJ for
+			// more details
+			//
+			// In such a case, instead of failing the rebalance with io.EOF error, retry
+			// the POST request. Two scenarios exist here:
+			// (a) Server has received the request and closed the connection (Very unlikely)
+			//     In this case, the request will be processed by server but client will see
+			//     EOF error. Retry will fail rebalance that index definition already exists.
+			// (b) Server has not received this request. Then retry will work and rebalance
+			//     will not fail.
+			//
+			// Instead of failing rebalance with io.EOF error, we retry the request and reduce
+			// probability of failure
+			if err == io.EOF {
+				bodybuf, isErr := getReqBody()
+				if isErr {
+					return true
+				}
+				resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
+				if err != nil {
+					l.Errorf("Rebalancer::processTokenAsDest Error register clone index during retry on %v %v", r.localaddr+url, err)
+					r.setTransferTokenError(ttid, tt, err.Error())
+					return true
+				} else {
+					l.Infof("Rebalancer::processTokenAsDest Successful POST of createIndexRebalance during retry on %v, defnId: %v, instId: %v",
+						r.localaddr+url, indexDefn.DefnId, indexDefn.InstId)
+				}
+			} else {
+				r.setTransferTokenError(ttid, tt, err.Error())
+				return true
+			}
 		}
 
 		response := new(manager.IndexResponse)
