@@ -1112,10 +1112,9 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 
 			logging.Infof("DDLServiceMgr: processing delete index instance token %v", entry.Path)
 
-			command, err := mc.UnmarshallDropInstanceCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to clean delete index instance token upon rebalancing.  Skip command %v.  Internal Error = %v.",
-					entry.Path, err)
+			command, err := mc.GetDropInstanceTokenFromPath(entry.Path)
+			if command == nil {
+				logging.Verbosef("DDLServiceMgr: delete index instance token for path %v does not exist", entry.Path)
 				continue
 			}
 
