@@ -1034,16 +1034,46 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	response := new(manager.IndexResponse)
 	url := "/buildIndexRebalance"
 
-	ir := manager.IndexRequest{IndexIds: idList}
-	body, _ := json.Marshal(&ir)
-	bodybuf := bytes.NewBuffer(body)
+	getReqBody := func() (*bytes.Buffer, error) {
+		ir := manager.IndexRequest{IndexIds: idList}
+		body, err := json.Marshal(&ir)
+		if err != nil {
+			l.Errorf("Rebalancer::buildAcceptedIndexes Error marshalling index inst list: %v, err: %v", idList, err)
+			return nil, err
+		}
+		bodybuf := bytes.NewBuffer(body)
+		return bodybuf, nil
+	}
 
-	resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
+	var bodybuf *bytes.Buffer
+	var resp *http.Response
+	var err error
+
+	bodybuf, err = getReqBody()
+	if err != nil {
+		errStr = err.Error()
+		goto cleanup
+	}
+
+	resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
 	if err != nil {
 		// Error from HTTP layer, not from index processing code
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index on %v %v", r.localaddr+url, err)
-		errStr = err.Error()
-		goto cleanup
+		if err == io.EOF {
+			// Retry build again before failing rebalance
+			bodybuf, err = getReqBody()
+			resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
+			if err != nil {
+				l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index during retry on %v %v", r.localaddr+url, err)
+				errStr = err.Error()
+				goto cleanup
+			} else {
+				l.Infof("Rebalancer::buildAcceptedIndexes Successful POST of buildIndexRebalance during retry on %v, instIdList: %v", r.localaddr+url, idList)
+			}
+		} else {
+			errStr = err.Error()
+			goto cleanup
+		}
 	}
 
 	if err := convertResponse(resp, response); err != nil {
