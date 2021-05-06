@@ -2346,7 +2346,7 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 	msgUpdateIndexInstMap.AppendDeletedInstIds([]common.IndexInstId{inst.InstId})
 
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
-	msgUpdateIndexPartnMap.SetDeletedInstId(inst.InstId)
+	msgUpdateIndexPartnMap.AppendDeletedInstIds([]common.IndexInstId{inst.InstId})
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
 	}
@@ -2861,7 +2861,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			instIdList, buildStream, buildState)
 
 		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-		updatedIndexes := idx.getUpdatedInsts(instIdList)
+		updatedIndexes := idx.getInsts(instIdList)
 		msgUpdateIndexInstMap.AppendUpdatedInsts(updatedIndexes)
 
 		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
@@ -2973,7 +2973,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		indexInst.State == common.INDEX_STATE_READY ||
 		indexInst.State == common.INDEX_STATE_DELETED {
 
-		idx.cleanupIndexData(indexInst, clientCh)
+		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
 		logging.Infof("Indexer::handleDropIndex Cleanup Successful for "+
 			"Index Data %v", indexInst)
 		resp = &MsgSuccess{}
@@ -3961,8 +3961,11 @@ func (idx *indexer) handleMTRFail(msg Message) {
 
 }
 
-// handleKeyspaceNotFound will delete the metadata for indexes in the missing keyspace,
-// or if recovery already in progress recovery will do the cleanup so this will skip it.
+// handleKeyspaceNotFound deletes the metadata for built indexes in the missing keyspace, or
+// if recovery already in progress recovery will do the cleanup so this will skip it. It will
+// also distribute updated maps to all the workers and delete the associated slices. Similar
+// to cleanupIndexDataForCollectionDrop for collections. (Cleanup of deferred indexes from a
+// dropped keyspace uses a different codepath: IndexManager.monitorKeyspace (manager/manager.go)).
 func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
@@ -4007,9 +4010,9 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
 	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
-	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
+	deletedInstIds := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
-	if len(instIdList) == 0 {
+	if len(deletedInstIds) == 0 {
 		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList. Stopping the keyspaceId stream %v %v",
 			streamId, keyspaceId)
 
@@ -4019,31 +4022,23 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		return
 	}
 
-	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
+	idx.bulkUpdateState(deletedInstIds, common.INDEX_STATE_DELETED)
 	logging.Infof("Indexer::handleKeyspaceNotFound Updated Index State to DELETED %v",
-		instIdList)
+		deletedInstIds)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-	updatedInstances := idx.getUpdatedInsts(instIdList)
-	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInstances)
-
+	deletedInsts := idx.getInsts(deletedInstIds)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(deletedInsts)
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
 	idx.stopKeyspaceIdStream(streamId, keyspaceId)
-
-	//cleanup index data for all indexes in the keyspace
-	for _, instId := range instIdList {
-		index := idx.indexInstMap[instId]
-		idx.cleanupIndexData(index, nil)
-	}
-
+	idx.cleanupIndexData(deletedInsts, nil)
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
 	logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
 		streamId, keyspaceId, STREAM_INACTIVE)
-
 }
 
 func (idx *indexer) handleDcpSystemEvent(cmd Message) {
@@ -4109,7 +4104,7 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-	updatedInstances := idx.getUpdatedInsts(instIdList)
+	updatedInstances := idx.getInsts(instIdList)
 	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInstances)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
@@ -4127,23 +4122,18 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	}
 }
 
+// cleanupIndexDataForCollectionDrop deletes the metadata for built indexes in the dropped
+// collection, distributes updated maps to all the workers, and deletes the associated slices.
+// Caller must guarantee instIdList is non-empty. Similar to handleKeyspaceNotFound for buckets.
 func (idx *indexer) cleanupIndexDataForCollectionDrop(streamId common.StreamId,
-	keyspaceId string,
-	instIdList []common.IndexInstId) {
+	keyspaceId string, deletedInstIds []common.IndexInstId) {
 
 	logging.Infof("Indexer::cleanupIndexDataForCollectionDrop %v %v", streamId, keyspaceId)
 
-	var bucketUUID string
-
-	indexList := make([]common.IndexInst, 0)
-	for _, instId := range instIdList {
-		index := idx.indexInstMap[instId]
-		bucketUUID = index.Defn.BucketUUID
-		indexList = append(indexList, index)
-		idx.cleanupIndexData(index, nil)
-	}
-
-	idx.removeIndexesFromStream(indexList, keyspaceId,
+	bucketUUID := idx.indexInstMap[deletedInstIds[0]].Defn.BucketUUID // to-be-deleted info needed below
+	deletedInsts := idx.getInsts(deletedInstIds)
+	idx.cleanupIndexData(deletedInsts, nil)
+	idx.removeIndexesFromStream(deletedInsts, keyspaceId,
 		bucketUUID, streamId, common.INDEX_STATE_ACTIVE, nil)
 }
 
@@ -4156,23 +4146,30 @@ func (idx *indexer) newKeyspaceStatsMsg() *MsgUpdateKeyspaceStatsMap {
 	return &MsgUpdateKeyspaceStatsMap{keyspaceStatsMap: idx.stats.GetKeyspaceStatsMap().Clone()}
 }
 
-func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
+// cleanupIndexData updates and distributes index metadata to workers reflecting
+// the deletion of a set of instances and deletes the associated slices.
+func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 	clientCh MsgChannel) {
 
-	indexInstId := indexInst.InstId
-	idxPartnInfo := idx.indexPartnMap[indexInstId]
+	// Delete all instances from internal maps
+	var indexInstIds []common.IndexInstId
+	idxPartnInfoMap := make(map[common.IndexInstId]PartitionInstMap, len(indexInsts))
+	for _, indexInst := range indexInsts {
+		indexInstId := indexInst.InstId
+		indexInstIds = append(indexInstIds, indexInstId)
+		idxPartnInfoMap[indexInstId] = idx.indexPartnMap[indexInstId] // to-be-deleted metadata needed below
 
-	//update internal maps
-	delete(idx.indexInstMap, indexInstId)
-	delete(idx.indexPartnMap, indexInstId)
-	deleteFreeWriters(indexInst.InstId)
-	idx.deletePendingReset(indexInstId)
+		delete(idx.indexInstMap, indexInstId)
+		delete(idx.indexPartnMap, indexInstId)
+		deleteFreeWriters(indexInstId)
+		idx.deletePendingReset(indexInstId)
+	}
 
+	// Send the updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-	msgUpdateIndexInstMap.AppendDeletedInstIds([]common.IndexInstId{indexInstId})
+	msgUpdateIndexInstMap.AppendDeletedInstIds(indexInstIds)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
-	msgUpdateIndexPartnMap.SetDeletedInstId(indexInstId)
-
+	msgUpdateIndexPartnMap.AppendDeletedInstIds(indexInstIds)
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap,
 		msgUpdateIndexPartnMap); err != nil {
 		if clientCh != nil {
@@ -4185,32 +4182,34 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 		common.CrashOnError(err)
 	}
 
-	//for all partitions managed by this indexer
-	if indexInst.RState != common.REBAL_MERGED {
-		for _, partnInst := range idxPartnInfo {
-			sc := partnInst.Sc
-			pid := partnInst.Defn.GetPartitionId()
-			//close all the slices
-			for _, slice := range sc.GetAllSlices() {
-				go func() {
-					slice.Close()
-					logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
-						slice.IndexInstId(), pid)
-					//wipe the physical files
-					slice.Destroy()
-					logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Destroy Done",
-						slice.IndexInstId(), pid)
-				}()
+	// Delete the slices associated with the deleted instances
+	for _, indexInst := range indexInsts {
+		//for all partitions managed by this indexer
+		if indexInst.RState != common.REBAL_MERGED {
+			for _, partnInst := range idxPartnInfoMap[indexInst.InstId] {
+				sc := partnInst.Sc
+				pid := partnInst.Defn.GetPartitionId()
+				//close all the slices
+				for _, slice := range sc.GetAllSlices() {
+					go func() {
+						slice.Close()
+						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
+							slice.IndexInstId(), pid)
+						//wipe the physical files
+						slice.Destroy()
+						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Destroy Done",
+							slice.IndexInstId(), pid)
+					}()
+				}
 			}
 		}
 	}
-
 }
 
 func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	clientCh MsgChannel) {
 
-	idx.cleanupIndexData(indexInst, clientCh)
+	idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
 
 	//send Stream update to workers
 	if ok := idx.sendStreamUpdateForDropIndex(indexInst, clientCh); !ok {
@@ -8063,7 +8062,8 @@ func (idx *indexer) updateError(instId common.IndexInstId,
 
 }
 
-func (idx *indexer) getUpdatedInsts(instIdList []common.IndexInstId) []common.IndexInst {
+// getInsts returns the IndexInst objects identified by the IDs in instIdList.
+func (idx *indexer) getInsts(instIdList []common.IndexInstId) []common.IndexInst {
 
 	updInsts := make([]common.IndexInst, 0)
 	for _, instId := range instIdList {

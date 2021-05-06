@@ -1209,9 +1209,9 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 	if len(updatedInsts) > 0 {
 		logging.Infof("MutationMgr::handleUpdateIndexInstMap, updated instances: %v", updatedInsts)
 	}
-	deletedInsts := req.GetDeletedInstIds()
-	if len(deletedInsts) > 0 {
-		logging.Infof("MutationMgr::handleUpdateIndexInstMap, deleted instance id's: %v", deletedInsts)
+	deletedInstIds := req.GetDeletedInstIds()
+	if len(deletedInstIds) > 0 {
+		logging.Infof("MutationMgr::handleUpdateIndexInstMap, deleted instance ids: %v", deletedInstIds)
 	}
 	logging.Tracef("MutationMgr::handleUpdateIndexInstMap %v", cmd)
 
@@ -1232,9 +1232,9 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 	if len(updatedPartnMap) > 0 {
 		logging.Infof("MutationMgr::handleUpdateIndexPartnMap, updated paritionMap: %v", updatedPartnMap)
 	}
-	deletedInstId := req.GetDeletedInstId()
-	if deletedInstId > 0 {
-		logging.Infof("MutationMgr::handleUpdateIndexPartnMap, deleted instance id: %v", deletedInstId)
+	deletedInstIds := req.GetDeletedInstIds()
+	if len(deletedInstIds) > 0 {
+		logging.Infof("MutationMgr::handleUpdateIndexPartnMap, deleted instance ids: %v", deletedInstIds)
 	}
 	logging.Tracef("MutationMgr::handleUpdateIndexPartnMap %v", cmd)
 
