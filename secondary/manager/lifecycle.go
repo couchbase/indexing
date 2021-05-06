@@ -409,8 +409,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	start := time.Now()
 	defer func() {
 		if op != client.OPCODE_BROADCAST_STATS {
-			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v len(outgoings) %v",
-				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings), len(m.outgoings))
+			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v len(outgoings) %v error %v",
+				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings), len(m.outgoings), err)
 		}
 	}()
 
