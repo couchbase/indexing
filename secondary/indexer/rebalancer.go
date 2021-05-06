@@ -233,6 +233,8 @@ func (r *Rebalancer) initRebalAsync() {
 	go r.doRebalance()
 }
 
+// Cancel cancels a currently running rebalance or failover and waits
+// for its go routines to finish.
 func (r *Rebalancer) Cancel() {
 	l.Infof("Rebalancer::Cancel Exiting")
 

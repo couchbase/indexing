@@ -791,20 +791,31 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	move := uint64(0)
 	iteration := uint64(0)
 	positiveMove := uint64(0)
+	skipPlanner := false
 
-	logging.Infof("Planner::planSingleRun Initial variance of the solution: %v", current.cost.ComputeResourceVariation())
+	currentResourceVariation := current.cost.ComputeResourceVariation()
+	logging.Infof("Planner::planSingleRun Initial variance of the solution: %v", currentResourceVariation)
+
+	eligibles := p.placement.GetEligibleIndexes()
+	violations := p.constraint.GetViolations(current, eligibles)
+	if currentResourceVariation <= p.threshold && command == CommandRebalance &&
+		current.hasNewNodes() == false && current.hasDeletedNodes() == false && violations == nil {
+		logging.Infof("Planner::planSingleRun Skip running planner as current solution resource variation: %v is less than threshold: %v. "+
+			"No nodes have been added or deleted and there are no violations observed", currentResourceVariation, p.threshold)
+		skipPlanner = true
+	}
 
 	temperature := p.initialTemperatureFromResourceVariation(command, current.cost.ComputeResourceVariation())
 	startTemp := temperature
 	done := false
 
-	eligibles := p.placement.GetEligibleIndexes()
+	eligibles = p.placement.GetEligibleIndexes()
 	if !p.constraint.SatisfyClusterConstraint(current, eligibles) {
 		temperature = MaxTemperature
 		startTemp = temperature
 	}
 
-	for temperature > MinTemperature && !done {
+	for temperature > MinTemperature && !done && !skipPlanner {
 		lastMove := move
 		lastPositiveMove := positiveMove
 		for i := 0; i < IterationPerTemp; i++ {

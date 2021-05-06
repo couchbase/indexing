@@ -49,15 +49,17 @@ type RebalanceMgr interface {
 }
 
 type ServiceMgr struct {
-	mu *sync.RWMutex
+	mu *sync.RWMutex // protects shared fields that do not have their own mutexes
 
-	rebalancer   *Rebalancer
+	state   state         // state of the current rebalance, failover, or index move
+	stateMu *sync.RWMutex // protects state field; may be taken *after* mu mutex
+
+	waiters   waiters       // set of channels of states for go routines waiting for next state change
+	waitersMu *sync.RWMutex // protects waiters field; may be taken *after* mu mutex
+
+	rebalancer   *Rebalancer //runs the rebalance, failover, or index move
 	rebalancerF  *Rebalancer //follower rebalancer handle
 	rebalanceCtx *rebalanceContext
-
-	waiters waiters
-
-	state
 
 	nodeInfo *service.NodeInfo
 
@@ -98,17 +100,19 @@ func (ctx *rebalanceContext) incRev() uint64 {
 type waiter chan state
 type waiters map[waiter]struct{}
 
+// state contains the state information for a rebalance, failover, or index move.
 type state struct {
-	rev uint64
+	rev uint64 // revision number of the state; incremented with each material change
 
-	servers []service.NodeID
+	servers []service.NodeID // cluster nodes; assigned but not appended, so no need for deep copy
 
-	isBalanced bool
+	isBalanced bool // if true, UI Rebalance button is disabled; rev is not incremented for changes to this
 
 	rebalanceID   string
 	rebalanceTask *service.Task
 }
 
+// NewState constructs a zero-value state object.
 func NewState() state {
 	return state{
 		rev:           0,
@@ -135,11 +139,15 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 
 	l.Infof("RebalanceMgr::NewRebalanceMgr %v %v ", rebalanceRunning, rebalanceToken)
 
-	mu := &sync.RWMutex{}
-
 	mgr := &ServiceMgr{
-		mu:            mu,
-		state:         NewState(),
+		mu: &sync.RWMutex{},
+
+		state:   NewState(),
+		stateMu: &sync.RWMutex{},
+
+		waiters:   make(waiters),
+		waitersMu: &sync.RWMutex{},
+
 		supvCmdch:     supvCmdch,
 		supvMsgch:     supvMsgch,
 		supvPrioMsgch: supvPrioMsgch,
@@ -163,7 +171,6 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 	mgr.cinfo = cinfo
 
 	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
-	mgr.waiters = make(waiters)
 
 	mgr.nodeInfo = &service.NodeInfo{
 		NodeID:   service.NodeID(config["nodeuuid"].String()),
@@ -177,7 +184,7 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 	if rebalanceToken != nil {
 		mgr.cleanupPending = true
 		if rebalanceToken.Source == RebalSourceClusterOp { // rebalance, not move
-			mgr.isBalanced = false
+			mgr.state.isBalanced = false
 		}
 	}
 
@@ -208,7 +215,7 @@ func (m *ServiceMgr) initService(cleanupPending bool) {
 	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
-//update node list after restart
+// updateNodeList updates ServiceMgr.state.servers node list on start or restart.
 func (m *ServiceMgr) updateNodeList() {
 
 	topology, err := getGlobalTopology(m.localhttp)
@@ -222,17 +229,13 @@ func (m *ServiceMgr) updateNodeList() {
 		nodeList = append(nodeList, service.NodeID(meta.NodeUUID))
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	//update only if not yet updated by prepare
-	if m.servers == nil {
-		m.updateStateLOCKED(func(s *state) {
+	//update only if not yet updated by PrepareTopologyChange
+	m.updateState(func(s *state) {
+		if s.servers == nil {
 			s.servers = nodeList
-		})
-		l.Infof("ServiceMgr::updateNodeList Updated Node List %v", nodeList)
-	}
-
+		}
+	})
+	l.Infof("ServiceMgr::updateNodeList Updated Node List %v", nodeList)
 }
 
 //run starts the rebalance manager loop which listens to messages
@@ -309,42 +312,47 @@ func (m *ServiceMgr) registerWithServer() {
 /////////////////////////////////////////////////////////////////////////
 //
 //  service.Manager interface implementation
+//  Interface defined in cbauth/service/interface.go
 //
 /////////////////////////////////////////////////////////////////////////
 
+// GetNodeInfo is an external API called by ns_server (via cbauth).
 func (m *ServiceMgr) GetNodeInfo() (*service.NodeInfo, error) {
 
 	return m.nodeInfo, nil
 }
 
+// Shutdown is an external API called by ns_server (via cbauth).
 func (m *ServiceMgr) Shutdown() error {
 
 	return nil
 }
 
+// GetTaskList is an external API called by ns_server (via cbauth).
+// If rev is non-nil, respond only when the revision changes from that,
+// else respond immediately.
 func (m *ServiceMgr) GetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
 
 	l.Infof("ServiceMgr::GetTaskList %v", rev)
 
-	state, err := m.wait(rev, cancel)
+	currState, err := m.wait(rev, cancel)
 	if err != nil {
 		return nil, err
 	}
 
-	taskList := stateToTaskList(state)
+	taskList := stateToTaskList(currState)
 	l.Infof("ServiceMgr::GetTaskList returns %v", taskList)
 
 	return taskList, nil
 }
 
+// CancelTask is an external API called by ns_server (via cbauth).
 func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	l.Infof("ServiceMgr::CancelTask %v %v", id, rev)
 
-	tasks := stateToTaskList(m.state).Tasks
+	currState := m.copyState()
+	tasks := stateToTaskList(currState).Tasks
 	task := (*service.Task)(nil)
 
 	for i := range tasks {
@@ -369,42 +377,44 @@ func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
 		return service.ErrConflict
 	}
 
-	return m.cancelActualTaskLOCKED(task)
+	return m.cancelActualTask(task)
 }
 
+// GetCurrentTopology is an external API called by ns_server (via cbauth).
+// If rev is non-nil, respond only when the revision changes from that,
+// else respond immediately.
 func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
 	cancel service.Cancel) (*service.Topology, error) {
 
 	l.Infof("ServiceMgr::GetCurrentTopology %v", rev)
 
-	state, err := m.wait(rev, cancel)
+	currState, err := m.wait(rev, cancel)
 	if err != nil {
 		return nil, err
 	}
 
-	topology := m.stateToTopology(state)
+	topology := m.stateToTopology(currState)
 
 	l.Infof("ServiceMgr::GetCurrentTopology returns %v", topology)
 
 	return topology, nil
 }
 
-// PrepareTopologyChange is called on all indexer nodes by ns_server directly, to
-// prepare for a rebalance or failover that will later be started by StartTopologyChange
+// PrepareTopologyChange is an external API called by ns_server (via cbauth) on all indexer nodes
+// to prepare for a rebalance or failover that will later be started by StartTopologyChange
 // on the rebalance/failover master indexer node.
 //
 //All errors need to be reported as return value. Status of prepared task is not
 //considered for failure reporting.
 func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	l.Infof("ServiceMgr::PrepareTopologyChange %v", change)
 
-	if m.state.rebalanceID != "" {
-		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v", service.ErrConflict, m.state.rebalanceID)
+	currState := m.copyState()
+	if currState.rebalanceID != "" {
+		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v",
+			service.ErrConflict, currState.rebalanceID)
 		if change.Type == service.TopologyChangeTypeRebalance {
-			m.isBalanced = false
+			m.setStateIsBalanced(false)
 		}
 		return service.ErrConflict
 	}
@@ -415,12 +425,12 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 	} else if change.Type == service.TopologyChangeTypeRebalance {
 		err = m.prepareRebalance(change)
 		if err != nil {
-			m.isBalanced = false
+			m.setStateIsBalanced(false)
+			currState.isBalanced = false // keep in sync for logging below
 		}
 	} else {
 		err = service.ErrNotSupported
 	}
-
 	if err != nil {
 		return err
 	}
@@ -430,17 +440,21 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 		nodeList = append(nodeList, n.NodeInfo.NodeID)
 	}
 
-	m.updateStateLOCKED(func(s *state) {
+	m.updateState(func(s *state) {
 		s.rebalanceID = change.ID
 		s.servers = nodeList
 	})
 
-	logging.Infof("ServiceMgr::PrepareTopologyChange Success. isBalanced %v", m.isBalanced)
+	logging.Infof("ServiceMgr::PrepareTopologyChange Success. isBalanced %v",
+		currState.isBalanced)
 	return nil
 }
 
 // prepareFailover does sanity checks for the failover case under PrepareTopologyChange.
 func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if !m.indexerReady {
 		return nil
@@ -525,9 +539,12 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 // prepareRebalance does sanity checks for the rebalance case under PrepareTopologyChange.
 func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	var err error
 	if m.cleanupPending {
-		m.isBalanced = false
+		m.setStateIsBalanced(false)
 		err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 			"failed/aborted rebalance/failover/move index. please retry the request later.")
 		l.Errorf("ServiceMgr::prepareRebalance %v", err)
@@ -589,36 +606,36 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		}
 	}
 
-	m.isBalanced = true
-
+	m.setStateIsBalanced(true)
 	return nil
 }
 
-// StartTopologyChange is called on the indexer master node by ns_server directly,
-// to initiate a rebalance or failover that has already been prepared via
-// PrepareTopologyChange calls on all indexer nodes.
+// StartTopologyChange is an external API called by ns_server (via cbauth) only on the
+// GSI master node to initiate a rebalance or failover that has already been prepared
+// via PrepareTopologyChange calls on all indexer nodes.
 func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	l.Infof("ServiceMgr::StartTopologyChange %v", change)
 
-	if m.state.rebalanceID != change.ID || m.rebalancer != nil {
+	currState := m.copyState()
+	m.mu.RLock()
+	rebalancer := m.rebalancer
+	m.mu.RUnlock()
+	if currState.rebalanceID != change.ID || rebalancer != nil {
 		l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v %v", service.ErrConflict,
-			m.state.rebalanceID, change.ID, m.rebalancer)
+			currState.rebalanceID, change.ID, rebalancer)
 		if change.Type == service.TopologyChangeTypeRebalance {
-			m.isBalanced = false
+			m.setStateIsBalanced(false)
 		}
 		return service.ErrConflict
 	}
 
 	if change.CurrentTopologyRev != nil {
 		haveRev := DecodeRev(change.CurrentTopologyRev)
-		if haveRev != m.state.rev {
+		if haveRev != currState.rev {
 			l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v", service.ErrConflict,
-				haveRev, m.state.rev)
+				haveRev, currState.rev)
 			if change.Type == service.TopologyChangeTypeRebalance {
-				m.isBalanced = false
+				m.setStateIsBalanced(false)
 			}
 			return service.ErrConflict
 		}
@@ -630,17 +647,21 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 	} else if change.Type == service.TopologyChangeTypeRebalance {
 		err = m.startRebalance(change)
 		if err != nil {
-			m.isBalanced = false
+			m.setStateIsBalanced(false)
+			currState.isBalanced = false // keep in sync for logging below
 		}
 	} else {
 		err = service.ErrNotSupported
 	}
 
-	logging.Infof("ServiceMgr::StartTopologyChange returns Error %v. isBalanced %v.", err, m.isBalanced)
+	logging.Infof("ServiceMgr::StartTopologyChange returns Error %v. isBalanced %v.", err, currState.isBalanced)
 	return err
 }
 
 func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	ctx := &rebalanceContext{
 		rev:    0,
@@ -663,6 +684,9 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 // that will master the rebalance. This object launhes go routines to perform the
 // rebalance asynchronously.
 func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	var runPlanner bool
 	var skipRebalance bool
@@ -831,6 +855,7 @@ func (m *ServiceMgr) initPreparePhaseRebalance() error {
 	return nil
 }
 
+// runCleanupPhaseLOCKED caller should be holding mutex mu write(?) locked.
 func (m *ServiceMgr) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 
 	l.Infof("ServiceMgr::runCleanupPhase path %v isMaster %v", path, isMaster)
@@ -1262,10 +1287,8 @@ func (m *ServiceMgr) rebalanceJanitor() {
 	for {
 		time.Sleep(time.Second * 30)
 
-		m.mu.Lock()
-
 		l.Infof("ServiceMgr::rebalanceJanitor Running Periodic Cleanup")
-
+		m.mu.Lock()
 		if !m.rebalanceRunning {
 			rtokens, err := m.getCurrRebalTokens()
 			if err != nil {
@@ -1326,7 +1349,7 @@ func (m *ServiceMgr) genRebalanceToken() error {
 
 	m.rebalanceToken = &RebalanceToken{
 		MasterId: cfg["nodeuuid"].String(),
-		RebalId:  m.state.rebalanceID,
+		RebalId:  m.getStateRebalanceID(),
 		Source:   RebalSourceClusterOp,
 		MasterIP: localIP,
 	}
@@ -1570,6 +1593,7 @@ func (m *ServiceMgr) rebalanceProgressCallback(progress float64, cancel <-chan s
 	})
 }
 
+// updateRebalanceProgressLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 	rev := m.rebalanceCtx.incRev()
 	changeID := m.rebalanceCtx.change.ID
@@ -1586,7 +1610,7 @@ func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 		},
 	}
 
-	m.updateStateLOCKED(func(s *state) {
+	m.updateState(func(s *state) {
 		s.rebalanceTask = task
 	})
 }
@@ -1606,6 +1630,7 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 	})
 }
 
+// onRebalanceDoneLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 	logPrefix := "ServiceMgr::onRebalanceDoneLOCKED"
 	l.Infof("%s Rebalance Done, cancel: %v, err: %v", logPrefix, cancelRebalance, err)
@@ -1630,94 +1655,139 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 					"rebalanceId": ctx.change.ID,
 				},
 			}
-			m.isBalanced = false
+			m.setStateIsBalanced(false)
 		} else if cancelRebalance == true {
-			m.isBalanced = false
+			m.setStateIsBalanced(false)
 		} else {
-			m.isBalanced = true
+			m.setStateIsBalanced(true)
 		}
 
 		if !m.cleanupPending {
 			if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
-				m.isBalanced = false
+				m.setStateIsBalanced(false)
 			}
 		}
 
 		m.rebalanceCtx = nil
 
-		m.updateStateLOCKED(func(s *state) {
+		m.updateState(func(s *state) {
 			s.rebalanceTask = newTask
 			s.rebalanceID = ""
 		})
 	} else if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
-		m.isBalanced = false
+		m.setStateIsBalanced(false)
 	}
 
 	m.rebalancer = nil
 	m.rebalancerF = nil
-	l.Infof("%s isBalanced: %v, isMaster: %v", logPrefix, m.isBalanced, isMaster)
+	l.Infof("%s isBalanced: %v, isMaster: %v", logPrefix, m.getStateIsBalanced(), isMaster)
 }
 
-func (m *ServiceMgr) notifyWaitersLOCKED() {
-	s := m.copyStateLOCKED()
+// notifyWaiters sends the current (new) state to all state waiters.
+func (m *ServiceMgr) notifyWaiters() {
+	currState := m.copyState()
+
+	m.waitersMu.Lock()
 	for ch := range m.waiters {
 		if ch != nil {
-			ch <- s
+			ch <- currState
 		}
 	}
-
-	m.waiters = make(waiters)
+	m.waiters = make(waiters) // reinit to the empty set
+	m.waitersMu.Unlock()
 }
 
-func (m *ServiceMgr) addWaiterLOCKED() waiter {
+// addWaiter creates and returns a state notification channel of type
+// waiter (for the current go routine) and adds it to the waiters list.
+func (m *ServiceMgr) addWaiter() waiter {
 	ch := make(waiter, 1)
+
+	m.waitersMu.Lock()
 	m.waiters[ch] = struct{}{}
+	m.waitersMu.Unlock()
 
 	return ch
 }
 
+// removeWaiter removes the channel of type waiter (for the current
+// go routine) from the waiters list.
 func (m *ServiceMgr) removeWaiter(w waiter) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.waitersMu.Lock()
 	delete(m.waiters, w)
+	m.waitersMu.Unlock()
 }
 
+// copyState retuns a shallow copy of the m.state object.
+func (m *ServiceMgr) copyState() state {
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+	return m.state
+}
+
+// updateState executes a caller-supplied function that makes arbitrary updates to
+// to the m.state object, then increments the state revision # and notifies waiters.
 func (m *ServiceMgr) updateState(body func(state *state)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.updateStateLOCKED(body)
-}
-
-func (m *ServiceMgr) updateStateLOCKED(body func(state *state)) {
+	m.stateMu.Lock()
 	body(&m.state)
 	m.state.rev++
+	m.stateMu.Unlock()
 
-	m.notifyWaitersLOCKED()
+	m.notifyWaiters()
 }
 
+// getStateIsBalanced gets the m.state.isBalanced flag.
+func (m *ServiceMgr) getStateIsBalanced() bool {
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+	return m.state.isBalanced
+}
+
+// setStateIsBalanced sets the m.state.isBalanced flag to the value passed in.
+func (m *ServiceMgr) setStateIsBalanced(isBal bool) {
+	m.stateMu.Lock()
+	m.state.isBalanced = isBal
+	m.stateMu.Unlock()
+}
+
+// getStateRebalanceID gets the m.state.rebalanceID string.
+func (m *ServiceMgr) getStateRebalanceID() string {
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+	return m.state.rebalanceID
+}
+
+// getStateServers gets the m.state.servers slice.
+func (m *ServiceMgr) getStateServers() []service.NodeID {
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+	return m.state.servers
+}
+
+// wait returns the current state immediately if it is newer than what the
+// caller (ultimately ns_server, from GetTaskList or GetTopologyChange APIs)
+// already has or if caller passed a nil rev. Otherwise it waits until the
+// revision changes and returns the new state. ns_server's cbauth API stub
+// may cancel the wait before that happens by closing the cancel channel, in
+// which case this returns a zero-value state structure and an ErrCanceled
+// error. cbauth will then send a nil-rev follow-up call immediately. Note
+// that this follow-up call will not be sent until indexer first replies to
+// the cancel.
 func (m *ServiceMgr) wait(rev service.Revision,
 	cancel service.Cancel) (state, error) {
 
-	m.mu.Lock()
-
-	unlock := NewCleanup(func() { m.mu.Unlock() })
-	defer unlock.Run()
-
-	currState := m.copyStateLOCKED()
+	currState := m.copyState()
 
 	if rev == nil {
 		return currState, nil
 	}
 
 	haveRev := DecodeRev(rev)
-	if haveRev != m.rev {
+	if haveRev != currState.rev {
 		return currState, nil
 	}
 
-	ch := m.addWaiterLOCKED()
-	unlock.Run()
+	// Caller has current revision so wait for the next one before replying
+	ch := m.addWaiter()
 
 	select {
 	case <-cancel:
@@ -1728,13 +1798,11 @@ func (m *ServiceMgr) wait(rev service.Revision,
 	}
 }
 
-func (m *ServiceMgr) copyStateLOCKED() state {
-	s := m.state
+// cancelActualTask cancels a PrepareToplogyChange or StartToplogyChange.
+func (m *ServiceMgr) cancelActualTask(task *service.Task) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	return s
-}
-
-func (m *ServiceMgr) cancelActualTaskLOCKED(task *service.Task) error {
 	if m.rebalancer != nil {
 		change := &m.rebalanceCtx.change
 		defer func() {
@@ -1752,6 +1820,7 @@ func (m *ServiceMgr) cancelActualTaskLOCKED(task *service.Task) error {
 	}
 }
 
+// cancelPrepareTaskLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 	if m.rebalancer != nil {
 		return service.ErrConflict
@@ -1764,24 +1833,27 @@ func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 
 	m.cleanupRebalanceRunning()
 
-	m.updateStateLOCKED(func(s *state) {
+	m.updateState(func(s *state) {
 		s.rebalanceID = ""
 	})
 
 	return nil
 }
 
+// cancelRebalanceTaskLOCKED caller should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
 	switch task.Status {
 	case service.TaskStatusRunning:
 		return m.cancelRunningRebalanceTaskLOCKED()
 	case service.TaskStatusFailed:
-		return m.cancelFailedRebalanceTaskLOCKED()
+		return m.cancelFailedRebalanceTask()
 	default:
 		panic("can't happen")
 	}
 }
 
+// cancelRunningRebalanceTaskLOCKED cancels a currently running rebalance.
+// Caller should be holding mutex mu write locked.
 func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
 	m.rebalancer.Cancel()
 	m.onRebalanceDoneLOCKED(nil, true)
@@ -1789,11 +1861,11 @@ func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
 	return nil
 }
 
-func (m *ServiceMgr) cancelFailedRebalanceTaskLOCKED() error {
-	m.updateStateLOCKED(func(s *state) {
+// cancelFailedRebalanceTask cancels a failed rebalance.
+func (m *ServiceMgr) cancelFailedRebalanceTask() error {
+	m.updateState(func(s *state) {
 		s.rebalanceTask = nil
 	})
-
 	return nil
 }
 
@@ -1801,12 +1873,12 @@ func (m *ServiceMgr) stateToTopology(s state) *service.Topology {
 	topology := &service.Topology{}
 
 	topology.Rev = EncodeRev(s.rev)
-	if m.servers != nil && len(m.servers) != 0 {
-		topology.Nodes = append([]service.NodeID(nil), m.servers...)
+	if s.servers != nil && len(s.servers) != 0 {
+		topology.Nodes = append([]service.NodeID(nil), s.servers...)
 	} else {
 		topology.Nodes = append([]service.NodeID(nil), m.nodeInfo.NodeID)
 	}
-	topology.IsBalanced = m.isBalanced
+	topology.IsBalanced = s.isBalanced
 	topology.Messages = nil
 
 	return topology
@@ -1929,10 +2001,11 @@ func (m *ServiceMgr) checkGlobalCleanupPending() bool {
 		return true
 	}
 
+	servers := m.getStateServers()
 	if rtokens != nil && len(rtokens.TT) != 0 {
 		for _, tt := range rtokens.TT {
 			ownerId := m.getTransferTokenOwner(tt)
-			for _, s := range m.servers {
+			for _, s := range servers {
 				if ownerId == string(s) {
 					l.Infof("ServiceMgr::checkGlobalCleanupPending Found Global Pending Cleanup for Owner %v Token %v", ownerId, tt)
 					return true
@@ -2028,7 +2101,7 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 
 		if rtokens != nil {
 			if rtokens.RT != nil {
-				m.isBalanced = false
+				m.setStateIsBalanced(false)
 				err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 				if err != nil {
 					l.Errorf("ServiceMgr::handleCleanupRebalance RebalanceTokenPath Error %v", err)
@@ -2507,7 +2580,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return err, false
 	}
 
-	if m.state.rebalanceID != "" {
+	if m.getStateRebalanceID() != "" {
 		err = errors.New("Cannot Process Move Index - Failover In Progress")
 		l.Errorf("ServiceMgr::initMoveIndex %v", err)
 		return err, false
@@ -2830,6 +2903,7 @@ func (m *ServiceMgr) moveIndexDoneCallback(err error, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() { m.onMoveIndexDoneLOCKED(err) })
 }
 
+// onMoveIndexDoneLOCKED caller should be holding mutex mu write(?) locked.
 func (m *ServiceMgr) onMoveIndexDoneLOCKED(err error) {
 
 	if err != nil {
