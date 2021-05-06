@@ -40,7 +40,7 @@ import (
 
 // constant - simulated annealing
 const (
-	IterationPerTemp   int     = 1000
+	IterationPerTemp   int     = 100
 	ResizePerIteration int     = 1000
 	RunPerPlan         int     = 12
 	MaxTemperature     float64 = 1.0
@@ -792,7 +792,9 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	iteration := uint64(0)
 	positiveMove := uint64(0)
 
-	temperature := p.initialTemperature(command, old_cost)
+	logging.Infof("Planner::planSingleRun Initial variance of the solution: %v", current.cost.ComputeResourceVariation())
+
+	temperature := p.initialTemperatureFromResourceVariation(command, current.cost.ComputeResourceVariation())
 	startTemp := temperature
 	done := false
 
@@ -1055,7 +1057,22 @@ func (p *SAPlanner) initialTemperature(command CommandType, cost float64) float6
 		temp = cost * MaxTemperature * 0.1
 	}
 
-	logging.Tracef("Planner::initial temperature: initial cost %v temp %v", cost, temp)
+	logging.Infof("Planner::initial temperature: initial cost %v temp %v", cost, temp)
+	return temp
+}
+
+//
+// Get the initial temperature.
+//
+func (p *SAPlanner) initialTemperatureFromResourceVariation(command CommandType, resourceVariation float64) float64 {
+
+	if command == CommandPlan {
+		return MaxTemperature
+	}
+
+	temp := math.Max(MinTemperature, math.Abs(resourceVariation-p.threshold)*0.1)
+
+	logging.Infof("Planner::initial temperature: initial resource variation %v temp %v", resourceVariation, temp)
 	return temp
 }
 
@@ -4951,14 +4968,15 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		// for balancing resource consumption.
 		weight := c.dataCostWeight * (1 - usageCost)
 		movementCost = float64(c.DataMoved) / float64(c.TotalData) * weight
-		count++
 	}
 
 	if c.dataCostWeight > 0 && c.TotalIndex != 0 {
 		weight := c.dataCostWeight * (1 - usageCost)
 		indexCost = float64(c.IndexMoved) / float64(c.TotalIndex) * weight
-		count++
 	}
+
+	avgIndexMovementCost := (indexCost + movementCost) / 2
+	avgResourceCost := (memCost + emptyIdxCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
 
 	//logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v disk cost %v drain %v scan %v count %v",
 	//	memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, drainCost, scanCost, count)
@@ -4966,7 +4984,7 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		memCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, drainCost, scanCost, count)
 
 	//return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
-	return (memCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
+	return (avgResourceCost + avgIndexMovementCost) / 2
 }
 
 //

@@ -1609,7 +1609,8 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 
 		logging.Infof("DDLServiceMgr::handleListDropInstanceTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
-		deleteTokens, err := mc.ListAndFetchAllDropInstanceCommandToken()
+		numRetries := 8
+		deleteTokens, err := mc.ListAndFetchAllDropInstanceCommandToken(numRetries)
 		if err != nil {
 			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v in ListAndFetchAllDropInstanceCommandToken. req: %v", err, common.GetHTTPReqInfo(r))
 			w.WriteHeader(http.StatusInternalServerError)
