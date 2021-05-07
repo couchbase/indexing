@@ -2346,7 +2346,7 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				if forceLog || logging.IsEnabled(logging.Verbose) {
 					tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
 					hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
-					logging.Verbosef("Timekeeper::checkInitialBuildDone Index: %v Stream: %v KeyspaceId: %v"+
+					logging.Infof("Timekeeper::checkInitialBuildDone Index: %v Stream: %v KeyspaceId: %v"+
 						" FlushTs %v\n HWT %v", idx.InstId, streamId, keyspaceId, flushTs, hwt)
 				}
 			}
@@ -2415,7 +2415,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		}
 
 		if forceLog || logging.IsEnabled(logging.Verbose) {
-			logging.Verbosef("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+			logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
 		}
 		return false
 	}
