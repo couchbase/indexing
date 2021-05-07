@@ -4133,7 +4133,16 @@ func (idx *indexer) cleanupIndexDataForCollectionDrop(streamId common.StreamId,
 	bucketUUID := idx.indexInstMap[deletedInstIds[0]].Defn.BucketUUID // to-be-deleted info needed below
 	deletedInsts := idx.getInsts(deletedInstIds)
 	idx.cleanupIndexData(deletedInsts, nil)
-	idx.removeIndexesFromStream(deletedInsts, keyspaceId,
+
+	// Skip instances with NIL_STREAM
+	indexesWithStream := make([]common.IndexInst, 0)
+	for _, index := range deletedInsts {
+		if index.Stream == streamId {
+			indexesWithStream = append(indexesWithStream, index)
+		}
+	}
+
+	idx.removeIndexesFromStream(indexesWithStream, keyspaceId,
 		bucketUUID, streamId, common.INDEX_STATE_ACTIVE, nil)
 }
 
