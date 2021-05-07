@@ -6163,8 +6163,10 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 func (w *watcher) processChange(txid common.Txnid, op uint32, key string, content []byte, indexerId c.IndexerId) (bool,
 	map[c.IndexInstId]map[c.PartitionId]c.Statistics, error) {
 
-	logging.Debugf("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
-	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
+	if txid%100 == 0 {
+		logging.Infof("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
+		defer logging.Infof("watcher.processChange(): done -> key = %v", key)
+	}
 
 	opCode := common.OpCode(op)
 

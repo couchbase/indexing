@@ -671,7 +671,7 @@ type MsgUpdateInstMap struct {
 	stats          *IndexerStats
 	rollbackTimes  map[string]int64
 	updatedInsts   common.IndexInstList
-	deletedInstIds []common.IndexInstId
+	deletedInstIds []common.IndexInstId // used only for logging
 }
 
 func (m *MsgUpdateInstMap) GetMsgType() MsgType {
@@ -717,7 +717,7 @@ func (m *MsgUpdateInstMap) String() string {
 type MsgUpdatePartnMap struct {
 	indexPartnMap   IndexPartnMap
 	updatedPartnMap PartitionInstMap
-	deletedInstId   common.IndexInstId
+	deletedInstIds  []common.IndexInstId // used only for logging
 }
 
 func (m *MsgUpdatePartnMap) GetMsgType() MsgType {
@@ -736,12 +736,12 @@ func (m *MsgUpdatePartnMap) SetUpdatedPartnMap(partnMap PartitionInstMap) {
 	m.updatedPartnMap = partnMap
 }
 
-func (m *MsgUpdatePartnMap) GetDeletedInstId() common.IndexInstId {
-	return m.deletedInstId
+func (m *MsgUpdatePartnMap) GetDeletedInstIds() []common.IndexInstId {
+	return m.deletedInstIds
 }
 
-func (m *MsgUpdatePartnMap) SetDeletedInstId(instId common.IndexInstId) {
-	m.deletedInstId = instId
+func (m *MsgUpdatePartnMap) AppendDeletedInstIds(instIds []common.IndexInstId) {
+	m.deletedInstIds = append(m.deletedInstIds, instIds...)
 }
 
 func (m *MsgUpdatePartnMap) String() string {
