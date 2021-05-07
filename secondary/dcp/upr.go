@@ -44,7 +44,8 @@ func NewDcpFeedName(name string) DcpFeedName {
 // GetFailoverLogs get the failover logs for a set of vbucket ids
 func (b *Bucket) GetFailoverLogs(
 	opaque uint16,
-	vBuckets []uint16, config map[string]interface{}) (FailoverLog, error) {
+	vBuckets []uint16, uuid uint64,
+	config map[string]interface{}) (FailoverLog, error) {
 	// map vbids to their corresponding hosts
 	vbHostList := make(map[string][]uint16)
 	vbm := b.VBServerMap()
@@ -78,7 +79,7 @@ func (b *Bucket) GetFailoverLogs(
 			continue
 		}
 
-		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, time.Now().UnixNano()))
+		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, uuid))
 		flags := uint32(0x0)
 		singleFeed, err := serverConn.StartDcpFeed(
 			name, 0, flags, nil, opaque, nil, config)

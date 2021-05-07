@@ -17,6 +17,7 @@ import (
 
 	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 	apserver "github.com/couchbase/indexing/secondary/adminport/server"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -503,7 +504,9 @@ func (p *Projector) doFailoverLog(
 		"dataChanSize":   config["projector.dcp.dataChanSize"].Int(),
 		"numConnections": config["projector.dcp.numConnections"].Int(),
 	}
-	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
+
+	uuid := common.GetUUID(prefix, opaque)
+	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, uuid, dcpConfig)
 	if err == nil {
 		for vbno, flog := range flogs {
 			vbuuids := make([]uint64, 0, len(flog))

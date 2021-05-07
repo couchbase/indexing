@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
@@ -1738,7 +1739,9 @@ func (feed *Feed) bucketDetails(
 		"dataChanSize":   feed.config["dcp.dataChanSize"].Int(),
 		"numConnections": feed.config["dcp.numConnections"].Int(),
 	}
-	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
+
+	uuid := common.GetUUID(feed.logPrefix, feed.opaque)
+	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, uuid, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x GetFailoverLogs(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
