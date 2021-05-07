@@ -325,5 +325,13 @@ func (v *Vbucket) mcStatus2StreamStatus(s mcd.Status) c.StreamStatus {
 		return c.STREAM_ROLLBACK
 	}
 
+	if s == mcd.UNKNOWN_COLLECTION {
+		return c.STREAM_UNKNOWN_COLLECTION
+	}
+
+	if s == mcd.UNKNOWN_SCOPE {
+		return c.STREAM_UNKNOWN_SCOPE
+	}
+
 	return c.STREAM_FAIL
 }
