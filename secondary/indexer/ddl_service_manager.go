@@ -153,7 +153,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	gDDLServiceMgr = mgr
 
 	go mgr.buildTokenCleaner()
-	go mgr.dropTokenCleaner()
+	go mgr.delTokenCleaner()
 	go mgr.dropInstTokenCleaner()
 
 	logging.Infof("DDLServiceMgr: intialized. Local nodeUUID %v", mgr.nodeID)
@@ -309,7 +309,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	// TODO: Investigate if gDDLServiceMgrLck has to be held for the
 	// below methods
 	m.cleanupCreateCommand()
-	m.cleanupDropCommand(false, m.provider)
+	m.cleanupDelCommand(false, m.provider)
 	m.cleanupDropInstanceCommand(false, m.provider)
 	m.cleanupBuildCommand(false, m.provider)
 	m.handleClusterStorageMode(httpAddrMap)
@@ -354,7 +354,7 @@ func (m *DDLServiceMgr) startProcessDDL() {
 //
 // Recover drop index command
 //
-func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.MetadataProvider) {
+func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.MetadataProvider) {
 
 	m.dropCleanupLck.Lock()
 	defer m.dropCleanupLck.Unlock()
@@ -371,16 +371,16 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 
 	if provider == nil {
 		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDropCommand")
+		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDelCommand")
 		if err != nil {
-			logging.Errorf("DDLServiceMgr: cleanupDropCommand error in newMetadataProvider %v. Skip cleanup.", err)
+			logging.Errorf("DDLServiceMgr: cleanupDelCommand error in newMetadataProvider %v. Skip cleanup.", err)
 			return
 		}
 		defer provider.Close()
 	}
 
 	if provider == nil {
-		logging.Errorf("DDLServiceMgr: cleanupDropCommand nil MetadataProvider. Skip cleanup.")
+		logging.Errorf("DDLServiceMgr: cleanupDelCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -449,10 +449,10 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 
 				// MetakvDel failures are assumed to be rare and hence priortizing map cleanup because
 				// In case of error
-				// a) if error was before metakv marked the token as deleted. Next iteration of cleanupDropCommand
+				// a) if error was before metakv marked the token as deleted. Next iteration of cleanupDelCommand
 				// would find the same delete token and will process the request after another 24 hours
 				// b) if error is a after metakv marked the token as deleted and during the phase of sending response of delete operation to caller
-				// then metakv has deleted the toekn and hence it will not appear in next iteration of cleanupDropCommand
+				// then metakv has deleted the toekn and hence it will not appear in next iteration of cleanupDelCommand
 				// in such cases we will leak the command.DefnId entry in deleteTokenCache map.
 				// Hence not worrying about the rare case of error on MetakvDel for token deletion and priortizing map cleanup.
 				delete(m.deleteTokenCache, command.DefnId)
@@ -469,21 +469,21 @@ func (m *DDLServiceMgr) cleanupDropCommand(checkDDL bool, provider *client.Metad
 	}
 }
 
-func (m *DDLServiceMgr) dropTokenCleaner() {
+func (m *DDLServiceMgr) delTokenCleaner() {
 
 	ticker := time.NewTicker(10 * time.Minute)
 	// drop token cleaner will run every 10 minutes.
-	logging.Infof("DDLServiceMgr: starting dropTokenCleaner ...")
+	logging.Infof("DDLServiceMgr: starting delTokenCleaner ...")
 	for {
 		select {
 
 		case <-ticker.C:
 			if m.canProcessDDL() {
-				m.cleanupDropCommand(true, nil)
+				m.cleanupDelCommand(true, nil)
 			}
 
 		case <-m.dtCleanerStopCh:
-			logging.Infof("DDLServiceMgr: stopping dropTokenCleaner ...")
+			logging.Infof("DDLServiceMgr: stopping delTokenCleaner ...")
 			return
 		}
 	}
