@@ -898,18 +898,14 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 
 func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
-	// By this time, the schedule create token is seen at least once in waitForScheduleCreateToken.
-	// So, it is safe to assume that the waiting can be stopped once one of the following events
-	// occur.
-	// 1. Index gets created (state depends on defer build flag).
-	// 2. Stop schedule create token is posted.
-	// 3. Schedule create token gets deleted.
-	//    Note that the schedule create token can get deleted due to two reasons
-	//    1. index got created.
-	//    2. index got deleted.
-	//    Here, it is not possible to know the reason of schedule create token getting
-	//    deleted. Checking for DeleteCommandToken can race with DeleteCommandToken
-	//    cleanup.
+	//
+	// Wait until one of the following events are observed.
+	// 1. StopScheduleCreateToken is posted. Last error for token will be returned.
+	// 2. DeleteCommandToken is posted. No error returned.
+	// 3. Index metadata is created with state dependent on Deferred flag.
+	//
+	// Note that the DeleteCommandToken cleanup is delayed by 24 hours.
+	//
 
 	var states []c.IndexState
 	if idxDefn.Deferred {
@@ -920,13 +916,17 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
 	// Use nil topolgy as at this point the topology is unknown. This can lead
 	// to false notification in case of restart of unrelated indexer process.
-	event := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil}
-	if !o.repo.registerEvent(event) {
+	e := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil}
+	if !o.repo.registerEvent(e) {
 		// This means that the event has already occurred.
 		return nil
 	}
 
-	go func() {
+	errIndexDel := errors.New("Index is deleted. DeleteCommandToken posted.")
+
+	startTm := time.Now()
+
+	checkForTokens := func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
 
@@ -934,14 +934,22 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 			select {
 
 			case <-t.C:
-				exists, err := mc.ScheduleCreateTokenExist(idxDefn.DefnId)
+				// Check for worst case scenario timeout.
+				if time.Now().Sub(startTm) > time.Duration(4*time.Hour) {
+					timeoutErr := errors.New("Index creation timed out. The operation may" +
+						"have suceeded in the background. Please check for the index state.")
+					o.repo.cancelEvent(idxDefn.DefnId, timeoutErr)
+					return
+				}
+
+				exists, err := mc.DeleteCommandTokenExist(idxDefn.DefnId)
 				if err != nil {
 					o.repo.cancelEvent(idxDefn.DefnId, err)
 					return
 				}
 
-				if !exists {
-					o.repo.cancelEvent(idxDefn.DefnId, nil)
+				if exists {
+					o.repo.cancelEvent(idxDefn.DefnId, errIndexDel)
 					return
 				}
 
@@ -957,42 +965,21 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 				}
 			}
 		}
-	}()
+	}
+
+	go checkForTokens()
 
 	// Wait for the notification
-	err, _ := <-event.notifyCh
+	err, _ := <-e.notifyCh
 	if err != nil {
-		return err
-	}
-
-	// By this time, the index is either crearted or deleted. The notification
-	// may have been sent by the cancelEvent or by the actual index state update.
-	// If the defer_build was false, then wait until the index becomes active.
-	if idxDefn.Deferred {
-		return nil
-	}
-
-	func() {
-		o.repo.RLock()
-		defer o.repo.RUnlock()
-
-		states = []c.IndexState{c.INDEX_STATE_CREATED, c.INDEX_STATE_READY,
-			c.INDEX_STATE_INITIAL, c.INDEX_STATE_CATCHUP}
-
-		if !o.repo.hasWellFormedInstMatchingStatusNoLock(idxDefn.DefnId, states) {
-			// The index may have been deleted or errored or became active.
-			err = o.repo.getDefnErrorIgnoreStatusNoLock(idxDefn.DefnId)
+		if err.Error() == errIndexDel.Error() {
+			return nil
 		}
-	}()
 
-	if err != nil {
 		return err
 	}
 
-	// Use nil topolgy for the sake of simplicity. This can lead
-	// to false notification in case of restart of unrelated indexer process.
-	states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
-	return o.repo.waitForEvent(idxDefn.DefnId, states, nil)
+	return nil
 }
 
 // This should be called for the defn, that is not yet persisted in index metadata.
@@ -5106,7 +5093,6 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 	for _, meta := range r.indices {
 		for _, inst := range meta.Instances {
 
-
 			// Get the fully qualified index name
 			indexName := c.GetStatsPrefix(meta.Definition.Bucket, meta.Definition.Scope,
 				meta.Definition.Collection, meta.Definition.Name, int(inst.ReplicaId), 0, false)
@@ -5505,8 +5491,7 @@ func (w *watcher) updateIndexStatsNoLock(indexerId c.IndexerId, indexStats *Inde
 // server unless something changes. If the current function receives a complete indexStats2 first, it can populate the
 // cache, and then getClientStats will avoid doing so as its copy might be older and thus cause later bucket lookup
 // misses in the cached copy if a bucket was added after that version.
-func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *IndexStats2) (
-	map[c.IndexInstId]map[c.PartitionId]c.Statistics) {
+func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *IndexStats2) map[c.IndexInstId]map[c.PartitionId]c.Statistics {
 
 	// Check if the received indexStats2 is incomplete, in which case try to use the cached ones instead
 	useCached := false
@@ -5528,7 +5513,7 @@ func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *In
 		// Copy index information from cached version to indexStats2 received from broadcast
 		for bucket, dedupedIndexStats := range indexStats2.Stats {
 			if dedupedIndexStats == nil || clientStatsPtr.Stats[bucket] == nil {
-				logging.Errorf("watcher.updateIndexStats2NoLock: unexpected nil *DedupedIndexStats." +
+				logging.Errorf("watcher.updateIndexStats2NoLock: unexpected nil *DedupedIndexStats."+
 					" bucket %v, dedupedIndexStats %v, clientStatsPtr.Stats[bucket] %v",
 					bucket, dedupedIndexStats, clientStatsPtr.Stats[bucket])
 				return nil
