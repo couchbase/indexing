@@ -914,6 +914,22 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	}
 
+	tok, err := mc.GetScheduleCreateToken(idxDefn.DefnId)
+	if err != nil {
+		logging.Errorf("MetadataProvider:waitForScheduledIndex error in GetScheduleCreateToken for %v", idxDefn.DefnId)
+		return err
+	}
+
+	//
+	// By this time, the schedule create token has been observed at least once
+	// in waitForScheduleCreateToken. If the token is not present, index creation
+	// or deletion may have already happened. So, it is safe to return from here.
+	//
+	if tok == nil {
+		logging.Infof("MetadataProvider:waitForScheduledIndex schedule create token does not exits for %v", idxDefn.DefnId)
+		return nil
+	}
+
 	// Use nil topolgy as at this point the topology is unknown. This can lead
 	// to false notification in case of restart of unrelated indexer process.
 	e := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil}
@@ -926,14 +942,46 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
 	startTm := time.Now()
 
+	checkValidKeyspace := func() (bool, error) {
+		//
+		// Keyspace validation happens before posting shedule create token.
+		// Here, the purpose of keyspace validation is only to check for
+		// changes in keyspace if any. So, no need to retry.
+		//
+
+		bucketUUID, err := c.GetBucketUUID(o.clusterUrl, idxDefn.Bucket)
+		if err != nil {
+			return false, err
+		}
+
+		if bucketUUID != tok.BucketUUID {
+			return false, nil
+		}
+
+		scopeId, collId, err1 := c.GetScopeAndCollectionID(o.clusterUrl, idxDefn.Bucket,
+			idxDefn.Scope, idxDefn.Collection)
+
+		if err1 != nil {
+			return false, err1
+		}
+
+		if scopeId != tok.ScopeId || collId != tok.CollectionId {
+			return false, nil
+		}
+
+		return true, nil
+	}
+
 	checkForTokens := func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
 
+		count := 0
 		for {
 			select {
 
 			case <-t.C:
+				count++
 				// Check for worst case scenario timeout.
 				if time.Now().Sub(startTm) > time.Duration(4*time.Hour) {
 					timeoutErr := errors.New("Index creation timed out. The operation may" +
@@ -963,6 +1011,20 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 					o.repo.cancelEvent(idxDefn.DefnId, fmt.Errorf("%v", token.Reason))
 					return
 				}
+
+				// check for valid keyspace every 30 seconds.
+				if count%10 == 0 {
+					valid, err := checkValidKeyspace()
+					if err != nil {
+						o.repo.cancelEvent(idxDefn.DefnId, err)
+						return
+					}
+
+					if !valid {
+						o.repo.cancelEvent(idxDefn.DefnId, nil)
+						return
+					}
+				}
 			}
 		}
 	}
@@ -970,7 +1032,7 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 	go checkForTokens()
 
 	// Wait for the notification
-	err, _ := <-e.notifyCh
+	err, _ = <-e.notifyCh
 	if err != nil {
 		if err.Error() == errIndexDel.Error() {
 			return nil
@@ -1075,6 +1137,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				if o.settings.WaitForScheduledIndex() && !rebalRunning {
 					err := o.waitForScheduledIndex(idxDefn)
 					if err != nil {
+						logging.Errorf("Error in waitForScheduledIndex %v", err)
 						return err
 					}
 
