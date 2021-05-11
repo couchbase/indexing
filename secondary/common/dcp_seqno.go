@@ -1018,17 +1018,19 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 
 	wg.Wait()
 
-	var seqnos []uint64
-	i := 0
-	for kvaddr, kv_seqnos := range kv_seqnos_node {
-		if i == 0 {
-			seqnos = kv_seqnos
-		}
-		err := errors[kvaddr]
+	for kvaddr, err := range errors {
 		if err != nil {
 			conn := kvfeeds[kvaddr].mc
 			logging.Errorf("feed.DcpGetSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
 			return nil, err
+		}
+	}
+
+	var seqnos []uint64
+	i := 0
+	for _, kv_seqnos := range kv_seqnos_node {
+		if i == 0 {
+			seqnos = kv_seqnos
 		}
 
 		for vbno, seqno := range kv_seqnos {
