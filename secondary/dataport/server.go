@@ -95,6 +95,7 @@ type activeVb struct {
 	vbno       uint16
 	kvers      uint64
 	seqno      uint64
+	opaque     uint64 // Indexer's sessionId for stream request
 }
 
 type keeper map[string]*activeVb
@@ -203,7 +204,6 @@ func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 		if ok {
 			delete(hostUuids, x)
 			logging.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
-
 		} else {
 			logging.Errorf("%v not active vbucket %v\n", s.logPrefix, x)
 		}
@@ -254,7 +254,8 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 		for i := 0; i < len(vbs); i++ { //for each vbucket
 			vb := vbs[i]
 			keyspaceId, vbno := vb.GetKeyspaceId(), uint16(vb.GetVbucket())
-			id := (&activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno}).id()
+			opaque := vb.GetOpaque2() //sessionId for the stream request
+			id := (&activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno, opaque: opaque}).id()
 			kvs := vb.GetKvs() // mutations for each vbucket
 
 			// filter mutations for vbucket that is not from the same
@@ -272,15 +273,23 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 				}
 				switch byte(kv.GetCommands()[0]) {
 				case c.StreamBegin: // new vbucket stream(s) have started
-					avb = &activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno}
+					avb = &activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno, opaque: opaque}
 					hostUuids = s.addUuids(keeper{id: avb}, hostUuids)
 					avbok, vbok = true, true
 
 				case c.StreamEnd: // vbucket stream(s) have finished
-					avb = &activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno}
-					if _, ok := hostUuids[id]; ok {
-						hostUuids = s.delUuids(keeper{id: avb}, hostUuids)
-						vbok = true
+					avb = &activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno, opaque: opaque}
+					if curravb, ok := hostUuids[id]; ok {
+						if avb.opaque == curravb.opaque {
+							hostUuids = s.delUuids(keeper{id: avb}, hostUuids)
+							vbok = true
+						} else {
+							//If the sessionId(opaque) doesn't match, do not update bookkeeping. If stream is
+							//close/opened by Indexer in quick succession, StreamEnd from previous session can arrive
+							//after StreamBegin from the later session.
+							logging.Infof("%v skipped delete vbucket %v curr opaque %v, received opaque %v\n",
+								s.logPrefix, avb.id(), curravb.opaque, avb.opaque)
+						}
 					} else {
 						fmsg := "%v StreamEnd without StreamBegin for %v\n"
 						logging.Warnf(fmsg, s.logPrefix, id)

@@ -845,6 +845,32 @@ func MarshallDropInstanceCommandTokenList(r *DropInstanceCommandTokenList) ([]by
 	return buf, nil
 }
 
+func GetDropInstanceTokenFromPath(path string) (*DropInstanceCommandToken, error) {
+	//
+	// The input path is DropInstanceDDLCommandTokenPath/DefnId/InstId/Sub-partId
+	//
+
+	comps := strings.Split(path, "/")
+	if len(comps) != 8 {
+		return nil, fmt.Errorf("Malformed input path to GetDropInstanceTokenFromPath %v", path)
+	}
+
+	vpath := strings.Join(comps[:len(comps)-1], "/")
+
+	token := &DropInstanceCommandToken{}
+
+	exists, err := c.MetakvBigValueGet(vpath, token)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	return token, nil
+}
+
 //////////////////////////////////////////////////////////////
 // Version Management
 //////////////////////////////////////////////////////////////
