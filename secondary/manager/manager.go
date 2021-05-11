@@ -744,6 +744,8 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 		// Get CollectionID. CollectionID is COLLECTION_ID_NIL for non-existing collection
 		collectionID := cinfo.GetCollectionID(bucket, scope, collection)
 
+		version := cinfo.GetClusterVersion()
+
 		topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 		if err == nil && topology != nil {
 
@@ -772,8 +774,8 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 
 						// If there is any index in CREATED or PENDING state from a non-existent bucket.
 						// If so, this could be a candidate for cleanup.
-						if (defn.BucketUUID != currentUUID ||
-							defn.CollectionId != collectionID) &&
+						if (defn.BucketUUID != currentUUID || (version >= common.INDEXER_70_VERSION &&
+							defn.CollectionId != collectionID)) &&
 							instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 							common.StreamId(instRef.StreamId) == common.NIL_STREAM {
 							hasInvalidDeferIndex = true
