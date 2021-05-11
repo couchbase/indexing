@@ -661,6 +661,16 @@ func (kvdata *KVData) scatterMutation(
 				}
 			}
 
+		} else if m.Status == mcd.UNKNOWN_COLLECTION || m.Status == mcd.UNKNOWN_SCOPE {
+			fmsg := "%v ##%x StreamRequest %v: %v\n"
+			arg1 := logging.TagUD(m)
+			logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, m.Status, arg1)
+
+			if kvdata.async {
+				if err = worker.Event(m); err != nil {
+					return
+				}
+			}
 		} else if m.Status != mcd.SUCCESS {
 			fmsg := "%v ##%x StreamRequest %s: %v\n"
 			arg1 := logging.TagUD(m)

@@ -1233,6 +1233,22 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 			needRepair = true
 		}
 
+		cmdStatus := cmd.(*MsgStream).GetStatus()
+		if cmdStatus == common.STREAM_UNKNOWN_COLLECTION || cmdStatus == common.STREAM_UNKNOWN_SCOPE {
+			logging.Warnf("Timekeeper::handleStreamBegin StreamBegin %v for StreamId %v "+
+				"KeyspaceId %v vbucket %v", cmdStatus, streamId, meta.keyspaceId, meta.vbucket)
+
+			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], meta.keyspaceId)
+			tk.ss.streamKeyspaceIdStatus[streamId][meta.keyspaceId] = STREAM_INACTIVE
+
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
+				streamId:   streamId,
+				keyspaceId: meta.keyspaceId,
+				sessionId:  sessionId}
+			logging.Infof("Timekeeper::handleStreamBegin Sent Keyspace not found message to indexer for StreamId %v "+
+				"KeyspaceId %v vbucket %v", streamId, meta.keyspaceId, meta.vbucket)
+		}
+
 		// Trigger stream repair.
 		if needRepair {
 			if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[streamId][meta.keyspaceId]; !ok || stopCh == nil {

@@ -1018,17 +1018,19 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 
 	wg.Wait()
 
-	var seqnos []uint64
-	i := 0
-	for kvaddr, kv_seqnos := range kv_seqnos_node {
-		if i == 0 {
-			seqnos = kv_seqnos
-		}
-		err := errors[kvaddr]
+	for kvaddr, err := range errors {
 		if err != nil {
 			conn := kvfeeds[kvaddr].mc
 			logging.Errorf("feed.DcpGetSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
 			return nil, err
+		}
+	}
+
+	var seqnos []uint64
+	i := 0
+	for _, kv_seqnos := range kv_seqnos_node {
+		if i == 0 {
+			seqnos = kv_seqnos
 		}
 
 		for vbno, seqno := range kv_seqnos {
@@ -1414,7 +1416,8 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 	}
 
 	failoverLog := make(FailoverLog)
-	flogs, err := bucket.GetFailoverLogs(0 /*opaque*/, vbnos, dcpConfig)
+	uuid := GetUUID(fmt.Sprintf("BucketFailoverLog-%v", bucketn), 0)
+	flogs, err := bucket.GetFailoverLogs(0 /*opaque*/, vbnos, uuid, dcpConfig)
 
 	if err == nil {
 		if len(flogs) != numVb {
@@ -1585,4 +1588,24 @@ func GetClusterVersion() int64 {
 func UpdateVbSeqnosWorkersPerReader(numWorkers int32) {
 	atomic.StoreInt32(&workersPerReader, numWorkers)
 	logging.Infof("UpdateVbSeqnosWorkersPerReader: Updated the number of workers per reader to: %v", numWorkers)
+}
+
+func GetUUID(logPrefix string, opaque uint16) uint64 {
+	var uuid UUID
+	fn := func(r int, err error) error {
+		uuid, err = NewUUID()
+		if err != nil {
+			logging.Warnf("%v ##%x Error while trying to get UUID, err: %v, retrying (%v)", logPrefix, opaque, err, r)
+			return err
+		}
+		return nil
+	}
+
+	rh := NewRetryHelper(10, time.Second, 1, fn)
+	err := rh.Run()
+	if err != nil {
+		logging.Warnf("%v ##%x Error while retrieving UUID. Using time as UUID for retrieving failover logs", logPrefix, opaque)
+		return uint64(time.Now().UnixNano())
+	}
+	return uuid.Uint64()
 }

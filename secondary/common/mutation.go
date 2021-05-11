@@ -23,6 +23,8 @@ const (
 	STREAM_SUCCESS StreamStatus = iota // 0
 	STREAM_FAIL
 	STREAM_ROLLBACK
+	STREAM_UNKNOWN_COLLECTION
+	STREAM_UNKNOWN_SCOPE
 )
 
 // types of payload
