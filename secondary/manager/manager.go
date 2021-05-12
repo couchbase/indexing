@@ -1,11 +1,10 @@
-// Copyright (c) 2014 Couchbase, Inc.
-// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
-// except in compliance with the License. You may obtain a copy of the License at
-//   http://www.apache.org/licenses/LICENSE-2.0
-// Unless required by applicable law or agreed to in writing, software distributed under the
-// License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
-// either express or implied. See the License for the specific language governing permissions
-// and limitations under the License.
+// Copyright 2014-Present Couchbase, Inc.
+//
+// Use of this software is governed by the Business Source License included
+// in the file licenses/BSL-Couchbase.txt.  As of the Change Date specified
+// in that file, in accordance with the Business Source License, use of this
+// software will be governed by the Apache License, Version 2.0, included in
+// the file licenses/APL2.txt.
 
 package manager
 
@@ -745,6 +744,8 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 		// Get CollectionID. CollectionID is COLLECTION_ID_NIL for non-existing collection
 		collectionID := cinfo.GetCollectionID(bucket, scope, collection)
 
+		version := cinfo.GetClusterVersion()
+
 		topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 		if err == nil && topology != nil {
 
@@ -773,8 +774,8 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 
 						// If there is any index in CREATED or PENDING state from a non-existent bucket.
 						// If so, this could be a candidate for cleanup.
-						if (defn.BucketUUID != currentUUID ||
-							defn.CollectionId != collectionID) &&
+						if (defn.BucketUUID != currentUUID || (version >= common.INDEXER_70_VERSION &&
+							defn.CollectionId != collectionID)) &&
 							instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 							common.StreamId(instRef.StreamId) == common.NIL_STREAM {
 							hasInvalidDeferIndex = true
