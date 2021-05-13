@@ -1268,9 +1268,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.AutoTuneLSSCleaner": ConfigValue{
-		true,
+		false,
 		"Enable auto tuning of lss cleaning thresholds based on available free space",
-		true,
+		false,
 		false, // mutable,
 		false, // case-insensitive
 	},

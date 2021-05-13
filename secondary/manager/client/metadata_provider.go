@@ -140,6 +140,7 @@ type watcher struct {
 	loggedReqs   map[common.Txnid]*protocol.RequestHandle
 
 	clientStats IndexStats2Holder // local cached complete version showing all buckets and indexes that exist
+	storeStats  bool
 }
 
 // With partitioning, index instance is distributed among indexer nodes.
@@ -5316,6 +5317,7 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.loggedReqs = make(map[common.Txnid]*protocol.RequestHandle)
 	s.isClosed = false
 	s.lastSeenTxid = common.Txnid(0)
+	s.storeStats = (o.statsNotifyCh != nil)
 
 	return s
 }
@@ -5371,7 +5373,7 @@ RETRY2:
 		err = w.updateServiceMap(addr)
 	}
 
-	if err == nil {
+	if err == nil && w.storeStats {
 		clusterVersion := w.getClusterVersion()
 		if clusterVersion >= c.INDEXER_70_VERSION {
 			err = w.getClientStats()
@@ -6271,6 +6273,10 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 			return needRefresh, nil, nil
 
 		} else if isIndexStats2(key) {
+			if !w.storeStats {
+				return false, nil, nil
+			}
+
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
