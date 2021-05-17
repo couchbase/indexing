@@ -859,7 +859,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 			//past the last flushed TS of the MAINT_STREAM for this keyspace.
 			//In such case, all indexes of the keyspace can merged to MAINT_STREAM.
 			lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
-			if tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs) {
+			if tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, false) {
 				//if stream is ready to merge, further STREAM_ACTIVE processing is
 				//not required, return from here.
 				break
@@ -1841,7 +1841,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 		!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
 
 		lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
-		if tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs) {
+		if tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, false) {
 			//if stream is ready to merge, further STREAM_ACTIVE processing is
 			//not required, return from here.
 			tk.supvCmdch <- &MsgSuccess{}
@@ -2373,8 +2373,12 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 //checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
 //has reached past the last flushed TS of the MAINT_STREAM for this keyspaceId.
 //In such case, all indexes of the keyspaceId can merged to MAINT_STREAM.
+//If fetchKVSeq is true, this function will fetch latest collection/bucket seqnos
+//from KV for stream merge check(if required). It should only be used if there is
+//no flush activity for INIT_STREAM, as in that case the only way to know about
+//latest KV seq nums is to fetch those.
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
-	keyspaceId string, initFlushTs *common.TsVbuuid) bool {
+	keyspaceId string, initFlushTs *common.TsVbuuid, fetchKVSeq bool) bool {
 
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge Stream %v KeyspaceId %v len(buildInfo) %v "+
@@ -2478,7 +2482,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			buildInfo.buildDoneAckReceived == true &&
 			buildInfo.minMergeTs != nil {
 
-			readyToMerge, initTsSeq := tk.checkFlushTsValidForMerge(streamId, keyspaceId, initFlushTs, buildInfo.minMergeTs)
+			readyToMerge, initTsSeq := tk.checkFlushTsValidForMerge(streamId, keyspaceId,
+				initFlushTs, buildInfo.minMergeTs, fetchKVSeq)
 
 			if readyToMerge {
 
@@ -2530,7 +2535,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 }
 
 func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspaceId string,
-	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid) (bool, *common.TsVbuuid) {
+	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid, fetchKVSeq bool) (bool, *common.TsVbuuid) {
 
 	var maintFlushTs *common.TsVbuuid
 
@@ -2603,7 +2608,7 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
 	if initTsSeq.GreaterThanEqual(maintTsSeq) {
 		return true, initFlushTs
-	} else if lenInitTs == 0 {
+	} else if lenInitTs == 0 && fetchKVSeq {
 		//If there are mutations pending for the INIT_STREAM, avoid the expensive
 		//call to get KV seqnum. Instead, check for stream merge based on
 		//the seqnum of received mutations.
@@ -2742,6 +2747,27 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 				tsVbuuid.SetSnapType(common.FORCE_COMMIT)
 				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
 				tk.sendNewStabilityTS(&TsListElem{ts: tsVbuuid}, keyspaceId, streamId)
+			}
+		}
+
+		//For INIT_STREAM, if there is no new/pending TS, check for stream merge.
+		//fetchKVSeq is set to true here to allow merge to fetch latest bucket/collection seqnos
+		//for the check. This is an expensive operation and is only done if there is no
+		//flush activity.
+		if streamId == common.INIT_STREAM {
+			if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
+				!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
+
+				lastKVSeqFetchTime := tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId]
+
+				//if there is no flush activity, check for stream merge every 5 seconds by
+				//fetching the KV Seqnums(expensive check)
+				if time.Since(lastKVSeqFetchTime) > time.Duration(5*time.Second) {
+					lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
+					logging.Infof("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge.", streamId, keyspaceId)
+					tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, true /*fetchKVSeq*/)
+					tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Now()
+				}
 			}
 		}
 	}
@@ -4142,13 +4168,13 @@ func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 
 	logging.Debugf("Timekeeper::checkPendingStreamMerge Stream: %v KeyspaceId: %v", streamId, keyspaceId)
 
-	checkPendingMerge := func(streamId common.StreamId, keyspaceId string) {
+	checkPendingMerge := func(streamId common.StreamId, keyspaceId string, fetchKVSeq bool) {
 
 		if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
 			!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
 
 			lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
-			tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs)
+			tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, fetchKVSeq)
 		}
 	}
 
@@ -4160,11 +4186,11 @@ func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 		for ks, status := range keyspaceIdStatus {
 			bucket, _, _ := SplitKeyspaceId(ks)
 			if bucket == keyspaceId && status == STREAM_ACTIVE {
-				checkPendingMerge(common.INIT_STREAM, ks)
+				checkPendingMerge(common.INIT_STREAM, ks, false)
 			}
 		}
 	} else {
-		checkPendingMerge(streamId, keyspaceId)
+		checkPendingMerge(streamId, keyspaceId, false)
 	}
 
 }

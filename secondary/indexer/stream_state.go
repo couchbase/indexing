@@ -85,6 +85,9 @@ type StreamState struct {
 
 	//only used to log debug information for pending builds(INIT_STREAM only)
 	keyspaceIdPendBuildDebugLogTime map[string]uint64
+
+	//last time of KV seqnum fetch for stream merge check
+	streamKeyspaceIdLastKVSeqFetch map[common.StreamId]KeyspaceIdLastKVSeqFetch
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -134,6 +137,7 @@ type KeyspaceIdStatus map[string]StreamStatus
 type KeyspaceIdVBMap map[string]map[Vbucket]string
 
 type KeyspaceIdHWTOSO map[string]*common.TsVbuuid
+type KeyspaceIdLastKVSeqFetch map[string]time.Time
 
 type TsListElem struct {
 	ts       *common.TsVbuuid
@@ -200,6 +204,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdEnableOSO:              make(map[common.StreamId]KeyspaceIdEnableOSO),
 		streamKeyspaceIdHWTOSO:                 make(map[common.StreamId]KeyspaceIdHWTOSO),
 		keyspaceIdPendBuildDebugLogTime:        make(map[string]uint64),
+		streamKeyspaceIdLastKVSeqFetch:         make(map[common.StreamId]KeyspaceIdLastKVSeqFetch),
 	}
 
 	return ss
@@ -335,6 +340,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdHWTOSO := make(KeyspaceIdHWTOSO)
 	ss.streamKeyspaceIdHWTOSO[streamId] = keyspaceIdHWTOSO
 
+	keyspaceIdLastKVSeqFetch := make(KeyspaceIdLastKVSeqFetch)
+	ss.streamKeyspaceIdLastKVSeqFetch[streamId] = keyspaceIdLastKVSeqFetch
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -384,6 +392,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdVBMap[streamId][keyspaceId] = make(map[Vbucket]string)
 	ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Time{}
 
 	if streamId == common.INIT_STREAM {
 		ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
@@ -442,6 +451,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdVBMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdEnableOSO[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdHWTOSO[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastKVSeqFetch[streamId], keyspaceId)
 
 	if streamId == common.INIT_STREAM {
 		delete(ss.keyspaceIdPendBuildDebugLogTime, keyspaceId)
@@ -505,6 +515,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdVBMap, streamId)
 	delete(ss.streamKeyspaceIdEnableOSO, streamId)
 	delete(ss.streamKeyspaceIdHWTOSO, streamId)
+	delete(ss.streamKeyspaceIdLastKVSeqFetch, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
