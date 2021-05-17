@@ -14,21 +14,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/rpc"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
-	"net/rpc"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 type MetadataRepo struct {
 	repo       RepoRef
-	mutex      sync.Mutex
+	mutex      sync.RWMutex
 	isClosed   bool
 	defnCache  map[common.IndexDefnId]*common.IndexDefn
 	topoCache  map[string]*IndexTopology
@@ -183,8 +184,8 @@ func (c *MetadataRepo) DeleteLocalValue(key string) error {
 }
 
 func (c *MetadataRepo) GetLocalValue(key string) (string, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	return c.repo.getLocalValue(key)
 }
