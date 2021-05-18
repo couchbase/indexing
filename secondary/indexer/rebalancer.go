@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -495,6 +496,7 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.sourceTokens[ttid] = tt
+		logging.Infof("Rebalancer::processTokenAsSource Processing transfer token: %v", tt)
 
 		//TODO batch this rather than one per index
 		r.queueDropIndex(ttid)
@@ -524,7 +526,7 @@ func (r *Rebalancer) processDropIndexQueue() {
 			return
 		case ttid := <-r.dropQueue:
 			var tt c.TransferToken
-
+			logging.Infof("Rebalancer::processDropIndexQueue processing drop index request for ttid: %v", ttid)
 			if first {
 				// If it is the first drop, let wait to give a chance for the target's metaadta
 				// being synchronized with the cbq nodes.  This is to ensure that the cbq nodes
@@ -550,8 +552,14 @@ func (r *Rebalancer) processDropIndexQueue() {
 					if r.addToWaitGroup() {
 						notifych <- true
 						go r.dropIndexWhenIdle(ttid, &tt, notifych)
+					} else {
+						logging.Warnf("Rebalancer::processDropIndexQueue Skip processing drop index request for tt: %v as rebalancer can not add to wait group", tt)
 					}
+				} else {
+					logging.Infof("Rebalancer::processDropIndexQueue: Skip processing tt: %v as it is already added to drop list: %v", tt, r.drop)
 				}
+			} else {
+				logging.Warnf("Rebalancer::processDropIndexQueue Skipping drop index request for tt: %v", tt)
 			}
 		}
 	}
@@ -575,16 +583,25 @@ func (r *Rebalancer) queueDropIndex(ttid string) {
 		if r.checkIndexReadyToDrop() {
 			select {
 			case r.dropQueue <- ttid:
+				logging.Infof("Rebalancer::queueDropIndex Successfully queued index for drop, ttid: %v", ttid)
 			default:
 				tt := r.sourceTokens[ttid]
 				if tt.State == c.TransferTokenReady {
 					if !r.drop[ttid] {
 						if r.addToWaitGroup() {
 							go r.dropIndexWhenIdle(ttid, tt, nil)
+						} else {
+							logging.Warnf("Rebalancer::queueDropIndex Could not add to wait group, hence not attempting drop, ttid: %v", ttid)
 						}
+					} else {
+						logging.Infof("Rebalancer::queueDropIndex Did not queue drop index as index is already in drop list, ttid: %v, drop list: %v", ttid, r.drop)
 					}
+				} else {
+					logging.Infof("Rebalancer::queueDropIndex Did not queue index for drop as tt state is: %v, ttid: %v", tt.State, ttid)
 				}
 			}
+		} else {
+			logging.Warnf("Rebalancer::queueDropIndex Failed to queue index for drop, ttid: %v", ttid)
 		}
 	}
 }
@@ -931,6 +948,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			setTransferTokenInMetakv(ttid, tt)
 			atomic.AddInt32(&r.pendingBuild, 1)
 		}
+		logging.Infof("Rebalancer::processTokenAsDest, Incremening pendingBuild due to ttid: %v, pendingBuild value: %v", ttid, atomic.LoadInt32(&r.pendingBuild))
 
 		if r.checkIndexReadyToBuild() == true {
 			if !r.addToWaitGroup() {
@@ -1304,6 +1322,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 		}
 		setTransferTokenInMetakv(ttid, tt)
 		atomic.AddInt32(&r.pendingBuild, -1)
+		logging.Infof("Rebalancer::tokenMergeOrReady, Decrementing pendingBuild due to ttid: %v, pendingBuild value: %v", ttid, atomic.LoadInt32(&r.pendingBuild))
 
 		r.dropIndexWhenReady()
 
@@ -1363,6 +1382,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 					newTT.State = tt.State
 				}
 				atomic.AddInt32(&r.pendingBuild, -1)
+				logging.Infof("Rebalancer::tokenMergeOrReady, Decrementing pendingBuild due to ttid: %v, pendingBuild value: %v", ttid, atomic.LoadInt32(&r.pendingBuild))
 
 				r.dropIndexWhenReady()
 			}
