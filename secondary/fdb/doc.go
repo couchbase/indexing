@@ -174,3 +174,22 @@ func (d *Doc) Close() error {
 	d.freed = true
 	return nil
 }
+
+// CloseNoPool releases resources allocated to this document without
+// adding the Doc back to the global sync pool.
+func (d* Doc) CloseNoPool() error {
+	Log.Tracef("fdb_doc_free call d:%p doc:%v", d, d.doc)
+
+	// Free the doc and its field pointers.
+	errNo := C.fdb_doc_free(d.doc)
+
+	Log.Tracef("fdb_doc_free retn d:%p errNo:%v", d, errNo)
+
+	if errNo != RESULT_SUCCESS {
+		return Error(errNo)
+	}
+
+	d.freed = true
+
+	return nil
+}
