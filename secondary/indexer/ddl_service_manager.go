@@ -1553,7 +1553,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 		// Wait for initialization complete
 		ticker := time.NewTicker(time.Millisecond * 500)
 		defer ticker.Stop()
-		retry := 10
+		retry := 60 // Is set to 60 for 30 Sec timeout for watchers to go live.
 
 		for range ticker.C {
 			retry = retry - 1
@@ -1569,7 +1569,8 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 				}
 
 				provider.Close()
-				return nil, nil, errors.New("DDLServiceMgr: Failed to initialize metadata provider.  Unable to connect to all indexer nodes within 5 seconds.")
+				return nil, nil, errors.New("DDLServiceMgr: Failed to initialize metadata provider. " +
+					" Unable to connect to all indexer nodes within 30 seconds.")
 			}
 		}
 	}
