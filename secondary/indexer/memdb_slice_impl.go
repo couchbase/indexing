@@ -1028,12 +1028,19 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			s.info.InstId = mdb.idxInstId
 			s.info.PartnId = mdb.idxPartnId
 
+			// Append stats to manifest file
 			bs, err = json.Marshal(s.info)
 			if err == nil {
 				fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
-				_, err = fd.Write(bs)
-				if err == nil {
-					err = fd.Close()
+				if err == nil { // opened, so must close
+					_, err = fd.Write(bs)
+					if err == nil {
+						err = fd.Sync() // make sure stats make it to disk before renaming tempdir to dir
+					}
+					err2 := fd.Close()
+					if err == nil {
+						err = err2
+					}
 				}
 			}
 
