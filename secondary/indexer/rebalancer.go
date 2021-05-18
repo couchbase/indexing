@@ -1124,6 +1124,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
+						atomic.AddInt32(&r.pendingBuild, -1)
 						break
 					}
 				}
@@ -1137,6 +1138,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", tt)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
+						atomic.AddInt32(&r.pendingBuild, -1)
 					}
 				}
 				r.mu.Unlock()
@@ -1228,6 +1230,8 @@ loop:
 						indexState, err, tt)
 					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 					setTransferTokenInMetakv(ttid, tt)
+
+					atomic.AddInt32(&r.pendingBuild, -1)
 				} else if err != "" {
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
 					break
