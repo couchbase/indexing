@@ -3803,7 +3803,10 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 
 func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
-	cinfo, err := common.FetchNewClusterInfoCache2(m.clusterURL, common.DEFAULT_POOL, "GetServiceMap")
+	uuid := time.Now().UnixNano()
+	userAgent := fmt.Sprintf("GetServiceMap_%v", uuid)
+
+	cinfo, err := common.FetchNewClusterInfoCache2(m.clusterURL, common.DEFAULT_POOL, userAgent)
 	if err != nil {
 		return nil, err
 	}
