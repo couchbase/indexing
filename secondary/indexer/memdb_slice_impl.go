@@ -915,7 +915,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	if s.committed && mdb.hasPersistence {
 		s.info.MainSnap.Open()
-		go mdb.doPersistSnapshot(s)
+		mdb.doPersistSnapshot(s)
 	}
 
 	if s.info.MainSnap == nil {
@@ -945,86 +945,88 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	var concurrency int = 1
 
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
+		// Add details to snapshot info and persist it
+		snapshotStats := make(map[string]interface{})
+		snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
+		snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+		snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
+		snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
+		s.info.IndexStats = snapshotStats
 
-		t0 := time.Now()
-		dir := newSnapshotPath(mdb.path)
-		tmpdir := filepath.Join(mdb.path, tmpDirName)
-		manifest := filepath.Join(tmpdir, "manifest.json")
-		os.RemoveAll(tmpdir)
-		mdb.confLock.RLock()
-		maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
-		total := atomic.LoadInt64(&totalMemDBItems)
-		indexCount := mdb.GetCommittedCount()
-		// Compute number of workers to be used for taking backup
-		if total > 0 {
-			concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
-		}
+		go func() {
+			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
-		mdb.confLock.RUnlock()
-
-		// StoreToDisk call below will spawn 'concurrency' go routines to write
-		// and will wait for this group to complete.
-		// To ensure that CPU isn't overwhelmed, we limit how many such groups
-		// can run in parallel.
-		// To avoid holding a snapshot we must limit the caller via the item callback,
-		// But as this callback is invoked per item, per writer,
-		// it is enough to throttle just one writer go routine of each batch.
-		var throttleToken int64
-		limitWriterThreads := func(itm *memdb.ItemEntry) {
-			if atomic.CompareAndSwapInt64(&throttleToken, 0, 1) {
-				moiWriterSemaphoreCh <- true
+			t0 := time.Now()
+			dir := newSnapshotPath(mdb.path)
+			tmpdir := filepath.Join(mdb.path, tmpDirName)
+			manifest := filepath.Join(tmpdir, "manifest.json")
+			os.RemoveAll(tmpdir)
+			mdb.confLock.RLock()
+			maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
+			total := atomic.LoadInt64(&totalMemDBItems)
+			indexCount := mdb.GetCommittedCount()
+			// Compute number of workers to be used for taking backup
+			if total > 0 {
+				concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
 			}
-		}
-		defer func() {
-			if throttleToken == 1 { // Only post if callback above ran
-				<-moiWriterSemaphoreCh
+
+			// StoreToDisk call below will spawn 'concurrency' go routines to write
+			// and will wait for this group to complete.
+			// To ensure that CPU isn't overwhelmed, we limit how many such groups
+			// can run in parallel.
+			// To avoid holding a snapshot we must limit the caller via the item callback,
+			// But as this callback is invoked per item, per writer,
+			// it is enough to throttle just one writer go routine of each batch.
+			var throttleToken int64
+			limitWriterThreads := func(itm *memdb.ItemEntry) {
+				if atomic.CompareAndSwapInt64(&throttleToken, 0, 1) {
+					moiWriterSemaphoreCh <- true
+				}
+			}
+			defer func() {
+				if throttleToken == 1 { // Only post if callback above ran
+					<-moiWriterSemaphoreCh
+				}
+			}()
+			err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, limitWriterThreads)
+			if err == nil {
+				var fd *os.File
+				var bs []byte
+
+				// Add details to snapshot info and persist it
+
+				s.info.Version = SNAPSHOT_META_VERSION_MOI_1
+				s.info.InstId = mdb.idxInstId
+				s.info.PartnId = mdb.idxPartnId
+
+				bs, err = json.Marshal(s.info)
+				if err == nil {
+					fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
+					_, err = fd.Write(bs)
+					if err == nil {
+						err = fd.Close()
+					}
+				}
+
+				if err == nil {
+					err = os.Rename(tmpdir, dir)
+					if err == nil {
+						mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks)
+					}
+				}
+			}
+			if err == nil {
+				dur := time.Since(t0)
+				logging.Infof("MemDBSlice Slice Id %v, Threads %d, IndexInstId %v, PartitionId %v created ondisk"+
+					" snapshot %v. Took %v", mdb.id, concurrency, mdb.idxInstId, mdb.idxPartnId, dir, dur)
+				mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+			} else {
+				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
+					" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
+				os.RemoveAll(tmpdir)
+				os.RemoveAll(dir)
 			}
 		}()
-		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, limitWriterThreads)
-		if err == nil {
-			var fd *os.File
-			var bs []byte
-
-			// Add details to snapshot info and persist it
-			snapshotStats := make(map[string]interface{})
-			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
-			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
-			snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
-			snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
-			s.info.IndexStats = snapshotStats
-			s.info.Version = SNAPSHOT_META_VERSION_MOI_1
-			s.info.InstId = mdb.idxInstId
-			s.info.PartnId = mdb.idxPartnId
-
-			bs, err = json.Marshal(s.info)
-			if err == nil {
-				fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
-				_, err = fd.Write(bs)
-				if err == nil {
-					err = fd.Close()
-				}
-			}
-
-			if err == nil {
-				err = os.Rename(tmpdir, dir)
-				if err == nil {
-					mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks)
-				}
-			}
-		}
-
-		if err == nil {
-			dur := time.Since(t0)
-			logging.Infof("MemDBSlice Slice Id %v, Threads %d, IndexInstId %v, PartitionId %v created ondisk"+
-				" snapshot %v. Took %v", mdb.id, concurrency, mdb.idxInstId, mdb.idxPartnId, dir, dur)
-			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
-		} else {
-			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
-				" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
-			os.RemoveAll(tmpdir)
-			os.RemoveAll(dir)
-		}
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)

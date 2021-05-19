@@ -1301,6 +1301,13 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		if !mdb.isPrimary {
 			s.BackSnap.Open()
 		}
+		snapshotStats := make(map[string]interface{})
+		snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
+		snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
+		snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+		snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
+		snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
+		s.info.IndexStats = snapshotStats
 
 		go func() {
 			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
@@ -1309,13 +1316,6 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 				"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 			t0 := time.Now()
 
-			snapshotStats := make(map[string]interface{})
-			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
-			snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
-			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
-			snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
-			snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
-			s.info.IndexStats = snapshotStats
 			s.info.Version = SNAPSHOT_META_VERSION_PLASMA_1
 			s.info.InstId = mdb.idxInstId
 			s.info.PartnId = mdb.idxPartnId
