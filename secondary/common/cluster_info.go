@@ -127,6 +127,28 @@ func FetchNewClusterInfoCache(clusterUrl string, pool string, userAgent string) 
 	return c, nil
 }
 
+// FetchNewClusterInfoCache2 is does not do a Implicit Fetch() like FetchNewClusterInfoCache
+func FetchNewClusterInfoCache2(clusterUrl string, pool string, userAgent string) (*ClusterInfoCache, error) {
+
+	url, err := ClusterAuthUrl(clusterUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := NewClusterInfoCache(url, pool)
+	if err != nil {
+		return nil, err
+	}
+
+	c.SetUserAgent(userAgent)
+
+	if ServiceAddrMap != nil {
+		c.SetServicePorts(ServiceAddrMap)
+	}
+
+	return c, nil
+}
+
 func SetServicePorts(portMap map[string]string) {
 	ServiceAddrMap = portMap
 }
@@ -277,7 +299,7 @@ func (c *ClusterInfoCache) Fetch() error {
 		c.nodesvs = poolServs.NodesExt
 		c.buildEncryptPortMapping()
 
-		if err := c.fetchServerGroups(); err != nil {
+		if err := c.FetchServerGroups(); err != nil {
 			return err
 		}
 
@@ -399,7 +421,7 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 		c.nodesvs = poolServs.NodesExt
 		c.buildEncryptPortMapping()
 
-		if err := c.fetchServerGroups(); err != nil {
+		if err := c.FetchServerGroups(); err != nil {
 			return err
 		}
 
@@ -569,7 +591,7 @@ func (c *ClusterInfoCache) EncryptPortMapping() map[string]string {
 	return c.encryptPortMapping
 }
 
-func (c *ClusterInfoCache) fetchServerGroups() error {
+func (c *ClusterInfoCache) FetchServerGroups() error {
 
 	groups, err := c.pool.GetServerGroups()
 	if err != nil {

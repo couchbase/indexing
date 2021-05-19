@@ -1972,7 +1972,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		// Wait for initialization complete
 		ticker := time.NewTicker(time.Millisecond * 500)
 		defer ticker.Stop()
-		retry := 10
+		retry := 60 // Is set to 60 for 30 Sec timeout for watchers to go live.
 
 		for range ticker.C {
 			retry = retry - 1
@@ -1989,7 +1989,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 
 				provider.Close()
 				return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
-					"%v within 5 seconds.", logPrefix, common.ErrIndexerConnection.Error()))
+					"%v within 30 seconds.", logPrefix, common.ErrIndexerConnection.Error()))
 			}
 		}
 	}

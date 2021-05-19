@@ -39,7 +39,6 @@ import (
 // Singleton chain: Indexer -> ClustMgrAgent -> IndexManager -> LifecycleMgr
 type LifecycleMgr struct {
 	repo        *MetadataRepo
-	cinfo       *common.ClusterInfoCache
 	cinfoClient *common.ClusterInfoClient
 	notifier    MetadataNotifier // object to call Indexer to perform index DDL
 	clusterURL  string
@@ -160,15 +159,10 @@ type updator struct {
 // ClustMgrAgent which owns a singleton LifecycleMgr as a child.
 func NewLifecycleMgr(clusterURL string) (*LifecycleMgr, error) {
 
-	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "NewLifecycleMgr")
-	if err != nil {
-		return nil, err
-	}
-	cinfo.SetUserAgent("LifecycleMgr")
+	var err error
 
 	mgr := &LifecycleMgr{
 		repo:                       nil,
-		cinfo:                      cinfo,
 		notifier:                   nil, // set later via RegisterNotifier API
 		clusterURL:                 clusterURL,
 		incomings:                  make(chan *requestHolder, 100000),
@@ -189,6 +183,7 @@ func NewLifecycleMgr(clusterURL string) (*LifecycleMgr, error) {
 	}
 	mgr.cinfoClient.SetUserAgent("LifecycleMgr")
 
+	cinfo := mgr.cinfoClient.GetClusterInfoCache()
 	if cinfo.GetClusterVersion() >= common.INDEXER_70_VERSION {
 		atomic.StoreUint32(&mgr.collAwareCluster, 1)
 	}
@@ -3808,10 +3803,19 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 
 func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
-	m.cinfo.Lock()
-	defer m.cinfo.Unlock()
+	uuid := time.Now().UnixNano()
+	userAgent := fmt.Sprintf("GetServiceMap_%v", uuid)
 
-	if err := m.cinfo.Fetch(); err != nil {
+	cinfo, err := common.FetchNewClusterInfoCache2(m.clusterURL, common.DEFAULT_POOL, userAgent)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
+		return nil, err
+	}
+
+	if err := cinfo.FetchServerGroups(); err != nil {
 		return nil, err
 	}
 
@@ -3823,27 +3827,27 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 	}
 	srvMap.IndexerId = string(id)
 
-	srvMap.ScanAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE)
+	srvMap.ScanAddr, err = cinfo.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.HttpAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
+	srvMap.HttpAddr, err = cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.AdminAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE)
+	srvMap.AdminAddr, err = cinfo.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.NodeAddr, err = m.cinfo.GetLocalHostAddress()
+	srvMap.NodeAddr, err = cinfo.GetLocalHostAddress()
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.ServerGroup, err = m.cinfo.GetLocalServerGroup()
+	srvMap.ServerGroup, err = cinfo.GetLocalServerGroup()
 	if err != nil {
 		return nil, err
 	}
@@ -3855,7 +3859,7 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
 	srvMap.IndexerVersion = common.INDEXER_CUR_VERSION
 
-	srvMap.ClusterVersion = m.cinfo.GetClusterVersion()
+	srvMap.ClusterVersion = cinfo.GetClusterVersion()
 
 	exclude, err := m.repo.GetLocalValue("excludeNode")
 	if err != nil && !strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {

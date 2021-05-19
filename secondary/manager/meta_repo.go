@@ -67,9 +67,9 @@ type RemoteRepoRef struct {
 // LocalRepoRef implements the RepoRef interface for a local metadata repo.
 // This is the concrete type accessed by the HTTP(S) server in request_handler.go.
 type LocalRepoRef struct {
-	server         *gometa.EmbeddedServer
-	eventMgr       *eventManager
-	notifier       MetadataNotifier
+	server   *gometa.EmbeddedServer
+	eventMgr *eventManager
+	notifier MetadataNotifier
 
 	// metaDirty is a dirty flag for the index metadata of this host. This is
 	// periodically reset when request_handler crosses its ETag expiry time.
@@ -106,7 +106,6 @@ const (
 	KIND_GLOBAL_TOPOLOGY
 	KIND_STABILITY_TIMESTAMP
 )
-
 
 ///////////////////////////////////////////////////////
 //  Public Function : MetadataRepo
@@ -202,8 +201,8 @@ func (c *MetadataRepo) DeleteLocalValue(key string) error {
 }
 
 func (c *MetadataRepo) GetLocalValue(key string) (string, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	return c.repo.getLocalValue(key)
 }
