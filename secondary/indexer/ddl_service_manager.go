@@ -239,7 +239,7 @@ func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 //
 func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel bool) {
 
-	logging.Infof("DDLServiceMgr: handling rebalacne done")
+	logging.Infof("DDLServiceMgr: handling rebalance done")
 
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()
@@ -1459,7 +1459,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 	cinfo.SetUserAgent("newMetadataProvider")
 
-	if err := cinfo.Fetch(); err != nil {
+	if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
 		return nil, nil, err
 	}
 

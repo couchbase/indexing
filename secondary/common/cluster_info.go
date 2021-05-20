@@ -1019,6 +1019,7 @@ func (c *ClusterInfoCache) GetServerVersion(nid NodeId) (int, error) {
 func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 
 	if len(c.nodes) != len(c.nodesvs) {
+		logging.Warnf("ClusterInfoCache:validateCache - Failed as len(c.nodes): %v != len(c.nodesvs): %v", len(c.nodes), len(c.nodesvs))
 		return false
 	}
 
@@ -1044,6 +1045,7 @@ func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 		hp := net.JoinHostPort(h, fmt.Sprint(p))
 
 		if hostList1[i] != hp {
+			logging.Warnf("ClusterInfoCache:validateCache - Failed as hostname in nodes: %s != the one from nodesvs: %s", hostList1[i], hp)
 			return false
 		}
 	}
