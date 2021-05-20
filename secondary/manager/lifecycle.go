@@ -891,8 +891,20 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 		if err := m.CreateIndexOrInstance(&defn, false, reqCtx, asyncCreate); err != nil {
 			// If there is error, the defintion will not be created.
 			// But if it is recoverable error, then we still want to create the commit token.
-			logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", err)
-			return m.canRetryCreateError(err), "", "", "", err
+			logging.Errorf("LifecycleMgr.processCommitToken() : create index fails.  Reason = %v", err)
+
+			// canRetryCreateError logic may not be future safe as it defaults to true.
+			// So, ensure that the token will be posted only when the valid keyspace ids
+			// are available.
+			commit := true
+			if defn.BucketUUID == common.BUCKET_UUID_NIL ||
+				defn.ScopeId == collections.SCOPE_ID_NIL ||
+				defn.CollectionId == collections.COLLECTION_ID_NIL {
+
+				commit = false
+			}
+
+			return commit && m.canRetryCreateError(err), defn.BucketUUID, defn.ScopeId, defn.CollectionId, err
 		}
 
 		if !definitions[0].Deferred && len(definitions) == 1 && !asyncCreate {
@@ -902,7 +914,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
 				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", retryList[0])
-				return true, "", "", "", retryList[0]
+				return true, defn.BucketUUID, defn.ScopeId, defn.CollectionId, retryList[0]
 			}
 
 			if len(errList) != 0 {
