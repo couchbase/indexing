@@ -169,7 +169,9 @@ func (b *endpointBuffers) checkSeqOrder(kv *c.KeyVersions, endpoint *RouterEndpo
 			s.ProcessSnapshot(start, end)
 		}
 
-	case c.Upsert, c.Deletion, c.UpsertDeletion:
+	case c.Upsert, c.Deletion, c.UpsertDeletion, c.UpdateSeqno, c.SeqnoAdvanced,
+		c.CollectionCreate, c.CollectionDrop, c.CollectionChanged,
+		c.CollectionFlush, c.ScopeCreate, c.ScopeDrop:
 		if s, ok := endpoint.seqOrders[key]; ok && s != nil {
 			if !s.ProcessSeqno(kv.Seqno) {
 				logging.Fatalf("%v seq order violation for vb = %v, seq = %v, command = %v, "+
