@@ -2725,6 +2725,21 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.internal.minIterPerTemp": ConfigValue{
+		100,
+		"Minimum number of iterations - per temperature - to be used by simulated annealing index planner.",
+		100,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.planner.internal.maxIterPerTemp": ConfigValue{
+		20000,
+		"Maximum number of iterations - per temperature - to be used by simulated annealing index planner. " +
+			"If set to a value < minIterPerTemp, then minIterPerTemp iterations will be executed.",
+		20000,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",

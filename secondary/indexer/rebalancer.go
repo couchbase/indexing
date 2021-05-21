@@ -192,6 +192,8 @@ func (r *Rebalancer) initRebalAsync() {
 					timeout := cfg["planner.timeout"].Int()
 					threshold := cfg["planner.variationThreshold"].Float64()
 					cpuProfile := cfg["planner.cpuProfile"].Bool()
+					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
+					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
 
 					//user setting redistribute_indexes overrides the internal setting
 					//onEjectOnly. onEjectOnly is not expected to be used in production
@@ -204,7 +206,8 @@ func (r *Rebalancer) initRebalAsync() {
 
 					start := time.Now()
 					r.transferTokens, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.change,
-						r.nodeId, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile)
+						r.nodeId, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
+						minIterPerTemp, maxIterPerTemp)
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
 						go r.finish(err)

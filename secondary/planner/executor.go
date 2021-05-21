@@ -56,6 +56,8 @@ type RunConfig struct {
 	Runtime        *time.Time
 	Threshold      float64
 	CpuProfile     bool
+	MinIterPerTemp int
+	MaxIterPerTemp int
 }
 
 type RunStats struct {
@@ -131,15 +133,17 @@ type IndexSpec struct {
 /////////////////////////////////////////////////////////////
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
-	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool) (map[string]*common.TransferToken, error) {
+	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
+	maxIterPerTemp int) (map[string]*common.TransferToken, error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
-		timeout, threshold, cpuProfile, &runtime)
+		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
-	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, runtime *time.Time) (map[string]*common.TransferToken, error) {
+	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
+	runtime *time.Time) (map[string]*common.TransferToken, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil)
 	if err != nil {
@@ -181,6 +185,8 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.Runtime = runtime
 	config.Threshold = threshold
 	config.CpuProfile = cpuProfile
+	config.MinIterPerTemp = minIterPerTemp
+	config.MaxIterPerTemp = maxIterPerTemp
 
 	p, _, err := execute(config, CommandRebalance, plan, nil, deleteNodes)
 	if p != nil && detail {
@@ -812,6 +818,10 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 	// run planner
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
+
+	planner.SetMinIterPerTemp(config.MinIterPerTemp)
+	planner.SetMaxIterPerTemp(config.MaxIterPerTemp)
+
 	if _, err := planner.Plan(CommandPlan, solution); err != nil {
 		return planner, s, err
 	}
@@ -902,6 +912,8 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	planner.SetTimeout(config.Timeout)
 	planner.SetRuntime(config.Runtime)
 	planner.SetVariationThreshold(config.Threshold)
+	planner.SetMinIterPerTemp(config.MinIterPerTemp)
+	planner.SetMaxIterPerTemp(config.MaxIterPerTemp)
 	planner.SetCpuProfile(config.CpuProfile)
 	if config.Detail {
 		logging.Infof("************ Index Layout Before Rebalance *************")
@@ -1156,6 +1168,8 @@ func DefaultRunConfig() *RunConfig {
 		MemCostWeight:  1,
 		EjectOnly:      false,
 		DisableRepair:  false,
+		MinIterPerTemp: 100,
+		MaxIterPerTemp: 20000,
 	}
 }
 
