@@ -416,15 +416,7 @@ func (feed *DcpFeed) handlePacket(
 		feed.stats.TotalMutation.Add(1)
 		sendAck = true
 
-		if !feed.osoSnapshot {
-			if s, ok := feed.seqOrders[vb]; ok && s != nil {
-				if !s.ProcessSeqno(event.Seqno) {
-					logging.Fatalf("%v seq order violation for vb = %v, seq = %v, opcode = %v, "+
-						"orderState = %v, event = %v", prefix, vb, event.Seqno, pkt.Opcode,
-						s.GetInfo(), event.GetDebugInfo())
-				}
-			}
-		}
+		feed.checkSeqOrder(event, vb, pkt.Opcode)
 
 	case transport.DCP_STREAMEND:
 		event = newDcpEvent(pkt, stream)
@@ -502,6 +494,8 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_SYSTEM_EVENT for vb %d, eventType: %v, manifestUID: %s, scopeId: %s, collectionId: %x\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb, event.EventType, event.ManifestUID, event.ScopeID, event.CollectionID)
 
+		feed.checkSeqOrder(event, vb, pkt.Opcode)
+
 	case transport.DCP_SEQNO_ADVANCED:
 		event = newDcpEvent(pkt, stream)
 		feed.stats.SeqnoAdvanced.Add(1)
@@ -509,6 +503,7 @@ func (feed *DcpFeed) handlePacket(
 
 		if len(pkt.Extras) == dcpSeqnoAdvExtrasLen {
 			event.Seqno = binary.BigEndian.Uint64(pkt.Extras)
+			feed.checkSeqOrder(event, vb, pkt.Opcode)
 		} else {
 			fmsg := "%v ##%x DCP_SEQNO_ADVANCED for vb %d. Expected extras len: %v, received: %v\n"
 			logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, dcpSeqnoAdvExtrasLen, len(pkt.Extras))
@@ -546,6 +541,18 @@ func (feed *DcpFeed) handlePacket(
 	}
 	feed.sendBufferAck(sendAck, uint32(bytes))
 	return "ok"
+}
+
+func (feed *DcpFeed) checkSeqOrder(event *DcpEvent, vb uint16, opcode transport.CommandCode) {
+	if !feed.osoSnapshot {
+		if s, ok := feed.seqOrders[vb]; ok && s != nil {
+			if !s.ProcessSeqno(event.Seqno) {
+				logging.Fatalf("%v seq order violation for vb = %v, seq = %v, opcode = %v, "+
+					"orderState = %v, event = %v", feed.logPrefix, vb, event.Seqno, opcode,
+					s.GetInfo(), event.GetDebugInfo())
+			}
+		}
+	}
 }
 
 func (feed *DcpFeed) handleSystemEvent(pkt *transport.MCRequest, dcpEvent *DcpEvent, stream *DcpStream) {

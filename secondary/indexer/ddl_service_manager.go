@@ -266,14 +266,14 @@ func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 //
 func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel bool) {
 
-	logging.Infof("DDLServiceMgr: handling rebalacne done")
+	logging.Infof("DDLServiceMgr: handling rebalance done")
 
 	nodes := getNodesInfo(change, isCancel)
 
 	// nodes can be empty but it cannot be nil.
 	// If emtpy, then no node will be considered.
 	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr")
+	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:rebalanceDone")
 	if err != nil {
 		logging.Errorf("DDLServiceMgr:rebalanceDone(): Failed to initialize metadata provider.  Error=%v.", err)
 		return
@@ -761,7 +761,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 	// able to start.  But once the metadata provider is able to fetch metadata for all the nodes, the
 	// metadata will be cached locally even if there is network partitioning afterwards.
 	//
-	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr")
+	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:handleCreateCommand")
 	if err != nil {
 		logging.Errorf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
 		return
@@ -1854,7 +1854,7 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 	// nodes can be empty but it cannot be nil.
 	// If emtpy, then no node will be considered.
 	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr")
+	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:refreshMetadataProvider")
 	if err != nil {
 		return nil, err
 	}
@@ -1878,7 +1878,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 	}
 	cinfo.SetUserAgent(fmt.Sprintf("newMetadataProvider:%v", logPrefix))
 
-	if err := cinfo.Fetch(); err != nil {
+	if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
 		return nil, nil, err
 	}
 
