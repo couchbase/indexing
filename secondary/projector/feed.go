@@ -1592,7 +1592,7 @@ func (feed *Feed) cleanupKeyspace(keyspaceId string, enginesOk bool) {
 	feeder, ok := feed.feeders[keyspaceId]
 	if ok {
 		if kvdata, ok := feed.kvdata[keyspaceId]; ok {
-			kvdata.StopScatter()
+			kvdata.StopScatterFromFeed()
 		}
 		// drain the .C channel until it gets closed or if this feed
 		// happends to get closed.

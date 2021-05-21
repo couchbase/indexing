@@ -63,11 +63,12 @@ type KVData struct {
 
 	reqTsMutex *sync.RWMutex
 	// Closing genServerStopCh will stop all incoming requests to the control path
-	genServerStopCh  chan bool
-	genServerFinCh   chan bool
-	runScatterFinCh  chan bool
-	runScatterDoneCh chan bool
-	runScatterDone   bool
+	genServerStopCh       chan bool
+	genServerFinCh        chan bool
+	runScatterFinCh       chan bool
+	runScatterDoneCh      chan bool
+	runScatterDone        bool
+	stopScatterFromFeedCh chan bool
 	// misc.
 	syncTimeout time.Duration // in milliseconds
 	logPrefix   string
@@ -246,6 +247,8 @@ func NewKVData(
 		runScatterFinCh:  make(chan bool),
 		runScatterDoneCh: make(chan bool),
 
+		stopScatterFromFeedCh: make(chan bool),
+
 		stats:   &KvdataStats{},
 		kvaddr:  kvaddr,
 		async:   async,
@@ -371,6 +374,11 @@ func (kvdata *KVData) StopScatter() {
 	atomic.StoreUint32(&kvdata.stopScatter, 1)
 }
 
+func (kvdata *KVData) StopScatterFromFeed() {
+	atomic.StoreUint32(&kvdata.stopScatter, 1)
+	close(kvdata.stopScatterFromFeedCh)
+}
+
 func (kvdata *KVData) GetKVStats() map[string]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
@@ -421,23 +429,29 @@ func (kvdata *KVData) runScatter(
 loop:
 	for {
 		select {
-		case m, ok := <-mutch:
-			if ok == false || atomic.LoadUint32(&kvdata.stopScatter) == 1 { // upstream has closed
-				break loop
-			}
-			kvdata.stats.eventCount.Add(1)
-			seqno, err := kvdata.scatterMutation(m, ts)
-			if err != nil {
-				fmsg := "%v ##%x Error during scatter mutation while posting: %v, err: %v"
-				logging.Errorf(fmsg, kvdata.logPrefix, kvdata.opaque, m.Opcode, err)
-				break loop
-			}
-			kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
-
-		// Incase genServer() terminates first, it will close runScatterFinCh to
-		// terminate runScatter() go-routine
-		case <-kvdata.runScatterFinCh:
+		case <-kvdata.stopScatterFromFeedCh:
+			logging.Warnf("%v ##%x exiting runScatter as scatter is stopped from feed", kvdata.logPrefix, kvdata.opaque)
 			break loop
+		default:
+			select {
+			case m, ok := <-mutch:
+				if ok == false || atomic.LoadUint32(&kvdata.stopScatter) == 1 { // upstream has closed
+					break loop
+				}
+				kvdata.stats.eventCount.Add(1)
+				seqno, err := kvdata.scatterMutation(m, ts)
+				if err != nil {
+					fmsg := "%v ##%x Error during scatter mutation while posting: %v, err: %v"
+					logging.Errorf(fmsg, kvdata.logPrefix, kvdata.opaque, m.Opcode, err)
+					break loop
+				}
+				kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
+
+			// Incase genServer() terminates first, it will close runScatterFinCh to
+			// terminate runScatter() go-routine
+			case <-kvdata.runScatterFinCh:
+				break loop
+			}
 		}
 	}
 }
