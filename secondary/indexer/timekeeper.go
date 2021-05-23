@@ -3172,12 +3172,25 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 			//if flushTs has a smaller seqno than lastFlushTs
 			if s < lts.Seqnos[i] {
 
-				logging.Infof("Timekeeper::ensureMonotonicTs  Align seqno smaller than lastFlushTs. "+
-					"KeyspaceId %v StreamId %v vbucket %v. CurrentTS: Snapshot %v-%v Seqno %v Vbuuid %v. "+
-					"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v.",
-					keyspaceId, streamId, i,
-					flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], flushTs.Vbuuids[i],
-					lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i])
+				needsLog := true
+				//if disableAlign is set for the TS, it is possible that lastFlushTs has flushed upto
+				//snapEnd but the current TS seqno is smaller as snap alignment was disabled.
+				//skip logging this information as this can flood the logs when partial snapshots
+				//are getting processed.
+				if flushTs.HasDisableAlign() &&
+					flushTs.Snapshots[i][0] == lts.Snapshots[i][0] && //same snapshot start/end
+					flushTs.Snapshots[i][1] == lts.Snapshots[i][1] {
+					needsLog = false
+				}
+
+				if needsLog {
+					logging.Infof("Timekeeper::ensureMonotonicTs  Align seqno smaller than lastFlushTs. "+
+						"KeyspaceId %v StreamId %v vbucket %v. CurrentTS: Snapshot %v-%v Seqno %v Vbuuid %v. "+
+						"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v.",
+						keyspaceId, streamId, i,
+						flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], flushTs.Vbuuids[i],
+						lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i])
+				}
 
 				flushTs.Seqnos[i] = lts.Seqnos[i]
 				flushTs.Vbuuids[i] = lts.Vbuuids[i]
