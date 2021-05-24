@@ -4421,10 +4421,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId] = cid
 
-	var collectionAware bool
-	if clusterVer >= common.INDEXER_70_VERSION {
-		collectionAware = true
-	}
+	//Set collectionAware to true unconditionally. DCP allows to enable
+	//collections on upgraded nodes in mixed mode.
+	collectionAware := true
 
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
@@ -6178,10 +6177,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		idx.streamKeyspaceIdCollectionId[streamId][keyspaceId] = cid
 	}
 
-	var collectionAware bool
-	if clusterVer >= common.INDEXER_70_VERSION {
-		collectionAware = true
-	}
+	//Set collectionAware to true unconditionally. DCP allows to enable
+	//collections on upgraded nodes in mixed mode.
+	collectionAware := true
 
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           streamId,
