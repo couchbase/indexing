@@ -729,6 +729,15 @@ func (worker *VbucketWorker) broadcast2Endpoints(data interface{}, runFinCh chan
 			fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
 			logging.Debugf(fmsg, worker.logPrefix, worker.opaque, raddr, err)
 			if err == c.ErrorAborted { // return if worker is aborted
+				dkvs, ok := data.(*c.DataportKeyVersions)
+				if !ok {
+					logging.Fatalf("%v ##%x invalid data type %T\n", worker.logPrefix, worker.opaque, data)
+					return
+				}
+				commands := dkvs.Kv.Commands
+				if len(commands) == 1 && commands[0] == c.Snapshot {
+					logging.Warnf("%v ##%x endpoint(%q).Send failed to send snapshot message: %v", worker.logPrefix, worker.opaque, dkvs.Kv.GetDebugInfo())
+				}
 				return
 			}
 
