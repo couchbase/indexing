@@ -6686,14 +6686,22 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 		os.Exit(0)
 	}
 
-	//any index with nil snapshot should be moved to INIT_STREAM
-	//TODO optimize for case where keyspace has 0 documents
-	updatedInsts := idx.findAndResetEmptySnapshotIndex()
-
-	//send updated maps
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInsts)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+
+	resetOnRollback := idx.config["recovery.reset_index_on_rollback"].Bool()
+
+	if resetOnRollback {
+
+		//any index with nil snapshot should be moved to INIT_STREAM
+		//TODO optimize for case where keyspace has 0 documents
+		updatedInsts := idx.findAndResetEmptySnapshotIndex()
+
+		//send updated maps
+		msgUpdateIndexInstMap = idx.newIndexInstMsg(idx.indexInstMap)
+		msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInsts)
+		msgUpdateIndexPartnMap = &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+	}
 
 	// Distribute current stats object and index information
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
