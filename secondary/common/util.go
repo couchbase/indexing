@@ -43,6 +43,7 @@ var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 // Create the 2KB ECMA input table for crc64 checksums once ever,
 // instead of every time a checksum is computed.
 var crc64ECMA *crc64.Table
+
 func init() {
 	crc64ECMA = crc64.MakeTable(crc64.ECMA)
 }
@@ -219,6 +220,12 @@ func FailsafeOpAsync(
 // This method aborts send if abortCh is closed on callers side
 func FailsafeOpAsync2(
 	reqch chan []interface{}, cmd []interface{}, finch, abortCh chan bool) error {
+
+	select {
+	case <-abortCh:
+		return ErrorAborted
+	default:
+	}
 
 	select {
 	case reqch <- cmd:
