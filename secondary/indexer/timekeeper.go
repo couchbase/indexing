@@ -1057,8 +1057,16 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 		}
 	}
 
-	logging.Infof("TK StreamBegin %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
-		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, host)
+	var ss, se, seq uint64
+	hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][meta.keyspaceId]
+	if hwt != nil {
+		ss = hwt.Snapshots[meta.vbucket][0]
+		se = hwt.Snapshots[meta.vbucket][1]
+		seq = hwt.Seqnos[meta.vbucket]
+	}
+
+	logging.Infof("TK StreamBegin %v %v %v %v %v %v %v. HWT [%v-%v,%v].", streamId, meta.keyspaceId,
+		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, host, ss, se, seq)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
