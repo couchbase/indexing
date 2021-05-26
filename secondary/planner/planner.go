@@ -921,31 +921,69 @@ func (p *SAPlanner) runIteration(i int, s *Solution) bool {
 		return false
 	}
 
-	if s.command != CommandRebalance {
+	if s.command != CommandRebalance && s.command != CommandSwap {
 		// TODO: Can this happen for an index creation with numReplica*numPartition > minIterPerTemp ?
 		return false
 	}
 
-	if s.numDeletedNode == 0 {
-		// This mean that after a new node is added, only "minIterPerTemp" indexes will be moved
-		// to the new node.
-		// Further iterations depend on the variance.
-		return false
-	}
-
-	for _, node := range s.Placement {
-		if !node.isDelete {
-			continue
-		}
-
-		if len(node.Indexes) > 0 {
-			if i == p.minIterPerTemp {
-				logging.Infof("Planner::Running more iterations than %v because of deleted nodes.",
-					p.minIterPerTemp)
+	// Check if there are any non-empty deleted nodes
+	if s.numDeletedNode != 0 {
+		for _, node := range s.Placement {
+			if !node.isDelete {
+				continue
 			}
 
-			return true
+			if len(node.Indexes) > 0 {
+				if i == p.minIterPerTemp {
+					logging.Infof("Planner::Running more iterations than %v because of deleted nodes.", p.minIterPerTemp)
+				}
+
+				return true
+			}
 		}
+	}
+
+	//
+	// Note that a newly added node may not get more than minIterPerTemp number
+	// of indexes, if the movement to new node is allowed and variance is
+	// under threshold after minIterPerTemp number of movements.
+	//
+
+	// Check if any lost indexes need to be rebuilt, if yes allow more iterations
+	if s.place.HasOptionalIndexes() {
+
+		// Check if the current placement of optional indexes needs any more
+		// indexes to be moved.
+
+		haConstrained := false
+		eligibles := p.placement.GetEligibleIndexes()
+		for _, node := range s.Placement {
+			if !p.constraint.SatisfyNodeHAConstraint(s, node, eligibles) {
+				haConstrained = true
+			}
+		}
+
+		if !haConstrained {
+			// This means that the lost indexes will be rebuilt. No need for any
+			// more iterations.
+			return false
+		}
+
+		// Planner decides not to rebuild lost indexes before it decides not
+		// to enforce resource constraints. This means that if the cluster is
+		// resuorce constrained, there is no need to overburden the cluster
+		// further, by adding new indexes.
+		if !p.constraint.SatisfyClusterResourceConstraint(s) {
+			logging.Infof("Planner::Even though there are optional indexes, the cluster" +
+				"resource constraints are not satisfied. Not running any extra iterations.")
+			return false
+		}
+
+		if i == p.minIterPerTemp {
+			logging.Infof("Planner::Running more iterations than %v because of HA constraints.", p.minIterPerTemp)
+		}
+
+		return true
 	}
 
 	if i != p.minIterPerTemp {
