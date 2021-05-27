@@ -3192,12 +3192,16 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 				}
 
 				if needsLog {
+					hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+					lastSnap := tk.ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]
 					logging.Infof("Timekeeper::ensureMonotonicTs  Align seqno smaller than lastFlushTs. "+
 						"KeyspaceId %v StreamId %v vbucket %v. CurrentTS: Snapshot %v-%v Seqno %v Vbuuid %v. "+
-						"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v.",
+						"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v. HWT [%v-%v, %v]. LastSnap [%v-%v, %v].",
 						keyspaceId, streamId, i,
 						flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], flushTs.Vbuuids[i],
-						lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i])
+						lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i],
+						hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i],
+						lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1], lastSnap.Seqnos[i])
 				}
 
 				flushTs.Seqnos[i] = lts.Seqnos[i]

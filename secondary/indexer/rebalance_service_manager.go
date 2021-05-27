@@ -43,7 +43,7 @@ type RebalanceMgr interface {
 }
 
 type ServiceMgr struct {
-	mu *sync.RWMutex // protects shared fields that do not have their own mutexes
+	mu *sync.RWMutex // protects m.rebalancer, m.rebalancerF, and other shared fields that do not have their own mutexes
 
 	state   state         // state of the current rebalance, failover, or index move
 	stateMu *sync.RWMutex // protects state field; may be taken *after* mu mutex
@@ -610,10 +610,14 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 	l.Infof("ServiceMgr::StartTopologyChange %v", change)
 
+	// To avoid having more than one Rebalancer object at a time, we must hold mu write locked from
+	// the check for nil m.rebalancer through execution of children startFailover or startRebalance
+	// which will overwrite this field.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	currState := m.copyState()
-	m.mu.RLock()
 	rebalancer := m.rebalancer
-	m.mu.RUnlock()
 	if currState.rebalanceID != change.ID || rebalancer != nil {
 		l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v %v", service.ErrConflict,
 			currState.rebalanceID, change.ID, rebalancer)
@@ -654,9 +658,6 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 
 func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	ctx := &rebalanceContext{
 		rev:    0,
 		change: change,
@@ -678,9 +679,6 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 // that will master the rebalance. This object launhes go routines to perform the
 // rebalance asynchronously.
 func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	var runPlanner bool
 	var skipRebalance bool
@@ -1558,6 +1556,10 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 }
 
+// runRebalanceCallback is a callback used by Rebalancer used for all of:
+//   1. Rebalance progress
+//   2. Rebalance done
+//   3. MoveIndex done
 func (m *ServiceMgr) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 	done := make(chan struct{})
 
@@ -1581,6 +1583,7 @@ func (m *ServiceMgr) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 	}
 }
 
+// rebalanceProgressCallback is the Rebalancer.cb.progress callback function for a Rebalance.
 func (m *ServiceMgr) rebalanceProgressCallback(progress float64, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() {
 		m.updateRebalanceProgressLOCKED(progress)
@@ -1609,6 +1612,7 @@ func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 	})
 }
 
+// rebalanceDoneCallback is the Rebalancer.cb.done callback function for a Rebalance.
 func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 
 	m.runRebalanceCallback(cancel, func() {
@@ -1792,7 +1796,7 @@ func (m *ServiceMgr) wait(rev service.Revision,
 	}
 }
 
-// cancelActualTask cancels a PrepareToplogyChange or StartToplogyChange.
+// cancelActualTask cancels a PrepareTopologyChange or StartTopologyChange.
 func (m *ServiceMgr) cancelActualTask(task *service.Task) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2893,11 +2897,13 @@ func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, d
 
 }
 
+// moveIndexDoneCallback is the Rebalancer.cb.done callback function for a MoveIndex.
 func (m *ServiceMgr) moveIndexDoneCallback(err error, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() { m.onMoveIndexDoneLOCKED(err) })
 }
 
-// onMoveIndexDoneLOCKED caller should be holding mutex mu write(?) locked.
+// onMoveIndexDoneLOCKED is invoked when a MoveIndex completes (succeeds or fails).
+// Its caller should be holding mutex mu write(?) locked.
 func (m *ServiceMgr) onMoveIndexDoneLOCKED(err error) {
 
 	if err != nil {
