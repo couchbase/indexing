@@ -1,0 +1,32 @@
+{
+"name" 		: "Small Workload (20-50M)",
+"comment"   : "",
+"workload" 	: [
+	{
+		"name" 		: "bucket1",
+		"replica" 	: 1,
+		"workload" 	: [
+		{
+			"name" 				: "small",
+			"minNumDoc" 		: 20000000,
+			"maxNumDoc" 		: 50000000,   
+			"minDocKeySize" 	: 20, 
+			"maxDocKeySize" 	: 200,
+			"minSecKeySize" 	: 20,
+			"maxSecKeySize" 	: 200,
+			"minArrKeySize" 	: 0,
+			"maxArrKeySize" 	: 0,
+			"minArrSize"    	: 0,
+			"maxArrSize"    	: 0,
+			"minMutationRate"  	: 10000,
+			"maxMutationRate"  	: 100000,
+			"minScanRate"      	: 1000,
+			"maxScanRate"      	: 10000
+		}],
+		"distribution" 	: [100]
+	}],
+"distribution"   	: [100],
+"minNumIndex"   : 30,
+"maxNumIndex"   : 30
+}
+

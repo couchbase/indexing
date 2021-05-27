@@ -55,6 +55,18 @@ type rebalanceTestCase struct {
 	cpuScore       float64
 }
 
+type iterationTestCase struct {
+	comment   string
+	topoSpec  string
+	indexers  string
+	plan      string
+	minIter   int
+	maxIter   int
+	threshold float64
+	success   bool
+	action    string
+}
+
 var initialPlacementTestCases = []initialPlacementTestCase{
 	{"initial placement - 20-50M, 10 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-10-3.json", "", 0.20, 0.20},
 	{"initial placement - 20-50M, 30 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-30-3.json", "", 0.20, 0.20},
@@ -93,6 +105,53 @@ var rebalanceTestCases = []rebalanceTestCase{
 	{"rebalance - rebuid replica - 3 replica, 3 zone, add 1, delete 1, 1x", 1, 1, "../testdata/planner/plan/replica-3-zone.json", 0, 1, 1, 0, 0},
 }
 
+var iterationTestCases = []iterationTestCase{
+	{
+		"Remove one node - failure",
+		"../testdata/planner/workload/uniform-small-10-1.json",
+		"../testdata/planner/plan/empty-1-zone.json",
+		"",
+		1,
+		2,
+		0.35,
+		false,
+		"Remove 1",
+	},
+	{
+		"Remove one node - success",
+		"../testdata/planner/workload/uniform-small-10-1.json",
+		"../testdata/planner/plan/empty-1-zone.json",
+		"",
+		1,
+		15,
+		0.25,
+		true,
+		"Remove 1",
+	},
+	{
+		"Index rebuild - failure",
+		"",
+		"",
+		"../testdata/planner/plan/replica-repair-2-zone.json",
+		1,
+		1,
+		0.80,
+		false,
+		"Lost index",
+	},
+	{
+		"Index rebuild - success",
+		"",
+		"",
+		"../testdata/planner/plan/replica-repair-2-zone.json",
+		1,
+		50,
+		0.80,
+		true,
+		"Lost index",
+	},
+}
+
 func TestPlanner(t *testing.T) {
 	log.Printf("In TestPlanner()")
 
@@ -103,6 +162,7 @@ func TestPlanner(t *testing.T) {
 	incrPlacementTest(t)
 	rebalanceTest(t)
 	minMemoryTest(t)
+	iterationTest(t)
 }
 
 //
@@ -554,4 +614,118 @@ func minMemoryTest(t *testing.T) {
 		}
 
 	}()
+}
+
+//
+// The SA Planner runs a certain number of iterations per temperature in an
+// attempt to move the indexes. Ideally the number of iterations should be
+// enuogh to evaulate a large number of index movements to find an optimal
+// solution. But as the number of iterations increase, the number of index
+// movements also increase - which can lead to too much data movement
+// in the cluster. One way to redue the data movement in the cluster is to
+// reduce the planner iterations. But that may lead to avoiding necessary
+// index movements as well. For example, when number of indexes moved per
+// iteration are less than total indexes to be moved out of a deleted
+// node.
+//
+// With higher allowable variance in the cluster, planner may choose to
+// move only upto "iterations per temperature" number of indexes. To ensure
+// functional correctness, iterations per temperature are defined as a range
+// of minimum to maximum.
+//
+// This test varifies different functional scenarios where minimuum number
+// of iterations are not enough to ensure:
+// 1. Replica/partition repair with HA
+// 2. Node removal
+// 3. Node swap
+//
+func iterationTest(t *testing.T) {
+	for _, testcase := range iterationTestCases {
+		var p *planner.SAPlanner
+
+		log.Printf("-------------------------------------------")
+		log.Printf("iterationTest :: %v", testcase.comment)
+
+		if testcase.action == "Remove 1" {
+			config := planner.DefaultRunConfig()
+
+			s := planner.NewSimulator()
+			spec, err := s.ReadWorkloadSpec(testcase.topoSpec)
+			FailTestIfError(err, "Fail to read workload spec", t)
+
+			plan, err := planner.ReadPlan(testcase.indexers)
+			FailTestIfError(err, "Fail to read plan", t)
+
+			p, _, err = s.RunSingleTest(config, planner.CommandPlan, spec, plan, nil)
+			FailTestIfError(err, "Error in planner test", t)
+
+			if err := planner.ValidateSolution(p.Result); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// p.Print()
+
+		var newPlan *planner.Plan
+
+		switch testcase.action {
+
+		case "Remove 1":
+			p.Result.Placement[0].MarkDeleted()
+			newPlan = &planner.Plan{
+				Placement: p.Result.Placement,
+				MemQuota:  5302940000000,
+			}
+
+		case "Lost index":
+			var err error
+			newPlan, err = planner.ReadPlan(testcase.plan)
+			FailTestIfError(err, "Fail to read plan", t)
+			newPlan.MemQuota = 5302940000000
+
+		default:
+			t.Fatal("Unupported testcase action")
+		}
+
+		config1 := planner.DefaultRunConfig()
+		config1.UseLive = true
+		config1.Resize = false
+		config1.MinIterPerTemp = testcase.minIter
+		config1.MaxIterPerTemp = testcase.maxIter
+		config1.Threshold = testcase.threshold
+
+		s1 := planner.NewSimulator()
+		p1, _, err := s1.RunSingleTest(config1, planner.CommandRebalance, nil, newPlan, nil)
+
+		// p1.Print()
+
+		if testcase.action == "Remove 1" {
+			if testcase.success {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if len(p1.Result.Placement) == 2 {
+					t.Fatal(fmt.Errorf("Unexpected success for testcase %v", testcase.comment))
+				}
+			}
+		}
+
+		if testcase.action == "Lost index" {
+			count := 0
+			for _, node := range p1.Result.Placement {
+				count += len(node.Indexes)
+			}
+
+			if testcase.success {
+				if count != 60 {
+					t.Fatal(fmt.Errorf("Error: expected ccounut %v, actual count %v", 60, count))
+				}
+			} else {
+				if count != 30 {
+					t.Fatal(fmt.Errorf("Error: expected ccounut %v, actual count %v", 30, count))
+				}
+			}
+		}
+	}
 }
