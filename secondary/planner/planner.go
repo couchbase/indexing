@@ -38,7 +38,6 @@ import (
 
 // constant - simulated annealing
 const (
-	IterationPerTemp   int     = 100
 	ResizePerIteration int     = 1000
 	RunPerPlan         int     = 12
 	MaxTemperature     float64 = 1.0
@@ -361,10 +360,12 @@ type SAPlanner struct {
 	sizing     SizingMethod
 
 	// config
-	timeout    int
-	runtime    *time.Time
-	threshold  float64
-	cpuProfile bool
+	timeout        int
+	runtime        *time.Time
+	threshold      float64
+	cpuProfile     bool
+	minIterPerTemp int
+	maxIterPerTemp int
 
 	// result
 	Result          *Solution `json:"result,omitempty"`
@@ -816,7 +817,15 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	for temperature > MinTemperature && !done && !skipPlanner {
 		lastMove := move
 		lastPositiveMove := positiveMove
-		for i := 0; i < IterationPerTemp; i++ {
+
+		i := 0
+		for {
+			if !p.runIteration(i, current) {
+				break
+			}
+
+			i++
+
 			new_solution, force, final := p.findNeighbor(current)
 			if new_solution != nil {
 				new_cost := p.cost.Cost(new_solution)
@@ -850,16 +859,20 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 			}
 
 			if final {
+				logging.Infof("Planner::finalising the solution as final solution is found.")
 				done = true
 				break
 			}
 		}
 
 		if int64(move-lastMove) < MinNumMove && int64(positiveMove-lastPositiveMove) < MinNumPositiveMove {
+			logging.Infof("Planner::finalising the solution as there are no more valid index movements.")
 			done = true
 		}
 
-		if p.threshold > 0 && current.cost.ComputeResourceVariation() <= p.threshold {
+		currCost := current.cost.ComputeResourceVariation()
+		if p.threshold > 0 && currCost <= p.threshold {
+			logging.Infof("Planner::finalising the solution as the current resource variation is under control (%v).", currCost)
 			done = true
 		}
 
@@ -898,6 +911,50 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	return current, nil, nil
 }
 
+func (p *SAPlanner) runIteration(i int, s *Solution) bool {
+	if i < p.minIterPerTemp {
+		return true
+	}
+
+	if i >= p.maxIterPerTemp {
+		logging.Infof("Planner::stop planner iter per temp as maxIterPerTemp limit (%v, %v) exceeded.", i, p.maxIterPerTemp)
+		return false
+	}
+
+	if s.command != CommandRebalance {
+		// TODO: Can this happen for an index creation with numReplica*numPartition > minIterPerTemp ?
+		return false
+	}
+
+	if s.numDeletedNode == 0 {
+		// This mean that after a new node is added, only "minIterPerTemp" indexes will be moved
+		// to the new node.
+		// Further iterations depend on the variance.
+		return false
+	}
+
+	for _, node := range s.Placement {
+		if !node.isDelete {
+			continue
+		}
+
+		if len(node.Indexes) > 0 {
+			if i == p.minIterPerTemp {
+				logging.Infof("Planner::Running more iterations than %v because of deleted nodes.",
+					p.minIterPerTemp)
+			}
+
+			return true
+		}
+	}
+
+	if i != p.minIterPerTemp {
+		logging.Infof("Planner::Finished planner run after %v iterations.", i)
+	}
+
+	return false
+}
+
 func (p *SAPlanner) SetTimeout(timeout int) {
 	p.timeout = timeout
 }
@@ -912,6 +969,14 @@ func (p *SAPlanner) SetVariationThreshold(threshold float64) {
 
 func (p *SAPlanner) SetCpuProfile(cpuProfile bool) {
 	p.cpuProfile = cpuProfile
+}
+
+func (p *SAPlanner) SetMinIterPerTemp(minIterPerTemp int) {
+	p.minIterPerTemp = minIterPerTemp
+}
+
+func (p *SAPlanner) SetMaxIterPerTemp(maxIterPerTemp int) {
+	p.maxIterPerTemp = maxIterPerTemp
 }
 
 //
@@ -5547,7 +5612,6 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 
 	retryCount := numOfIndexers * 10
 	for i := 0; i < retryCount; i++ {
-
 		p.totalIteration++
 
 		// If there is one node that does not satisfy constriant,
