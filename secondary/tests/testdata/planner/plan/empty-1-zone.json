@@ -1,0 +1,40 @@
+{
+	"placement": [
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "dad15192216a984a53fc19de249e0ba4",
+			"serverGroup": "index 1",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 104857600,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"indexes": []
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "fd3bdfd9cef59ef7def316a81d704329",
+			"serverGroup": "index 1",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 104857600,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"indexes": []
+		},
+		{
+			"nodeId": "127.0.0.1:9003",
+			"nodeUUID": "b0a4f1bd3f3339003a1e4683e37e1763",
+			"serverGroup": "index 1",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 104857600,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"indexes": []
+		}
+	],
+	"memQuota": 530294000000,
+	"cpuQuota": 16,
+	"isLive": true
+}
