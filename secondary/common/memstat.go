@@ -1,17 +1,20 @@
 package common
 
-import "time"
-import "runtime"
-import "strings"
-import "strconv"
+import (
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 var Memstatch = make(chan int64, 16)
 var fmemsg = strings.Replace(`memstats {
 "Alloc":%v, "TotalAlloc":%v, "Sys":%v, "Lookups":%v, "Mallocs":%v,
 "Frees":%v, "HeapAlloc":%v, "HeapSys":%v, "HeapIdle":%v, "HeapInuse":%v,
 "HeapReleased":%v, "HeapObjects":%v,
+"MSpanInuse":%v, "MSpanSys": %v, "StackInuse": %v,
 "GCSys":%v, "LastGC":%v,
 "PauseTotalNs":%v, "PauseNs":%v, "NumGC":%v
 }`, "\n", "", -1)
@@ -69,6 +72,7 @@ func PrintMemstats(ms *runtime.MemStats, PauseNs []uint64, oldNumGC uint32) {
 		ms.Alloc, ms.TotalAlloc, ms.Sys, ms.Lookups, ms.Mallocs,
 		ms.Frees, ms.HeapAlloc, ms.HeapSys, ms.HeapIdle, ms.HeapInuse,
 		ms.HeapReleased, ms.HeapObjects,
+		ms.MSpanInuse, ms.MSpanSys, ms.StackInuse,
 		ms.GCSys, ms.LastGC,
 		ms.PauseTotalNs,
 		reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
