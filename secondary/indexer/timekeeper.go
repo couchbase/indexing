@@ -4581,7 +4581,7 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 		}
 
 		if !tk.clusterInfoClient.ValidateCollectionID(bucket, scope,
-			collection, collectionId) {
+			collection, collectionId, true) {
 			return false
 		}
 	}

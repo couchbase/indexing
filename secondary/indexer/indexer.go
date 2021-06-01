@@ -1358,11 +1358,22 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case RESET_STREAM:
 		idx.handleResetStream(msg)
 
+	case INDEXER_DROP_COLLECTION:
+		idx.handleDropCollection(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
 	}
 
+}
+
+func (idx *indexer) handleDropCollection(msg Message) {
+	streamId := msg.(*MsgIndexerDropCollection).GetStreamId()
+	keyspaceId := msg.(*MsgIndexerDropCollection).GetKeyspaceId()
+	scopeId := msg.(*MsgIndexerDropCollection).GetScopeId()
+	collectionId := msg.(*MsgIndexerDropCollection).GetCollectionId()
+	idx.processCollectionDrop(streamId, keyspaceId, scopeId, collectionId)
 }
 
 func (idx *indexer) updateStorageMode(newConfig common.Config) {
@@ -6237,6 +6248,49 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 				break retryloop
 			}
 
+			// simplified version of idxDefn.keyspaceId with only the bits necessary here,
+			// should not be used generically
+			// introduced this code as idxDefn.keyspaceId() would return bucket keyspace without the scope:collection
+			// for pre CC indexes where as we always need the _default/_default scope and collection
+			// since bucket exists and is validated already
+			getKeyspaceId := func(idx *common.IndexDefn) string {
+				//index created pre CC will have empty scope/collection, set it to _default
+				if idx.Scope == "" && idx.Collection == "" {
+					return strings.Join([]string{idx.Bucket, common.DEFAULT_SCOPE, common.DEFAULT_COLLECTION}, ":")
+				}
+				return strings.Join([]string{idx.Bucket, idx.Scope, idx.Collection}, ":")
+			}
+
+			if clusterVer >= common.INDEXER_70_VERSION && streamId == common.MAINT_STREAM {
+				validKeyspaceIdMap := make(map[string]bool)
+				invalidKeyspaceIdMap := make(map[string]bool)
+
+				for _, indexinst := range indexList {
+					keyspaceIdTemp := getKeyspaceId(&indexinst.Defn)
+					if _, ok := validKeyspaceIdMap[keyspaceIdTemp]; ok {
+						// keyspace is already validated
+						continue
+					}
+
+					collectionId := indexinst.Defn.CollectionId
+					scopeId := indexinst.Defn.ScopeId
+					b, s, c := SplitKeyspaceId(keyspaceIdTemp)
+
+					if _, ok := invalidKeyspaceIdMap[keyspaceIdTemp]; !ok {
+						if !idx.clusterInfoClient.ValidateCollectionID(b, s, c, collectionId, false) {
+							invalidKeyspaceIdMap[keyspaceIdTemp] = true
+							idx.internalRecvCh <- &MsgIndexerDropCollection{
+								streamId:     streamId,
+								keyspaceId:   keyspaceId,
+								scopeId:      scopeId,
+								collectionId: collectionId}
+						} else {
+							validKeyspaceIdMap[keyspaceIdTemp] = true
+						}
+					}
+				}
+			}
+
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
@@ -7515,7 +7569,7 @@ func (idx *indexer) validateIndexInstMap() {
 			if _, ok := keyspaceMap[keyspace]; !ok {
 
 				cidValid := idx.clusterInfoClient.ValidateCollectionID(index.Defn.Bucket,
-					index.Defn.Scope, index.Defn.Collection, index.Defn.CollectionId)
+					index.Defn.Scope, index.Defn.Collection, index.Defn.CollectionId, true)
 
 				if _, ok := keyspaceValid[keyspace]; ok {
 					keyspaceValid[keyspace] = keyspaceValid[keyspace] && cidValid
@@ -9746,7 +9800,7 @@ func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string
 		}
 
 		if !idx.clusterInfoClient.ValidateCollectionID(bucket,
-			scope, collection, collectionId) {
+			scope, collection, collectionId, true) {
 			return false
 		}
 	}

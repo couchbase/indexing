@@ -1293,7 +1293,7 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 // ValidateCollectionID will get CollectionID for a given bucket, scope
 // and collection and check if its equal to a given collnID
 func (cic *ClusterInfoClient) ValidateCollectionID(bucket, scope,
-	collection, collnID string) bool {
+	collection, collnID string, retry bool) bool {
 
 	cinfo := cic.GetClusterInfoCache()
 	cinfo.RLock()
@@ -1308,7 +1308,7 @@ func (cic *ClusterInfoClient) ValidateCollectionID(bucket, scope,
 	}
 
 	resp := validateKeyspace()
-	if resp == false {
+	if resp == false && retry == true {
 		// Force fetch cluster info cache to avoid staleness in cluster info cache
 		cinfo.RUnlock()
 		err := cinfo.FetchWithLock()
