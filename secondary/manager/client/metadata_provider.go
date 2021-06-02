@@ -402,7 +402,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		if collection != c.DEFAULT_COLLECTION || scope != c.DEFAULT_SCOPE {
 			err := errors.New("Fails to create index.  Creation of an index on non-default collection" +
 				"is enabled only after cluster is fully upgraded and there is no failed node.")
-			return c.IndexDefnId(0), err, false
+			return c.IndexDefnId(0), err, true
 		}
 	}
 
@@ -3193,13 +3193,16 @@ func (o *MetadataProvider) FindServiceForIndexer(id c.IndexerId) (adminport stri
 	return watcher.getAdminAddr(), watcher.getScanAddr(), watcher.getHttpAddr(), nil
 }
 
-func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport string) error {
+func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport string, refreshServiceMap bool) error {
 
 	watcher, err := o.findWatcherByIndexerId(id)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot locate cluster node."))
 	}
 
+	if refreshServiceMap {
+		watcher.refreshServiceMap()
+	}
 	return watcher.updateServiceMap(adminport)
 }
 

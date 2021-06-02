@@ -351,7 +351,9 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	keyspaceId string) {
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	ss.streamKeyspaceIdHWTMap[streamId][keyspaceId] = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	ss.streamKeyspaceIdHWTMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = false
@@ -379,19 +381,19 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdCollectionId[streamId][keyspaceId] = ""
 	ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = false
-	ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
-	ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdNeedsLastRollbackReset[streamId][keyspaceId] = true
 	ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
-	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
-	ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
-	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] = make([]RepairState, numVbuckets)
 	ss.streamKeyspaceIdVBMap[streamId][keyspaceId] = make(map[Vbucket]string)
 	ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = false
-	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Time{}
 
 	if streamId == common.INIT_STREAM {
@@ -588,7 +590,7 @@ func (ss *StreamState) computeRollbackTs(streamId common.StreamId, keyspaceId st
 		restartTs := ss.computeRestartTs(streamId, keyspaceId)
 		if restartTs == nil {
 			numVbuckets := ss.config["numVbuckets"].Int()
-			restartTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+			restartTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		} else {
 			ss.adjustNonSnapAlignedVbs(restartTs, streamId, keyspaceId, nil, false)
 			ss.adjustVbuuids(restartTs, streamId, keyspaceId)
@@ -659,7 +661,7 @@ func (ss *StreamState) getRepairTsForKeyspaceId(streamId common.StreamId,
 	anythingToRepair := false
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	repairTs := common.NewTsVbuuid(keyspaceId, numVbuckets)
+	repairTs := common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 
 	var shutdownVbs []Vbucket = nil
 	var repairVbs []Vbucket = nil
@@ -900,7 +902,7 @@ func (ss *StreamState) addKVRollbackTs(streamId common.StreamId, keyspaceId stri
 	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	if rollbackTs == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
-		rollbackTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+		rollbackTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = rollbackTs
 	}
 
@@ -972,7 +974,7 @@ func (ss *StreamState) addKVActiveTs(streamId common.StreamId, keyspaceId string
 	activeTs := ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId]
 	if activeTs == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
-		activeTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+		activeTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
 	}
 
@@ -1008,7 +1010,7 @@ func (ss *StreamState) addKVPendingTs(streamId common.StreamId, keyspaceId strin
 	pendingTs := ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId]
 	if pendingTs == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
-		pendingTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+		pendingTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = pendingTs
 	}
 
@@ -1090,12 +1092,13 @@ func (ss *StreamState) clearAllRepairState(streamId common.StreamId, keyspaceId 
 	logging.Infof("StreamState::clear all repair state for %v keyspaceId %v", streamId, keyspaceId)
 
 	numVbuckets := ss.config["numVbuckets"].Int()
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
 	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] = make([]RepairState, numVbuckets)
 	ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
-	ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
-	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
-	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 }
 
 //

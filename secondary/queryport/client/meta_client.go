@@ -107,7 +107,7 @@ func newMetaBridgeClient(
 		return nil, err
 	}
 
-	if err := b.updateIndexerList(false); err != nil {
+	if err := b.updateIndexerList(false, false); err != nil {
 		logging.Errorf("updateIndexerList(): %v\n", err)
 		b.mdClient.Close()
 		return nil, err
@@ -120,7 +120,7 @@ func newMetaBridgeClient(
 
 // Sync will update the indexer list.
 func (b *metadataClient) Sync() error {
-	if err := b.updateIndexerList(true); err != nil {
+	if err := b.updateIndexerList(true, false); err != nil {
 		logging.Errorf("updateIndexerList(): %v\n", err)
 		return err
 	}
@@ -330,7 +330,7 @@ RETRY:
 
 	if needRefresh && refreshCnt == 0 {
 		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
-		if err := b.updateIndexerList(false); err != nil {
+		if err := b.updateIndexerList(false, true); err != nil {
 			logging.Errorf("updateIndexerList(): %v\n", err)
 			return uint64(defnID), err
 		}
@@ -1490,7 +1490,7 @@ func (b *metadataClient) indexInstState(instID uint64) (common.IndexState, error
 //-----------------------------------------------
 
 // update 2i cluster information,
-func (b *metadataClient) updateIndexerList(discardExisting bool) error {
+func (b *metadataClient) updateIndexerList(discardExisting, refreshServiceMap bool) error {
 
 	clusterURL, err := common.ClusterAuthUrl(b.cluster)
 	if err != nil {
@@ -1581,7 +1581,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			indexerID = b.mdClient.WatchMetadata(adminport, fn, activeNode)
 			m[adminport] = indexerID
 		} else {
-			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport)
+			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport, refreshServiceMap)
 			m[adminport] = indexerID
 			delete(curradmns, adminport)
 		}
@@ -2043,7 +2043,7 @@ func (b *metadataClient) watchClusterChanges() {
 				selfRestart()
 				return
 			} else if n.Type != common.CollectionManifestChangeNotification {
-				if err := b.updateIndexerList(false); err != nil {
+				if err := b.updateIndexerList(false, false); err != nil {
 					logging.Errorf("updateIndexerList(): %v\n", err)
 					selfRestart()
 					return
@@ -2051,7 +2051,7 @@ func (b *metadataClient) watchClusterChanges() {
 			}
 		case _, ok := <-b.mdNotifyCh:
 			if ok {
-				if err := b.updateIndexerList(false); err != nil {
+				if err := b.updateIndexerList(false, false); err != nil {
 					logging.Errorf("updateIndexerList(): %v\n", err)
 					selfRestart()
 					return
@@ -2088,7 +2088,7 @@ func (b *metadataClient) watchClusterChanges() {
 			} else if hasUnhealthyNode {
 				// refresh indexer version when there is no more unhealthy node
 				hasUnhealthyNode = false
-				if err := b.updateIndexerList(false); err != nil {
+				if err := b.updateIndexerList(false, false); err != nil {
 					logging.Errorf("updateIndexerList(): %v\n", err)
 					selfRestart()
 					return
