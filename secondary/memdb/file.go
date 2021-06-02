@@ -24,8 +24,8 @@ type FileWriter interface {
 	Open() error
 	WriteItem(*Item) error
 	Checksum() uint32
-	Close() error
-	FlushAndClose() error
+	Close(sync bool) error
+	FlushAndClose(sync bool) error
 }
 
 type FileReader interface {
@@ -55,6 +55,7 @@ func (m *MemDB) newFileReader(t FileType, ver int) FileReader {
 	return r
 }
 
+// rawFileWriter implements the FileWriter interface defined above.
 type rawFileWriter struct {
 	db       *MemDB
 	fd       *os.File
@@ -77,17 +78,25 @@ func (f *rawFileWriter) Open() error {
 	return err
 }
 
-func (f *rawFileWriter) FlushAndClose() (reterr error) {
+// rawFileWriter.FlushAndClose flushes the buffer to the io.Writer (which does NOT
+// force the bytes to disk), optionally syncs the file (which DOES force the bytes
+// to disk), and closes the file. Returns the first error, if any.
+func (f *rawFileWriter) FlushAndClose(sync bool) (reterr error) {
 
 	if f.w != nil {
-		if err := f.w.Flush(); err != nil {
-			reterr = err
-		}
+		reterr = f.w.Flush()
 	}
 	f.w = nil
 
 	if f.fd != nil {
-		if err := f.fd.Close(); err != nil {
+		if sync {
+			err := f.fd.Sync()
+			if reterr == nil {
+				reterr = err
+			}
+		}
+		err := f.fd.Close()
+		if reterr == nil {
 			reterr = err
 		}
 	}
@@ -106,37 +115,35 @@ func (f *rawFileWriter) Checksum() uint32 {
 	return f.checksum
 }
 
-func (f *rawFileWriter) Close() (reterr error) {
+// rawFileWriter.Close writes an empty Item terminator to the file, flushes the buffer to
+// the io.Writer (which does NOT force the bytes to disk), optionally syncs the file (which
+// DOES force the bytes to disk), and closes the file. Returns the first error, if any.
+func (f *rawFileWriter) Close(sync bool) (reterr error) {
 
+	// Open the file if needed
 	if f.fd == nil {
-		if err := f.Open(); err != nil {
-			reterr = err
-			return
+		reterr = f.Open()
+		if reterr != nil {
+			return reterr
 		}
 	}
 
+	// Write empty item terminator
 	terminator := &Item{}
-	if err := f.WriteItem(terminator); err != nil {
+	err := f.WriteItem(terminator)
+	if reterr == nil {
 		reterr = err
 	}
 
-	if f.w != nil {
-		if err := f.w.Flush(); err != nil {
-			reterr = err
-		}
+	err = f.FlushAndClose(sync)
+	if reterr == nil {
+		reterr = err
 	}
-	f.w = nil
-
-	if f.fd != nil {
-		if err := f.fd.Close(); err != nil {
-			reterr = err
-		}
-	}
-	f.fd = nil
 
 	return reterr
 }
 
+// rawFileReader implements the FileReader interface defined above.
 type rawFileReader struct {
 	version  int
 	db       *MemDB
@@ -173,6 +180,7 @@ func (f *rawFileReader) Close() error {
 	return f.fd.Close()
 }
 
+// forestdbFileWriter implements the FileWriter interface defined above.
 type forestdbFileWriter struct {
 	db       *MemDB
 	file     *forestdb.File
@@ -209,11 +217,13 @@ func (f *forestdbFileWriter) Checksum() uint32 {
 	return f.checksum
 }
 
-func (f *forestdbFileWriter) FlushAndClose() error {
-	return f.Close()
+// forestdbFileWriter.FlushAndClose sync flag is ignored by delegate.
+func (f *forestdbFileWriter) FlushAndClose(sync bool) error {
+	return f.Close(sync)
 }
 
-func (f *forestdbFileWriter) Close() (reterr error) {
+// forestdbFileWriter.Close ignores the sync flag.
+func (f *forestdbFileWriter) Close(sync bool) (reterr error) {
 	if f.file != nil {
 		if err := f.file.Commit(forestdb.COMMIT_NORMAL); err != nil {
 			reterr = err
@@ -235,6 +245,7 @@ func (f *forestdbFileWriter) Close() (reterr error) {
 	return reterr
 }
 
+// forestdbFileReader implements the FileReader interface defined above.
 type forestdbFileReader struct {
 	db       *MemDB
 	file     *forestdb.File

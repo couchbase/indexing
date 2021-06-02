@@ -18,6 +18,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
@@ -257,6 +258,8 @@ func (w *Writer) addFlushNode(itm *Item) {
 	w.flushSz += int64(itm.dataLen) + 4
 }
 
+// doDeltaFlush force flag both forces the write to be done and its
+// bytes to be forced to disk (by sync call under FlushAndClose).
 func (w *Writer) doDeltaFlush(force bool) {
 	ctx := &w.dwrCtx
 	if w.flushHead != nil && (force || gWriteBarrier.get()) {
@@ -284,7 +287,7 @@ func (w *Writer) doDeltaFlush(force bool) {
 			ptr.itm = nil
 		}
 
-		if err := ctx.fw.FlushAndClose(); err != nil {
+		if err := ctx.fw.FlushAndClose(force); err != nil {
 			ctx.err = err
 		}
 	}
@@ -1017,6 +1020,7 @@ func (m *MemDB) ptrToItem(itmPtr unsafe.Pointer) *Item {
 	return itm
 }
 
+// Visitor is called directly by memdb_test.go but otherwise only from within the current file.
 func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concurrency int) error {
 	var wg sync.WaitGroup
 	var pivotItems []*Item
@@ -1024,13 +1028,13 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 	wch := make(chan int, shards)
 
 	if snap == nil {
-		panic("snapshot cannot be nil")
+		return errors.New("MemDB::Visitor: snapshot cannot be nil")
 	}
 
-	func() {
+	err := func() error {
 		tmpIter := m.NewIterator(snap)
 		if tmpIter == nil {
-			panic("iterator cannot be nil")
+			return fmt.Errorf("MemDB::Visitor: could not open iterator; snapshot %v already closed", snap.sn)
 		}
 		defer tmpIter.Close()
 
@@ -1052,9 +1056,13 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 			}
 		}
 		pivotItems = append(pivotItems, nil) // end item
+		return nil
 	}()
+	if err != nil {
+		return err
+	}
 
-	errors := make([]error, len(pivotItems)-1)
+	errors := make([]error, len(pivotItems)-1) // errors per shard from below goroutines
 
 	// Run workers
 	for i := 0; i < concurrency; i++ {
@@ -1068,7 +1076,10 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 
 				itr := m.NewIterator(snap)
 				if itr == nil {
-					panic("iterator cannot be nil")
+					errors[shard] = fmt.Errorf(
+						"MemDB::Visitor: could not open iterator for shard %v; snapshot %v already closed",
+						shard, snap.sn)
+					return
 				}
 				defer itr.Close()
 
@@ -1102,7 +1113,7 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 
 	wg.Wait()
 
-	for _, err := range errors {
+	for _, err = range errors {
 		if err != nil {
 			return err
 		}
@@ -1208,6 +1219,8 @@ func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
 	return nil
 }
 
+// StoreToDisk writes an index snapshot to disk. It is run in a child goroutine of doPersistSnapshot
+// (memdb_slice_impl.go). dir passed in is a temporary directory that caller will rename on success.
 func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback ItemCallback) (err error) {
 
 	var snapClosed bool
@@ -1243,7 +1256,10 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	defer func() {
 		for _, w := range writers {
 			if w != nil {
-				w.Close()
+				err2 := w.Close(true)
+				if err == nil {
+					err = err2
+				}
 			}
 		}
 	}()
@@ -1265,7 +1281,10 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		defer func() {
 			for _, w := range m.deltaWriters {
 				if w != nil {
-					w.Close()
+					err2 := w.Close(true)
+					if err == nil {
+						err = err2
+					}
 				}
 			}
 			m.deltaFiles = nil
@@ -1276,17 +1295,27 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		snap = &m.persistSnap
 
 		defer func() {
-			if err = m.changeDeltaWrState(dwStateTerminate, nil, nil); err == nil {
+			err2 := m.changeDeltaWrState(dwStateTerminate, nil, nil)
+			if err == nil { // to report the first error instead of overwriting an earlier one
+				err = err2
+			}
+			if err2 == nil { // forge ahead if no err2, even if there was an earlier err
 				deltadir := filepath.Join(dir, "delta")
 				deltaChecksums := make([]uint32, m.numWriters())
 				bs, _ := json.Marshal(m.deltaFiles)
-				err = ioutil.WriteFile(filepath.Join(deltadir, "files.json"), bs, 0660)
-				if err == nil {
+				err2 = common.WriteFileWithSync(filepath.Join(deltadir, "files.json"), bs, 0660)
+				if err == nil { // report first error...
+					err = err2
+				}
+				if err2 == nil { // forge ahead...
 					for id, dwr := range m.deltaWriters {
 						deltaChecksums[id] = dwr.Checksum()
 					}
 					bs, _ = json.Marshal(deltaChecksums)
-					err = ioutil.WriteFile(filepath.Join(deltadir, "checksums.json"), bs, 0660)
+					err2 = common.WriteFileWithSync(filepath.Join(deltadir, "checksums.json"), bs, 0660)
+					if err == nil { // report first error...
+						err = err2
+					}
 				}
 			}
 		}()
@@ -1302,7 +1331,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	dataSz := storeStats.Memory
 
 	defer func() {
-		logging.Infof("memdb.StoreToDisk: Done dir [%v] disk snapshot - count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
+		logging.Infof("MemDB::StoreToDisk: Done dir [%v] disk snapshot - count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
 			dir, cntPerShard, totalCnt, snapCnt, szPerShard, totalSz, dataSz)
 	}()
 
@@ -1315,7 +1344,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		if ts, tc := atomic.AddInt64(&totalSz, sz), atomic.AddInt64(&totalCnt, 1); (ts > dataSz || tc > snapCnt) &&
 			time.Since(lastLogTime) > 5*time.Minute {
 
-			logging.Infof("memdb.StoreToDisk: Unexpected amount of data being persisted dir [%v] count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
+			logging.Infof("MemDB::StoreToDisk: Unexpected amount of data being persisted dir [%v] count per shard [%v] total count [%v] snap count [%v] size per shard [%v] total size [%v] memoryInUse [%v]",
 				dir, cntPerShard, tc, snapCnt, szPerShard, ts, dataSz)
 
 			lastLogTime = time.Now()
@@ -1342,16 +1371,17 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	}
 
 	manifest, _ := json.Marshal(map[string]interface{}{"version": version})
-	if err = ioutil.WriteFile(filepath.Join(manifestdir, "nitro.json"), manifest, 0660); err == nil {
+	// This is the first non-deferred assignment to err so don't need err2 to preserve first error reporting
+	if err = common.WriteFileWithSync(filepath.Join(manifestdir, "nitro.json"), manifest, 0660); err == nil {
 		if err = m.Visitor(snap, visitorCallback, shards, concurr); err == nil {
 			bs, _ := json.Marshal(files)
-			err = ioutil.WriteFile(filepath.Join(datadir, "files.json"), bs, 0660)
+			err = common.WriteFileWithSync(filepath.Join(datadir, "files.json"), bs, 0660)
 			if err == nil {
 				for id, wr := range writers {
 					checksums[id] = wr.Checksum()
 				}
 				bs, _ = json.Marshal(checksums)
-				err = ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), bs, 0660)
+				err = common.WriteFileWithSync(filepath.Join(datadir, "checksums.json"), bs, 0660)
 			}
 		}
 	}

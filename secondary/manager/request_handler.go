@@ -2615,7 +2615,7 @@ func (m *requestHandlerContext) saveLocalIndexMetadataToDisk(hostKey string, met
 		return err
 	}
 
-	err = ioutil.WriteFile(temp, content, 0755)
+	err = common.WriteFileWithSync(temp, content, 0755)
 	if err != nil {
 		logging.Errorf("saveLocalIndexMetadataToDisk: fail to save metadata to file %v.  Error %v", temp, err)
 		return err
@@ -2857,7 +2857,7 @@ func (m *requestHandlerContext) saveStatsToDisk(hostKey string, stats *common.St
 		return err
 	}
 
-	err = ioutil.WriteFile(temp, content, 0755)
+	err = common.WriteFileWithSync(temp, content, 0755)
 	if err != nil {
 		logging.Errorf("saveStatsToDisk: fail to save stats to file %v.  Error %v", temp, err)
 		return err
@@ -2943,7 +2943,7 @@ func (m *requestHandlerContext) runPersistor() {
 			if !ok {
 				return
 			}
-			for len(m.metaCh) > 0 {
+			for len(m.metaCh) > 0 { // discard all but newest
 				metaToCache = <-m.metaCh
 			}
 			updateMeta(metaToCache)
@@ -2952,7 +2952,7 @@ func (m *requestHandlerContext) runPersistor() {
 			if !ok {
 				return
 			}
-			for len(m.statsCh) > 0 {
+			for len(m.statsCh) > 0 { // discard all but newest
 				statsToCache = <-m.statsCh
 			}
 			updateStats(statsToCache)
