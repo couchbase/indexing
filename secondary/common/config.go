@@ -2316,6 +2316,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+
+	"indexer.init_stream.smallSnapshotThreshold": ConfigValue{
+		uint64(100), //please see minVbQueueLength before changing this
+		"Threshold For Considering a DCP Snapshot as Small for INIT_STREAM." +
+			"Must be smaller than minVbQueueLength.",
+		uint64(100),
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.settings.snapshotRequestWorkers": ConfigValue{
 		(runtime.GOMAXPROCS(0) + 1) / 2,
 		"Number of workers storage manager will spawn for listening " +
