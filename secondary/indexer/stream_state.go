@@ -1452,7 +1452,13 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 	keyspaceId string, tsElem *TsListElem, enableOSO bool) {
 
-	smallSnap := ss.config["settings.smallSnapshotThreshold"].Uint64()
+	var smallSnap uint64
+	if streamId == common.INIT_STREAM {
+		smallSnap = ss.config["init_stream.smallSnapshotThreshold"].Uint64()
+	} else {
+		smallSnap = ss.config["settings.smallSnapshotThreshold"].Uint64()
+	}
+
 	lastSnap := ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]
 
 	ts := tsElem.ts
