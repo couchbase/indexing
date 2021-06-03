@@ -1854,6 +1854,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.recovery.enableFullReplayOnError": ConfigValue{
+		true,
+		"enable full data replay upon error",
+		true,
+		false,
+		false,
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(2000),

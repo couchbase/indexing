@@ -321,6 +321,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.MaxInstsPerShard = slice.sysconf["plasma.maxInstancePerShard"].Uint64()
 	cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
 	cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
+	cfg.EnableFullReplayOnError = slice.sysconf["plasma.recovery.enableFullReplayOnError"].Bool()
 
 	cfg.StatsRunInterval = time.Duration(slice.sysconf["plasma.stats.runInterval"].Uint64()) * time.Second
 	cfg.StatsLogInterval = time.Duration(slice.sysconf["plasma.stats.logInterval"].Uint64()) * time.Second
@@ -2361,6 +2362,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
 	mdb.mainstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 	mdb.mainstore.RecoveryCheckpointInterval = cfg["plasma.recovery.checkpointInterval"].Uint64()
+	mdb.mainstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 
 	mdb.mainstore.EnableInMemoryCompression = mdb.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
 
@@ -2413,6 +2415,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
 		mdb.backstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 		mdb.backstore.RecoveryCheckpointInterval = cfg["plasma.recovery.checkpointInterval"].Uint64()
+		mdb.backstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 
 		mdb.backstore.EnableInMemoryCompression = mdb.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
 
