@@ -184,6 +184,7 @@ const (
 	POOL_CHANGE
 
 	INDEXER_DDL_IN_PROGRESS_RESPONSE
+	INDEXER_DROP_COLLECTION
 )
 
 type Message interface {
@@ -2232,6 +2233,33 @@ func (m *MsgStorageWarmupDone) NeedsRestart() bool {
 	return m.needsRestart
 }
 
+type MsgIndexerDropCollection struct {
+	streamId     common.StreamId
+	keyspaceId   string
+	scopeId      string
+	collectionId string
+}
+
+func (m *MsgIndexerDropCollection) GetMsgType() MsgType {
+	return INDEXER_DROP_COLLECTION
+}
+
+func (m *MsgIndexerDropCollection) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgIndexerDropCollection) GetKeyspaceId() string {
+	return m.keyspaceId
+}
+
+func (m *MsgIndexerDropCollection) GetScopeId() string {
+	return m.scopeId
+}
+
+func (m *MsgIndexerDropCollection) GetCollectionId() string {
+	return m.collectionId
+}
+
 //MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -2517,6 +2545,8 @@ func (m MsgType) String() string {
 
 	case INDEXER_DDL_IN_PROGRESS_RESPONSE:
 		return "INDEXER_DDL_IN_PROGRESS_RESPONSE"
+	case INDEXER_DROP_COLLECTION:
+		return "INDEXER_DROP_COLLECTION"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"
