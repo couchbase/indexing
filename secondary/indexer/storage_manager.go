@@ -1209,6 +1209,10 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 			is := snapC.snap
 			DestroyIndexSnapshot(is)
 			delete(indexSnapMap, idxInstId)
+			//set sc.deleted to true to indicate to concurrent readers
+			//that this snap container should no longer be used
+			snapC.deleted = true
+
 			s.notifySnapshotDeletion(idxInstId)
 			snapC.Unlock()
 		}
@@ -1319,6 +1323,13 @@ func (s *storageMgr) listenSnapshotReqs(index int) {
 			}
 
 			snapC.Lock()
+			//snapC.deleted indicates that the snapshot container belongs to a deleted
+			//index and it should no longer be used.
+			if snapC.deleted {
+				req.respch <- common.ErrIndexNotFound
+				snapC.Unlock()
+				return
+			}
 			if isSnapshotConsistent(snapC.snap, req.GetConsistency(), req.GetTS()) {
 				req.respch <- CloneIndexSnapshot(snapC.snap)
 				snapC.Unlock()
