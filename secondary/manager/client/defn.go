@@ -33,8 +33,7 @@ const (
 	OPCODE_DELETE_BUCKET                            = OPCODE_SERVICE_MAP + 1
 	OPCODE_INDEXER_READY                            = OPCODE_DELETE_BUCKET + 1
 	OPCODE_CLEANUP_INDEX                            = OPCODE_INDEXER_READY + 1
-	OPCODE_CLEANUP_DEFER_INDEX                      = OPCODE_CLEANUP_INDEX + 1
-	OPCODE_CREATE_INDEX_REBAL                       = OPCODE_CLEANUP_DEFER_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                       = OPCODE_CLEANUP_INDEX + 1
 	OPCODE_BUILD_INDEX_REBAL                        = OPCODE_CREATE_INDEX_REBAL + 1
 	OPCODE_DROP_INDEX_REBAL                         = OPCODE_BUILD_INDEX_REBAL + 1
 	OPCODE_BROADCAST_STATS                          = OPCODE_DROP_INDEX_REBAL + 1
@@ -56,6 +55,7 @@ const (
 	OPCODE_RESET_INDEX_ON_ROLLBACK                  = OPCODE_CHECK_TOKEN_EXIST + 1
 	OPCODE_DELETE_COLLECTION                        = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
 	OPCODE_CLIENT_STATS                             = OPCODE_DELETE_COLLECTION + 1
+	OPCODE_INVALID_COLLECTION                       = OPCODE_CLIENT_STATS + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -76,8 +76,6 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_INDEXER_READY"
 	case OPCODE_CLEANUP_INDEX:
 		return "OPCODE_CLEANUP_INDEX"
-	case OPCODE_CLEANUP_DEFER_INDEX:
-		return "OPCODE_CLEANUP_DEFER_INDEX"
 	case OPCODE_CREATE_INDEX_REBAL:
 		return "OPCODE_CREATE_INDEX_REBAL"
 	case OPCODE_BUILD_INDEX_REBAL:
@@ -122,6 +120,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_DELETE_COLLECTION"
 	case OPCODE_CLIENT_STATS:
 		return "OPCODE_CLIENT_STATS"
+	case OPCODE_INVALID_COLLECTION:
+		return "OPCODE_INVALID_COLLECTION"
 	}
 	return fmt.Sprintf("%v", op)
 }
@@ -178,13 +178,13 @@ type IndexStats2 struct {
 }
 
 type DedupedIndexStats struct {
-	NumDocsPending   float64                   `json:"num_docs_pending,omitempty"`
-	NumDocsQueued    float64                   `json:"num_docs_queued,omitempty"`
-	LastRollbackTime string                    `json:"last_rollback_time,omitempty"`
-	ProgressStatTime string                    `json:"progress_stat_time,omitempty"`
+	NumDocsPending   float64 `json:"num_docs_pending,omitempty"`
+	NumDocsQueued    float64 `json:"num_docs_queued,omitempty"`
+	LastRollbackTime string  `json:"last_rollback_time,omitempty"`
+	ProgressStatTime string  `json:"progress_stat_time,omitempty"`
 
 	// Indexes map key: fully qualified index name (<keyspace>:index).
-	Indexes          map[string]*PerIndexStats `json:"indexes,omitempty"`
+	Indexes map[string]*PerIndexStats `json:"indexes,omitempty"`
 }
 
 type PerIndexStats struct {
