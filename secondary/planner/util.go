@@ -11,14 +11,15 @@ package planner
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"math/rand"
 	"os"
 	"runtime/pprof"
 	"strconv"
 	"strings"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //////////////////////////////////////////////////////////////
@@ -188,8 +189,8 @@ func getWeightedRandomNode(rs *rand.Rand, indexers []*IndexerNode, loads []int64
 // This function sorts the indexer node by usage in ascending order.
 // For indexer usage, it will consider both cpu and memory.
 // For indexer nodes that have the same usage, it will sort by
-// the number of indexes with unkown usage info (index.NoUsageInfo=true).
-// Two indexers could have the same usage if the indexers are emtpy
+// the number of indexes with unknown usage info (index.NoUsageInfo=true).
+// Two indexers could have the same usage if the indexers are empty
 // or holding deferred index (no usage stats).
 //
 func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
@@ -285,7 +286,7 @@ func sortIndexByUsage(s *Solution, indexes []*IndexUsage) []*IndexUsage {
 }
 
 //
-// This function gets a list of elibigle index to move.
+// This function gets a list of eligible index to move.
 //
 func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*IndexUsage {
 

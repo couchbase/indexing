@@ -12,13 +12,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"math"
 	"math/rand"
 	"strconv"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 /******************* SAMPLE WORKLOAD *****************
@@ -379,7 +380,7 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 		return rebalance(command, config, p, indexes, deletedNodes)
 
 	} else {
-		return nil, nil, errors.New(fmt.Sprintf("uknown command: %v", command))
+		return nil, nil, errors.New(fmt.Sprintf("unknown command: %v", command))
 	}
 
 	return nil, nil, nil
@@ -414,7 +415,7 @@ func (t *simulator) findNodesToDelete(config *RunConfig, plan *Plan) ([]string, 
 }
 
 //////////////////////////////////////////////////////////////
-// Index Usage Genreation
+// Index Usage Generation
 /////////////////////////////////////////////////////////////
 
 func (t *simulator) indexUsages(s SizingMethod, spec *WorkloadSpec) ([]*IndexUsage, error) {
@@ -748,11 +749,11 @@ func (s *simulator) ReadWorkloadSpec(specFile string) (*WorkloadSpec, error) {
 
 		buf, err := ioutil.ReadFile(specFile)
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("Unsable to read workload spec from %v. err = %s", specFile, err))
+			return nil, errors.New(fmt.Sprintf("Unable to read workload spec from %v. err = %s", specFile, err))
 		}
 
 		if err := json.Unmarshal(buf, spec); err != nil {
-			return nil, errors.New(fmt.Sprintf("Unsable to parse workload spec from %v. err = %s", specFile, err))
+			return nil, errors.New(fmt.Sprintf("Unable to parse workload spec from %v. err = %s", specFile, err))
 		}
 
 		s.sortBucketSpec(spec)
