@@ -1490,24 +1490,24 @@ func (m *CommandListener) AddDeletedScheduleCreateTokenNoLock(path string) {
 
 func (m *CommandListener) ListenTokens() {
 
-	metaKVCallback := func(path string, value []byte, rev interface{}) error {
-		if strings.Contains(path, DropInstanceDDLCommandTokenPath) {
-			m.handleNewDropInstanceCommandToken(path, value)
+	metaKVCallback := func(kve metakv.KVEntry) error {
+		if strings.Contains(kve.Path, DropInstanceDDLCommandTokenPath) {
+			m.handleNewDropInstanceCommandToken(kve.Path, kve.Value)
 
-		} else if strings.Contains(path, DeleteDDLCommandTokenPath) {
-			m.handleNewDeleteCommandToken(path, value)
+		} else if strings.Contains(kve.Path, DeleteDDLCommandTokenPath) {
+			m.handleNewDeleteCommandToken(kve.Path, kve.Value)
 
-		} else if strings.Contains(path, BuildDDLCommandTokenPath) {
-			m.handleNewBuildCommandToken(path, value)
+		} else if strings.Contains(kve.Path, BuildDDLCommandTokenPath) {
+			m.handleNewBuildCommandToken(kve.Path, kve.Value)
 
-		} else if strings.Contains(path, CreateDDLCommandTokenPath) {
-			m.handleNewCreateCommandToken(path, value)
+		} else if strings.Contains(kve.Path, CreateDDLCommandTokenPath) {
+			m.handleNewCreateCommandToken(kve.Path, kve.Value)
 
-		} else if strings.Contains(path, ScheduleCreateTokenPath) {
-			m.handleNewScheduleCreateToken(path, value)
+		} else if strings.Contains(kve.Path, ScheduleCreateTokenPath) {
+			m.handleNewScheduleCreateToken(kve.Path, kve.Value)
 
-		} else if strings.Contains(path, StopScheduleCreateTokenPath) {
-			m.handleNewStopScheduleCreateToken(path, value)
+		} else if strings.Contains(kve.Path, StopScheduleCreateTokenPath) {
+			m.handleNewStopScheduleCreateToken(kve.Path, kve.Value)
 		}
 
 		return nil
@@ -1520,7 +1520,7 @@ func (m *CommandListener) ListenTokens() {
 			if r > 0 {
 				logging.Errorf("CommandListener: metakv notifier failed (%v)..Restarting %v", err, r)
 			}
-			err = metakv.RunObserveChildren(CommandMetakvDir, metaKVCallback, m.cancelCh)
+			err = metakv.RunObserveChildrenV2(CommandMetakvDir, metaKVCallback, m.cancelCh)
 			return err
 		}
 

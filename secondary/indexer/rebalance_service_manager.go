@@ -2290,7 +2290,7 @@ func (m *ServiceMgr) listenMoveIndex() {
 
 	cancel := make(chan struct{})
 	for {
-		err := metakv.RunObserveChildren(RebalanceMetakvDir, m.processMoveIndex, cancel)
+		err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, m.processMoveIndex, cancel)
 		if err != nil {
 			l.Infof("ServiceMgr::listenMoveIndex metakv err %v. Retrying...", err)
 			time.Sleep(2 * time.Second)
@@ -2299,16 +2299,15 @@ func (m *ServiceMgr) listenMoveIndex() {
 
 }
 
-func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}) error {
-
-	if path == MoveIndexTokenPath {
-		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %v", path, value)
+func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
+	if kve.Path == MoveIndexTokenPath {
+		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %v", kve.Path, kve.Value)
 
 		var rebalToken RebalanceToken
-		if value == nil { //move index token deleted
+		if kve.Value == nil { //move index token deleted
 			return nil
 		} else {
-			if err := json.Unmarshal(value, &rebalToken); err != nil {
+			if err := json.Unmarshal(kve.Value, &rebalToken); err != nil {
 				l.Errorf("ServiceMgr::processMoveIndex Error reading move index token %v", err)
 				return err
 			}

@@ -48,11 +48,11 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 }
 
 func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
-	metaKvCb := func(path string, val []byte, rev interface{}) error {
-		if path == IndexingSettingsMetaPath {
-			logging.Infof("New settings received: \n%s", string(val))
+	metaKvCb := func(kve metakv.KVEntry) error {
+		if kve.Path == IndexingSettingsMetaPath {
+			logging.Infof("New settings received: \n%s", string(kve.Value))
 			config := SystemConfig.FilterConfig(".settings.")
-			config.Update(val)
+			config.Update(kve.Value)
 			callb(config)
 		}
 		return nil
@@ -63,7 +63,7 @@ func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 			if r > 0 {
 				logging.Errorf("metakv notifier failed (%v)..Retrying %v", err, r)
 			}
-			err = metakv.RunObserveChildren(IndexingSettingsMetaDir, metaKvCb, cancelCh)
+			err = metakv.RunObserveChildrenV2(IndexingSettingsMetaDir, metaKvCb, cancelCh)
 			return err
 		}
 		rh := NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)
