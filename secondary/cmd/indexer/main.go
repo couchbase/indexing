@@ -50,7 +50,8 @@ func main() {
 	certFile := fset.String("certFile", "", "Index https X509 certificate file")
 	keyFile := fset.String("keyFile", "", "Index https cert key file")
 	isEnterprise := fset.Bool("isEnterprise", true, "Enterprise Edition")
-	isIPv6 := fset.Bool("ipv6", false, "IPV6 cluster")
+	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
+	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
@@ -74,6 +75,15 @@ func main() {
 		}
 	}
 
+	var isIPv6 bool
+	var err error
+
+	isIPv6, err = common.GetIPv6FromParam(*ipv4, *ipv6)
+	if err != nil {
+		logging.Fatalf("IsIPv6FromParam returns error: err=%v ipv4=%v ipv6=%v", err, *ipv4, *ipv6)
+		common.CrashOnError(err)
+	}
+
 	go common.ExitOnStdinClose()
 
 	config := common.SystemConfig
@@ -94,7 +104,7 @@ func main() {
 	config.SetValue("indexer.log_dir", *logDir)
 	config.SetValue("indexer.nodeuuid", *nodeuuid)
 	config.SetValue("indexer.isEnterprise", *isEnterprise)
-	config.SetValue("indexer.isIPv6", *isIPv6)
+	config.SetValue("indexer.isIPv6", isIPv6)
 
 	// Prior to watson (4.5 version) storage_dir parameter was converted
 	// to lower case. Post watson, the plan is to keep the parameter
@@ -163,7 +173,9 @@ func main() {
 		*/
 	}
 
-	common.SetIpv6(*isIPv6)
+	logging.Infof("Setting ipv6=%v", isIPv6)
+
+	common.SetIpv6(isIPv6)
 
 	_, msg := indexer.NewIndexer(config)
 
