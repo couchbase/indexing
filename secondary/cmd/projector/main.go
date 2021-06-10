@@ -41,10 +41,12 @@ func argParse() string {
 	fset.StringVar(&options.loglevel, "logLevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
 	fset.StringVar(&options.auth, "auth", "", "Auth user and password")
 	fset.StringVar(&options.diagDir, "diagDir", "./", "Directory for writing projector diagnostic information")
-	fset.BoolVar(&options.isIPv6, "ipv6", false, "IPV6 cluster")
 	fset.StringVar(&options.certFile, "certFile", "", "Index https X509 certificate file")
 	fset.StringVar(&options.keyFile, "keyFile", "", "Index https cert key file")
 	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
+
+	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
+	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
 
 	logging.Infof("Parsing the args")
 
@@ -57,6 +59,17 @@ func argParse() string {
 			}
 		}
 	}
+
+	var isIPv6 bool
+	var err error
+
+	isIPv6, err = c.GetIPv6FromParam(*ipv4, *ipv6)
+	if err != nil {
+		logging.Fatalf("IsIPv6FromParam returns error: err=%v ipv4=%v ipv6=%v", err, *ipv4, *ipv6)
+		c.CrashOnError(err)
+	}
+
+	options.isIPv6 = isIPv6
 
 	args := fset.Args()
 	if len(args) == 0 {
@@ -110,6 +123,8 @@ func main() {
 
 	logging.Infof("%v\n", c.LogOs())
 	logging.Infof("%v\n", c.LogRuntime())
+
+	logging.Infof("Setting ipv6=%v", options.isIPv6)
 
 	c.SetIpv6(options.isIPv6)
 
