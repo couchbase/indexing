@@ -2592,9 +2592,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.rebalance.startPhaseBeginTimeout": ConfigValue{
-		60,
+		600,
 		"wait time(in seconds) for Start Phase to begin after Prepare Phase",
-		60,
+		600,
 		false, // mutable
 		false, // case-insensitive
 	},

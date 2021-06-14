@@ -84,6 +84,7 @@ type rebalanceContext struct {
 	rev    uint64
 }
 
+// incRev increments the rebalanceContext revision number and returns the OLD value.
 func (ctx *rebalanceContext) incRev() uint64 {
 	curr := ctx.rev
 	ctx.rev++
@@ -603,7 +604,7 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		}
 	}
 
-	m.setStateIsBalanced(true)
+	m.setStateIsBalanced(true) // kludge to disable UI "Rebalance" button during rebalance as ns_server doesn't
 	return nil
 }
 
@@ -835,6 +836,7 @@ func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
 
 }
 
+// initPreparePhaseRebalance is a helper for prepareRebalance.
 func (m *ServiceMgr) initPreparePhaseRebalance() error {
 
 	err := m.registerRebalanceRunning(true)
@@ -1235,6 +1237,7 @@ func (m *ServiceMgr) cleanupLocalRToken() error {
 	return nil
 }
 
+// monitorStartPhaseInit runs in a goroutine and checks whether rebalanceToken is created in a reasonable time.
 func (m *ServiceMgr) monitorStartPhaseInit(stopch StopChannel) error {
 
 	cfg := m.config.Load()
@@ -1254,7 +1257,7 @@ loop:
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				if m.rebalanceToken == nil && elapsed > startPhaseBeginTimeout {
-					l.Infof("ServiceMgr::monitorStartPhaseInit Timout Waiting for RebalanceToken. Cleanup Prepare Phase")
+					l.Infof("ServiceMgr::monitorStartPhaseInit Timeout Waiting for RebalanceToken. Cleanup Prepare Phase")
 					//TODO handle server side differently
 					m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 					done = true
