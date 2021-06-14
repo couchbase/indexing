@@ -28,7 +28,7 @@ start_cluster() {
     echo "Starting server: attempt $a"
     stop_cluster
     cd $WORKSPACE/ns_server
-    ./cluster_run -n4 1>$WORKSPACE/run.log 2>&1 &
+    ./cluster_run -n4 --dont-rename 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
