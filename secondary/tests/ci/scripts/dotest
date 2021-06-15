@@ -72,7 +72,7 @@ stop_cluster() {
   sleep 10
   echo "Process list after stopping cluster"
   processes=$(ps aux)
-  echo "$processes
+  echo "$processes"
 }
 
 collect_logs() {
