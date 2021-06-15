@@ -39,7 +39,7 @@ start_cluster() {
       sleep 3
     done
     test "$ok_run" || continue
-    sleep 90
+    sleep 30
     ./cluster_connect -n2 -s 1500 -I 1500 -T n0:kv+n1ql,n1:kv+index >$WORKSPACE/run.log 2>&1 &
     for i in {1..120}; do
       grep -qs 'Bucket "default" marked as warmed' logs/n_0/info.log && \
@@ -108,6 +108,8 @@ error_email() {
 error_exit() {
   echo "</pre><h4>Testing Failed: $1</h4><pre>"
   echo "$2"
+  processes=$(ps aux)
+  echo "$processes"
   collect_logs
   stop_cluster
   for patch_id in `cat ~/gerrit.list`; do
