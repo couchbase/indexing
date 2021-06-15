@@ -70,6 +70,9 @@ stop_cluster() {
   make dataclean 1>/dev/null 2>&1
   sudo rm -f /tmp/core*
   sleep 10
+  echo "Process list after stopping cluster"
+  processes=$(ps aux)
+  echo "$processes
 }
 
 collect_logs() {
