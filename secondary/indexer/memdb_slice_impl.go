@@ -923,7 +923,7 @@ type memdbSnapshot struct {
 	refCount int32
 }
 
-// Creates an open snapshot handle from snapshot info
+// OpenSnapshot creates an open snapshot handle from snapshot info.
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
 func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
@@ -1074,6 +1074,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	}
 }
 
+// cleanupOldSnapshotFiles deletes old disk snapshots.
 func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotInfo) {
 
 	var seqTs Timestamp
@@ -1104,16 +1105,14 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 	//used for recovery
 	maxDiskSnaps := mdb.maxDiskSnaps
 	if sinfo.IsOSOSnap() {
-		maxDiskSnaps = 1
 		keepn = 1
+		maxDiskSnaps = 1
 	}
 
 	infos, manifests, _ := mdb.getSnapshots()
-
+	numDiskSnapshots := len(manifests)
 	if len(manifests) > keepn {
-
 		for i := 0; i < len(manifests)-keepn; i++ {
-
 			file := manifests[len(manifests)-i-1]
 			snapInfo := infos[len(infos)-i-1]
 			snapTsVbuuid := snapInfo.Timestamp()
@@ -1127,6 +1126,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 					"Removing disk snapshot %v. Num snapshots %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, dir, len(manifests)-i)
 				os.RemoveAll(dir)
+				numDiskSnapshots--
 			} else {
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Skipped disk snapshot cleanup %v. Num snapshots %v. ",
@@ -1135,6 +1135,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 			}
 		}
 	}
+	mdb.idxStats.numDiskSnapshots.Set(int64(numDiskSnapshots))
 }
 
 func (mdb *memdbSlice) cleanupAllOldSnapshotFiles() {
@@ -1287,6 +1288,7 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	return nil
 }
 
+// updateStatsFromSnapshotMeta updates the slice stats from those available in SnapshotInfo.
 func (mdb *memdbSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 
 	// Update stats *if* available in snapshot info
@@ -1316,6 +1318,7 @@ func (mdb *memdbSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	}
 }
 
+// loadSnapshot loads a persisted snapshot back from disk.
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	defer func() {
 		if r := recover(); r != nil || err != nil {
