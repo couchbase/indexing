@@ -3016,7 +3016,7 @@ func (m *requestHandlerContext) handleScheduleCreateRequest(w http.ResponseWrite
 	send(http.StatusOK, w, "OK")
 }
 
-func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.ScheduleCreateRequest) (string, string, string, error) {
+func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.ScheduleCreateRequest) (string, string, string, error) {
 
 	// Check for all possible fail-fast situations. Fail scheduling of index
 	// creation if any of the required preconditions are not satisfied.
@@ -3029,7 +3029,7 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 			return "", "", "", err
 		}
 		if common.IsPartitioned(defn.PartitionScheme) {
-			err := errors.New("Index Partitining is not supported in non-Enterprise Edition")
+			err := errors.New("Index Partitioning is not supported in non-Enterprise Edition")
 			return "", "", "", err
 		}
 	}
@@ -3038,20 +3038,36 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 	var bucketUUID, scopeId, collectionId string
 	var err error
 
-	bucketUUID, err = m.getBucketUUID(defn.Bucket)
-	if err != nil {
+	cinfo := m.mgr.reqcic.GetClusterInfoCache()
+	if cinfo == nil {
+		errMsg := "validateScheduleCreateRequest: ClusterInfoCache unavailable in IndexManager"
+		logging.Errorf(errMsg)
+		err = errors.New(errMsg)
 		return "", "", "", err
 	}
 
+	err = cinfo.FetchBucketInfo(defn.Bucket)
+	if err != nil {
+		errMsg := "validateScheduleCreateRequest: ClusterInfoCache unable to FetchBucketInfo"
+		logging.Errorf(errMsg)
+		err = errors.New(errMsg)
+		return "", "", "", err
+	}
+
+	err = cinfo.FetchManifestInfo(defn.Bucket)
+	if err != nil {
+		errMsg := "validateScheduleCreateRequest: ClusterInfoCache unable to FetchManifestInfo"
+		logging.Errorf(errMsg)
+		err = errors.New(errMsg)
+		return "", "", "", err
+	}
+
+	bucketUUID = cinfo.GetBucketUUID(defn.Bucket)
 	if bucketUUID == common.BUCKET_UUID_NIL {
 		return "", "", "", common.ErrBucketNotFound
 	}
 
-	scopeId, collectionId, err = m.getScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
-	if err != nil {
-		return "", "", "", err
-	}
-
+	scopeId, collectionId = cinfo.GetScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
 	if scopeId == collections.SCOPE_ID_NIL {
 		return "", "", "", common.ErrScopeNotFound
 	}
@@ -3175,9 +3191,9 @@ RETRY:
 }
 
 func (m *requestHandlerContext) processScheduleCreateRequest(req *client.ScheduleCreateRequest) error {
-	bucketUUID, scopeId, collectionId, err := m.validateScheduleCreateRequst(req)
+	bucketUUID, scopeId, collectionId, err := m.validateScheduleCreateRequest(req)
 	if err != nil {
-		logging.Errorf("requestHandlerContext: Error in validateScheduleCreateRequst %v", err)
+		logging.Errorf("requestHandlerContext: Error in validateScheduleCreateRequest %v", err)
 		return err
 	}
 

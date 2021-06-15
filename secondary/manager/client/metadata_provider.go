@@ -943,29 +943,28 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
 	startTm := time.Now()
 
+	cinfo, err := c.FetchNewClusterInfoCache2(o.clusterUrl, c.DEFAULT_POOL, "waitForScheduledIndex")
+	if err != nil {
+		return err
+	}
+
 	checkValidKeyspace := func() (bool, error) {
 		//
 		// Keyspace validation happens before posting shedule create token.
 		// Here, the purpose of keyspace validation is only to check for
 		// changes in keyspace if any. So, no need to retry.
 		//
-
-		bucketUUID, err := c.GetBucketUUID(o.clusterUrl, idxDefn.Bucket)
+		err = cinfo.FetchForBucket(idxDefn.Bucket, false, false, true, true)
 		if err != nil {
 			return false, err
 		}
 
+		bucketUUID := cinfo.GetBucketUUID(idxDefn.Bucket)
 		if bucketUUID != tok.BucketUUID {
 			return false, nil
 		}
 
-		scopeId, collId, err1 := c.GetScopeAndCollectionID(o.clusterUrl, idxDefn.Bucket,
-			idxDefn.Scope, idxDefn.Collection)
-
-		if err1 != nil {
-			return false, err1
-		}
-
+		scopeId, collId := cinfo.GetScopeAndCollectionID(idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
 		if scopeId != tok.ScopeId || collId != tok.CollectionId {
 			return false, nil
 		}
@@ -2001,7 +2000,7 @@ func (o *MetadataProvider) prepareNodeList(nodeList []string, watcherMap map[c.I
 		for indexerId, _ := range watcherMap {
 			watcher, err := o.findWatcherByIndexerId(indexerId)
 			if err != nil {
-				return nil, errors.New("Fail to invokve planner.  Some of the indexers may be down or network partitioned from query process.")
+				return nil, errors.New("Fail to invoke planner.  Some of the indexers may be down or network partitioned from query process.")
 			}
 			nodes = append(nodes, strings.ToLower(watcher.getNodeAddr()))
 		}
@@ -2379,7 +2378,7 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 	}
 
 	if partitionScheme == c.SINGLE && len(partitionKeys) != 0 {
-		return errors.New(fmt.Sprintf("Fails to create index.  Cannot suppport partition keys for non-partitioned index."))
+		return errors.New(fmt.Sprintf("Fails to create index.  Cannot support partition keys for non-partitioned index."))
 	}
 
 	if partitionScheme == c.SINGLE {
@@ -2689,7 +2688,7 @@ func (o *MetadataProvider) getArrSizeParam(plan map[string]interface{}) (uint64,
 	}
 
 	if arrSize < 0 {
-		return 0, errors.New("Fails to create index.  Parameter arrSize mrust be a positive value."), false
+		return 0, errors.New("Fails to create index.  Parameter arrSize must be a positive value."), false
 	}
 
 	return arrSize, nil, false
@@ -2718,7 +2717,7 @@ func (o *MetadataProvider) getNumDocParam(plan map[string]interface{}) (uint64, 
 	}
 
 	if numDoc < 0 {
-		return 0, errors.New("Fails to create index.  Parameter numDoc mrust be a positive value."), false
+		return 0, errors.New("Fails to create index.  Parameter numDoc must be a positive value."), false
 	}
 
 	return numDoc, nil, false
@@ -2747,7 +2746,7 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	}
 
 	if residentRatio < 0 {
-		return 0, errors.New("Fails to create index.  Parameter residentRatio mrust be a positive value."), false
+		return 0, errors.New("Fails to create index.  Parameter residentRatio must be a positive value."), false
 	}
 
 	return residentRatio, nil, false
@@ -2927,7 +2926,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 
 		if len(errStr) != 0 {
 			msg := fmt.Sprintf("Fail to drop index on some indexer nodes.  Error=%s.  ", errStr)
-			msg += "If cluster or indexer is currently unavailable, the operation will automaticaly retry after cluster is back to normal."
+			msg += "If cluster or indexer is currently unavailable, the operation will automatically retry after cluster is back to normal."
 			return errors.New(msg)
 		}
 	}
@@ -3287,7 +3286,7 @@ func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name, bucket, sco
 		if numReplica2 != nil && numReplica2.IsValid() {
 			result, merged, err := numReplica.MergeWith(*numReplica2)
 			if err != nil {
-				logging.Errorf("Cannot merge counter for index defnition %v from indexer %v", defnId, indexerId)
+				logging.Errorf("Cannot merge counter for index definition %v from indexer %v", defnId, indexerId)
 				return nil, err
 			}
 			if merged {
@@ -4743,7 +4742,7 @@ func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket, sc
 				}
 			}
 		} else {
-			logging.Verbosef("Find orphan index %v in topology but watcher has not recieved corresponding definition", defnId)
+			logging.Verbosef("Find orphan index %v in topology but watcher has not received corresponding definition", defnId)
 		}
 	}
 

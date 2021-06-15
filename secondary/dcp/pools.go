@@ -721,8 +721,11 @@ loop:
 	return nil
 }
 
-func (p *Pool) RefreshManifest(bucket string) error {
+func (p *Pool) RefreshManifest(bucket string, resetManifestMap bool) error {
 	retryCount := 0
+	if resetManifestMap {
+		p.Manifest = make(map[string]*collections.CollectionManifest)
+	}
 	// Compute the minimum version among all the nodes
 	version := p.getVersion()
 retry:
@@ -787,7 +790,7 @@ func (c *Client) GetPoolWithBucket(name string, bucketn string) (p Pool, err err
 	return
 }
 
-func (c *Client) CallPoolURI(name string) (p Pool, err error) {
+func (c *Client) GetPoolWithoutRefresh(name string) (p Pool, err error) {
 	var poolURI string
 	for _, p := range c.Info.Pools {
 		if p.Name == name {
