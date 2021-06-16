@@ -37,7 +37,6 @@ def tryhandler(handler) :
         handler()
     except:
         raise
-        pass
 
 def normalizeJson(value) :
     try :

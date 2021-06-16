@@ -216,8 +216,8 @@ func ExecuteRebalanceInternal(clusterUrl string,
 // n2 (replica 1), n3 (replica 2) in a 4 node cluster (n1,n2,n3,n4) and
 // if planner has generated a placement to move replica 0 from n1->n2,
 // replica 1 from n2->n3 and replica 3 from n3->n4, the movement of replicas
-// from n2 and n3 are unnecessary as replica instaces exist on the node before
-// and after movement. filterSolution will elimimate all such movements and
+// from n2 and n3 are unnecessary as replica instances exist on the node before
+// and after movement. filterSolution will eliminate all such movements and
 // update the solution to have one final movement from n1->n4
 //
 // Similarly, if there are any cyclic movements i.e. n1->n2,n2->n3,n3->n1,
@@ -315,7 +315,7 @@ func filterSolution(placement []*IndexerNode) {
 								index.initialNode.NodeId, preFilterDest.NodeId, index.destNode.NodeId)
 						}
 					} else {
-						// Initial destination and final destiantion are same. No change
+						// Initial destination and final destination are same. No change
 						// in placement required
 					}
 				} else {
@@ -761,7 +761,7 @@ func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*Inde
 		return rebalance(command, config, p, indexes, deletedNodes)
 
 	} else {
-		panic(fmt.Sprintf("uknown command: %v", command))
+		panic(fmt.Sprintf("unknown command: %v", command))
 	}
 
 	return nil, nil, nil

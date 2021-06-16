@@ -44,14 +44,16 @@ type Command struct {
 	QueryPort string
 	Auth      string
 	// options for create-index.
-	Using     string
-	ExprType  string
-	PartnStr  string
-	WhereStr  string
-	SecStrs   []string
-	IsPrimary bool
-	With      string
-	WithPlan  map[string]interface{}
+	Using         string
+	ExprType      string
+	PartnStr      string
+	WhereStr      string
+	SecStrs       []string
+	IsPrimary     bool
+	With          string
+	WithPlan      map[string]interface{}
+	Scheme        c.PartitionScheme
+	PartitionKeys []string
 	// options for build index
 	Bindexes []string
 	// options for Range, Statistics, Count
@@ -85,9 +87,9 @@ type Command struct {
 // ParseArgs into Command object, return the list of arguments,
 // flagset used for parseing and error if any.
 func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
-	var fields, bindexes string
+	var fields, bindexes, partitionKeys string
 	var inclusion uint
-	var equal, low, high string
+	var equal, low, high, scheme string
 	var useSessionCons bool
 
 	cmdOptions := &Command{Consistency: c.AnyConsistency}
@@ -132,6 +134,9 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.Int64Var(&cmdOptions.WaitForClientBootstrap, "bootstrap_wait", 60, "Time (in seconds) cbindex will wait for client bootstrap")
 	fset.Int64Var(&cmdOptions.NumBuilds, "num_builds", 10, "Number of builds that can happen simultaneously across multiple collections")
 
+	fset.StringVar(&scheme, "scheme", string(c.SINGLE), "Partition scheme for partitioned index.")
+	fset.StringVar(&partitionKeys, "partitionKeys", "", "Comma separated fields for partition key for partitioned index.")
+
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
 	cmdOptions.PartnStr = ""
@@ -173,6 +178,41 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	}
 	cmdOptions.Low = c.SecondaryKey(Arg2Key([]byte(low)))
 	cmdOptions.High = c.SecondaryKey(Arg2Key([]byte(high)))
+
+	// Populate partition keys and scheme
+	cmdOptions.Scheme = c.PartitionScheme(scheme)
+	switch cmdOptions.Scheme {
+
+	case c.KEY:
+		if partitionKeys == "" {
+			logging.Errorf("Missing input partition keys")
+			os.Exit(1)
+		}
+
+		cmdOptions.PartitionKeys = make([]string, 0)
+		if partitionKeys != "" {
+			for _, partnKey := range strings.Split(partitionKeys, ",") {
+				key, err := n1ql.ParseExpression(partnKey)
+				if err != nil {
+					msgf := "Error in ParseExpression: Invalid partn key (%v) error:%v\n"
+					return nil, nil, fset, fmt.Errorf(msgf, partnKey, err)
+				}
+
+				keyStr := expression.NewStringer().Visit(key)
+				cmdOptions.PartitionKeys = append(cmdOptions.PartitionKeys, keyStr)
+			}
+		}
+
+	case c.SINGLE:
+		if partitionKeys != "" {
+			logging.Errorf("Unexpected partition keys %v for partition scheme %v", partitionKeys, cmdOptions.Scheme)
+			os.Exit(1)
+		}
+
+	default:
+		logging.Errorf("Unsupported partition scheme %v", cmdOptions.Scheme)
+		os.Exit(1)
+	}
 
 	// with
 	if len(cmdOptions.With) > 0 {
@@ -336,7 +376,7 @@ func HandleCommand(
 		}
 		defnID, err = client.CreateIndex4(
 			iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
-			cmd.WhereStr, cmd.SecStrs, nil, cmd.IsPrimary, c.SINGLE, nil,
+			cmd.WhereStr, cmd.SecStrs, nil, cmd.IsPrimary, cmd.Scheme, cmd.PartitionKeys,
 			[]byte(cmd.With))
 		if err == nil {
 			fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",

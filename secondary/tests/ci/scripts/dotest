@@ -1,4 +1,4 @@
-#"!/bin/bash
+#!/bin/bash
 
 source ~/.cienv
 
@@ -39,7 +39,7 @@ start_cluster() {
       sleep 3
     done
     test "$ok_run" || continue
-    sleep 30
+    sleep 180
     ./cluster_connect -n2 -s 1500 -I 1500 -T n0:kv+n1ql,n1:kv+index >$WORKSPACE/run.log 2>&1 &
     for i in {1..120}; do
       grep -qs 'Bucket "default" marked as warmed' logs/n_0/info.log && \
@@ -233,7 +233,7 @@ fi
 export phase=integration
 if [[ "$MODE" == *"$phase"* ]]; then
   echo "</pre><h4>Integration tests</h4><pre>"
-  export LD_LIBRARY_PATH=""
+  #export LD_LIBRARY_PATH=""
   cd $WORKSPACE/testrunner
   [ "$STORAGE" = "memdb" ] && export TYPE="memory_optimized"
   [ "$STORAGE" = "plasma" ] && export TYPE="plasma"

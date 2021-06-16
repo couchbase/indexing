@@ -402,7 +402,7 @@ func (r *Rebalancer) observeRebalance() {
 
 	<-r.waitForTokenPublish
 
-	err := metakv.RunObserveChildren(RebalanceMetakvDir, r.processTokens, r.metakvCancel)
+	err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, r.processTokens, r.metakvCancel)
 	if err != nil {
 		l.Infof("Rebalancer::observeRebalance Exiting On Metakv Error %v", err)
 		r.finish(err)
@@ -415,26 +415,26 @@ func (r *Rebalancer) observeRebalance() {
 // processTokens is the callback registered on the metakv transfer token directory for
 // a rebalance and gets called by metakv for each token and each change to a token.
 // This decodes the token and hands it off to processTransferToken.
-func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) error {
+func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 
-	if path == RebalanceTokenPath || path == MoveIndexTokenPath {
-		l.Infof("Rebalancer::processTokens RebalanceToken %v %v", path, value)
+	if kve.Path == RebalanceTokenPath || kve.Path == MoveIndexTokenPath {
+		l.Infof("Rebalancer::processTokens RebalanceToken %v %v", kve.Path, kve.Value)
 
-		if value == nil {
+		if kve.Value == nil {
 			l.Infof("Rebalancer::processTokens Rebalance Token Deleted. Mark Done.")
 			r.cancelMetakv()
 			r.finish(nil)
 		}
-	} else if strings.Contains(path, TransferTokenTag) {
-		if value != nil {
-			ttid, tt, err := r.decodeTransferToken(path, value)
+	} else if strings.Contains(kve.Path, TransferTokenTag) {
+		if kve.Value != nil {
+			ttid, tt, err := r.decodeTransferToken(kve.Path, kve.Value)
 			if err != nil {
 				l.Errorf("Rebalancer::processTokens Unable to decode transfer token. Ignored")
 				return nil
 			}
 			r.processTransferToken(ttid, tt)
 		} else {
-			l.Infof("Rebalancer::processTokens Received empty or deleted transfer token %v", path)
+			l.Infof("Rebalancer::processTokens Received empty or deleted transfer token %v", kve.Path)
 		}
 	}
 

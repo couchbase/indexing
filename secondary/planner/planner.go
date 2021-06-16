@@ -24,7 +24,7 @@ import (
 
 //TODO
 
-// - retry proxy when there is transient netowrk error
+// - retry proxy when there is transient network error
 // - tuning parameter (spock)
 // - generate cpu usage stats for index (spock)
 // - generate move index statement (spock)
@@ -190,7 +190,7 @@ type IndexerNode struct {
 	isNew    bool
 	exclude  string
 
-	// intput/output: planning
+	// input/output: planning
 	meetConstraint bool
 	numEmptyIndex  int
 	hasEligible    bool
@@ -579,7 +579,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			}
 		}
 
-		logging.Infof("Planner::Fail to create plan satisyfig constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
+		logging.Infof("Planner::Fail to create plan satisfying constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
 			p.Try, formatTimeStr(uint64(time.Now().Sub(startTime).Nanoseconds())))
 
 		// reduce minimum memory for each round
@@ -601,7 +601,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			// can relax constraint if there is deleted node or it is not rebalancing
 			solution.enforceConstraint = !(solution.numDeletedNode > 0 || solution.command == CommandPlan || solution.command == CommandRepair)
 			if !solution.enforceConstraint {
-				logging.Warnf("Unable to find a solution with rersource costraint.  Relax resource constraint check.")
+				logging.Warnf("Unable to find a solution with resource constraint.  Relax resource constraint check.")
 			}
 		}
 
@@ -702,7 +702,7 @@ func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, n
 	}
 
 	if len(healthy)+len(unhealthy)-decrement <= 0 {
-		return nil, nil, fmt.Errorf("Index only has %v replica.  Cannot satsify request to drop %v copy", len(healthy)+len(unhealthy)-1, decrement)
+		return nil, nil, fmt.Errorf("Index only has %v replica.  Cannot satisfy request to drop %v copy", len(healthy)+len(unhealthy)-1, decrement)
 	}
 
 	reverse := func(arr []int) {
@@ -765,7 +765,7 @@ func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, n
 		return solution, result, nil
 	}
 
-	return nil, nil, fmt.Errorf("Unsable to drop %v replica without violating availability constraint", decrement)
+	return nil, nil, fmt.Errorf("Unable to drop %v replica without violating availability constraint", decrement)
 }
 
 //
@@ -838,7 +838,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 					positiveMove++
 				}
 
-				// if force=true, then jsut accept the new solution.  Do
+				// if force=true, then just accept the new solution.  Do
 				// not need to change the temperature since new solution
 				// could have higher score.
 				if force || prob > rs.Float64() {
@@ -859,20 +859,20 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 			}
 
 			if final {
-				logging.Infof("Planner::finalising the solution as final solution is found.")
+				logging.Infof("Planner::finalizing the solution as final solution is found.")
 				done = true
 				break
 			}
 		}
 
 		if int64(move-lastMove) < MinNumMove && int64(positiveMove-lastPositiveMove) < MinNumPositiveMove {
-			logging.Infof("Planner::finalising the solution as there are no more valid index movements.")
+			logging.Infof("Planner::finalizing the solution as there are no more valid index movements.")
 			done = true
 		}
 
 		currCost := current.cost.ComputeResourceVariation()
 		if p.threshold > 0 && currCost <= p.threshold {
-			logging.Infof("Planner::finalising the solution as the current resource variation is under control (%v).", currCost)
+			logging.Infof("Planner::finalizing the solution as the current resource variation is under control (%v).", currCost)
 			done = true
 		}
 
@@ -971,7 +971,7 @@ func (p *SAPlanner) runIteration(i int, s *Solution) bool {
 
 		// Planner decides not to rebuild lost indexes before it decides not
 		// to enforce resource constraints. This means that if the cluster is
-		// resuorce constrained, there is no need to overburden the cluster
+		// resource constrained, there is no need to overburden the cluster
 		// further, by adding new indexes.
 		if !p.constraint.SatisfyClusterResourceConstraint(s) {
 			logging.Infof("Planner::Even though there are optional indexes, the cluster" +
@@ -1111,7 +1111,7 @@ func (p *SAPlanner) PrintCost() {
 }
 
 //
-// This function finds a neigbhor placement layout using
+// This function finds a neighbor placement layout using
 // given placement method.
 //
 func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
@@ -1198,9 +1198,9 @@ func (p *SAPlanner) getAcceptProbability(old_cost float64, new_cost float64, tem
 	}
 
 	// new_cost is higher or equal to old_cost.  But still consider this solution based on probability.
-	// Low propbabilty when
+	// Low probability when
 	// 1) low temperature (many iterations have passed)
-	// 2) differnce between new_cost and old_cost are high
+	// 2) difference between new_cost and old_cost are high
 	cost := (old_cost - new_cost)
 	return math.Exp(cost / temperature)
 }
@@ -1327,7 +1327,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 			if !found {
 				keepCandidates = append(keepCandidates, index)
 			} else {
-				logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v,%v,%v) from ejected node %v",
+				logging.Warnf("There is more replica than available nodes.  Will not move index replica (%v,%v,%v,%v) from ejected node %v",
 					index.Bucket, index.Scope, index.Collection, index.Name, indexer.NodeId)
 
 				c := []*IndexUsage{index}
@@ -1595,7 +1595,7 @@ func (s *Solution) UseLiveData() bool {
 }
 
 //
-// Get the constriant method for the solution
+// Get the constraint method for the solution
 //
 func (s *Solution) getConstraintMethod() ConstraintMethod {
 	return s.constraint
@@ -2174,8 +2174,8 @@ func (s *Solution) ComputeEmptyIndexDistribution() (float64, float64) {
 }
 
 //
-// This function returns the residual memory after subtracting ONLY the estimated emtpy index memory.
-// The cost function tries to maximize the total memory of emtpy index (or minimize
+// This function returns the residual memory after subtracting ONLY the estimated empty index memory.
+// The cost function tries to maximize the total memory of empty index (or minimize
 // the residual memory after subtracting empty index).
 // The residual memory is further calibrated by empty index usage ratio (the total empty index memory over the total memory)
 // If there is no empty index, this function returns 0.
@@ -2328,7 +2328,7 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 			// check replica for each partition (including self)
 			if index.IsReplica(u) {
 				if index.Instance == nil {
-					logging.Warnf("Cannot determinte replicaId for index (%v,%v,%v,%v)", index.Name, index.Bucket, index.Scope, index.Collection)
+					logging.Warnf("Cannot determine replicaId for index (%v,%v,%v,%v)", index.Name, index.Bucket, index.Scope, index.Collection)
 					return (map[int]common.IndexInstId)(nil)
 				}
 				found[index.Instance.ReplicaId] = index.InstId
@@ -2337,7 +2337,7 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 			// check instance/replica for the index definition (including self)
 			if index.IsSameIndex(u) {
 				if index.Instance == nil {
-					logging.Warnf("Cannot determinte replicaId for index (%v,%v,%v,%v)", index.Name, index.Bucket, index.Scope, index.Collection)
+					logging.Warnf("Cannot determine replicaId for index (%v,%v,%v,%v)", index.Name, index.Bucket, index.Scope, index.Collection)
 					return (map[int]common.IndexInstId)(nil)
 				}
 				instances[index.InstId] = index.Instance.ReplicaId
@@ -2453,8 +2453,8 @@ func (s *Solution) findNumServerGroup() int {
 }
 
 //
-// This function recalculates the index and indexer sizes baesd on sizing formula.
-// Data captured from live cluser will not be overwritten.
+// This function recalculates the index and indexer sizes based on sizing formula.
+// Data captured from live cluster will not be overwritten.
 //
 func (s *Solution) calculateSize() {
 
@@ -2516,7 +2516,7 @@ func (s *Solution) findNumExcludeInNodes() int {
 }
 
 //
-// Find num of emptpy node
+// Find num of empty node
 //
 func (s *Solution) findNumEmptyNodes() int {
 
@@ -2539,7 +2539,7 @@ func (s *Solution) findNumLiveNode() int {
 }
 
 //
-// find number of availabe live node (excluding ejected node and excluded node)
+// find number of available live node (excluding ejected node and excluded node)
 //
 func (s *Solution) findNumAvailLiveNode() int {
 
@@ -2554,7 +2554,7 @@ func (s *Solution) findNumAvailLiveNode() int {
 }
 
 //
-// Eavluate if each indexer meets constraint
+// Evaluate if each indexer meets constraint
 //
 func (s *Solution) evaluateNodes() {
 
@@ -2568,7 +2568,7 @@ func (s *Solution) evaluateNodes() {
 //
 func (s *Solution) ignoreResourceConstraint() bool {
 
-	// always honor resource constriant when doing simulation
+	// always honor resource constraint when doing simulation
 	if !s.UseLiveData() {
 		return false
 	}
@@ -2767,7 +2767,7 @@ func (s *Solution) hasHighestReplicaCountInServerGroup(u *IndexUsage) bool {
 */
 
 //
-// Does the index node has replia?
+// Does the index node has replica?
 //
 func (s *Solution) hasReplica(indexer *IndexerNode, target *IndexUsage) bool {
 
@@ -2964,17 +2964,17 @@ func (s *Solution) generateReplicaMap() {
 // For placement, planner still want to layout noUsage index such that
 // 1) indexer with more free memory will take up more partitions.
 // 2) partitions should be spread out as much as possible
-// 3) non-partiton index have different weight than individual partition of a partitioned index
+// 3) non-partition index have different weight than individual partition of a partitioned index
 //
 // It is impossible to achieve accurate number for (1) and (3) without sizing info (even with sizing,
 // it is only an approximation).    But if we make 2 assumptions, we can provide estimated sizing of partitions:
 // 1) the new index will take up the remaining free memory of all indexers
-// 2) the partiton of new index are equal size
+// 2) the partition of new index are equal size
 //
 // To estimate NoUsageInfo index size based on free memory available.
 // 1) calculates total free memory from indexers which has less than 80% memory usage
 // 2) Based on total free memory, estimates index size based on number of noUsage index.
-// 3) Estimate the partiton size
+// 3) Estimate the partition size
 //    - non-partitioned index has 1 partition, so it will take up full index size
 //    - individual partition of a partitioned index will take up (index-size / numPartition)
 // 4) Given the estimated size, if cannot find a placement solution, reduce index size by 10% and repeat (4)
@@ -2985,7 +2985,7 @@ func (s *Solution) generateReplicaMap() {
 //
 // Empty Index:
 // When an index is empty, it can have DataSize and MemUsage as zero (Actual or otherwise). Note that
-// this can heppen with MOI index created on a bucket which never had any mutations). For such indexes,
+// this can happen with MOI index created on a bucket which never had any mutations). For such indexes,
 // the index state will be ACTIVE. So, there is no need to estimate the size of such indexes.
 // But the planner cannot work with zero sized indexes. And the above mentioned strategy (i.e. index will
 // take up the remaining free memory of all indexers) will not work - as it misrepresent the actual
@@ -3358,7 +3358,7 @@ func (s *Solution) demoteEligIndex(index *IndexUsage) {
 		s.indexSGMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = sg
 	}()
 
-	// Trasfer from Replica Map
+	// Transfer from Replica Map
 	func() {
 		idx, ok := s.eligReplicaMap[index.DefnId][index.PartnId][index.Instance.ReplicaId]
 		if !ok {
@@ -3619,7 +3619,7 @@ func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUs
 
 //
 // This function determines if an index can be placed into the given node,
-// while satsifying availability and resource constraint.
+// while satisfying availability and resource constraint.
 //
 func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsage) ViolationCode {
 
@@ -3678,7 +3678,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 
 //
 // This function determines if an index can be swapped with another index in the given node,
-// while satsifying availability and resource constraint.
+// while satisfying availability and resource constraint.
 //
 func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *IndexUsage, t *IndexUsage) ViolationCode {
 
@@ -3830,7 +3830,7 @@ func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNo
 }
 
 //
-// This function determines if cluster wide constraint is satisifed.
+// This function determines if cluster wide constraint is satisfied.
 //
 func (c *IndexerConstraint) SatisfyClusterResourceConstraint(s *Solution) bool {
 
@@ -3892,7 +3892,7 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 }
 
 //
-// This function determines if cluster wide constraint is satisifed.
+// This function determines if cluster wide constraint is satisfied.
 //
 func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool {
 
@@ -4362,7 +4362,7 @@ func (o *IndexerNode) EvaluateNodeConstraint(s *Solution, canAddIndex bool, idxT
 
 	if idxRemoved != nil {
 		if o.meetConstraint {
-			// If node alreay meet constraint when an index is removed,
+			// If node already meet constraint when an index is removed,
 			// the node must be meeting constraint after the removal.
 			return
 		}
@@ -5057,7 +5057,7 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		count++
 	}
 
-	// Empty index is index with no recorded memory or cpu usage (exlcuding mem overhead).
+	// Empty index is index with no recorded memory or cpu usage (excluding mem overhead).
 	// It could be index without stats or sizing information.
 	// The cost function minimize the residual memory after subtracting the estimated empty
 	// index usage.
@@ -5501,7 +5501,7 @@ func (p *RandomPlacement) RemoveEligibleIndex(indexes []*IndexUsage) {
 // empty index is eventually build).
 //
 // Along with the cost method, this function will try to optimize the solution by
-// 1) This function move emtpy index to a indexer with higher memory per empty index.
+// 1) This function move empty index to a indexer with higher memory per empty index.
 // 2) Using cost function, it will try to get the higher mean memory per empty index
 //
 // For (1), it tries to find a better mem-per-empty-index for the index.  The node with higher
@@ -5652,7 +5652,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	for i := 0; i < retryCount; i++ {
 		p.totalIteration++
 
-		// If there is one node that does not satisfy constriant,
+		// If there is one node that does not satisfy constraint,
 		if len(constrained) == 1 {
 			if !s.constraint.CanAddNode(s) {
 				// If planner is working on a fixed cluster, then
@@ -5689,7 +5689,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		}
 
 		// Select an constrained candidate based on weighted probability
-		// The most constrained candidate has a higher probabilty to be selected.
+		// The most constrained candidate has a higher probability to be selected.
 		// This function may not return a source if all indexes are empty indexes.
 		source := getWeightedRandomNode(p.rs, constrained, loads, total)
 
@@ -6253,7 +6253,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 }
 
 //
-// Find a set of indexers do not satisfy node constriant.
+// Find a set of indexers do not satisfy node constraint.
 //
 func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint ConstraintMethod, indexers []*IndexerNode) []*IndexerNode {
 
@@ -6270,7 +6270,7 @@ func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint Constrain
 		return result
 	}
 
-	// Find out if any indexder has problem holding the indexes
+	// Find out if any indexer has problem holding the indexes
 	for _, indexer := range indexers {
 		if indexer.GetMemMin(s.UseLiveData()) > s.constraint.GetMemQuota() {
 			result = append(result, indexer)

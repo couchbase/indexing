@@ -100,6 +100,9 @@ type state struct {
 
 	servers []service.NodeID // cluster nodes; assigned but not appended, so no need for deep copy
 
+	// isBalanced tells whether GSI considers itself balanced. It is also sent to ns_server as part of
+	// GetCurrentTopology response, which uses it as one input to tell UI whether to enable the Rebalance button.
+	// (If any service reports isBalanced == false, the button becomes enabled.)
 	isBalanced bool // if true, UI Rebalance button is disabled; rev is not incremented for changes to this
 
 	rebalanceID   string
@@ -127,7 +130,7 @@ var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress an
 
 var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 
-// NewRebalanceMgr is the RebalanceMgr constructor.
+// NewRebalanceMgr is the RebalanceMgr constructor. Indexer constructs a singleton RebalanceMgr at boot.
 func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch MsgChannel, config c.Config,
 	rebalanceRunning bool, rebalanceToken *RebalanceToken) (RebalanceMgr, Message) {
 
@@ -667,7 +670,7 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load(), nil, false, nil)
+		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), nil, false, nil)
 
 	return nil
 }
@@ -1612,8 +1615,19 @@ func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 	})
 }
 
-// rebalanceDoneCallback is the Rebalancer.cb.done callback function for a Rebalance.
+// failoverDoneCallback is the Rebalancer.cb.done callback function for Failovers.
+func (m *ServiceMgr) failoverDoneCallback(err error, cancel <-chan struct{}) {
+	m.rebalanceOrFailoverDoneCallback(err, cancel, true)
+}
+
+// rebalanceDoneCallback is the Rebalancer.cb.done callback function for Rebalances.
 func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
+	m.rebalanceOrFailoverDoneCallback(err, cancel, false)
+}
+
+// rebalanceOrFailoverDoneCallback is a delegate for both failoverDoneCallback and
+// rebalanceDoneCallback. isFailover arg distinguishes between these.
+func (m *ServiceMgr) rebalanceOrFailoverDoneCallback(err error, cancel <-chan struct{}, isFailover bool) {
 
 	m.runRebalanceCallback(cancel, func() {
 
@@ -1624,22 +1638,25 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 			}()
 		}
 
-		m.onRebalanceDoneLOCKED(err, false)
+		m.onRebalanceDoneLOCKED(err, isFailover)
 	})
 }
 
-// onRebalanceDoneLOCKED caller should be holding mutex mu write locked.
-func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
-	logPrefix := "ServiceMgr::onRebalanceDoneLOCKED"
-	l.Infof("%s Rebalance Done, cancel: %v, err: %v", logPrefix, cancelRebalance, err)
-
+// onRebalanceDoneLOCKED is invoked when a Rebalance or Failover completes (succeeds or fails).
+// Non-nil err means the rebalance failed.
+// forceUnbalanced flag forces isBalanced = false (for failovers and cancels).
+// Caller should be holding mutex mu write locked.
+func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, forceUnbalanced bool) {
 	isMaster := m.rebalancer != nil
+	isBalancedNew := !forceUnbalanced // new isBalanced state to set; below should only change this to false
 	if isMaster {
-		newTask := (*service.Task)(nil)
+		newTask := (*service.Task)(nil) // no task if succeeded
 		if err != nil {
+			isBalancedNew = false
 			ctx := m.rebalanceCtx
 			rev := ctx.incRev()
 
+			// Failed rebalance task
 			newTask = &service.Task{
 				Rev:          EncodeRev(rev),
 				ID:           fmt.Sprintf("rebalance/%s", ctx.change.ID),
@@ -1653,17 +1670,10 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 					"rebalanceId": ctx.change.ID,
 				},
 			}
-			m.setStateIsBalanced(false)
-		} else if cancelRebalance == true {
-			m.setStateIsBalanced(false)
-		} else {
-			m.setStateIsBalanced(true)
 		}
 
-		if !m.cleanupPending {
-			if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
-				m.setStateIsBalanced(false)
-			}
+		if !m.cleanupPending && m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
+			isBalancedNew = false
 		}
 
 		m.rebalanceCtx = nil
@@ -1673,12 +1683,15 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 			s.rebalanceID = ""
 		})
 	} else if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
-		m.setStateIsBalanced(false)
+		isBalancedNew = false
 	}
 
+	m.setStateIsBalanced(isBalancedNew) // set new isBalanced state
 	m.rebalancer = nil
 	m.rebalancerF = nil
-	l.Infof("%s isBalanced: %v, isMaster: %v", logPrefix, m.getStateIsBalanced(), isMaster)
+	l.Infof("ServiceMgr::onRebalanceDoneLOCKED Rebalance Done: "+
+		"isBalanced %v, isMaster %v, forceUnbalanced %v, err: %v",
+		isBalancedNew, isMaster, forceUnbalanced, err)
 }
 
 // notifyWaiters sends the current (new) state to all state waiters.
@@ -1790,7 +1803,7 @@ func (m *ServiceMgr) wait(rev service.Revision,
 	select {
 	case <-cancel:
 		m.removeWaiter(ch)
-		return NewState(), service.ErrCanceled
+		return NewState(), service.ErrCanceled // this reply to the cancel gets discarded
 	case newState := <-ch:
 		return newState, nil
 	}
@@ -1855,7 +1868,6 @@ func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
 func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
 	m.rebalancer.Cancel()
 	m.onRebalanceDoneLOCKED(nil, true)
-
 	return nil
 }
 
@@ -2278,7 +2290,7 @@ func (m *ServiceMgr) listenMoveIndex() {
 
 	cancel := make(chan struct{})
 	for {
-		err := metakv.RunObserveChildren(RebalanceMetakvDir, m.processMoveIndex, cancel)
+		err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, m.processMoveIndex, cancel)
 		if err != nil {
 			l.Infof("ServiceMgr::listenMoveIndex metakv err %v. Retrying...", err)
 			time.Sleep(2 * time.Second)
@@ -2287,16 +2299,15 @@ func (m *ServiceMgr) listenMoveIndex() {
 
 }
 
-func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}) error {
-
-	if path == MoveIndexTokenPath {
-		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %v", path, value)
+func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
+	if kve.Path == MoveIndexTokenPath {
+		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %v", kve.Path, kve.Value)
 
 		var rebalToken RebalanceToken
-		if value == nil { //move index token deleted
+		if kve.Value == nil { //move index token deleted
 			return nil
 		} else {
-			if err := json.Unmarshal(value, &rebalToken); err != nil {
+			if err := json.Unmarshal(kve.Value, &rebalToken); err != nil {
 				l.Errorf("ServiceMgr::processMoveIndex Error reading move index token %v", err)
 				return err
 			}

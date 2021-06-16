@@ -73,7 +73,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			if r > 0 {
 				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting %v", err, r)
 			}
-			err = metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
+			err = metakv.RunObserveChildrenV2("/", s.metaKVCallback, s.cancelCh)
 			return err
 		}
 		rh := common.NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)
@@ -273,23 +273,22 @@ func (s *settingsManager) handleSupervisorCommands(cmd Message) {
 
 }
 
-func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
-
-	if !s.indexerReady && (path == common.IndexingSettingsMetaPath || path == indexCompactonMetaPath) {
+func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
+	if !s.indexerReady && (kve.Path == common.IndexingSettingsMetaPath || kve.Path == indexCompactonMetaPath) {
 		s.notifyPending = true
-		logging.Infof("SettingsMgr:: Dropped request %v %v. Any setting change will get applied once Indexer is ready.", path, string(value))
+		logging.Infof("SettingsMgr:: Dropped request %v %v. Any setting change will get applied once Indexer is ready.", kve.Path, string(kve.Value))
 		return nil
 	}
 
-	if path == common.IndexingSettingsMetaPath {
-		err := s.applySettings(path, value, rev)
+	if kve.Path == common.IndexingSettingsMetaPath {
+		err := s.applySettings(kve.Path, kve.Value, kve.Rev)
 		if err != nil {
 			return err
 		}
-	} else if path == indexCompactonMetaPath {
+	} else if kve.Path == indexCompactonMetaPath {
 		currentToken := s.compactionToken
-		s.compactionToken = value
-		if bytes.Equal(currentToken, value) {
+		s.compactionToken = kve.Value
+		if bytes.Equal(currentToken, kve.Value) {
 			return nil
 		}
 

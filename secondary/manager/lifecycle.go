@@ -1444,6 +1444,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	if instState != common.INDEX_STATE_READY {
 		logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
 			"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
+		err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_READY)
+		return err
 	}
 	/////////////////////////////////////////////////////
 	// Build Index

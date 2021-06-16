@@ -74,7 +74,7 @@ func NewClientSettings(needRefresh bool) *ClientSettings {
 				if r > 0 {
 					logging.Errorf("ClientSettings: metakv notifier failed (%v)..Restarting %v", err, r)
 				}
-				err = metakv.RunObserveChildren(common.IndexingSettingsMetaDir, s.metaKVCallback, s.cancelCh)
+				err = metakv.RunObserveChildrenV2(common.IndexingSettingsMetaDir, s.metaKVCallback, s.cancelCh)
 				return err
 			}
 			rh := common.NewRetryHelper(200, time.Second, 2, fn)
@@ -95,13 +95,13 @@ func (s *ClientSettings) Close() {
 	close(s.cancelCh)
 }
 
-func (s *ClientSettings) metaKVCallback(path string, value []byte, rev interface{}) error {
+func (s *ClientSettings) metaKVCallback(kve metakv.KVEntry) error {
 
-	if path == common.IndexingSettingsMetaPath {
-		logging.Infof("New settings received: \n%s", string(value))
+	if kve.Path == common.IndexingSettingsMetaPath {
+		logging.Infof("New settings received: \n%s", string(kve.Value))
 
 		config := s.config.Clone()
-		config.Update(value)
+		config.Update(kve.Value)
 		s.config = config
 
 		s.handleSettings(s.config)

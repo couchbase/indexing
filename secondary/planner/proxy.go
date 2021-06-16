@@ -32,7 +32,7 @@ import (
 // when this method is invoked for the first time
 var cinfoClient *common.ClusterInfoClient
 
-// This mutex will protect cinfoClient from mulitple initializations
+// This mutex will protect cinfoClient from multiple initializations
 // since it is possible for RetrievePlanFromCluster to get invoked
 // from multiple go-routines
 var cinfoClientMutex sync.Mutex
@@ -99,7 +99,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		}
 	}
 	cinfoClientMutex.Unlock()
-	if err != nil { // Error while initilizing clusterInfoClient
+	if err != nil { // Error while initializing clusterInfoClient
 		logging.Errorf("Planner::RetrievePlanFromCluster: Error while initializing cluster info client at %v, err:  %v", clusterUrl, err)
 		return nil, err
 	}
@@ -153,9 +153,9 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		return nil, err
 	}
 
-	// Recalculate the index and indexer memory and cpu usage using the sizing formaula.
+	// Recalculate the index and indexer memory and cpu usage using the sizing formula.
 	// The stats retrieved from indexer typically has lower memory/cpu utilization than
-	// sizing formula, since sizing forumula captures max usage capacity. By recalculating
+	// sizing formula, since sizing formula captures max usage capacity. By recalculating
 	// the usage, it makes sure that planning does not partially skewed data.
 	recalculateIndexerSize(plan)
 
@@ -163,7 +163,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 }
 
 //
-// This function recalculates the index and indexer sizes baesd on sizing formula.
+// This function recalculates the index and indexer sizes based on sizing formula.
 //
 func recalculateIndexerSize(plan *Plan) {
 
@@ -264,7 +264,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 }
 
 //
-// This function convert index defintions from a single metadatda repository to a list of IndexUsage.
+// This function convert index definitions from a single metadata repository to a list of IndexUsage.
 //
 func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, node *IndexerNode,
 	buildTokens map[common.IndexDefnId]*mc.BuildCommandToken,
@@ -295,7 +295,7 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 }
 
 //
-// This function convert a single index defintion to IndexUsage.
+// This function convert a single index definition to IndexUsage.
 //
 func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta *LocalIndexMetadata,
 	buildTokens map[common.IndexDefnId]*mc.BuildCommandToken,
@@ -355,7 +355,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				numVbuckets := config["indexer.numVbuckets"].Int()
 				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
-				// Is the index being deleted by user?   This will read the delete token from metakv.  If untable read from metakv,
+				// Is the index being deleted by user?   This will read the delete token from metakv.  If unable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).s
 				if delTokens != nil {
 					_, index.pendingDelete = delTokens[defn.DefnId]
@@ -467,7 +467,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		*/
 
 		var actualStorageMem uint64
-		// memory_used_storage constains the total storage consumption,
+		// memory_used_storage contains the total storage consumption,
 		// including fdb overhead, main index and back index.  This also
 		// includes overhead (skip list / back index).
 		if memUsedStorage, ok := statsMap["memory_used_storage"]; ok {
@@ -587,7 +587,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			if avgSecKeySize, ok := GetIndexStat(index, "avg_sec_key_size", statsMap, true, clusterVersion); ok {
 				index.AvgSecKeySize = uint64(avgSecKeySize.(float64))
 			} else if !index.IsPrimary {
-				// Aproximate AvgSecKeySize.   AvgSecKeySize includes both
+				// Approximate AvgSecKeySize.   AvgSecKeySize includes both
 				// sec key len + doc key len
 				if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
 					index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
@@ -598,7 +598,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			if avgDocKeySize, ok := GetIndexStat(index, "avg_doc_key_size", statsMap, true, clusterVersion); ok {
 				index.AvgDocKeySize = uint64(avgDocKeySize.(float64))
 			} else if index.IsPrimary {
-				// Aproximate AvgDocKeySize.  Subtract 74 bytes for main
+				// Approximate AvgDocKeySize.  Subtract 74 bytes for main
 				// index overhead
 				if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
 					index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
@@ -759,7 +759,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		// 7) Compute an aggregated ratio of each index (mutation rate / 5 + scan rate / 2)
 		// 8) Compute cpu utilization for each index (cpu utilization * aggregated ratio)
 		//
-		// CPU usge can be 0 if
+		// CPU usage can be 0 if
 		// 1) there is no index stats
 		// 2) index has no scan or mutation (e.g. deferred index)
 		//
@@ -1691,7 +1691,7 @@ func (r *RestResponse) SetResponse(res *http.Response) error {
 
 //
 // Helper function for sending REST requests in parallel to indexer nodes.
-// This function assumes that the cinfoClient is already initialised and
+// This function assumes that the cinfoClient is already initialized and
 // the latest information is fetched. All the callers use the same cache.
 //
 // IMP: Note that the callers of this function should hold cinfo lock
