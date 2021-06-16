@@ -17,6 +17,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	u "net/url"
 	"os"
 	"path"
 	"runtime/debug"
@@ -1299,16 +1300,16 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 
 			url := "/getLocalIndexMetadata"
 			if len(t.bucket) != 0 {
-				url += "?bucket=" + t.bucket
+				url += "?bucket=" + u.QueryEscape(t.bucket) 
 			}
 			if len(t.scope) != 0 {
-				url += "&scope=" + t.scope
+				url += "&scope=" + u.QueryEscape(t.scope)
 			}
 			if len(t.collection) != 0 {
-				url += "&collection=" + t.collection
+				url += "&collection=" + u.QueryEscape(t.collection)
 			}
 			if len(t.index) != 0 {
-				url += "&index=" + t.index
+				url += "&index=" + u.QueryEscape(t.index)
 			}
 
 			resp, err := getWithAuth(addr + url)
@@ -3261,13 +3262,13 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 
 			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 			if err == nil {
-				url := "/getLocalIndexMetadata?bucket=" + bucket
+				url := "/getLocalIndexMetadata?bucket=" + u.QueryEscape(bucket)
 				if len(include) != 0 {
-					url += "&include=" + include
+					url += "&include=" + u.QueryEscape(include)
 				}
 
 				if len(exclude) != 0 {
-					url += "&exclude=" + exclude
+					url += "&exclude=" + u.QueryEscape(exclude)
 				}
 
 				resp, err := getWithAuth(addr + url)
