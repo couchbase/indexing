@@ -4,18 +4,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/dcp"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 )
 
 var ErrRebalanceTimedout = errors.New("Rebalance did not finish after 30 minutes")
 var ErrRebalanceFailed = errors.New("Rebalance failed")
 
+func getInitServicesUrl(serverAddr string) string {
+	return prependHttp(serverAddr) + "/node/controller/setupServices"
+}
+
+func getWebCredsUrl(serverAddr string) string {
+	return prependHttp(serverAddr) + "/settings/web"
+}
+
+func getQuotaSetUrl(serverAddr string) string {
+	return prependHttp(serverAddr) + "/pools/default"
+}
 func getAddNodeUrl(serverAddr string) string {
 	return prependHttp(serverAddr) + "/controller/addNode"
 }
@@ -54,6 +66,27 @@ func recoveryFromRest(serverAddr, username, password, hostname, recoveryType str
 	_, recoveryNodes := otpNodes(serverAddr, username, password, []string{hostname})
 	payload := strings.NewReader(fmt.Sprintf("otpNode=%s&recoveryType=%s", url.QueryEscape(recoveryNodes), recoveryType))
 	return makeRequest(username, password, "POST", payload, getRecoveryUrl(serverAddr))
+}
+
+func initServicesFromRest(serverAddr, username, password, roles string) ([]byte, error) {
+	log.Printf("Initialising services with role: %s on node: %v\n", roles, serverAddr)
+
+	payload := strings.NewReader(fmt.Sprintf("services=%s", roles))
+	return makeRequest("", "", "POST", payload, getInitServicesUrl(serverAddr))
+}
+
+func initWebCredsFromRest(serverAddr, username, password string) ([]byte, error) {
+	log.Printf("Initialising web UI on node: %v\n", serverAddr)
+
+	payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s&port=SAME", username, password))
+	return makeRequest("", "", "POST", payload, getWebCredsUrl(serverAddr))
+}
+
+func setQuotaUsingRest(serverAddr, username, password string) ([]byte, error) {
+	log.Printf("Setting data quota of 1500M and Index quota of 1500M\n")
+
+	payload := strings.NewReader(fmt.Sprintf("memoryQuota=1500&indexMemoryQuota=1500"))
+	return makeRequest(username, password, "POST", payload, getQuotaSetUrl(serverAddr))
 }
 
 func addNodeFromRest(serverAddr, username, password, hostname, roles string) ([]byte, error) {
@@ -159,7 +192,10 @@ func makeRequest(username, password, requestType string, payload *strings.Reader
 	}
 
 	req.Header.Add("content-type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(username, password)
+	if username != "" && password != "" {
+		req.SetBasicAuth(username, password)
+	}
+
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Println(err)
@@ -215,6 +251,41 @@ func AddNode(serverAddr, username, password, hostname string, role string) error
 
 	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
 		return fmt.Errorf("Error during rebalance, err: %v", err)
+	}
+	return nil
+}
+
+func InitClusterServices(serverAddr, username, password, role string) error {
+
+	if res, err := initServicesFromRest(serverAddr, username, password, role); err != nil {
+		return fmt.Errorf("Error while initialising services from REST, err: %v", err)
+	} else {
+		response := fmt.Sprintf("%s", res)
+		if response != "" {
+			return fmt.Errorf("Unexpected response while initialising cluster services response: %s", res)
+		}
+	}
+	return nil
+}
+
+func InitWebCreds(serverAddr, username, password string) error {
+	if res, err := initWebCredsFromRest(serverAddr, username, password); err != nil {
+		return fmt.Errorf("Error while initialising web credentials node from REST, err: %v", err)
+	} else {
+		response := fmt.Sprintf("%s", res)
+		log.Printf("InitWebCreds, response is: %v", response)
+	}
+	return nil
+}
+
+func InitDataAndIndexQuota(serverAddr, username, password string) error {
+	if res, err := setQuotaUsingRest(serverAddr, username, password); err != nil {
+		return fmt.Errorf("Error while setting index and data quota using REST, err: %v", err)
+	} else {
+		response := fmt.Sprintf("%s", res)
+		if response != "" {
+			return fmt.Errorf("Received error response while initialising data and index quota from REST, err: %v", err)
+		}
 	}
 	return nil
 }
@@ -284,6 +355,26 @@ func IsNodeIndex(status map[string][]string, hostname string) bool {
 	services := status[hostname]
 	for _, service := range services {
 		if service == "index" {
+			return true
+		}
+	}
+	return false
+}
+
+func IsNodeKV(status map[string][]string, hostname string) bool {
+	services := status[hostname]
+	for _, service := range services {
+		if service == "kv" {
+			return true
+		}
+	}
+	return false
+}
+
+func IsNodeN1QL(status map[string][]string, hostname string) bool {
+	services := status[hostname]
+	for _, service := range services {
+		if service == "n1ql" {
 			return true
 		}
 	}
