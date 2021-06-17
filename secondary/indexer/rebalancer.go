@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -884,7 +883,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			//
 			// Instead of failing rebalance with io.EOF error, we retry the request and reduce
 			// probability of failure
-			if err == io.EOF {
+			if strings.HasSuffix(err.Error(), ": EOF") {
 				bodybuf, isErr := getReqBody()
 				if isErr {
 					return true
@@ -1076,7 +1075,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	if err != nil {
 		// Error from HTTP layer, not from index processing code
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index on %v %v", r.localaddr+url, err)
-		if err == io.EOF {
+		if strings.HasSuffix(err.Error(), ": EOF") {
 			// Retry build again before failing rebalance
 			bodybuf, err = getReqBody()
 			resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
