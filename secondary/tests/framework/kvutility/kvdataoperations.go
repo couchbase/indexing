@@ -140,6 +140,27 @@ func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUser
 	log.Printf("Created bucket %v, responseBody: %s", bucketName, responseBody)
 }
 
+func CreateBucketOfType(bucketName, serverUserName, serverPassword, hostaddress, bucketRamQuota, bucketType string) {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/pools/default/buckets"
+	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}, "flushEnabled": {"1"}, "replicaNumber": {"1"}, "bucketType": {bucketType}}
+	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("CreateBucket failed for bucket %v \n", bucketName)
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Create Bucket")
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
+	log.Printf("Created bucket %v, responseBody: %s", bucketName, responseBody)
+}
+
 func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
