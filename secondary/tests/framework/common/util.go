@@ -180,6 +180,15 @@ func ClearMap(docs KeyValues) {
 	}
 }
 
+func KillMemcacheD() {
+	out, err := exec.Command("pkill", "memcached").CombinedOutput()
+	if err != nil {
+		log.Printf("%v", err)
+	} else {
+		log.Printf("%v", out)
+	}
+}
+
 func KillIndexer() {
 	out, err := exec.Command("pkill", "indexer").CombinedOutput()
 	if err != nil {

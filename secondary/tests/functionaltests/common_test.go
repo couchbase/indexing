@@ -431,6 +431,13 @@ func verifyPathExists(Pth string) (bool, error) {
 	return false, errStat
 }
 
+func forceKillMemcacheD() {
+	// restart mcd process
+	fmt.Println("Restarting memcached process ...")
+	tc.KillMemcacheD()
+	time.Sleep(20 * time.Second)
+}
+
 func forceKillIndexer() {
 	// restart the indexer
 	fmt.Println("Restarting indexer process ...")
