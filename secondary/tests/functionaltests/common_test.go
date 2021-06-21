@@ -89,6 +89,10 @@ func TestMain(m *testing.M) {
 	seed = 1
 	proddir, bagdir = tc.FetchMonsterToolPath()
 
+	if err := initClusterFromREST(); err != nil {
+		tc.HandleError(err, "Error while initialising cluster")
+	}
+
 	// setup cbauth
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
@@ -874,10 +878,10 @@ func getSingleIndex_SimpleRanges_Overlapping() qc.Scans {
 }
 
 func get3FieldsSingleSeek() qc.Scans {
-scans := make(qc.Scans, 1)
-eq := c.SecondaryKey([]interface{}{"SOLAREN", "Michele Yang", int64(25)})
-scans[0] = &qc.Scan{Seek: eq}
-return scans
+	scans := make(qc.Scans, 1)
+	eq := c.SecondaryKey([]interface{}{"SOLAREN", "Michele Yang", int64(25)})
+	scans[0] = &qc.Scan{Seek: eq}
+	return scans
 }
 
 func get3FieldsMultipleSeeks() qc.Scans {
