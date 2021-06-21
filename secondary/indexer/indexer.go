@@ -6731,35 +6731,34 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
 
-	//set topic names based on indexer id
-	idx.initStreamTopicName()
-
-	//close any old streams with projector
-	idx.closeAllStreams()
-
 	idx.recoverRebalanceState()
 
-	start := time.Now()
-	err := idx.recoverIndexInstMap()
-	if err != nil {
-		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
-		return err
-	}
-
-	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
-
-	idx.validateIndexInstMap()
-
-	// Cleanup orphan indexes, if any.
-	idx.cleanupOrphanIndexes()
-
-	// Upgrade storage depending on the storage mode of the indexes residing on this node.
-	// This step does not depend on the cluster storage mode (from metakv).   The indexer
-	// may need to restart if the bootstrap storage mode is different than the storage mode of
-	// the upgraded indexes.
-	needsRestart := idx.upgradeStorage()
-
 	go func() {
+		//set topic names based on indexer id
+		idx.initStreamTopicName()
+
+		//close any old streams with projector
+		idx.closeAllStreams()
+
+		start := time.Now()
+		err := idx.recoverIndexInstMap()
+		if err != nil {
+			logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+		}
+
+		logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
+
+		idx.validateIndexInstMap()
+
+		// Cleanup orphan indexes, if any.
+		idx.cleanupOrphanIndexes()
+
+		// Upgrade storage depending on the storage mode of the indexes residing on this node.
+		// This step does not depend on the cluster storage mode (from metakv).   The indexer
+		// may need to restart if the bootstrap storage mode is different than the storage mode of
+		// the upgraded indexes.
+		needsRestart := idx.upgradeStorage()
+
 		//Start Storage Manager
 		var res Message
 		stats := idx.stats.Clone()
@@ -6773,7 +6772,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 		}
 
 		//Recover indexes from local metadata.
-		err := idx.initFromPersistedState()
+		err = idx.initFromPersistedState()
 		if err != nil {
 			//sending error will cause indexer to restart
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
