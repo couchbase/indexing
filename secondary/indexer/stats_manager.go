@@ -30,6 +30,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -2659,6 +2660,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStatsReq", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
@@ -2739,6 +2741,7 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetrics", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
@@ -2766,6 +2769,7 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetricsHigh", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
@@ -2794,6 +2798,7 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMemStatsReq", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
@@ -2889,6 +2894,7 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStorageStatsReq", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
@@ -2946,6 +2952,7 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStorageMMStatsReq", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
@@ -2969,6 +2976,7 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStatsResetReq", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return

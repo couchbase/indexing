@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -329,8 +330,9 @@ func (m *requestHandlerContext) createIndexRequestRebalance(w http.ResponseWrite
 // doCreateIndex creates an index via REST. isRebalReq arg is true if called from Rebalancer, else false.
 // It delegates to IndexManager to do the real work.
 func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Request, isRebalReq bool) {
+	const method string = "RequestHandler::doCreateIndex" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -343,7 +345,7 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 	}
 
 	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
-	if !isAllowed(creds, []string{permission}, w) {
+	if !isAllowed(creds, []string{permission}, r, w, method) {
 		return
 	}
 
@@ -368,8 +370,8 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 	// call the index manager to handle the DDL
 	if logging.IsEnabled(logging.Debug) {
 		logging.Debugf(
-			"RequestHandler::doCreateIndex: calling IndexManager to create index %v:%v:%v:%v",
-			indexDefn.Bucket, indexDefn.Scope, indexDefn.Collection, indexDefn.Name)
+			"%v: calling IndexManager to create index %v:%v:%v:%v",
+			method, indexDefn.Bucket, indexDefn.Scope, indexDefn.Collection, indexDefn.Name)
 	}
 	if err := m.mgr.HandleCreateIndexDDL(&indexDefn, isRebalReq); err == nil {
 		// No error, return success
@@ -382,8 +384,9 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 
 // dropIndexRequest handles the /dropIndex REST endpoint.
 func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::dropIndexRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -396,7 +399,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	}
 
 	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!drop", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
-	if !isAllowed(creds, []string{permission}, w) {
+	if !isAllowed(creds, []string{permission}, r, w, method) {
 		return
 	}
 
@@ -458,8 +461,9 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 //     handleBuildIndex -- sends MsgBuildIndexResponse containing the error map back to cluster_manager_agent OnIndexBuild
 //
 func (m *requestHandlerContext) buildIndexRequestRebalance(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::buildIndexRequestRebalance" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -472,7 +476,7 @@ func (m *requestHandlerContext) buildIndexRequestRebalance(w http.ResponseWriter
 	}
 
 	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!build", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
-	if !isAllowed(creds, []string{permission}, w) {
+	if !isAllowed(creds, []string{permission}, r, w, method) {
 		return
 	}
 
@@ -518,17 +522,19 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 // will be filtered out. (ns_server calls this enpoint every 5 sec on every indexer node to
 // get statues for all indexes, but it is not the only caller.)
 func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleIndexStatusRequest" // for logging
+
 	defer func() {
 		if r := recover(); r != nil {
 			count := atomic.AddUint64(&m.stReqRecCount, 1)
 			if count%40 == 1 {
-				logging.Fatalf("handleIndexStatusRequest:: Recovered from panic %v. Stacktrace %v",
-					count, string(debug.Stack()))
+				logging.Fatalf("%v: Recovered from panic %v. Stacktrace %v",
+					method, count, string(debug.Stack()))
 			}
 		}
 	}()
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -540,7 +546,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	index := m.getIndex(r)
 	t, err := validateRequest(bucket, scope, collection, index)
 	if err != nil {
-		logging.Debugf("RequestHandler::handleIndexStatusRequest: Error %v", err)
+		logging.Debugf("%v: Error %v", method, err)
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: err.Error()}
 		send(http.StatusInternalServerError, w, resp)
 		return
@@ -564,7 +570,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 			sendWithETag(http.StatusOK, w, resp, eTagResponse)
 		}
 	} else {
-		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
+		logging.Debugf("%v: failed nodes %v", method, failedNodes)
 		sort.Sort(indexStatusSorter(indexStatuses))
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
 			Status: indexStatuses, FailedNodes: failedNodes}
@@ -1165,8 +1171,9 @@ func (m *requestHandlerContext) consolideStateStr(str1 string, str2 string) stri
 // The caller can request statements for only a subset of indexes; additionally any indexes
 // they do not have permissions for will be filtered out.
 func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleIndexStatementRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -1178,7 +1185,7 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 
 	t, err := validateRequest(bucket, scope, collection, index)
 	if err != nil {
-		logging.Debugf("RequestHandler::handleIndexStatementRequest: err %v", err)
+		logging.Debugf("%v: err %v", method, err)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
 		send(http.StatusInternalServerError, w, resp)
 		return
@@ -1230,7 +1237,9 @@ func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target)
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
-	creds, ok := doAuth(r, w)
+	const method string = "RequestHandler::handleIndexMetadataRequest" // for logging
+
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -1241,7 +1250,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 
 	index := m.getIndex(r)
 	if len(index) != 0 {
-		err := errors.New("RequestHandler::handleIndexMetadataRequest, err: Index level metadata requests are not supported")
+		err := fmt.Errorf("%v: err: Index level metadata requests are not supported", method)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
 		send(http.StatusInternalServerError, w, resp)
 		return
@@ -1249,7 +1258,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 
 	t, err := validateRequest(bucket, scope, collection, index)
 	if err != nil {
-		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
+		logging.Debugf("%v: err %v", method, err)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
 		send(http.StatusInternalServerError, w, resp)
 		return
@@ -1260,7 +1269,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
 		send(http.StatusOK, w, resp)
 	} else {
-		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
+		logging.Debugf("%v: err %v", method, err)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
 		send(http.StatusInternalServerError, w, resp)
 	}
@@ -1610,7 +1619,9 @@ func eTagValid(eTagRequest uint64, eTagCurrent uint64, eTagExpiry int64) bool {
 // the previously returned results to the caller. If this checksum is still valid, return
 // it with a 304 Not Modified response, else return the full metadata with latest checksum.
 func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
-	creds, ok := doAuth(r, w)
+	const method string = "RequestHandler::handleLocalIndexMetadataRequest" // for logging
+
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -1642,7 +1653,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	collection := m.getCollection(r)
 	index := m.getIndex(r)
 	if len(index) != 0 {
-		err := errors.New("RequestHandler::handleLocalIndexMetadataRequest, err: Index level metadata requests are not supported")
+		err := fmt.Errorf("%v: err: Index level metadata requests are not supported", method)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
 		send(http.StatusBadRequest, w, resp)
 		return
@@ -1650,7 +1661,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 	t, err := validateRequest(bucket, scope, collection, index)
 	if err != nil {
-		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
+		logging.Debugf("%v: err %v", method, err)
 		errStr := fmt.Sprintf(" Unable to retrieve local index metadata due to: %v", err.Error())
 		sendHttpError(w, errStr, http.StatusBadRequest)
 		return
@@ -1660,7 +1671,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	var filterType string
 	filters, filterType, err = getFilters(r, bucket)
 	if err != nil {
-		logging.Infof("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
+		logging.Infof("%v: err %v", method, err)
 		errStr := fmt.Sprintf(" Unable to retrieve local index metadata due to: %v", err.Error())
 		sendHttpError(w, errStr, http.StatusBadRequest)
 		return
@@ -1682,12 +1693,12 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	meta, timingStr, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType, useETag)
 	if err == nil {
 		if timingStr != "" {
-			logging.Warnf("RequestHandler::handleLocalIndexMetadataRequest req %v, %v", common.GetHTTPReqInfo(r), timingStr)
+			logging.Warnf("%v: req %v, %v", method, common.GetHTTPReqInfo(r), timingStr)
 		}
 
 		sendWithETag(http.StatusOK, w, meta, meta.ETag)
 	} else {
-		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
+		logging.Debugf("%v: err %v", method, err)
 		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
 	}
 }
@@ -1842,8 +1853,9 @@ func shouldProcess(t *target, defnBucket, defnScope, defnColl, defnName string) 
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleCachedLocalIndexMetadataRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -1873,15 +1885,16 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 		send(http.StatusOK, w, newMeta)
 
 	} else {
-		logging.Debugf("RequestHandler::handleCachedLocalIndexMetadataRequest: host %v, err %v", host, err)
+		logging.Debugf("%v: host %v, err %v", method, host, err)
 		msg := fmt.Sprintf("No cached LocalIndexMetadata available for %v", host)
 		sendHttpError(w, msg, http.StatusNotFound)
 	}
 }
 
 func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleCachedStats" // for logging
 
-	_, ok := doAuth(r, w)
+	_, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -1893,7 +1906,7 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 	if stats != nil {
 		send(http.StatusOK, w, stats)
 	} else {
-		logging.Debugf("RequestHandler::handleCachedStats: host %v, err %v", host, err)
+		logging.Debugf("%v: host %v, err %v", method, host, err)
 		msg := fmt.Sprintf("No cached stats available for %v", host)
 		sendHttpError(w, msg, http.StatusNotFound)
 	}
@@ -1914,8 +1927,9 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 //
 // TODO (Collections): Any changes necessary will be handled as part of Backup-Restore task
 func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleRestoreIndexMetadataRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -1958,6 +1972,7 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("%v", err)})
 	}
 }
+
 func (m *requestHandlerContext) restoreIndexMetadataToNodes(hostIndexMap map[string][]*common.IndexDefn) error {
 
 	var mu sync.Mutex
@@ -2031,14 +2046,14 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleIndexPlanRequest" // for logging
 
-	_, ok := doAuth(r, w)
+	_, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
 
 	stmts, err := m.getIndexPlan(r)
-
 	if err == nil {
 		send(http.StatusOK, w, stmts)
 	} else {
@@ -2047,20 +2062,21 @@ func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r 
 }
 
 func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
+	const method string = "RequestHandler::getIndexPlan" // for logging
 
 	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Fail to retreive index information from cluster.   Error=%v", err))
+		return "", fmt.Errorf("%v: Fail to retrieve index information from cluster. err: %v", method, err)
 	}
 
 	specs, err := m.convertIndexPlanRequest(r)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Fail to read index spec from request.   Error=%v", err))
+		return "", fmt.Errorf("%v: Fail to read index spec from request. err: %v", method, err)
 	}
 
 	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Fail to plan index.   Error=%v", err))
+		return "", fmt.Errorf("%v: Fail to plan index. err: %v", method, err)
 	}
 
 	return planner.CreateIndexDDL(solution), nil
@@ -2091,13 +2107,14 @@ func (m *requestHandlerContext) convertIndexPlanRequest(r *http.Request) ([]*pla
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleIndexStorageModeRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
 
-	if !isAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !isAllowed(creds, []string{"cluster.settings!write"}, r, w, method) {
 		return
 	}
 
@@ -2113,22 +2130,23 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 
 					nodeUUID, err := m.mgr.getMetadataRepo().GetLocalNodeUUID()
 					if err != nil {
-						logging.Infof("RequestHandler::handleIndexStorageModeRequest: unable to identify nodeUUID.  Cannot downgrade.")
+						logging.Infof("%v: Unable to identify nodeUUID.  Cannot downgrade.", method)
 						send(http.StatusOK, w, "Unable to identify nodeUUID.  Cannot downgrade.")
 						return
 					}
 
 					mc.PostIndexerStorageModeOverride(string(nodeUUID), common.ForestDB)
-					logging.Infof("RequestHandler::handleIndexStorageModeRequest: set override storage mode to forestdb")
-					send(http.StatusOK, w, "downgrade storage mode to forestdb after indexer restart.")
+					logging.Infof("%v: Set override storage mode to forestdb", method)
+					send(http.StatusOK, w, "Downgrade storage mode to forestdb after indexer restart.")
 				} else {
-					logging.Infof("RequestHandler::handleIndexStorageModeRequest: local storage mode is not plasma.  Cannot downgrade.")
+					logging.Infof("%v: Local storage mode is not plasma.  Cannot downgrade.", method)
 					send(http.StatusOK, w, "Indexer storage mode is not plasma.  Cannot downgrade.")
 				}
 			} else {
 				nodeUUID, err := m.mgr.getMetadataRepo().GetLocalNodeUUID()
 				if err != nil {
-					logging.Infof("RequestHandler::handleIndexStorageModeRequest: unable to identify nodeUUID. Cannot disable storage mode downgrade.")
+					logging.Infof("%v: Unable to identify nodeUUID.  Cannot disable storage mode downgrade.",
+						method)
 					send(http.StatusOK, w, "Unable to identify nodeUUID.  Cannot disable storage mode downgrade.")
 					return
 				}
@@ -2150,13 +2168,14 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handlePlannerRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handlePlannerRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
 
-	if !isAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !isAllowed(creds, []string{"cluster.settings!write"}, r, w, method) {
 		return
 	}
 
@@ -2174,8 +2193,9 @@ func (m *requestHandlerContext) handlePlannerRequest(w http.ResponseWriter, r *h
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleListLocalReplicaCountRequest(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleListLocalReplicaCountRequest" // for logging
 
-	creds, ok := doAuth(r, w)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
@@ -2184,7 +2204,7 @@ func (m *requestHandlerContext) handleListLocalReplicaCountRequest(w http.Respon
 	if err == nil {
 		send(http.StatusOK, w, result)
 	} else {
-		logging.Debugf("RequestHandler::handleListReplicaCountRequest: err %v", err)
+		logging.Debugf("%v: err %v", method, err)
 		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
 	}
 }
@@ -2312,7 +2332,12 @@ func convertResponse(r *http.Response, resp interface{}) string {
 	return RESP_SUCCESS
 }
 
-func doAuth(r *http.Request, w http.ResponseWriter) (cbauth.Creds, bool) {
+// doAuth authenticates credentials from an HTTP request and responds
+// directly to bad request and unauthorized failures, else leaves it up to
+// the caller to respond.
+// calledBy is "Class::Method" of calling function for auditing.
+func doAuth(r *http.Request, w http.ResponseWriter, calledBy string) (cbauth.Creds, bool) {
+	const method string = "request_handler::doAuth" // for logging
 
 	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
@@ -2320,6 +2345,7 @@ func doAuth(r *http.Request, w http.ResponseWriter) (cbauth.Creds, bool) {
 		w.Write([]byte(err.Error() + "\n"))
 		return nil, false
 	} else if valid == false {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, method, "Called by "+calledBy)
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return nil, false
@@ -2328,9 +2354,13 @@ func doAuth(r *http.Request, w http.ResponseWriter) (cbauth.Creds, bool) {
 	return creds, true
 }
 
+// isAllowed checks whether creds has ANY of the specified permissions.
+// calledBy is "Class::Method" of calling function for auditing.
 // TODO: This function shouldn't always return IndexResponse on error in
 // verifying auth. It should depend on the caller.
-func isAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+func isAllowed(creds cbauth.Creds, permissions []string, r *http.Request,
+	w http.ResponseWriter, calledBy string) bool {
+	const method string = "request_handler::isAllowed" // for logging
 
 	allow := false
 	err := error(nil)
@@ -2351,8 +2381,9 @@ func isAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) 
 
 	if !allow {
 		if w != nil {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+			audit.Audit(common.AUDIT_FORBIDDEN, r, method, "Called by "+calledBy)
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
 		}
 		return false
 	}
@@ -2934,41 +2965,46 @@ func (m *requestHandlerContext) runPersistor() {
 }
 
 func (m *requestHandlerContext) handleScheduleCreateRequest(w http.ResponseWriter, r *http.Request) {
-	creds, ok := doAuth(r, w)
+	const method string = "RequestHandler::handleScheduleCreateRequest" // for logging
+
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
 
 	buf := new(bytes.Buffer)
 	if _, err := buf.ReadFrom(r.Body); err != nil {
-		logging.Debugf("RequestHandler::handleScheduleCreateRequest: unable to read request body, err %v", err)
+		logging.Debugf("%v: Unable to read request body, err: %v", method, err)
 		send(http.StatusBadRequest, w, "Unable to read request body")
 		return
 	}
 
 	req := &client.ScheduleCreateRequest{}
 	if err := json.Unmarshal(buf.Bytes(), req); err != nil {
-		logging.Debugf("RequestHandler::handleScheduleCreateRequest: unable to unmarshall request body. Buf = %s, err %v", logging.TagStrUD(buf), err)
-		send(http.StatusBadRequest, w, "Unable to unmarshall request body")
+		logging.Debugf("%v: Unable to unmarshal request body. Buf = %s, err: %v",
+			method, logging.TagStrUD(buf), err)
+		send(http.StatusBadRequest, w, "Unable to unmarshal request body")
 		return
 	}
 
 	if req.Definition.DefnId == common.IndexDefnId(0) {
-		logging.Warnf("RequestHandler::handleScheduleCreateRequest: empty index definition")
+		logging.Warnf("%v: Empty index definition", method)
 		send(http.StatusBadRequest, w, "Empty index definition")
 		return
 	}
 
 	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", req.Definition.Bucket, req.Definition.Scope, req.Definition.Collection)
-	if !isAllowed(creds, []string{permission}, w) {
-		send(http.StatusForbidden, w, "Specified user cannot create an index on the bucket")
+	if !isAllowed(creds, []string{permission}, r, w, method) {
+		msg := "Specified user cannot create an index on the bucket"
+		audit.Audit(common.AUDIT_FORBIDDEN, r, method, msg)
+		send(http.StatusForbidden, w, msg)
 		return
 	}
 
 	err := m.processScheduleCreateRequest(req)
 	if err != nil {
 		msg := fmt.Sprintf("Error in processing schedule create token: %v", err)
-		logging.Errorf("RequestHandler::handleScheduleCreateRequest: %v", msg)
+		logging.Errorf("%v: %v", method, msg)
 		send(http.StatusInternalServerError, w, msg)
 		return
 	}
@@ -3358,6 +3394,7 @@ func getSchedCreateTokens(bucket string, filters map[string]bool, filterType str
 
 func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 	r *http.Request, creds cbauth.Creds, bucket, include, exclude string) bool {
+	const method string = "RequestHandler::authorizeBucketRequest" // for logging
 
 	// Basic RBAC.
 	// 1. If include filter is specified, verify user has permissions to access
@@ -3386,13 +3423,13 @@ func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 		switch r.Method {
 		case "GET":
 			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!%s", bucket, op)
-			if !isAllowed(creds, []string{permission}, w) {
+			if !isAllowed(creds, []string{permission}, r, w, method) {
 				return false
 			}
 
 		case "POST":
 			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!%s", bucket, op)
-			if !isAllowed(creds, []string{permission}, w) {
+			if !isAllowed(creds, []string{permission}, r, w, method) {
 				// TODO: If bucket level verification fails, then as a best effort,
 				// iterate over restore metadata and verify for each scope/collection.
 				// This will be needed only if backup was performed by a user using
@@ -3413,13 +3450,13 @@ func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 			if len(inc) == 1 {
 				scope := fmt.Sprintf("%s:%s", bucket, inc[0])
 				permission := fmt.Sprintf("cluster.scope[%s].n1ql.index!%s", scope, op)
-				if !isAllowed(creds, []string{permission}, w) {
+				if !isAllowed(creds, []string{permission}, r, w, method) {
 					return false
 				}
 			} else if len(inc) == 2 {
 				collection := fmt.Sprintf("%s:%s:%s", bucket, inc[0], inc[1])
 				permission := fmt.Sprintf("cluster.collection[%s].n1ql.index!%s", collection, op)
-				if !isAllowed(creds, []string{permission}, w) {
+				if !isAllowed(creds, []string{permission}, r, w, method) {
 					return false
 				}
 			} else {
