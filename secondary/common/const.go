@@ -133,3 +133,13 @@ const HTTP_KEY_ETAG_RESPONSE = "ETag"         // http.Response checksum field
 const HTTP_VAL_APPLICATION_JSON = "application/json"  // for HTTP_KEY_CONTENT_TYPE
 const HTTP_VAL_ETAG_BASE = 16 // base (hex) of string-form ETag values in HTTP headers
 const HTTP_VAL_ETAG_INVALID = 0 // ETag value of 0 is treated as invalid or missing
+
+// Byte slices for HTTP error response bodies. We use these instead of e.g.
+// http.StatusText(http.StatusUnauthorized) as those don't show the error number,
+// and having them here also makes it easier for developers to know the contents.
+var HTTP_STATUS_UNAUTHORIZED []byte
+//var HTTP_STATUS_FORBIDDEN []byte
+func init() {
+	HTTP_STATUS_UNAUTHORIZED = []byte("401 Unauthorized\n")
+	//HTTP_STATUS_FORBIDDEN = []byte("403 Forbidden\n")
+}
