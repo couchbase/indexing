@@ -59,8 +59,8 @@ type Rebalancer struct {
 
 	cb Callbacks
 
-	cancel chan struct{}
-	done   chan struct{}
+	cancel chan struct{} // closed to signal rebalance canceled
+	done   chan struct{} // closed to signal rebalance done (not canceled)
 	isDone int32
 
 	metakvCancel chan struct{} // close this to end metakv.RunObserveChildren callbacks
@@ -72,8 +72,7 @@ type Rebalancer struct {
 
 	wg sync.WaitGroup
 
-	progressInitOnce sync.Once
-	cleanupOnce      sync.Once
+	cleanupOnce sync.Once
 
 	waitForTokenPublish chan struct{}
 
@@ -84,7 +83,7 @@ type Rebalancer struct {
 	lastKnownProgress map[c.IndexInstId]float64
 
 	change     *service.TopologyChange
-	runPlanner bool
+	runPlanner bool // should this rebalance run the planner?
 
 	runParam *runParams
 }
@@ -158,9 +157,14 @@ func (r *Rebalancer) initRebalAsync() {
 		r.finish(nil)
 		return
 	}
-	cfg := r.config.Load()
+
+	// Launch the progress updater goroutine
+	if r.cb.progress != nil {
+		go r.updateProgress()
+	}
 
 	if r.runPlanner {
+		cfg := r.config.Load()
 	loop:
 		for {
 			select {
@@ -298,6 +302,8 @@ func (r *Rebalancer) cancelMetakv() {
 
 }
 
+// addToWaitGroup adds caller to r.wg waitgroup and returns true if metakv.RunObserveChildren
+// callbacks are active, else it does nothing and returns false.
 func (r *Rebalancer) addToWaitGroup() bool {
 
 	r.muCleanup.Lock()
@@ -884,7 +890,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			//
 			// Instead of failing rebalance with io.EOF error, we retry the request and reduce
 			// probability of failure
-			if err == io.EOF {
+			if strings.HasSuffix(err.Error(), ": EOF") {
 				bodybuf, isErr := getReqBody()
 				if isErr {
 					return true
@@ -1076,7 +1082,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	if err != nil {
 		// Error from HTTP layer, not from index processing code
 		l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index on %v %v", r.localaddr+url, err)
-		if err == io.EOF {
+		if strings.HasSuffix(err.Error(), ": EOF") { {
 			// Retry build again before failing rebalance
 			bodybuf, err = getReqBody()
 			resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
@@ -1424,10 +1430,6 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		tt.State = c.TransferTokenInitiate
 		setTransferTokenInMetakv(ttid, tt)
 
-		if r.cb.progress != nil {
-			go r.progressInitOnce.Do(r.updateProgress)
-		}
-
 	case c.TransferTokenRefused:
 		//TODO replan
 
@@ -1536,9 +1538,9 @@ func (r *Rebalancer) updateProgress() {
 	if !r.addToWaitGroup() {
 		return
 	}
-
 	defer r.wg.Done()
 
+	l.Infof("Rebalancer::updateProgress goroutine started")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -1546,9 +1548,7 @@ func (r *Rebalancer) updateProgress() {
 		select {
 		case <-ticker.C:
 			progress := r.computeProgress()
-			if progress > 0 {
-				r.cb.progress(progress, r.cancel)
-			}
+			r.cb.progress(progress, r.cancel)
 		case <-r.cancel:
 			l.Infof("Rebalancer::updateProgress Cancel Received")
 			return
@@ -1557,9 +1557,9 @@ func (r *Rebalancer) updateProgress() {
 			return
 		}
 	}
-
 }
 
+// computeProgress is a helper for updateProgress called periodically to compute the progress of index builds.
 func (r *Rebalancer) computeProgress() (progress float64) {
 
 	url := "/getIndexStatus?getAll=true"
@@ -1681,54 +1681,22 @@ func getDestNode(partitionId c.PartitionId, partitionMap map[string][]int) strin
 	return "" // should not reach here
 } // getDestNode
 
+// getBuildProgressFromStatus is a helper for computeProgress that gets an estimate of index build progress for the
+// given transfer token from the status arg.
 func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, tt *c.TransferToken) float64 {
 
 	instId := tt.InstId
 	realInstId := tt.RealInstId // for partitioned indexes
-	destId := tt.DestId
-	defn := tt.IndexInst.Defn
-
-	realInstProgress := 0.0
-	count := 0
-
-	// updateProgress holds an anonymous function called with instId and, if that yields count == 0
-	// (not found), again with realInstId to find the progress of a partitioned index.
-	updateProgress := func(id c.IndexInstId) {
-		for _, idx := range status.Status {
-			if idx.InstId == id {
-				// This function is called for every transfer token before it has becomes COMMITTED or DELETED.
-				// The index may have not be in REAL_PENDING state but the token has not yet moved to COMMITTED/DELETED state.
-				// So we need to return progress even if it is not replicating.
-				// Pre-7.0 nodes will report "Replicating" instead of "Moving" so check for both.
-				if idx.Status == "Moving" || idx.Status == "Replicating" || idx.NodeUUID == destId {
-					progress, ok := r.lastKnownProgress[id]
-					if !ok || idx.Progress > 0 {
-						progress = idx.Progress
-					}
-
-					destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
-					l.Infof("Rebalancer::getBuildProgressFromStatus Index: %v:%v:%v:%v"+
-						" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-						progress, idx.InstId, realInstId, defn.Partitions, destNode)
-
-					realInstProgress += progress
-					count++
-				}
-			}
-		}
-	}
 
 	// If it is a partitioned index, it is possible that we cannot find progress from instId:
 	// 1) partition is built using realInstId
 	// 2) partition has already been merged to instance with realInstId
-	// In either case, count will be 0 after calling updateProgress(instId) and it will find progress
+	// In either case, count will be 0 after calling getBuildProgress(instId) and it will find progress
 	// using realInstId instead.
-	updateProgress(instId)
+	realInstProgress, count := r.getBuildProgress(status, tt, instId)
 	if count == 0 {
-		updateProgress(realInstId)
+		realInstProgress, count = r.getBuildProgress(status, tt, realInstId)
 	}
-
 	if count > 0 {
 		r.lastKnownProgress[instId] = realInstProgress / float64(count)
 	}
@@ -1738,6 +1706,41 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 	}
 	return 0.0
 } // getBuildProgressFromStatus
+
+// getBuildProgress is a helper for getBuildProgressFromStatus that gets the progress of an inde≈ build
+// for a given instId. Return value count gives the number of partitions of instId found to be building.
+// If this is 0 the caller will try again with realInstId to find the progress of a partitioned index.
+func (r *Rebalancer) getBuildProgress(status *manager.IndexStatusResponse, tt *c.TransferToken, instId c.IndexInstId) (
+	realInstProgress float64, count int) {
+
+	destId := tt.DestId
+	defn := tt.IndexInst.Defn
+
+	for _, idx := range status.Status {
+		if idx.InstId == instId {
+			// This function is called for every transfer token before it has becomes COMMITTED or DELETED.
+			// The index may have not be in REAL_PENDING state but the token has not yet moved to COMMITTED/DELETED state.
+			// So we need to return progress even if it is not replicating.
+			// Pre-7.0 nodes will report "Replicating" instead of "Moving" so check for both.
+			if idx.Status == "Moving" || idx.Status == "Replicating" || idx.NodeUUID == destId {
+				progress, ok := r.lastKnownProgress[instId]
+				if !ok || idx.Progress > 0 {
+					progress = idx.Progress
+				}
+
+				destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
+				l.Infof("Rebalancer::getBuildProgress Index: %v:%v:%v:%v"+
+					" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name,
+					progress, idx.InstId, tt.RealInstId, defn.Partitions, destNode)
+
+				realInstProgress += progress
+				count++
+			}
+		}
+	}
+	return realInstProgress, count
+}
 
 //
 // This function gets the indexer stats for a specific indexer host.

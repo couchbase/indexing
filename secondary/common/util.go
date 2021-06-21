@@ -1200,6 +1200,47 @@ func IsIpv6() bool {
 	return security.IsIpv6()
 }
 
+func GetIPv6FromParam(ipv4, ipv6 string) (bool, error) {
+	//
+	// Validate ipv4 and ipv6 parameters
+	// Projector / Indexer only listen on required ip:port and NOT on optional ip:port
+	// So, if ipv4 is required and ipv6 is (optional or off), isIPv6 will
+	//     be set to false
+	// Similarly, if ipv6 is required and ipv4 is (optional or off), isIPv6
+	//     will be set to true
+	//
+
+	var isIPv6 bool
+
+	// Backward compatibility check
+	if ipv4 == "" {
+		if ipv6 == "true" {
+			return true, nil
+		}
+
+		if ipv6 == "false" {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("Invalid input")
+	}
+
+	// Input validation
+	if ipv4 != "required" && ipv6 != "required" {
+		return false, fmt.Errorf("Invalid input")
+	}
+
+	if ipv4 == "required" && ipv6 == "required" {
+		return false, fmt.Errorf("Invalid input")
+	}
+
+	if ipv6 == "required" {
+		isIPv6 = true
+	}
+
+	return isIPv6, nil
+}
+
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	_, valid, err := IsAuthValid(r)
 	if err != nil {

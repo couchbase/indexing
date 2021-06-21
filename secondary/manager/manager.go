@@ -702,10 +702,10 @@ func (m *IndexManager) monitorKeyspace(killch chan bool) {
 			keyspaceList, err := m.getKeyspaceForCleanup()
 			if err == nil {
 				for _, keyspace := range keyspaceList {
-					logging.Infof("IndexManager.MonitorKeyspace(): making request for deleting defer index for keyspace %v", keyspace)
+					logging.Infof("IndexManager.MonitorKeyspace(): making request for deleting defered and active MAINT_STREAM index for keyspace %v", keyspace)
 					// Make sure it is making a synchronous request.  So if indexer main loop cannot proceed to delete the indexes
 					// (e.g. indexer is slow or blocked), it won't keep generating new request.
-					m.requestServer.MakeRequest(client.OPCODE_CLEANUP_DEFER_INDEX, keyspace, []byte{})
+					m.requestServer.MakeRequest(client.OPCODE_INVALID_COLLECTION, keyspace, []byte{})
 				}
 			} else {
 				logging.Errorf("IndexManager.MonitorKeyspace(): Error occurred while getting keyspace list for cleanup %v", err)
@@ -752,49 +752,28 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
 			copy(definitions, topology.Definitions)
 
-			hasValidActiveIndex := false
-			hasInvalidDeferIndex := false
-
 			for _, defnRef := range definitions {
-
-				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+				defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
+				if err == nil && defn != nil {
 
 					instances := make([]IndexInstDistribution, len(defnRef.Instances))
 					copy(instances, defnRef.Instances)
 
 					for _, instRef := range instances {
 
-						// Check for index with active stream.  If there is any index with active stream, all
-						// index in the bucket will be deleted when the stream is closed due to bucket delete.
-						if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
-							common.StreamId(instRef.StreamId) != common.NIL_STREAM {
-							hasValidActiveIndex = true
-							break
-						}
-
-						// If there is any index in CREATED or PENDING state from a non-existent bucket.
-						// If so, this could be a candidate for cleanup.
+						// Check for invalid keyspace
 						if (defn.BucketUUID != currentUUID || (version >= common.INDEXER_70_VERSION &&
 							defn.CollectionId != collectionID)) &&
-							instRef.State != uint32(common.INDEX_STATE_DELETED) &&
-							common.StreamId(instRef.StreamId) == common.NIL_STREAM {
-							hasInvalidDeferIndex = true
+							instRef.State != uint32(common.INDEX_STATE_DELETED) {
+							keyspace := strings.Join([]string{bucket, scope, collection}, ":")
+							result = append(result, keyspace)
+							break
 						}
 					}
 				}
-
-				if hasValidActiveIndex {
-					break
-				}
-			}
-
-			if !hasValidActiveIndex && hasInvalidDeferIndex {
-				keyspace := strings.Join([]string{bucket, scope, collection}, ":")
-				result = append(result, keyspace)
 			}
 		}
 	}
-
 	return result, nil
 }
 

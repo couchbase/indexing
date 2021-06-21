@@ -1533,6 +1533,7 @@ func setDifferenceRPs(xRPs, yRPs []*plasma.RecoveryPoint) []*plasma.RecoveryPoin
 	return onlyInX
 }
 
+// cleanupOldRecoveryPoints deletes old disk snapshots.
 func (mdb *plasmaSlice) cleanupOldRecoveryPoints(sinfo *plasmaSnapshotInfo) {
 
 	var seqTs Timestamp
@@ -1569,11 +1570,11 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints(sinfo *plasmaSnapshotInfo) {
 		maxDiskSnaps = 1
 	}
 
-	// Cleanup old recovery points
+	// Cleanup old mainstore recovery points
 	mRPs := mdb.mainstore.GetRecoveryPoints()
+	numDiskSnapshots := len(mRPs)
 	if len(mRPs) > maxRollbacks {
 		for i := 0; i < len(mRPs)-maxRollbacks; i++ {
-
 			snapInfo, err := mdb.getRPSnapInfo(mRPs[i])
 			if err != nil {
 				logging.Errorf("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1591,6 +1592,7 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints(sinfo *plasmaSnapshotInfo) {
 					"Cleanup mainstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, snapInfo, len(mRPs)-i)
 				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
+				numDiskSnapshots--
 			} else {
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Skipped mainstore recovery point cleanup. num RPs %v ",
@@ -1599,12 +1601,13 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints(sinfo *plasmaSnapshotInfo) {
 			}
 		}
 	}
+	mdb.idxStats.numDiskSnapshots.Set(int64(numDiskSnapshots))
 
+	// Cleanup old backstore recovery points
 	if !mdb.isPrimary {
 		bRPs := mdb.backstore.GetRecoveryPoints()
 		if len(bRPs) > maxRollbacks {
 			for i := 0; i < len(bRPs)-maxRollbacks; i++ {
-
 				snapInfo, err := mdb.getRPSnapInfo(bRPs[i])
 				if err != nil {
 					logging.Errorf("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1627,7 +1630,6 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints(sinfo *plasmaSnapshotInfo) {
 						mdb.id, mdb.idxInstId, mdb.idxPartnId, len(bRPs)-i)
 					break
 				}
-
 			}
 		}
 	}
@@ -1848,7 +1850,7 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 	return nil
 }
 
-// Update stats available in snapshot info
+// updateStatsFromSnapshotMeta updates the slice stats from those available in SnapshotInfo.
 func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 
 	// Update stats *if* available in snapshot info

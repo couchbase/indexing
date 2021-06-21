@@ -153,6 +153,9 @@ func (it *IndexTimingStats) Init() {
 	it.n1qlExpr.Init()
 }
 
+// IndexStats holds statistics for a single index instance. If it is non-partitioned,
+// its stats will be in the IndexStats struct itself. If it is partitioned, the stats
+// will instead be stored per partition in its partitions map field.
 type IndexStats struct {
 	name, scope, collection, bucket, dispName string
 
@@ -204,8 +207,9 @@ type IndexStats struct {
 	scanBytesRead             stats.Int64Val
 	getBytes                  stats.Int64Val
 	itemsCount                stats.Int64Val
-	numCommits                stats.Int64Val
-	numSnapshots              stats.Int64Val
+	numDiskSnapshots          stats.Int64Val // # snapshots still available on disk
+	numCommits                stats.Int64Val // # snapshots ever written to disk
+	numSnapshots              stats.Int64Val // # snapshots ever created, including both disk and memory-only
 	numOpenSnapshots          stats.Int64Val
 	numCompactions            stats.Int64Val
 	numItemsFlushed           stats.Int64Val
@@ -448,6 +452,7 @@ func (s *IndexStats) Init() {
 	s.avgTsItemsCount.Init()
 	s.lastNumFlushQueued.Init()
 	s.lastTsTime.Init()
+	s.numDiskSnapshots.Init()
 	s.numCommits.Init()
 	s.numSnapshots.Init()
 	s.numOpenSnapshots.Init()
@@ -652,6 +657,12 @@ func (s *IndexStats) partnAvgInt64Stats(f func(*IndexStats) int64) int64 {
 	return s.int64Stats(f)
 }
 
+// int64Stats will execute the passed-in function f to extract a stat from an
+// IndexStats object. If the IndexStats receiver represents a partitioned index,
+// int64Stats will return the average of f over all of partitions where it is
+// non-zero (different from the normal concept of average which would not exclude
+// zeros). If it is zero for all partitions or the partitions map is empty, the
+// index is assumed to be non-partitioned and int64Stats will return f(this).
 func (s *IndexStats) int64Stats(f func(*IndexStats) int64) int64 {
 
 	var v, count int64
@@ -1492,6 +1503,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.avgTsItemsCount.Value()
 		},
 		&s.avgTsItemsCount, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_disk_snapshots",
+		func(ss *IndexStats) int64 {
+			return ss.numDiskSnapshots.Value()
+		},
+		&s.numDiskSnapshots, s.int64Stats)
 
 	statMap.AddAggrStatFiltered("num_commits",
 		func(ss *IndexStats) int64 {

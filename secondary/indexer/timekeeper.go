@@ -464,6 +464,8 @@ func (tk *timekeeper) updateBuildTs(cmd Message) {
 	tk.setBuildTs(streamId, keyspaceId, buildTs)
 }
 
+// handleRemoveIndexFromStream handles REMOVE_INDEX_LIST_FROM_STREAM messages.
+// It holds tk.lock write locked through all processing.
 func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
 
 	logging.Infof("Timekeeper::handleRemoveIndexFromStream %v", cmd)
@@ -492,6 +494,14 @@ func (tk *timekeeper) handleRemoveKeyspaceFromStream(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
+// removeIndexFromStream handles REMOVE_INDEX_LIST_FROM_STREAM messages. It idempotently
+// deletes the instances in the incoming message from the indexBuildInfo map. An index
+// might already no longer be in the map due to multiple independent drop requests in
+// flight concurrently (e.g. from a drop index and a concurrent drop collection). It
+// also updates the count of indexes in this stream and keyspace if the corresponding
+// streamKeyspaceIdIndexCountMap entry still exists.
+//
+// Caller is holding tk.lock write locked.
 func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
@@ -501,17 +511,21 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 		// This is only called for DROP INDEX.   Therefore, it is OK to remove buildInfo.
 		// If this is used for other purpose, it is necessary to ensure there is no side effect.
 		if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
+			keyspaceId := idx.Defn.KeyspaceId(streamId)
 			logging.Infof("Timekeeper::removeIndexFromStream remove index %v from stream %v keyspaceId %v",
-				idx.InstId, streamId, idx.Defn.KeyspaceId(streamId))
+				idx.InstId, streamId, keyspaceId)
 			delete(tk.indexBuildInfo, idx.InstId)
-		}
-		if tk.ss.streamKeyspaceIdIndexCountMap[streamId][idx.Defn.KeyspaceId(streamId)] == 0 {
-			logging.Fatalf("Timekeeper::removeIndexFromStream Invalid Internal "+
-				"State Detected. Index Count Underflow. Stream %s. KeyspaceId %s.", streamId,
-				idx.Defn.KeyspaceId(streamId))
-		} else {
-			tk.ss.streamKeyspaceIdIndexCountMap[streamId][idx.Defn.KeyspaceId(streamId)] -= 1
-			logging.Infof("Timekeeper::removeIndexFromStream IndexCount %v", tk.ss.streamKeyspaceIdIndexCountMap)
+
+			// There will be no streamKeyspaceIdIndexCountMap[streamId][keyspaceId] entry if collection is being dropped
+			if count, ok2 := tk.ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId]; ok2 {
+				if count == 0 {
+					logging.Errorf("Timekeeper::removeIndexFromStream Invalid Internal "+
+						"State Detected. Index Count Underflow. Stream %s. KeyspaceId %s.", streamId, keyspaceId)
+				} else {
+					tk.ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId] -= 1
+					logging.Infof("Timekeeper::removeIndexFromStream IndexCount %v", tk.ss.streamKeyspaceIdIndexCountMap)
+				}
+			}
 		}
 	}
 }
