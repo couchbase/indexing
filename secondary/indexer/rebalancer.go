@@ -1252,7 +1252,7 @@ func (r *Rebalancer) updateProgress() {
 
 	defer r.wg.Done()
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -1298,9 +1298,11 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	var totalProgress float64
 	for _, tt := range r.transferTokens {
 		state := tt.State
-		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
+		// All states not tested in the if-else if are treated as 0% progress
+		if  state == c.TransferTokenReady  || state == c.TransferTokenMerge ||
+			state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100.00
-		} else {
+		} else if state == c.TransferTokenInProgress {
 			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.InstId, tt.RealInstId, tt.DestId)
 		}
 	}
