@@ -1670,9 +1670,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.mutation_manager.maxQueueMem": ConfigValue{
-		uint64(1 * 1024 * 1024 * 1024),
+		uint64(1 * 256 * 1024 * 1024),
 		"Max memory used by the mutation queue",
-		uint64(1 * 1024 * 1024 * 1024),
+		uint64(1 * 256 * 1024 * 1024),
 		false,
 		false,
 	},
