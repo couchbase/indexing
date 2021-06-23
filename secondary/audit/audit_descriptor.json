@@ -1,0 +1,46 @@
+{
+  "version": 2,
+  "module": "index",
+  "events": [
+    {
+      "id": 49152,
+      "name": "HTTP 401: Unauthorized",
+      "description": "Authentication is required to access the requested resource",
+      "sync": false,
+      "enabled": true,
+      "mandatory_fields": {
+        "timestamp": "",
+        "real_userid": {"domain": "", "user": ""},
+        "remote": {"ip": "", "port": 1},
+        "local": {"ip": "", "port": 1},
+
+        "service": "",
+        "method": "",
+        "url": ""
+      },
+      "optional_fields": {
+        "message": ""
+      }
+    },
+    {
+      "id": 49153,
+      "name": "HTTP 403: Forbidden",
+      "description": "The user does not have permission to access the requested resource",
+      "sync": false,
+      "enabled": true,
+      "mandatory_fields": {
+        "timestamp": "",
+        "real_userid": {"domain": "", "user": ""},
+        "remote": {"ip": "", "port": 1},
+        "local": {"ip": "", "port": 1},
+
+        "service": "",
+        "method": "",
+        "url": ""
+      },
+      "optional_fields": {
+        "message": ""
+      }
+    }
+  ]
+}

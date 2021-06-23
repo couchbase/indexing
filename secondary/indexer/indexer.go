@@ -76,7 +76,7 @@ var (
 	ErrUnknownBucket            = errors.New("Unknown Bucket")
 	ErrIndexerNotActive         = errors.New("Indexer Not Active")
 	ErrInvalidMetadata          = errors.New("Invalid Metadata")
-	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI Storage")
+	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI or PLASMA Storage")
 )
 
 // Backup corrupt index data files
@@ -1626,8 +1626,10 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 		return
 	}
-	if ephemeral && common.GetStorageMode() != common.MOI {
-		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v is Ephemeral but GSI storage is not MOI")
+
+	storageMode := common.GetStorageMode()
+	if ephemeral && storageMode != common.MOI && storageMode != common.PLASMA {
+		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v is Ephemeral but GSI storage is not MOI or PLASMA", indexInst.Defn.Bucket)
 		if clientCh != nil {
 			clientCh <- &MsgError{
 				err: Error{code: ERROR_BUCKET_EPHEMERAL,
@@ -1703,8 +1705,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//allocate partition/slice
-	var partnInstMap PartitionInstMap
-	if partnInstMap, _, err = idx.initPartnInstance(indexInst, clientCh, false); err != nil {
+	partnInstMap, _, err := idx.initPartnInstance(indexInst, clientCh, false)
+	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
 		}
