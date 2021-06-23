@@ -819,7 +819,10 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 
 	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
 	res, err := security.PostWithAuth(clusterAddr, "application/x-www-form-urlencoded", reader, params)
-	res.Body.Close()
+	if (err == nil) {
+		ioutil.ReadAll(res.Body)
+		res.Body.Close()
+	}
 
 	return err
 }

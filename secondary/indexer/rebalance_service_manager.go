@@ -1118,10 +1118,9 @@ func (m *ServiceMgr) cleanupIndex(indexDefn c.IndexDefn) error {
 		l.Errorf("ServiceMgr::cleanupIndex Error drop index on %v %v", localaddr+url, err)
 		return err
 	}
-
 	defer resp.Body.Close()
-	response := new(manager.IndexResponse)
 	bytes, _ := ioutil.ReadAll(resp.Body)
+	response := new(manager.IndexResponse)
 	if err := json.Unmarshal(bytes, &response); err != nil {
 		l.Errorf("ServiceMgr::cleanupIndex Error unmarshal response %v %v", localaddr+url, err)
 		return err
@@ -1500,8 +1499,8 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
 				return err, true
 			}
+			ioutil.ReadAll(resp.Body)
 			resp.Body.Close()
-
 		} else {
 			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Service Address %v", err)
 			return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node %v", err)), true
