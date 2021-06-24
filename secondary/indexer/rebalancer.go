@@ -971,7 +971,8 @@ loop:
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
 					break
 				}
-				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
+				defn := tt.IndexInst.Defn
+				sname := fmt.Sprintf("%s:%s:", defn.Bucket, tt.IndexInst.DisplayName())
 				sname_pend := sname + "num_docs_pending"
 				sname_queued := sname + "num_docs_queued"
 				sname_processed := sname + "num_docs_processed"
@@ -1005,8 +1006,10 @@ loop:
 					remainingBuildTime = 0
 				}
 
-				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v EstTime %v", sname,
-					c.IndexState(status), tot_remaining, remainingBuildTime)
+				l.Infof("Rebalancer::waitForIndexBuild Index: %v:v State: %v" +
+					" Pending: %v EstTime: %v Partitions: %v Destination: %v",
+					defn.Bucket, defn.Name, c.IndexState(status),
+					tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 
 				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 
@@ -1303,7 +1306,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 			state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100.00
 		} else if state == c.TransferTokenInProgress {
-			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.InstId, tt.RealInstId, tt.DestId)
+			totalProgress += r.getBuildProgressFromStatus(statusResp, tt)
 		}
 	}
 
@@ -1373,11 +1376,31 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 	return state, msg
 }
 
-func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, instId c.IndexInstId, realInstId c.IndexInstId, destId string) float64 {
+// getDestNode returns the key of the partitionMap entry whose value
+// contains partitionId. This is the node hosting that partition.
+func getDestNode(partitionId c.PartitionId, partitionMap map[string][]int) string {
+	for node, partIds := range partitionMap {
+		for _, partId := range partIds {
+			if partId == int(partitionId) {
+				return node
+			}
+		}
+	}
+	return "" // should not reach here
+}
+
+func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, tt *c.TransferToken) float64 {
+
+	instId := tt.InstId
+	realInstId := tt.RealInstId // for partitioned indexes
+	destId := tt.DestId
+	defn := tt.IndexInst.Defn
 
 	realInstProgress := 0.0
 	count := 0
 
+	// updateProgress holds an anonymous function called with instId and, if that yields count == 0
+	// (not found), again with realInstId to find the progress of a partitioned index.
 	updateProgress := func(id c.IndexInstId) {
 		for _, idx := range status.Status {
 			if idx.InstId == id {
@@ -1390,7 +1413,12 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 						progress = idx.Progress
 					}
 
-					l.Infof("Rebalancer::getBuildProgressFromStatus %v %v %v", idx.InstId, realInstId, progress)
+					destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
+					l.Infof("Rebalancer::getBuildProgressFromStatus Index: %v:%v" +
+						" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
+						defn.Bucket, defn.Name,
+						progress, idx.InstId, realInstId, defn.Partitions, destNode)
+
 					realInstProgress += progress
 					count++
 				}
@@ -1401,10 +1429,9 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 	// If it is a partitioned index, it is possible that we cannot find progress from instId:
 	// 1) partition is built using realInstId
 	// 2) partition has already been merged to instance with realInstId
-	// In either case, coutn will be 0 after calling updateProgress(instId) and it will find progress
-	// using realInstId later.
+	// In either case, count will be 0 after calling updateProgress(instId) and it will find progress
+	// using realInstId instead.
 	updateProgress(instId)
-
 	if count == 0 {
 		updateProgress(realInstId)
 	}

@@ -126,7 +126,13 @@ type IndexStatus struct {
 	Scheduled    bool               `json:"scheduled"`
 	Partitioned  bool               `json:"partitioned"`
 	NumPartition int                `json:"numPartition"`
+
+	// PartitionMap is a map from node host:port to partitionIds,
+	// telling which partition(s) are on which node(s). If an
+	// index is not partitioned, it will have a single
+	// partition with ID 0.
 	PartitionMap map[string][]int   `json:"partitionMap"`
+
 	NodeUUID     string             `json:"nodeUUID,omitempty"`
 	NumReplica   int                `json:"numReplica"`
 	IndexName    string             `json:"indexName"`

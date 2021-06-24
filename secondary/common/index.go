@@ -235,7 +235,12 @@ type IndexDefn struct {
 	InstVersion   int           `json:"instanceVersion,omitempty"`
 	ReplicaId     int           `json:"replicaId,omitempty"`
 	InstId        IndexInstId   `json:"instanceId,omitempty"`
+
+	// Partitions contains either the IDs of all partitions in the
+	// index, or in the case of a rebalance only that subset of IDs
+	// of the specific partitions being moved by the current TransferToken.
 	Partitions    []PartitionId `json:"partitions,omitempty"`
+
 	Versions      []int         `json:"versions,omitempty"`
 	NumPartitions uint32        `json:"numPartitions,omitempty"`
 	RealInstId    IndexInstId   `json:"realInstId,omitempty"`
