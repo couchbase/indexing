@@ -153,7 +153,7 @@ type ProjectorStatsHolder struct {
 	ptr unsafe.Pointer
 }
 
-func (p ProjectorStatsHolder) Get() *ProjectorStats {
+func (p *ProjectorStatsHolder) Get() *ProjectorStats {
 	return (*ProjectorStats)(atomic.LoadPointer(&p.ptr))
 }
 

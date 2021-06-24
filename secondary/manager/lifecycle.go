@@ -67,7 +67,7 @@ type StatsHolder struct {
 	ptr unsafe.Pointer
 }
 
-func (h StatsHolder) Get() *common.Statistics {
+func (h *StatsHolder) Get() *common.Statistics {
 	return (*common.Statistics)(atomic.LoadPointer(&h.ptr))
 }
 

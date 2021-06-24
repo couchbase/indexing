@@ -404,9 +404,10 @@ func (s *IndexStats) addPartition(id common.PartitionId) {
 	}
 }
 
-func (s IndexStats) clone() *IndexStats {
-	var clone IndexStats
-	clone = s
+// IndexStats.Clone creates a new copy of the IndexStats object with a new
+// partitions map that points to the original stats objects.
+func (s *IndexStats) clone() *IndexStats {
+	var clone IndexStats = *s // shallow copy
 
 	clone.partitions = make(map[common.PartitionId]*IndexStats)
 	for k, v := range s.partitions {
@@ -669,7 +670,7 @@ func (s *IndexStats) getArrKeySizeStats() map[string]interface{} {
 	return keySizeStats
 }
 
-func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
+func (is *IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 	essential bool) common.Statistics {
 
 	var prefix string
@@ -1198,7 +1199,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 	return statsMap
 }
 
-func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
+func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	var key string
 	statsMap := make(map[string]interface{})
 	var found bool
@@ -1259,7 +1260,7 @@ func computeAvgArrayLength(itemsCount, docidCount int64) int64 {
 	return 0
 }
 
-func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) common.Statistics {
+func (is *IndexerStats) constructIndexerStats(skipEmpty bool, version string) common.Statistics {
 	indexerStats := make(map[string]interface{})
 	addStat := addStatFactory(skipEmpty, indexerStats)
 
@@ -1423,7 +1424,7 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	return indexStats
 }
 
-func (is IndexerStats) MarshalJSON(partition bool, pretty bool,
+func (is *IndexerStats) MarshalJSON(partition bool, pretty bool,
 	skipEmpty bool, essential bool) ([]byte, error) {
 	stats := is.GetStats(partition, skipEmpty, essential)
 
@@ -1434,7 +1435,7 @@ func (is IndexerStats) MarshalJSON(partition bool, pretty bool,
 	}
 }
 
-func (is IndexerStats) VersionedJSON(t *target) ([]byte, error) {
+func (is *IndexerStats) VersionedJSON(t *target) ([]byte, error) {
 	statsMap, found := is.GetVersionedStats(t)
 	if !found {
 		return nil, errors.New("404")
@@ -1444,9 +1445,11 @@ func (is IndexerStats) VersionedJSON(t *target) ([]byte, error) {
 	return json.MarshalIndent(statsMap, "", "   ")
 }
 
-func (s IndexerStats) Clone() *IndexerStats {
-	var clone IndexerStats
-	clone = s
+// IndexerStats.Clone creates a new copy of the IndexerStats object
+// with new maps that point to the original stats objects.
+func (s *IndexerStats) Clone() *IndexerStats {
+	var clone IndexerStats = *s // shallow copy
+
 	clone.indexes = make(map[common.IndexInstId]*IndexStats)
 	clone.buckets = make(map[string]*BucketStats)
 	for k, v := range s.indexes {

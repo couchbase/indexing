@@ -187,12 +187,12 @@ func (b *Bucket) GetVBmap(addrs []string) (map[string][]uint16, error) {
 	return m, nil
 }
 
-// Nodes returns teh current list of nodes servicing this bucket.
-func (b Bucket) Nodes() []Node {
+// Nodes returns the current list of nodes servicing this bucket.
+func (b *Bucket) Nodes() []Node {
 	return *(*[]Node)(atomic.LoadPointer(&b.nodeList))
 }
 
-func (b Bucket) getConnPools() []*connectionPool {
+func (b *Bucket) getConnPools() []*connectionPool {
 	return *(*[]*connectionPool)(atomic.LoadPointer(&b.connPools))
 }
 
