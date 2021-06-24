@@ -770,10 +770,17 @@ func (b *loadStats) getPendingItem(partitionId common.PartitionId) int64 {
 	return b.pending[partitionId]
 }
 
+// getTotalPendingItems returns the total pending items across all partitions.
+// Pending items are initialized to math.MaxInt64 to distinguish missing stats
+// from actual zeros, so this returns math.MaxInt64 if any partition has that
+// value to avoid returning garbage (e.g. a sum of math.MaxInt64s is negative).
 func (b *loadStats) getTotalPendingItems() int64 {
 
 	var total int64
 	for _, pending := range b.pending {
+		if pending == math.MaxInt64 {
+			return math.MaxInt64
+		}
 		total += pending
 	}
 
@@ -1187,7 +1194,7 @@ func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopol
 
 			if !init[partnId] {
 				// minPending can be MaxInt64 if
-				// 1) instance partition is exlcuded
+				// 1) instance partition is excluded
 				// 2) there is no stats for the instance partition
 				// 3) there is no current stats for the instance partition
 				minPending[partnId] = math.MaxInt64
@@ -1220,6 +1227,7 @@ func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopol
 // local utility functions
 //---------------------------
 
+// logstats logs client stats every logtick milliseconds until told to stop.
 func (b *metadataClient) logstats() {
 	tick := time.NewTicker(b.logtick)
 	defer func() {
@@ -1242,6 +1250,11 @@ loop:
 	}
 }
 
+// printstats logs GSI query client stats (to indexer.log or query.log, depending
+// on its execution context). Most of its logging is done at the Verbose level.
+// Client pending item stats are initialized to math.MaxInt64 to distinguish missing
+// stats from actual 0s (used to exclude stale partitions from scans); these will
+// appear as 9223372036854775807 counts in the logs.
 func (b *metadataClient) printstats() {
 
 	s := make([]string, 0, 16)
