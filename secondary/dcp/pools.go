@@ -87,6 +87,11 @@ type Node struct {
 	AddressFamily        string             `json:"addressFamily,omitempty"`
 }
 
+type BucketName struct {
+	Name string `json:"bucketName"`
+	UUID string `json:"uuid"`
+}
+
 // A Pool of nodes and buckets.
 type Pool struct {
 	BucketMap map[string]Bucket
@@ -97,6 +102,7 @@ type Pool struct {
 
 	BucketURL       map[string]string `json:"buckets"`
 	ServerGroupsUri string            `json:"serverGroupsUri"`
+	BucketNames     []BucketName      `json:"bucketNames"`
 
 	client Client
 }
@@ -376,21 +382,6 @@ func (c *Client) RunObserveNodeServices(pool string, callb func(interface{}) err
 			logging.Errorf("RunObserveNodeServices: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
 		}
 		return &ps, err
-	}
-
-	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
-}
-
-func (c *Client) RunObserveBuckets(pool string, callb func(interface{}) error, cancel chan bool) error {
-
-	path := "/pools/" + pool + "/saslBucketsStreaming"
-	decoder := func(bs []byte) (interface{}, error) {
-		var buckets SaslBucket
-		var err error
-		if err = json.Unmarshal(bs, &buckets); err != nil {
-			logging.Errorf("RunObserveBuckets: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
-		}
-		return &buckets, err
 	}
 
 	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
