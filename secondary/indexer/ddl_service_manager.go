@@ -1317,6 +1317,8 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// handleListDeleteTokens responds to /listDeleteTokens REST endpoint
+// with a list of all delete tokens in metakv on this indexer host.
 func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
@@ -1356,6 +1358,8 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// handleListDropInstanceTokens responds to /listDropInstanceTokens REST endpoint
+// with a list of all drop instance tokens in metakv on this indexer host.
 func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {

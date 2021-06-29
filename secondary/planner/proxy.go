@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -23,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -58,6 +58,13 @@ type LocalIndexMetadata struct {
 	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
 	IndexTopologies  []mc.IndexTopology `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
+}
+
+// tokenKey holds match fields from tokens in a type that can
+// be used as a map key.
+type tokenKey struct {
+	DefnId common.IndexDefnId
+	InstId common.IndexInstId
 }
 
 ///////////////////////////////////////////////////////
@@ -109,11 +116,11 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 
 	replicaMap := generateReplicaMap(indexers)
 
-	if err := processDeleteToken(indexers, config); err != nil {
+	if err := processDeleteToken(indexers); err != nil {
 		return nil, err
 	}
 
-	if err := processDropInstanceToken(indexers, config, replicaMap); err != nil {
+	if err := processDropInstanceToken(indexers, replicaMap); err != nil {
 		return nil, err
 	}
 
@@ -412,7 +419,6 @@ func getIndexStats(plan *Plan, config common.Config) error {
 	cinfo := cinfoClient.GetClusterInfoCache()
 	cinfo.RLock()
 	defer cinfo.RUnlock()
-
 	clusterVersion := cinfo.GetClusterVersion()
 
 	// find all nodes that has a index http service
@@ -914,22 +920,6 @@ func findTopologyByBucket(topologies []mc.IndexTopology, bucket string) *mc.Inde
 }
 
 //
-// This function finds the index instance id from bucket topology.
-//
-func findIndexInstId(topology *mc.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
-
-	for _, defnRef := range topology.Definitions {
-		if defnRef.DefnId == uint64(defnId) {
-			for _, inst := range defnRef.Instances {
-				return common.IndexInstId(inst.InstId), nil
-			}
-		}
-	}
-
-	return common.IndexInstId(0), errors.New(fmt.Sprintf("Cannot find index instance id for defnition %v", defnId))
-}
-
-//
 // This function creates an indexer node for plan
 //
 func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*IndexerNode, error) {
@@ -1108,28 +1098,6 @@ func getWithCbauth(url string) (*http.Response, error) {
 	}
 
 	return response, err
-}
-
-//
-// This function gets a pointer to clusterInfoCache.
-//
-func clusterInfoCache(clusterUrl string) (*common.ClusterInfoCache, error) {
-
-	url, err := common.ClusterAuthUrl(clusterUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	cinfo, err := common.NewClusterInfoCache(url, "default")
-	if err != nil {
-		return nil, err
-	}
-
-	if err := cinfo.Fetch(); err != nil {
-		return nil, err
-	}
-
-	return cinfo, nil
 }
 
 //
@@ -1356,16 +1324,23 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 			return false
 		}
 
-		for _, token := range tokens.Tokens {
+		logging.Infof("Planner::processCreateToken: processing %v tokens for node %v",
+			len(tokens.Tokens), nodeId)
 
-			logging.Verbosef("Planner: Processing create token for index %v from node %v", token.DefnId, nodeId)
+		verbose := logging.IsEnabled(logging.Verbose)
+		for _, token := range tokens.Tokens {
+			if verbose {
+				logging.Verbosef(
+					"Planner::processCreateToken: Processing create token for index %v from node: %v",
+					token.DefnId, nodeId)
+			}
 
 			for indexerId, definitions := range token.Definitions {
 				for _, defn := range definitions {
 					for _, partition := range defn.Partitions {
 						if !findPartition(defn.InstId, partition) {
 							if addIndex(indexerId, makeIndexUsage(&defn, partition)) {
-								logging.Infof("Planner: Add index (%v, %v, %v) from create token.", defn.DefnId, defn.InstId, partition)
+								logging.Infof("Planner::processCreateToken: Add index (%v, %v, %v)", defn.DefnId, defn.InstId, partition)
 							}
 						}
 					}
@@ -1380,7 +1355,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 //
 // There may be delete token that has yet to process.  Update the indexer layout based on token information.
 //
-func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
+func processDeleteToken(indexers []*IndexerNode) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
 	cinfo.RLock()
@@ -1429,35 +1404,64 @@ func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 			return err
 		}
 
+		// Create lookup map of deleted DefnIds from tokens
+		tokenMap, err := getDeletedDefnIds(tokens, nodeId)
+		if err != nil {
+			return err
+		}
+
 		// nothing to do
-		if len(tokens.Tokens) == 0 {
+		if len(tokenMap) == 0 {
 			logging.Infof("Planner::processDeleteToken: There is no delete token to process for node %v", nodeId)
 			continue
 		}
 
-		for _, token := range tokens.Tokens {
-			logging.Verbosef("Planner: Processing delete token for index %v from node %v", token.DefnId, nodeId)
-			for _, indexer := range indexers {
-				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
-				for _, index := range indexer.Indexes {
-					if index.DefnId != token.DefnId {
-						indexes = append(indexes, index)
-					} else {
-						logging.Infof("Planner: Remove index (%v, %v) due to delete token.", index.GetDisplayName(), index.Bucket)
-					}
+		logging.Infof("Planner::processDeleteToken: processing %v tokens for node %v",
+			len(tokenMap), nodeId)
+
+		// Remove any deleted indexes from indexer.Indexes
+		for _, indexer := range indexers {
+			indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+			for _, index := range indexer.Indexes {
+				_, exists := tokenMap[index.DefnId]
+				if !exists {
+					indexes = append(indexes, index)
+				} else { // token matches index
+					logging.Infof(
+						"Planner::processDeleteToken: Remove index (%v, %v)",
+						index.GetDisplayName(), index.Bucket)
 				}
-				indexer.Indexes = indexes
 			}
+			indexer.Indexes = indexes
 		}
 	}
 
 	return nil
 }
 
+// getDeletedDefnIds is a helper for processDeleteToken that returns a map whose
+// keys are the DefnIds of indexes deleted by the delete tokens.
+func getDeletedDefnIds(tokens *mc.DeleteCommandTokenList, nodeId string) (
+	map[common.IndexDefnId]bool, error) {
+
+	tokenMap := make(map[common.IndexDefnId]bool) // return value
+
+	// Extract defnIds and put into lookup map
+	verbose := logging.IsEnabled(logging.Verbose)
+	for _, token := range tokens.Tokens {
+		tokenMap[token.DefnId] = true
+		if verbose {
+			logging.Verbosef("Planner::getDeletedDefnIds: Received delete token for index %v from node %v", token.DefnId, nodeId)
+		}
+	}
+
+	return tokenMap, nil
+}
+
 //
 // There may be drop instance token that has yet to process.  Update the indexer layout based on token information.
 //
-func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
+func processDropInstanceToken(indexers []*IndexerNode,
 	replicaIdMap map[common.IndexDefnId]map[int]bool) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
@@ -1514,26 +1518,35 @@ func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 			continue
 		}
 
-		for _, token := range tokens.Tokens {
-			logging.Verbosef("Planner: Processing drop instance token for index %v (replicaId %v inst %v) from node %v",
-				token.DefnId, token.ReplicaId, token.InstId, nodeId)
-			found := false
-			for _, indexer := range indexers {
-				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
-				for _, index := range indexer.Indexes {
-					if index.DefnId != token.DefnId || index.InstId != token.InstId {
-						indexes = append(indexes, index)
-					} else {
-						found = true
-						logging.Infof("Planner: Remove index (%v, %v) due to drop instance token.", index.GetDisplayName(), index.Bucket)
-					}
-				}
-				indexer.Indexes = indexes
-			}
+		logging.Infof("Planner::processDropInstanceToken: processing %v tokens for node %v",
+			len(tokens.Tokens), nodeId)
 
-			if found {
-				replicaIdMap[token.DefnId][token.ReplicaId] = true
+		// Create lookup map of the token keys, cashing ReplicaId in the value
+		tokenMap := make(map[tokenKey]int, len(tokens.Tokens))
+		verbose := logging.IsEnabled(logging.Verbose)
+		for _, token := range tokens.Tokens {
+			tokenMap[tokenKey{token.DefnId, token.InstId}] = token.ReplicaId
+			if verbose {
+				logging.Verbosef("Planner::processDropInstanceToken: Received drop instance token for index %v (replicaId %v inst %v) from node %v",
+					token.DefnId, token.ReplicaId, token.InstId, nodeId)
 			}
+		}
+
+		// Remove any dropped instances from indexer.Indexes and update replicaIdMap
+		for _, indexer := range indexers {
+			indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+			for _, index := range indexer.Indexes {
+				replicaId, exists := tokenMap[tokenKey{index.DefnId, index.InstId}]
+				if !exists {
+					indexes = append(indexes, index)
+				} else { // token matches index
+					replicaIdMap[index.DefnId][replicaId] = true
+					logging.Infof(
+						"Planner::processDropInstanceToken: Remove index (%v, %v)",
+						index.GetDisplayName(), index.Bucket)
+				}
+			}
+			indexer.Indexes = indexes
 		}
 	}
 

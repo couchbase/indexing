@@ -588,6 +588,8 @@ func ListAndFetchDropInstanceCommandToken(defnId c.IndexDefnId) ([]*DropInstance
 	return result, nil
 }
 
+// ListAndFetchAllDropInstanceCommandToken returns all drop instance
+// tokens for this indexer host.
 func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, error) {
 
 	paths, err := c.MetakvBigValueList(DropInstanceDDLCommandTokenPath)
