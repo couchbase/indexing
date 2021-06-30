@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/ioutil"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -69,6 +70,8 @@ type IndexResponse struct {
 // Index Backup / Restore
 //
 
+// LocalIndexMetadata is the metadata returned by getIndexStatus
+// for all indexes on a single indexer node.
 type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
@@ -131,14 +134,14 @@ type IndexStatus struct {
 	// telling which partition(s) are on which node(s). If an
 	// index is not partitioned, it will have a single
 	// partition with ID 0.
-	PartitionMap map[string][]int   `json:"partitionMap"`
+	PartitionMap map[string][]int `json:"partitionMap"`
 
-	NodeUUID     string             `json:"nodeUUID,omitempty"`
-	NumReplica   int                `json:"numReplica"`
-	IndexName    string             `json:"indexName"`
-	ReplicaId    int                `json:"replicaId"`
-	Stale        bool               `json:"stale"`
-	LastScanTime string             `json:"lastScanTime,omitempty"`
+	NodeUUID     string `json:"nodeUUID,omitempty"`
+	NumReplica   int    `json:"numReplica"`
+	IndexName    string `json:"indexName"`
+	ReplicaId    int    `json:"replicaId"`
+	Stale        bool   `json:"stale"`
+	LastScanTime string `json:"lastScanTime,omitempty"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -153,33 +156,52 @@ const (
 )
 
 //
-// Internal data structure
+// requestHandlerContext contains state for the HTTP(S) server created by
+// RegisterRequestHandler.
 //
-
 type requestHandlerContext struct {
-	initializer sync.Once
-	finalizer   sync.Once
-	mgr         *IndexManager
-	clusterUrl  string
+	initializer sync.Once     // HTTP(S) custom initialization at startup
+	finalizer   sync.Once     // cleanup at HTTP(S) server shutdown
+	mgr         *IndexManager // parent
+	config      common.Config // config settings map
+	clusterUrl  string        // this node's full URL
+	hostname    string        // this node's host:httpPort
+	hostKey     string        // this node's mem+disk cache key
 
-	metaDir    string
-	statsDir   string
-	metaCh     chan map[string]*LocalIndexMetadata
-	statsCh    chan map[string]*common.Statistics
-	metaCache  map[string]*LocalIndexMetadata
-	statsCache map[string]*common.Statistics
+	///////////////////////////////////////////////////////////////////////////
+	// IndexStatus caches of info from all indexer nodes. New info is written
+	// into the memory cache first and eventually persisted to disk. Lookups
+	// check the memory cache first. Only the latest known full set of status
+	// data (i.e. for all indexes on a node) is cached for each node - partial
+	// sets are never cached.
 
-	mutex  sync.RWMutex
+	// Index metadata cache
+	metaCache map[string]*LocalIndexMetadata      // IndexMetadata mem cache (key = host2key(host:httpPort))
+	metaCh    chan map[string]*LocalIndexMetadata // metaCache persistence feed
+	metaDir   string                              // metaCache persistence directory
+	metaMutex sync.RWMutex                        // metaCache mutex
+
+	// IndexStats subset cache
+	statsCache map[string]*common.Statistics      // IndexStats subset mem cache (key = host2key(host:httpPort))
+	statsCh    chan map[string]*common.Statistics // statsCache persistence feed
+	statsDir   string                             // statsCache persistence directory
+	statsMutex sync.RWMutex                       // statsCache mutex
+	///////////////////////////////////////////////////////////////////////////
+
 	doneCh chan bool
 }
 
-var handlerContext requestHandlerContext
+var handlerContext requestHandlerContext // state for the HTTP(S) server
 
 ///////////////////////////////////////////////////////
 // Registration
 ///////////////////////////////////////////////////////
 
-func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.ServeMux, config common.Config) {
+// RegisterRequestHandler is the main entry point of the request handler. It creates
+// an HTTP(S) server by registering REST endpoints and their handlers with Go's
+// HTTP server infrastructure http.ServeMux (Go's HTTP request multiplexer), which
+// will receive requests and call their handler functions.
+func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common.Config) {
 
 	handlerContext.initializer.Do(func() {
 		defer func() {
@@ -188,14 +210,24 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 			}
 		}()
 
+		handlerContext.mgr = mgr
+		handlerContext.config = config
+		handlerContext.clusterUrl = config["clusterAddr"].String()
+		handlerContext.hostname = getHostname(handlerContext.clusterUrl)
+		handlerContext.hostKey = host2key(handlerContext.hostname)
+
+		// Scatter-gather endpoints. These are the entry points to a single indexer that will
+		// scatter the request to all indexers and gather the results to return to the caller.
+		mux.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
+		mux.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
+
+		// Single-indexer endpoints (non-scatter-gather).
 		mux.HandleFunc("/createIndex", handlerContext.createIndexRequest)
 		mux.HandleFunc("/createIndexRebalance", handlerContext.createIndexRequestRebalance)
 		mux.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
 		mux.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
-		mux.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
 		mux.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
-		mux.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
 		mux.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
 		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
@@ -220,15 +252,20 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 
 		go handlerContext.runPersistor()
 	})
-
-	handlerContext.mgr = mgr
-	handlerContext.clusterUrl = clusterUrl
 }
 
+// Close permanently shuts down the HTTP(S) server created by RegisterRequestHandler.
 func (m *requestHandlerContext) Close() {
 	m.finalizer.Do(func() {
 		close(m.doneCh)
 	})
+}
+
+// getHostname returns the properly IPv4 or IPv6 formatted host:httpPort from a URL.
+func getHostname(url string) string {
+	host, _, _ := net.SplitHostPort(url)
+	port := handlerContext.config["httpPort"].String()
+	return net.JoinHostPort(host, port)
 }
 
 ///////////////////////////////////////////////////////
@@ -428,6 +465,62 @@ func (m *requestHandlerContext) getBucket(r *http.Request) string {
 	return r.FormValue("bucket")
 }
 
+// memCacheLocalIndexMetadata adds an entry to the local metadata memory cache.
+// hostKey is host2key(host:httpPort).
+func (m *requestHandlerContext) memCacheLocalIndexMetadata(hostKey string, value *LocalIndexMetadata) {
+	m.metaMutex.Lock()
+	m.metaCache[hostKey] = value
+	m.metaMutex.Unlock()
+}
+
+// memCacheStats adds an entry to the local IndexStats subset memory cache.
+// hostKey is host2key(host:httpPort).
+func (m *requestHandlerContext) memCacheStats(hostKey string, value *common.Statistics) {
+	m.statsMutex.Lock()
+	m.statsCache[hostKey] = value
+	m.statsMutex.Unlock()
+}
+
+// mergeCounter is a helper for getIndexStatus.
+func mergeCounter(defnId common.IndexDefnId, counter common.Counter,
+	numReplicas map[common.IndexDefnId]common.Counter) {
+
+	if current, ok := numReplicas[defnId]; ok {
+		newValue, merged, err := current.MergeWith(counter)
+		if err != nil {
+			logging.Errorf("Fail to merge replica count. Error: %v", err)
+			return
+		}
+
+		if merged {
+			numReplicas[defnId] = newValue
+		}
+		return
+	}
+
+	if counter.IsValid() {
+		numReplicas[defnId] = counter
+	}
+}
+
+// addHost is a helper for getIndexStatus.
+func addHost(defnId common.IndexDefnId, hostAddr string, defnToHostMap map[common.IndexDefnId][]string) {
+	if hostList, ok := defnToHostMap[defnId]; ok {
+		for _, host := range hostList {
+			if strings.Compare(hostAddr, host) == 0 {
+				return
+			}
+		}
+	}
+	defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
+}
+
+// getIndexStatus returns statuses of all indexer nodes. An unresponsive node's status is served
+// from the cache of whichever responsive node has the newest data cached. Only if no responsive
+// node has a cached value will an unresponsive node's status be omitted. (The caches were only
+// added in common.INDEXER_65_VERSION.) Status consists of two parts:
+//   1. LocalIndexMetadata
+//   2. A subset of IndexStats (currently: buildProgress, completionProgress, lastScanTime)
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string, getAll bool) ([]IndexStatus, []string, error) {
 
 	var cinfo *common.ClusterInfoCache
@@ -445,47 +538,20 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	defns := make(map[common.IndexDefnId]common.IndexDefn)
-	list := make([]IndexStatus, 0)
-	failedNodes := make([]string, 0)
+	list := make([]IndexStatus, 0)   // return 1: flat list of statuses
+	failedNodes := make([]string, 0) // return 2: flat list of unreachable indexer nodes
+
+	// IndexStatus pieces by node to cache to local disk, corresponding to metaCache and statsCache
 	metaToCache := make(map[string]*LocalIndexMetadata)
 	statsToCache := make(map[string]*common.Statistics)
 
 	defnToHostMap := make(map[common.IndexDefnId][]string)
 	isInstanceDeferred := make(map[common.IndexInstId]bool)
 
-	mergeCounter := func(defnId common.IndexDefnId, counter common.Counter) {
-		if current, ok := numReplicas[defnId]; ok {
-			newValue, merged, err := current.MergeWith(counter)
-			if err != nil {
-				logging.Errorf("Fail to merge replica count. Error: %v", err)
-				return
-			}
-
-			if merged {
-				numReplicas[defnId] = newValue
-			}
-
-			return
-		}
-
-		if counter.IsValid() {
-			numReplicas[defnId] = counter
-		}
-	}
-
-	addHost := func(defnId common.IndexDefnId, hostAddr string) {
-		if hostList, ok := defnToHostMap[defnId]; ok {
-			for _, host := range hostList {
-				if strings.Compare(hostAddr, host) == 0 {
-					return
-				}
-			}
-		}
-		defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
-	}
-
+	keepKeys := make([]string, 0, len(nids)) // memory cache keys of current indexer nodes
 	for _, nid := range nids {
 
+		// mgmtAddr is this node's "cluster" address (host:uiPort), NOT a key for caches
 		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt")
 		if err != nil {
 			logging.Errorf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
@@ -493,193 +559,211 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 		}
 
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err == nil {
-
-			u, err := security.GetURL(addr)
-			if err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Fail to parse URL %v", addr)
-				failedNodes = append(failedNodes, mgmtAddr)
-				continue
-			}
-
-			stale := false
-			metaToCache[u.Host] = nil
-			localMeta, latest, err := m.getLocalMetadataForNode(addr, u.Host, cinfo)
-			if localMeta == nil || err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
-				failedNodes = append(failedNodes, mgmtAddr)
-				continue
-			}
-
-			if !latest {
-				stale = true
-			} else {
-				metaToCache[u.Host] = localMeta
-			}
-
-			statsToCache[u.Host] = nil
-			stats, latest, err := m.getStatsForNode(addr, u.Host, cinfo)
-			if stats == nil || err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
-				failedNodes = append(failedNodes, mgmtAddr)
-				continue
-			}
-
-			if !latest {
-				stale = true
-			} else {
-				statsToCache[u.Host] = stats
-			}
-
-			for _, defn := range localMeta.IndexDefinitions {
-
-				if len(bucket) != 0 && bucket != defn.Bucket {
-					continue
-				}
-
-				permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
-				if !isAllowed(creds, []string{permission}, nil) {
-					continue
-				}
-
-				mergeCounter(defn.DefnId, defn.NumReplica2)
-
-				if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
-
-					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
-					for _, instance := range instances {
-
-						state, errStr := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(instance.InstId))
-
-						if state != common.INDEX_STATE_CREATED &&
-							state != common.INDEX_STATE_DELETED &&
-							state != common.INDEX_STATE_NIL {
-
-							stateStr := "Not Available"
-							switch state {
-							case common.INDEX_STATE_READY:
-								stateStr = "Created"
-							case common.INDEX_STATE_INITIAL:
-								stateStr = "Building"
-							case common.INDEX_STATE_CATCHUP:
-								stateStr = "Building"
-							case common.INDEX_STATE_ACTIVE:
-								stateStr = "Ready"
-							}
-
-							if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
-								stateStr = "Replicating"
-							}
-
-							if state == common.INDEX_STATE_INITIAL || state == common.INDEX_STATE_CATCHUP {
-								if len(instance.OldStorageMode) != 0 {
-
-									if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
-										stateStr = "Building (Upgrading)"
-									}
-
-									if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
-										stateStr = "Building (Downgrading)"
-									}
-								}
-							}
-
-							if state == common.INDEX_STATE_READY {
-								if len(instance.OldStorageMode) != 0 {
-
-									if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
-										stateStr = "Created (Upgrading)"
-									}
-
-									if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
-										stateStr = "Created (Downgrading)"
-									}
-								}
-							}
-
-							if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
-								if indexerState == "Paused" {
-									stateStr = "Paused"
-								} else if indexerState == "Bootstrap" || indexerState == "Warmup" {
-									stateStr = "Warmup"
-								}
-							}
-
-							if len(errStr) != 0 {
-								stateStr = "Error"
-							}
-
-							name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
-
-							completion := int(0)
-							key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, name)
-							if progress, ok := stats.ToMap()[key]; ok {
-								completion = int(progress.(float64))
-							}
-
-							progress := float64(0)
-							key = fmt.Sprintf("%v:completion_progress", instance.InstId)
-							if stat, ok := stats.ToMap()[key]; ok {
-								progress = math.Float64frombits(uint64(stat.(float64)))
-							}
-
-							lastScanTime := "NA"
-							key = fmt.Sprintf("%v:%v:last_known_scan_time", defn.Bucket, name)
-							if scanTime, ok := stats.ToMap()[key]; ok {
-								nsecs := int64(scanTime.(float64))
-								if nsecs != 0 {
-									lastScanTime = time.Unix(0, nsecs).Format(time.UnixDate)
-								}
-							}
-
-							partitionMap := make(map[string][]int)
-							for _, partnDef := range instance.Partitions {
-								partitionMap[mgmtAddr] = append(partitionMap[mgmtAddr], int(partnDef.PartId))
-							}
-
-							addHost(defn.DefnId, mgmtAddr)
-							isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
-							defn.NumPartitions = instance.NumPartitions
-
-							status := IndexStatus{
-								DefnId:       defn.DefnId,
-								InstId:       common.IndexInstId(instance.InstId),
-								Name:         name,
-								Bucket:       defn.Bucket,
-								IsPrimary:    defn.IsPrimary,
-								SecExprs:     defn.SecExprs,
-								WhereExpr:    defn.WhereExpr,
-								IndexType:    string(defn.Using),
-								Status:       stateStr,
-								Error:        errStr,
-								Hosts:        []string{mgmtAddr},
-								Definition:   common.IndexStatement(defn, int(instance.NumPartitions), -1, true),
-								Completion:   completion,
-								Progress:     progress,
-								Scheduled:    instance.Scheduled,
-								Partitioned:  common.IsPartitioned(defn.PartitionScheme),
-								NumPartition: len(instance.Partitions),
-								PartitionMap: partitionMap,
-								NodeUUID:     localMeta.NodeUUID,
-								NumReplica:   int(defn.GetNumReplica()),
-								IndexName:    defn.Name,
-								ReplicaId:    int(instance.ReplicaId),
-								Stale:        stale,
-								LastScanTime: lastScanTime,
-							}
-
-							list = append(list, status)
-						}
-					}
-				}
-				defns[defn.DefnId] = defn
-			}
-		} else {
+		if err != nil {
 			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
-	}
+
+		u, err := security.GetURL(addr)
+		if err != nil {
+			logging.Debugf("RequestHandler::getIndexStatus: Fail to parse URL %v", addr)
+			failedNodes = append(failedNodes, mgmtAddr)
+			continue
+		}
+
+		hostname := u.Host
+		hostKey := host2key(hostname) // key to caches
+		keepKeys = append(keepKeys, hostKey)
+
+		stale := false
+		metaToCache[hostKey] = nil
+
+		//
+		// Get metadata for all indexes of current node
+		//
+		localMeta, latest, err := m.getLocalIndexMetadataForNode(addr, hostname, cinfo)
+		if localMeta == nil || err != nil {
+			logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
+			failedNodes = append(failedNodes, mgmtAddr)
+			continue
+		}
+		if !latest {
+			stale = true
+		}
+		metaToCache[hostKey] = localMeta
+
+		//
+		// Get stats subset for all indexes of current node
+		//
+		statsToCache[hostKey] = nil
+		var stats *common.Statistics
+		stats, latest, err = m.getStatsForNode(addr, hostname, cinfo)
+		if stats == nil || err != nil {
+			logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
+			failedNodes = append(failedNodes, mgmtAddr)
+			continue
+		}
+
+		if !latest {
+			stale = true
+		}
+		statsToCache[hostKey] = stats
+
+		//
+		// Process all the data for current host
+		//
+		for _, defn := range localMeta.IndexDefinitions {
+
+			if len(bucket) != 0 && bucket != defn.Bucket {
+				// Do not cache partial results
+				metaToCache[hostKey] = nil
+				statsToCache[hostKey] = nil
+				continue
+			}
+
+			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+			if !isAllowed(creds, []string{permission}, nil) {
+				// Do not cache partial results
+				metaToCache[hostKey] = nil
+				statsToCache[hostKey] = nil
+				continue
+			}
+
+			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
+			if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
+				instances := topology.GetIndexInstancesByDefn(defn.DefnId)
+				for _, instance := range instances {
+					state, errStr := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(instance.InstId))
+
+					if state != common.INDEX_STATE_CREATED &&
+						state != common.INDEX_STATE_DELETED &&
+						state != common.INDEX_STATE_NIL {
+
+						stateStr := "Not Available"
+						switch state {
+						case common.INDEX_STATE_READY:
+							stateStr = "Created"
+						case common.INDEX_STATE_INITIAL:
+							stateStr = "Building"
+						case common.INDEX_STATE_CATCHUP:
+							stateStr = "Building"
+						case common.INDEX_STATE_ACTIVE:
+							stateStr = "Ready"
+						}
+						if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
+							stateStr = "Replicating"
+						}
+						if state == common.INDEX_STATE_INITIAL || state == common.INDEX_STATE_CATCHUP {
+							if len(instance.OldStorageMode) != 0 {
+
+								if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
+									stateStr = "Building (Upgrading)"
+								}
+
+								if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
+									stateStr = "Building (Downgrading)"
+								}
+							}
+						}
+						if state == common.INDEX_STATE_READY {
+							if len(instance.OldStorageMode) != 0 {
+
+								if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
+									stateStr = "Created (Upgrading)"
+								}
+
+								if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
+									stateStr = "Created (Downgrading)"
+								}
+							}
+						}
+						if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
+							if indexerState == "Paused" {
+								stateStr = "Paused"
+							} else if indexerState == "Bootstrap" || indexerState == "Warmup" {
+								stateStr = "Warmup"
+							}
+						}
+						if len(errStr) != 0 {
+							stateStr = "Error"
+						}
+
+						name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
+
+						completion := int(0)
+						key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, name)
+						if progress, ok := stats.ToMap()[key]; ok {
+							completion = int(progress.(float64))
+						}
+
+						progress := float64(0)
+						key = fmt.Sprintf("%v:completion_progress", instance.InstId)
+						if stat, ok := stats.ToMap()[key]; ok {
+							progress = math.Float64frombits(uint64(stat.(float64)))
+						}
+
+						lastScanTime := "NA"
+						key = fmt.Sprintf("%v:%v:last_known_scan_time", defn.Bucket, name)
+						if scanTime, ok := stats.ToMap()[key]; ok {
+							nsecs := int64(scanTime.(float64))
+							if nsecs != 0 {
+								lastScanTime = time.Unix(0, nsecs).Format(time.UnixDate)
+							}
+						}
+
+						partitionMap := make(map[string][]int)
+						for _, partnDef := range instance.Partitions {
+							partitionMap[mgmtAddr] = append(partitionMap[mgmtAddr], int(partnDef.PartId))
+						}
+
+						addHost(defn.DefnId, mgmtAddr, defnToHostMap)
+						isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
+						defn.NumPartitions = instance.NumPartitions
+
+						status := IndexStatus{
+							DefnId:       defn.DefnId,
+							InstId:       common.IndexInstId(instance.InstId),
+							Name:         name,
+							Bucket:       defn.Bucket,
+							IsPrimary:    defn.IsPrimary,
+							SecExprs:     defn.SecExprs,
+							WhereExpr:    defn.WhereExpr,
+							IndexType:    string(defn.Using),
+							Status:       stateStr,
+							Error:        errStr,
+							Hosts:        []string{mgmtAddr},
+							Definition:   common.IndexStatement(defn, int(instance.NumPartitions), -1, true),
+							Completion:   completion,
+							Progress:     progress,
+							Scheduled:    instance.Scheduled,
+							Partitioned:  common.IsPartitioned(defn.PartitionScheme),
+							NumPartition: len(instance.Partitions),
+							PartitionMap: partitionMap,
+							NodeUUID:     localMeta.NodeUUID,
+							NumReplica:   int(defn.GetNumReplica()),
+							IndexName:    defn.Name,
+							ReplicaId:    int(instance.ReplicaId),
+							Stale:        stale,
+							LastScanTime: lastScanTime,
+						}
+
+						list = append(list, status)
+					}
+				}
+			}
+			defns[defn.DefnId] = defn
+		}
+
+		// Memory cache the data if it is a full set
+		if metaToCache[hostKey] != nil && statsToCache[hostKey] != nil {
+			m.memCacheLocalIndexMetadata(hostKey, metaToCache[hostKey])
+			m.memCacheStats(hostKey, statsToCache[hostKey])
+		}
+	} // for each nid
+
+	// Delete obsolete entries from LocalIndexMetadata and IndexStats subset memory caches
+	m.cleanupMemoryCaches(keepKeys)
 
 	//Fix replica count
 	for i, index := range list {
@@ -719,7 +803,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 		list = m.consolideIndexStatus(list)
 	}
 
-	// persist local meta and stats to disk cache
+	// Stage local metadata and stats subset for persisting to disk cache
 	m.metaCh <- metaToCache
 	m.statsCh <- statsToCache
 
@@ -960,6 +1044,8 @@ func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *Cl
 // LocalIndexMetadata
 ///////////////////////////////////////////////////////
 
+// handleLocalIndexMetadataRequest handles incoming requests for the /getLocalIndexMetadata
+// REST endpoint.
 func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := doAuth(r, w)
@@ -1057,7 +1143,7 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 	host := r.FormValue("host")
 	host = strings.Trim(host, "\"")
 
-	meta, err := m.getLocalMetadataFromDisk(host)
+	meta, err := m.getLocalIndexMetadataFromCache(host2key(host))
 	if meta != nil && err == nil {
 		newMeta := *meta
 		newMeta.IndexDefinitions = make([]common.IndexDefn, 0, len(meta.IndexDefinitions))
@@ -1095,11 +1181,11 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 	host := r.FormValue("host")
 	host = strings.Trim(host, "\"")
 
-	stats, err := m.getIndexStatsFromDisk(host)
+	stats, err := m.getStatsFromCache(host2key(host))
 	if stats != nil && err == nil {
 		send(http.StatusOK, w, stats)
 	} else {
-		logging.Debugf("RequestHandler::handleCachedLocalIndexMetadataRequest: err %v", err)
+		logging.Debugf("RequestHandler::handleCachedStats: err %v", err)
 		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
 	}
 }
@@ -1454,6 +1540,8 @@ func sendIndexResponse(w http.ResponseWriter) {
 	send(http.StatusOK, w, result)
 }
 
+// send sends an HTTP(S) response of the specified status on success.
+// res is the response payload.
 func send(status int, w http.ResponseWriter, res interface{}) {
 
 	header := w.Header()
@@ -1474,6 +1562,10 @@ func sendHttpError(w http.ResponseWriter, reason string, code int) {
 	http.Error(w, reason, code)
 }
 
+// convertResponse attempts to unmarshal the body of an HTTP(S) response into an
+// object the caller passes in. They must pass in an object of the correct type.
+// Currently this does not verify that r.StatusCode == http.StatusOK, so the
+// unmarshaling could fail because the expected payload is not present.
 func convertResponse(r *http.Response, resp interface{}) string {
 
 	buf := new(bytes.Buffer)
@@ -1535,6 +1627,7 @@ func isAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) 
 	return true
 }
 
+// getWithAuth does an HTTP(S) GET request with Basic Authentication.
 func getWithAuth(url string) (*http.Response, error) {
 	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
 	return security.GetWithAuth(url, params)
@@ -1584,9 +1677,13 @@ func (s indexStatusSorter) Less(i, j int) bool {
 // retrieve / persist cached local index metadata
 ///////////////////////////////////////////////////////
 
-func (m *requestHandlerContext) getLocalMetadataForNode(addr string, host string, cinfo *common.ClusterInfoCache) (*LocalIndexMetadata, bool, error) {
+// getLocalIndexMetadataForNode will retrieve the latest LocalIndexMetadata for a given
+// indexer node if they are available anywhere. If the source host is responding they will
+// be from that host, else they will be from whatever indexer host has the most recent
+// cached version.
+func (m *requestHandlerContext) getLocalIndexMetadataForNode(addr string, host string, cinfo *common.ClusterInfoCache) (localMeta *LocalIndexMetadata, latest bool, err error) {
 
-	meta, err := m.getLocalMetadataFromREST(addr, host)
+	meta, err := m.getLocalIndexMetadataFromREST(addr, host)
 	if err == nil {
 		return meta, true, nil
 	}
@@ -1597,7 +1694,7 @@ func (m *requestHandlerContext) getLocalMetadataForNode(addr string, host string
 		for _, nid := range nids {
 			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 			if err1 == nil {
-				cached, err1 := m.getCachedLocalMetadataFromREST(addr, host)
+				cached, err1 := m.getCachedLocalIndexMetadataFromREST(addr, host)
 				if cached != nil && err1 == nil {
 					if latest == nil || cached.Timestamp > latest.Timestamp {
 						latest = cached
@@ -1614,7 +1711,9 @@ func (m *requestHandlerContext) getLocalMetadataForNode(addr string, host string
 	return nil, false, err
 }
 
-func (m *requestHandlerContext) getLocalMetadataFromREST(addr string, hostname string) (*LocalIndexMetadata, error) {
+// getLocalIndexMetadataFromREST gets the LocalIndexMetadata values from a (usually remote)
+// indexer node.
+func (m *requestHandlerContext) getLocalIndexMetadataFromREST(addr string, hostname string) (*LocalIndexMetadata, error) {
 
 	resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 	defer func() {
@@ -1624,27 +1723,18 @@ func (m *requestHandlerContext) getLocalMetadataFromREST(addr string, hostname s
 	}()
 
 	if err == nil {
+		// Process newly retrieved payload
 		localMeta := new(LocalIndexMetadata)
 		if status := convertResponse(resp, localMeta); status == RESP_SUCCESS {
-
-			m.mutex.Lock()
-			filename := host2file(hostname)
-			if _, ok := m.metaCache[filename]; ok {
-				logging.Debugf("getLocalMetadataFromREST: remove metadata form in-memory cache %v", filename)
-				delete(m.metaCache, filename)
-			}
-			m.mutex.Unlock()
-
 			return localMeta, nil
 		}
-
 		err = fmt.Errorf("Fail to unmarshal response from %v", hostname)
 	}
 
 	return nil, err
 }
 
-func (m *requestHandlerContext) getCachedLocalMetadataFromREST(addr string, host string) (*LocalIndexMetadata, error) {
+func (m *requestHandlerContext) getCachedLocalIndexMetadataFromREST(addr string, host string) (*LocalIndexMetadata, error) {
 
 	resp, err := getWithAuth(fmt.Sprintf("%v/getCachedLocalIndexMetadata?host=\"%v\"", addr, host))
 	defer func() {
@@ -1665,79 +1755,121 @@ func (m *requestHandlerContext) getCachedLocalMetadataFromREST(addr string, host
 	return nil, err
 }
 
-func (m *requestHandlerContext) getLocalMetadataFromDisk(hostname string) (*LocalIndexMetadata, error) {
+// getLocalIndexMetadataFromCache looks up the cached LocalIndexMetadata for the given
+// hostname from the cache (memory first, and if not found then disk). If missing
+// from memory but found on disk, it also copies the disk version to the memory cache.
+// hostKey is host2key(host:httpPort).
+func (m *requestHandlerContext) getLocalIndexMetadataFromCache(hostKey string) (*LocalIndexMetadata, error) {
 
-	filename := host2file(hostname)
-
-	m.mutex.RLock()
-	if meta, ok := m.metaCache[filename]; ok && meta != nil {
-		logging.Debugf("getLocalMetadataFromDisk(): found metadata from in-memory cache %v", filename)
-		m.mutex.RUnlock()
-		return meta, nil
+	// Look in memory cache
+	m.metaMutex.RLock()
+	localMeta, ok := m.metaCache[hostKey]
+	m.metaMutex.RUnlock()
+	if ok && localMeta != nil {
+		if logging.IsEnabled(logging.Debug) {
+			logging.Debugf("getLocalIndexMetadataFromCache: found metadata in memory cache %v", hostKey)
+		}
+		return localMeta, nil
 	}
-	m.mutex.RUnlock()
 
-	filepath := path.Join(m.metaDir, filename)
-
+	// Not found in mem cache; look in disk cache
+	filepath := path.Join(m.metaDir, hostKey)
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
-		logging.Errorf("getLocalMetadataFromDisk(): fail to read metadata from file %v.  Error %v", filepath, err)
+		logging.Errorf("getLocalIndexMetadataFromCache: fail to read metadata from file %v.  Error %v", filepath, err)
 		return nil, err
 	}
 
-	localMeta := new(LocalIndexMetadata)
+	localMeta = new(LocalIndexMetadata)
 	if err := json.Unmarshal(content, localMeta); err != nil {
-		logging.Errorf("getLocalMetadataFromDisk(): fail to unmarshal metadata from file %v.  Error %v", filepath, err)
+		logging.Errorf("getLocalIndexMetadataFromCache: fail to unmarshal metadata from file %v.  Error %v", filepath, err)
 		return nil, err
 	}
 
-	m.mutex.Lock()
-	logging.Debugf("getLocalMetadataFromDisk(): save metadata to in-memory cache %v", filename)
-	m.metaCache[filename] = localMeta
-	m.mutex.Unlock()
+	// Found on disk but not in mem, so add to mem cache
+	m.memCacheLocalIndexMetadata(hostKey, localMeta)
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("getLocalIndexMetadataFromCache: saved metadata to memory cache %v", hostKey)
+
+	}
 
 	return localMeta, nil
 }
 
-func (m *requestHandlerContext) saveLocalMetadataToDisk(hostname string, meta *LocalIndexMetadata) error {
+func (m *requestHandlerContext) saveLocalIndexMetadataToDisk(hostKey string, meta *LocalIndexMetadata) error {
 
-	filename := host2file(hostname)
-	filepath := path.Join(m.metaDir, filename)
-	temp := path.Join(m.metaDir, filename+".tmp")
+	filepath := path.Join(m.metaDir, hostKey)
+	temp := filepath + ".tmp"
 
 	content, err := json.Marshal(meta)
 	if err != nil {
-		logging.Errorf("saveLocalMetadatasToDisk(): fail to marshal metadata to file %v.  Error %v", filepath, err)
+		logging.Errorf("saveLocalIndexMetadataToDisk: fail to marshal metadata to file %v.  Error %v", filepath, err)
 		return err
 	}
 
 	err = ioutil.WriteFile(temp, content, 0755)
 	if err != nil {
-		logging.Errorf("saveLocalMetadataToDisk(): fail to save metadata to file %v.  Error %v", temp, err)
+		logging.Errorf("saveLocalIndexMetadataToDisk: fail to save metadata to file %v.  Error %v", temp, err)
 		return err
 	}
 
 	err = os.Rename(temp, filepath)
 	if err != nil {
-		logging.Errorf("saveLocalMetadataToDisk(): fail to rename metadata to file %v.  Error %v", filepath, err)
+		logging.Errorf("saveLocalIndexMetadataToDisk: fail to rename metadata to file %v.  Error %v", filepath, err)
 		return err
 	}
 
-	logging.Debugf("saveLocalMetadataToDisk(): successfully written metadata to disk for %v", filename)
+	logging.Debugf("saveLocalIndexMetadataToDisk: successfully written metadata to disk for %v", hostKey)
 
 	return nil
 }
 
-func (m *requestHandlerContext) cleanupLocalMetadataOnDisk(hostnames []string) {
+// cleanupMemoryCaches deletes obsolete entries from all getIndexStatus memory caches.
+// keepKeys correspond to the current indexer nodes; all other entries are deleted.
+func (m *requestHandlerContext) cleanupMemoryCaches(keepKeys []string) {
 
-	filenames := make([]string, len(hostnames))
-	for i, hostname := range hostnames {
-		filenames[i] = host2file(hostname)
+	// metaCache
+	m.metaMutex.Lock()
+	for cacheKey := range m.metaCache {
+		keep := false
+		for _, keepKey := range keepKeys {
+			if cacheKey == keepKey {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			delete(m.metaCache, cacheKey)
+		}
 	}
+	m.metaMutex.Unlock()
 
+	// statsCache
+	m.statsMutex.Lock()
+	for cacheKey := range m.statsCache {
+		keep := false
+		for _, keepKey := range keepKeys {
+			if cacheKey == keepKey {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			delete(m.statsCache, cacheKey)
+		}
+	}
+	m.statsMutex.Unlock()
+}
+
+// cleanupLocalIndexMetadataOnDisk takes a list of hostnames of indexer nodes that currently
+// exist, reads all filenames in the disk directory of the LocalIndexMetadata cache,
+// and deletes any that do not correspond to an entry in the hostKeys list.
+func (m *requestHandlerContext) cleanupLocalIndexMetadataOnDisk(hostKeys []string) {
+
+	// Disk files that exist
 	files, err := ioutil.ReadDir(m.metaDir)
 	if err != nil {
-		logging.Errorf("cleanupLocalMetadataOnDisk(): fail to read directory %v.  Error %v", m.metaDir, err)
+		logging.Errorf("cleanupLocalIndexMetadataOnDisk: failed to read directory %v.  Error %v", m.metaDir, err)
 		return
 	}
 
@@ -1745,26 +1877,20 @@ func (m *requestHandlerContext) cleanupLocalMetadataOnDisk(hostnames []string) {
 		filename := file.Name()
 
 		found := false
-		for _, filename2 := range filenames {
-			if filename2 == filename {
+		for _, hostKey := range hostKeys {
+			if hostKey == filename {
 				found = true
+				break
 			}
 		}
 
 		if !found {
 			filepath := path.Join(m.metaDir, filename)
 			if err := os.RemoveAll(filepath); err != nil {
-				logging.Errorf("cleanupLocalMetadataOnDisk(): fail to remove file %v.  Error %v", filepath, err)
+				logging.Errorf("cleanupLocalIndexMetadataOnDisk: failed to remove file %v.  Error %v", filepath, err)
+			} else if logging.IsEnabled(logging.Debug) {
+				logging.Debugf("cleanupLocalIndexMetadataOnDisk: successfully removed file %v.", filepath)
 			}
-
-			logging.Debugf("cleanupLocalMetadataOnDisk(): succesfully removing file %v from cache.", filepath)
-
-			m.mutex.Lock()
-			if _, ok := m.metaCache[filename]; ok {
-				logging.Debugf("cleanupMetadataFromDisk: remove metadata form in-memory cache %v", filename)
-				delete(m.metaCache, filename)
-			}
-			m.mutex.Unlock()
 		}
 	}
 }
@@ -1773,9 +1899,12 @@ func (m *requestHandlerContext) cleanupLocalMetadataOnDisk(hostnames []string) {
 // retrieve / persist cached index stats
 ///////////////////////////////////////////////////////
 
-func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo *common.ClusterInfoCache) (*common.Statistics, bool, error) {
+// getStatsForNode will retrieve the latest IndexStats subset for a given indexer node if
+// they are available anywhere. If the source host is responding they will be from that
+// host, else they will be from whatever indexer host has the most recent cached version.
+func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo *common.ClusterInfoCache) (stats *common.Statistics, latest bool, err error) {
 
-	stats, err := m.getStatsFromREST(addr, host)
+	stats, err = m.getStatsFromREST(addr, host)
 	if err == nil {
 		return stats, true, nil
 	}
@@ -1824,6 +1953,7 @@ func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo 
 	return nil, false, err
 }
 
+// getStatsFromREST gets a subset of IndexStats from a (usually remote) indexer node.
 func (m *requestHandlerContext) getStatsFromREST(addr string, hostname string) (*common.Statistics, error) {
 
 	resp, err := getWithAuth(addr + "/stats?async=true")
@@ -1834,23 +1964,13 @@ func (m *requestHandlerContext) getStatsFromREST(addr string, hostname string) (
 	}()
 
 	if err == nil {
+		// Process newly retrieved payload
 		stats := new(common.Statistics)
 		if status := convertResponse(resp, stats); status == RESP_SUCCESS {
-
-			m.mutex.Lock()
-			filename := host2file(hostname)
-			if _, ok := m.statsCache[filename]; ok {
-				logging.Debugf("getStatsFromREST: remove stats from in-memory cache %v", filename)
-				delete(m.statsCache, filename)
-			}
-			m.mutex.Unlock()
-
 			return stats, nil
 		}
-
 		err = fmt.Errorf("Fail to unmarshal response from %v", hostname)
 	}
-
 	return nil, err
 }
 
@@ -1875,79 +1995,83 @@ func (m *requestHandlerContext) getCachedStatsFromREST(addr string, host string)
 	return nil, err
 }
 
-func (m *requestHandlerContext) getIndexStatsFromDisk(hostname string) (*common.Statistics, error) {
+// getStatsFromCache looks up the cached subset of IndexStats for the given
+// hostname from the cache (memory first, and if not found then disk). If missing
+// from memory but found on disk, it also copies the disk version to the memory cache.
+// hostKey is host2Key(host:httpPort).
+func (m *requestHandlerContext) getStatsFromCache(hostKey string) (*common.Statistics, error) {
 
-	filename := host2file(hostname)
-
-	m.mutex.RLock()
-	if stats, ok := m.statsCache[filename]; ok && stats != nil {
-		logging.Debugf("getIndexStatsFromDisk(): found stats from in-memory cache %v", filename)
-		m.mutex.RUnlock()
+	// Look in memory cache
+	m.statsMutex.RLock()
+	stats, ok := m.statsCache[hostKey]
+	m.statsMutex.RUnlock()
+	if ok && stats != nil {
+		if logging.IsEnabled(logging.Debug) {
+			logging.Debugf("getStatsFromCache: found stats in memory cache %v", hostKey)
+		}
 		return stats, nil
 	}
-	m.mutex.RUnlock()
 
-	filepath := path.Join(m.statsDir, filename)
-
+	// Not found in mem cache; look in disk cache
+	filepath := path.Join(m.statsDir, hostKey)
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
-		logging.Errorf("getIndexStatsFromDisk(): fail to read stats from file %v.  Error %v", filepath, err)
+		logging.Errorf("getStatsFromCache: fail to read stats from file %v.  Error %v", filepath, err)
 		return nil, err
 	}
 
-	stats := new(common.Statistics)
+	stats = new(common.Statistics)
 	if err := json.Unmarshal(content, stats); err != nil {
-		logging.Errorf("getIndexStatsFromDisk(): fail to unmarshal stats from file %v.  Error %v", filepath, err)
+		logging.Errorf("getStatsFromCache: fail to unmarshal stats from file %v.  Error %v", filepath, err)
 		return nil, err
 	}
 
-	m.mutex.Lock()
-	m.statsCache[filename] = stats
-	logging.Debugf("getIndexStatsFromDisk(): save stats to in-memory cache %v", filename)
-	m.mutex.Unlock()
+	// Found on disk but not in mem, so add to mem cache
+	m.memCacheStats(hostKey, stats)
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf("getStatsFromCache: saved stats to memory cache %v", hostKey)
+	}
 
 	return stats, nil
 }
 
-func (m *requestHandlerContext) saveIndexStatsToDisk(hostname string, stats *common.Statistics) error {
+func (m *requestHandlerContext) saveStatsToDisk(hostKey string, stats *common.Statistics) error {
 
-	filename := host2file(hostname)
-	filepath := path.Join(m.statsDir, filename)
-	temp := path.Join(m.statsDir, filename+".tmp")
+	filepath := path.Join(m.statsDir, hostKey)
+	temp := filepath + ".tmp"
 
 	content, err := json.Marshal(stats)
 	if err != nil {
-		logging.Errorf("saveIndexStatsToDisk(): fail to marshal stats to file %v.  Error %v", filepath, err)
+		logging.Errorf("saveStatsToDisk: fail to marshal stats to file %v.  Error %v", filepath, err)
 		return err
 	}
 
 	err = ioutil.WriteFile(temp, content, 0755)
 	if err != nil {
-		logging.Errorf("saveIndexStatsToDisk(): fail to save stats to file %v.  Error %v", temp, err)
+		logging.Errorf("saveStatsToDisk: fail to save stats to file %v.  Error %v", temp, err)
 		return err
 	}
 
 	err = os.Rename(temp, filepath)
 	if err != nil {
-		logging.Errorf("saveIndexStatsToDisk(): fail to rename stats to file %v.  Error %v", filepath, err)
+		logging.Errorf("saveStatsToDisk: fail to rename stats to file %v.  Error %v", filepath, err)
 		return err
 	}
 
-	logging.Debugf("saveIndexStatsToDisk(): successfully written stats to disk for %v", filename)
+	logging.Debugf("saveStatsToDisk: successfully written stats to disk for %v", hostKey)
 
 	return nil
 }
 
-func (m *requestHandlerContext) cleanupIndexStatsOnDisk(hostnames []string) {
+// cleanupStatsOnDisk takes a list of hostnames of indexer nodes that currently
+// exist, reads all filenames in the disk directory of the IndexStats subset cache,
+// and deletes any that do not correspond to an entry in the hostKeys list.
+func (m *requestHandlerContext) cleanupStatsOnDisk(hostKeys []string) {
 
-	filenames := make([]string, len(hostnames))
-	for i, hostname := range hostnames {
-		filenames[i] = host2file(hostname)
-	}
-
+	// Disk files that exist
 	files, err := ioutil.ReadDir(m.statsDir)
 	if err != nil {
-		logging.Errorf("cleanupStatsOnDisk(): fail to read directory %v.  Error %v", m.statsDir, err)
+		logging.Errorf("cleanupStatsOnDisk: failed to read directory %v.  Error %v", m.statsDir, err)
 		return
 	}
 
@@ -1955,26 +2079,20 @@ func (m *requestHandlerContext) cleanupIndexStatsOnDisk(hostnames []string) {
 		filename := file.Name()
 
 		found := false
-		for _, filename2 := range filenames {
-			if filename2 == filename {
+		for _, hostKey := range hostKeys {
+			if hostKey == filename {
 				found = true
+				break
 			}
 		}
 
 		if !found {
 			filepath := path.Join(m.statsDir, filename)
 			if err := os.RemoveAll(filepath); err != nil {
-				logging.Errorf("cleanupStatsOnDisk(): fail to remove file %v.  Error %v", filepath, err)
+				logging.Errorf("cleanupStatsOnDisk: failed to remove file %v.  Error %v", filepath, err)
+			} else if logging.IsEnabled(logging.Debug) {
+				logging.Debugf("cleanupStatsOnDisk: successfully removed file %v.", filepath)
 			}
-
-			logging.Debugf("cleanupIndexStatsOnDisk(): succesfully removing file %v from cache.", filepath)
-
-			m.mutex.Lock()
-			if _, ok := m.statsCache[filename]; ok {
-				logging.Debugf("cleanupStatsOnDisk: remove stats from in-memory cache %v", filename)
-				delete(m.statsCache, filename)
-			}
-			m.mutex.Unlock()
 		}
 	}
 }
@@ -1983,57 +2101,49 @@ func (m *requestHandlerContext) cleanupIndexStatsOnDisk(hostnames []string) {
 // persistor
 ///////////////////////////////////////////////////////
 
+// runPersistor runs in a Go routine and persists IndexStatus data
+// from all indexer nodes to local disk cache.
 func (m *requestHandlerContext) runPersistor() {
-
-	updateMeta := func(v map[string]*LocalIndexMetadata) {
-		hostnames := make([]string, 0, len(v))
-
-		for host, meta := range v {
+	updateMeta := func(metaToCache map[string]*LocalIndexMetadata) {
+		hostKeys := make([]string, 0, len(metaToCache))
+		for hostKey, meta := range metaToCache {
 			if meta != nil {
-				m.saveLocalMetadataToDisk(host, meta)
+				m.saveLocalIndexMetadataToDisk(hostKey, meta)
 			}
-			hostnames = append(hostnames, host)
+			hostKeys = append(hostKeys, hostKey)
 		}
-
-		m.cleanupLocalMetadataOnDisk(hostnames)
+		m.cleanupLocalIndexMetadataOnDisk(hostKeys)
 	}
-
-	updateStats := func(v map[string]*common.Statistics) {
-		hostnames := make([]string, 0, len(v))
-
-		for host, stats := range v {
+	updateStats := func(statsToCache map[string]*common.Statistics) {
+		hostKeys := make([]string, 0, len(statsToCache))
+		for hostKey, stats := range statsToCache {
 			if stats != nil {
-				m.saveIndexStatsToDisk(host, stats)
+				m.saveStatsToDisk(hostKey, stats)
 			}
-			hostnames = append(hostnames, host)
+			hostKeys = append(hostKeys, hostKey)
 		}
-
-		m.cleanupIndexStatsOnDisk(hostnames)
+		m.cleanupStatsOnDisk(hostKeys)
 	}
 
 	for {
 		select {
-		case v, ok := <-m.metaCh:
+		case metaToCache, ok := <-m.metaCh:
 			if !ok {
 				return
 			}
-
 			for len(m.metaCh) > 0 {
-				v = <-m.metaCh
+				metaToCache = <-m.metaCh
 			}
+			updateMeta(metaToCache)
 
-			updateMeta(v)
-
-		case v, ok := <-m.statsCh:
+		case statsToCache, ok := <-m.statsCh:
 			if !ok {
 				return
 			}
-
 			for len(m.statsCh) > 0 {
-				v = <-m.statsCh
+				statsToCache = <-m.statsCh
 			}
-
-			updateStats(v)
+			updateStats(statsToCache)
 
 		case <-m.doneCh:
 			logging.Infof("request_handler persistor exits")
@@ -2042,7 +2152,9 @@ func (m *requestHandlerContext) runPersistor() {
 	}
 }
 
-func host2file(hostname string) string {
+// host2key converts a host:httpPort string to a key for the metaCache and statsCache.
+// This is also used as the filename for the disk halves of these caches.
+func host2key(hostname string) string {
 
 	hostname = strings.Replace(hostname, ".", "_", -1)
 	hostname = strings.Replace(hostname, ":", "_", -1)
