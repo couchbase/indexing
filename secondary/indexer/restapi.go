@@ -7,6 +7,7 @@ import "strings"
 import "strconv"
 import "fmt"
 
+import "github.com/couchbase/indexing/secondary/audit"
 import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
@@ -68,13 +69,14 @@ func (api *testServer) validateAuth(w http.ResponseWriter, r *http.Request) (cba
 	if err != nil {
 		api.writeError(w, err)
 	} else if valid == false {
+		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "testServer::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
 	}
 	return creds, valid
 }
 
-func (api *testServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool {
+func (api *testServer) authorize(r *http.Request, w http.ResponseWriter, creds cbauth.Creds) bool {
 
 	indexes, _, _, _, err := api.client.Refresh()
 	if err != nil {
@@ -136,7 +138,7 @@ func (api *testServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool
 		}
 	}
 
-	return c.IsAllAllowed(creds, permissions, w)
+	return c.IsAllAllowed(creds, permissions, r, w, "testServer::authorize")
 }
 
 // GET  /internal/indexes
@@ -150,7 +152,7 @@ func (api *testServer) handleIndexes(
 		return
 	}
 
-	if !api.authorize(w, creds) {
+	if !api.authorize(request, w, creds) {
 		return
 	}
 
@@ -194,7 +196,7 @@ func (api *testServer) handleIndex(
 		return
 	}
 
-	if !api.authorize(w, creds) {
+	if !api.authorize(request, w, creds) {
 		return
 	}
 

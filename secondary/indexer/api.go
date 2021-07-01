@@ -7,10 +7,10 @@ import (
 	"fmt"
 	re "regexp"
 
-	log "github.com/couchbase/indexing/secondary/logging"
-
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/audit"
 	c "github.com/couchbase/indexing/secondary/common"
+	log "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 )
 
@@ -249,7 +249,7 @@ func (api *restServer) authorizeStats(req request, t *target) bool {
 		return false
 	}
 
-	return c.IsAllAllowed(req.creds, permissions, req.w)
+	return c.IsAllAllowed(req.creds, permissions, req.r, req.w, "restServer::authorizeStats")
 }
 
 func (api *restServer) writeError(w http.ResponseWriter, err error) {
@@ -262,6 +262,7 @@ func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) (cba
 	if err != nil {
 		api.writeError(w, err)
 	} else if valid == false {
+		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "restServer::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
 	}

@@ -28,6 +28,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/audit"
 	c "github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -2373,10 +2374,11 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 }
 
 func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
+	const method string = "ServiceMgr::handleMoveIndex" // for logging
 
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleMoveIndex Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("%v: Validation Failure req: %v", method, c.GetHTTPReqInfo(r))
 		return
 	}
 
@@ -2426,7 +2428,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 		}
 
 		permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!alter", bucket, scope, collection)
-		if !c.IsAllowed(creds, []string{permission}, w) {
+		if !c.IsAllowed(creds, []string{permission}, r, w, method) {
 			return
 		}
 
@@ -2448,7 +2450,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		if defn == nil {
 			err := errors.New(fmt.Sprintf("Fail to find index definition for bucket %v index %v.", bucket, index))
-			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
+			l.Errorf("%v: %v", method, err)
 			send(http.StatusInternalServerError, w, err.Error())
 			return
 		}
@@ -2474,10 +2476,11 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
+	const method string = "ServiceMgr::handleMoveIndexInternal" // for logging
 
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleMoveIndexInternal Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("%v: Validation Failure req: %v", method, c.GetHTTPReqInfo(r))
 		return
 	}
 
@@ -2485,7 +2488,7 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 		bytes, _ := ioutil.ReadAll(r.Body)
 		var req manager.IndexRequest
 		if err := json.Unmarshal(bytes, &req); err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndexInternal %v", err)
+			l.Errorf("%v: err: %v", method, err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
 			return
 		}
@@ -2506,7 +2509,7 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 		}
 
 		permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!alter", req.Index.Bucket, scope, collection)
-		if !c.IsAllowed(creds, []string{permission}, w) {
+		if !c.IsAllowed(creds, []string{permission}, r, w, method) {
 			return
 		}
 
@@ -2562,25 +2565,26 @@ func (m *ServiceMgr) monitorMoveIndex() {
 }
 
 func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
+	const method string = "ServiceMgr::initMoveIndex" // for logging
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var err error
 	if !m.indexerReady {
-		l.Errorf("ServiceMgr::initMoveIndex Cannot Process Request %v", c.ErrIndexerInBootstrap)
+		l.Errorf("%v: Cannot Process Request %v", method, c.ErrIndexerInBootstrap)
 		return c.ErrIndexerInBootstrap, false
 	}
 
 	if m.checkRebalanceRunning() {
 		err = errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress")
-		l.Errorf("ServiceMgr::initMoveIndex %v", err)
+		l.Errorf("%v: err: %v", method, err)
 		return err, false
 	}
 
 	if m.getStateRebalanceID() != "" {
 		err = errors.New("Cannot Process Move Index - Failover In Progress")
-		l.Errorf("ServiceMgr::initMoveIndex %v", err)
+		l.Errorf("%v: err: %v", method, err)
 		return err, false
 	}
 
@@ -2588,7 +2592,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	if m.checkGlobalCleanupPending() {
 		err = errors.New("Cannot Process Move Index - cleanup pending from previous " +
 			"failed/aborted rebalance/failover/move index. please retry the request later.")
-		l.Errorf("ServiceMgr::initMoveIndex %v", err)
+		l.Errorf("%v: err: %v", method, err)
 		return err, false
 	}
 
@@ -2603,8 +2607,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return err, false
 	}
 
-	l.Infof("ServiceMgr::handleMoveIndex New Move Index Token %v Dest %v", m.rebalanceToken, nodes)
-
+	l.Infof("%v: New Move Index Token %v Dest %v", method, m.rebalanceToken, nodes)
 	transferTokens, err := m.generateTransferTokenForMoveIndex(req, nodes)
 	if err != nil {
 		m.rebalanceToken = nil
@@ -2618,7 +2621,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 
 	if err = m.registerRebalanceRunning(true); err != nil || m.p.ddlRunning {
 		if m.p.ddlRunning {
-			l.Errorf("ServiceMgr::handleMoveIndex Found index build running. Cannot process move index.")
+			l.Errorf("%v: Found index build running. Cannot process move index.", method)
 			fmtMsg := "move index failure - index build is in progress for indexes: %v."
 			err = errors.New(fmt.Sprintf(fmtMsg, m.p.ddlRunningIndexNames))
 		}
@@ -2646,7 +2649,6 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true
 	return nil, false
-
 }
 
 func (m *ServiceMgr) genMoveIndexToken() error {
@@ -2690,6 +2692,7 @@ func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken) error
 
 func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
 	reqNodes []string) (map[string]*c.TransferToken, error) {
+	const method string = "ServiceMgr::generateTransferTokenForMoveIndex" // for logging
 
 	topology, err := getGlobalTopology(m.localhttp)
 	if err != nil {
@@ -2707,7 +2710,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 		}
 	}
 
-	l.Infof("ServiceMgr::handleMoveIndex nodes %v uuid %v", reqNodes, reqNodeUUID)
+	l.Infof("%v: nodes %v, uuid %v", method, reqNodes, reqNodeUUID)
 
 	var currNodeUUID []string
 	var currInst [][]*c.IndexInst
@@ -2722,7 +2725,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 				numCurrInst++
 				for i, uuid := range reqNodeUUID {
 					if localMeta.IndexerId == uuid {
-						l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip Index %v. Already exist on dest %v.", index.DefnId, uuid)
+						l.Infof("%v: Skip Index %v. Already exist on dest %v.", method, index.DefnId, uuid)
 						reqNodeUUID = append(reqNodeUUID[:i], reqNodeUUID[i+1:]...)
 						break outerloop
 					}
@@ -2731,14 +2734,14 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 				topology := findTopologyByCollection(localMeta.IndexTopologies, index.Bucket, index.Scope, index.Collection)
 				if topology == nil {
 					err := errors.New(fmt.Sprintf("Fail to find index topology for bucket %v for node %v.", index.Bucket, localMeta.NodeUUID))
-					l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+					l.Errorf("%v: err: %v", method, err)
 					return nil, err
 				}
 
 				insts := topology.GetIndexInstancesByDefn(index.DefnId)
 				if len(insts) == 0 {
 					err := errors.New(fmt.Sprintf("Fail to find index instance for definition %v for node %v.", index.DefnId, localMeta.NodeUUID))
-					l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+					l.Errorf("%v: err: %v", method, err)
 					return nil, err
 				}
 
@@ -2776,39 +2779,33 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 	if len(reqNodes) != numCurrInst {
 		err := errors.New(fmt.Sprintf("Target node list must specify exactly one destination for each "+
 			"instances of the index. Request Nodes %v", reqNodes))
-		l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+		l.Errorf("%v: err: %v", method, err)
 		return nil, err
 	}
 
 	if len(currNodeUUID) != len(reqNodeUUID) {
 		err := errors.New(fmt.Sprintf("Server error in computing new destination for index. "+
 			"Request Nodes %v. Curr Nodes %v", reqNodeUUID, currNodeUUID))
-		l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+		l.Errorf("%v: err: %v", method, err)
 		return nil, err
 	}
 
 	transferTokens := make(map[string]*c.TransferToken)
-
 	for i, _ := range reqNodeUUID {
 		for _, inst := range currInst[i] {
 			ttid, tt, err := m.genTransferToken(inst, currNodeUUID[i], reqNodeUUID[i])
 			if err != nil {
 				return nil, err
 			}
-
 			if tt.SourceId == tt.DestId {
-				l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip No-op TransferToken %v", tt)
+				l.Infof("%v: Skip No-op TransferToken %v %v", method, ttid, tt)
 				continue
 			}
-
-			l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Generated TransferToken %v %v", ttid, tt)
+			l.Infof("%v: Generated TransferToken %v %v", method, ttid, tt)
 			transferTokens[ttid] = tt
 		}
-
 	}
-
 	return transferTokens, nil
-
 }
 
 func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
@@ -2892,9 +2889,7 @@ func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, d
 		tt.RealInstId = tt.InstId
 		tt.InstId = instId
 	}
-
 	return ttid, tt, nil
-
 }
 
 // moveIndexDoneCallback is the Rebalancer.cb.done callback function for a MoveIndex.
@@ -3046,6 +3041,7 @@ func (m *ServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) (cbaut
 	if err != nil {
 		m.writeError(w, err)
 	} else if valid == false {
+		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "ServiceMgr::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
 	}

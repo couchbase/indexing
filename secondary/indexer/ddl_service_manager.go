@@ -12,6 +12,7 @@ package indexer
 import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -1823,6 +1824,7 @@ func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) boo
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
 	} else if valid == false {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "DDLServiceMgr::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 	}

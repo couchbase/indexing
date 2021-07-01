@@ -36,6 +36,7 @@ import "reflect"
 import "sync"
 import "time"
 
+import "github.com/couchbase/indexing/secondary/audit"
 import "github.com/couchbase/indexing/secondary/security"
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -116,6 +117,7 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
 	} else if valid == false {
+		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "admin_httpd::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
 	}
