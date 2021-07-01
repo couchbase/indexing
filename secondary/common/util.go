@@ -25,6 +25,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/cbauthimpl"
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -1130,7 +1131,10 @@ func GenNextBiggerKey(b []byte, isPrimary bool) []byte {
 	return x.Bytes()
 }
 
-func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+// IsAllowed checks if the user creds have ANY of the specified permissions.
+// calledBy is "Class::Method" of calling function for auditing.
+func IsAllowed(creds cbauth.Creds, permissions []string, r *http.Request,
+	w http.ResponseWriter, calledBy string) bool {
 
 	allow := false
 	err := error(nil)
@@ -1141,7 +1145,6 @@ func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) 
 			break
 		}
 	}
-
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
@@ -1149,15 +1152,19 @@ func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) 
 	}
 
 	if !allow {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		audit.Audit(AUDIT_FORBIDDEN, r, "util::IsAllowed", "Called by "+calledBy)
+		w.WriteHeader(http.StatusForbidden)
+		w.Write(HTTP_STATUS_FORBIDDEN)
 		return false
 	}
 
 	return true
 }
 
-func IsAllAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+// IsAllAllowed checks if the user creds have ALL of the specified permissions.
+// calledBy is "Class::Method" of calling function for auditing.
+func IsAllAllowed(creds cbauth.Creds, permissions []string, r *http.Request,
+	w http.ResponseWriter, calledBy string) bool {
 
 	allow := true
 	err := error(nil)
@@ -1168,7 +1175,6 @@ func IsAllAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWrite
 			break
 		}
 	}
-
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
@@ -1176,8 +1182,9 @@ func IsAllAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWrite
 	}
 
 	if !allow {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		audit.Audit(AUDIT_FORBIDDEN, r, "util::IsAllAllowed", "Called by "+calledBy)
+		w.WriteHeader(http.StatusForbidden)
+		w.Write(HTTP_STATUS_FORBIDDEN)
 		return false
 	}
 
@@ -1247,8 +1254,9 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
 	} else if valid == false {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized\n"))
+		audit.Audit(AUDIT_UNAUTHORIZED, r, "util::validateAuth", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(HTTP_STATUS_UNAUTHORIZED)
 	}
 	return valid
 }
@@ -1382,6 +1390,23 @@ func GetCollectionDefaults(scope, collection string) (string, string) {
 	}
 
 	return scope, collection
+}
+
+// WriteFileWithSync simulates ioutil.WriteFile but also syncs (forces bytes
+// to disk) before closing. Returns the first error, if any.
+func WriteFileWithSync(path string, data []byte, perm os.FileMode) error {
+	fd, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, perm)
+	if err == nil { // opened, so must close
+		_, err = fd.Write(data)
+		if err == nil {
+			err = fd.Sync()
+		}
+		err2 := fd.Close()
+		if err == nil {
+			err = err2
+		}
+	}
+	return err
 }
 
 // Mapping of major and minor versions to indexer's

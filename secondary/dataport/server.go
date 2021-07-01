@@ -316,39 +316,45 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 	}
 
 	handlereq := func(cmd []interface{}) {
-		msg := cmd[0].(serverMessage)
-		switch msg.cmd {
-		case serverCmdNewConnection:
-			conn, raddr := msg.args[0].(net.Conn), msg.raddr
-			if _, ok := s.conns[raddr]; ok {
-				logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
-				conn.Close()
+		select {
+		case <-s.finch:
+			logging.Errorf("%v %q already closed\n", s.logPrefix, s.laddr)
+			return
+		default:
+			msg := cmd[0].(serverMessage)
+			switch msg.cmd {
+			case serverCmdNewConnection:
+				conn, raddr := msg.args[0].(net.Conn), msg.raddr
+				if _, ok := s.conns[raddr]; ok {
+					logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
+					conn.Close()
 
-			} else { // connection accepted
-				worker := make(chan interface{}, s.maxVbuckets)
-				s.conns[raddr] = &netConn{
-					conn: conn, worker: worker,
-					tpkt: newTransportPkt(s.maxPayload),
+				} else { // connection accepted
+					worker := make(chan interface{}, s.maxVbuckets)
+					s.conns[raddr] = &netConn{
+						conn: conn, worker: worker,
+						tpkt: newTransportPkt(s.maxPayload),
+					}
+					n := len(s.conns)
+					fmsg := "%v new connection %q +%d\n"
+					logging.Infof(fmsg, s.logPrefix, raddr, n)
+					s.startWorker(raddr)
 				}
-				n := len(s.conns)
-				fmsg := "%v new connection %q +%d\n"
-				logging.Infof(fmsg, s.logPrefix, raddr, n)
-				s.startWorker(raddr)
+
+			case serverCmdClose:
+				// before closing the dataport-server log a consolidated
+				// stats on the active-vbuckets.
+				s.logStats(hostUuids)
+				respch := cmd[1].(chan []interface{})
+				s.handleClose()
+				respch <- []interface{}{nil}
+
+			case serverCmdResetConnections:
+				logging.Errorf("%v %q reset connections ...\n", s.logPrefix, s.laddr)
+				respch := cmd[1].(chan []interface{})
+				err := s.handleResetConnections()
+				respch <- []interface{}{err}
 			}
-
-		case serverCmdClose:
-			// before closing the dataport-server log a consolidated
-			// stats on the active-vbuckets.
-			s.logStats(hostUuids)
-			respch := cmd[1].(chan []interface{})
-			s.handleClose()
-			respch <- []interface{}{nil}
-
-		case serverCmdResetConnections:
-			logging.Errorf("%v %q reset connections ...\n", s.logPrefix, s.laddr)
-			respch := cmd[1].(chan []interface{})
-			err := s.handleResetConnections()
-			respch <- []interface{}{err}
 		}
 	}
 

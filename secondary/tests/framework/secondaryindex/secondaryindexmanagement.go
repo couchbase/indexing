@@ -7,6 +7,7 @@ import (
 	"log"
 	"path"
 	"path/filepath"
+	"sync"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -51,6 +52,17 @@ func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 	return client, nil
 }
 
+func CreateClientWithConfig(server string, givenConfig c.Config) (*qc.GsiClient, error) {
+	config := givenConfig.SectionConfig("queryport.client.", true)
+	client, err := qc.NewGsiClient(server, config)
+	if err != nil {
+		log.Printf("Error while creating gsi client: ", err)
+		return nil, err
+	}
+
+	return client, nil
+}
+
 func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID uint64, ok bool) {
 
 	return GetDefnID2(client, bucket, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, indexName)
@@ -71,6 +83,33 @@ func GetDefnID2(client *qc.GsiClient, bucket, scopeName,
 		}
 	}
 	return uint64(c.IndexDefnId(0)), false
+}
+
+func GetDefnIdsDefault(client *qc.GsiClient, bucket string, indexNames []string) map[string]uint64 {
+	return GetDefnIds(client, bucket, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, indexNames)
+}
+
+func GetDefnIds(client *qc.GsiClient, bucket, scopeName, collectionName string,
+	indexNames []string) map[string]uint64 {
+
+	defnIds := make(map[string]uint64, len(indexNames))
+	for _, i := range indexNames {
+		defnIds[i] = 0
+	}
+
+	indexes, _, _, _, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		if defn.Bucket != bucket || defn.Scope != scopeName || defn.Collection != collectionName {
+			continue
+		}
+		_, ok := defnIds[defn.Name]
+		if ok {
+			defnIds[defn.Name] = uint64(index.Definition.DefnId)
+		}
+	}
+	return defnIds
 }
 
 // Creates an index and waits for it to become active
@@ -153,6 +192,46 @@ func CreateSecondaryIndexAsync(
 		skipIfExists, 0 /*timeout*/, client)
 }
 
+func CreateIndexesConcurrently(bucketName, server string,
+	indexNameToFieldMap map[string][]string, indexNameToWhereExp map[string]string,
+	indexNameToIsPrimary map[string]bool, indexNameToWith map[string][]byte,
+	skipIfExists bool, client *qc.GsiClient) []error {
+
+	var wg sync.WaitGroup
+	errList := make([]error, len(indexNameToFieldMap))
+
+	createAsync := func(in string, fields []string, errListIndex int, wg *sync.WaitGroup) {
+		defer wg.Done()
+
+		var where string
+		var with []byte
+		var isPrimary bool
+		if indexNameToWhereExp != nil {
+			where = indexNameToWhereExp[in]
+		}
+		if indexNameToWith != nil {
+			with = indexNameToWith[in]
+		}
+		if indexNameToIsPrimary != nil {
+			isPrimary = indexNameToIsPrimary[in]
+		}
+
+		err := CreateSecondaryIndexAsync(in, bucketName, server, where, fields, isPrimary, with, skipIfExists, nil)
+		errList[errListIndex] = err
+	}
+
+	errListIndex := 0
+	for indexName, indexFields := range indexNameToFieldMap {
+		wg.Add(1)
+		go createAsync(indexName, indexFields, errListIndex, &wg)
+		errListIndex++
+	}
+
+	wg.Wait()
+
+	return errList
+}
+
 // Todo: Remove this function and update functional tests to use BuildIndexes
 func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds int64) error {
 	client, e := GetOrCreateClient(server, "2itest")
@@ -233,14 +312,77 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 		state, _ := client.IndexState(defnID)
 
 		if state == c.INDEX_STATE_ACTIVE {
-			log.Printf("Index is now active")
+			log.Printf("Index is %d now active", defnID)
 			return nil
 		} else {
-			log.Printf("Waiting for index to go active ...")
+			log.Printf("Waiting for index %d to go active ...", defnID)
 			time.Sleep(1 * time.Second)
 		}
 	}
-	return nil
+}
+
+func GetStatusOfAllIndexes(server string) (indexStateMap map[string]c.IndexState, err error) {
+	var client *qc.GsiClient
+	client, err = GetOrCreateClient(server, "2itest")
+	if err != nil {
+		log.Printf("PrintStatusOfAllIndexes(): Error from GetOrCreateClient: %v ", err)
+		return
+	}
+
+	indexes, _, _, _, err := client.Refresh()
+	if err != nil {
+		log.Printf("PrintStatusOfAllIndexes(): Error from client.Refresh(): %v ", err)
+		return
+	}
+
+	indexStateMap = make(map[string]c.IndexState, len(indexes))
+	for _, index := range indexes {
+		defn := index.Definition
+		indexStateMap[defn.Name] = index.State
+	}
+
+	return
+}
+
+func WaitTillAllIndexesActive(defnIDs []uint64, client *qc.GsiClient, indexActiveTimeoutSeconds int64) error {
+	start := time.Now()
+	activeMap := make(map[uint64]bool, len(defnIDs))
+	for {
+		elapsed := time.Since(start)
+		if elapsed.Seconds() >= float64(indexActiveTimeoutSeconds) {
+			err := errors.New(fmt.Sprintf("Index did not become active after %d seconds", indexActiveTimeoutSeconds))
+			return err
+		}
+
+		for _, defnID := range defnIDs {
+			if active, ok := activeMap[defnID]; ok && active {
+				continue
+			}
+			state, _ := client.IndexState(defnID)
+
+			if state == c.INDEX_STATE_ACTIVE {
+				log.Printf("Index %d is now active", defnID)
+				activeMap[defnID] = true
+			} else {
+				log.Printf("Waiting for index %d in state %v to go active ...", defnID, state)
+				activeMap[defnID] = false
+			}
+		}
+
+		allActive := true
+		for _, active := range activeMap {
+			if !active {
+				allActive = false
+				break
+			}
+		}
+
+		if allActive {
+			return nil
+		}
+
+		time.Sleep(3 * time.Second)
+	}
 }
 
 func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int64) error {

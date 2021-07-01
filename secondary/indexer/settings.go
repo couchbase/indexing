@@ -15,6 +15,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
@@ -123,8 +124,9 @@ func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) (
 	if err != nil {
 		s.writeError(w, err)
 	} else if valid == false {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized\n"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "SettingsManager::validateAuth", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 	}
 	return creds, valid
 }
@@ -143,7 +145,8 @@ func (s *settingsManager) handleSettings(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleSettings") {
 		return
 	}
 
@@ -208,7 +211,8 @@ func (s *settingsManager) handleCompactionTrigger(w http.ResponseWriter, r *http
 		return
 	}
 
-	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleCompactionTrigger") {
 		return
 	}
 
@@ -233,7 +237,8 @@ func (s *settingsManager) handlePlasmaDiag(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handlePlasmaDiag") {
 		return
 	}
 
@@ -267,7 +272,7 @@ func (s *settingsManager) handleSupervisorCommands(cmd Message) {
 		s.handleIndexerReady()
 
 	default:
-		logging.Fatalf("settingsManager::handleSupervisorCommands Unknown Message %+v", cmd)
+		logging.Fatalf("SettingsManager::handleSupervisorCommands Unknown Message %+v", cmd)
 		common.CrashOnError(errors.New("Unknown Msg On Supv Channel"))
 	}
 
@@ -276,7 +281,7 @@ func (s *settingsManager) handleSupervisorCommands(cmd Message) {
 func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
 	if !s.indexerReady && (kve.Path == common.IndexingSettingsMetaPath || kve.Path == indexCompactonMetaPath) {
 		s.notifyPending = true
-		logging.Infof("SettingsMgr:: Dropped request %v %v. Any setting change will get applied once Indexer is ready.", kve.Path, string(kve.Value))
+		logging.Infof("SettingsMgr::metaKVCallback Dropped request %v %v. Any setting change will get applied once Indexer is ready.", kve.Path, string(kve.Value))
 		return nil
 	}
 
@@ -352,7 +357,8 @@ func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleFreeMemoryReq") {
 		return
 	}
 
@@ -368,7 +374,8 @@ func (s *settingsManager) handleForceGCReq(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleForceGCReq") {
 		return
 	}
 

@@ -45,7 +45,7 @@ var ErrScanTimedOut = errors.New("Index scan timed out")
 var ErrIndexNotFound = errors.New("Index not found")
 
 var ErrIndexNotFoundRebal = errors.New("Index not found (rebalance)") // magic string;
-	// do not use other than in lifecycle.go buildIndexesLifecycleMgr
+// do not use other than in lifecycle.go buildIndexesLifecycleMgr
 
 // Index not ready
 var ErrIndexNotReady = errors.New("Index not ready for serving queries")
@@ -130,6 +130,21 @@ const HTTP_KEY_ETAG_REQUEST = "If-None-Match" // http.Request checksum field
 const HTTP_KEY_ETAG_RESPONSE = "ETag"         // http.Response checksum field
 
 // Magic values of HTTP header fields and related constants
-const HTTP_VAL_APPLICATION_JSON = "application/json"  // for HTTP_KEY_CONTENT_TYPE
-const HTTP_VAL_ETAG_BASE = 16 // base (hex) of string-form ETag values in HTTP headers
-const HTTP_VAL_ETAG_INVALID = 0 // ETag value of 0 is treated as invalid or missing
+const HTTP_VAL_APPLICATION_JSON = "application/json" // for HTTP_KEY_CONTENT_TYPE
+const HTTP_VAL_ETAG_BASE = 16                        // base (hex) of string-form ETag values in HTTP headers
+const HTTP_VAL_ETAG_INVALID = 0                      // ETag value of 0 is treated as invalid or missing
+
+// Byte slices for HTTP error response bodies. We use these instead of e.g.
+// http.StatusText(http.StatusUnauthorized) as those don't show the error number,
+// and having them here also makes it easier for developers to know the contents.
+var HTTP_STATUS_UNAUTHORIZED []byte
+var HTTP_STATUS_FORBIDDEN []byte
+
+func init() {
+	HTTP_STATUS_UNAUTHORIZED = []byte("401 Unauthorized\n")
+	HTTP_STATUS_FORBIDDEN = []byte("403 Forbidden\n")
+}
+
+// Audit event IDs
+const AUDIT_UNAUTHORIZED = uint32(49152) // HTTP_STATUS_UNAUTHORIZED
+const AUDIT_FORBIDDEN = uint32(49153)    // HTTP_STATUS_FORBIDDEN

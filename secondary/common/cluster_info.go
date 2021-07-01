@@ -127,7 +127,7 @@ func FetchNewClusterInfoCache(clusterUrl string, pool string, userAgent string) 
 	return c, nil
 }
 
-// FetchNewClusterInfoCache2 is does not do a Implicit Fetch() like FetchNewClusterInfoCache
+// FetchNewClusterInfoCache2 does not do an Implicit Fetch() like FetchNewClusterInfoCache
 func FetchNewClusterInfoCache2(clusterUrl string, pool string, userAgent string) (*ClusterInfoCache, error) {
 
 	url, err := ClusterAuthUrl(clusterUrl)
@@ -184,20 +184,12 @@ func (c *ClusterInfoCache) Connect() (err error) {
 
 // Note: This function does not fetch BucketMap and Manifest data in c.pool
 func (c *ClusterInfoCache) FetchNodesData() (err error) {
-	c.pool, err = c.client.CallPoolURI(c.poolName)
+	c.pool, err = c.client.GetPoolWithoutRefresh(c.poolName)
 	if err != nil {
 		return err
 	}
 
-	c.updateNodesData()
-
-	found := false
-	for _, node := range c.nodes {
-		if node.ThisNode {
-			found = true
-		}
-	}
-
+	found := c.updateNodesData()
 	if !found {
 		return errors.New("Current node's cluster membership is not active")
 	}
@@ -217,16 +209,78 @@ func (c *ClusterInfoCache) FetchNodeSvsData() (err error) {
 	return nil
 }
 
-// TODO: In many places (e.g. lifecycle manager), cluster info cache
-// refresh is required only for one bucket. It is sub-optimal to update
-// the cluster info for all the buckets. Add a new method
-// (E.g., FetchForBucket) which will update the cluster info cache
-// only for that bucket.
+func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, getServerGroups bool, getTerseBucketInfo bool,
+	getBucketManifest bool) error {
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Infof("%vError occurred during cluster info update (%v) .. Retrying(%d)",
+				c.logPrefix, err, r)
+		}
+
+		vretry := 0
+	retry:
+		c.client, err = couchbase.Connect(c.url)
+		if err != nil {
+			return err
+		}
+		c.client.SetUserAgent(c.userAgent)
+
+		if err = c.FetchNodesData(); err != nil {
+			return err
+		}
+
+		if getNodeSvs {
+			if err = c.FetchNodeSvsData(); err != nil {
+				return err
+			}
+		}
+
+		if getTerseBucketInfo {
+			if err := c.pool.RefreshBucket(bucketName, true); err != nil {
+				return err
+			}
+		}
+
+		if getBucketManifest {
+			if err := c.pool.RefreshManifest(bucketName, true); err != nil {
+				return err
+			}
+		}
+
+		if getServerGroups {
+			if err := c.FetchServerGroups(); err != nil {
+				return err
+			}
+		}
+
+		if getNodeSvs {
+			if !c.validateCache(c.client.Info.IsIPv6) {
+				if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
+					vretry++
+					logging.Infof("%vValidation Failed for cluster info.. Retrying(%d)",
+						c.logPrefix, vretry)
+					goto retry
+				} else {
+					logging.Infof("%vValidation Failed for cluster info.. %v",
+						c.logPrefix, c)
+					return ErrValidationFailed
+				}
+			}
+		}
+
+		return nil
+	}
+
+	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	return rh.Run()
+}
+
 func (c *ClusterInfoCache) Fetch() error {
 
 	fn := func(r int, err error) error {
 		if r > 0 {
-			logging.Infof("%vError occured during cluster info update (%v) .. Retrying(%d)",
+			logging.Infof("%vError occurred during cluster info update (%v) .. Retrying(%d)",
 				c.logPrefix, err, r)
 		}
 
@@ -330,7 +384,7 @@ func (c *ClusterInfoCache) FetchWithLock() error {
 	return c.Fetch()
 }
 
-func (c *ClusterInfoCache) updateNodesData() {
+func (c *ClusterInfoCache) updateNodesData() bool {
 	var nodes []couchbase.Node
 	var failedNodes []couchbase.Node
 	var addNodes []couchbase.Node
@@ -367,6 +421,14 @@ func (c *ClusterInfoCache) updateNodesData() {
 	if c.version == math.MaxUint32 {
 		c.version = 0
 	}
+
+	found := false
+	for _, node := range c.nodes {
+		if node.ThisNode {
+			found = true
+		}
+	}
+	return found
 }
 
 func (c *ClusterInfoCache) FetchWithLockForPoolChange() error {
@@ -379,7 +441,7 @@ func (c *ClusterInfoCache) FetchWithLockForPoolChange() error {
 func (c *ClusterInfoCache) FetchForPoolChange() error {
 	fn := func(r int, err error) error {
 		if r > 0 {
-			logging.Infof("%vError occured during cluster info update (%v) .. Retrying(%d)",
+			logging.Infof("%vError occurred during cluster info update (%v) .. Retrying(%d)",
 				c.logPrefix, err, r)
 		}
 
@@ -391,7 +453,7 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 		}
 		c.client.SetUserAgent(c.userAgent)
 
-		np, err := c.client.CallPoolURI(c.poolName)
+		np, err := c.client.GetPoolWithoutRefresh(c.poolName)
 		if err != nil {
 			return err
 		}
@@ -401,14 +463,7 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 			return err
 		}
 
-		c.updateNodesData()
-
-		found := false
-		for _, node := range c.nodes {
-			if node.ThisNode {
-				found = true
-			}
-		}
+		found := c.updateNodesData()
 		if !found {
 			return errors.New("Current node's cluster membership is not active")
 		}
@@ -455,7 +510,7 @@ func (c *ClusterInfoCache) FetchNodesAndSvsInfoWithLock() (err error) {
 func (c *ClusterInfoCache) FetchNodesAndSvsInfo() (err error) {
 	fn := func(r int, err error) error {
 		if r > 0 {
-			logging.Infof("%vError occured during nodes and nodesvs update (%v) .. Retrying(%d)",
+			logging.Infof("%vError occurred during nodes and nodesvs update (%v) .. Retrying(%d)",
 				c.logPrefix, err, r)
 		}
 
@@ -500,7 +555,7 @@ func (c *ClusterInfoCache) FetchManifestInfoOnUIDChange(bucketName string, muid 
 	p := &c.pool
 	m, ok := p.Manifest[bucketName]
 	if !ok || m.UID != muid {
-		return p.RefreshManifest(bucketName)
+		return p.RefreshManifest(bucketName, false)
 	}
 	return nil
 }
@@ -510,7 +565,7 @@ func (c *ClusterInfoCache) FetchManifestInfo(bucketName string) error {
 	defer c.Unlock()
 
 	pool := &c.pool
-	return pool.RefreshManifest(bucketName)
+	return pool.RefreshManifest(bucketName, false)
 }
 
 // Note: This function does not update c.pool.nodes but updates

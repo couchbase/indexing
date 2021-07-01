@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
@@ -84,6 +85,8 @@ const (
 	CORRUPT_DATA_SUBDIR = ".corruptData"
 )
 
+// indexer is the central GSI class that runs the main message loop.
+// It also implements the Indexer interface.
 type indexer struct {
 	id    string
 	state common.IndexerState
@@ -306,10 +309,17 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error %+v", res)
 		return nil, res
 	}
+	clusterAddr := idx.config["clusterAddr"].String() // "127.0.0.1:<admin_port>"
+
+	// Initialize auditing
+	err := audit.InitAuditService(clusterAddr)
+	if err != nil {
+		common.CrashOnError(err)
+	}
 
 	//Initialize security context
 	encryptLocalHost := config["security.encryption.encryptLocalhost"].Bool()
-	err := idx.initSecurityContext(encryptLocalHost)
+	err = idx.initSecurityContext(encryptLocalHost)
 	if err != nil {
 		idxErr := Error{
 			code:     ERROR_INDEXER_INTERNAL_ERROR,
@@ -325,7 +335,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
-	idx.clusterInfoClient, err = common.NewClusterInfoClient(idx.config["clusterAddr"].String(), DEFAULT_POOL, idx.config)
+	idx.clusterInfoClient, err = common.NewClusterInfoClient(clusterAddr, DEFAULT_POOL, idx.config)
 	if err != nil {
 		common.CrashOnError(err)
 	}

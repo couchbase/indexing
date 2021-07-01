@@ -30,6 +30,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1744,7 +1745,7 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 	})
 
 	flushQueue := s.partnInt64Stats(func(ss *IndexStats) int64 {
-		return postiveNum(ss.numDocsFlushQueued.Value() - ss.numDocsIndexed.Value())
+		return positiveNum(ss.numDocsFlushQueued.Value() - ss.numDocsIndexed.Value())
 	})
 	s.flushQueue.Set(flushQueue)
 	statMap.AddStatValueFiltered("flush_queue_size", &s.flushQueue)
@@ -2659,8 +2660,9 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStatsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2739,8 +2741,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetrics", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2766,8 +2769,9 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMetricsHigh", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2794,8 +2798,9 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleMemStatsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2889,8 +2894,9 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStorageStatsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2946,8 +2952,9 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStorageMMStatsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2969,8 +2976,9 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStatsResetReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -3170,7 +3178,9 @@ const num_rows_scanned = "nrs"
 const last_num_rows_scanned = "lrs"
 const chunkSz = "chunkSz"
 
-// Periodically persist a subset of index stats
+// runStatsPersister runs in a goroutine and persists a subset of index stats every
+// statsPersistenceInterval seconds (not including the time taken to do the persistence),
+// unless this is disabled by being set to 0. It will recover from panics and restart.
 func (s *statsManager) runStatsPersister() {
 
 	defer func() {
@@ -3303,11 +3313,10 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 	}
 }
 
-func postiveNum(n int64) int64 {
+func positiveNum(n int64) int64 {
 	if n < 0 {
 		return 0
 	}
-
 	return n
 }
 
@@ -3322,11 +3331,12 @@ type StatsPersister interface {
 
 const STATS_DATA_DIR = "indexstats"
 
-// Flat file persister
+// FlatFileStatsPersister implements the StatsPersister interface.
+// It handles periodic stats persistence to files on disk.
 type FlatFileStatsPersister struct {
-	statsDir    string
-	filePath    string
-	newFilePath string
+	statsDir    string // stats directory path
+	filePath    string // permanent stats filename after write completes
+	newFilePath string // temporary stats filename while writing
 
 	config map[string]interface{}
 }
@@ -3345,6 +3355,7 @@ func NewFlatFilePersister(dir string, chunksz int) *FlatFileStatsPersister {
 	return &fp
 }
 
+// PersistStats is called by runStatsPersister to write stats to disk.
 func (fp *FlatFileStatsPersister) PersistStats(stats map[string]interface{}) error {
 
 	statsJson, err := commonjson.Marshal(stats)
@@ -3366,12 +3377,14 @@ func (fp *FlatFileStatsPersister) PersistStats(stats map[string]interface{}) err
 	checkSum := crc32.ChecksumIEEE(compressed)
 	binary.BigEndian.PutUint32(header[1:5], checkSum)
 
+	// Write the stats to disk
 	content := append(header, compressed...)
-	err = ioutil.WriteFile(fp.newFilePath, content, 0755)
+	err = common.WriteFileWithSync(fp.newFilePath, content, 0755)
 	if err != nil {
 		return err
 	}
 
+	// If the write succeeded, rename the file from temp to permanent name
 	err = os.Rename(fp.newFilePath, fp.filePath)
 	if err != nil {
 		return err

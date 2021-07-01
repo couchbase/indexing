@@ -17,6 +17,7 @@ import (
 
 	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 	apserver "github.com/couchbase/indexing/secondary/adminport/server"
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -830,8 +831,9 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
 	} else if valid == false {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized\n"))
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "projector::validateAuth", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 	}
 	return valid
 }
