@@ -830,8 +830,8 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
 	} else if valid == false {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized\n"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 	}
 	return valid
 }

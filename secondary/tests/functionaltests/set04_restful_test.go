@@ -767,13 +767,13 @@ func restful_stats(indexes map[string]interface{}) error {
 	}
 	log.Println("STATS: Testing URLs with valid authentication")
 	for _, URL := range auth {
-		if err := validate_status(URL, 200); err != nil {
+		if err := validate_status(URL, http.StatusOK); err != nil {
 			return err
 		}
 	}
 	log.Println("STATS: Testing URLs with invalid authentication")
 	for _, URL := range noAuth {
-		if err := validate_status(URL, 401); err != nil {
+		if err := validate_status(URL, http.StatusUnauthorized); err != nil {
 			return err
 		}
 	}
@@ -782,11 +782,11 @@ func restful_stats(indexes map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	if err := validate_status(invalid, 404); err != nil {
+	if err := validate_status(invalid, http.StatusNotFound); err != nil {
 		return err
 	}
 	for _, URL := range invalids {
-		if err := validate_status(URL, 404); err != nil {
+		if err := validate_status(URL, http.StatusNotFound); err != nil {
 			return err
 		}
 	}
@@ -795,8 +795,8 @@ func restful_stats(indexes map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != 405 {
-		return fmt.Errorf("ERROR: POST %s Returned %d Expected %d\n", auth[0], resp.StatusCode, 405)
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		return fmt.Errorf("ERROR: POST %s Returned %d Expected %d\n", auth[0], resp.StatusCode, http.StatusMethodNotAllowed)
 	}
 	return nil
 }

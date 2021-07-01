@@ -2642,8 +2642,8 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2722,8 +2722,8 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2749,8 +2749,8 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2777,8 +2777,8 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2872,8 +2872,8 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2929,8 +2929,8 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
@@ -2952,8 +2952,8 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 		w.Write([]byte(err.Error() + "\n"))
 		return
 	} else if !valid {
-		w.WriteHeader(401)
-		w.Write([]byte("401 Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
 	}
 
