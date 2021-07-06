@@ -1,0 +1,85 @@
+{
+   "placement":[
+      {
+         "nodeId":"127.0.0.1:9001",
+         "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
+         "indexerId":"",
+         "restUrl":"",
+         "serverGroup":"index 1",
+         "memUsage":260000000,
+         "cpuUsage":1,
+         "memOverhead": 165423720,
+	 "indexes": [
+		{
+			"defnId": 1111,
+			"instId": 0,
+			"name": "index1",
+			"bucket": "bucket2",
+			"host": null,
+			"avgArrSize": 0,
+			"avgArrKeySize": 0,
+			"mutationRate": 0,
+			"scanRate": 0,
+			"memUsage": 260000000,
+			"cpuUsage": 1,
+			"memOverhead": 165423720
+		}
+	 ]
+      },
+      {
+         "nodeId":"127.0.0.1:9002",
+         "nodeUUID":"abc15192216a984a53fc19de249e0ba4",
+         "indexerId":"",
+         "restUrl":"",
+         "serverGroup":"index 2",
+         "memUsage":360000000,
+         "cpuUsage":1,
+         "memOverhead": 165423720,
+	 "indexes": [
+		{
+			"defnId": 2222,
+			"instId": 0,
+			"name": "index2",
+			"bucket": "bucket2",
+			"host": null,
+			"avgArrSize": 0,
+			"avgArrKeySize": 0,
+			"mutationRate": 0,
+			"scanRate": 0,
+			"memUsage": 360000000,
+			"cpuUsage": 1,
+			"memOverhead": 165423720
+		}
+	 ]
+      },
+      {
+         "nodeId":"127.0.0.1:9003",
+         "nodeUUID":"def15192216a984a53fc19de249e0ba4",
+         "indexerId":"",
+         "restUrl":"",
+         "serverGroup":"index 1",
+         "memUsage":160000000,
+         "cpuUsage":1,
+         "memOverhead": 165423720,
+	 "indexes": [
+		{
+			"defnId": 3333,
+			"instId": 0,
+			"name": "index3",
+			"bucket": "bucket2",
+			"host": null,
+			"avgArrSize": 0,
+			"avgArrKeySize": 0,
+			"mutationRate": 0,
+			"scanRate": 0,
+			"memUsage": 160000000,
+			"cpuUsage": 1,
+			"memOverhead": 165423720
+		}
+	 ]
+      }
+   ],
+   "memQuota":100000000000,
+   "cpuQuota":30,
+   "isLive":true
+}
