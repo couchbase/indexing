@@ -143,6 +143,7 @@ type ConstraintMethod interface {
 	Print()
 	Validate(s *Solution) error
 	GetViolations(s *Solution, indexes map[*IndexUsage]bool) *Violations
+	SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool
 }
 
 type SizingMethod interface {
@@ -2056,8 +2057,8 @@ func (s *Solution) PrintLayout() {
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes))
-		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v",
-			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint)
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v",
+			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint, s.computeUsageRatio(indexer))
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
@@ -3969,6 +3970,21 @@ func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles map[
 
 	for _, indexer := range s.Placement {
 		if !c.SatisfyNodeConstraint(s, indexer, eligibles) {
+			return false
+		}
+	}
+
+	return true
+}
+
+//
+// This function determines if cluster wide constraint is satisfied.
+// This function ignores the resource constraint.
+//
+func (c *IndexerConstraint) SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool {
+
+	for _, indexer := range s.Placement {
+		if !c.SatisfyNodeHAConstraint(s, indexer, eligibles) {
 			return false
 		}
 	}
@@ -6795,25 +6811,35 @@ func canUseGreedyIndexPlacement(config *RunConfig, indexes []*IndexUsage,
 		return false, common.IndexDefnId(0)
 	}
 
-	// At this time, there aren't any eligible indexes. Check if the
-	// current cluster constraints are satisfied. If not, let the
-	// SAPlanner run
-	if ok := solution.SatisfyClusterConstraint(); !ok {
+	// At this time, there aren't any eligible indexes. It is possible that the
+	// cluster constraints not satisfied due to resource constraints. That should
+	// not lead to use of SAPlanner. Failure of SAPlanner can lead to round robin
+	// index placement which does not look at the usage based cost of the indexer
+	// nodes and hence can lead to bad index placement.
+
+	// Avoid using greedy planner if the HA constraints in the cluster are not satisfied.
+
+	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
+		logging.Infof("Cannot use greedy planner as the cluster constraints are not satisfied.")
+
 		return false, common.IndexDefnId(0)
 	}
 
 	// Safety check, if there are no indexes, return false.
 	if len(indexes) == 0 {
+		logging.Infof("Cannot use greedy planner as there aren't any indexes to place.")
 		return false, common.IndexDefnId(0)
 	}
 
 	// If initial shuffling was allowed, let the SAPlanner run
 	if config.Shuffle != 0 {
+		logging.Infof("Cannot use greedy planner as shuffle flag is set to %v", config.Shuffle)
 		return false, common.IndexDefnId(0)
 	}
 
 	// If indexes were moved for deciding initial placement, let the SAPlanner run
 	if movedIndex != uint64(0) || movedData != uint64(0) {
+		logging.Infof("Cannot use greedy planner as indxes/data has been moved (%v, %v)", movedIndex, movedData)
 		return false, common.IndexDefnId(0)
 	}
 
@@ -6831,11 +6857,13 @@ func canUseGreedyIndexPlacement(config *RunConfig, indexes []*IndexUsage,
 		if idx.HasSizingInputs() {
 			// TODO: Why can't we allow greedy method even if sizing inputs are
 			//       provided ? Esp when the index is non-partitioned ?
+			logging.Infof("Cannot use greedy planner as the index has sizing inputs.")
 			return false, common.IndexDefnId(0)
 		}
 
 		if len(defns) == 1 {
 			if _, ok := defns[idx.DefnId]; !ok {
+				logging.Infof("Cannot use greedy planner as more than one index is being placed.")
 				return false, common.IndexDefnId(0)
 			}
 		} else {
@@ -6981,7 +7009,7 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		p.placement.AddToIndexer(solution, indexer, idx)
 	}
 
-	if ok := solution.SatisfyClusterConstraint(); !ok {
+	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
 		return nil, errors.New("Cannot satisfy cluster constraints by greedy placement method")
 	}
 
