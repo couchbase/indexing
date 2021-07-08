@@ -3,10 +3,13 @@
 
 package common
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "bytes"
-import "fmt"
-import "sync"
+import (
+	"bytes"
+	"fmt"
+	"sync"
+
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 // TsVb is logical clock for a subset of vbuckets.
 type TsVb struct {
@@ -342,6 +345,8 @@ func (ts *TsVbuuid) Equal2(other *TsVbuuid, compareSnapshot bool) bool {
 }
 
 // Equal returns whether `ts` is equal or greater than `other`
+// Note: This method is currently used only in StorageMgr::handleIndexMergeSnapshot
+// This method does not compare vbuuid's if the seqno. of a vbucket is "0".
 func (ts *TsVbuuid) EqualOrGreater(other *TsVbuuid) bool {
 	if ts != nil && other == nil ||
 		ts == nil && other != nil {
@@ -363,8 +368,25 @@ func (ts *TsVbuuid) EqualOrGreater(other *TsVbuuid) bool {
 	}
 
 	for i, vbuuid := range ts.Vbuuids {
-		if other.Vbuuids[i] != vbuuid {
-			return false
+		// When there are less number of documents in the bucket and some vbuckets
+		// have no documents, then it is possible for timekeeper to generate a disk
+		// snapshot even if some stream begin messages are pending to be processed.
+		// The disk snapshot in that case would not contain vbuuid's of all vbuckets.
+		// When merge is attempted with such snapshot, this method would return "false"
+		// as some Vbuuid's would be empty in source timestamp. So, the caller of this
+		// method would panic and indexer would restart.
+		//
+		// One way to fix the issue is to wait for all stream beings and only then
+		// generate disk snaphosts. However, this logic will effect all index build cases.
+		// Since the issue is only when vbuckets have "0" seqno, this method would skip the
+		// vbuuid check if the vbucket seqno is zero.
+		//
+		// After merge, as the target timestamp is used against the merged instances, it
+		// should be ok to skip this check
+		if other.Seqnos[i] != 0 {
+			if other.Vbuuids[i] != vbuuid {
+				return false
+			}
 		}
 	}
 
