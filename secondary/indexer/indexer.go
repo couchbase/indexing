@@ -1623,34 +1623,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	ephemeral, err := idx.clusterInfoClient.IsEphemeral(indexInst.Defn.Bucket)
-	if err != nil {
-		errStr := fmt.Sprintf("Cannot Query Bucket Type of %v", indexInst.Defn.Bucket)
-		logging.Errorf(errStr)
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{severity: FATAL,
-					cause:    errors.New(errStr),
-					category: INDEXER}}
-
-		}
-		return
-	}
-
-	storageMode := common.GetStorageMode()
-	if ephemeral && storageMode != common.MOI && storageMode != common.PLASMA {
-		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v is Ephemeral but GSI storage is not MOI or PLASMA", indexInst.Defn.Bucket)
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_BUCKET_EPHEMERAL,
-					severity: FATAL,
-					cause:    ErrBucketEphemeral,
-					category: INDEXER}}
-
-		}
-		return
-	}
-
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
 
 		reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
