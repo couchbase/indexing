@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -63,6 +64,9 @@ type KVData struct {
 	uuid      uint64 // immutable
 	kvaddr    string
 	opaque2   uint64 //client opaque
+
+	stopScatter           uint32
+	stopScatterFromFeedCh chan bool
 }
 
 type KvdataStats struct {
@@ -188,12 +192,13 @@ func NewKVData(
 		endpoints: make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
-		sbch:    make(chan []interface{}, 16),
-		finch:   make(chan bool),
-		stats:   &KvdataStats{},
-		kvaddr:  kvaddr,
-		async:   async,
-		opaque2: opaque2,
+		sbch:                  make(chan []interface{}, 16),
+		finch:                 make(chan bool),
+		stopScatterFromFeedCh: make(chan bool),
+		stats:                 &KvdataStats{},
+		kvaddr:                kvaddr,
+		async:                 async,
+		opaque2:               opaque2,
 	}
 
 	uuid, err := common.NewUUID()
@@ -309,6 +314,11 @@ func (kvdata *KVData) Close() error {
 	return err
 }
 
+func (kvdata *KVData) StopScatterFromFeed() {
+	atomic.StoreUint32(&kvdata.stopScatter, 1)
+	close(kvdata.stopScatterFromFeedCh)
+}
+
 func (kvdata *KVData) GetKVStats() map[string]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
@@ -374,12 +384,14 @@ loop:
 			if breakloop := kvdata.handleCommand(msg, ts); breakloop {
 				break loop
 			}
+		case <-kvdata.stopScatterFromFeedCh:
+			break loop
 		default:
 		}
 
 		select {
 		case m, ok := <-mutch:
-			if ok == false { // upstream has closed
+			if ok == false || atomic.LoadUint32(&kvdata.stopScatter) == 1 { // upstream has closed
 				break loop
 			}
 			kvdata.stats.eventCount.Add(1)
@@ -408,6 +420,9 @@ loop:
 			if breakloop := kvdata.handleCommand(msg, ts); breakloop {
 				break loop
 			}
+
+		case <-kvdata.stopScatterFromFeedCh:
+			break loop
 		}
 	}
 }

@@ -1,16 +1,23 @@
 package projector
 
-import "fmt"
-import "time"
+import (
+	"fmt"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import couchbase "github.com/couchbase/indexing/secondary/dcp"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import projC "github.com/couchbase/indexing/secondary/projector/client"
-import "github.com/golang/protobuf/proto"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+
+	projC "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/golang/protobuf/proto"
+)
 
 // NOTE1:
 // https://github.com/couchbase/indexing/commit/
@@ -1455,9 +1462,23 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 	// close upstream
 	feeder, ok := feed.feeders[bucketn]
 	if ok {
+		if kvdata, ok := feed.kvdata[bucketn]; ok {
+			kvdata.StopScatterFromFeed()
+		}
 		// drain the .C channel until it gets closed or if this feed
 		// happends to get closed.
 		go func(C <-chan *mc.DcpEvent, finch chan bool) {
+
+			// List of all snapshot messages (per vbucket) that are drained in this go-routine
+			snapshotMsgs := make(map[uint16][][2]uint64)
+
+			defer func() {
+				for vb, snapshotMsgList := range snapshotMsgs {
+					fmsg := "%v ##%x Snapshot for vb: %v, bucket: '%v' is drained in clean-up path. List of Snapshots drained: %v"
+					logging.Warnf(fmsg, feed.logPrefix, feed.opaque, vb, bucketn, snapshotMsgList)
+				}
+			}()
+
 			for {
 				select {
 				case m, ok := <-C:
@@ -1466,6 +1487,9 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 					} else if m.Opcode == mcd.DCP_STREAMREQ {
 						fmsg := "%v ##%x DCP_STREAMREQ for vb:%d, bucket: '%v' is drained in clean-up path"
 						logging.Errorf(fmsg, feed.logPrefix, m.Opaque, m.VBucket, bucketn)
+					} else if m.Opcode == mcd.DCP_SNAPSHOT {
+						ss := [2]uint64{m.SnapstartSeq, m.SnapendSeq}
+						snapshotMsgs[m.VBucket] = append(snapshotMsgs[m.VBucket], ss)
 					}
 				case <-finch:
 					return
