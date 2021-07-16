@@ -292,6 +292,9 @@ func (slice *plasmaSlice) initStores() error {
 	cfg := plasma.DefaultConfig()
 	cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
+	cfg.RecoveryFlushBufferSize = int(slice.sysconf["plasma.recoveryFlushBufferSize"].Int())
+	cfg.SharedFlushBufferSize = int(slice.sysconf["plasma.sharedFlushBufferSize"].Int())
+	cfg.SharedRecoveryFlushBufferSize = int(slice.sysconf["plasma.sharedRecoveryFlushBufferSize"].Int())
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
