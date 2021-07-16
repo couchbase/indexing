@@ -1198,9 +1198,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.recoveryFlushBufferSize": ConfigValue{
-		1024 * 1024,
+		256 * 1024,
 		"Flush buffer size for dedicated instance recovery log",
-		1024 * 1024,
+		256 * 1024,
 		false,
 		false,
 	},
