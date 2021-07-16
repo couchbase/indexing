@@ -4,15 +4,15 @@ import qexpr "github.com/couchbase/query/expression"
 import qparser "github.com/couchbase/query/expression/parser"
 import "errors"
 
-func IsArrayExpression(exp string) (bool, bool, error) {
+func IsArrayExpression(exp string) (bool, bool, bool, error) {
 	cExpr, err := qparser.Parse(exp)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 
 	expr := cExpr.(qexpr.Expression)
-	isArray, isDistinct := expr.IsArrayIndexKey()
-	return isArray, isDistinct, nil
+	isArray, isDistinct, isFlatten := expr.IsArrayIndexKey()
+	return isArray, isDistinct, isFlatten, nil
 }
 
 func GetArrayExpressionPosition(exprs []string) (bool, bool, int, error) {
@@ -20,7 +20,7 @@ func GetArrayExpressionPosition(exprs []string) (bool, bool, int, error) {
 	isArrayDistinct := true // Default is true as we do not yet support duplicate entries
 	arrayExprPos := -1
 	for i, exp := range exprs {
-		isArray, isDistinct, err := IsArrayExpression(exp)
+		isArray, isDistinct, _, err := IsArrayExpression(exp)
 		if err != nil {
 			return false, false, -1, err
 		}
