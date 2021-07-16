@@ -2,7 +2,6 @@ package functionaltests
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -48,10 +47,6 @@ func TestEphemeralBucketBasic(t *testing.T) {
 		bucketDocs[i] = generateDocs(1000, "users.prod")
 		kvutility.SetKeyValues(bucketDocs[i], bucketNames[i], "", clusterconfig.KVAddress)
 		err := secondaryindex.CreateSecondaryIndex(indexNames[i], bucketNames[i], indexManagementAddress, "", []string{indexFields[i]}, false, nil, true, defaultIndexActiveTimeout, nil)
-		if i != 0 && clusterconfig.IndexUsing == "forestdb" {
-			FailTestIfNoError(err, "Did not see Error when creating ForestDb index on Ephemeral Bucket", t)
-			goto cleanup
-		}
 		FailTestIfError(err, "Error in creating the index", t)
 	}
 	time.Sleep(3 * time.Second)
@@ -84,7 +79,6 @@ func TestEphemeralBucketBasic(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-cleanup:
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[1])
 	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -99,11 +93,6 @@ cleanup:
 }
 
 func TestEphemeralBucketRecovery(t *testing.T) {
-	if clusterconfig.IndexUsing == "forestdb" {
-		fmt.Println("Not running TestEphemeralBucketRecovery for forestdb")
-		return
-	}
-
 	log.Printf("In TestEphemeralBucketRecovery()")
 
 	numOfBuckets := 2
@@ -162,10 +151,6 @@ func TestEphemeralBucketRecovery(t *testing.T) {
 }
 
 func TestEphemeralBucketFlush(t *testing.T) {
-	if clusterconfig.IndexUsing == "forestdb" {
-		fmt.Println("Not running TestEphemeralBucketFlush for forestdb")
-		return
-	}
 	log.Printf("In TestEphemeralBucketFlush()")
 
 	numOfBuckets := 2
@@ -222,11 +207,6 @@ func TestEphemeralBucketFlush(t *testing.T) {
 }
 
 func TestEphemeralBucketMCDCrash(t *testing.T) {
-	if clusterconfig.IndexUsing == "forestdb" {
-		fmt.Println("Not running TestEphemeralBucketMCDCrash for forestdb")
-		return
-	}
-
 	log.Printf("In TestEphemeralBucketMCDCrash()")
 
 	numOfBuckets := 2

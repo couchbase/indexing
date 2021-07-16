@@ -47,6 +47,7 @@ type LifecycleMgr struct {
 	incomings  chan *requestHolder // normal priority DDL requests from clients
 	expedites  chan *requestHolder // high priority DDL-related requests from clients
 	bootstraps chan *requestHolder // bootstrap-related requests from clients
+	parallels  chan *requestHolder // lightweight requests that can run in parallel with expediates & incomings safely
 	outgoings  chan c.Packet       // responses back to clients
 
 	killch           chan bool
@@ -167,6 +168,7 @@ func NewLifecycleMgr(clusterURL string) (*LifecycleMgr, error) {
 		clusterURL:                 clusterURL,
 		incomings:                  make(chan *requestHolder, 100000),
 		expedites:                  make(chan *requestHolder, 100000),
+		parallels:                  make(chan *requestHolder, 100000),
 		outgoings:                  make(chan c.Packet, 100000),
 		killch:                     make(chan bool),
 		bootstraps:                 make(chan *requestHolder, 1000),
@@ -247,6 +249,9 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 		// detect if there is any change to indexer info (e.g. serverGroup)
 		go m.updator.run()
 
+		// allows requests processing to start for parallels requests
+		go m.processParallelsRequests()
+
 		// allow request processing to go through
 		close(m.bootstraps)
 
@@ -275,7 +280,15 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 			}
 		}
 
-		if op == client.OPCODE_UPDATE_INDEX_INST ||
+		if op == client.OPCODE_CONFIG_UPDATE ||
+			op == client.OPCODE_GET_REPLICA_COUNT ||
+			op == client.OPCODE_CHECK_TOKEN_EXIST ||
+			op == client.OPCODE_CLIENT_STATS ||
+			op == client.OPCODE_REBALANCE_RUNNING||
+			op == client.OPCODE_BROADCAST_STATS {
+			m.parallels <- req
+
+		} else if op == client.OPCODE_UPDATE_INDEX_INST ||
 			op == client.OPCODE_DROP_OR_PRUNE_INSTANCE ||
 			op == client.OPCODE_MERGE_PARTITION ||
 			op == client.OPCODE_PREPARE_CREATE_INDEX ||
@@ -382,6 +395,34 @@ END_BOOTSTRAP:
 	}
 }
 
+
+func (m *LifecycleMgr) processParallelsRequests() {
+
+	logging.Debugf("LifecycleMgr.processParallelsRequests(): indexer is ready to process client request on parallels channel.")
+	factory := message.NewConcreteMsgFactory()
+
+	m.done.Add(1)
+	defer m.done.Done()
+
+	for {
+		select {
+		case request, ok := <-m.parallels:
+			if ok {
+				// TOOD: deal with error
+				m.dispatchRequest(request, factory)
+			} else {
+				// server shutdown.
+				logging.Infof("LifecycleMgr.processParallelsRequests(): channel for receiving client request is closed. Terminate.")
+				return
+			}
+		case <-m.killch:
+			// server shutdown
+			logging.Infof("LifecycleMgr.processParallelsRequests(): receive kill signal. Stop Client request processing.")
+			return
+		}
+	}
+}
+
 // dispatchRequest *synchronously* executes requests from the bootstrap, expidites, and incomings
 // queues of client requests, as well as the special case OPCODE_SERVICE_MAP operation for which
 // this function is called in its own go routine and thus effectively runs asynchronously. It then
@@ -402,8 +443,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	start := time.Now()
 	defer func() {
 		if op != client.OPCODE_BROADCAST_STATS {
-			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v len(outgoings) %v error %v",
-				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings), len(m.outgoings), err)
+			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v len(outgoings) %v len(parallels) %v error %v",
+				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings), len(m.outgoings), len(m.parallels), err)
 		}
 	}()
 
