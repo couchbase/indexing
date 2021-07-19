@@ -1908,14 +1908,16 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	// Array index related information
 	//
 	isArrayIndex := false
+	isArrayFlattened := false
 	arrayExprCount := 0
 	for _, exp := range secExprs {
-		isArray, _, _, err := queryutil.IsArrayExpression(exp)
+		isArray, _, isFlatten, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Fails to create index.  Error in parsing expression %v : %v", exp, err)), false
 		}
 		if isArray == true {
 			isArrayIndex = isArray
+			isArrayFlattened = isFlatten
 			arrayExprCount++
 		}
 	}
@@ -1965,6 +1967,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Nodes:              nodes,
 		Immutable:          immutable,
 		IsArrayIndex:       isArrayIndex,
+		IsArrayFlattened:   isArrayFlattened,
 		NumReplica:         uint32(numReplica),
 		HashScheme:         c.CRC32,
 		NumPartitions:      uint32(numPartition),

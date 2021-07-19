@@ -1,8 +1,11 @@
 package queryutil
 
-import qexpr "github.com/couchbase/query/expression"
-import qparser "github.com/couchbase/query/expression/parser"
-import "errors"
+import (
+	"errors"
+
+	qexpr "github.com/couchbase/query/expression"
+	qparser "github.com/couchbase/query/expression/parser"
+)
 
 func IsArrayExpression(exp string) (bool, bool, bool, error) {
 	cExpr, err := qparser.Parse(exp)
@@ -15,22 +18,24 @@ func IsArrayExpression(exp string) (bool, bool, bool, error) {
 	return isArray, isDistinct, isFlatten, nil
 }
 
-func GetArrayExpressionPosition(exprs []string) (bool, bool, int, error) {
+func GetArrayExpressionPosition(exprs []string) (bool, bool, bool, int, error) {
 	isArrayIndex := false
-	isArrayDistinct := true // Default is true as we do not yet support duplicate entries
+	isArrayDistinct := true   // Default is true as we do not yet support duplicate entries
+	isArrayFlattened := false // Default is false as user has to explicitly specify "FLATTEN" keyword for array flattening
 	arrayExprPos := -1
 	for i, exp := range exprs {
-		isArray, isDistinct, _, err := IsArrayExpression(exp)
+		isArray, isDistinct, isFlatten, err := IsArrayExpression(exp)
 		if err != nil {
-			return false, false, -1, err
+			return false, false, false, -1, err
 		}
 		if isArray == true {
 			isArrayIndex = isArray
 			isArrayDistinct = isDistinct
+			isArrayFlattened = isFlatten
 			arrayExprPos = i
 		}
 	}
-	return isArrayIndex, isArrayDistinct, arrayExprPos, nil
+	return isArrayIndex, isArrayDistinct, isArrayFlattened, arrayExprPos, nil
 }
 
 func GetXATTRNames(exprs []string) (present bool, names []string, err error) {

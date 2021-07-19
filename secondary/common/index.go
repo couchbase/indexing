@@ -221,6 +221,7 @@ type IndexDefn struct {
 	Immutable          bool       `json:"immutable,omitempty"`
 	Nodes              []string   `json:"nodes,omitempty"`
 	IsArrayIndex       bool       `json:"isArrayIndex,omitempty"`
+	IsArrayFlattened   bool       `json:"isArrayFlattened,omitempty"`
 	NumReplica         uint32     `json:"numReplica,omitempty"`
 	PartitionKeys      []string   `json:"partitionKeys,omitempty"`
 	RetainDeletedXATTR bool       `json:"retainDeletedXATTR,omitempty"`
@@ -325,6 +326,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		Immutable:          idx.Immutable,
 		Nodes:              idx.Nodes,
 		IsArrayIndex:       idx.IsArrayIndex,
+		IsArrayFlattened:   idx.IsArrayFlattened,
 		NumReplica:         idx.NumReplica,
 		RetainDeletedXATTR: idx.RetainDeletedXATTR,
 		NumDoc:             idx.NumDoc,

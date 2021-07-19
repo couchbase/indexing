@@ -110,6 +110,7 @@ type plasmaSlice struct {
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
+	isArrayFlattened  bool
 
 	encodeBuf        [][]byte
 	arrayBuf1        [][]byte
@@ -239,7 +240,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	}
 
 	// Array related initialization
-	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
+	_, slice.isArrayDistinct, slice.isArrayFlattened, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
 	}
@@ -908,7 +909,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		}
 
 		oldEntriesBytes, oldKeyCount, newbufLen, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
-			tmpBuf, mdb.isArrayDistinct, false, szConf)
+			tmpBuf, mdb.isArrayDistinct, mdb.isArrayFlattened, false, szConf)
 		mdb.arrayBuf1[workerId] = resizeArrayBuf(mdb.arrayBuf1[workerId], newbufLen, szConf.allowLargeKeys)
 
 		if err != nil {
@@ -924,7 +925,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	if key != nil {
 
 		newEntriesBytes, newKeyCount, newbufLen, err = ArrayIndexItems(key, mdb.arrayExprPosition,
-			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, !szConf.allowLargeKeys, szConf)
+			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, mdb.isArrayFlattened, !szConf.allowLargeKeys, szConf)
 		mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], newbufLen, szConf.allowLargeKeys)
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in creating "+
@@ -1257,7 +1258,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
-		tmpBuf, mdb.isArrayDistinct, false, szConf)
+		tmpBuf, mdb.isArrayDistinct, mdb.isArrayFlattened, false, szConf)
 	if err != nil {
 		// TODO: Do not crash for non-storage operation. Force delete the old entries
 		common.CrashOnError(err)

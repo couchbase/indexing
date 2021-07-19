@@ -166,6 +166,7 @@ type memdbSlice struct {
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
+	isArrayFlattened  bool
 
 	encodeBuf        [][]byte
 	arrayBuf         [][]byte
@@ -259,7 +260,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.initStores()
 
 	// Array related initialization
-	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
+	_, slice.isArrayDistinct, slice.isArrayFlattened, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +636,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 	var nmut int
 	newEntriesBytes, newKeyCount, newbufLen, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
-		mdb.arrayBuf[workerId], mdb.isArrayDistinct, !szConf.allowLargeKeys, szConf)
+		mdb.arrayBuf[workerId], mdb.isArrayDistinct, mdb.isArrayFlattened, !szConf.allowLargeKeys, szConf)
 	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], newbufLen, szConf.allowLargeKeys)
 	if err != nil {
 		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+

@@ -25,7 +25,15 @@ var (
 // with all other items in the composite secondary key
 // Example: if input key is [35, ["Dave", "Ann", "Pete"]] and arrayPos = 1, this generates the product as:
 // [30, "Dave"] , [30, "Ann"], [30, "Pete"]
-func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte, error) {
+//
+// When index is created with "FLATTEN_KEYS" keyword, the array items are flattened
+// E.g., create index idx on default(org, DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age) for v in dob END)
+// If the input key is: ["Couchbase", [["Alice", 24], ["Bob", 24]]], then this method generates
+// output as ["Couchbase", "Alice", 24], ["Couchbase", "Bob", 24].
+//
+// With out FLATTEN support, for the input key: ["Couchbase", [["Alice", 24], ["Bob", 24]]],
+// the output would be ["Couchbase", ["Alice", 24]], ["Couchbase", ["Bob", 24]]
+func splitSecondaryArrayKey(key []byte, arrayPos int, isFlatten bool, tmpBuf []byte) ([][][]byte, error) {
 	var arrayLen int
 	var arrayItem [][]byte
 
@@ -72,6 +80,13 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 		return arrayIndexEntries, nil
 	}
 
+	if isFlatten {
+		arrayItem, err = FlattenArray(arrayItem, tmpBuf, codec)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if hasArray {
 		for _, element := range arrayItem {
 			element2 := make([][]byte, len(secKeyObject))
@@ -85,11 +100,11 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 }
 
 func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
-	isDistinct, checkSize bool, sz keySizeConfig) ([][]byte, []int, int, error) {
+	isDistinct, isFlatten, checkSize bool, sz keySizeConfig) ([][]byte, []int, int, error) {
 	var items [][]byte
 	var err error
 
-	itemArrays, err := splitSecondaryArrayKey(bs, arrPos, buf)
+	itemArrays, err := splitSecondaryArrayKey(bs, arrPos, isFlatten, buf)
 	if err != nil {
 		return nil, nil, len(buf), err
 	}
@@ -188,4 +203,27 @@ func CompareArrayEntriesWithCount(newKey, oldKey [][]byte, newKeyCount, oldKeyCo
 		newKey[index] = nil
 	}
 	return newKey, oldKey
+}
+
+func FlattenArray(arrayItem [][]byte, tmpBuf []byte, codec *collatejson.Codec) ([][]byte, error) {
+
+	for itemIndex, arrItem := range arrayItem {
+		flattenedEntries, err := codec.ExplodeArray4(arrItem, tmpBuf)
+		if err != nil {
+			if err == collatejson.ErrorOutputLen {
+				newBuf2 := make([]byte, 0, len(arrItem)*3)
+				flattenedEntries, err = codec.ExplodeArray4(arrItem, newBuf2)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		joinBuf := make([]byte, 0, len(arrItem))
+		// Join all the flattened entries
+		for _, entry := range flattenedEntries {
+			joinBuf = append(joinBuf, entry...)
+		}
+		arrayItem[itemIndex] = joinBuf
+	}
+	return arrayItem, nil
 }
