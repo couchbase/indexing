@@ -1156,6 +1156,12 @@ func (c *ClusterInfoCache) GetServerVersion(nid NodeId) (int, error) {
 			return INDEXER_65_VERSION, nil
 		}
 	}
+	if version == 7 {
+		if minorVersion >= 1 {
+			return INDEXER_71_VERSION, nil
+		}
+		return INDEXER_70_VERSION, nil
+	}
 	return INDEXER_55_VERSION, nil
 }
 

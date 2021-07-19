@@ -1926,6 +1926,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
 	}
 
+	if isArrayIndex && isArrayFlattened && (version < c.INDEXER_71_VERSION || clusterVersion < c.INDEXER_71_VERSION) {
+		return nil,
+			errors.New("Fail to create index with flatten array. This option is available only after all nodes in the cluster are atleast running on server 7.1 version"),
+			false
+	}
+
 	//
 	// Ascending/Descending key
 	//
