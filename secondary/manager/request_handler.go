@@ -713,27 +713,29 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	for _, nid := range nids {
 
 		// mgmtAddr is this node's "cluster" address (host:uiPort), NOT a key for caches
-		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt")
+		// TODO: Check this when user can specify encrypted port from query
+		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", false)
 		if err != nil {
 			logging.Errorf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
 			continue
 		}
 
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
-			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
+			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, true) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
 
-		u, err := security.GetURL(addr)
+		// Use same un-encrypted port number as key, even if the encryption level changes in between
+		addrForKey, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, false)
 		if err != nil {
-			logging.Debugf("RequestHandler::getIndexStatus: Fail to parse URL %v", addr)
+			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, false) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
 
-		hostname := u.Host
+		hostname := addrForKey
 		hostKey := host2key(hostname) // key to caches
 		keepKeys = append(keepKeys, hostKey)
 		stale := false
@@ -1295,7 +1297,7 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 
 	for i, nid := range nids {
 
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err == nil {
 
 			url := "/getLocalIndexMetadata"
@@ -2492,7 +2494,7 @@ func (m *requestHandlerContext) getLocalIndexMetadataForNode(addr string, host s
 		var latest *LocalIndexMetadata
 		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
-			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err1 == nil {
 				cached, err1 := m.getCachedLocalIndexMetadataFromREST(addr, host)
 				if cached != nil && err1 == nil {
@@ -2727,7 +2729,7 @@ func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo 
 		var latest *common.Statistics
 		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
-			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err1 == nil {
 				cached, err1 := m.getCachedStatsFromREST(addr, host)
 				if cached != nil && err1 == nil {
@@ -3276,7 +3278,7 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 			cinfo.RLock()
 			defer cinfo.RUnlock()
 
-			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err == nil {
 				url := "/getLocalIndexMetadata?bucket=" + u.QueryEscape(bucket)
 				if len(include) != 0 {
@@ -3336,7 +3338,7 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 		localMeta := new(LocalIndexMetadata)
 		status := convertResponse(resp, localMeta)
 		if status == RESP_ERROR {
-			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from node id %v.", nid))
 			} else {
@@ -3660,7 +3662,8 @@ func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, 
 		fetched = true
 	}
 
-	return s.cinfo.GetServiceAddress(nid, "mgmt")
+	// TODO: Check impact of having an un encrypted port here
+	return s.cinfo.GetServiceAddress(nid, "mgmt", false)
 }
 
 func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {

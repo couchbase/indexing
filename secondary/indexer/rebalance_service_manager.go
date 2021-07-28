@@ -1522,10 +1522,10 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 	for _, nid := range nids {
 
-		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
+		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 		if err == nil {
 
-			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE)
+			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Local Service Address %v", err)
 				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
@@ -2837,14 +2837,15 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
 	for _, nid := range nids {
 
-		maddr, err := m.cinfo.GetServiceAddress(nid, "mgmt")
+		// TODO: Check this when user can specify encrypted port from query.
+		maddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", false)
 		if err != nil {
 			return "", err
 		}
 
 		if maddr == dest {
 
-			haddr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
+			haddr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				return "", err
 			}

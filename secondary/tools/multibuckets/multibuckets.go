@@ -1,21 +1,27 @@
 package main
 
-import "flag"
-import "fmt"
-import "log"
-import "os"
-import "strings"
-import "time"
-import "sync"
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/dataport"
-import "github.com/couchbase/indexing/secondary/projector"
-import projc "github.com/couchbase/indexing/secondary/projector/client"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import data "github.com/couchbase/indexing/secondary/protobuf/data"
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dataport"
+	"github.com/couchbase/indexing/secondary/projector"
+
+	projc "github.com/couchbase/indexing/secondary/projector/client"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+
+	data "github.com/couchbase/indexing/secondary/protobuf/data"
+)
 
 var pooln = "default"
 
@@ -221,7 +227,7 @@ func getProjectorAdminport(cluster, pooln string) string {
 		log.Fatal(err)
 	}
 	nodeID := cinfo.GetCurrentNode()
-	adminport, err := cinfo.GetServiceAddress(nodeID, "projector")
+	adminport, err := cinfo.GetServiceAddress(nodeID, "projector", false)
 	if err != nil {
 		log.Fatal(err)
 	}
