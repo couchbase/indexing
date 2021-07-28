@@ -1293,7 +1293,7 @@ func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, e
 			return nil, nil, err
 		} else {
 			vbs = append(vbs, vbnos...)
-			addr, err := cinfo.GetServiceAddress(nid, "projector")
+			addr, err := cinfo.GetServiceAddress(nid, "projector", true)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1314,7 +1314,7 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 
 	var addrList []string
 	for _, nid := range nodes {
-		addr, err := cinfo.GetServiceAddress(nid, "projector")
+		addr, err := cinfo.GetServiceAddress(nid, "projector", true)
 		if err != nil {
 			return nil, err
 		}
@@ -1360,7 +1360,7 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]st
 		}
 
 		if found {
-			addr, err := cinfo.GetServiceAddress(n, "projector")
+			addr, err := cinfo.GetServiceAddress(n, "projector", true)
 			if err != nil {
 				return nil, err
 			}

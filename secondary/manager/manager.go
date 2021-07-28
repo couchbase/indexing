@@ -172,7 +172,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
+	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE, true)
 	if err != nil {
 		mgr.Close()
 		return nil, err

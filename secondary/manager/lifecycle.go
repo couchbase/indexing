@@ -3069,17 +3069,17 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 	}
 	srvMap.IndexerId = string(id)
 
-	srvMap.ScanAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE)
+	srvMap.ScanAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE, true)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.HttpAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
+	srvMap.HttpAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE, true)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.AdminAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE)
+	srvMap.AdminAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE, true)
 	if err != nil {
 		return nil, err
 	}

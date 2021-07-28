@@ -3,19 +3,22 @@
 
 package client
 
-import "net/http"
-import "encoding/json"
-import "bytes"
-import "fmt"
-import "io/ioutil"
-import "errors"
-import "strings"
-import "sync"
-import "math"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"math"
+	"net/http"
+	"strings"
+	"sync"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/common"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+)
 
 // indexError for a failed index-request.
 type indexError struct {
@@ -67,11 +70,11 @@ func newCbqClient(cluster string) (*cbqClient, error) {
 		err := fmt.Errorf("cinfo.GetNodesByServiceType() returns %d nodes", l)
 		return nil, err
 	}
-	adminport, err := cinfo.GetServiceAddress(nodes[0], "indexAdmin")
+	adminport, err := cinfo.GetServiceAddress(nodes[0], "indexAdmin", true)
 	if err != nil {
 		return nil, err
 	}
-	queryport, err := cinfo.GetServiceAddress(nodes[0], "indexScan")
+	queryport, err := cinfo.GetServiceAddress(nodes[0], "indexScan", true)
 	if err != nil {
 		return nil, err
 	}

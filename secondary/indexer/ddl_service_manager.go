@@ -1473,7 +1473,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
 
-			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err == nil {
 
 				resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
@@ -1490,7 +1490,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 				if nodes[service.NodeID(localMeta.NodeUUID)] {
 					httpAddrMap[localMeta.NodeUUID] = addr
 
-					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -1516,7 +1516,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 		for _, nid := range nids {
-			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 			if err != nil {
 				return nil, nil, err
 			}

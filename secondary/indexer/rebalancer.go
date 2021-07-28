@@ -1506,7 +1506,7 @@ func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
 
 	for _, nid := range nids {
 
-		addr, err := cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 		if err == nil {
 
 			resp, err := getWithAuth(addr + url)

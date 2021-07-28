@@ -1813,7 +1813,7 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, i
 		}
 		logging.Verbosef("node %v status: %q", node, status)
 		if status == "healthy" || status == "active" || status == "warmup" {
-			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
+			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin", true)
 			if err != nil {
 				return nil, 0, 0, 0, 0, err
 			}

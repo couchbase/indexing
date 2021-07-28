@@ -13,10 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"github.com/couchbase/indexing/secondary/security"
 	"net"
 	"net/http"
 	"runtime"
@@ -24,6 +20,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 // ClusterInfoClient gets initialized in RetrievePlanFromCluster
@@ -233,7 +234,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		node.ServerGroup = cinfo.GetServerGroup(nid)
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::getIndexLayout: Error from getting service address for node %v. Error = %v", node.NodeId, err)
 			return nil, err
@@ -445,7 +446,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		}
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::getIndexStats: Error from getting service address for node %v. Error = %v", nodeId, err)
 			return err
@@ -878,7 +879,7 @@ func getIndexSettings(plan *Plan) error {
 		}
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::getIndexSettings: Error from getting service address for node %v. Error = %v", nodeId, err)
 			return err
@@ -938,7 +939,8 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 //
 func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, error) {
 
-	addr, err := cinfo.GetServiceAddress(nid, "mgmt")
+	// TODO: Check this when user can specify encrypted port from query
+	addr, err := cinfo.GetServiceAddress(nid, "mgmt", false)
 	if err != nil {
 		return "", err
 	}
@@ -1252,7 +1254,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 		}
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::processCreateToken: Error from getting service address for node %v. Error = %v", nodeId, err)
 			return err
@@ -1387,7 +1389,7 @@ func processDeleteToken(indexers []*IndexerNode) error {
 		}
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::processDeleteToken: Error from getting service address for node %v. Error = %v", nodeId, err)
 			return err
@@ -1494,7 +1496,7 @@ func processDropInstanceToken(indexers []*IndexerNode,
 		}
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::processDropInstanceToken: Error from getting service address for node %v. Error = %v", nodeId, err)
 			return err
@@ -1593,7 +1595,7 @@ func getIndexNumReplica(plan *Plan) error {
 		}
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::getIndexNumReplica: Error from getting service address for node %v. Error = %v", nodeId, err)
 			return err
