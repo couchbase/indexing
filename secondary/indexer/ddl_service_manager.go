@@ -1895,7 +1895,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
 
-			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err == nil {
 
 				resp, err := getWithAuth(addr + "/getLocalIndexMetadata?useETag=false")
@@ -1912,7 +1912,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 				if nodes[service.NodeID(localMeta.NodeUUID)] {
 					httpAddrMap[localMeta.NodeUUID] = addr
 
-					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -1938,7 +1938,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 		for _, nid := range nids {
-			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2266,7 +2266,7 @@ func postSchedTransferMap(transferMap map[string][]*mc.ScheduleCreateToken, clus
 				return fmt.Errorf("node with uuiid %v not found in cluster info cache", nodeUUID)
 			}
 
-			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				return fmt.Errorf("error in GetServiceAddress %v", err)
 			}

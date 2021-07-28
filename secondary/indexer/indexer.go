@@ -497,14 +497,14 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 
 	security.RegisterCallback("indexer", fn)
 
-	if err := refreshSecurityContextOnTopology(clusterAddr); err != nil {
+	if err := idx.refreshSecurityContextOnTopology(clusterAddr); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func refreshSecurityContextOnTopology(clusterAddr string) error {
+func (idx *indexer) refreshSecurityContextOnTopology(clusterAddr string) error {
 
 	fn := func(r int, e error) error {
 		var cinfo *common.ClusterInfoCache
@@ -525,7 +525,15 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 			return err
 		}
 
-		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
+		// When adding the node during the init time. nodesvs will not have httpPort in it.
+		// Add Port mapping from command line if the mapping does not have port.
+		mapping := cinfo.EncryptPortMapping()
+		httpPort := idx.config["httpPort"].String()
+		if _, ok := mapping[httpPort]; !ok {
+			httpsPort := idx.config["httpsPort"].String()
+			mapping[httpPort] = httpsPort
+		}
+		security.SetEncryptPortMapping(mapping)
 
 		return nil
 	}
@@ -546,8 +554,8 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	if refreshEncrypt {
 		logging.Infof("handleSecurityChange: refresh security context")
 		clusterAddr := idx.config["clusterAddr"].String()
-		if err := refreshSecurityContextOnTopology(clusterAddr); err != nil {
-			exitFn(fmt.Sprintf("Fail to refresh security contexxt on security change. Error %v", err))
+		if err := idx.refreshSecurityContextOnTopology(clusterAddr); err != nil {
+			exitFn(fmt.Sprintf("Fail to refresh security context on security change. Error %v", err))
 		}
 	}
 
@@ -5012,6 +5020,7 @@ func (idx *indexer) initServiceAddressMap() {
 	ServiceAddrMap[common.INDEX_ADMIN_SERVICE] = idx.config["adminPort"].String()
 	ServiceAddrMap[common.INDEX_SCAN_SERVICE] = idx.config["scanPort"].String()
 	ServiceAddrMap[common.INDEX_HTTP_SERVICE] = idx.config["httpPort"].String()
+	ServiceAddrMap[common.INDEX_HTTPS_SERVICE] = idx.config["httpsPort"].String()
 
 	common.SetServicePorts(ServiceAddrMap)
 }
