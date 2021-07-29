@@ -84,13 +84,18 @@ const (
 	EMPTY_INDEX_MEMUSAGE = 8
 )
 
+var ErrNoAvailableIndexer = errors.New("Cannot find any indexer that can add new indexes")
+
 //////////////////////////////////////////////////////////////
 // Interface
 //////////////////////////////////////////////////////////////
 
 type Planner interface {
-	Plan(indexers []*IndexerNode, indexes []*IndexUsage) *Solution
+	Plan(command CommandType, solution *Solution) (*Solution, error)
+	GetResult() *Solution
 	Print()
+	PrintCost()
+	SetParam(map[string]interface{}) error
 }
 
 type CostMethod interface {
@@ -109,6 +114,7 @@ type CostMethod interface {
 type PlacementMethod interface {
 	Move(s *Solution) (bool, bool, bool)
 	Add(s *Solution, indexes []*IndexUsage) error
+	AddToIndexer(s *Solution, indexer *IndexerNode, idx *IndexUsage)
 	InitialPlace(s *Solution, indexes []*IndexUsage) error
 	Validate(s *Solution) error
 	GetEligibleIndexes() map[*IndexUsage]bool
@@ -137,6 +143,7 @@ type ConstraintMethod interface {
 	Print()
 	Validate(s *Solution) error
 	GetViolations(s *Solution, indexes map[*IndexUsage]bool) *Violations
+	SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool
 }
 
 type SizingMethod interface {
@@ -380,6 +387,35 @@ type SAPlanner struct {
 	Try             uint64    `json:"try,omitempty"`
 }
 
+//
+// SAPlanner uses simulated annealing method to find optimal index
+// placement. When the index is being created, the placement of existing
+// indexes won't change. Only the indexes that are newly getting created
+// will get placed optimally. For this, the planner finds the initial
+// node for the new indexes randomly - and then performs simulated
+// annealing to find the optimal target node. This step of performing
+// simulated annealing tries large number of solutions - by randomly moving
+// one new index to a differrent target node - in every step.
+//
+// When a single index is getting created, with limited number of nodes
+// present in the cluster, finding the optimal solution should not require
+// large number of random index movements (performed by simulated annealing),
+// but deterministic placement should work trivially. The only exception being
+// the placement of index partitions. So, one can use a greedy approach
+// and place the new indexes on the least loaded nodes while making sure that
+// the replica and server group constraints are satisfied.
+//
+type GreedyPlanner struct {
+	placement  PlacementMethod
+	cost       CostMethod
+	constraint ConstraintMethod
+	sizing     SizingMethod
+
+	newIndexes []*IndexUsage
+
+	Result *Solution
+}
+
 //////////////////////////////////////////////////////////////
 // Interface Implementation - CostMethod
 //////////////////////////////////////////////////////////////
@@ -560,7 +596,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
 		startTime := time.Now()
-		solution.runSizeEstimation(p.placement)
+		solution.runSizeEstimation(p.placement, 0)
 		solution.evaluateNodes()
 
 		err = p.Validate(solution)
@@ -1063,6 +1099,7 @@ func (p *SAPlanner) Print() {
 	logging.Infof("----------------------------------------")
 
 	if p.Result != nil {
+		logging.Infof("Using SAPlanner")
 		p.cost.Print()
 		logging.Infof("----------------------------------------")
 		p.Result.PrintStats()
@@ -1134,7 +1171,7 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 		// Add new node to change cluster in order to ensure constraint can be satisfied
 		if !neighbor.SatisfyClusterConstraint() {
 			if neighbor.canRunEstimation() {
-				neighbor.runSizeEstimation(p.placement)
+				neighbor.runSizeEstimation(p.placement, 0)
 			} else if p.constraint.CanAddNode(s) {
 				nodeId := strconv.FormatUint(uint64(rand.Uint32()), 10)
 				neighbor.addNewNode(nodeId)
@@ -1540,6 +1577,37 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 			p.placement.AddOptionalIndexes(allCloned)
 		}
 	}
+}
+
+func (p *SAPlanner) GetResult() *Solution {
+	return p.Result
+}
+
+func (p *SAPlanner) SetParam(param map[string]interface{}) error {
+	minIter, ok := param["MinIterPerTemp"]
+	if !ok {
+		return fmt.Errorf("Planner Error: Missing expected param MinIterPerTemp")
+	}
+
+	maxIter, ok := param["MaxIterPerTemp"]
+	if !ok {
+		return fmt.Errorf("Planner Error: Missing expected param MaxIterPerTemp")
+	}
+
+	minIterPerTemp, ok := minIter.(int)
+	if !ok {
+		return fmt.Errorf("Planner Error: Uexpected type of param MinIterPerTemp")
+	}
+
+	maxIterPerTemp, ok := maxIter.(int)
+	if !ok {
+		return fmt.Errorf("Planner Error: Uexpected type of param MaxIterPerTemp")
+	}
+
+	p.SetMinIterPerTemp(minIterPerTemp)
+	p.SetMaxIterPerTemp(maxIterPerTemp)
+
+	return nil
 }
 
 //////////////////////////////////////////////////////////////
@@ -1989,8 +2057,8 @@ func (s *Solution) PrintLayout() {
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes))
-		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v",
-			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint)
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v",
+			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint, s.computeUsageRatio(indexer))
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
@@ -2937,25 +3005,29 @@ func (s *Solution) generateReplicaMap() {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			var replicaM ReplicaMap
-			if isEligibleIndex(index, eligibles) {
-				replicaM = s.eligReplicaMap
-			} else {
-				replicaM = s.replicaMap
-			}
-
-			if index.Instance != nil {
-				if _, ok := replicaM[index.DefnId]; !ok {
-					replicaM[index.DefnId] = make(map[common.PartitionId]map[int]*IndexUsage)
-				}
-
-				if _, ok := replicaM[index.DefnId][index.PartnId]; !ok {
-					replicaM[index.DefnId][index.PartnId] = make(map[int]*IndexUsage)
-				}
-
-				replicaM[index.DefnId][index.PartnId][index.Instance.ReplicaId] = index
-			}
+			s.updateReplicaMap(index, indexer, eligibles)
 		}
+	}
+}
+
+func (s *Solution) updateReplicaMap(index *IndexUsage, indexer *IndexerNode, eligibles map[*IndexUsage]bool) {
+	var replicaM ReplicaMap
+	if isEligibleIndex(index, eligibles) {
+		replicaM = s.eligReplicaMap
+	} else {
+		replicaM = s.replicaMap
+	}
+
+	if index.Instance != nil {
+		if _, ok := replicaM[index.DefnId]; !ok {
+			replicaM[index.DefnId] = make(map[common.PartitionId]map[int]*IndexUsage)
+		}
+
+		if _, ok := replicaM[index.DefnId][index.PartnId]; !ok {
+			replicaM[index.DefnId][index.PartnId] = make(map[int]*IndexUsage)
+		}
+
+		replicaM[index.DefnId][index.PartnId][index.Instance.ReplicaId] = index
 	}
 }
 
@@ -2997,7 +3069,7 @@ func (s *Solution) generateReplicaMap() {
 //    the new index.   Therefore, the estimated index size represents the "average index size" for
 //    all unsized indexes.
 //
-func (s *Solution) runSizeEstimation(placement PlacementMethod) {
+func (s *Solution) runSizeEstimation(placement PlacementMethod, newInstCount int) {
 
 	estimate := func(estimatedIndexSize uint64) {
 		for _, indexer := range s.Placement {
@@ -3147,7 +3219,7 @@ retry1:
 
 		// Compute initial slot size based on total free memory.
 		// The slot size is the "average" index size.
-		s.estimatedIndexSize = totalMemFree / uint64(len(insts))
+		s.estimatedIndexSize = totalMemFree / uint64(len(insts)+newInstCount)
 
 	retry2:
 		for s.estimatedIndexSize > 0 {
@@ -3898,6 +3970,21 @@ func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles map[
 
 	for _, indexer := range s.Placement {
 		if !c.SatisfyNodeConstraint(s, indexer, eligibles) {
+			return false
+		}
+	}
+
+	return true
+}
+
+//
+// This function determines if cluster wide constraint is satisfied.
+// This function ignores the resource constraint.
+//
+func (c *IndexerConstraint) SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool {
+
+	for _, indexer := range s.Placement {
+		if !c.SatisfyNodeHAConstraint(s, indexer, eligibles) {
 			return false
 		}
 	}
@@ -5974,7 +6061,7 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 	}
 
 	if len(candidates) == 0 {
-		return errors.New("Cannot find any indexer that can add new indexes")
+		return ErrNoAvailableIndexer
 	}
 
 	for _, idx := range indexes {
@@ -5984,6 +6071,17 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 	}
 
 	return nil
+}
+
+//
+// This function places the index on the specified indexer node
+//
+func (p *RandomPlacement) AddToIndexer(s *Solution, indexer *IndexerNode, idx *IndexUsage) {
+
+	// Explicitly pass meetconstraint to true (forced addition)
+	s.addIndex(indexer, idx, true)
+	idx.initialNode = nil
+	s.updateReplicaMap(idx, indexer, s.place.GetEligibleIndexes())
 }
 
 //
@@ -6685,4 +6783,290 @@ func (v *Violations) Error() string {
 func (v *Violations) IsEmpty() bool {
 
 	return v == nil || len(v.Violations) == 0
+}
+
+//////////////////////////////////////////////////////////////
+// GreedyPlanner
+//////////////////////////////////////////////////////////////
+
+//
+// Constructor
+//
+func newGreedyPlanner(cost CostMethod, constraint ConstraintMethod, placement PlacementMethod,
+	sizing SizingMethod, indexes []*IndexUsage) *GreedyPlanner {
+
+	return &GreedyPlanner{
+		cost:       cost,
+		constraint: constraint,
+		placement:  placement,
+		sizing:     sizing,
+		newIndexes: indexes,
+	}
+}
+
+func canUseGreedyIndexPlacement(config *RunConfig, indexes []*IndexUsage,
+	movedIndex, movedData uint64, solution *Solution) (bool, common.IndexDefnId) {
+
+	if !config.UseGreedyPlanner {
+		return false, common.IndexDefnId(0)
+	}
+
+	// At this time, there aren't any eligible indexes. It is possible that the
+	// cluster constraints not satisfied due to resource constraints. That should
+	// not lead to use of SAPlanner. Failure of SAPlanner can lead to round robin
+	// index placement which does not look at the usage based cost of the indexer
+	// nodes and hence can lead to bad index placement.
+
+	// Avoid using greedy planner if the HA constraints in the cluster are not satisfied.
+
+	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
+		logging.Infof("Cannot use greedy planner as the cluster constraints are not satisfied.")
+
+		return false, common.IndexDefnId(0)
+	}
+
+	// Safety check, if there are no indexes, return false.
+	if len(indexes) == 0 {
+		logging.Infof("Cannot use greedy planner as there aren't any indexes to place.")
+		return false, common.IndexDefnId(0)
+	}
+
+	// If initial shuffling was allowed, let the SAPlanner run
+	if config.Shuffle != 0 {
+		logging.Infof("Cannot use greedy planner as shuffle flag is set to %v", config.Shuffle)
+		return false, common.IndexDefnId(0)
+	}
+
+	// If indexes were moved for deciding initial placement, let the SAPlanner run
+	if movedIndex != uint64(0) || movedData != uint64(0) {
+		logging.Infof("Cannot use greedy planner as indxes/data has been moved (%v, %v)", movedIndex, movedData)
+		return false, common.IndexDefnId(0)
+	}
+
+	// If there are any partitioned indexes OR
+	// If there is any sizing info provided by the user OR
+	// If there are instances of more than 1 index in the list of indexes,
+	//     let the SAPlanner run.
+	defns := make(map[common.IndexDefnId]bool)
+	var defnId common.IndexDefnId
+	for _, idx := range indexes {
+		if idx.PartnId != 0 {
+			return false, common.IndexDefnId(0)
+		}
+
+		if idx.HasSizingInputs() {
+			// TODO: Why can't we allow greedy method even if sizing inputs are
+			//       provided ? Esp when the index is non-partitioned ?
+			logging.Infof("Cannot use greedy planner as the index has sizing inputs.")
+			return false, common.IndexDefnId(0)
+		}
+
+		if len(defns) == 1 {
+			if _, ok := defns[idx.DefnId]; !ok {
+				logging.Infof("Cannot use greedy planner as more than one index is being placed.")
+				return false, common.IndexDefnId(0)
+			}
+		} else {
+			defns[idx.DefnId] = true
+			defnId = idx.DefnId
+		}
+	}
+
+	return true, defnId
+}
+
+func (p *GreedyPlanner) initializeSolution(command CommandType, solution *Solution) {
+	// Do not enforce constraints (keep solution.enforceConstraints as false) as the
+	// greedy approach anyways places the indexes on the least loaded nodes.
+	solution.command = command
+	solution.constraint = p.constraint
+	solution.sizing = p.sizing
+	solution.cost = p.cost
+	solution.place = p.placement
+
+	// Update server group map.
+	// This will be required while validating the final solution.
+	solution.initializeServerGroupMap()
+
+	// Generate replica map.
+	// This will be required for validating server group constraints of the final solution.
+	solution.generateReplicaMap()
+
+	// No need to maintain used replica id map for CommandPlan.
+
+	// Run Size Estimation
+	// Even if the size estimation is tuned for SAPlanner, the same size estimation should
+	// work for greedy planner as well as the greedy planner is just trying to deterministically
+	// decide which node is least loade - and hence is the optimal target for the index.
+
+	// TODO: Understand the detailed impact of the passing len(p.newIndexes) to runSizeEstimation.
+	solution.runSizeEstimation(p.placement, len(p.newIndexes))
+
+	// Update cost
+	_ = p.cost.Cost(solution)
+	solution.updateCost()
+}
+
+func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, error) {
+
+	if command != CommandPlan {
+		return nil, fmt.Errorf("Greedy Planner does not support command %v", command)
+	}
+
+	indexes := p.newIndexes
+	if len(indexes) == 0 {
+		p.Result = sol
+		return sol, nil
+	}
+
+	solution := sol.clone()
+
+	// Initialize solution
+	p.initializeSolution(command, solution)
+
+	// Sort the list of nodes based on usages
+	// (For MOI, may be), do we need to use tie breaker as number of indexes
+	// that needs estimation, instead of number of indexes that has no
+	// usage info?
+	// TODO:
+	sortedNodeList := sortNodeByUsage(solution, solution.Placement)
+
+	// Filter the excluded nodes
+	serverGroups := make(map[string]bool)
+	filteredNodeList := make([]*IndexerNode, 0)
+	for _, node := range sortedNodeList {
+
+		// Why shouldn't this be ExcludeIn? RandomPlacement.Add does ExcludeAny!
+		if node.ExcludeAny(solution) {
+			continue
+		}
+
+		serverGroups[node.ServerGroup] = true
+		filteredNodeList = append(filteredNodeList, node)
+	}
+
+	if len(filteredNodeList) == 0 {
+		return nil, ErrNoAvailableIndexer
+	}
+
+	if len(filteredNodeList) < len(indexes) {
+		return nil, ErrNoAvailableIndexer
+	}
+
+	numServerGroups := len(serverGroups)
+	filledServerGroups := make(map[string]bool)
+	filledNodes := make(map[string]bool)
+
+	getNextIndexer := func(i int) *IndexerNode {
+		if i == 0 {
+			// filteredNodeList cannot be empty by the time we reach here.
+			node := filteredNodeList[0]
+			filledServerGroups[node.ServerGroup] = true
+			filledNodes[node.NodeId] = true
+			return node
+		}
+
+		// Check if Server Group Constraint needs to be honored.
+		if numServerGroups > len(filledServerGroups) {
+			for _, node := range filteredNodeList[1:] {
+				if _, ok := filledNodes[node.NodeId]; ok {
+					continue
+				}
+
+				if _, ok := filledServerGroups[node.ServerGroup]; ok {
+					continue
+				}
+
+				filledServerGroups[node.ServerGroup] = true
+				filledNodes[node.NodeId] = true
+				return node
+			}
+
+			return nil
+		}
+
+		// Server Group Constraint is already honored
+		for _, node := range filteredNodeList[1:] {
+			if _, ok := filledNodes[node.NodeId]; ok {
+				continue
+			}
+
+			filledServerGroups[node.ServerGroup] = true
+			filledNodes[node.NodeId] = true
+			return node
+		}
+
+		return nil
+	}
+
+	// Place the indexes
+	for i, idx := range indexes {
+		indexer := getNextIndexer(i)
+		if indexer == nil {
+			return nil, ErrNoAvailableIndexer
+		}
+
+		p.placement.AddToIndexer(solution, indexer, idx)
+	}
+
+	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
+		return nil, errors.New("Cannot satisfy cluster constraints by greedy placement method")
+	}
+
+	p.Result = solution
+	return solution, nil
+}
+
+func (p *GreedyPlanner) GetResult() *Solution {
+	return p.Result
+}
+
+func (p *GreedyPlanner) Print() {
+	if p.Result != nil {
+		logging.Infof("Using GreedyPlanner")
+		p.cost.Print()
+		logging.Infof("----------------------------------------")
+		p.Result.PrintStats()
+		logging.Infof("----------------------------------------")
+		p.constraint.Print()
+		logging.Infof("----------------------------------------")
+		p.placement.Print()
+		logging.Infof("----------------------------------------")
+		p.Result.PrintLayout()
+	}
+}
+
+func (p *GreedyPlanner) PrintCost() {
+}
+
+func (p *GreedyPlanner) SetParam(param map[string]interface{}) error {
+	return nil
+}
+
+//
+// During index creation, either of SAPlanner and GreedyPlanner can be used. The
+// decision to use a specific planner depends on the input indexes - to be created
+// and the planner config.
+// This function (NewPlannerForCommandPlan) decides which planner implementation is
+// better for the given input indexes and given planner config. Based on the
+// decision, the correspnoding planner object will be returned.
+//
+func NewPlannerForCommandPlan(config *RunConfig, indexes []*IndexUsage, movedIndex, movedData uint64,
+	solution *Solution, cost CostMethod, constraint ConstraintMethod, placement PlacementMethod,
+	sizing SizingMethod) (Planner, error) {
+
+	var planner Planner
+
+	if ok, defnId := canUseGreedyIndexPlacement(config, indexes, movedIndex, movedData, solution); ok {
+		logging.Infof("Using greedy index placement for index %v", defnId)
+		planner = newGreedyPlanner(cost, constraint, placement, sizing, indexes)
+	} else {
+		if err := placement.Add(solution, indexes); err != nil {
+			return nil, err
+		}
+
+		planner = newSAPlanner(cost, constraint, placement, sizing)
+	}
+
+	return planner, nil
 }

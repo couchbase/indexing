@@ -44,6 +44,8 @@ type ClientSettings struct {
 
 	allowScheduleCreateRebal uint32
 	waitForScheduledIndex    uint32
+
+	useGreedyPlanner uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -255,6 +257,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.usePlanner, 1)
 	}
 
+	useGreedyPlanner, ok := config["indexer.planner.useGreedyPlanner"]
+	if ok {
+		if useGreedyPlanner.Bool() {
+			atomic.StoreUint32(&s.useGreedyPlanner, 1)
+		} else {
+			atomic.StoreUint32(&s.useGreedyPlanner, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing indexer.planner.useGreedyPlanner")
+		atomic.StoreUint32(&s.useGreedyPlanner, 1)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -346,4 +361,8 @@ func (s *ClientSettings) UsePlanner() bool {
 
 func (s *ClientSettings) WaitForScheduledIndex() bool {
 	return atomic.LoadUint32(&s.waitForScheduledIndex) == 1
+}
+
+func (s *ClientSettings) UseGreedyPlanner() bool {
+	return atomic.LoadUint32(&s.useGreedyPlanner) == 1
 }

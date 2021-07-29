@@ -225,6 +225,8 @@ type requestHandlerContext struct {
 	doneCh        chan bool
 	schedTokenMon *schedTokenMonitor
 	stReqRecCount uint64
+
+	useGreedyPlanner bool
 }
 
 var handlerContext requestHandlerContext // state for the HTTP(S) server
@@ -288,6 +290,8 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		handlerContext.statsCache = make(map[string]*common.Statistics)
 
 		handlerContext.schedTokenMon = newSchedTokenMonitor(mgr)
+
+		handlerContext.useGreedyPlanner = config["indexer.planner.useGreedyPlanner"].Bool()
 
 		go handlerContext.runPersistor()
 	})
@@ -2074,7 +2078,7 @@ func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 		return "", fmt.Errorf("%v: Fail to read index spec from request. err: %v", method, err)
 	}
 
-	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true)
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner)
 	if err != nil {
 		return "", fmt.Errorf("%v: Fail to plan index. err: %v", method, err)
 	}

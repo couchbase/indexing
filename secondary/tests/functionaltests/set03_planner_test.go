@@ -67,6 +67,22 @@ type iterationTestCase struct {
 	action    string
 }
 
+type greedyPlannerFuncTestCase struct {
+	comment     string
+	topology    string
+	index       string
+	targetNodes map[string]bool
+}
+
+type greedyPlannerIdxDistTestCase struct {
+	comment         string
+	topology        string
+	sampleIndex     string
+	numIndexes      int
+	minDistVariance float64
+	maxDistVariance float64
+}
+
 var initialPlacementTestCases = []initialPlacementTestCase{
 	{"initial placement - 20-50M, 10 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-10-3.json", "", 0.20, 0.20},
 	{"initial placement - 20-50M, 30 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-30-3.json", "", 0.20, 0.20},
@@ -152,6 +168,134 @@ var iterationTestCases = []iterationTestCase{
 	},
 }
 
+var greedyPlannerFuncTestCases = []greedyPlannerFuncTestCase{
+	// Place single index instace
+	{
+		"Place Single Index Instance - 3 empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true, "127.0.0.1:9003": true},
+	},
+	{
+		"Place Single Index Instance - 2 empty nodes, 1 non-empty node - 1 SG",
+		"../testdata/planner/greedy/topologies/2_empty_1_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	{
+		"Place Single Index Instance - 1 empty node, 2 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/1_empty_2_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		map[string]bool{"127.0.0.1:9002": true},
+	},
+	{
+		"Place Single Index Instance - 3 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		map[string]bool{"127.0.0.1:9003": true},
+	},
+	// Place index with 1 replica
+	{
+		"Place Index With 1 Replica - 3 empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true, "127.0.0.1:9003": true},
+	},
+	{
+		"Place Index With 1 Replica - 2 empty nodes, 1 non-empty node - 1 SG",
+		"../testdata/planner/greedy/topologies/2_empty_1_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	{
+		"Place Index With 1 Replica - 1 empty node, 2 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/1_empty_2_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9002": true, "127.0.0.1:9003": true},
+	},
+	{
+		"Place Index With 1 Replica - 3 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9001": true},
+	},
+	// Place index with 2 replicas
+	{
+		"Place Index With 2 Replica - 3 empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_2_replicas.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true, "127.0.0.1:9003": true},
+	},
+	{
+		"Place Index With 2 Replica - 3 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_2_replicas.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	// Place index with 1 replica across server groups
+	{
+		"Place Index With 1 Replica - 2 empty nodes, 1 non-empty node - 2 SG",
+		"../testdata/planner/greedy/topologies/2_empty_1_non_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	{
+		"Place Index With 1 Replica - 1 empty node, 2 non-empty nodes - 2 SG",
+		"../testdata/planner/greedy/topologies/1_empty_2_non_empty_nodes_2_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	{
+		"Place Index With 1 Replica - 3 non-empty nodes - 2 SG",
+		"../testdata/planner/greedy/topologies/3_non_empty_nodes_2_sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9002": true},
+	},
+}
+
+var greedyPlannerIdxDistTestCases = []greedyPlannerIdxDistTestCase{
+	{
+		"Place 60 index instaces on 3 empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_empty_nodes_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		60,
+		0.0, // Deferred index distribution 30 - 30
+		0.0, // Deferred index distribution 30 - 30
+	},
+	{
+		"Place 60 index instaces on 1 empty and 1 10 percent filled node - 1 SG",
+		"../testdata/planner/greedy/topologies/1_empty_1_10pct_filled_node_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		60,
+		8.0,  // Deferred index distribution 28 - 32
+		32.0, // Deferred index distribution 26 - 34
+	},
+	{
+		"Place 60 index instaces on 1 empty and 1 30 percent filled node - 1 SG",
+		"../testdata/planner/greedy/topologies/1_empty_1_30pct_filled_node_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		60,
+		50.0,  // Deferred index distribution 25 - 35
+		128.0, // Deferred index distribution 22 - 38
+	},
+	{
+		"Place 5 index instaces on 1 empty and 1 60 percent filled node - 1 SG",
+		"../testdata/planner/greedy/topologies/1_empty_1_60pct_filled_node_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		5,
+		4.5, // Deferred index distribution 1 - 4
+		4.5, // Deferred index distribution 1 - 4
+	},
+	{
+		"Place 60 index instaces on 1 empty and 1 60 percent filled node - 1 SG",
+		"../testdata/planner/greedy/topologies/1_empty_1_60pct_filled_node_1_sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		60,
+		450.0, // Deferred index distribution 15 - 45
+		800.0, // Deferred index distribution 10 - 50
+	},
+}
+
 func TestPlanner(t *testing.T) {
 	log.Printf("In TestPlanner()")
 
@@ -163,6 +307,15 @@ func TestPlanner(t *testing.T) {
 	rebalanceTest(t)
 	minMemoryTest(t)
 	iterationTest(t)
+}
+
+func TestGreedyPlanner(t *testing.T) {
+	log.Printf("In TestGreedyPlanner()")
+
+	logging.SetLogLevel(logging.Info)
+	defer logging.SetLogLevel(logging.Warn)
+
+	greedyPlannerTests(t)
 }
 
 //
@@ -189,20 +342,20 @@ func initialPlacementTest(t *testing.T) {
 		indexSpecs, err := planner.ReadIndexSpecs(testcase.indexSpec)
 		FailTestIfError(err, "Fail to read index spec", t)
 
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, spec, nil, indexSpecs)
+		p, _, err := s.RunSingleTestPlan(config, spec, nil, indexSpecs)
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
 
-		memMean, memDev := p.Result.ComputeMemUsage()
-		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
+		memMean, memDev := p.GetResult().ComputeMemUsage()
+		cpuMean, cpuDev := p.GetResult().ComputeCpuUsage()
 
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
-			p.Result.PrintLayout()
+			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
 
-		if err := planner.ValidateSolution(p.Result); err != nil {
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -233,20 +386,20 @@ func incrPlacementTest(t *testing.T) {
 		indexSpecs, err := planner.ReadIndexSpecs(testcase.indexSpec)
 		FailTestIfError(err, "Fail to read index spec", t)
 
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, indexSpecs)
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
 
-		memMean, memDev := p.Result.ComputeMemUsage()
-		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
+		memMean, memDev := p.GetResult().ComputeMemUsage()
+		cpuMean, cpuDev := p.GetResult().ComputeCpuUsage()
 
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
-			p.Result.PrintLayout()
+			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
 
-		if err := planner.ValidateSolution(p.Result); err != nil {
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -276,20 +429,20 @@ func rebalanceTest(t *testing.T) {
 		plan, err := planner.ReadPlan(testcase.plan)
 		FailTestIfError(err, "Fail to read plan", t)
 
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
 
-		memMean, memDev := p.Result.ComputeMemUsage()
-		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
+		memMean, memDev := p.GetResult().ComputeMemUsage()
+		cpuMean, cpuDev := p.GetResult().ComputeCpuUsage()
 
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
-			p.Result.PrintLayout()
+			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
 
-		if err := planner.ValidateSolution(p.Result); err != nil {
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -320,11 +473,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if the indexers have equal number of indexes
-		if len(p.Result.Placement[0].Indexes) != len(p.Result.Placement[1].Indexes) {
+		if len(p.GetResult().Placement[0].Indexes) != len(p.GetResult().Placement[1].Indexes) {
 			t.Fatal("rebalance does not spread indexes equally")
 		}
 	}()
@@ -342,11 +495,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if index violates memory constraint
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			minMemory := uint64(0)
 			for _, index := range indexer.Indexes {
 				minMemory += index.ActualMemMin
@@ -373,11 +526,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if the indexers have equal number of indexes
-		if len(p.Result.Placement[0].Indexes) != len(p.Result.Placement[1].Indexes) {
+		if len(p.GetResult().Placement[0].Indexes) != len(p.GetResult().Placement[1].Indexes) {
 			t.Fatal("rebalance does not spread indexes equally")
 		}
 	}()
@@ -394,11 +547,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check the total number of indexes
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			if len(indexer.Indexes) != 1 {
 				t.Fatal("There is more than 1 index per node")
 			}
@@ -418,12 +571,12 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check the total number of indexes
 		total := 0
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			total += len(indexer.Indexes)
 		}
 		if total != 4 {
@@ -446,15 +599,15 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
-		if count1 != len(p.Result.Placement[0].Indexes) {
-			t.Fatal(fmt.Sprintf("Index count for indexer1 has changed %v != %v", count1, len(p.Result.Placement[0].Indexes)))
+		if count1 != len(p.GetResult().Placement[0].Indexes) {
+			t.Fatal(fmt.Sprintf("Index count for indexer1 has changed %v != %v", count1, len(p.GetResult().Placement[0].Indexes)))
 		}
 
-		if count2 != len(p.Result.Placement[1].Indexes) {
-			t.Fatal(fmt.Sprintf("Index count for indexer2 has changed %v != %v", count2, len(p.Result.Placement[1].Indexes)))
+		if count2 != len(p.GetResult().Placement[1].Indexes) {
+			t.Fatal(fmt.Sprintf("Index count for indexer2 has changed %v != %v", count2, len(p.GetResult().Placement[1].Indexes)))
 		}
 	}()
 
@@ -477,15 +630,15 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
-		if len(p.Result.Placement) != 1 {
+		if len(p.GetResult().Placement) != 1 {
 			t.Fatal("There is more than 1 node after rebalance-out")
 		}
 
 		count2 := 0
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			count2 += len(indexer.Indexes)
 		}
 
@@ -527,11 +680,11 @@ func minMemoryTest(t *testing.T) {
 		spec.Using = string(common.PlasmaDB)
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, []*planner.IndexSpec{&spec})
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, []*planner.IndexSpec{&spec})
 		FailTestIfError(err, "Error in planner test", t)
 
 		found := false
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			for _, index := range indexer.Indexes {
 				if index.DefnId == spec.DefnId {
 					found = true
@@ -559,7 +712,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		_, _, err = s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		_, _, err = s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 	}()
 
@@ -596,11 +749,11 @@ func minMemoryTest(t *testing.T) {
 		spec.Using = string(common.PlasmaDB)
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, []*planner.IndexSpec{&spec})
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, []*planner.IndexSpec{&spec})
 		FailTestIfError(err, "Error in planner test", t)
 
 		success := true
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			if len(indexer.Indexes) != 1 {
 				success = false
 				p.Print()
@@ -641,7 +794,7 @@ func minMemoryTest(t *testing.T) {
 //
 func iterationTest(t *testing.T) {
 	for _, testcase := range iterationTestCases {
-		var p *planner.SAPlanner
+		var p planner.Planner
 
 		log.Printf("-------------------------------------------")
 		log.Printf("iterationTest :: %v", testcase.comment)
@@ -656,10 +809,10 @@ func iterationTest(t *testing.T) {
 			plan, err := planner.ReadPlan(testcase.indexers)
 			FailTestIfError(err, "Fail to read plan", t)
 
-			p, _, err = s.RunSingleTest(config, planner.CommandPlan, spec, plan, nil)
+			p, _, err = s.RunSingleTestPlan(config, spec, plan, nil)
 			FailTestIfError(err, "Error in planner test", t)
 
-			if err := planner.ValidateSolution(p.Result); err != nil {
+			if err := planner.ValidateSolution(p.GetResult()); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -671,9 +824,9 @@ func iterationTest(t *testing.T) {
 		switch testcase.action {
 
 		case "Remove 1":
-			p.Result.Placement[0].MarkDeleted()
+			p.GetResult().Placement[0].MarkDeleted()
 			newPlan = &planner.Plan{
-				Placement: p.Result.Placement,
+				Placement: p.GetResult().Placement,
 				MemQuota:  5302940000000,
 			}
 
@@ -695,7 +848,7 @@ func iterationTest(t *testing.T) {
 		config1.Threshold = testcase.threshold
 
 		s1 := planner.NewSimulator()
-		p1, _, err := s1.RunSingleTest(config1, planner.CommandRebalance, nil, newPlan, nil)
+		p1, _, err := s1.RunSingleTestRebal(config1, planner.CommandRebalance, nil, newPlan, nil)
 
 		// p1.Print()
 
@@ -713,7 +866,7 @@ func iterationTest(t *testing.T) {
 
 		if testcase.action == "Lost index" {
 			count := 0
-			for _, node := range p1.Result.Placement {
+			for _, node := range p1.GetResult().Placement {
 				count += len(node.Indexes)
 			}
 
@@ -725,6 +878,249 @@ func iterationTest(t *testing.T) {
 				if count != 30 {
 					t.Fatal(fmt.Errorf("Error: expected ccounut %v, actual count %v", 30, count))
 				}
+			}
+		}
+	}
+}
+
+//
+// Greedy planner tests
+//
+func greedyPlannerTests(t *testing.T) {
+
+	greedyPlannerFuncTests(t)
+
+	greedyPlannerIdxDistTests(t)
+
+}
+
+//
+// Greedy planner functional tests.
+// Each test case takes following inputs:
+// 1. Initial topology
+// 2. Set of index specs to be placed
+// 3. A set of target nodes, on which the input indexes are to be placed.
+//
+// During verification, the index placement decided by greedy planner is
+// validated against the set of target nodes.
+//
+func greedyPlannerFuncTests(t *testing.T) {
+
+	for _, testcase := range greedyPlannerFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.Resize = false
+		config.AddNode = -1
+		config.AllowSwap = false
+		config.AllowMove = false
+		config.UseGreedyPlanner = true
+		// config.UseLive = true
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.index)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
+		FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+		// p.Print()
+
+		if _, ok := p.(*planner.GreedyPlanner); !ok {
+			t.Fatalf("Greedy planner was not chosen for index placement.")
+			continue
+		}
+
+		validateGreedyPlacementFunc(t, p, indexSpecs, testcase.targetNodes)
+	}
+}
+
+//
+// Greedy planner index distibution tests
+//
+// The purpose of these test cases is to verify the overall good index
+// distribution across the nodes. With the existance of deferred indexes,
+// the size estimation needs to run to estimate the size of the existing
+// deferred indexes in the cluster. These tests verify the overall index
+// distribution in the cluster has controlled variance.
+//
+// Note: these tests primarily focus on the distribution of the deferred
+//       indexes, given the initial topology.
+//
+// Each test takes following inputs
+// 1. Initial topology
+// 2. A sample index to be placed
+// 3. Total number of indexes to be placed
+// 4. Allowed variance in the number of new indexes placed across the nodes
+//
+func greedyPlannerIdxDistTests(t *testing.T) {
+
+	for _, testcase := range greedyPlannerIdxDistTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.Resize = false
+		config.AddNode = -1
+		config.AllowSwap = false
+		config.AllowMove = false
+		config.UseGreedyPlanner = true
+		// config.UseLive = true
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.sampleIndex)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		defnId := indexSpecs[0].DefnId
+		name := indexSpecs[0].Name
+		secExpr := indexSpecs[0].SecExprs[0]
+
+		var p planner.Planner
+
+		for i := 0; i < testcase.numIndexes; i++ {
+
+			// Update index spec i.e. name, DefnId and secExprs
+			newDefnId := int64(defnId) + int64(1000000000) + int64(i)*int64(1000000)
+			indexSpecs[0].DefnId = common.IndexDefnId(newDefnId)
+
+			indexSpecs[0].Name = name + "_" + fmt.Sprintf("%v", i)
+
+			indexSpecs[0].SecExprs = []string{secExpr + "_" + fmt.Sprintf("%v", i)}
+
+			s := planner.NewSimulator()
+
+			var err error
+			p, _, err = s.RunSingleTestPlan(config, nil, plan, indexSpecs)
+			FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+			// p.Print()
+
+			if _, ok := p.(*planner.GreedyPlanner); !ok {
+				t.Fatalf("Greedy planner was not chosen for index placement.")
+			}
+
+			result := p.GetResult()
+			if i < testcase.numIndexes-1 {
+				cleanupEstimation(result)
+				plan.Placement = result.Placement
+			}
+		}
+
+		// p.Print()
+
+		validateGreedyPlacementIdxDist(t, p, testcase.numIndexes,
+			testcase.minDistVariance, testcase.maxDistVariance)
+
+	}
+}
+
+func validateGreedyPlacementFunc(t *testing.T, p planner.Planner,
+	indexSpecs []*planner.IndexSpec, targetNodes map[string]bool) {
+
+	defnId := indexSpecs[0].DefnId
+	count := 0
+
+	targets := make(map[string]bool)
+	for nid, ok := range targetNodes {
+		targets[nid] = ok
+	}
+
+	result := p.GetResult()
+	for _, indexer := range result.Placement {
+		for _, index := range indexer.Indexes {
+			if index.DefnId == defnId {
+				count++
+
+				if _, ok := targets[indexer.NodeId]; !ok {
+					log.Printf("Unexpected index placement by greedy planner. Target Nodes = %v", targetNodes)
+					p.Print()
+					t.Fatalf("Unexpected index placement by greedy planner %v, %v", targets, indexer.NodeId)
+				}
+
+				delete(targets, indexer.NodeId)
+			}
+		}
+	}
+
+	if count != int(indexSpecs[0].Replica) {
+		p.Print()
+		t.Fatalf("Some indexes are not found in the result")
+	}
+}
+
+func calcVariance(dist []int) float64 {
+	if len(dist) <= 0 {
+		return 0.0
+	}
+
+	if len(dist) == 1 {
+		return float64(dist[0])
+	}
+
+	sum := 0
+	for _, count := range dist {
+		sum += count
+	}
+
+	mean := float64(sum) / float64(len(dist))
+
+	ss := 0.0
+	for _, count := range dist {
+		sqr := (float64(count) - mean) * (float64(count) - mean)
+		ss += sqr
+	}
+
+	return ss / float64(len(dist)-1)
+}
+
+func validateGreedyPlacementIdxDist(t *testing.T, p planner.Planner,
+	numIndexes int, minDistVariance float64, maxDistVariance float64) {
+
+	result := p.GetResult()
+
+	deferredIdxCount := make([]int, 0, len(result.Placement))
+	total := 0
+	for _, indexer := range result.Placement {
+		count := 0
+		for _, index := range indexer.Indexes {
+			if index.NoUsageInfo {
+				count++
+				total++
+			}
+		}
+
+		deferredIdxCount = append(deferredIdxCount, count)
+	}
+
+	if total != numIndexes {
+		p.Print()
+		t.Fatalf("Total number of deferred indexes don't match expected %v actual %v", numIndexes, total)
+	}
+
+	actVariance := calcVariance(deferredIdxCount)
+	logging.Infof("Actual variance of deferred index count across nodes is %v", actVariance)
+
+	if actVariance < minDistVariance || actVariance > maxDistVariance {
+		p.Print()
+		t.Fatalf("Deferred index distribution variace (%v) doesn't fall in allowed variance range (%v, %v)",
+			actVariance, minDistVariance, maxDistVariance)
+	}
+}
+
+func cleanupEstimation(s *planner.Solution) {
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.NeedsEstimation() {
+				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage)
+				indexer.SubtractDataSize(s, index.EstimatedDataSize)
+				index.EstimatedMemUsage = 0
+				index.EstimatedDataSize = 0
 			}
 		}
 	}
