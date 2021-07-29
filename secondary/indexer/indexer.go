@@ -3036,7 +3036,7 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 	logging.Infof("Indexer::handlePrepareRecovery StreamId %v KeyspaceId %v",
 		streamId, keyspaceId)
 
-	idx.stopKeyspaceIdStream(streamId, keyspaceId)
+	idx.stopKeyspaceIdStream(streamId, keyspaceId, false)
 
 }
 
@@ -3623,7 +3623,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 				logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v "+
 					"State %v. No Index Found. Cleaning up.", streamId, keyspaceId,
 					idx.getStreamKeyspaceIdState(streamId, keyspaceId))
-				idx.stopKeyspaceIdStream(streamId, keyspaceId)
+				idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
 
 				idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 				idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
@@ -4010,7 +4010,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList. Stopping the keyspaceId stream %v %v",
 			streamId, keyspaceId)
 
-		idx.stopKeyspaceIdStream(streamId, keyspaceId)
+		idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
 		return
@@ -4027,7 +4027,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	idx.stopKeyspaceIdStream(streamId, keyspaceId)
+	idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
 	idx.cleanupIndexData(deletedInsts, nil)
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
@@ -5856,7 +5856,7 @@ func (idx *indexer) cleanupEmptyMaintStream(bucket string) {
 
 	if !found {
 		logging.Infof("Indexer::cleanupEmptyMaintStream %v %v. Stop empty stream.", streamId, bucket)
-		idx.stopKeyspaceIdStream(streamId, bucket)
+		idx.stopKeyspaceIdStream(streamId, bucket, true)
 		idx.setStreamKeyspaceIdState(streamId, bucket, STREAM_INACTIVE)
 		idx.cleanupAllStreamKeyspaceIdState(streamId, bucket)
 	}
@@ -5960,7 +5960,7 @@ func (idx *indexer) checkCatchupPendingForStream(streamId common.StreamId,
 
 // stopKeyspaceIdStream removes the request to receive DCP records of given keyspaceId
 // from a given streamId. Used during recovery so does not call cleanupStreamKeyspaceIdState.
-func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId string) {
+func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId string, resetKeyspaceStats bool) {
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
@@ -6003,8 +6003,10 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
-	idx.distributeKeyspaceStatsMapsToWorkers()
+	if resetKeyspaceStats {
+		idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+		idx.distributeKeyspaceStatsMapsToWorkers()
+	}
 
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
@@ -9519,6 +9521,11 @@ func (idx *indexer) checkStreamRequestPending(
 func (idx *indexer) cleanupStreamKeyspaceIdState(
 	streamId common.StreamId,
 	keyspaceId string) {
+
+	// Remove keyspace stats for the stream as they are not removed
+	// during recovery
+	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	idx.cleanupStreamKeyspaceIdRecoveryState(streamId, keyspaceId)
 	idx.cleanupStreamKeyspaceIdCurrRequest(streamId, keyspaceId)
