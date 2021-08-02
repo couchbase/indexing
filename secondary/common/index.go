@@ -280,7 +280,7 @@ type IndexInstMap map[IndexInstId]IndexInst
 type IndexInstList []IndexInst
 
 func (idx IndexDefn) String() string {
-
+	secExprs, _, _ := GetUnexplodedExprs(idx.SecExprs, idx.Desc)
 	str := fmt.Sprintf("DefnId: %v ", idx.DefnId)
 	str += fmt.Sprintf("Name: %v ", idx.Name)
 	str += fmt.Sprintf("Using: %v ", idx.Using)
@@ -290,7 +290,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
 	str += fmt.Sprintf("NumReplica: %v ", idx.GetNumReplica())
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
-	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(idx.SecExprs))
+	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("\n\t\tHashScheme: %v ", idx.HashScheme.String())
