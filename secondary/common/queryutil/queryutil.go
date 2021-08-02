@@ -47,6 +47,7 @@ func GetArrayExpressionPosition(exprs []string) (bool, bool, bool, int, error) {
 			isArrayDistinct = isDistinct
 			isArrayFlattened = isFlatten
 			arrayExprPos = i
+			break
 		}
 	}
 	return isArrayIndex, isArrayDistinct, isArrayFlattened, arrayExprPos, nil
