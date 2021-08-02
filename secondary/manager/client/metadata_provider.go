@@ -1910,7 +1910,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	isArrayIndex := false
 	isArrayFlattened := false
 	arrayExprCount := 0
-	for _, exp := range secExprs {
+	skipFlattenExprsTillPos := 0
+	for pos, exp := range secExprs {
+		// As `secExprs` in flattened array index are exploded,
+		// skip some `secExprs`
+		if isArrayIndex && isArrayFlattened && pos < skipFlattenExprsTillPos {
+			continue
+		}
+
 		isArray, _, isFlatten, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Fails to create index.  Error in parsing expression %v : %v", exp, err)), false
@@ -1919,6 +1926,13 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			isArrayIndex = isArray
 			isArrayFlattened = isFlatten
 			arrayExprCount++
+		}
+		if isArray && isFlatten {
+			numFlattenKeys, err := queryutil.NumFlattenKeys(exp)
+			if err != nil {
+				return nil, errors.New(fmt.Sprintf("Fails to create index.  Error while retrieving flatten keys in expression %v : %v ", exp, err)), false
+			}
+			skipFlattenExprsTillPos = pos + numFlattenKeys
 		}
 	}
 
