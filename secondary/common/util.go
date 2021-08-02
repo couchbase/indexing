@@ -27,6 +27,7 @@ import (
 	"github.com/couchbase/cbauth/cbauthimpl"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common/collections"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -732,12 +733,13 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 
 	} else {
 		exprs := ""
-		for i, exp := range def.SecExprs {
+		secExprs, desc, _ := GetUnexplodedExprs(def.SecExprs, def.Desc)
+		for i, exp := range secExprs {
 			if exprs != "" {
 				exprs += ","
 			}
 			exprs += exp
-			if def.Desc != nil && def.Desc[i] {
+			if desc != nil && desc[i] {
 				exprs += " DESC"
 			}
 		}
@@ -819,6 +821,49 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 	}
 
 	return stmt
+}
+
+// For flattened array, returns the list of secExprs and
+// the desc array before explosion
+func GetUnexplodedExprs(secExprs []string, desc []bool) ([]string, []bool, bool) {
+
+	var isArray, isFlatten bool
+	skipFlattenExprsTillPos := 0
+	origSecExprs := make([]string, 0)
+	origDesc := make([]bool, 0)
+	if desc == nil {
+		desc = make([]bool, len(secExprs))
+		for i, _ := range secExprs {
+			desc[i] = false
+		}
+	}
+
+	for i, exp := range secExprs {
+		if isArray && isFlatten && i < skipFlattenExprsTillPos {
+			continue
+		}
+
+		isArray, _, isFlatten, _ = queryutil.IsArrayExpression(exp)
+		if isArray && isFlatten {
+			numFlattenKeys, _ := queryutil.NumFlattenKeys(exp)
+			skipFlattenExprsTillPos = i + numFlattenKeys
+			// Always populate "false" as DESC for flattened array expression
+			// as it is not allowed to have DESC key outside of flattened key
+			// expression i.e. DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age) DESC
+			// is an invalid statement.
+			//
+			// A valid statement would be
+			// DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC)
+			origDesc = append(origDesc, false)
+		} else {
+			origDesc = append(origDesc, desc[i])
+		}
+
+		origSecExprs = append(origSecExprs, exp)
+
+	}
+
+	return origSecExprs, origDesc, isFlatten
 }
 
 func LogRuntime() string {

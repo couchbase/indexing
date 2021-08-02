@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	commonjson "github.com/couchbase/indexing/secondary/common/json"
 	"io"
 	"io/ioutil"
 	"net"
@@ -22,6 +21,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	commonjson "github.com/couchbase/indexing/secondary/common/json"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -572,9 +573,11 @@ func (c *GsiClient) CreateIndex4(
 	fmsg := "CreateIndex %v %v %v %v/%v using:%v exprType:%v " +
 		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v scheme:%v " +
 		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
+
+	origSecExprs, _, _ := common.GetUnexplodedExprs(secExprs, desc)
 	logging.Infof(
 		fmsg, defnID, bucket, scope, collection, name, using, exprType, logging.TagUD(whereExpr),
-		logging.TagUD(secExprs), desc, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
+		logging.TagUD(origSecExprs), desc, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
 	return defnID, err
 }
 
