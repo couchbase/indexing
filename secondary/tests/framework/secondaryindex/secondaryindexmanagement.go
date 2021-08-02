@@ -11,6 +11,7 @@ import (
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/natsort"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -157,9 +158,28 @@ func CreateSecondaryIndex3(
 			expr, err := n1ql.ParseExpression(indexField)
 			if err != nil {
 				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+				return err
 			}
 
-			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+			isArray, _, isFlatten, err := queryutil.IsArrayExpression(indexField)
+			if err != nil {
+				log.Printf("Creating index %v. Error while checking array expression (%v) : %v", indexName, indexField, err)
+				return err
+			}
+			if isArray && isFlatten {
+				// Explode secExprs
+				numFlattenKeys, err := queryutil.NumFlattenKeys(indexField)
+				if err != nil {
+					log.Printf("Creating index %v. Error while parsing the expression (%v) : %v, during the extraction of numFlattenKeys", indexName, indexField, err)
+					return err
+				}
+				for i := 0; i < numFlattenKeys; i++ {
+					secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+				}
+
+			} else {
+				secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+			}
 		}
 	}
 	exprType := "N1QL"
