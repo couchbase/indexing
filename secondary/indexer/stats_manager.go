@@ -157,7 +157,7 @@ func (it *IndexTimingStats) Init() {
 type IndexStats struct {
 	name, scope, collection, bucket, dispName string
 
-	indexState stats.Uint64Val // Only used by lifecycle manager to filter indexes in MAINT_STREAM
+	indexState stats.Uint64Val
 
 	replicaId    int
 	isArrayIndex bool
@@ -2045,6 +2045,10 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	st = append(st, []byte(str)...)
 
 	numDocsPending := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsPending.Value() })
+	indexState := s.indexState.Value()
+	if indexState == uint64(common.INDEX_STATE_CREATED) {
+		numDocsPending = 0
+	}
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_pending", s.bucket, collectionLabels, s.dispName, numDocsPending)
 	st = append(st, []byte(str)...)
 
