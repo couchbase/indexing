@@ -1873,7 +1873,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	isArrayIndex := false
 	arrayExprCount := 0
 	for _, exp := range secExprs {
-		isArray, _, err := queryutil.IsArrayExpression(exp)
+		isArray, _, _, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Fails to create index.  Error in parsing expression %v : %v", exp, err)), false
 		}
@@ -2439,7 +2439,7 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 			}
 		}
 
-		if isArray, _ := partnExpr.IsArrayIndexKey(); isArray {
+		if isArray, _, _ := partnExpr.IsArrayIndexKey(); isArray {
 			return errors.New(fmt.Sprintf("Fails to create index. Partition key '%v' cannot be an array expression.", partitionKeys[i]))
 		}
 	}

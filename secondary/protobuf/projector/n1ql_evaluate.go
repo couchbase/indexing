@@ -51,7 +51,7 @@ func N1QLTransform(
 			logging.Errorf(fmsg, arg1, arg2, err)
 			return nil, nil, nil
 		}
-		isArray, _ := expr.IsArrayIndexKey()
+		isArray, _, _ := expr.IsArrayIndexKey()
 		if isArray == false {
 			if scalar == nil { //nil is ERROR condition
 				exprstr := qexpr.NewStringer().Visit(expr)
