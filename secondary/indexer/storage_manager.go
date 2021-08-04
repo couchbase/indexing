@@ -1668,7 +1668,6 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 		//collection level while MAINT_STREAM works at bucket level.
 		/*
 			if !source.Timestamp().EqualOrGreater(target.Timestamp()) {
-				s.muSnap.Unlock()
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
@@ -1693,7 +1692,6 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 				}
 			}
 			if count != len(partitions) || count != len(source.Partitions()) {
-				s.muSnap.Unlock()
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
@@ -1717,7 +1715,6 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 				}
 
 				if found {
-					s.muSnap.Unlock()
 					s.supvCmdch <- &MsgError{
 						err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 							severity: FATAL,
