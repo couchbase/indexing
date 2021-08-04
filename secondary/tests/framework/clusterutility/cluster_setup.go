@@ -230,27 +230,56 @@ func GetClusterStatus(serverAddr, username, password string) map[string][]string
 	return status
 }
 
-func AddNode(serverAddr, username, password, hostname string, role string) error {
+// AddNode just adds a node to the cluster but does NOT perform rebalance.
+// It does this by calling the ns_server /controller/addNode documented REST endpoint.
+// It retries up to 30 times one second apart because both the servicing node and the
+// newly added node may take a long time (at least > 10 sec) to become ready to respond.
+func AddNode(serverAddr, username, password, hostname string, role string) (err error) {
+	method := "AddNode" // for logging
 	host := prependHttp(hostname)
-	if res, err := addNodeFromRest(serverAddr, username, password, host, role); err != nil {
-		return fmt.Errorf("Error while adding node from REST, err: %v", err)
-	} else {
-		response := fmt.Sprintf("%s", res)
-		if strings.Contains(response, "{\"otpNode\":") {
-			log.Printf("addNode: Successfully added node with hostname: %v, res: %s", hostname, res)
-		} else {
-			return fmt.Errorf("Unexpected response while adding node: %s, err: %v", res, err)
+	var res []byte // raw HTTP response
+	var response string // string form of res
+	for retries := 0; ; retries++ {
+		res, err = addNodeFromRest(serverAddr, username, password, host, role)
+		if err == nil {
+			response = fmt.Sprintf("%s", res)
+			if strings.Contains(response, "{\"otpNode\":") {
+				log.Printf("%v: Successfully added node: %v (role %v), response: %v",
+					method, hostname, role, response)
+				return nil
+			}
 		}
+		if retries >= 30 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("%v: Error from addNodeFromRest while adding node: %v (role: %v), err: %v",
+			method, hostname, role, err)
+	}
+	return fmt.Errorf("%v: Unexpected response body from addNodeFromRest while adding node: %v (role: %v), response: %v",
+		method, hostname, role, response)
+}
+
+// AddNodeAndRebalance adds a node to the cluster and then does a rebalance.
+// Adding the node is delegated to AddNode.
+// Rebalance is done by calling the ns_server /controller/rebalance documented REST endpoint.
+func AddNodeAndRebalance(serverAddr, username, password, hostname string, role string) error {
+	method := "AddNodeAndRebalance" // for logging
+	err := AddNode(serverAddr, username, password, hostname, role)
+	if err != nil {
+		return err
 	}
 
 	if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
-		return fmt.Errorf("Error while rebalancing, err: %v", err)
+		return fmt.Errorf("%v: Error calling rebalanceFromRest, err: %v", method, err)
 	} else if err == nil && res != nil && (fmt.Sprintf("%s", res) != "") {
-		return fmt.Errorf("Error adding node and rebalancing, rebalanceFromRest response: %s", res)
+		return fmt.Errorf("%v: Error in rebalanceFromRest response: %s", method, res)
 	}
 
 	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		return fmt.Errorf("Error during rebalance, err: %v", err)
+		return fmt.Errorf("%v: Error during rebalance, err: %v", method, err)
 	}
 	return nil
 }
@@ -290,6 +319,8 @@ func InitDataAndIndexQuota(serverAddr, username, password string) error {
 	return nil
 }
 
+// RemoveNode performs a rebalance out (ejection) of the specified node.
+// This is done by calling the ns_server /controller/rebalance documented REST endpoint.
 func RemoveNode(serverAddr, username, password, hostname string) error {
 	if res, err := rebalanceFromRest(serverAddr, username, password, []string{hostname}); err != nil {
 		return fmt.Errorf("Error while removing node and rebalance, hostname: %v, err: %v", hostname, err)
@@ -335,17 +366,9 @@ func ResetCluster(serverAddr, username, password string, dropNodes []string, kee
 	}
 
 	for node, role := range keepNodes {
-		for retries := 0; ; retries++ {
-			err := AddNode(serverAddr, username, password, node, role)
-			if err == nil {
-				break
-			}
-			// Retries allow time for the node to come back up without a mandatory long sleep.
-			// Plain 10-second sleep was not always long enough.
-			if retries >= 30 {
-				return fmt.Errorf("Error while adding node: %v (role: %v) to cluster, err: %v", node, role, err)
-			}
-			time.Sleep(1 * time.Second)
+		err := AddNodeAndRebalance(serverAddr, username, password, node, role)
+		if err != nil {
+			return fmt.Errorf("Error while adding node: %v (role: %v) to cluster, err: %v", node, role, err)
 		}
 	}
 	return nil

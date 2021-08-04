@@ -10,6 +10,7 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 )
 
+// addNode just adds a node to the cluster but does NOT perform rebalance.
 func addNode(hostname, role string, t *testing.T) {
 	serverAddr := clusterconfig.KVAddress
 	username := clusterconfig.Username
@@ -20,6 +21,18 @@ func addNode(hostname, role string, t *testing.T) {
 	}
 }
 
+// addNodeAndRebalance adds a node to the cluster and then does a rebalance.
+func addNodeAndRebalance(hostname, role string, t *testing.T) {
+	serverAddr := clusterconfig.KVAddress
+	username := clusterconfig.Username
+	password := clusterconfig.Password
+
+	if err := cluster.AddNodeAndRebalance(serverAddr, username, password, hostname, role); err != nil {
+		t.Fatalf(err.Error())
+	}
+}
+
+// removeNode performs a rebalance out (ejection) of the specified node.
 func removeNode(hostname string, t *testing.T) {
 	serverAddr := clusterconfig.KVAddress
 	username := clusterconfig.Username
@@ -106,8 +119,8 @@ func is4NodeCluster() bool {
 func init4NodeCluster(t *testing.T) {
 
 	resetCluster(t)
-	addNode(clusterconfig.Nodes[2], "index", t)
-	addNode(clusterconfig.Nodes[3], "index", t)
+	addNodeAndRebalance(clusterconfig.Nodes[2], "index", t)
+	addNodeAndRebalance(clusterconfig.Nodes[3], "index", t)
 
 	if !is4NodeCluster() {
 		t.Fatalf("Unable to initialize 4 node cluster. Cluster status: %v", getClusterStatus())
@@ -137,7 +150,7 @@ func initClusterFromREST() error {
 		}
 
 		time.Sleep(1 * time.Second)
-		if err := cluster.AddNode(serverAddr, username, password, clusterconfig.Nodes[1], "kv,index"); err != nil {
+		if err := cluster.AddNodeAndRebalance(serverAddr, username, password, clusterconfig.Nodes[1], "kv,index"); err != nil {
 			return err
 		}
 		time.Sleep(5 * time.Second)
