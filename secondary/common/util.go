@@ -1392,6 +1392,23 @@ func GetCollectionDefaults(scope, collection string) (string, string) {
 	return scope, collection
 }
 
+// WriteFileWithSync simulates ioutil.WriteFile but also syncs (forces bytes
+// to disk) before closing. Returns the first error, if any.
+func WriteFileWithSync(path string, data []byte, perm os.FileMode) error {
+	fd, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, perm)
+	if err == nil { // opened, so must close
+		_, err = fd.Write(data)
+		if err == nil {
+			err = fd.Sync()
+		}
+		err2 := fd.Close()
+		if err == nil {
+			err = err2
+		}
+	}
+	return err
+}
+
 // Mapping of major and minor versions to indexer's
 // internal representation of server versions
 func GetVersion(version, minorVersion uint32) uint64 {

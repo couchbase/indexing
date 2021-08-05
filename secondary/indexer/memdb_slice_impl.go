@@ -971,11 +971,14 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, err
 }
 
+// doPersistSnapshot writes a snapshot to disk, including a checksum file, manifests, and
+// snapshot info with a subset of stats. (The checksum only covers the snapshot itself.)
+// Most of the work is done in a separate goroutine running the anonymous function below.
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	var concurrency int = 1
 
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		// Add details to snapshot info and persist it
+		// Add persisted subset of stats to snapshot info
 		snapshotStats := make(map[string]interface{})
 		snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
 		snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
@@ -1013,7 +1016,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 				return
 			}
 
-			// StoreToDisk call below will spawn 'concurrency' go routines to write
+			// StoreToDisk call below will spawn 'concurrency' goroutines to write
 			// and will wait for this group to complete.
 			// To ensure that CPU isn't overwhelmed, we limit how many such groups
 			// can run in parallel.
@@ -1023,30 +1026,20 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			}()
 			err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 			if err == nil {
-				var fd *os.File
-				var bs []byte
-
-				// Add details to snapshot info and persist it
+				// Add details to snapshot info
 				s.info.Version = SNAPSHOT_META_VERSION_MOI_1
 				s.info.InstId = mdb.idxInstId
 				s.info.PartnId = mdb.idxPartnId
 
-				// Append stats to manifest file
+				// Append info with stats to manifest file
+				var bs []byte // declare to avoid shadowing err with :=
 				bs, err = json.Marshal(s.info)
 				if err == nil {
-					fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
-					if err == nil { // opened, so must close
-						_, err = fd.Write(bs)
-						if err == nil {
-							err = fd.Sync() // make sure stats make it to disk before renaming tempdir to dir
-						}
-						err2 := fd.Close()
-						if err == nil {
-							err = err2
-						}
-					}
+					err = common.WriteFileWithSync(manifest, bs, 0755)
 				}
 
+				// If everything succeeded, rename the temp dir to the final dir
+				// and clean up old disk snapshots
 				if err == nil {
 					err = os.Rename(tmpdir, dir)
 					if err == nil {
