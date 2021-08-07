@@ -536,6 +536,7 @@ func groupAggrton1ql(groupAggs *qc.GroupAggr) *datastore.IndexGroupAggregates {
 		Aggregates:         aggregates,
 		DependsOnIndexKeys: dependsOnIndexKeys,
 		IndexKeyNames:      groupAggs.IndexKeyNames,
+		AllowPartialAggr:   groupAggs.AllowPartialAggr,
 	}
 
 	return ga
