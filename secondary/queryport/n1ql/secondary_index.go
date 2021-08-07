@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	l "github.com/couchbase/indexing/secondary/logging"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
@@ -857,12 +858,14 @@ func newSecondaryIndexFromMetaData(
 	}
 
 	if indexDefn.SecExprs != nil {
-		exprs := make(expression.Expressions, 0, len(indexDefn.SecExprs))
-		for _, secExpr := range indexDefn.SecExprs {
+		origSecExprs, origDesc, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc)
+		exprs := make(expression.Expressions, 0, len(origSecExprs))
+		for _, secExpr := range origSecExprs {
 			expr, _ := parser.Parse(secExpr)
 			exprs = append(exprs, expr)
 		}
 		si.secExprs = exprs
+		si.desc = origDesc
 	}
 
 	if len(indexDefn.PartitionKeys) != 0 {
@@ -1226,6 +1229,7 @@ func (si *secondaryIndex2) Scan2(
 
 // RangeKey2 implements Index2{} interface.
 func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
+
 	if si != nil && si.secExprs != nil {
 		idxkeys := make(datastore.IndexKeys, 0, len(si.secExprs))
 		for i, exprS := range si.secExprs {
