@@ -614,9 +614,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.readDeadline": ConfigValue{
-		300000,
+		120000,
 		"timeout, in milliseconds, is timeout while reading from socket",
-		300000,
+		120000,
 		true,  // immutable
 		false, // case-insensitive
 	},
