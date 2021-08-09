@@ -286,6 +286,12 @@ type IndexUsage struct {
 	instStatPrefix  string
 
 	eligible bool
+
+	// stats for duplicate index removal logic
+	numDocsQueued	int64
+	numDocsPending	int64
+	rollbackTime	int64
+	progressStatTime int64
 }
 
 type Solution struct {

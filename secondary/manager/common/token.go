@@ -86,6 +86,7 @@ type DeleteCommandToken struct {
 	Name   string
 	Bucket string
 	DefnId c.IndexDefnId
+	Internal bool
 }
 
 type BuildCommandToken struct {
@@ -426,10 +427,11 @@ func MarshallCreateCommandTokenList(r *CreateCommandTokenList) ([]byte, error) {
 //
 // Generate a token to metakv for recovery purpose
 //
-func PostDeleteCommandToken(defnId c.IndexDefnId) error {
+func PostDeleteCommandToken(defnId c.IndexDefnId, internal bool) error {
 
 	commandToken := &DeleteCommandToken{
 		DefnId: defnId,
+		Internal: internal,
 	}
 
 	id := fmt.Sprintf("%v", defnId)

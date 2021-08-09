@@ -2899,7 +2899,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 	// place token for recovery.  Even if the index does not exist, the delete token will
 	// be cleaned up during rebalance.  By placing the delete token, it will make sure that the
 	// outstanding create token will be deleted.
-	if err := mc.PostDeleteCommandToken(defnID); err != nil {
+	if err := mc.PostDeleteCommandToken(defnID, false); err != nil {
 		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
 	}
 
