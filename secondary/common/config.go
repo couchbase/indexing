@@ -796,6 +796,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.keepAliveInterval": ConfigValue{
+		1, // value
+		"client side keepalive interval, in seconds, to fast close the scan client conection on failover",
+		1,     // default
+		false, // mutable
+		false, // case-insensitive
+	},
 	"queryport.client.waitForScheduledIndex": ConfigValue{
 		true,
 		"Do not return the index creation request until the scheduled index is created",
