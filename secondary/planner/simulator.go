@@ -387,7 +387,8 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 			t.setStorageType(p)
 		}
 
-		return rebalance(command, config, p, indexes, deletedNodes)
+		plnr, stat, _, e := rebalance(command, config, p, indexes, deletedNodes, false)
+		return plnr, stat, e
 
 	} else {
 		return nil, nil, errors.New(fmt.Sprintf("uknown command: %v", command))
