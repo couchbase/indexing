@@ -713,8 +713,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	for _, nid := range nids {
 
 		// mgmtAddr is this node's "cluster" address (host:uiPort), NOT a key for caches
-		// TODO: Check this when user can specify encrypted port from query
-		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", false)
+		// address here will be with encrypted port if encryption is enabled.
+		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
 		if err != nil {
 			logging.Errorf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
 			continue
@@ -3662,8 +3662,7 @@ func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, 
 		fetched = true
 	}
 
-	// TODO: Check impact of having an un encrypted port here
-	return s.cinfo.GetServiceAddress(nid, "mgmt", false)
+	return s.cinfo.GetServiceAddress(nid, "mgmt", true)
 }
 
 func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
