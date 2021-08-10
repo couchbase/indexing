@@ -891,8 +891,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 //
 func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, error) {
 
-	// TODO: Check this when user can specify encrypted port from query
-	addr, err := cinfo.GetServiceAddress(nid, "mgmt", false)
+	addr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
 	if err != nil {
 		return "", err
 	}
