@@ -13,17 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/gometa/common"
-	gometaL "github.com/couchbase/gometa/log"
-	"github.com/couchbase/gometa/message"
-	"github.com/couchbase/gometa/protocol"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/logging"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"github.com/couchbase/indexing/secondary/planner"
-	"github.com/couchbase/query/expression"
-	"github.com/couchbase/query/expression/parser"
 	"math"
 	"math/rand"
 	"net"
@@ -33,6 +22,19 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/gometa/common"
+	gometaL "github.com/couchbase/gometa/log"
+	"github.com/couchbase/gometa/message"
+	"github.com/couchbase/gometa/protocol"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
 )
 
 // TODO:
@@ -803,6 +805,7 @@ func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.Indexer
 
 func (o *MetadataProvider) validateNodes(nodes []string, watcherMap map[c.IndexerId]int) (bool, error) {
 	availableNodes := make(map[string]bool)
+	encryptedNodes := make(map[string]bool)
 
 	for indexerId, _ := range watcherMap {
 		watcher, err := o.findWatcherByIndexerId(indexerId)
@@ -810,6 +813,23 @@ func (o *MetadataProvider) validateNodes(nodes []string, watcherMap map[c.Indexe
 			return false, err
 		}
 		availableNodes[strings.ToLower(watcher.getNodeAddr())] = true
+	}
+
+	if security.EncryptionEnabled() {
+		for nodeAddr := range availableNodes {
+			encryptedNodeAddr, _, _, _ := security.EncryptPortFromAddr(nodeAddr)
+			encryptedNodes[strings.ToLower(encryptedNodeAddr)] = true
+		}
+	}
+
+	// We have made a map for available node with and without encrypted ports. If NonSSLPorts are disabled we should only
+	// use the encrypted ports. If Encryption is enabled and NonSSLPorts are not disable we are use eiter of them.
+	if security.DisableNonSSLPort() {
+		availableNodes = encryptedNodes
+	} else {
+		for nodeAddr := range encryptedNodes {
+			availableNodes[nodeAddr] = true
+		}
 	}
 
 	for _, node := range nodes {
@@ -1369,7 +1389,8 @@ func (o *MetadataProvider) prepareNodeList(nodeList []string, watcherMap map[c.I
 			if err != nil {
 				return nil, errors.New("Fail to invokve planner.  Some of the indexers may be down or network partitioned from query process.")
 			}
-			nodes = append(nodes, strings.ToLower(watcher.getNodeAddr()))
+			nodeAddr, _, _, _ := security.EncryptPortFromAddr(watcher.getNodeAddr())
+			nodes = append(nodes, strings.ToLower(nodeAddr))
 		}
 	}
 
@@ -1481,6 +1502,14 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 				for _, useNode := range useNodes {
 					if strings.ToLower(currNode) == strings.ToLower(useNode) {
 						found = true
+					} else {
+						hp, _, _, err := security.EncryptPortFromAddr(useNode)
+						if err != nil {
+							return err
+						}
+						if strings.ToLower(hp) == strings.ToLower(currNode) {
+							found = true
+						}
 					}
 				}
 				if !found {
@@ -3399,6 +3428,14 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 	for _, watcher := range o.watchers {
 		if strings.ToLower(watcher.getNodeAddr()) == strings.ToLower(nodeAddr) {
 			return watcher
+		} else {
+			hp, _, _, err := security.EncryptPortFromAddr(watcher.getNodeAddr())
+			if err != nil {
+				return nil
+			}
+			if strings.ToLower(hp) == strings.ToLower(nodeAddr) {
+				return watcher
+			}
 		}
 	}
 

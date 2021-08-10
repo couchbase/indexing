@@ -13,15 +13,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth/service"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 //////////////////////////////////////////////////////////////
@@ -345,6 +347,15 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 				if indexer.NodeId == node {
 					found = true
 					break
+				} else {
+					hp, _, _, err := security.EncryptPortFromAddr(node)
+					if err != nil {
+						return nil, err
+					}
+					if indexer.NodeId == hp {
+						found = true
+						break
+					}
 				}
 			}
 
@@ -411,6 +422,15 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 				if indexer.NodeId == node {
 					found = true
 					break
+				} else {
+					hp, _, _, err := security.EncryptPortFromAddr(node)
+					if err != nil {
+						return nil, err
+					}
+					if indexer.NodeId == hp {
+						found = true
+						break
+					}
 				}
 			}
 

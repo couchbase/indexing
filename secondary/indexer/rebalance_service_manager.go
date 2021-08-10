@@ -35,7 +35,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -395,7 +395,7 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 
 	if m.state.rebalanceID != "" {
 		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v", service.ErrConflict, m.state.rebalanceID)
-		if (change.Type == service.TopologyChangeTypeRebalance) {
+		if change.Type == service.TopologyChangeTypeRebalance {
 			m.isBalanced = false
 		}
 		return service.ErrConflict
@@ -2691,6 +2691,19 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 
 func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
+	isDest := func(addr, addrSSL string) bool {
+		if security.EncryptionEnabled() && security.DisableNonSSLPort() {
+			// Encryption Level : Strict -> allow only SSL Address
+			return dest == addrSSL
+		} else if security.EncryptionEnabled() && !security.DisableNonSSLPort() {
+			// Encryption Level : All -> allow both SSL and Non SSL
+			return dest == addr || dest == addrSSL
+		} else {
+			// Encryption not Enabled -> allow only Non SSL
+			return dest == addr
+		}
+	}
+
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
 
@@ -2704,13 +2717,17 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
 	for _, nid := range nids {
 
-		// TODO: Check this when user can specify encrypted port from query.
 		maddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", false)
 		if err != nil {
 			return "", err
 		}
 
-		if maddr == dest {
+		meaddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", true)
+		if err != nil {
+			return "", err
+		}
+
+		if isDest(maddr, meaddr) {
 
 			haddr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 			if err != nil {

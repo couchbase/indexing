@@ -221,6 +221,16 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 			for _, host := range hosts {
 				if strings.ToLower(host) == strings.ToLower(node.NodeId) {
 					found = true
+					break
+				} else {
+					hp, _, _, err := security.EncryptPortFromAddr(host)
+					if err != nil {
+						return nil, err
+					}
+					if strings.ToLower(hp) == strings.ToLower(node.NodeId) {
+						found = true
+						break
+					}
 				}
 			}
 
@@ -939,8 +949,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 //
 func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, error) {
 
-	// TODO: Check this when user can specify encrypted port from query
-	addr, err := cinfo.GetServiceAddress(nid, "mgmt", false)
+	addr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
 	if err != nil {
 		return "", err
 	}

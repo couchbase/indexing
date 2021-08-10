@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -442,13 +442,12 @@ func (c *ClusterInfoCache) buildEncryptPortMapping() {
 			mapping[fmt.Sprint(node.Services[CBQ_SERVICE])] = fmt.Sprint(node.Services[CBQ_SSL_SERVICE])
 		}
 
-		// TODO: Check this when user can specify encrypted port from query
-		// As ns_server does not send encrypted from all APIs we will need this in map.
-		// _, ok = node.Services[MGMT_SERVICE]
-		// _, ok1 = node.Services[MGMT_SSL_SERVICE]
-		// if ok && ok1 {
-		// mapping[fmt.Sprint(node.Services[MGMT_SERVICE])] = fmt.Sprint(node.Services[MGMT_SSL_SERVICE])
-		// }
+		// As ns_server does not send encrypted ports in all APIs we will need this in map.
+		_, ok = node.Services[MGMT_SERVICE]
+		_, ok1 = node.Services[MGMT_SSL_SERVICE]
+		if ok && ok1 {
+			mapping[fmt.Sprint(node.Services[MGMT_SERVICE])] = fmt.Sprint(node.Services[MGMT_SSL_SERVICE])
+		}
 	}
 
 	c.encryptPortMapping = mapping

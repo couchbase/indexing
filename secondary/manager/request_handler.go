@@ -552,8 +552,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	for _, nid := range nids {
 
 		// mgmtAddr is this node's "cluster" address (host:uiPort), NOT a key for caches
-		// TODO: Check this when user can specify encrypted port from query
-		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", false)
+		// address here will be with encrypted port if encryption is enabled.
+		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
 		if err != nil {
 			logging.Errorf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
 			continue
