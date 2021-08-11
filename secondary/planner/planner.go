@@ -7010,6 +7010,7 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	}
 
 	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
+		solution.PrintLayout()
 		return nil, errors.New("Cannot satisfy cluster constraints by greedy placement method")
 	}
 
