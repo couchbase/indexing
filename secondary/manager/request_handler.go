@@ -291,7 +291,7 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 
 		handlerContext.schedTokenMon = newSchedTokenMonitor(mgr)
 
-		handlerContext.useGreedyPlanner = config["indexer.planner.useGreedyPlanner"].Bool()
+		handlerContext.useGreedyPlanner = config["planner.useGreedyPlanner"].Bool()
 
 		go handlerContext.runPersistor()
 	})
@@ -1300,7 +1300,7 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 
 			url := "/getLocalIndexMetadata"
 			if len(t.bucket) != 0 {
-				url += "?bucket=" + u.QueryEscape(t.bucket) 
+				url += "?bucket=" + u.QueryEscape(t.bucket)
 			}
 			if len(t.scope) != 0 {
 				url += "&scope=" + u.QueryEscape(t.scope)
