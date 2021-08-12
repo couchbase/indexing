@@ -614,9 +614,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.readDeadline": ConfigValue{
-		300000,
+		120000,
 		"timeout, in milliseconds, is timeout while reading from socket",
-		300000,
+		120000,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -793,6 +793,13 @@ var SystemConfig = Config{
 		120, // value
 		"timeout, in seconds, is timeout for REST calls in GetWithCbauth Function of Index Planner.", //help
 		120,   // default
+		false, // mutable
+		false, // case-insensitive
+	},
+	"queryport.client.keepAliveInterval": ConfigValue{
+		1, // value
+		"client side keepalive interval, in seconds, to fast close the scan client conection on failover",
+		1,     // default
 		false, // mutable
 		false, // case-insensitive
 	},

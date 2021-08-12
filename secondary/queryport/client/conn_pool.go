@@ -43,6 +43,7 @@ type connectionPool struct {
 	relConnBatchSize int32
 	stopCh           chan bool
 	ewma             gometrics.EWMA
+	kaInterval       time.Duration
 }
 
 type connection struct {
@@ -54,7 +55,7 @@ func newConnectionPool(
 	host string,
 	poolSize, poolOverflow, maxPayload int,
 	timeout, availTimeout time.Duration,
-	minPoolSizeWM int32, relConnBatchSize int32) *connectionPool {
+	minPoolSizeWM int32, relConnBatchSize int32, kaInterval int) *connectionPool {
 
 	cp := &connectionPool{
 		host:             host,
@@ -67,6 +68,7 @@ func newConnectionPool(
 		minPoolSizeWM:    minPoolSizeWM,
 		relConnBatchSize: relConnBatchSize,
 		stopCh:           make(chan bool, 1),
+		kaInterval:       time.Duration(kaInterval) * time.Second,
 	}
 	cp.mkConn = cp.defaultMkConn
 	cp.ewma = gometrics.NewEWMA5()
@@ -89,6 +91,15 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 	pkt := transport.NewTransportPacket(cp.maxPayload, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobuf.ProtobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
+
+	if cp.kaInterval > time.Duration(0) {
+		tcpconn, ok := conn.(*net.TCPConn)
+		if ok {
+			tcpconn.SetKeepAlive(true)
+			tcpconn.SetKeepAlivePeriod(cp.kaInterval)
+		}
+	}
+
 	return &connection{conn, pkt}, nil
 }
 

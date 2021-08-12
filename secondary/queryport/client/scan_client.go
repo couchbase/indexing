@@ -61,7 +61,7 @@ func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, e
 	}
 	c.pool = newConnectionPool(
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
-		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize)
+		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize, config["keepAliveInterval"].Int())
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {

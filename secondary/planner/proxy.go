@@ -1527,8 +1527,10 @@ func getIndexNumReplica(plan *Plan) error {
 	}
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
+	nodeIds := make([]string, 0)
+	errMap := make(map[common.IndexDefnId]error)
+	replicaCounterMap := make(map[common.IndexDefnId]map[string]common.Counter)
 	for nid, res := range resp {
-
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
@@ -1536,22 +1538,48 @@ func getIndexNumReplica(plan *Plan) error {
 			return err
 		}
 
+		nodeIds = append(nodeIds, nodeId)
 		localNumReplicas := res.numReplicas
 
 		for defnId, numReplica1 := range localNumReplicas {
+			if _, ok := replicaCounterMap[defnId]; !ok {
+				replicaCounterMap[defnId] = make(map[string]common.Counter)
+			}
+			replicaCounterMap[defnId][nodeId] = numReplica1
+
 			if numReplica2, ok := numReplicas[defnId]; !ok {
 				numReplicas[defnId] = numReplica1
 			} else {
 				newNumReplica, merged, err := numReplica2.MergeWith(numReplica1)
 				if err != nil {
-					logging.Errorf("Planner::getIndexNumReplica: Error merging num replica for node: %v, err: %v", nodeId, err)
-					return err
+					errMap[defnId] = err
 				}
 				if merged {
 					numReplicas[defnId] = newNumReplica
 				}
 			}
 		}
+	}
+
+	// Process errMap and return errors
+	if len(errMap) > 0 {
+		logging.Errorf("Planner::getIndexNumReplica: Processed nodes in order: %v", nodeIds)
+		var err error
+		var defnId common.IndexDefnId
+
+		for defnId, err = range errMap {
+			var errStr string
+			if counterMap, ok := replicaCounterMap[defnId]; !ok {
+				logging.Errorf("Planner::getIndexNumReplica: Error observed when merging replicas for defnId: %v, err: %v", defnId, err)
+				return err
+			} else {
+				for nodeId, counter := range counterMap {
+					errStr += fmt.Sprintf("%v:%+v ", nodeId, counter)
+				}
+				logging.Errorf("Planner::getIndexNumReplica: Error merging numReplica for defnId: %v, counter values: %v, err: %v", defnId, errStr, err)
+			}
+		}
+		return err
 	}
 
 	for _, indexer := range plan.Placement {
