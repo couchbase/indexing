@@ -1404,9 +1404,15 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 		if confStorageMode != "" {
 			if idx.canSetStorageMode(confStorageMode) {
 				if common.SetStorageModeStr(confStorageMode) {
-					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. Restarting indexer", common.GetStorageMode())
-					idx.stats.needsRestart.Set(true)
-					os.Exit(0)
+					//restart is only required for ForestDB storage engine
+					//to initialize the buffer cache correctly
+					if confStorageMode == common.ForestDB {
+						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. Restarting indexer", common.GetStorageMode())
+						idx.stats.needsRestart.Set(true)
+						os.Exit(0)
+					} else {
+						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. ", common.GetStorageMode())
+					}
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
 				}
