@@ -740,6 +740,9 @@ type IndexerStats struct {
 	totalDataSize       stats.Int64Val
 	totalDiskSize       stats.Int64Val
 
+	numGoroutine stats.Int64Val
+	numCgoCall   stats.Int64Val
+
 	indexerStateHolder stats.StringVal
 }
 
@@ -781,6 +784,9 @@ func (s *IndexerStats) Init() {
 	s.avgDiskBps.Init()
 	s.totalDataSize.Init()
 	s.totalDiskSize.Init()
+
+	s.numGoroutine.Init()
+	s.numCgoCall.Init()
 
 	s.SetPlannerFilters()
 	s.SetRebalanceFilters()
@@ -1013,6 +1019,11 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
 	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
+
+	is.numGoroutine.Set(int64(runtime.NumGoroutine()))
+	statMap.AddStatValueFiltered("num_goroutine", &is.numGoroutine)
+	is.numCgoCall.Set(int64(runtime.NumCgoCall()))
+	statMap.AddStatValueFiltered("num_cgo_call", &is.numCgoCall)
 
 	strts := fmt.Sprintf("%v", time.Now().UnixNano())
 	is.timestamp.Set(&strts)
