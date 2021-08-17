@@ -181,9 +181,13 @@ type indexer struct {
 
 	bootstrapStorageMode common.StorageMode
 
+	httpsSrvLock sync.Mutex
+	httpsSrv     *http.Server
+	tlsListener  net.Listener
+
 	httpSrvLock sync.Mutex
-	httpsSrv    *http.Server
-	tlsListener net.Listener
+	httpSrv     *http.Server
+	tcpListener net.Listener
 
 	enableSecurityChange chan bool
 
@@ -548,12 +552,20 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	}
 
 	// stop HTTPS server
-	idx.httpSrvLock.Lock()
+	idx.httpsSrvLock.Lock()
 	if idx.httpsSrv != nil {
 		// This does not close connections.  Use idx.httpSrv.Close() on 1.11
 		idx.tlsListener.Close()
 		idx.httpsSrv = nil
 		idx.tlsListener = nil
+	}
+	idx.httpsSrvLock.Unlock()
+
+	idx.httpSrvLock.Lock()
+	if idx.httpSrv != nil {
+		idx.tcpListener.Close()
+		idx.httpSrv = nil
+		idx.tcpListener = nil
 	}
 	idx.httpSrvLock.Unlock()
 
@@ -577,9 +589,19 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		}
 	}
 
+	// start HTTP server
+	initHttp := func(r int, e error) error {
+		logging.Infof("handleSecurityChange: restarting http server")
+		return idx.initHttpServer()
+	}
+	rh := common.NewRetryHelper(10, time.Second, 1, initHttp)
+	if err := rh.Run(); err != nil {
+		exitFn(fmt.Sprintf("Fail to restart http server on security change. Error %v", err))
+	}
+
 	// start HTTPS server
 	fn := func(r int, e error) error {
-		logging.Infof("handleSecurityChange: restarting http/https server")
+		logging.Infof("handleSecurityChange: restarting https server")
 		return idx.initHttpsServer()
 	}
 	helper := common.NewRetryHelper(10, time.Second, 1, fn)
@@ -687,36 +709,52 @@ func (idx *indexer) initPeriodicProfile() {
 
 func (idx *indexer) initHttpServer() error {
 
-	// Setup http server
-	addr := net.JoinHostPort("", idx.config["httpPort"].String())
+	if !security.DisableNonSSLPort() {
+		// Setup http server
+		addr := net.JoinHostPort("", idx.config["httpPort"].String())
 
-	logging.Infof("indexer:: Staring http server : %v", addr)
+		logging.Infof("indexer:: Staring http server : %v", addr)
 
-	srv := &http.Server{
-		ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
-		WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
-		ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
-		Addr:              addr,
-		Handler:           GetHTTPMux(),
-	}
-
-	lsnr, err := security.MakeProtocolAwareTCPListener(addr)
-	if err != nil {
-		return fmt.Errorf("Error in creating TCP Listener: %v", err)
-	}
-
-	go func() {
-		// replace below with ListenAndServe on moving to go1.8
-		if err := srv.Serve(lsnr); err != nil {
-			// This does not close connections.  Use idx.httpSrv.Close() on 1.11
-			lsnr.Close()
-			logging.Errorf("indexer:: Error from Http Server: %v", err)
-
-			// self restart
-			time.Sleep(time.Duration(10) * time.Second)
-			go idx.initHttpServer()
+		srv := &http.Server{
+			ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
+			WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
+			ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
+			Addr:              addr,
+			Handler:           GetHTTPMux(),
 		}
-	}()
+
+		lsnr, err := security.MakeProtocolAwareTCPListener(addr)
+		if err != nil {
+			return fmt.Errorf("Error in creating TCP Listener: %v", err)
+		}
+
+		idx.httpSrvLock.Lock()
+		idx.httpSrv = srv
+		idx.tcpListener = lsnr
+		idx.httpSrvLock.Unlock()
+
+		go func() {
+			// replace below with ListenAndServe on moving to go1.8
+			if err := srv.Serve(lsnr); err != nil {
+				logging.Errorf("indexer:: Error from Http Server: %v", err)
+
+				idx.httpSrvLock.Lock()
+				if idx.httpSrv != nil && idx.httpSrv == srv {
+					// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+					lsnr.Close()
+
+					// reset before releasing the lock
+					idx.httpSrv = nil
+					idx.tcpListener = nil
+
+					// self restart
+					time.Sleep(time.Duration(10) * time.Second)
+					go idx.initHttpServer()
+				}
+				idx.httpSrvLock.Unlock()
+			}
+		}()
+	}
 
 	return nil
 }
@@ -745,16 +783,16 @@ func (idx *indexer) initHttpsServer() error {
 
 		logging.Infof("indexer:: SSL server started: %v", sslAddr)
 
-		idx.httpSrvLock.Lock()
+		idx.httpsSrvLock.Lock()
 		idx.httpsSrv = sslsrv
 		idx.tlsListener = lsnr
-		idx.httpSrvLock.Unlock()
+		idx.httpsSrvLock.Unlock()
 
 		go func() {
 			if err := sslsrv.Serve(lsnr); err != nil {
 				logging.Errorf("HTTPS Server terminates on error: %v", err)
 
-				idx.httpSrvLock.Lock()
+				idx.httpsSrvLock.Lock()
 				if idx.httpsSrv != nil && idx.httpsSrv == sslsrv {
 					// This does not close connections.  Use idx.httpSrv.Close() on 1.11
 					idx.tlsListener.Close()
@@ -766,7 +804,7 @@ func (idx *indexer) initHttpsServer() error {
 					// self restart
 					go idx.initHttpsServer()
 				}
-				idx.httpSrvLock.Unlock()
+				idx.httpsSrvLock.Unlock()
 			}
 		}()
 	}
@@ -1404,9 +1442,15 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 		if confStorageMode != "" {
 			if idx.canSetStorageMode(confStorageMode) {
 				if common.SetStorageModeStr(confStorageMode) {
-					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. Restarting indexer", common.GetStorageMode())
-					idx.stats.needsRestart.Set(true)
-					os.Exit(0)
+					//restart is only required for ForestDB storage engine
+					//to initialize the buffer cache correctly
+					if confStorageMode == common.ForestDB {
+						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. Restarting indexer", common.GetStorageMode())
+						idx.stats.needsRestart.Set(true)
+						os.Exit(0)
+					} else {
+						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. ", common.GetStorageMode())
+					}
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
 				}
