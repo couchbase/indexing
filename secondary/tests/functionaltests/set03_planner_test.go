@@ -251,6 +251,19 @@ var greedyPlannerFuncTestCases = []greedyPlannerFuncTestCase{
 		"../testdata/planner/greedy/new_index_with_1_replica.json",
 		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9002": true},
 	},
+	// Place equivalent indexes
+	{
+		"Place Equivalent Index Without any replica - 3 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_nodes_equiv_index.json",
+		"../testdata/planner/greedy/new_equiv_index.json",
+		map[string]bool{"127.0.0.1:9002": true},
+	},
+	{
+		"Place Equivalent Index With 1 Replica - 3 non-empty nodes - 1 SG",
+		"../testdata/planner/greedy/topologies/3_nodes_equiv_index.json",
+		"../testdata/planner/greedy/new_equiv_index_1_replica.json",
+		map[string]bool{"127.0.0.1:9000": true, "127.0.0.1:9002": true},
+	},
 }
 
 var greedyPlannerIdxDistTestCases = []greedyPlannerIdxDistTestCase{
