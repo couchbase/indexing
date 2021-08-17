@@ -1,0 +1,13 @@
+[
+	{
+		"name" 	        : "newEquivIdx",
+  		"bucket"        : "default",
+  		"isPrimary"     : false,
+		"secExprs"      : ["equivField"],
+		"isArrayIndex"  : false,
+		"replica"       : 1,
+		"defnId"        : 987654,
+		"NoUsageInfo"   : true,
+		"NeedsEstimate" : true
+	}
+]

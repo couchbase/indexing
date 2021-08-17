@@ -132,8 +132,8 @@ type ConstraintMethod interface {
 	GetCpuQuota() uint64
 	SatisfyClusterResourceConstraint(s *Solution) bool
 	SatisfyNodeResourceConstraint(s *Solution, n *IndexerNode) bool
-	SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool
-	SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, index *IndexUsage, eligibles map[*IndexUsage]bool) bool
+	SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool, chkEquiv bool) bool
+	SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, index *IndexUsage, eligibles map[*IndexUsage]bool, chkEquiv bool) bool
 	SatisfyClusterConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool
 	SatisfyNodeConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool
 	SatisfyServerGroupConstraint(s *Solution, n *IndexUsage, group string) bool
@@ -143,7 +143,7 @@ type ConstraintMethod interface {
 	Print()
 	Validate(s *Solution) error
 	GetViolations(s *Solution, indexes map[*IndexUsage]bool) *Violations
-	SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool
+	SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool, chkEquiv bool) bool
 }
 
 type SizingMethod interface {
@@ -418,6 +418,9 @@ type GreedyPlanner struct {
 	sizing     SizingMethod
 
 	newIndexes []*IndexUsage
+
+	equivIndexMap map[string]bool
+	numEquivIndex int
 
 	Result *Solution
 }
@@ -1000,7 +1003,7 @@ func (p *SAPlanner) runIteration(i int, s *Solution) bool {
 		haConstrained := false
 		eligibles := p.placement.GetEligibleIndexes()
 		for _, node := range s.Placement {
-			if !p.constraint.SatisfyNodeHAConstraint(s, node, eligibles) {
+			if !p.constraint.SatisfyNodeHAConstraint(s, node, eligibles, true) {
 				haConstrained = true
 			}
 		}
@@ -3572,7 +3575,7 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles map[*IndexUsage
 						continue
 					}
 
-					if satisfyResourceConstraint && c.SatisfyIndexHAConstraint(s, indexer, index, eligibles) {
+					if satisfyResourceConstraint && c.SatisfyIndexHAConstraint(s, indexer, index, eligibles, true) {
 						continue
 					}
 
@@ -3850,10 +3853,10 @@ func (c *IndexerConstraint) SatisfyNodeResourceConstraint(s *Solution, n *Indexe
 //
 // This function determines if a node HA constraint is satisfied.
 //
-func (c *IndexerConstraint) SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool {
+func (c *IndexerConstraint) SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool, chkEquiv bool) bool {
 
 	for offset, index := range n.Indexes {
-		if !c.SatisfyIndexHAConstraintAt(s, n, offset+1, index, eligibles) {
+		if !c.SatisfyIndexHAConstraintAt(s, n, offset+1, index, eligibles, chkEquiv) {
 			return false
 		}
 	}
@@ -3864,12 +3867,12 @@ func (c *IndexerConstraint) SatisfyNodeHAConstraint(s *Solution, n *IndexerNode,
 //
 // This function determines if a HA constraint is satisfied for a particular index in indexer node.
 //
-func (c *IndexerConstraint) SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, source *IndexUsage, eligibles map[*IndexUsage]bool) bool {
+func (c *IndexerConstraint) SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, source *IndexUsage, eligibles map[*IndexUsage]bool, chkEquiv bool) bool {
 
-	return c.SatisfyIndexHAConstraintAt(s, n, 0, source, eligibles)
+	return c.SatisfyIndexHAConstraintAt(s, n, 0, source, eligibles, chkEquiv)
 }
 
-func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNode, offset int, source *IndexUsage, eligibles map[*IndexUsage]bool) bool {
+func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNode, offset int, source *IndexUsage, eligibles map[*IndexUsage]bool, chkEquiv bool) bool {
 
 	if n.isDelete {
 		return false
@@ -3893,9 +3896,11 @@ func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNo
 			return false
 		}
 
-		// check equivalent index
-		if index.IsEquivalentIndex(source, true) {
-			return false
+		if chkEquiv {
+			// check equivalent index
+			if index.IsEquivalentIndex(source, true) {
+				return false
+			}
 		}
 	}
 
@@ -3966,7 +3971,7 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 		return false
 	}
 
-	return c.SatisfyNodeHAConstraint(s, n, eligibles)
+	return c.SatisfyNodeHAConstraint(s, n, eligibles, true)
 }
 
 //
@@ -3987,10 +3992,10 @@ func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles map[
 // This function determines if cluster wide constraint is satisfied.
 // This function ignores the resource constraint.
 //
-func (c *IndexerConstraint) SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool {
+func (c *IndexerConstraint) SatisfyClusterHAConstraint(s *Solution, eligibles map[*IndexUsage]bool, chkEquiv bool) bool {
 
 	for _, indexer := range s.Placement {
-		if !c.SatisfyNodeHAConstraint(s, indexer, eligibles) {
+		if !c.SatisfyNodeHAConstraint(s, indexer, eligibles, chkEquiv) {
 			return false
 		}
 	}
@@ -5843,7 +5848,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		// See if the index can be moved while obeying resource constraint.
 		violation := s.constraint.CanAddIndex(s, target, index)
 		if !checkConstraint || violation == NoViolation {
-			force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, index, p.GetEligibleIndexes())
+			force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, index, p.GetEligibleIndexes(), true)
 			s.moveIndex(source, index, target, checkConstraint)
 			p.randomMoveDur += time.Now().Sub(now).Nanoseconds()
 			p.randomMoveCnt++
@@ -6030,7 +6035,7 @@ func (p *RandomPlacement) getRandomEligibleIndex(s *Solution, constraint Constra
 		eligibles := p.GetEligibleIndexes()
 		for _, index := range node.Indexes {
 			if _, ok := p.indexes[index]; ok {
-				if !constraint.SatisfyIndexHAConstraint(s, node, index, eligibles) {
+				if !constraint.SatisfyIndexHAConstraint(s, node, index, eligibles, true) {
 					candidates = append(candidates, index)
 				}
 			}
@@ -6168,7 +6173,7 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 
 		// If index has no usage info, then swap only if violate HA constraint.
-		if sourceIndex.NoUsageInfo && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes()) {
+		if sourceIndex.NoUsageInfo && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true) {
 			continue
 		}
 
@@ -6230,7 +6235,7 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 			}
 
 			// If index has no usage info, then swap only if violate HA constraint.
-			if sourceIndex.NoUsageInfo && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes()) {
+			if sourceIndex.NoUsageInfo && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true) {
 				continue
 			}
 
@@ -6313,7 +6318,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 			// If index has no usage info, then swap only if violate HA constraint.
 			if !sourceIndex.HasSizing(s.UseLiveData()) {
 				if target := p.findLeastUsedAndPopulatedTargetNode(s, sourceIndex, source); target != nil {
-					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes())
+					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true)
 					s.moveIndex(source, sourceIndex, target, false)
 
 					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
@@ -6339,7 +6344,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 				// See if the index can be moved while obeying resource constraint.
 				violation := s.constraint.CanAddIndex(s, target, sourceIndex)
 				if !checkConstraint || violation == NoViolation {
-					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes())
+					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true)
 					s.moveIndex(source, sourceIndex, target, checkConstraint)
 
 					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
@@ -6802,11 +6807,12 @@ func newGreedyPlanner(cost CostMethod, constraint ConstraintMethod, placement Pl
 	sizing SizingMethod, indexes []*IndexUsage) *GreedyPlanner {
 
 	return &GreedyPlanner{
-		cost:       cost,
-		constraint: constraint,
-		placement:  placement,
-		sizing:     sizing,
-		newIndexes: indexes,
+		cost:          cost,
+		constraint:    constraint,
+		placement:     placement,
+		sizing:        sizing,
+		newIndexes:    indexes,
+		equivIndexMap: make(map[string]bool),
 	}
 }
 
@@ -6825,7 +6831,7 @@ func canUseGreedyIndexPlacement(config *RunConfig, indexes []*IndexUsage,
 
 	// Avoid using greedy planner if the HA constraints in the cluster are not satisfied.
 
-	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
+	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil, false); !ok {
 		logging.Infof("Cannot use greedy planner as the cluster constraints are not satisfied.")
 
 		return false, common.IndexDefnId(0)
@@ -6911,6 +6917,51 @@ func (p *GreedyPlanner) initializeSolution(command CommandType, solution *Soluti
 	// Update cost
 	_ = p.cost.Cost(solution)
 	solution.updateCost()
+
+	// Initialise equivalent index map
+	p.initEquivIndexMap(solution)
+}
+
+//
+// Check if equivalent indexes exist in the cluster.
+//
+func (p *GreedyPlanner) initEquivIndexMap(solution *Solution) {
+	for _, indexer := range solution.Placement {
+		if indexer.ExcludeAny(solution) {
+			continue
+		}
+
+		if indexer.IsDeleted() {
+			continue
+		}
+
+		found := false
+
+	equivLoop:
+		for _, index := range indexer.Indexes {
+			// This check will always work if one of the index is non-partitioned.
+			if p.newIndexes[0].Instance == nil {
+				continue
+			}
+
+			if index.Instance == nil {
+				continue
+			}
+
+			if common.IsEquivalentIndex(&index.Instance.Defn, &p.newIndexes[0].Instance.Defn) {
+				p.equivIndexMap[indexer.IndexerId] = true
+				found = true
+				p.numEquivIndex++
+
+				// It should not matter if a node has one or more equivalent indexes.
+				break equivLoop
+			}
+		}
+
+		if !found {
+			p.equivIndexMap[indexer.IndexerId] = false
+		}
+	}
 }
 
 func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, error) {
@@ -6937,13 +6988,17 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	// TODO:
 	sortedNodeList := sortNodeByUsage(solution, solution.Placement)
 
-	// Filter the excluded nodes
+	// Filter the excluded and deleted nodes
 	serverGroups := make(map[string]bool)
 	filteredNodeList := make([]*IndexerNode, 0)
 	for _, node := range sortedNodeList {
 
 		// Why shouldn't this be ExcludeIn? RandomPlacement.Add does ExcludeAny!
 		if node.ExcludeAny(solution) {
+			continue
+		}
+
+		if node.IsDeleted() {
 			continue
 		}
 
@@ -6963,13 +7018,29 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	filledServerGroups := make(map[string]bool)
 	filledNodes := make(map[string]bool)
 
+	// number of indexes to be forcefully placed even if their
+	// equivalent index(es) residing are on the same node
+	numForcePlaceEquivalent := p.numEquivIndex + len(indexes) - len(filteredNodeList)
+
+	checkEquivalent := true
+	if numForcePlaceEquivalent > 0 {
+		checkEquivalent = false
+	}
+
 	getNextIndexer := func(i int) *IndexerNode {
 		if i == 0 {
 			// filteredNodeList cannot be empty by the time we reach here.
 			node := filteredNodeList[0]
-			filledServerGroups[node.ServerGroup] = true
-			filledNodes[node.NodeId] = true
-			return node
+
+			if numForcePlaceEquivalent > 0 || !p.equivIndexMap[node.IndexerId] {
+				if numForcePlaceEquivalent > 0 {
+					numForcePlaceEquivalent--
+				}
+
+				filledServerGroups[node.ServerGroup] = true
+				filledNodes[node.NodeId] = true
+				return node
+			}
 		}
 
 		// Check if Server Group Constraint needs to be honored.
@@ -6983,9 +7054,15 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 					continue
 				}
 
-				filledServerGroups[node.ServerGroup] = true
-				filledNodes[node.NodeId] = true
-				return node
+				if numForcePlaceEquivalent > 0 || !p.equivIndexMap[node.IndexerId] {
+					if numForcePlaceEquivalent > 0 {
+						numForcePlaceEquivalent--
+					}
+
+					filledServerGroups[node.ServerGroup] = true
+					filledNodes[node.NodeId] = true
+					return node
+				}
 			}
 
 			return nil
@@ -6997,9 +7074,15 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 				continue
 			}
 
-			filledServerGroups[node.ServerGroup] = true
-			filledNodes[node.NodeId] = true
-			return node
+			if numForcePlaceEquivalent > 0 || !p.equivIndexMap[node.IndexerId] {
+				if numForcePlaceEquivalent > 0 {
+					numForcePlaceEquivalent--
+				}
+
+				filledServerGroups[node.ServerGroup] = true
+				filledNodes[node.NodeId] = true
+				return node
+			}
 		}
 
 		return nil
@@ -7015,7 +7098,7 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		p.placement.AddToIndexer(solution, indexer, idx)
 	}
 
-	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil); !ok {
+	if ok := solution.constraint.SatisfyClusterHAConstraint(solution, nil, checkEquivalent); !ok {
 		solution.PrintLayout()
 		return nil, errors.New("Cannot satisfy cluster constraints by greedy placement method")
 	}
