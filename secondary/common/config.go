@@ -1337,6 +1337,13 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.plasma.MaxSMRWorkerPerInst": ConfigValue{
+		uint64(runtime.GOMAXPROCS(0)),
+		"Flush buffer size for dedicated instance data log",
+		uint64(runtime.GOMAXPROCS(0)),
+		false,
+		false,
+	},
 	"indexer.plasma.MaxPageSize": ConfigValue{
 		192 * 1024,
 		"Used with AutoTuneLSSCleaner; target page size limit",
