@@ -1299,13 +1299,31 @@ func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.Indexer
 		}
 	} else {
 		names := make(map[string]*watcher)
+		namesWithEncryption := make(map[string]*watcher)
 
 		o.mutex.Lock()
 		for _, watcher := range o.watchers {
 			if watcher.serviceMap.ExcludeNode != "in" &&
 				watcher.serviceMap.ExcludeNode != "inout" {
 
-				names[strings.ToLower(watcher.getNodeAddr())] = watcher
+				nodeAddr := watcher.getNodeAddr()
+				names[strings.ToLower(nodeAddr)] = watcher
+
+				if security.EncryptionEnabled() {
+					encryptedNodeAddr, _, _, _ := security.EncryptPortFromAddr(nodeAddr)
+					namesWithEncryption[strings.ToLower(encryptedNodeAddr)] = watcher
+				}
+			}
+		}
+
+		// We have built name2watcher maps with normalPorts and encryptedPorts when NonSSLPorts
+		// are disabled query must use only SSLPorts. If encryption is enabled and NonSSL
+		// ports are not disabled query can specify either
+		if security.DisableNonSSLPort() {
+			names = namesWithEncryption
+		} else if security.EncryptionEnabled() {
+			for nodeAddr, nodeWatcher := range namesWithEncryption {
+				names[nodeAddr] = nodeWatcher
 			}
 		}
 		o.mutex.Unlock()
@@ -1368,11 +1386,29 @@ func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.Indexer
 
 func (o *MetadataProvider) validateNodes(nodes []string) (bool, error) {
 	availableNodes := make(map[string]bool)
+	encryptedNodes := make(map[string]bool)
 
 	watchers := o.getAllAvailWatchers()
 
 	for _, watcher := range watchers {
 		availableNodes[strings.ToLower(watcher.getNodeAddr())] = true
+	}
+
+	if security.EncryptionEnabled() {
+		for nodeAddr := range availableNodes {
+			encryptedNodeAddr, _, _, _ := security.EncryptPortFromAddr(nodeAddr)
+			encryptedNodes[strings.ToLower(encryptedNodeAddr)] = true
+		}
+	}
+
+	// We have made a map for available node with and without encrypted ports. If NonSSLPorts are disabled we should only
+	// use the encrypted ports. If Encryption is enabled and NonSSLPorts are not disable we are use eiter of them.
+	if security.DisableNonSSLPort() {
+		availableNodes = encryptedNodes
+	} else {
+		for nodeAddr := range encryptedNodes {
+			availableNodes[nodeAddr] = true
+		}
 	}
 
 	for _, node := range nodes {
@@ -2002,7 +2038,8 @@ func (o *MetadataProvider) prepareNodeList(nodeList []string, watcherMap map[c.I
 			if err != nil {
 				return nil, errors.New("Fail to invoke planner.  Some of the indexers may be down or network partitioned from query process.")
 			}
-			nodes = append(nodes, strings.ToLower(watcher.getNodeAddr()))
+			nodeAddr, _, _, _ := security.EncryptPortFromAddr(watcher.getNodeAddr())
+			nodes = append(nodes, strings.ToLower(nodeAddr))
 		}
 	}
 

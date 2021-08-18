@@ -225,7 +225,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		node.ServerGroup = cinfo.GetServerGroup(nid)
 
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::getIndexLayout: Error from getting service address for node %v, err: = %v", node.NodeId, err)
 			return nil, err
@@ -891,7 +891,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 //
 func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, error) {
 
-	addr, err := cinfo.GetServiceAddress(nid, "mgmt")
+	addr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
 	if err != nil {
 		return "", err
 	}
@@ -1796,7 +1796,7 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 
 	for _, nid := range nids {
 		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			logging.Errorf("Planner::restHelperNoLock: Error from getting service address for node %v. Error = %v", nid, err)
 			return nil, err

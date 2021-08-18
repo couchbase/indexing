@@ -637,6 +637,13 @@ func (c *ClusterInfoCache) buildEncryptPortMapping() {
 		if ok && ok1 {
 			mapping[fmt.Sprint(node.Services[CBQ_SERVICE])] = fmt.Sprint(node.Services[CBQ_SSL_SERVICE])
 		}
+
+		// As ns_server does not send encrypted ports in all APIs we will need this in map.
+		_, ok = node.Services[MGMT_SERVICE]
+		_, ok1 = node.Services[MGMT_SSL_SERVICE]
+		if ok && ok1 {
+			mapping[fmt.Sprint(node.Services[MGMT_SERVICE])] = fmt.Sprint(node.Services[MGMT_SSL_SERVICE])
+		}
 	}
 
 	c.encryptPortMapping = mapping
@@ -890,7 +897,7 @@ func (c *ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
 	return c.nodes[nid].Status, nil
 }
 
-func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
+func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string, useEncryptedPortMap bool) (addr string, err error) {
 	var port int
 	var ok bool
 
@@ -910,18 +917,23 @@ func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr stri
 
 	// For current node, hostname might be empty
 	// Insert hostname used to connect to the cluster
-	cUrl, err := url.Parse(c.url)
-	if err != nil {
-		return "", errors.New("Unable to parse cluster url - " + err.Error())
-	}
-	h, p, _ := net.SplitHostPort(cUrl.Host)
 	if node.Hostname == "" {
+		cUrl, err := url.Parse(c.url)
+		if err != nil {
+			return "", errors.New("Unable to parse cluster url - " + err.Error())
+		}
+		h, _, _ := net.SplitHostPort(cUrl.Host)
 		node.Hostname = h
 	}
 
-	p = security.EncryptPort(node.Hostname, p)
+	var portStr string
+	if useEncryptedPortMap {
+		portStr = security.EncryptPort(node.Hostname, fmt.Sprint(port))
+	} else {
+		portStr = fmt.Sprint(port)
+	}
 
-	addr = net.JoinHostPort(node.Hostname, fmt.Sprint(port))
+	addr = net.JoinHostPort(node.Hostname, portStr)
 	return
 }
 
@@ -966,7 +978,7 @@ func (c *ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
 	return n1.Hostname == n2.Hostname
 }
 
-func (c *ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
 
 	if c.useStaticPorts {
 
@@ -979,16 +991,26 @@ func (c *ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
 		if e != nil {
 			return "", e
 		}
-		return net.JoinHostPort(h, p), nil
-
+		srvcAddr = net.JoinHostPort(h, p)
+		if useEncryptedPortMap {
+			srvcAddr, _, _, err = security.EncryptPortFromAddr(srvcAddr)
+			if err != nil {
+				return "", err
+			}
+		}
 	} else {
 		node := c.GetCurrentNode()
-		return c.GetServiceAddress(node, srvc)
+		srvcAddr, err = c.GetServiceAddress(node, srvc, useEncryptedPortMap)
+		if err != nil {
+			return "", err
+		}
 	}
+
+	return srvcAddr, nil
 }
 
-func (c *ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
-	addr, err := c.GetLocalServiceAddress(srvc)
+func (c *ClusterInfoCache) GetLocalServicePort(srvc string, useEncryptedPortMap bool) (string, error) {
+	addr, err := c.GetLocalServiceAddress(srvc, useEncryptedPortMap)
 	if err != nil {
 		return addr, err
 	}
@@ -1001,9 +1023,9 @@ func (c *ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
 	return net.JoinHostPort("", p), nil
 }
 
-func (c *ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServiceHost(srvc string, useEncryptedPortMap bool) (string, error) {
 
-	addr, err := c.GetLocalServiceAddress(srvc)
+	addr, err := c.GetLocalServiceAddress(srvc, useEncryptedPortMap)
 	if err != nil {
 		return addr, err
 	}

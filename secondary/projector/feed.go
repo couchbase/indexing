@@ -1809,9 +1809,9 @@ func (feed *Feed) getLocalKVAddrs(
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	kvaddr, err := cinfo.GetLocalServiceAddress("kv")
+	kvaddr, err := cinfo.GetLocalServiceAddress("kv", false)
 	if err != nil {
-		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`): %v\n"
+		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`, false): %v\n"
 		logging.Errorf(fmsg, prefix, opaque, err)
 
 		// Force fetch cluster info cache incase it was not syncronized properly,

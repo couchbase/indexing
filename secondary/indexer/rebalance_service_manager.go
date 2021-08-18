@@ -1522,10 +1522,10 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 	for _, nid := range nids {
 
-		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
+		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 		if err == nil {
 
-			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE)
+			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Local Service Address %v", err)
 				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
@@ -2824,6 +2824,19 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 
 func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
+	isDest := func(addr, addrSSL string) bool {
+		if security.EncryptionEnabled() && security.DisableNonSSLPort() {
+			// Encryption Level : Strict -> allow only SSL Address
+			return dest == addrSSL
+		} else if security.EncryptionEnabled() && !security.DisableNonSSLPort() {
+			// Encryption Level : All -> allow both SSL and Non SSL
+			return dest == addr || dest == addrSSL
+		} else {
+			// Encryption not Enabled -> allow only Non SSL
+			return dest == addr
+		}
+	}
+
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
 
@@ -2837,14 +2850,19 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
 	for _, nid := range nids {
 
-		maddr, err := m.cinfo.GetServiceAddress(nid, "mgmt")
+		maddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", false)
 		if err != nil {
 			return "", err
 		}
 
-		if maddr == dest {
+		meaddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", true)
+		if err != nil {
+			return "", err
+		}
 
-			haddr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
+		if isDest(maddr, meaddr) {
+
+			haddr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				return "", err
 			}
