@@ -99,7 +99,9 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	c.CrashOnError(err)
 	p.cinfoClient = cic
 	p.cinfoClient.SetUserAgent("projector")
-	p.cinfoClient.WatchRebalanceChanges()
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.SetRetryInterval(4 * time.Second)
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval) // Initialize memory manager
