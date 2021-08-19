@@ -159,17 +159,18 @@ func (c *ClusterInfoCache) Fetch() error {
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
-
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
-		c.pool, err = c.client.GetPool(c.poolName)
+		p, err := c.client.GetPool(c.poolName)
 		if err != nil {
 			return err
 		}
+		c.pool = p
 
 		var nodes []couchbase.Node
 		var failedNodes []couchbase.Node
@@ -312,10 +313,11 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
 		np, err := c.client.CallPoolURI(c.poolName)
