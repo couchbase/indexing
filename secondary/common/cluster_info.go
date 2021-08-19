@@ -189,10 +189,11 @@ func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
 }
 
 func (c *ClusterInfoCache) Connect() (err error) {
-	c.client, err = couchbase.Connect(c.url)
+	cl, err := couchbase.Connect(c.url)
 	if err != nil {
 		return err
 	}
+	c.client = cl
 
 	c.client.SetUserAgent(c.userAgent)
 	return nil
@@ -200,10 +201,11 @@ func (c *ClusterInfoCache) Connect() (err error) {
 
 // Note: This function does not fetch BucketMap and Manifest data in c.pool
 func (c *ClusterInfoCache) FetchNodesData() (err error) {
-	c.pool, err = c.client.GetPoolWithoutRefresh(c.poolName)
+	p, err := c.client.GetPoolWithoutRefresh(c.poolName)
 	if err != nil {
 		return err
 	}
+	c.pool = p
 
 	found := c.updateNodesData()
 	if !found {
@@ -236,10 +238,11 @@ func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, ge
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
 		if err = c.FetchNodesData(); err != nil {
@@ -302,17 +305,18 @@ func (c *ClusterInfoCache) Fetch() error {
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
-
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
-		c.pool, err = c.client.GetPool(c.poolName)
+		p, err := c.client.GetPool(c.poolName)
 		if err != nil {
 			return err
 		}
+		c.pool = p
 
 		var nodes []couchbase.Node
 		var failedNodes []couchbase.Node
@@ -463,10 +467,11 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
 		np, err := c.client.GetPoolWithoutRefresh(c.poolName)
