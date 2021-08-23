@@ -7028,24 +7028,21 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	}
 
 	getNextIndexer := func(i int) *IndexerNode {
-		if i == 0 {
-			// filteredNodeList cannot be empty by the time we reach here.
-			node := filteredNodeList[0]
 
-			if numForcePlaceEquivalent > 0 || !p.equivIndexMap[node.IndexerId] {
-				if numForcePlaceEquivalent > 0 {
-					numForcePlaceEquivalent--
-				}
-
-				filledServerGroups[node.ServerGroup] = true
-				filledNodes[node.NodeId] = true
-				return node
+		// Update the filled nodes map, server group map and forced equivalent index
+		// placement count before returning the node
+		useNode := func(node *IndexerNode) {
+			if numForcePlaceEquivalent > 0 {
+				numForcePlaceEquivalent--
 			}
+
+			filledServerGroups[node.ServerGroup] = true
+			filledNodes[node.NodeId] = true
 		}
 
 		// Check if Server Group Constraint needs to be honored.
 		if numServerGroups > len(filledServerGroups) {
-			for _, node := range filteredNodeList[1:] {
+			for _, node := range filteredNodeList {
 				if _, ok := filledNodes[node.NodeId]; ok {
 					continue
 				}
@@ -7055,12 +7052,7 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 				}
 
 				if numForcePlaceEquivalent > 0 || !p.equivIndexMap[node.IndexerId] {
-					if numForcePlaceEquivalent > 0 {
-						numForcePlaceEquivalent--
-					}
-
-					filledServerGroups[node.ServerGroup] = true
-					filledNodes[node.NodeId] = true
+					useNode(node)
 					return node
 				}
 			}
@@ -7069,18 +7061,13 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		}
 
 		// Server Group Constraint is already honored
-		for _, node := range filteredNodeList[1:] {
+		for _, node := range filteredNodeList {
 			if _, ok := filledNodes[node.NodeId]; ok {
 				continue
 			}
 
 			if numForcePlaceEquivalent > 0 || !p.equivIndexMap[node.IndexerId] {
-				if numForcePlaceEquivalent > 0 {
-					numForcePlaceEquivalent--
-				}
-
-				filledServerGroups[node.ServerGroup] = true
-				filledNodes[node.NodeId] = true
+				useNode(node)
 				return node
 			}
 		}
