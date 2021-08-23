@@ -45,6 +45,8 @@ const (
 )
 
 const CLUSTER_INFO_DEFAULT_RETRIES = 300
+const CLUSTER_INFO_DEFAULT_RETRY_INTERVAL = 2 * time.Second // Seconds
+const CLUSTER_INFO_DEFAULT_RETRY_FACTOR = 1                 // Exponential back off
 const CLUSTER_INFO_VALIDATION_RETRIES = 10
 
 const BUCKET_UUID_NIL = ""
@@ -59,7 +61,10 @@ type ClusterInfoCache struct {
 	poolName  string
 	logPrefix string
 	userAgent string
-	retries   int
+
+	retries       int
+	retryInterval time.Duration
+	retryFactor   int
 
 	useStaticPorts bool
 	servicePortMap map[string]string
@@ -93,10 +98,12 @@ type NodeId int
 
 func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
 	c := &ClusterInfoCache{
-		url:        clusterUrl,
-		poolName:   pool,
-		retries:    CLUSTER_INFO_DEFAULT_RETRIES,
-		node2group: make(map[NodeId]string),
+		url:           clusterUrl,
+		poolName:      pool,
+		retries:       CLUSTER_INFO_DEFAULT_RETRIES,
+		retryInterval: CLUSTER_INFO_DEFAULT_RETRY_INTERVAL,
+		retryFactor:   CLUSTER_INFO_DEFAULT_RETRY_FACTOR,
+		node2group:    make(map[NodeId]string),
 	}
 
 	return c, nil
@@ -161,6 +168,15 @@ func (c *ClusterInfoCache) SetMaxRetries(r int) {
 	c.retries = r
 }
 
+// Seconds
+func (c *ClusterInfoCache) SetRetryInterval(i time.Duration) {
+	c.retryInterval = i
+}
+
+func (c *ClusterInfoCache) SetRetryBackoffFactor(f int) {
+	c.retryFactor = f
+}
+
 func (c *ClusterInfoCache) SetUserAgent(userAgent string) {
 	c.userAgent = userAgent
 }
@@ -173,10 +189,11 @@ func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
 }
 
 func (c *ClusterInfoCache) Connect() (err error) {
-	c.client, err = couchbase.Connect(c.url)
+	cl, err := couchbase.Connect(c.url)
 	if err != nil {
 		return err
 	}
+	c.client = cl
 
 	c.client.SetUserAgent(c.userAgent)
 	return nil
@@ -184,10 +201,11 @@ func (c *ClusterInfoCache) Connect() (err error) {
 
 // Note: This function does not fetch BucketMap and Manifest data in c.pool
 func (c *ClusterInfoCache) FetchNodesData() (err error) {
-	c.pool, err = c.client.GetPoolWithoutRefresh(c.poolName)
+	p, err := c.client.GetPoolWithoutRefresh(c.poolName)
 	if err != nil {
 		return err
 	}
+	c.pool = p
 
 	found := c.updateNodesData()
 	if !found {
@@ -220,10 +238,11 @@ func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, ge
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
 		if err = c.FetchNodesData(); err != nil {
@@ -272,7 +291,7 @@ func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, ge
 		return nil
 	}
 
-	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	rh := NewRetryHelper(c.retries, c.retryInterval, c.retryFactor, fn)
 	return rh.Run()
 }
 
@@ -286,17 +305,18 @@ func (c *ClusterInfoCache) Fetch() error {
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
-
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
-		c.pool, err = c.client.GetPool(c.poolName)
+		p, err := c.client.GetPool(c.poolName)
 		if err != nil {
 			return err
 		}
+		c.pool = p
 
 		var nodes []couchbase.Node
 		var failedNodes []couchbase.Node
@@ -373,7 +393,7 @@ func (c *ClusterInfoCache) Fetch() error {
 		return nil
 	}
 
-	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	rh := NewRetryHelper(c.retries, c.retryInterval, c.retryFactor, fn)
 	return rh.Run()
 }
 
@@ -447,10 +467,11 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 
 		vretry := 0
 	retry:
-		c.client, err = couchbase.Connect(c.url)
+		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
 		}
+		c.client = cl
 		c.client.SetUserAgent(c.userAgent)
 
 		np, err := c.client.GetPoolWithoutRefresh(c.poolName)
@@ -496,7 +517,7 @@ func (c *ClusterInfoCache) FetchForPoolChange() error {
 		return nil
 	}
 
-	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	rh := NewRetryHelper(c.retries, c.retryInterval, c.retryFactor, fn)
 	return rh.Run()
 }
 
@@ -544,7 +565,7 @@ func (c *ClusterInfoCache) FetchNodesAndSvsInfo() (err error) {
 		return nil
 	}
 
-	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
+	rh := NewRetryHelper(c.retries, c.retryInterval, c.retryFactor, fn)
 	return rh.Run()
 }
 

@@ -575,6 +575,11 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.numDocsFlushQueued.AddFilter(stats.PlannerFilter)
 	s.avgScanRate.AddFilter(stats.PlannerFilter)
 	s.numRowsReturned.AddFilter(stats.PlannerFilter)
+	s.numDocsPending.AddFilter(stats.PlannerFilter)
+	s.numDocsQueued.AddFilter(stats.PlannerFilter)
+	s.lastRollbackTime.AddFilter(stats.PlannerFilter)
+	s.progressStatTime.AddFilter(stats.PlannerFilter)
+	s.indexState.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexStats) getPartitions() []common.PartitionId {

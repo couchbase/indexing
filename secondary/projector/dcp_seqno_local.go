@@ -415,7 +415,7 @@ func CollectSeqnos(kvfeeds map[string]*kvConn, cid string) (l_seqnos []uint64, e
 
 func pollForDeletedBuckets() {
 	for {
-		time.Sleep(10 * time.Second)
+		time.Sleep(10 * time.Minute)
 		todels := []string{}
 		func() {
 			dcp_buckets_seqnos.rw.Lock()

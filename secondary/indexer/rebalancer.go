@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -23,10 +24,12 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
 )
 
@@ -60,6 +63,9 @@ type Rebalancer struct {
 
 	cancel chan struct{} // closed to signal rebalance canceled
 	done   chan struct{} // closed to signal rebalance done (not canceled)
+	dropIndexDone chan struct{} // closed to signal rebalance is done with dropping duplicate indexes
+	removeDupIndex bool // duplicate index removal is called
+
 	isDone int32
 
 	metakvCancel chan struct{} // close this to end metakv.RunObserveChildren callbacks
@@ -109,6 +115,8 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		cancel: make(chan struct{}),
 		done:   make(chan struct{}),
+		dropIndexDone: make(chan struct{}),
+		removeDupIndex: false,
 
 		metakvCancel: make(chan struct{}),
 
@@ -145,11 +153,171 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 	return r
 }
 
+// RemoveDuplicateIndexes function gets input of hosts and index definitions to be removed from hosts,
+// these are indexes that have been detected as duplicate and are being removed as part of rebalance.
+// The method itself deos not do anything to identfy or detect duplicates and only drops the input set of index
+// that it recieves but the name has been given as removeDuplicateIndexes to identify its purpose
+// which is different than other dropIndex cleanup that rebalance process does.
+// Also if there is an error while dropping one or more indexes it simply logs the error but does not fail the rebalance.
+func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.IndexDefnId]*common.IndexDefn) {
+	defer close(r.dropIndexDone)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	const method string = "Rebalancer::RemoveDuplicateIndexes:"
+	errMap := make(map[string]map[common.IndexDefnId]error)
+
+	uniqueDefns := make(map[common.IndexDefnId]bool)
+	for _, indexes := range hostIndexMap {
+		for _, index := range indexes {
+			// true is set if we are not able to post dropToken, in which case index is not removed
+			// initially all indexes to be dropped.
+			uniqueDefns[index.DefnId] = false
+		}
+	}
+
+	// Place delete token for recovery and any corner cases.
+	// We place the drop tokens for every identified index except for the case of rebalance being canceled/done
+	// If we fail to place drop token even after 3 retries we will not drop that index to avoid any errors in dropIndex
+	// causing metadata consistency and cleanup problems
+	for defnId, _ := range uniqueDefns {
+		loop:
+		for i:=0;i<3;i++ { // 3 retries in case of error on PostDeleteCommandToken
+			select {
+			case <-r.cancel:
+				l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
+				return
+			case <-r.done:
+				l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
+				return
+			default:
+				l.Infof("%v posting dropToken for defnid %v", method, defnId)
+				if err := mc.PostDeleteCommandToken(defnId, true); err != nil {
+					if i==2 { // all retries have failed to post drop token
+						uniqueDefns[defnId] = true
+						l.Errorf("%v failed to post delete command token after 3 retries, for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
+					} else {
+						l.Warnf("%v failed to post delete command token for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
+					}
+					break // break select and retry PostDeleteCommandToken
+				}
+				break loop // break retry loop and move to next defn
+			}
+		}
+	}
+
+	removeIndexes := func(host string, indexes map[common.IndexDefnId]*common.IndexDefn) {
+		defer wg.Done()
+
+		for _, index := range indexes {
+			select {
+				case <-r.cancel:
+					l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
+					return
+				case <-r.done:
+					l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
+					return
+				default:
+					if uniqueDefns[index.DefnId] == true { // we were not able to post dropToken for this index.
+						break // break select move to next index
+					}
+					if err := r.makeDropIndexRequest(index, host); err != nil {
+						// we will only record the error and proceeded, not failing rebalance just because we could not delete
+						// a index.
+						mu.Lock()
+						if _, ok := errMap[host]; !ok {
+							errMap[host] = make(map[common.IndexDefnId]error)
+						}
+						errMap[host][index.DefnId] = err
+						mu.Unlock()
+					}
+			}
+		}
+	}
+
+	select {
+	case <-r.cancel:
+		l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
+		return
+	case <-r.done:
+		l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
+		return
+	default:
+		for host, indexes := range hostIndexMap {
+			wg.Add(1)
+			go removeIndexes(host, indexes)
+		}
+
+		wg.Wait()
+
+		for host, indexes := range errMap {
+			for defnId, err := range indexes{ // not really an error as we already posted drop tokens
+				l.Warnf("%v encountered error while removing index on host %v, defnId %v, err %v", method, host, defnId, err)
+			}
+		}
+	}
+}
+
+func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) error {
+	const method string = "Rebalancer::makeDropIndexRequest" // for logging
+	req := manager.IndexRequest{Index: *defn}
+	body, err := json.Marshal(&req)
+	if err != nil {
+		l.Errorf("%v error in marshal drop index defnId %v err %v", method, defn.DefnId, err)
+		return err
+	}
+
+	bodybuf := bytes.NewBuffer(body)
+
+	url := "/dropIndex"
+	resp, err := postWithAuth(host+url, "application/json", bodybuf)
+	if err != nil {
+		l.Errorf("%v error in drop index on host %v, defnId %v, err %v", method, host, defn.DefnId, err)
+		if err == io.EOF {
+			// should not rety in case of rebalance done or cancel
+			select {
+			case <- r.cancel:
+				return err // return original error
+			case <-r.done:
+				return err
+			default:
+				bodybuf := bytes.NewBuffer(body)
+				resp, err = postWithAuth(host+url, "application/json", bodybuf)
+				if err != nil {
+					l.Errorf("%v error in drop index on host %v, defnId %v, err %v", method, host, defn.DefnId, err)
+					return err
+				}
+			}
+		} else {
+			return err
+		}
+	}
+
+	response := new(manager.IndexResponse)
+	err = convertResponse(resp, response)
+	if err != nil {
+		l.Errorf("%v encountered error parsing response, host %v, defnId %v, err %v", method, host, defn.DefnId, err)
+		return err
+	}
+
+	if response.Code == manager.RESP_ERROR {
+		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+			l.Errorf("%v error dropping index, host %v defnId %v err %v. Ignored.", method, host, defn.DefnId, response.Error)
+			return nil
+		}
+		l.Errorf("%v error dropping index, host %v, defnId %v, err %v", method, host, defn.DefnId, response.Error)
+		return err
+	}
+	l.Infof("%v removed index defnId %v, defn %v, from host %v", method, defn.DefnId, defn, host)
+	return nil
+}
+
+
 // initRebalAsync runs as a helper go routine for NewRebalancer on the rebalance
 // master. It calls the planner if needed, then launches a separate go routine,
 // doRebalance, to manage the fine-grained steps of the rebalance.
 func (r *Rebalancer) initRebalAsync() {
 
+	var hostToIndexToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 	//short circuit
 	if len(r.transferTokens) == 0 && !r.runPlanner {
 		r.cb.progress(1.0, r.cancel)
@@ -208,7 +376,7 @@ func (r *Rebalancer) initRebalAsync() {
 					}
 
 					start := time.Now()
-					r.transferTokens, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.change,
+					r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.change,
 						r.nodeId, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
 						minIterPerTemp, maxIterPerTemp)
 					if err != nil {
@@ -216,7 +384,10 @@ func (r *Rebalancer) initRebalAsync() {
 						go r.finish(err)
 						return
 					}
-
+					if len(hostToIndexToRemove) > 0 {
+						r.removeDupIndex = true
+						go r.RemoveDuplicateIndexes(hostToIndexToRemove)
+					}
 					if len(r.transferTokens) == 0 {
 						r.transferTokens = nil
 					}
@@ -324,6 +495,9 @@ func (r *Rebalancer) addToWaitGroup() bool {
 // observeRebalance go routine that does the real rebalance work for the master.
 func (r *Rebalancer) doRebalance() {
 
+	if r.master && r.runPlanner && r.removeDupIndex {
+		 <- r.dropIndexDone // wait for duplicate index removal to finish
+	}
 	if r.transferTokens != nil {
 
 		if ddl, err := r.checkDDLRunning(); ddl {

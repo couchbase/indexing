@@ -11,15 +11,16 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
-	"os"
-	"os/exec"
-	"strings"
-	"syscall"
 )
 
 // - document that planning tool should be run on an indexer node or manual enter cpu quota
@@ -341,7 +342,7 @@ func main() {
 			return
 		}
 
-		tokens, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
+		tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
 			gDetail, true, false, 0, 0, false, 100, 20000, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)

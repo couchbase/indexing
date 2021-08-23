@@ -455,6 +455,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		// look up the corresponding indexer object based on the nodeId
 		indexer := findIndexerByNodeId(plan.Placement, nodeId)
 		if indexer == nil {
+			logging.Errorf("Planner::getIndexStats: skipping stats collection for indexer nodeId %v, restURL %v", nodeId, indexer.RestUrl)
 			continue
 		}
 
@@ -578,6 +579,30 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			// disk usage per index
 			if diskUsed, ok := GetIndexStat(index, "avg_disk_bps", statsMap, true, clusterVersion); ok {
 				index.ActualDiskUsage = uint64(diskUsed.(float64))
+			}
+
+			if numDocsQueued, ok := GetIndexStat(index, "num_docs_queued", statsMap, true, clusterVersion); ok {
+				index.numDocsQueued = int64(numDocsQueued.(float64))
+			}
+
+			if numDocsPending, ok := GetIndexStat(index, "num_docs_pending", statsMap, true, clusterVersion); ok {
+				index.numDocsPending = int64(numDocsPending.(float64))
+			}
+
+			if rollbackTime, ok := GetIndexStat(index, "last_rollback_time", statsMap, true, clusterVersion); ok {
+				if rollback, err := strconv.ParseInt(rollbackTime.(string), 10, 64); err == nil {
+					index.rollbackTime = rollback
+				} else {
+					logging.Errorf("Planner::getIndexStats: Error in converting last_rollback_time %v, err %v", rollbackTime, err)
+				}
+			}
+
+			if progressStatTime, ok := GetIndexStat(index, "progress_stat_time", statsMap, true, clusterVersion); ok {
+				if progress, err := strconv.ParseInt(progressStatTime.(string), 10, 64); err == nil {
+					index.progressStatTime = progress
+				} else {
+					logging.Errorf("Planner::getIndexStats: Error in converting progress_stat_time %v, err %v", progressStatTime, err)
+				}
 			}
 
 			// avg_sec_key_size is currently unavailable in 4.5.   To estimate,

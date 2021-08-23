@@ -16,6 +16,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -135,7 +136,7 @@ type IndexSpec struct {
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
 	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int) (map[string]*common.TransferToken, error) {
+	maxIterPerTemp int) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
 		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, &runtime)
@@ -144,11 +145,11 @@ func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	runtime *time.Time) (map[string]*common.TransferToken, error) {
+	runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+		return nil, nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}
 
 	nodes := make(map[string]string)
@@ -159,7 +160,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	deleteNodes := make([]string, len(topologyChange.EjectNodes))
 	for i, node := range topologyChange.EjectNodes {
 		if _, ok := nodes[string(node.NodeID)]; !ok {
-			return nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeID))
+			return nil, nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeID))
 		}
 		deleteNodes[i] = nodes[string(node.NodeID)]
 	}
@@ -167,7 +168,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	// make sure we have all the keep nodes
 	for _, node := range topologyChange.KeepNodes {
 		if _, ok := nodes[string(node.NodeInfo.NodeID)]; !ok {
-			return nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeInfo.NodeID))
+			return nil, nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeInfo.NodeID))
 		}
 	}
 
@@ -189,7 +190,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.MinIterPerTemp = minIterPerTemp
 	config.MaxIterPerTemp = maxIterPerTemp
 
-	p, _, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes)
+	p, _, hostToIndexToRemove, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes, true)
 	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.Print()
@@ -197,17 +198,17 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	filterSolution(p.Result.Placement)
 
 	transferTokens, err := genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return transferTokens, nil
+	return transferTokens, hostToIndexToRemove, nil
 }
 
 // filterSolution will iterate through the new placement generated
@@ -694,7 +695,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 
-	p, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes)
+	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
 	if detail {
 		logging.Infof("************ Indexer Layout *************")
@@ -722,7 +723,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 
-	p, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes)
+	p, _, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes, false)
 
 	if detail {
 		logging.Infof("************ Indexer Layout *************")
@@ -756,15 +757,16 @@ func executePlan(config *RunConfig, command CommandType, p *Plan, indexSpecs []*
 	return plan(config, p, indexes)
 }
 
-func executeRebal(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string) (*SAPlanner, *RunStats, error) {
+func executeRebal(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string, isInternal bool) (
+	*SAPlanner, *RunStats, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	var indexes []*IndexUsage
 
 	if p == nil {
-		return nil, nil, errors.New("missing argument: either workload or plan must be present")
+		return nil, nil, nil, errors.New("missing argument: either workload or plan must be present")
 	}
 
-	return rebalance(command, config, p, indexes, deletedNodes)
+	return rebalance(command, config, p, indexes, deletedNodes, isInternal)
 }
 
 func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunStats, error) {
@@ -851,7 +853,410 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 	return planner, s, nil
 }
 
-func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNodes []string) (*SAPlanner, *RunStats, error) {
+
+func prepareIndexNameToUsageMap(indexes []*IndexUsage, idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage){
+
+	for _, index := range indexes {
+		if index.Instance == nil || index.Instance.Pc == nil {
+			continue
+		}
+		key := fmt.Sprintf("%v:%v:%v:%v", index.Bucket, index.Scope, index.Collection, index.Name)
+		partnId := index.PartnId
+		replicaId := index.Instance.ReplicaId
+		defnId := index.DefnId
+		if _, ok := idxMap[key]; !ok {
+			idxMap[key] = make(map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage)
+		}
+
+		if _, ok := idxMap[key][defnId]; !ok {
+			idxMap[key][defnId] = make(map[int]map[common.PartitionId][]*IndexUsage)
+		}
+
+		if _, ok := idxMap[key][defnId][replicaId]; !ok {
+			idxMap[key][defnId][replicaId] = make(map[common.PartitionId][]*IndexUsage)
+		}
+
+		if _, ok := idxMap[key][defnId][replicaId][partnId]; !ok {
+			idxMap[key][defnId][replicaId][partnId] = make([]*IndexUsage, 0)
+		}
+
+		idxMap[key][defnId][replicaId][partnId] = append(idxMap[key][defnId][replicaId][partnId], index)
+	}
+}
+
+func getIndexDefnsToRemove(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
+	indexDefnIdToRemove map[common.IndexDefnId]bool) map[string]map[common.IndexDefnId]*common.IndexDefn {
+
+	hostToIndexToRemove :=  make(map[string]map[common.IndexDefnId]*common.IndexDefn)
+	for _, defnMap := range idxMap {
+		if len(defnMap) > 1 {
+			for _, replicas := range defnMap {
+				for _, partitions := range replicas{
+					for _, idxusages := range partitions{
+						for _, idx := range idxusages{
+							remove := indexDefnIdToRemove[idx.DefnId]
+							if remove == false{
+								continue
+							}
+							// if this index is to be removed add to hostToIndexToRemove map
+							if idx.initialNode == nil {
+								continue
+							}
+							if _, ok := hostToIndexToRemove[idx.initialNode.RestUrl]; !ok {
+								hostToIndexToRemove[idx.initialNode.RestUrl] = make(map[common.IndexDefnId]*common.IndexDefn)
+							}
+							if _, ok := hostToIndexToRemove[idx.initialNode.RestUrl][idx.DefnId]; !ok {
+								hostToIndexToRemove[idx.initialNode.RestUrl][idx.DefnId] = &idx.Instance.Defn
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return hostToIndexToRemove
+}
+
+
+
+func getIndexStateValue(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
+	key string, defnId common.IndexDefnId) int {
+	// for partations of replica even if one of the partation is not fully formed
+	// that replica can not be used for serving queries
+	// Also if one replica is in active state that index can serve queries.
+	// hence we will get the lowest state among partations of a replica as state of replica and
+	// highest state of replica will be returned as state of index.
+
+	// define the usefulness of index when comparing two equivalent indexes with INDEX_STATE_ACTIVE being most useful
+    getIndexStateValue := func (state common.IndexState) int {
+		switch(state) {
+		case common.INDEX_STATE_DELETED, common.INDEX_STATE_ERROR, common.INDEX_STATE_NIL:
+			return 0
+		case common.INDEX_STATE_CREATED:
+			return 1
+		case common.INDEX_STATE_READY:
+			return 2
+		case common.INDEX_STATE_INITIAL:
+			return 3
+		case common.INDEX_STATE_CATCHUP:
+			return 4
+		case common.INDEX_STATE_ACTIVE:
+			return 5
+		}
+		return 0
+	}
+
+	replicaMap := make(map[int]int) // replicaMap[replicaId]indexStateValue
+
+	if _, ok := idxMap[key]; !ok {
+		return 0
+	}
+	if _, ok := idxMap[key][defnId]; !ok {
+		return 0
+	}
+
+	replicas := idxMap[key][defnId]
+	for _, partitions := range replicas {
+		for _, idxUsages := range partitions {
+			for _, idx := range idxUsages {
+				replicaId := idx.Instance.ReplicaId
+				indexStateVal := getIndexStateValue(idx.state)
+				if _, ok := replicaMap[replicaId]; !ok {
+					replicaMap[replicaId] = indexStateVal
+				} else {
+					if replicaMap[replicaId] > indexStateVal { // lowest partition state becomes the state of replica.
+						replicaMap[replicaId] = indexStateVal
+					}
+				}
+			}
+		}
+	}
+
+	state := int(0) // lowest state value
+	for _, stateVal := range replicaMap {
+		if stateVal > state {
+			state = stateVal // return the highest state value among replicas
+		}
+	}
+	return state
+}
+
+// return values calculated as per available partations in idxMap input param
+func getNumDocsForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage, key string, defnId common.IndexDefnId) (int64, int64) {
+	replicaMap := make(map[int][]int64)
+	// we will calculate the numDocsPending as replicaMap[replicaId][0] and numDocsQueued as replicaMap[replicaId][1]
+	// at each replica level and the replica with lesser total is the replica which is more uptodate.
+	// hence we will return numDocs numbers for that replica.
+	if _, ok := idxMap[key]; !ok {
+		return int64(0), int64(0)
+	}
+	if _, ok := idxMap[key][defnId]; !ok {
+		return int64(0), int64(0)
+	}
+
+	replicas := idxMap[key][defnId]
+	for _, partitions := range replicas {
+		for _, idxUsages := range partitions {
+			for _, idx := range idxUsages {
+				replicaId := idx.Instance.ReplicaId
+				if _, ok := replicaMap[replicaId]; !ok {
+					replicaMap[replicaId] = make([]int64,2)
+				}
+				replicaMap[replicaId][0] = replicaMap[replicaId][0]+idx.numDocsPending
+				replicaMap[replicaId][1] = replicaMap[replicaId][1]+idx.numDocsQueued
+			}
+		}
+	}
+
+	const MaxUint64 = ^uint64(0)
+	const MaxInt64 = int64(MaxUint64 >> 1)
+	var numDocsPending, numDocsQueued, numDocsTotal int64
+	numDocsTotal = MaxInt64
+	for _, docs := range replicaMap {
+		numDocs := docs[0] + docs[1]
+		if numDocs < numDocsTotal {
+			numDocsTotal = numDocs
+			numDocsPending, numDocsQueued = docs[0],docs[1]
+		}
+	}
+	return numDocsPending, numDocsQueued
+}
+
+// return values calculated as per available partations in idxMap input param
+func getNumReplicaForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
+	key string, defnId common.IndexDefnId, numPartations uint32) (uint32, uint32) {
+
+	missingReplicaCount := uint32(0) // total of missing partations across all replicas as observed on idxMap
+	observedReplicaCount := uint32(0)
+
+	if _, ok := idxMap[key]; !ok {
+		return observedReplicaCount, missingReplicaCount
+	}
+	if _, ok := idxMap[key][defnId]; !ok {
+		return observedReplicaCount, missingReplicaCount
+	}
+
+	replicas := idxMap[key][defnId]
+	// get observed replica count for this defn
+	observedReplicaCount = uint32(len(replicas))
+	for replicaId, partitions := range replicas {
+		if uint32(len(partitions)) > numPartations { // can this happen?
+			logging.Warnf("getNumReplicaForDefn: found more than expected partations for index defn %v, replicaId %v, expected partations %v, observed partations %v",
+				defnId, replicaId, numPartations, len(partitions))
+			return uint32(0), uint32(0)
+		} else {
+			missingReplicaCount += (numPartations - uint32(len(partitions))) // missing = expected - observed
+		}
+	}
+		return observedReplicaCount, missingReplicaCount
+}
+
+func getNumServerGroupsForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
+	key string, defnId common.IndexDefnId) int {
+	serverGroups := make(map[string]map[int]map[common.PartitionId]int)
+	//number of serverGroups this index (pointed by defnId) and its replicas are part of is given by len(serverGroups) .
+	if _, ok := idxMap[key]; !ok {
+		return 0
+	}
+	if _, ok := idxMap[key][defnId]; !ok {
+		return 0
+	}
+
+	replicas := idxMap[key][defnId]
+	for _, partitions := range replicas {
+		for _, idxUsages := range partitions {
+			for _, idx := range idxUsages {
+				sgroup := idx.initialNode.ServerGroup
+				replicaId := idx.Instance.ReplicaId
+				partnId := idx.PartnId
+				if _, ok := serverGroups[sgroup]; !ok {
+					serverGroups[sgroup] = make(map[int]map[common.PartitionId]int)
+				}
+				if _, ok := serverGroups[sgroup][replicaId]; !ok {
+					serverGroups[sgroup][replicaId] = make(map[common.PartitionId]int)
+				}
+				if _, ok := serverGroups[sgroup][replicaId][partnId]; !ok {
+					serverGroups[sgroup][replicaId][partnId] = 1
+				} else {
+					serverGroups[sgroup][replicaId][partnId] = serverGroups[sgroup][replicaId][partnId] + 1
+				}
+			}
+		}
+	}
+	return len(serverGroups)
+}
+
+func hasDuplicateIndexes(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage) bool {
+	var hasDuplicate bool
+	for _, uniqueDefns := range idxMap {
+		if len(uniqueDefns) > 1 { // there is at least one duplicate index entry for this index name
+			hasDuplicate = true
+			break
+		}
+	}
+	return hasDuplicate
+}
+
+func selectDuplicateIndexesToRemove(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage) map[common.IndexDefnId]bool {
+
+	indexDefnIdToRemove := make(map[common.IndexDefnId]bool)
+
+	type indexToEliminate struct {
+		defnId common.IndexDefnId
+		numServerGroup uint32 // observed count of server groups
+		numReplica	uint32 // numReplica count as available in index defn
+		numObservedReplicaCount uint32 // observed count of replicas
+		numMissingReplica uint32 // value calculated at index level for num missing partations across all replicas
+		numDocsPending int64 // calculated as max of numDocsPending from all the replicas
+		numDocsQueued int64 //  calculated as max of numDocsQueued from all the replica
+		stateValue int // Index with higher state (even for one of the replica) is more useful
+	}
+
+	filterDupIndex := func (dupIndexes []*indexToEliminate, indexDefnIdToRemove map[common.IndexDefnId]bool) {
+		eligibles := []*indexToEliminate{}
+		for _, index := range dupIndexes{
+			if indexDefnIdToRemove[index.defnId] == false { // if index is marked for removal already skip it.
+				eligibles = append(eligibles, index)
+			}
+		}
+
+		less := func(i, j int) bool { // comparision function
+			if eligibles[i].stateValue == eligibles[j].stateValue {
+				if eligibles[i].numServerGroup == eligibles[i].numServerGroup {
+					if eligibles[i].numReplica == eligibles[i].numReplica {
+						if eligibles[i].numMissingReplica == eligibles[j].numMissingReplica {
+							numDocsTotal_i := eligibles[i].numDocsQueued + eligibles[i].numDocsPending
+							numDocsTotal_j := eligibles[j].numDocsQueued + eligibles[j].numDocsPending
+							if numDocsTotal_i == numDocsTotal_j {
+								return true
+							} else {
+								return numDocsTotal_i < numDocsTotal_j
+							}
+						} else {
+							return eligibles[i].numMissingReplica < eligibles[j].numMissingReplica
+						}
+					} else {
+						return eligibles[i].numReplica > eligibles[i].numReplica
+					}
+				} else {
+					return eligibles[i].numServerGroup > eligibles[i].numServerGroup
+				}
+			} else {
+				return eligibles[i].stateValue > eligibles[j].stateValue
+			}
+		}
+
+		if len(eligibles) > 1 {
+			sort.Slice(eligibles, less)
+			for i, index := range eligibles {
+				if i==0 {// keep the 0th element defn remove other indexes
+					continue
+				}
+				indexDefnIdToRemove[index.defnId]=true
+			}
+		}
+	}
+
+	groupEquivalantDefns := func (defns []*common.IndexDefn) [][]*common.IndexDefn {
+		//TODO... complexity of this function is n^2 see if this can be improved in separate patch
+		equiList := make([][]*common.IndexDefn,0)
+		for {
+			eql := []*common.IndexDefn{}
+			k:=-1
+			progress := false
+			for i:=0; i< len(defns); i++ {
+				defn := defns[i]
+				if  defn == nil {
+					continue
+				}
+				progress = true
+				if k==-1 {
+					eql = append(eql, defn)
+					k=0
+					defns[i]=nil // we are done processing this defn
+					continue
+				}
+				if common.IsEquivalentIndex(eql[k], defn) {
+					eql = append(eql, defn)
+					k++
+					defns[i]=nil // we are done processing this defn
+				}
+			}
+			if len(eql) > 0 {
+				equiList = append(equiList, eql)
+			}
+			if progress == false {
+				// we are done processing all defns
+				break
+			}
+		}
+		return equiList
+	}
+
+	for _, uniqueDefns := range idxMap {
+		if len(uniqueDefns) <= 1 { // there are no duplicates for this index name skip it
+			continue
+		}
+		// make 2d slice of equivalant index defns here
+		// if one of the slice count is more than 1 we may have equivalent duplicae indexes
+		// now find which index to keep / eliminate.
+		defnList := make([]*common.IndexDefn, len(uniqueDefns))
+		i:=0
+		for _, replicas := range uniqueDefns {
+			loop1: // we just need defn for this defnId which can be taken from one of the instance
+			for _, partitions := range replicas {
+				for _, idxUsages := range partitions{
+					defnList[i] = &idxUsages[0].Instance.Defn
+					i++
+					break loop1
+				}
+			}
+		}
+		equiDefns := groupEquivalantDefns(defnList) // we got equivalent denfs grouped
+
+		for _, defns := range equiDefns {
+			if len(defns) <= 1 { // no duplicate equivalent indexes here move ahead
+				continue
+			}
+			dupIndexes := []*indexToEliminate{}
+			// out of equivalant defns now choose which one to keep and which ones to remove.
+			for _, defn := range defns {
+				key := fmt.Sprintf("%v:%v:%v:%v", defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+				numServerGroup := getNumServerGroupsForDefn(idxMap, key, defn.DefnId)
+				numDocsPending, numDocsQueued := getNumDocsForDefn(idxMap, key, defn.DefnId)
+				numObservedReplicaCount, missingReplicaCount := getNumReplicaForDefn(idxMap, key, defn.DefnId, defn.NumPartitions)
+				stateVal := getIndexStateValue(idxMap, key, defn.DefnId)
+				dupEntry := &indexToEliminate{
+					defnId: defn.DefnId,
+					numServerGroup: uint32(numServerGroup),
+					numReplica: defn.NumReplica,
+					numObservedReplicaCount : numObservedReplicaCount,
+					numMissingReplica: missingReplicaCount,
+					numDocsPending: numDocsPending,
+					numDocsQueued: numDocsQueued,
+					stateValue: stateVal,
+				}
+				dupIndexes = append(dupIndexes, dupEntry)
+			}
+			filterDupIndex(dupIndexes, indexDefnIdToRemove)
+		}
+	}
+	return indexDefnIdToRemove
+}
+
+func filterIndexesToRemove(indexes []*IndexUsage, indexDefnIdToRemove map[common.IndexDefnId]bool) []*IndexUsage {
+	toKeep := make([]*IndexUsage, 0)
+	for _, index := range indexes {
+		if indexDefnIdToRemove[index.DefnId] == true {
+			continue
+		}
+		toKeep = append(toKeep, index)
+	}
+	return toKeep
+}
+
+func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNodes []string, isInternal bool) (
+	*SAPlanner, *RunStats, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	var constraint ConstraintMethod
 	var sizing SizingMethod
@@ -863,6 +1268,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	var outIndexes []*IndexUsage
 
 	var err error
+	var indexDefnsToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 
 	s := &RunStats{}
 
@@ -880,7 +1286,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		initialIndexes = indexes
 		solution, constraint, err = initialSolution(config, sizing, initialIndexes)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, 0, 0, false)
 	}
@@ -888,7 +1294,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	// change topology before rebalancing
 	outIndexes, err = changeTopology(config, solution, deletedNodes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	//
@@ -911,6 +1317,26 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		}
 	}
 
+	if isInternal {
+		//map key is string bucket:scope:collection:name this is used to group duplicate indexUsages by defn/replica/partition
+		indexNameToUsageMap := make(map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage)
+		prepareIndexNameToUsageMap(indexes, indexNameToUsageMap)
+		for _, indexer := range solution.Placement {
+			prepareIndexNameToUsageMap(indexer.Indexes, indexNameToUsageMap)
+		}
+		if hasDuplicateIndexes(indexNameToUsageMap) {
+			indexDefnIdToRemove := selectDuplicateIndexesToRemove(indexNameToUsageMap)
+
+			// build map of index definations to remove from each indexer this will be used to make drop index calls.
+			indexDefnsToRemove = getIndexDefnsToRemove(indexNameToUsageMap, indexDefnIdToRemove)
+
+			// remove identified duplicate indexes from the initial solution
+			indexes = filterIndexesToRemove(indexes, indexDefnIdToRemove)
+			for _, indexer := range solution.Placement {
+				indexer.Indexes = filterIndexesToRemove(indexer.Indexes, indexDefnIdToRemove)
+			}
+		}
+	}
 	// run planner
 	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
@@ -923,7 +1349,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	param["MinIterPerTemp"] = config.MinIterPerTemp
 	param["MaxIterPerTemp"] = config.MaxIterPerTemp
 	if err := planner.SetParam(param); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	planner.SetCpuProfile(config.CpuProfile)
@@ -933,7 +1359,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		logging.Infof("****************************************")
 	}
 	if _, err := planner.Plan(command, solution); err != nil {
-		return planner, s, err
+		return planner, s, indexDefnsToRemove, err
 	}
 
 	// save result
@@ -942,11 +1368,11 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 
 	if config.Output != "" {
 		if err := savePlan(config.Output, planner.Result, constraint); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
-	return planner, s, nil
+	return planner, s, indexDefnsToRemove, nil
 }
 
 func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, increment int) (*SAPlanner, error) {
