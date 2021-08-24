@@ -61,10 +61,10 @@ type Rebalancer struct {
 
 	cb Callbacks
 
-	cancel chan struct{} // closed to signal rebalance canceled
-	done   chan struct{} // closed to signal rebalance done (not canceled)
-	dropIndexDone chan struct{} // closed to signal rebalance is done with dropping duplicate indexes
-	removeDupIndex bool // duplicate index removal is called
+	cancel         chan struct{} // closed to signal rebalance canceled
+	done           chan struct{} // closed to signal rebalance done (not canceled)
+	dropIndexDone  chan struct{} // closed to signal rebalance is done with dropping duplicate indexes
+	removeDupIndex bool          // duplicate index removal is called
 
 	isDone int32
 
@@ -113,9 +113,9 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		cb: Callbacks{progress, done},
 
-		cancel: make(chan struct{}),
-		done:   make(chan struct{}),
-		dropIndexDone: make(chan struct{}),
+		cancel:         make(chan struct{}),
+		done:           make(chan struct{}),
+		dropIndexDone:  make(chan struct{}),
 		removeDupIndex: false,
 
 		metakvCancel: make(chan struct{}),
@@ -180,8 +180,8 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 	// If we fail to place drop token even after 3 retries we will not drop that index to avoid any errors in dropIndex
 	// causing metadata consistency and cleanup problems
 	for defnId, _ := range uniqueDefns {
-		loop:
-		for i:=0;i<3;i++ { // 3 retries in case of error on PostDeleteCommandToken
+	loop:
+		for i := 0; i < 3; i++ { // 3 retries in case of error on PostDeleteCommandToken
 			select {
 			case <-r.cancel:
 				l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
@@ -192,7 +192,7 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 			default:
 				l.Infof("%v posting dropToken for defnid %v", method, defnId)
 				if err := mc.PostDeleteCommandToken(defnId, true); err != nil {
-					if i==2 { // all retries have failed to post drop token
+					if i == 2 { // all retries have failed to post drop token
 						uniqueDefns[defnId] = true
 						l.Errorf("%v failed to post delete command token after 3 retries, for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
 					} else {
@@ -210,26 +210,26 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 
 		for _, index := range indexes {
 			select {
-				case <-r.cancel:
-					l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
-					return
-				case <-r.done:
-					l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
-					return
-				default:
-					if uniqueDefns[index.DefnId] == true { // we were not able to post dropToken for this index.
-						break // break select move to next index
+			case <-r.cancel:
+				l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
+				return
+			case <-r.done:
+				l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
+				return
+			default:
+				if uniqueDefns[index.DefnId] == true { // we were not able to post dropToken for this index.
+					break // break select move to next index
+				}
+				if err := r.makeDropIndexRequest(index, host); err != nil {
+					// we will only record the error and proceeded, not failing rebalance just because we could not delete
+					// a index.
+					mu.Lock()
+					if _, ok := errMap[host]; !ok {
+						errMap[host] = make(map[common.IndexDefnId]error)
 					}
-					if err := r.makeDropIndexRequest(index, host); err != nil {
-						// we will only record the error and proceeded, not failing rebalance just because we could not delete
-						// a index.
-						mu.Lock()
-						if _, ok := errMap[host]; !ok {
-							errMap[host] = make(map[common.IndexDefnId]error)
-						}
-						errMap[host][index.DefnId] = err
-						mu.Unlock()
-					}
+					errMap[host][index.DefnId] = err
+					mu.Unlock()
+				}
 			}
 		}
 	}
@@ -250,7 +250,7 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 		wg.Wait()
 
 		for host, indexes := range errMap {
-			for defnId, err := range indexes{ // not really an error as we already posted drop tokens
+			for defnId, err := range indexes { // not really an error as we already posted drop tokens
 				l.Warnf("%v encountered error while removing index on host %v, defnId %v, err %v", method, host, defnId, err)
 			}
 		}
@@ -275,7 +275,7 @@ func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) e
 		if err == io.EOF {
 			// should not rety in case of rebalance done or cancel
 			select {
-			case <- r.cancel:
+			case <-r.cancel:
 				return err // return original error
 			case <-r.done:
 				return err
@@ -310,7 +310,6 @@ func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) e
 	l.Infof("%v removed index defnId %v, defn %v, from host %v", method, defn.DefnId, defn, host)
 	return nil
 }
-
 
 // initRebalAsync runs as a helper go routine for NewRebalancer on the rebalance
 // master. It calls the planner if needed, then launches a separate go routine,
@@ -496,7 +495,7 @@ func (r *Rebalancer) addToWaitGroup() bool {
 func (r *Rebalancer) doRebalance() {
 
 	if r.master && r.runPlanner && r.removeDupIndex {
-		 <- r.dropIndexDone // wait for duplicate index removal to finish
+		<-r.dropIndexDone // wait for duplicate index removal to finish
 	}
 	if r.transferTokens != nil {
 
@@ -1962,9 +1961,14 @@ func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
 
 	var pausedAddr []string
 
-	cinfo, err := c.FetchNewClusterInfoCache(clusterURL, c.DEFAULT_POOL, "checkAllIndexersWarmedup")
+	cinfo, err := c.FetchNewClusterInfoCache2(clusterURL, c.DEFAULT_POOL, "checkAllIndexersWarmedup")
 	if err != nil {
 		l.Errorf("Rebalancer::checkAllIndexersWarmedup Error Fetching Cluster Information %v", err)
+		return false, nil
+	}
+
+	if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
+		l.Errorf("Rebalancer::checkAllIndexersWarmedup Error Fetching Nodes and serives Information %v", err)
 		return false, nil
 	}
 
