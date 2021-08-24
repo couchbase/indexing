@@ -2867,7 +2867,7 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
 
-	if err := m.cinfo.Fetch(); err != nil {
+	if err := m.cinfo.FetchNodesAndSvsInfo(); err != nil {
 		l.Errorf("ServiceMgr::getNodeIdFromDest Error Fetching Cluster Information %v", err)
 		return "", err
 	}
