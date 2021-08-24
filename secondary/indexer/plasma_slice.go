@@ -335,8 +335,9 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.StatsLoggerFileSize = slice.sysconf["plasma.stats.logger.fileSize"].Uint64()
 	cfg.StatsLoggerFileCount = slice.sysconf["plasma.stats.logger.fileCount"].Uint64()
 	cfg.RecoveryCheckpointInterval = slice.sysconf["plasma.recovery.checkpointInterval"].Uint64()
-	cfg.MaxSMRWorkerPerInst = slice.sysconf["plasma.MaxSMRWorkerPerInst"].Uint64()
 	cfg.BufMemQuotaRatio = slice.sysconf["plasma.BufMemQuotaRatio"].Float64()
+	cfg.MaxSMRWorkerPerCore = slice.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
+	cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
 	cfg.StorageDir = slice.storageDir
 	cfg.LogDir = slice.logDir
@@ -2372,8 +2373,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 
 	mdb.mainstore.EnableInMemoryCompression = mdb.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
-	mdb.mainstore.MaxSMRWorkerPerInst = mdb.sysconf["plasma.MaxSMRWorkerPerInst"].Uint64()
 	mdb.mainstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
+	mdb.mainstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
+	mdb.mainstore.MaxSMRInstPerCtx = mdb.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
 	mdb.mainstore.UpdateConfig()
 
@@ -2427,8 +2429,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 
 		mdb.backstore.EnableInMemoryCompression = mdb.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
-		mdb.backstore.MaxSMRWorkerPerInst = mdb.sysconf["plasma.MaxSMRWorkerPerInst"].Uint64()
 		mdb.backstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
+		mdb.backstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
+		mdb.backstore.MaxSMRInstPerCtx = mdb.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
 		mdb.backstore.UpdateConfig()
 	}
