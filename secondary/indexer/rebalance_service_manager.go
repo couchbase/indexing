@@ -2305,7 +2305,7 @@ func (m *ServiceMgr) listenMoveIndex() {
 
 func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
 	if kve.Path == MoveIndexTokenPath {
-		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %v", kve.Path, kve.Value)
+		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %s", kve.Path, kve.Value)
 
 		var rebalToken RebalanceToken
 		if kve.Value == nil { //move index token deleted
@@ -2648,7 +2648,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return err, false
 	}
 
-	if err = m.registerMoveIndexTokenInMetakv(m.rebalanceToken); err != nil {
+	if err = m.registerMoveIndexTokenInMetakv(m.rebalanceToken, true); err != nil {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 		return err, false
 	}
@@ -2681,7 +2681,7 @@ func (m *ServiceMgr) setErrorInMoveIndexToken(token *RebalanceToken, err error) 
 
 	token.Error = err.Error()
 
-	if err := m.registerMoveIndexTokenInMetakv(token); err != nil {
+	if err := m.registerMoveIndexTokenInMetakv(token, false); err != nil {
 		return err
 	}
 
@@ -2690,16 +2690,43 @@ func (m *ServiceMgr) setErrorInMoveIndexToken(token *RebalanceToken, err error) 
 	return nil
 }
 
-func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken) error {
+func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken, upsert bool) error {
 
-	err := c.MetakvSet(MoveIndexTokenPath, token)
+	updateRToken := func() error {
+		err := c.MetakvSet(MoveIndexTokenPath, token)
+		if err != nil {
+			l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to set "+
+				"RebalanceToken In Meta Storage. Err %v", err)
+			return err
+		}
+		l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Registered Global Rebalance"+
+			"Token In Metakv %v %v", MoveIndexTokenPath, token)
+		return nil
+	}
+
+	var rtoken RebalanceToken
+	found, err := c.MetakvGet(MoveIndexTokenPath, &rtoken)
 	if err != nil {
-		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to set "+
-			"RebalanceToken In Meta Storage. Err %v", err)
+		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to get "+
+			"RebalanceToken from Meta Storage. Err %v", err)
 		return err
 	}
-	l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Registered Global Rebalance"+
-		"Token In Metakv %v %v", MoveIndexTokenPath, token)
+
+	// The caller's token and metakv token has to be the same as MoveIndexTokenPath supports
+	// only one metakv value. If they are not same, report error to the caller
+	if !found && upsert { // No token found in metakv and the caller is requesting to insert new token
+		return updateRToken()
+	} else if found && rtoken.RebalId == token.RebalId { // Caller's token is same as the token in metakv. Update the token
+		return updateRToken()
+	} else if found && upsert { // Caller has a different token than the token in metakv. Return err
+		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Move token: %v is different "+
+			"from the token in metakv. found: %v, rtoken: %v", token, found, rtoken)
+		return errors.New("Inconsistent MoveToken in metakv")
+	} else { // The token in metakv is different from the caller's version and the caller is trying to update it.
+		// Ignore the update as the caller's version of the token might have been deleted
+		l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Move token: %v is probably deleted "+
+			"from metakv. found: %v, rtoken: %v", found, rtoken)
+	}
 
 	return nil
 }
