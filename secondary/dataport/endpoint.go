@@ -321,6 +321,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 
 	raddr := endpoint.raddr
 	lastActiveTime := time.Now()
+	lastFlushTime := time.Now()
 	buffers := newEndpointBuffers(raddr)
 
 	messageCount := 0
@@ -339,6 +340,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 			endpoint.stats.flushCount.Add(1)
 		}
 		messageCount = 0
+		lastFlushTime = time.Now()
 		return
 	}
 
@@ -368,7 +370,7 @@ loop:
 				})
 
 				messageCount++ // count queued up mutations.
-				if messageCount > endpoint.bufferSize {
+				if messageCount > endpoint.bufferSize || time.Since(lastFlushTime) > time.Duration(1*time.Millisecond) {
 					if err := flushBuffers(); err != nil {
 						break loop
 					}
