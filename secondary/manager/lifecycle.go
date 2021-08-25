@@ -3585,7 +3585,8 @@ func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error
 		indexerErr.Code == common.InvalidBucket ||
 		indexerErr.Code == common.BucketEphemeral ||
 		indexerErr.Code == common.IndexAlreadyExist ||
-		indexerErr.Code == common.IndexInvalidState {
+		indexerErr.Code == common.IndexInvalidState ||
+		indexerErr.Code == common.BucketEphemeralStd {
 		return false
 	}
 
@@ -3604,7 +3605,8 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 		indexerErr.Code == common.BucketEphemeral ||
 		indexerErr.Code == common.IndexAlreadyExist ||
 		indexerErr.Code == common.TransientError ||
-		indexerErr.Code == common.IndexInvalidState {
+		indexerErr.Code == common.IndexInvalidState ||
+		indexerErr.Code == common.BucketEphemeralStd {
 		return false
 	}
 

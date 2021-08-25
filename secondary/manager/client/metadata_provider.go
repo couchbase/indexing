@@ -861,7 +861,7 @@ func (o *MetadataProvider) makeScheduleCreateRequest(idxDefn *c.IndexDefn,
 			return err
 		}
 
-		if err := json.Unmarshal(buf.Bytes(), msg); err != nil {
+		if err := json.Unmarshal(buf.Bytes(), &msg); err != nil {
 			logging.Errorf("MetadataProvider::makeScheduleCreateRequest: error in unmarshalling response body: %v, for index (%v, %v, %v, %v)",
 				err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 			return err

@@ -786,6 +786,7 @@ const (
 	IndexInvalidState
 	BucketEphemeral
 	MaxParallelCollectionBuilds
+	BucketEphemeralStd
 )
 
 type IndexerError struct {
