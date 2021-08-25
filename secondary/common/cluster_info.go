@@ -297,6 +297,16 @@ func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, ge
 	return rh.Run()
 }
 
+func (c *ClusterInfoCache) GetIndexScopeLimit(bucketn, scope string) (uint32, error) {
+	cl, err := couchbase.Connect(c.url)
+	if err != nil {
+		return 0, err
+	}
+	c.client = cl
+	c.client.SetUserAgent(c.userAgent)
+	return c.client.GetIndexScopeLimit(bucketn, scope)
+}
+
 func (c *ClusterInfoCache) Fetch() error {
 
 	fn := func(r int, err error) error {
@@ -825,7 +835,7 @@ func (c *ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err e
 	}
 	defer b.Close()
 
-	for i, _ := range c.nodes {
+	for i := range c.nodes {
 		nid := NodeId(i)
 		if _, ok := c.findVBServerIndex(b, nid); ok {
 			nids = append(nids, nid)
@@ -848,7 +858,7 @@ func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 	defer b.Close()
 
 	// This node recognize this bucket.   Make sure its vb is resided in at least one node.
-	for i, _ := range c.nodes {
+	for i := range c.nodes {
 		nid := NodeId(i)
 		if _, ok := c.findVBServerIndex(b, nid); ok {
 			// find the bucket resides in at least one node
