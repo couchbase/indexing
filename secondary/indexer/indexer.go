@@ -78,6 +78,7 @@ var (
 	ErrIndexerNotActive         = errors.New("Indexer Not Active")
 	ErrInvalidMetadata          = errors.New("Invalid Metadata")
 	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI or PLASMA Storage")
+	ErrBucketEphemeralStd       = errors.New("Standard GSI Index on ephemeral bucket requires fully upgraded cluster")
 )
 
 // Backup corrupt index data files
@@ -1682,6 +1683,57 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
+	ephemeral, err := idx.clusterInfoClient.IsEphemeral(indexInst.Defn.Bucket)
+	if err != nil {
+		errStr := fmt.Sprintf("Cannot Query Bucket Type of %v", indexInst.Defn.Bucket)
+		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
+	if ephemeral {
+		allowed, reason, err := idx.isAllowedEphemeral(indexInst.Defn.Bucket)
+		if err != nil {
+			errStr := fmt.Sprintf("Cannot check if index creation is allowed on ephemeral bucket %v. Error %v",
+				indexInst.Defn.Bucket, err)
+
+			logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER,
+					},
+				}
+			}
+
+			return
+		}
+
+		if !allowed {
+			logging.Errorf("Indexer::handleCreateIndex %v", reason)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_BUCKET_EPHEMERAL_STD,
+						severity: FATAL,
+						cause:    ErrBucketEphemeralStd,
+						category: INDEXER,
+					},
+				}
+			}
+
+			return
+		}
+	}
+
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
 
 		reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
@@ -1789,6 +1841,38 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			respCh: clientCh})
 	}
 
+}
+
+func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
+	if common.GetStorageMode() == common.MOI {
+		return true, "", nil
+	}
+
+	if idx.clusterInfoClient.ClusterVersion() < common.INDEXER_70_VERSION {
+		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
+			" is supported only on fully upgraded cluster.", bucket)
+		return false, retMsg, nil
+	}
+
+	cinfo := idx.clusterInfoClient.GetClusterInfoCache()
+	if cinfo == nil {
+		return false, "", fmt.Errorf("Cluster info cache is nil.")
+	}
+
+	ver, err := common.GetInternalClusterVersion(cinfo)
+	if err != nil {
+		return false, "", err
+	}
+
+	logging.Infof("indexer::isAllowedEphemeral While creating index on ephemeral bucket %v, internal indexer version is (%v)", bucket, ver)
+
+	if ver.LessThan(common.InternalVersion(common.MIN_VER_STD_GSI_EPHEMERAL)) {
+		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
+			" is supported only on fully upgraded cluster.", bucket)
+		return false, retMsg, nil
+	}
+
+	return true, "", nil
 }
 
 func (idx *indexer) handleCancelMergePartition(msg Message) {

@@ -274,6 +274,7 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		mux.HandleFunc("/getCachedLocalIndexMetadata", handlerContext.handleCachedLocalIndexMetadataRequest)
 		mux.HandleFunc("/getCachedStats", handlerContext.handleCachedStats)
 		mux.HandleFunc("/postScheduleCreateRequest", handlerContext.handleScheduleCreateRequest)
+		mux.HandleFunc("/getInternalVersion", handlerContext.handleInternalVersionRequest)
 
 		cacheDir := path.Join(config["storage_dir"].String(), "cache")
 		handlerContext.metaDir = path.Join(cacheDir, "meta")
@@ -3042,24 +3043,24 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 
 	cinfo := m.mgr.reqcic.GetClusterInfoCache()
 	if cinfo == nil {
-		errMsg := "validateScheduleCreateRequest: ClusterInfoCache unavailable in IndexManager"
-		logging.Errorf(errMsg)
+		errMsg := "ClusterInfoCache unavailable in IndexManager"
+		logging.Errorf("validateScheduleCreateRequest: %v", errMsg)
 		err = errors.New(errMsg)
 		return "", "", "", err
 	}
 
 	err = cinfo.FetchBucketInfo(defn.Bucket)
 	if err != nil {
-		errMsg := "validateScheduleCreateRequest: ClusterInfoCache unable to FetchBucketInfo"
-		logging.Errorf(errMsg)
+		errMsg := "ClusterInfoCache unable to FetchBucketInfo"
+		logging.Errorf("validateScheduleCreateRequest: %v", errMsg)
 		err = errors.New(errMsg)
 		return "", "", "", err
 	}
 
 	err = cinfo.FetchManifestInfo(defn.Bucket)
 	if err != nil {
-		errMsg := "validateScheduleCreateRequest: ClusterInfoCache unable to FetchManifestInfo"
-		logging.Errorf(errMsg)
+		errMsg := "ClusterInfoCache unable to FetchManifestInfo"
+		logging.Errorf("validateScheduleCreateRequest: %v", errMsg)
 		err = errors.New(errMsg)
 		return "", "", "", err
 	}
@@ -3089,17 +3090,66 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 
 	// TODO: Check indexer state to be active
 
-	var ephimeral bool
-	ephimeral, err = m.isEphemeral(defn.Bucket)
+	var ephemeral bool
+	ephemeral, err = m.isEphemeral(defn.Bucket)
 	if err != nil {
+		logging.Errorf("validateScheduleCreateRequest: isEphemeral %v", err)
 		return "", "", "", err
 	}
 
-	if ephimeral && common.GetStorageMode() != common.MOI {
-		return "", "", "", fmt.Errorf("Bucket %v is Ephemeral but GSI storage is not MOI", defn.Bucket)
+	if ephemeral {
+		allowed, reason, err := m.isAllowedEphemeral(defn.Bucket)
+		if err != nil {
+			err1 := fmt.Errorf("Cannot check if index creation is allowed on ephemeral bucket %v. Error %v",
+				defn.Bucket, err)
+			logging.Errorf("validateScheduleCreateRequest: isAllowedEphemeral %v", err1)
+			return "", "", "", err1
+		}
+
+		if !allowed {
+			logging.Errorf("validateScheduleCreateRequest: %v", reason)
+			return "", "", "", fmt.Errorf("Standard GSI Index on ephemeral bucket requires fully upgraded cluster")
+		}
 	}
 
 	return bucketUUID, scopeId, collectionId, nil
+}
+
+func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string, error) {
+
+	var cinfo *common.ClusterInfoCache
+	cinfo = m.mgr.reqcic.GetClusterInfoCache()
+
+	if cinfo == nil {
+		return false, "", errors.New("ClusterInfoCache unavailable in IndexManager")
+	}
+
+	if common.GetStorageMode() == common.MOI {
+		return true, "", nil
+	}
+
+	cinfo.RLock()
+	if cinfo.GetClusterVersion() < common.INDEXER_70_VERSION {
+		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
+			" is supported only on fully upgraded cluster.", bucket)
+		return false, retMsg, nil
+	}
+	cinfo.RUnlock()
+
+	ver, err := common.GetInternalClusterVersion(cinfo)
+	if err != nil {
+		return false, "", err
+	}
+
+	logging.Infof("requestHandlerContext:isAllowedEphemeral While creating index on ephemeral bucket %v, internal indexer version is (%v)", bucket, ver)
+
+	if ver.LessThan(common.InternalVersion(common.MIN_VER_STD_GSI_EPHEMERAL)) {
+		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
+			" is supported only on fully upgraded cluster.", bucket)
+		return false, retMsg, nil
+	}
+
+	return true, "", nil
 }
 
 func (m *requestHandlerContext) isEphemeral(bucket string) (bool, error) {
@@ -3565,6 +3615,31 @@ func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.
 	default:
 		send(http.StatusBadRequest, w, fmt.Sprintf("Malformed URL %v", r.URL.Path))
 	}
+}
+
+//
+// Returns intenal version of local indexer node
+//
+func (m *requestHandlerContext) handleInternalVersionRequest(w http.ResponseWriter, r *http.Request) {
+
+	const method string = "RequestHandler::handleInternalVersionRequest" // for logging
+
+	_, ok := doAuth(r, w, method)
+	if !ok {
+		return
+	}
+
+	data, err := common.GetMarshalledInternalVersion()
+	if err != nil {
+		logging.Debugf("requestHandlerContext:handleInternalVersionRequest error %v", err)
+		sendHttpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	logging.Debugf("requestHandlerContext:handleInternalVersionRequest data %s", data)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // host2key converts a host:httpPort string to a key for the metaCache and statsCache.
