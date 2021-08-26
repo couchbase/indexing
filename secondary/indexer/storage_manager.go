@@ -1640,7 +1640,7 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 	targetC, ok := indexSnapMap[tgtInstId]
 	if !ok {
 		// increment source snapshot refcount
-		target = s.deepCloneIndexSnapshot(source, nil)
+		target = s.deepCloneIndexSnapshot(source, false, nil)
 
 	} else {
 		targetC.Lock()
@@ -1733,13 +1733,13 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 		// Deep clone a new snapshot by copying internal maps + increment target snapshot refcount.
 		// The target snapshot could be being used (e.g. under scan).  Increment the snapshot refcount
 		// ensure that the snapshot will not get reclaimed.
-		target = s.deepCloneIndexSnapshot(target, nil)
+		target = s.deepCloneIndexSnapshot(target, false, nil)
 		if len(partitions) != 0 {
 			// Increment source snaphsot refcount (only for copied partitions).  Those snapshots will
 			// be copied over to the target snapshot.  Note that the source snapshot can have different
 			// refcount than the target snapshot, since the source snapshot may not be used for scanning.
 			// But it should be safe to copy from source to target, even if ref count is different.
-			source = s.deepCloneIndexSnapshot(source, partitions)
+			source = s.deepCloneIndexSnapshot(source, true, partitions)
 
 			// move the partition in source snapshot to target snapshot
 			for _, snap := range source.Partitions() {
@@ -1795,7 +1795,7 @@ func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
 	}
 
 	// Increment the snapshot refcount for the partition/slice that we want to keep.
-	newSnapshot := s.deepCloneIndexSnapshot(snapshot, kept)
+	newSnapshot := s.deepCloneIndexSnapshot(snapshot, true, kept)
 
 	stats := s.stats.Get()
 	idxStats := stats.indexes[instId]
@@ -1806,7 +1806,21 @@ func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
-func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, partnIds []common.PartitionId) IndexSnapshot {
+// deepCloneIndexSnapshot makes a clone of a partitioned-index snapshot, but optionally clones only
+// a subset of the partition snapshots. It also increments the reference count (i.e. opens) all the
+// slices of all the snapshot partitions that do get cloned.
+//
+// is -- the index shapshot to clone
+// doPrune -- false clones ALL partitions and IGNORES the keepPartnIds[] arg. true clones only the
+//   subset of partitions listed in the keepPartnIds[] arg.
+// keepPartnIds[] -- used ONLY if doPrune == true, this gives the set of partitions whose snapshots
+//   are to be cloned, which MAY BE EMPTY OR NIL to indicate pruning away of ALL partitions is
+//   desired, in which case none of the partition snapshots are cloned. (This case can occur when a
+//   prune is done of all partitions currently in the real instance while there is also an
+//   outstanding proxy to be merged into the real instance. Even though all existing partns are
+//   moving out, other partns are moving in, so we do a prune of all partitions in the real instance
+//   instead of a drop of the index.)
+func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, doPrune bool, keepPartnIds []common.PartitionId) IndexSnapshot {
 
 	snap := is.(*indexSnapshot)
 
@@ -1816,17 +1830,23 @@ func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, partnIds []common.
 		partns: make(map[common.PartitionId]PartitionSnapshot),
 	}
 
+	// For each partition snapshot...
 	for partnId, partnSnap := range snap.Partitions() {
 
-		toClone := len(partnIds) == 0
-		for _, partnId2 := range partnIds {
-			if partnId == partnId2 {
-				toClone = true
-				break
+		// Determine if we need to clone this partition snapshot
+		doClone := false
+		if !doPrune {
+			doClone = true
+		} else {
+			for _, keepPartnId := range keepPartnIds {
+				if partnId == keepPartnId {
+					doClone = true
+					break
+				}
 			}
 		}
 
-		if toClone {
+		if doClone {
 			ps := &partitionSnapshot{
 				id:     partnId,
 				slices: make(map[SliceId]SliceSnapshot),
