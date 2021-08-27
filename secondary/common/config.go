@@ -1344,6 +1344,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.BufMemQuotaRatio": ConfigValue{
+		float64(0.3),
+		"max limit of memory quota used for buffer",
+		float64(0.3),
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.MaxPageSize": ConfigValue{
 		192 * 1024,
 		"Used with AutoTuneLSSCleaner; target page size limit",
