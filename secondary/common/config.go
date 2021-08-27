@@ -540,9 +540,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.dataport.dataChanSize": ConfigValue{
-		250,
+		1000,
 		"request channel size of indexer dataport's gen-server routine",
-		250,
+		1000,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -1061,18 +1061,18 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.fdb.workerBuffer": ConfigValue{
-		uint64(500),
+		uint64(3000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(500),
+		uint64(3000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.fdb.mutationBuffer": ConfigValue{
-		uint64(250),
+		uint64(3000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(250),
+		uint64(3000),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1114,18 +1114,18 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.moi.workerBuffer": ConfigValue{
-		uint64(500),
+		uint64(2000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(500),
+		uint64(2000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.moi.mutationBuffer": ConfigValue{
-		uint64(250),
+		uint64(1000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(250),
+		uint64(1000),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1898,26 +1898,26 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
-		uint64(500),
+		uint64(2000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(500),
+		uint64(2000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.plasma.mutationBuffer": ConfigValue{
-		uint64(250),
+		uint64(1000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(250),
+		uint64(1000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.dataport.plasma.dataChanSize": ConfigValue{
-		250,
+		1000,
 		"request channel size of indexer dataport's gen-server routine",
-		250,
+		1000,
 		false, // mutable
 		false, // case-insensitive
 	},
