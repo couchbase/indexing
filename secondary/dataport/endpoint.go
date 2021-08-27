@@ -368,7 +368,7 @@ loop:
 				})
 
 				messageCount++ // count queued up mutations.
-				if messageCount > endpoint.bufferSize {
+				if messageCount > endpoint.bufferSize || time.Since(lastActiveTime) > time.Duration(1*time.Millisecond) {
 					if err := flushBuffers(); err != nil {
 						break loop
 					}
