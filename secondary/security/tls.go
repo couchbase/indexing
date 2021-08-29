@@ -748,6 +748,14 @@ func MakeHTTPServer(addr string) (*http.Server, error) {
 	return server, nil
 }
 
+func GetLocalHost() string {
+	if IsIpv6() {
+		return "[::1]"
+	} else {
+		return "127.0.0.1"
+	}
+}
+
 //
 // Cluster wide ipv6 setting.
 //
