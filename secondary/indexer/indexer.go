@@ -717,52 +717,55 @@ func (idx *indexer) initPeriodicProfile() {
 
 func (idx *indexer) initHttpServer() error {
 
+	// Setup http server
+	var addr string
 	if !security.DisableNonSSLPort() {
-		// Setup http server
-		addr := net.JoinHostPort("", idx.config["httpPort"].String())
-
-		logging.Infof("indexer:: Staring http server : %v", addr)
-
-		srv := &http.Server{
-			ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
-			WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
-			ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
-			Addr:              addr,
-			Handler:           GetHTTPMux(),
-		}
-
-		lsnr, err := security.MakeProtocolAwareTCPListener(addr)
-		if err != nil {
-			return fmt.Errorf("Error in creating TCP Listener: %v", err)
-		}
-
-		idx.httpSrvLock.Lock()
-		idx.httpSrv = srv
-		idx.tcpListener = lsnr
-		idx.httpSrvLock.Unlock()
-
-		go func() {
-			// replace below with ListenAndServe on moving to go1.8
-			if err := srv.Serve(lsnr); err != nil {
-				logging.Errorf("indexer:: Error from Http Server: %v", err)
-
-				idx.httpSrvLock.Lock()
-				if idx.httpSrv != nil && idx.httpSrv == srv {
-					// This does not close connections.  Use idx.httpSrv.Close() on 1.11
-					lsnr.Close()
-
-					// reset before releasing the lock
-					idx.httpSrv = nil
-					idx.tcpListener = nil
-
-					// self restart
-					time.Sleep(time.Duration(10) * time.Second)
-					go idx.initHttpServer()
-				}
-				idx.httpSrvLock.Unlock()
-			}
-		}()
+		addr = net.JoinHostPort("", idx.config["httpPort"].String())
+	} else {
+		addr = net.JoinHostPort(security.GetLocalHost(), idx.config["httpPort"].String())
 	}
+
+	logging.Infof("indexer:: Staring http server : %v", addr)
+
+	srv := &http.Server{
+		ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
+		WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
+		ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
+		Addr:              addr,
+		Handler:           GetHTTPMux(),
+	}
+
+	lsnr, err := security.MakeProtocolAwareTCPListener(addr)
+	if err != nil {
+		return fmt.Errorf("Error in creating TCP Listener: %v", err)
+	}
+
+	idx.httpSrvLock.Lock()
+	idx.httpSrv = srv
+	idx.tcpListener = lsnr
+	idx.httpSrvLock.Unlock()
+
+	go func() {
+		// replace below with ListenAndServe on moving to go1.8
+		if err := srv.Serve(lsnr); err != nil {
+			logging.Errorf("indexer:: Error from Http Server: %v", err)
+
+			idx.httpSrvLock.Lock()
+			if idx.httpSrv != nil && idx.httpSrv == srv {
+				// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+				lsnr.Close()
+
+				// reset before releasing the lock
+				idx.httpSrv = nil
+				idx.tcpListener = nil
+
+				// self restart
+				time.Sleep(time.Duration(10) * time.Second)
+				go idx.initHttpServer()
+			}
+			idx.httpSrvLock.Unlock()
+		}
+	}()
 
 	return nil
 }

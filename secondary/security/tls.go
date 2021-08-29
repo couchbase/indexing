@@ -527,7 +527,7 @@ func GetWithAuthAndETag(u string, params *RequestParams, eTag string) (*http.Res
 	}
 
 	if eTag != "" {
-		req.Header.Set("If-None-Match", eTag)  // common.HTTP_KEY_ETAG_REQUEST
+		req.Header.Set("If-None-Match", eTag) // common.HTTP_KEY_ETAG_REQUEST
 	}
 
 	if params != nil && params.UserAgent != "" {
@@ -758,6 +758,14 @@ func MakeHTTPServer(addr string) (*http.Server, error) {
 	}
 
 	return server, nil
+}
+
+func GetLocalHost() string {
+	if IsIpv6() {
+		return "[::1]"
+	} else {
+		return "127.0.0.1"
+	}
 }
 
 //
