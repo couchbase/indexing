@@ -2577,14 +2577,14 @@ func (m *LifecycleMgr) handleCleanupIndexFromInvalidKeyspace(keyspace string) er
 	// Get bucket UUID.  if err==nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 	currentUUID, err := m.getBucketUUID(bucket, false)
 	if err != nil {
-		logging.Errorf("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace Error while fetching bucketUUID from cinfocache, err: %v")
+		logging.Errorf("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace Error while fetching bucketUUID from cinfocache, err: %v", err)
 		// If err != nil, then cannot connect to fetch bucket info.  Do not attempt to delete index.
 		return nil
 	}
 
 	collectionID, err := m.getCollectionID(bucket, scope, collection, false)
 	if err != nil {
-		logging.Errorf("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace Error while fetching collectionID from cinfocache, err: %v")
+		logging.Errorf("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace Error while fetching collectionID from cinfocache, err: %v", err)
 		// If err != nil, then cannot connect to fetch collection info.  Do not attempt to delete index.
 		return nil
 	}
