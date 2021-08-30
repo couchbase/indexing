@@ -1461,6 +1461,10 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 						os.Exit(0)
 					} else {
 						logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. ", common.GetStorageMode())
+						if idx.getIndexerState() == common.INDEXER_ACTIVE &&
+							common.GetStorageMode() == common.PLASMA {
+							RecoveryDone()
+						}
 					}
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
