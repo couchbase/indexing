@@ -288,9 +288,9 @@ type IndexUsage struct {
 	eligible bool
 
 	// stats for duplicate index removal logic
-	numDocsQueued	int64
-	numDocsPending	int64
-	rollbackTime	int64
+	numDocsQueued    int64
+	numDocsPending   int64
+	rollbackTime     int64
 	progressStatTime int64
 }
 
@@ -7080,6 +7080,10 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		indexer := getNextIndexer(i)
 		if indexer == nil {
 			return nil, ErrNoAvailableIndexer
+		}
+
+		if equiv, ok := p.equivIndexMap[indexer.IndexerId]; ok && equiv {
+			idx.suppressEquivIdxCheck = true
 		}
 
 		p.placement.AddToIndexer(solution, indexer, idx)
