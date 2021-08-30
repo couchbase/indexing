@@ -69,7 +69,7 @@ func printClusterConfig(caller string, location string) {
 // Node 0 is assumed to be correct already and not actually set here. Any existing nodes 1-3
 // are dropped and readded as index-only nodes.
 func setupCluster(t *testing.T) {
-	method := "setupCluster" // for logging
+	const method string = "setupCluster" // for logging
 	resetCluster(t)
 	status := getClusterStatus()
 	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
@@ -98,7 +98,7 @@ func skipTest() bool {
 // It also sets indexer.settings.rebalance.redistribute_indexes = true so rebalance will move
 // indexes to empty nodes.
 func TestRebalanceSetupCluster(t *testing.T) {
-	method := "TestRebalanceSetupCluster" // for logging
+	const method string = "TestRebalanceSetupCluster" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -126,7 +126,7 @@ func TestRebalanceSetupCluster(t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index]
 //   Ending config:   same
 func TestCreateDocsBeforeRebalance(t *testing.T) {
-	method := "TestCreateDocsBeforeRebalance" // for logging
+	const method string = "TestCreateDocsBeforeRebalance" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -147,7 +147,7 @@ func TestCreateDocsBeforeRebalance(t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index]
 //   Ending config:   same
 func TestCreateIndexesBeforeRebalance(t *testing.T) {
-	method := "TestCreateIndexesBeforeRebalance" // for logging
+	const method string = "TestCreateIndexesBeforeRebalance" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -251,7 +251,7 @@ func addTwoNodesAndRebalance(caller string, t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
 //   Ending config:   same
 func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
-	method := "TestCreateReplicatedIndexesBeforeRebalance" // for logging
+	const method string = "TestCreateReplicatedIndexesBeforeRebalance" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -269,7 +269,7 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v) with {\"num_replica\":2}",
 			indexName, bucketName, fieldName1, fieldName2)
 		executeN1qlStmt(n1qlStmt, bucketName, method, t)
-		time.Sleep(5 * time.Second) // these take some time to build
+		time.Sleep(6 * time.Second) // these take some time to build
 		log.Printf("%v: %v index is now active.", method, indexName)
 	}
 
@@ -304,7 +304,7 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
 //   Ending config:   [0: kv n1ql]            [2: index] [3: index]
 func TestIndexNodeRebalanceOut(t *testing.T) {
-	method := "TestIndexNodeRebalanceOut" // for logging
+	const method string = "TestIndexNodeRebalanceOut" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -328,7 +328,7 @@ func TestIndexNodeRebalanceOut(t *testing.T) {
 //   Starting config: [0: kv n1ql]            [2: index] [3: index]
 //   Ending config:   [0: kv n1ql]                       [3: index]
 func TestFailoverAndRebalance(t *testing.T) {
-	method := "TestFailoverAndRebalance" // for logging
+	const method string = "TestFailoverAndRebalance" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -355,7 +355,7 @@ func TestFailoverAndRebalance(t *testing.T) {
 //   Starting config: [0: kv n1ql]                       [3: index]
 //   Ending config:   [0: kv n1ql] [1: index]
 func TestSwapRebalance(t *testing.T) {
-	method := "TestSwapRebalance" // for logging
+	const method string = "TestSwapRebalance" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
@@ -391,7 +391,7 @@ func TestRebalanceReplicaRepair(t *testing.T) {
 // to avoid affecting other tests, including those that call addNodeAndRebalance/AddNodeAndRebalance,
 // amd then resets the expected starting cluster configuration, as some later tests depend on it.
 func TestRebalanceResetCluster(t *testing.T) {
-	method := "TestRebalanceResetCluster" // for logging
+	const method string = "TestRebalanceResetCluster" // for logging
 	printClusterConfig(method, "entry")
 	if skipTest() {
 		log.Printf("%v: Test skipped", method)
