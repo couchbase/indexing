@@ -2464,8 +2464,6 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
 						result = err
 					}
-					mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
-
 				} else {
 					for _, instRef := range defnRef.Instances {
 
@@ -2477,8 +2475,6 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
 								result = err
 							}
-							mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
-
 							break
 						}
 					}
@@ -2596,7 +2592,6 @@ func (m *LifecycleMgr) handleCleanupIndexFromInvalidKeyspace(keyspace string) er
 								continue
 							}
 							deleteToken = true
-							mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
 							logging.Infof("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace cleaning up index %v, %v, %v, %v, %v", common.IndexDefnId(defn.DefnId), defn.Name, defn.Bucket, defn.Scope, defn.Collection)
 							break
 						} else {
