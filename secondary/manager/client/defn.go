@@ -24,6 +24,8 @@ import (
 // OpCode
 ////////////////////////////////////////////////////////////////////////
 
+// IMP: Please do not remove these OpCodes. Removal of OpCodes can
+// lead to failures during rolling upgrade.
 const (
 	OPCODE_CREATE_INDEX               common.OpCode = common.OPCODE_CUSTOM + 1
 	OPCODE_DROP_INDEX                               = OPCODE_CREATE_INDEX + 1
@@ -33,7 +35,8 @@ const (
 	OPCODE_DELETE_BUCKET                            = OPCODE_SERVICE_MAP + 1
 	OPCODE_INDEXER_READY                            = OPCODE_DELETE_BUCKET + 1
 	OPCODE_CLEANUP_INDEX                            = OPCODE_INDEXER_READY + 1
-	OPCODE_CREATE_INDEX_REBAL                       = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CLEANUP_DEFER_INDEX                      = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                       = OPCODE_CLEANUP_DEFER_INDEX + 1
 	OPCODE_BUILD_INDEX_REBAL                        = OPCODE_CREATE_INDEX_REBAL + 1
 	OPCODE_DROP_INDEX_REBAL                         = OPCODE_BUILD_INDEX_REBAL + 1
 	OPCODE_BROADCAST_STATS                          = OPCODE_DROP_INDEX_REBAL + 1
@@ -76,6 +79,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_INDEXER_READY"
 	case OPCODE_CLEANUP_INDEX:
 		return "OPCODE_CLEANUP_INDEX"
+	case OPCODE_CLEANUP_DEFER_INDEX:
+		return "OPCODE_CLEANUP_DEFER_INDEX"
 	case OPCODE_CREATE_INDEX_REBAL:
 		return "OPCODE_CREATE_INDEX_REBAL"
 	case OPCODE_BUILD_INDEX_REBAL:
