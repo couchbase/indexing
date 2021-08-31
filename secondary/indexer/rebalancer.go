@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -1769,7 +1770,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	progress = (totalProgress / float64(totTokens)) / 100.0
 	l.Infof("Rebalancer::computeProgress %v", progress)
 
-	if progress < 0.1 {
+	if progress < 0.1 || math.IsNaN(progress) {
 		progress = 0.1
 	} else if progress == 1.0 {
 		progress = 0.99
