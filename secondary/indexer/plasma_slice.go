@@ -326,6 +326,10 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
 	cfg.EnableFullReplayOnError = slice.sysconf["plasma.recovery.enableFullReplayOnError"].Bool()
 
+	cfg.EnableReaderPurge = slice.sysconf["plasma.reader.purge.enabled"].Bool()
+	cfg.ReaderPurgeThreshold = slice.sysconf["plasma.reader.purge.threshold"].Float64()
+	cfg.ReaderPurgePageRatio = slice.sysconf["plasma.reader.purge.pageRatio"].Float64()
+
 	cfg.StatsRunInterval = time.Duration(slice.sysconf["plasma.stats.runInterval"].Uint64()) * time.Second
 	cfg.StatsLogInterval = time.Duration(slice.sysconf["plasma.stats.logInterval"].Uint64()) * time.Second
 	cfg.StatsKeySizeThreshold = slice.sysconf["plasma.stats.threshold.keySize"].Uint64()
@@ -2353,6 +2357,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 	mdb.mainstore.PageStatsSamplePercent = mdb.sysconf["plasma.PageStatsSamplePercent"].Float64()
 
+	mdb.mainstore.EnableReaderPurge = mdb.sysconf["plasma.reader.purge.enabled"].Bool()
+	mdb.mainstore.ReaderPurgeThreshold = mdb.sysconf["plasma.reader.purge.threshold"].Float64()
+	mdb.mainstore.ReaderPurgePageRatio = mdb.sysconf["plasma.reader.purge.pageRatio"].Float64()
+
 	mdb.mainstore.EnablePageBloomFilter = mdb.sysconf["plasma.mainIndex.enablePageBloomFilter"].Bool()
 	mdb.mainstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
 	mdb.mainstore.BloomFilterExpectedMaxItems = mdb.sysconf["plasma.mainIndex.bloomFilterExpectedMaxItems"].Uint64()
@@ -2408,6 +2416,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 		mdb.backstore.PageStatsSamplePercent = mdb.sysconf["plasma.PageStatsSamplePercent"].Float64()
+
+		mdb.backstore.EnableReaderPurge = mdb.sysconf["plasma.reader.purge.enabled"].Bool()
+		mdb.backstore.ReaderPurgeThreshold = mdb.sysconf["plasma.reader.purge.threshold"].Float64()
+		mdb.backstore.ReaderPurgePageRatio = mdb.sysconf["plasma.reader.purge.pageRatio"].Float64()
 
 		mdb.backstore.EnablePageBloomFilter = mdb.sysconf["plasma.backIndex.enablePageBloomFilter"].Bool()
 		mdb.backstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()

@@ -1783,6 +1783,27 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.reader.purge.enabled": ConfigValue{
+		true,
+		"Enable mvcc purge from reader",
+		true,
+		false,
+		false,
+	},
+	"indexer.plasma.reader.purge.threshold": ConfigValue{
+		float64(5),
+		"Reader Purge Threshold.  Initialized to 5 (20% valid record per page).",
+		float64(5),
+		false,
+		false,
+	},
+	"indexer.plasma.reader.purge.pageRatio": ConfigValue{
+		float64(0.25),
+		" number of items in a page relative to (active max page items + active delta chain length)",
+		float64(0.25),
+		false,
+		false,
+	},
 	"indexer.plasma.enablePageChecksum": ConfigValue{
 		true, // Value set
 		"Checksum every page to enable corruption detection",
