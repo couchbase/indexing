@@ -540,9 +540,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.dataport.dataChanSize": ConfigValue{
-		1000,
+		250,
 		"request channel size of indexer dataport's gen-server routine",
-		1000,
+		250,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -1061,18 +1061,18 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.fdb.workerBuffer": ConfigValue{
-		uint64(3000),
+		uint64(500),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(3000),
+		uint64(500),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.fdb.mutationBuffer": ConfigValue{
-		uint64(3000),
+		uint64(250),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(3000),
+		uint64(250),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1114,18 +1114,18 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.moi.workerBuffer": ConfigValue{
-		uint64(2000),
+		uint64(500),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(2000),
+		uint64(500),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.moi.mutationBuffer": ConfigValue{
-		uint64(1000),
+		uint64(250),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(1000),
+		uint64(250),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1344,6 +1344,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.BufMemQuotaRatio": ConfigValue{
+		float64(0.3),
+		"max limit of memory quota used for buffer",
+		float64(0.3),
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.MaxPageSize": ConfigValue{
 		192 * 1024,
 		"Used with AutoTuneLSSCleaner; target page size limit",
@@ -1469,9 +1476,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableInMemoryCompression": ConfigValue{
-		false,
+		true,
 		"Enable compression of memory resident items",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1595,9 +1602,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableInMemoryCompression": ConfigValue{
-		false,
+		true,
 		"Enable compression of memory resident items",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1898,26 +1905,26 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
-		uint64(2000),
+		uint64(500),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(2000),
+		uint64(500),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.plasma.mutationBuffer": ConfigValue{
-		uint64(1000),
+		uint64(250),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(1000),
+		uint64(250),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.dataport.plasma.dataChanSize": ConfigValue{
-		1000,
+		250,
 		"request channel size of indexer dataport's gen-server routine",
-		1000,
+		250,
 		false, // mutable
 		false, // case-insensitive
 	},
