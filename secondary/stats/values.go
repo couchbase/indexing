@@ -12,6 +12,7 @@ const PlannerFilter = 0x2
 const IndexStatusFilter = 0x4
 const RebalancerFilter = 0x8
 const GSIClientFilter = 0x10
+const SmartBatchingFilter = 0x20
 
 // This filter is only used for storage stats
 const N1QLStorageStatsFilter = 0x20

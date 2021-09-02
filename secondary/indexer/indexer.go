@@ -1641,10 +1641,8 @@ func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 }
 
 func (idx *indexer) handleCreateIndex(msg Message) {
-
 	indexInst := msg.(*MsgCreateIndex).GetIndexInst()
 	clientCh := msg.(*MsgCreateIndex).GetResponseChannel()
-
 	logging.Infof("Indexer::handleCreateIndex %v", indexInst)
 
 	// NOTE
@@ -1735,11 +1733,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
-
 		reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
-
-		if reqCtx != nil && reqCtx.ReqSource == common.DDLRequestSourceUser {
-
+		if reqCtx.ReqSource == common.DDLRequestSourceUser {
 			errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
 			logging.Errorf("Indexer::handleCreateIndex %v", errStr)
 
@@ -1770,7 +1765,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 				err: Error{severity: FATAL,
 					cause:    errors.New(errStr),
 					category: INDEXER}}
-
 		}
 		return
 	} else {
@@ -1786,7 +1780,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 					err: Error{severity: FATAL,
 						cause:    errors.New(errStr),
 						category: INDEXER}}
-
 			}
 			return
 		}
@@ -1840,7 +1833,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		idx.handleBuildIndex(&MsgBuildIndex{indexInstList: []common.IndexInstId{indexInst.InstId},
 			respCh: clientCh})
 	}
-
 }
 
 func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
@@ -2841,13 +2833,11 @@ func (idx *indexer) updateStreamForRebalance(force bool) {
 	}
 }
 
-// handleBuildIndex performs index builds. These can be due to normal create index or rebalance.
-// It constructs an error map (errMap) from instId to error and sends it back to the caller.
+// handleBuildIndex performs index builds for potentially multiple indexes in one call. These can be due to normal
+// create index or rebalance. It constructs an error map (errMap) from instId to error and sends it back to the caller.
 func (idx *indexer) handleBuildIndex(msg Message) {
-
 	instIdList := msg.(*MsgBuildIndex).GetIndexList()
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
-
 	logging.Infof("Indexer::handleBuildIndex %v", instIdList)
 
 	// NOTE
@@ -2864,7 +2854,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 	is := idx.getIndexerState()
 	if is != common.INDEXER_ACTIVE {
-
 		errStr := fmt.Sprintf("Indexer Cannot Process Build Index In %v State", is)
 		logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 
@@ -2880,11 +2869,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
-
 		reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
-
-		if reqCtx != nil && reqCtx.ReqSource == common.DDLRequestSourceUser {
-
+		if reqCtx.ReqSource == common.DDLRequestSourceUser {
 			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
 			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 
@@ -2894,18 +2880,15 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						severity: FATAL,
 						cause:    errors.New(errStr),
 						category: INDEXER}}
-
 			}
 			return
 		}
-
 	}
 
 	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
-
 		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap)
 		if !ok {
 			logging.Errorf("Indexer::handleBuildIndex Invalid Index List "+
@@ -2920,10 +2903,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		//check if Initial Build is already running for this index's keyspace
+		// Check if Initial Build is already running for this index's keyspace. Indexer does not support multiple
+		// builds on the same keyspace because the keyspaceId is used as a key to stream maps.
 		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildIndex Build Already In"+
-				"Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
+				" Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
 			if idx.enableManager {
 				delete(keyspaceIdIndexList, keyspaceId)
 				continue
@@ -2932,6 +2916,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
+		// Limit the number of concurrent build streams.
 		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
 			maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
@@ -3038,10 +3023,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 }
 
 func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
-
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
 	clientCh := msg.(*MsgDropIndex).GetResponseChannel()
-
 	logging.Infof("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
 
 	//actual error is not required for admin msg handler
@@ -3050,7 +3033,6 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	var indexInst common.IndexInst
 	var ok bool
 	if indexInst, ok = idx.indexInstMap[indexInstId]; !ok {
-
 		errStr := fmt.Sprintf("Unknown Index Instance %v", indexInstId)
 		logging.Errorf("Indexer::handleDropIndex %v", errStr)
 
@@ -3075,7 +3057,6 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 					severity: FATAL,
 					cause:    ErrIndexerNotActive,
 					category: INDEXER}}
-
 		}
 		return
 	}
@@ -3083,9 +3064,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
 
 		reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
-
-		if reqCtx != nil && reqCtx.ReqSource == common.DDLRequestSourceUser {
-
+		if reqCtx.ReqSource == common.DDLRequestSourceUser {
 			errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
 			logging.Errorf("Indexer::handleDropIndex %v", errStr)
 
@@ -3095,11 +3074,9 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 						severity: FATAL,
 						cause:    errors.New(errStr),
 						category: INDEXER}}
-
 			}
 			return
 		}
-
 	}
 
 	idx.stats.RemoveIndexStats(indexInst)
@@ -5209,7 +5186,6 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 			return false
 		}
 	}
-
 	return true
 }
 

@@ -109,6 +109,8 @@ func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, err
 	return c, nil
 }
 
+// FetchNewClusterInfoCache returns a pointer to a new instance, so the anonymous mutex in the returned
+// object only needs to be locked if the caller shares it among goroutines.
 func FetchNewClusterInfoCache(clusterUrl string, pool string, userAgent string) (*ClusterInfoCache, error) {
 
 	url, err := ClusterAuthUrl(clusterUrl)
@@ -1270,6 +1272,7 @@ func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *Clu
 	return cic, err
 }
 
+// GetClusterInfoCache returns a pointer to an existing, shared instance.
 // Consumer must lock returned cinfo before using it
 func (c *ClusterInfoClient) GetClusterInfoCache() *ClusterInfoCache {
 	return c.cinfo

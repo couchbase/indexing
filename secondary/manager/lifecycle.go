@@ -455,7 +455,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key, common.NewUserRequestContext())
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
@@ -469,11 +469,11 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_CREATE_INDEX_REBAL:
 		err = m.handleCreateIndexScheduledBuild(key, content, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
-		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext(), true)
+		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_RETRY:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleNotifyStats(content)
 	case client.OPCODE_RESET_INDEX:
@@ -1890,7 +1890,8 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 
 // handleBuildIndexes handles all kinds of build index requests
 // (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
-func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext, isRebal bool) error {
+func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
+	isRebal := reqCtx.ReqSource == common.DDLRequestSourceRebalance // is this call from Rebalance?
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {

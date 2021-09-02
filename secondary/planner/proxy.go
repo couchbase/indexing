@@ -8,8 +8,6 @@
 package planner
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -1061,49 +1059,7 @@ func getLocalNumReplicasResp(addr string) (*http.Response, error) {
 }
 
 func getWithCbauth(url string) (*http.Response, error) {
-
-	t := GetRestRequestTimeout()
-	params := &security.RequestParams{Timeout: time.Duration(t) * time.Second}
-	response, err := security.GetWithAuth(url, params)
-	if err == nil && response.StatusCode != http.StatusOK {
-		return response, convertError(response)
-	}
-
-	return response, err
-}
-
-//
-// This function unmarshalls a response.
-//
-func convertResponse(r *http.Response, resp interface{}) error {
-	defer r.Body.Close()
-
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(r.Body); err != nil {
-		return err
-	}
-
-	if err := json.Unmarshal(buf.Bytes(), resp); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func convertError(r *http.Response) error {
-	if r.StatusCode != http.StatusOK {
-		if r.Body != nil {
-			defer r.Body.Close()
-
-			buf := new(bytes.Buffer)
-			if _, err := buf.ReadFrom(r.Body); err == nil {
-				return fmt.Errorf("response status:%v cause:%v", r.StatusCode, string(buf.Bytes()))
-			}
-		}
-		return fmt.Errorf("response status:%v cause:Unknown", r.StatusCode)
-	}
-
-	return nil
+	return security.GetWithAuthAndTimeout(url, GetRestRequestTimeout())
 }
 
 //
@@ -1696,42 +1652,42 @@ func (r *RestResponse) SetResponse(res *http.Response) error {
 	switch r.respType {
 
 	case "LocalMetadataResp":
-		if err := convertResponse(res, r.meta); err != nil {
+		if err := security.ConvertHttpResponse(res, r.meta); err != nil {
 			return err
 		}
 
 	case "LocalStatsResp":
-		if err := convertResponse(res, r.stats); err != nil {
+		if err := security.ConvertHttpResponse(res, r.stats); err != nil {
 			return err
 		}
 
 	case "LocalSettingsResp":
-		if err := convertResponse(res, &r.settings); err != nil {
+		if err := security.ConvertHttpResponse(res, &r.settings); err != nil {
 			return err
 		}
 
 	case "LocalCreateTokensResp":
-		if err := convertResponse(res, r.createTokens); err != nil {
+		if err := security.ConvertHttpResponse(res, r.createTokens); err != nil {
 			return err
 		}
 
 	case "LocalDeleteTokensResp":
-		if err := convertResponse(res, r.delTokens); err != nil {
+		if err := security.ConvertHttpResponse(res, r.delTokens); err != nil {
 			return err
 		}
 
 	case "LocalDeleteTokenPathsResp":
-		if err := convertResponse(res, r.delTokenPaths); err != nil {
+		if err := security.ConvertHttpResponse(res, r.delTokenPaths); err != nil {
 			return err
 		}
 
 	case "LocalDropInstanceTokensResp":
-		if err := convertResponse(res, r.dropInstTokens); err != nil {
+		if err := security.ConvertHttpResponse(res, r.dropInstTokens); err != nil {
 			return err
 		}
 
 	case "LocalNumReplicasResp":
-		if err := convertResponse(res, &r.numReplicas); err != nil {
+		if err := security.ConvertHttpResponse(res, &r.numReplicas); err != nil {
 			return err
 		}
 

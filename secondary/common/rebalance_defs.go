@@ -11,6 +11,7 @@ package common
 
 import (
 	"fmt"
+	"strings"
 )
 
 type TokenState byte
@@ -24,26 +25,26 @@ const (
 	// processTokenAsDest, and tokenMergeOrReady.
 	//
 	TransferTokenCreated TokenState = iota // 1. Dest: Clone source index metadata into
-		// local metadata; change state to TTAccepted. (Original design is first check
-		// if enough resources and if not, change state to TTRefused and rerun planner,
-		// but this is not implemented.)
-	TransferTokenAccepted // 2. Master: Launch progress updater. Change state to TTInitiate.
-	TransferTokenRefused // x. Master (but really unused): No-op.
+	// local metadata; change state to TTAccepted. (Original design is first check
+	// if enough resources and if not, change state to TTRefused and rerun planner,
+	// but this is not implemented.)
+	TransferTokenAccepted // 2. Master: Change state to TTInitiate.
+	TransferTokenRefused  // x. Master (but really unused): No-op.
 	TransferTokenInitiate // 3. Dest: Initiate index build if non-deferred and change state.
-		// to TTInProgress; if build is deferred it may change state to TTTokenMerge instead.
+	// to TTInProgress; if build is deferred it may change state to TTTokenMerge instead.
 	TransferTokenInProgress // 4. Dest: No-op in processTokenAsDest; processed in
-		// tokenMergeOrReady. Build in progress. May pass through state TTMerge. Change state
-		// to TTReady when done.
+	// tokenMergeOrReady. Build in progress or staged for start. May pass through state
+	// TTMerge. Change state to TTReady when done.
 	TransferTokenReady // 5. Source: Ready to delete source idx (dest idx now taking all
-		// traffic). Queue source index for later async drop. Drop processing will change
-		// state to TTCommit after the drop is complete.
+	// traffic). Queue source index for later async drop. Drop processing will change
+	// state to TTCommit after the drop is complete.
 	TransferTokenCommit // 6. Master: Source index is deleted. Change master's in-mem token
-		// state to TTCommit amd metakv token state to TTDeleted.
+	// state to TTCommit amd metakv token state to TTDeleted.
 	TransferTokenDeleted // 7. Master: All TT processing done. Delete the TT from metakv.
-	TransferTokenError // x. Unused; kept so down-level iotas match.
-	TransferTokenMerge // 4.5 Dest (partitioned indexes only): No-op in processTokenAsDest;
-		// processed in tokenMergeOrReady. Tells indexer to merge dest partn's temp "proxy"
-		// IndexDefn w/ "real" IndexDefn for that index. Change state to TTReady when done.
+	TransferTokenError   // x. Unused; kept so down-level iotas match.
+	TransferTokenMerge   // 4.5 Dest (partitioned indexes only): No-op in processTokenAsDest;
+	// processed in tokenMergeOrReady. Tells indexer to merge dest partn's temp "proxy"
+	// IndexDefn w/ "real" IndexDefn for that index. Change state to TTReady when done.
 )
 
 func (ts TokenState) String() string {
@@ -75,6 +76,8 @@ func (ts TokenState) String() string {
 
 }
 
+// TokenBuildSource is the type of the TransferToken.BuildSource field, which is currently unused
+// but will be used in future when rebalance is done using file copy rather than DCP.
 type TokenBuildSource byte
 
 const (
@@ -97,7 +100,7 @@ type TokenTransferMode byte
 
 const (
 	TokenTransferModeMove TokenTransferMode = iota // moving idx from source to dest
-	TokenTransferModeCopy // no source node; idx created on dest during rebalance (replica repair)
+	TokenTransferModeCopy                          // no source node; idx created on dest during rebalance (replica repair)
 )
 
 func (tm TokenTransferMode) String() string {
@@ -111,69 +114,70 @@ func (tm TokenTransferMode) String() string {
 	return "unknown"
 }
 
+// TransferToken represents a sindgle index partition movement for rebalance or move index.
+// These get stored in metakv, which makes callbacks on creation and each change.
 type TransferToken struct {
-	MasterId     string
-	SourceId     string
-	DestId       string
+	MasterId     string // rebal master nodeUUID (32-digit random hex)
+	SourceId     string // index source nodeUUID
+	DestId       string // index dest   nodeUUID
 	RebalId      string
-	State        TokenState
-	InstId       IndexInstId
-	RealInstId   IndexInstId
+	State        TokenState  // current TT state; usually tells the NEXT thing to be done
+	InstId       IndexInstId // true instance ID for non-partitioned; may be proxy ID for partitioned
+	RealInstId   IndexInstId // 0 for non-partitioned or non-proxy partitioned, else true instId to merge partn to
 	IndexInst    IndexInst
-	Error        string
-	BuildSource  TokenBuildSource
-	TransferMode TokenTransferMode
+	Error        string            // English error text; empty if no error
+	BuildSource  TokenBuildSource  // unused
+	TransferMode TokenTransferMode // move (rebalance) vs copy (replica repair)
 
 	//used for logging
 	SourceHost string
 	DestHost   string
 }
 
+// TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
+// only one layer deep, this can be done by returning the value receiver as Go already copied it.
 func (tt TransferToken) Clone() TransferToken {
-
-	var ttc TransferToken
-	ttc.MasterId = tt.MasterId
-	ttc.SourceId = tt.SourceId
-	ttc.DestId = tt.DestId
-	ttc.RebalId = tt.RebalId
-	ttc.State = tt.State
-	ttc.InstId = tt.InstId
-	ttc.RealInstId = tt.RealInstId
-	ttc.IndexInst = tt.IndexInst
-	ttc.Error = tt.Error
-	ttc.BuildSource = tt.BuildSource
-	ttc.TransferMode = tt.TransferMode
-
-	ttc.SourceHost = tt.SourceHost
-	ttc.DestHost = tt.DestHost
-
-	return ttc
-
+	return tt
 }
 
-func (tt TransferToken) String() string {
+// TransferToken.IsUserDeferred returns whether the transfer token represents an index
+// that was created by the user as deferred (with {"defer_build":true}) and not yet built.
+// Rebalance will move the index metadata from source to dest but will NOT build these.
+// All deferred indexes have flag setting
+//   tt.IndexInst.Defn.Deferred == true
+// User-deferred indexes additionally have state value
+//   tt.IndexInst.State == INDEX_STATE_READY
+// whereas system-deferred indexes have a different State (usually INDEX_STATE_ACTIVE).
+func (tt *TransferToken) IsUserDeferred() bool {
+	return tt.IndexInst.Defn.Deferred && tt.IndexInst.State == INDEX_STATE_READY
+}
 
-	str := fmt.Sprintf(" MasterId: %v ", tt.MasterId)
-	str += fmt.Sprintf("SourceId: %v ", tt.SourceId)
+// TransferToken.String returns a human-friendly string representation of a TT.
+func (tt *TransferToken) String() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " MasterId: %v ", tt.MasterId)
+	fmt.Fprintf(sbp, "SourceId: %v ", tt.SourceId)
 	if len(tt.SourceHost) != 0 {
-		str += fmt.Sprintf("(%v) ", tt.SourceHost)
+		fmt.Fprintf(sbp, "(%v) ", tt.SourceHost)
 	}
-	str += fmt.Sprintf("DestId: %v ", tt.DestId)
+	fmt.Fprintf(sbp, "DestId: %v ", tt.DestId)
 	if len(tt.DestHost) != 0 {
-		str += fmt.Sprintf("(%v) ", tt.DestHost)
+		fmt.Fprintf(sbp, "(%v) ", tt.DestHost)
 	}
-	str += fmt.Sprintf("RebalId: %v ", tt.RebalId)
-	str += fmt.Sprintf("State: %v ", tt.State)
-	str += fmt.Sprintf("BuildSource: %v ", tt.BuildSource)
-	str += fmt.Sprintf("TransferMode: %v ", tt.TransferMode)
+	fmt.Fprintf(sbp, "RebalId: %v ", tt.RebalId)
+	fmt.Fprintf(sbp, "State: %v ", tt.State)
+	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
+	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
 	if tt.Error != "" {
-		str += fmt.Sprintf("Error: %v ", tt.Error)
+		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
-	str += fmt.Sprintf("InstId: %v ", tt.InstId)
-	str += fmt.Sprintf("RealInstId: %v ", tt.RealInstId)
-	str += fmt.Sprintf("Partitions: %v ", tt.IndexInst.Defn.Partitions)
-	str += fmt.Sprintf("Versions: %v ", tt.IndexInst.Defn.Versions)
-	str += fmt.Sprintf("Inst: %v \n", tt.IndexInst)
-	return str
+	fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
+	fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
+	fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
+	fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
+	fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
 
+	return sb.String()
 }
