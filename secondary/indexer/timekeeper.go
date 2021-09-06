@@ -2499,17 +2499,20 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			} else {
 				//check for one index is sufficient as all indexes in a keyspaceId
 				//move together
+				logging.Debugf("Timekeeper::checkInitStreamReadyToMerge checkFlushTsValidForMerge returned readyToMerge=false, %v, %v, initTsSeq %v, initFlushTs %v, buildinfo.MinMergeTs %v fetchKVSeq %v",
+					streamId, keyspaceId, initTsSeq, initFlushTs, buildInfo.minMergeTs, fetchKVSeq)
 				return false
 			}
 		}
 	}
-
+	logging.Debugf("Timekeeper::checkInitStreamReadyToMerge index does not belong to flushed keyspace, %v, %v, initFlushTs %v, fetchKVSeq %v",
+		streamId, keyspaceId, initFlushTs, fetchKVSeq)
 	return false
 }
 
 func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspaceId string,
 	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid, fetchKVSeq bool) (bool, *common.TsVbuuid) {
-
+	const method = "Timekeeper::checkFlushTsValidForMerge"
 	var maintFlushTs *common.TsVbuuid
 
 	//if the initFlushTs is past the lastFlushTs of this keyspace in MAINT_STREAM,
@@ -2534,6 +2537,8 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 	//if initFlushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
 	//merge cannot happen
 	if maintFlushTs != nil && initFlushTs == nil {
+		logging.Debugf("%v, %v, %v, maintFlushTs %v, but initFlushTs is nil, merge can not happen.",
+			method, streamId, keyspaceId, maintFlushTs)
 		return false, nil
 	}
 
@@ -2554,11 +2559,14 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			if cid != "" {
 				//vbuuids need to match for index merge
 				if !initFlushTs.CompareVbuuids(maintFlushTs) {
+					logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, vbuuids do not match, flushedPastMinMergeTs=false",
+						method, streamId, keyspaceId, maintFlushTs, initFlushTs)
 					return false, nil
 				}
 				currCTs, err := common.CollectionSeqnos(cluster, "default", bucket, cid)
 				if err != nil {
-					logging.Infof("Timekeeper::checkFlushTsValidForMerge CollectionSeqnos err %v. Skipping stream merge.", err)
+					logging.Errorf("%v, %v, %v, CollectionSeqnos err %v. Skipping stream merge. flushedPastMinMergeTs=false",
+						method, streamId, keyspaceId, err)
 					return false, nil
 				}
 				//if the collection high seqno has been reached
@@ -2566,12 +2574,16 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 					return true, initFlushTs
 				}
 			}
+			logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, cid = %v, flushedPastMinMergeTs=false",
+				method, streamId, keyspaceId, maintFlushTs, initFlushTs, cid)
 			return false, nil
 		}
 	}
 
 	//vbuuids need to match for index merge
 	if !initFlushTs.CompareVbuuids(maintFlushTs) {
+		logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, vbuuids do not match with flushedPastMinmergeTs=%v",
+			method, streamId, keyspaceId, maintFlushTs, initFlushTs, flushedPastMinMergeTs)
 		return false, nil
 	}
 
@@ -2593,13 +2605,13 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			//TODO Collections compute the seqnos asynchronously
 			currBTs, err := common.BucketSeqnos(cluster, "default", bucket)
 			if err != nil {
-				logging.Infof("Timekeeper::checkFlushTsValidForMerge BucketSeqnos err %v. Skipping stream merge.", err)
+				logging.Errorf("%v, %v, %v, cid %v, BucketSeqnos err %v. Skipping stream merge.", method, streamId, keyspaceId, cid, err)
 				return false, nil
 			}
 
 			currCTs, err := common.CollectionSeqnos(cluster, "default", bucket, cid)
 			if err != nil {
-				logging.Infof("Timekeeper::checkFlushTsValidForMerge CollectionSeqnos err %v. Skipping stream merge.", err)
+				logging.Errorf("%v, %v, %v, cid %v, CollectionSeqnos err %v. Skipping stream merge.", method, streamId, keyspaceId, cid, err)
 				return false, nil
 			}
 
@@ -2607,9 +2619,15 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			if initTsSeq.GreaterThanEqual(Timestamp(currCTs)) &&
 				bucketTsSeq.GreaterThanEqual(maintTsSeq) {
 				return true, initFlushTs
+			} else {
+				logging.Debugf("%v, %v, %v, initTsSeq !GTE currTs and bucketTsSeq GTE maintTsSeq. Skipping stream merge. intitTsSeq %v, bucketTsSeq %v, maintTsSeq %v, intitFlushTs %v, currCTs %v",
+					method, streamId, keyspaceId, initTsSeq, bucketTsSeq, maintTsSeq, initFlushTs, currCTs)
 			}
+		} else {
+			logging.Debugf("%v, %v, %v, len(initTs)=0 fetchKVSeq=true cid is empty, skipping merge", method, streamId, keyspaceId)
 		}
 	}
+	logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, last return", method, streamId, keyspaceId, maintFlushTs, initFlushTs)
 	return false, nil
 }
 
@@ -2738,6 +2756,8 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			if time.Since(lastKVSeqFetchTime) > time.Duration(5*time.Second) {
 				lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
 				logging.Infof("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge.", streamId, keyspaceId)
+				logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge. lastFlushedTs %v",
+					streamId, keyspaceId, lastFlushedTs)
 				tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, true /*fetchKVSeq*/)
 				tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Now()
 			}
@@ -4177,6 +4197,7 @@ func (tk *timekeeper) setMergeTs(streamId common.StreamId, keyspaceId string,
 			buildInfo.addInstPending == false {
 
 			logging.Infof("Timekeeper::setMergeTs %v %v %v", streamId, keyspaceId, buildInfo.indexInst.InstId)
+			logging.Debugf("Timekeeper::setMergeTs %v %v %v, mergeTs %v", streamId, keyspaceId, buildInfo.indexInst.InstId, mergeTs)
 
 			buildInfo.buildDoneAckReceived = true
 			//set minMergeTs. stream merge can only happen at or above this
