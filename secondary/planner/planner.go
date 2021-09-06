@@ -63,6 +63,7 @@ const (
 	CommandSwap                  = "swap"
 	CommandRepair                = "repair"
 	CommandDrop                  = "drop"
+	CommandRetrieve              = "retrieve"
 )
 
 // constant - violation code
@@ -205,6 +206,8 @@ type IndexerNode struct {
 	totalIndex     uint64
 	dataMovedIn    uint64
 	indexMovedIn   uint64
+
+	UsageRatio float64 `json:"usageRatio"`
 }
 
 type IndexUsage struct {
@@ -423,6 +426,8 @@ type GreedyPlanner struct {
 	numEquivIndex int
 
 	Result *Solution
+
+	numNewIndexes int
 }
 
 //////////////////////////////////////////////////////////////
@@ -6911,8 +6916,12 @@ func (p *GreedyPlanner) initializeSolution(command CommandType, solution *Soluti
 	// work for greedy planner as well as the greedy planner is just trying to deterministically
 	// decide which node is least loade - and hence is the optimal target for the index.
 
-	// TODO: Understand the detailed impact of the passing len(p.newIndexes) to runSizeEstimation.
-	solution.runSizeEstimation(p.placement, len(p.newIndexes))
+	numNewIdx := len(p.newIndexes)
+	if numNewIdx == 0 {
+		numNewIdx = p.numNewIndexes
+	}
+
+	solution.runSizeEstimation(p.placement, numNewIdx)
 
 	// Update cost
 	_ = p.cost.Cost(solution)
@@ -6926,6 +6935,11 @@ func (p *GreedyPlanner) initializeSolution(command CommandType, solution *Soluti
 // Check if equivalent indexes exist in the cluster.
 //
 func (p *GreedyPlanner) initEquivIndexMap(solution *Solution) {
+
+	if len(p.newIndexes) == 0 {
+		return
+	}
+
 	for _, indexer := range solution.Placement {
 		if indexer.ExcludeAny(solution) {
 			continue
@@ -6974,6 +6988,11 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	if len(indexes) == 0 {
 		p.Result = sol
 		return sol, nil
+	}
+
+	if len(p.newIndexes) != 0 && p.numNewIndexes != 0 {
+		logging.Errorf("Greedy planner initialisation error. Index count mismatch (%v, %v)", len(p.newIndexes), p.numNewIndexes)
+		return nil, fmt.Errorf("Greedy planner initialisation error")
 	}
 
 	solution := sol.clone()
@@ -7095,6 +7114,28 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	}
 
 	p.Result = solution
+	return solution, nil
+}
+
+func (p *GreedyPlanner) Initialise(command CommandType, sol *Solution) (*Solution, error) {
+	if command != CommandPlan {
+		return nil, fmt.Errorf("Greedy Planner does not support command %v", command)
+	}
+
+	if len(p.newIndexes) != 0 && p.numNewIndexes != 0 {
+		logging.Errorf("Greedy planner initialisation error. Index count mismatch (%v, %v)", len(p.newIndexes), p.numNewIndexes)
+		return nil, fmt.Errorf("Greedy planner initialisation error")
+	}
+
+	solution := sol.clone()
+
+	// Initialize solution
+	p.initializeSolution(command, solution)
+
+	for _, indexer := range solution.Placement {
+		indexer.UsageRatio = solution.computeUsageRatio(indexer)
+	}
+
 	return solution, nil
 }
 

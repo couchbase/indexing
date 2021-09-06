@@ -626,13 +626,76 @@ func ExecuteRetrieve(clusterUrl string, nodes []string, output string) (*Solutio
 	config.Resize = false
 	config.Output = output
 
-	return ExecuteRetrieveWithOptions(plan, config)
+	return ExecuteRetrieveWithOptions(plan, config, nil)
 }
 
-func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig) (*Solution, error) {
+func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string]interface{}) (*Solution, error) {
 
 	sizing := newGeneralSizingMethod()
-	solution, constraint, _, _, _ := solutionFromPlan(CommandRebalance, config, sizing, plan)
+	solution, constraint, initialIndexes, movedIndex, movedData := solutionFromPlan(CommandRebalance, config, sizing, plan)
+
+	if params != nil && config.UseGreedyPlanner {
+		var gub, ok, getUsage bool
+		var gu interface{}
+		gu, ok = params["getUsage"]
+		if ok {
+			gub, ok = gu.(bool)
+			if ok {
+				getUsage = gub
+			}
+		}
+
+		if getUsage {
+
+			if config.Shuffle != 0 {
+				return nil, fmt.Errorf("Cannot use greedy planner as shuffle flag is set to %v", config.Shuffle)
+			}
+
+			// If indexes were moved for deciding initial placement, let the SAPlanner run
+			if movedIndex != uint64(0) || movedData != uint64(0) {
+				return nil, fmt.Errorf("Cannot use greedy planner as indxes/data has been moved (%v, %v)", movedIndex, movedData)
+			}
+
+			numNewReplica := 0
+			nnr, ok := params["numNewReplica"]
+			if ok {
+				nnri, ok := nnr.(int)
+				if ok {
+					numNewReplica = nnri
+				}
+			}
+
+			indexes := ([]*IndexUsage)(nil)
+
+			// update runtime stats
+			s := &RunStats{}
+			setIndexPlacementStats(s, indexes, false)
+
+			setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, false)
+
+			// create placement method
+			placement := newRandomPlacement(indexes, config.AllowSwap, false)
+
+			// Compute Index Sizing info and add them to solution
+			computeNewIndexSizingInfo(solution, indexes)
+
+			// New cost mothod
+			cost := newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
+
+			// initialise greedy planner
+			planner := newGreedyPlanner(cost, constraint, placement, sizing, indexes)
+
+			// set numNewIndexes for size estimation
+			planner.numNewIndexes = numNewReplica
+
+			sol, err := planner.Initialise(CommandPlan, solution)
+			if err != nil {
+				return nil, err
+			}
+
+			solution = sol
+		}
+	}
 
 	if config.Output != "" {
 		if err := savePlan(config.Output, solution, constraint); err != nil {
@@ -853,8 +916,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 	return planner, s, nil
 }
 
-
-func prepareIndexNameToUsageMap(indexes []*IndexUsage, idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage){
+func prepareIndexNameToUsageMap(indexes []*IndexUsage, idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage) {
 
 	for _, index := range indexes {
 		if index.Instance == nil || index.Instance.Pc == nil {
@@ -887,15 +949,15 @@ func prepareIndexNameToUsageMap(indexes []*IndexUsage, idxMap map[string]map[com
 func getIndexDefnsToRemove(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
 	indexDefnIdToRemove map[common.IndexDefnId]bool) map[string]map[common.IndexDefnId]*common.IndexDefn {
 
-	hostToIndexToRemove :=  make(map[string]map[common.IndexDefnId]*common.IndexDefn)
+	hostToIndexToRemove := make(map[string]map[common.IndexDefnId]*common.IndexDefn)
 	for _, defnMap := range idxMap {
 		if len(defnMap) > 1 {
 			for _, replicas := range defnMap {
-				for _, partitions := range replicas{
-					for _, idxusages := range partitions{
-						for _, idx := range idxusages{
+				for _, partitions := range replicas {
+					for _, idxusages := range partitions {
+						for _, idx := range idxusages {
 							remove := indexDefnIdToRemove[idx.DefnId]
-							if remove == false{
+							if remove == false {
 								continue
 							}
 							// if this index is to be removed add to hostToIndexToRemove map
@@ -917,8 +979,6 @@ func getIndexDefnsToRemove(idxMap map[string]map[common.IndexDefnId]map[int]map[
 	return hostToIndexToRemove
 }
 
-
-
 func getIndexStateValue(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
 	key string, defnId common.IndexDefnId) int {
 	// for partations of replica even if one of the partation is not fully formed
@@ -928,8 +988,8 @@ func getIndexStateValue(idxMap map[string]map[common.IndexDefnId]map[int]map[com
 	// highest state of replica will be returned as state of index.
 
 	// define the usefulness of index when comparing two equivalent indexes with INDEX_STATE_ACTIVE being most useful
-    getIndexStateValue := func (state common.IndexState) int {
-		switch(state) {
+	getIndexStateValue := func(state common.IndexState) int {
+		switch state {
 		case common.INDEX_STATE_DELETED, common.INDEX_STATE_ERROR, common.INDEX_STATE_NIL:
 			return 0
 		case common.INDEX_STATE_CREATED:
@@ -1000,10 +1060,10 @@ func getNumDocsForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[comm
 			for _, idx := range idxUsages {
 				replicaId := idx.Instance.ReplicaId
 				if _, ok := replicaMap[replicaId]; !ok {
-					replicaMap[replicaId] = make([]int64,2)
+					replicaMap[replicaId] = make([]int64, 2)
 				}
-				replicaMap[replicaId][0] = replicaMap[replicaId][0]+idx.numDocsPending
-				replicaMap[replicaId][1] = replicaMap[replicaId][1]+idx.numDocsQueued
+				replicaMap[replicaId][0] = replicaMap[replicaId][0] + idx.numDocsPending
+				replicaMap[replicaId][1] = replicaMap[replicaId][1] + idx.numDocsQueued
 			}
 		}
 	}
@@ -1016,7 +1076,7 @@ func getNumDocsForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[comm
 		numDocs := docs[0] + docs[1]
 		if numDocs < numDocsTotal {
 			numDocsTotal = numDocs
-			numDocsPending, numDocsQueued = docs[0],docs[1]
+			numDocsPending, numDocsQueued = docs[0], docs[1]
 		}
 	}
 	return numDocsPending, numDocsQueued
@@ -1048,7 +1108,7 @@ func getNumReplicaForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[c
 			missingReplicaCount += (numPartations - uint32(len(partitions))) // missing = expected - observed
 		}
 	}
-		return observedReplicaCount, missingReplicaCount
+	return observedReplicaCount, missingReplicaCount
 }
 
 func getNumServerGroupsForDefn(idxMap map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage,
@@ -1102,19 +1162,19 @@ func selectDuplicateIndexesToRemove(idxMap map[string]map[common.IndexDefnId]map
 	indexDefnIdToRemove := make(map[common.IndexDefnId]bool)
 
 	type indexToEliminate struct {
-		defnId common.IndexDefnId
-		numServerGroup uint32 // observed count of server groups
-		numReplica	uint32 // numReplica count as available in index defn
+		defnId                  common.IndexDefnId
+		numServerGroup          uint32 // observed count of server groups
+		numReplica              uint32 // numReplica count as available in index defn
 		numObservedReplicaCount uint32 // observed count of replicas
-		numMissingReplica uint32 // value calculated at index level for num missing partations across all replicas
-		numDocsPending int64 // calculated as max of numDocsPending from all the replicas
-		numDocsQueued int64 //  calculated as max of numDocsQueued from all the replica
-		stateValue int // Index with higher state (even for one of the replica) is more useful
+		numMissingReplica       uint32 // value calculated at index level for num missing partations across all replicas
+		numDocsPending          int64  // calculated as max of numDocsPending from all the replicas
+		numDocsQueued           int64  //  calculated as max of numDocsQueued from all the replica
+		stateValue              int    // Index with higher state (even for one of the replica) is more useful
 	}
 
-	filterDupIndex := func (dupIndexes []*indexToEliminate, indexDefnIdToRemove map[common.IndexDefnId]bool) {
+	filterDupIndex := func(dupIndexes []*indexToEliminate, indexDefnIdToRemove map[common.IndexDefnId]bool) {
 		eligibles := []*indexToEliminate{}
-		for _, index := range dupIndexes{
+		for _, index := range dupIndexes {
 			if indexDefnIdToRemove[index.defnId] == false { // if index is marked for removal already skip it.
 				eligibles = append(eligibles, index)
 			}
@@ -1149,37 +1209,37 @@ func selectDuplicateIndexesToRemove(idxMap map[string]map[common.IndexDefnId]map
 		if len(eligibles) > 1 {
 			sort.Slice(eligibles, less)
 			for i, index := range eligibles {
-				if i==0 {// keep the 0th element defn remove other indexes
+				if i == 0 { // keep the 0th element defn remove other indexes
 					continue
 				}
-				indexDefnIdToRemove[index.defnId]=true
+				indexDefnIdToRemove[index.defnId] = true
 			}
 		}
 	}
 
-	groupEquivalantDefns := func (defns []*common.IndexDefn) [][]*common.IndexDefn {
+	groupEquivalantDefns := func(defns []*common.IndexDefn) [][]*common.IndexDefn {
 		//TODO... complexity of this function is n^2 see if this can be improved in separate patch
-		equiList := make([][]*common.IndexDefn,0)
+		equiList := make([][]*common.IndexDefn, 0)
 		for {
 			eql := []*common.IndexDefn{}
-			k:=-1
+			k := -1
 			progress := false
-			for i:=0; i< len(defns); i++ {
+			for i := 0; i < len(defns); i++ {
 				defn := defns[i]
-				if  defn == nil {
+				if defn == nil {
 					continue
 				}
 				progress = true
-				if k==-1 {
+				if k == -1 {
 					eql = append(eql, defn)
-					k=0
-					defns[i]=nil // we are done processing this defn
+					k = 0
+					defns[i] = nil // we are done processing this defn
 					continue
 				}
 				if common.IsEquivalentIndex(eql[k], defn) {
 					eql = append(eql, defn)
 					k++
-					defns[i]=nil // we are done processing this defn
+					defns[i] = nil // we are done processing this defn
 				}
 			}
 			if len(eql) > 0 {
@@ -1201,11 +1261,11 @@ func selectDuplicateIndexesToRemove(idxMap map[string]map[common.IndexDefnId]map
 		// if one of the slice count is more than 1 we may have equivalent duplicae indexes
 		// now find which index to keep / eliminate.
 		defnList := make([]*common.IndexDefn, len(uniqueDefns))
-		i:=0
+		i := 0
 		for _, replicas := range uniqueDefns {
-			loop1: // we just need defn for this defnId which can be taken from one of the instance
+		loop1: // we just need defn for this defnId which can be taken from one of the instance
 			for _, partitions := range replicas {
-				for _, idxUsages := range partitions{
+				for _, idxUsages := range partitions {
 					defnList[i] = &idxUsages[0].Instance.Defn
 					i++
 					break loop1
@@ -1227,14 +1287,14 @@ func selectDuplicateIndexesToRemove(idxMap map[string]map[common.IndexDefnId]map
 				numObservedReplicaCount, missingReplicaCount := getNumReplicaForDefn(idxMap, key, defn.DefnId, defn.NumPartitions)
 				stateVal := getIndexStateValue(idxMap, key, defn.DefnId)
 				dupEntry := &indexToEliminate{
-					defnId: defn.DefnId,
-					numServerGroup: uint32(numServerGroup),
-					numReplica: defn.NumReplica,
-					numObservedReplicaCount : numObservedReplicaCount,
-					numMissingReplica: missingReplicaCount,
-					numDocsPending: numDocsPending,
-					numDocsQueued: numDocsQueued,
-					stateValue: stateVal,
+					defnId:                  defn.DefnId,
+					numServerGroup:          uint32(numServerGroup),
+					numReplica:              defn.NumReplica,
+					numObservedReplicaCount: numObservedReplicaCount,
+					numMissingReplica:       missingReplicaCount,
+					numDocsPending:          numDocsPending,
+					numDocsQueued:           numDocsQueued,
+					stateValue:              stateVal,
 				}
 				dupIndexes = append(dupIndexes, dupEntry)
 			}
