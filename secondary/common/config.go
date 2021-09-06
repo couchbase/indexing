@@ -1337,10 +1337,17 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
-	"indexer.plasma.MaxSMRWorkerPerInst": ConfigValue{
-		uint64(runtime.GOMAXPROCS(0)),
-		"Flush buffer size for dedicated instance data log",
-		uint64(runtime.GOMAXPROCS(0)),
+	"indexer.plasma.MaxSMRWorkerPerCore": ConfigValue{
+		uint64(2),
+		"Max number of SMR Worker per core per context",
+		uint64(2),
+		false,
+		false,
+	},
+	"indexer.plasma.MaxSMRInstPerCtx": ConfigValue{
+		uint64(100),
+		"max number of instances per SMR context",
+		uint64(100),
 		false,
 		false,
 	},
