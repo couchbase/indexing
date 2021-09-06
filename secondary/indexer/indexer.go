@@ -7093,6 +7093,13 @@ func (idx *indexer) initFromPersistedState() error {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
 				idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
 			}
+
+			// Initialise keyspace stats for this stream
+			stream := inst.Stream
+			keyspaceId := inst.Defn.KeyspaceId(stream)
+			if stream == common.INIT_STREAM || stream == common.MAINT_STREAM {
+				idx.stats.AddKeyspaceStats(stream, keyspaceId)
+			}
 		}
 	}
 
