@@ -85,6 +85,7 @@ const (
 
 	ERROR_SCAN_COORD_QUERYPORT_FAIL
 	ERROR_BUCKET_EPHEMERAL
+	ERROR_BUCKET_EPHEMERAL_STD
 )
 
 type errSeverity int16
@@ -148,6 +149,8 @@ func (e Error) convertError() common.IndexerErrCode {
 		return common.BucketEphemeral
 	case ERROR_MAX_PARALLEL_COLLECTION_BUILDS:
 		return common.MaxParallelCollectionBuilds
+	case ERROR_BUCKET_EPHEMERAL_STD:
+		return common.BucketEphemeralStd
 	}
 
 	return common.TransientError

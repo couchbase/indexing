@@ -3196,7 +3196,10 @@ const last_known_scan_time = "lqt" //last_query_time
 const avg_scan_rate = "asr"
 const num_rows_scanned = "nrs"
 const last_num_rows_scanned = "lrs"
+const num_rollbacks = "nrb"
+const num_rollbacks_to_zero = "nrbz"
 const chunkSz = "chunkSz"
+const STREAM_PREFIX = "stream"
 
 // runStatsPersister runs in a goroutine and persists a subset of index stats every
 // statsPersistenceInterval seconds (not including the time taken to do the persistence),
@@ -3227,6 +3230,17 @@ func (s *statsManager) runStatsPersister() {
 						statsToBePersisted[instdId+":"+partnId+":"+last_num_rows_scanned] = partnStats.lastNumRowsScanned.Value()
 					}
 				}
+
+				keyspaceStatsMap := indexerStats.keyspaceStatsMap.Get()
+				for streamId, keyspaceIdStats := range keyspaceStatsMap {
+					for keyspaceId, keyspaceStats := range keyspaceIdStats {
+						numRollbacksKey := fmt.Sprintf("%v:%v:%v:%v", STREAM_PREFIX, streamId, keyspaceId, num_rollbacks)
+						statsToBePersisted[numRollbacksKey] = keyspaceStats.numRollbacks.Value()
+						numRollbacksToZeroKey := fmt.Sprintf("%v:%v:%v:%v", STREAM_PREFIX, streamId, keyspaceId, num_rollbacks_to_zero)
+						statsToBePersisted[numRollbacksToZeroKey] = keyspaceStats.numRollbacksToZero.Value()
+					}
+				}
+
 				err := s.statsPersister.PersistStats(statsToBePersisted)
 				if err != nil {
 					logging.Warnf("Encountered error while persisting stats. Error: %v", err)
@@ -3283,7 +3297,7 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 
 	for k, value := range persistedStats {
 		kstrs := strings.Split(k, ":")
-		// len(kstrs): 1 =>indexer stat, 2 =>index stat, 3 =>partition stat
+		// len(kstrs): 1 =>indexer stat, 2 =>index stat, 3 =>partition stat, 4 => stream stats
 
 		if len(kstrs) == 2 { // index level stat
 			id, _ := strconv.ParseUint(kstrs[0], 10, 64)
@@ -3327,6 +3341,23 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].partitions[partnId].lastNumRowsScanned.Set(val)
+				}
+			}
+		}
+		if len(kstrs) >= 4 && kstrs[0] == STREAM_PREFIX { // stream level stats
+			statName := kstrs[len(kstrs)-1]
+			streamId := common.GetStreamId(kstrs[1])
+			keyspaceId := strings.Join(kstrs[2:len(kstrs)-1], ":")
+			val, ok := getInt64Val(value, statName)
+			if ok && (streamId == common.MAINT_STREAM || streamId == common.INIT_STREAM) {
+				ksStats := indexerStats.GetKeyspaceStats(streamId, keyspaceId)
+				if ksStats != nil {
+					switch statName {
+					case num_rollbacks:
+						ksStats.numRollbacks.Set(val)
+					case num_rollbacks_to_zero:
+						ksStats.numRollbacksToZero.Set(val)
+					}
 				}
 			}
 		}

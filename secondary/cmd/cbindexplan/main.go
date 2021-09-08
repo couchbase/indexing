@@ -171,6 +171,8 @@ var gAddNode int
 var gMemQuota string
 var gCpuQuota int
 var gEjectedNode string
+var gGetUsage bool
+var gNumNewReplica int
 
 //////////////////////////////////////////////////////////////
 // Initialization
@@ -184,7 +186,7 @@ func init() {
 	flag.StringVar(&gGenStmt, "ddl", "", "generate DDL statement after planning for new/moved indexes")
 
 	// command + index specification
-	flag.StringVar(&gCommand, "command", "", "command = {plan | rebalance}")
+	flag.StringVar(&gCommand, "command", "", "command = {plan | rebalance | retrieve | swap}")
 	flag.StringVar(&gClusterUrl, "cluster", "", "fetch existing index layout plan from cluster url")
 	flag.StringVar(&gUsername, "username", "", "admin user for the cluster")
 	flag.StringVar(&gPassword, "password", "", "admin password for the cluster")
@@ -203,6 +205,12 @@ func init() {
 
 	// swap
 	flag.StringVar(&gEjectedNode, "ejectNode", "", "node to be ejected from cluster")
+
+	// get current usage of the nodes - Applicable only when command is retrieve.
+	flag.BoolVar(&gGetUsage, "getUsage", false, "flag to get usage after running estimation. Applicable only when command is retrieve. Applicable only with greedy planner.")
+
+	// number of new replicas to be created (considered for running the size estimation) - Applicable only when command is retrieve.
+	flag.IntVar(&gNumNewReplica, "numNewReplica", 1, "number of new index replicas to be created - considered for running size estimation. Applicable only when command is retrieve. Applicable only with greedy planner.")
 }
 
 func main() {
@@ -362,14 +370,23 @@ func main() {
 			logging.Infof("Transfer Token Index InstId : %v", token.InstId)
 		}
 
-	} else if gCommand == "retrieve" {
+	} else if gCommand == string(planner.CommandRetrieve) {
 
 		config := planner.DefaultRunConfig()
 		config.Detail = logging.IsEnabled(logging.Info)
 		config.Resize = false
 		config.Output = gOutput
 
-		_, err := planner.ExecuteRetrieveWithOptions(plan, config)
+		var params map[string]interface{}
+
+		if gGetUsage {
+			config.UseGreedyPlanner = true
+			params = make(map[string]interface{})
+			params["getUsage"] = true
+			params["numNewReplica"] = gNumNewReplica
+		}
+
+		_, err := planner.ExecuteRetrieveWithOptions(plan, config, params)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

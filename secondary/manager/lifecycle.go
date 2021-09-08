@@ -284,7 +284,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 			op == client.OPCODE_GET_REPLICA_COUNT ||
 			op == client.OPCODE_CHECK_TOKEN_EXIST ||
 			op == client.OPCODE_CLIENT_STATS ||
-			op == client.OPCODE_REBALANCE_RUNNING||
+			op == client.OPCODE_REBALANCE_RUNNING ||
 			op == client.OPCODE_BROADCAST_STATS {
 			m.parallels <- req
 
@@ -394,7 +394,6 @@ END_BOOTSTRAP:
 		}
 	}
 }
-
 
 func (m *LifecycleMgr) processParallelsRequests() {
 
@@ -3626,7 +3625,8 @@ func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error
 		indexerErr.Code == common.InvalidBucket ||
 		indexerErr.Code == common.BucketEphemeral ||
 		indexerErr.Code == common.IndexAlreadyExist ||
-		indexerErr.Code == common.IndexInvalidState {
+		indexerErr.Code == common.IndexInvalidState ||
+		indexerErr.Code == common.BucketEphemeralStd {
 		return false
 	}
 
@@ -3645,7 +3645,8 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 		indexerErr.Code == common.BucketEphemeral ||
 		indexerErr.Code == common.IndexAlreadyExist ||
 		indexerErr.Code == common.TransientError ||
-		indexerErr.Code == common.IndexInvalidState {
+		indexerErr.Code == common.IndexInvalidState ||
+		indexerErr.Code == common.BucketEphemeralStd {
 		return false
 	}
 
