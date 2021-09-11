@@ -2,11 +2,18 @@
 
 package common
 
-import "encoding/json"
-import "sort"
-import "fmt"
-import "strings"
-import "github.com/couchbase/indexing/secondary/logging"
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+)
 
 // Statistics provide a type and method receivers for marshalling and
 // un-marshalling statistics, as JSON, for components across the network.
@@ -213,4 +220,120 @@ func (spec *StatsIndexSpec) GetInstances() []IndexInstId {
 	}
 
 	return spec.Instances
+}
+
+// GetIndexStats gets the index and/or indexer stats selected by the given filter from all indexer
+// nodes in parallel (generalized from planner/proxy.go getIndexStats, which is integrated with
+// Planner data structures) and returns them in a map from nodeUUID to stats. The filter strings
+// can be found in stats_manager.go statsFilterMap. If there is any error, the first one will be
+// returned in err (decorated with its nodeUUID if it is from a stats REST call). If some REST
+// calls succeeded and others failed, the successful ones will be returned in statsMap while
+// errors from the failing ones will be returned in errMap (and the first one decorated in err).
+func GetIndexStats(config Config, filter string, httpTimeoutSecs uint32) (statsMap map[string]*Statistics, errMap map[string]error, err error) {
+	const method string = "stats::GetIndexStats" // for logging
+
+	clusterURL := config["clusterAddr"].String()
+	cinfo, err := FetchNewClusterInfoCache2(clusterURL, DEFAULT_POOL, "GetIndexStats")
+	if err != nil {
+		logging.Errorf("%v: Error fetching cluster info cache: %v", method, err)
+		return nil, nil, err
+	}
+	err = cinfo.FetchNodesAndSvsInfo()
+	if err != nil {
+		logging.Errorf("%v: Error fetching node and service info: %v", method, err)
+		return nil, nil, err
+	}
+
+	nids := cinfo.GetNodesByServiceType(INDEX_HTTP_SERVICE)
+	statsMap, errMap = parallelStatsRestCall(cinfo, nids, filter, httpTimeoutSecs)
+	for nodeUUID, nodeErr := range errMap {
+		err = fmt.Errorf("%v: Error retrieving stats for nodeUUID %v. Error: %v",
+			method, nodeUUID, nodeErr)
+		break // just wanted the first one found
+	}
+	return statsMap, errMap, err
+}
+
+// parallelStatsRestCall makes the same stats REST call to all Index nodes in parallel and returns the results
+// mapped by nodeUUID (string). Adapted from planner/proxy.go restHelperNoLock.
+func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string, httpTimeoutSecs uint32) (respMap map[string]*Statistics, errMap map[string]error) {
+	respMap = make(map[string]*Statistics) // return 1: indexer stats by nodeUUID
+	errMap = make(map[string]error)        // return 2: errors by nodeUUID
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, nid := range nids {
+		nodeUUID := cinfo.GetNodeUUID(nid)
+
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, INDEX_HTTP_SERVICE, true)
+		if err != nil {
+			logging.Errorf("stats::parallelStatsRestCall: Error getting service address for nodeUUID %v. Error: %v",
+				nodeUUID, err)
+			errMap[nodeUUID] = err
+			continue
+		}
+
+		restCall := func(nid NodeId, addr string) {
+			defer wg.Done()
+
+			var resp *http.Response
+			stats := new(Statistics)
+			t0 := time.Now()
+			resp, err = restGetStats(addr, filter, httpTimeoutSecs) // make the REST call
+			dur := time.Since(t0)
+			if dur > 30*time.Second || err != nil {
+				logging.Warnf("stats::parallelStatsRestCall took %v for addr %v with err %v", dur, addr, err)
+			}
+			if err == nil {
+				err = security.ConvertHttpResponse(resp, stats)
+				if err != nil {
+					logging.Errorf("stats::parallelStatsRestCall SetResponse for addr %v with err %v", addr, err)
+				}
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				errMap[nodeUUID] = err
+				respMap[nodeUUID] = nil
+			} else {
+				respMap[nodeUUID] = stats
+			}
+		}
+
+		wg.Add(1)
+		go restCall(nid, addr)
+	}
+
+	wg.Wait()
+	mu.Lock()
+	mu.Unlock()
+
+	return respMap, errMap
+}
+
+// restGetStats gets the marshalled index stats from a specific indexer host using the given filter.
+// Adapted from planner/proxy.go getLocalStatsResp.
+func restGetStats(addr string, filter string, httpTimeoutSecs uint32) (*http.Response, error) {
+
+	var filterString string
+	if filter != "" {
+		filterString = "&consumerFilter=" + filter
+	}
+
+	resp, err := security.GetWithAuthAndTimeout(
+		addr+"/stats?async=false&partition=true"+filterString, httpTimeoutSecs)
+	if err != nil {
+		logging.Warnf("stats::restGetStats: Failed to get the most recent stats from node: %v, err: %v"+
+			" Try fetch cached stats.", addr, err)
+		resp, err = security.GetWithAuthAndTimeout(
+			addr+"/stats?async=true&partition=true"+filterString, httpTimeoutSecs)
+		if err != nil {
+			logging.Errorf("stats::restGetStats: Failed to get cached stats from node: %v, err: %v", addr, err)
+			return nil, err
+		}
+	}
+	return resp, nil
 }

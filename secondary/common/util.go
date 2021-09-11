@@ -1430,7 +1430,11 @@ func GetVersion(version, minorVersion uint32) uint64 {
 		return INDEXER_55_VERSION // For 6.0, return 5.5 as indexer version
 	}
 	if version == 7 {
-		return INDEXER_70_VERSION
+		if minorVersion < 1 {
+			return INDEXER_70_VERSION
+		} else {
+			return INDEXER_71_VERSION
+		}
 	}
 	return INDEXER_CUR_VERSION
 }

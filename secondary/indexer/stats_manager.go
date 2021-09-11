@@ -549,20 +549,6 @@ func (s *IndexStats) SetRebalancerFilters() {
 	s.numDocsProcessed.AddFilter(stats.RebalancerFilter)
 }
 
-func (s *IndexStats) SetIndexStatusFilters() {
-	s.buildProgress.AddFilter(stats.IndexStatusFilter)
-	s.completionProgress.AddFilter(stats.IndexStatusFilter)
-	s.lastScanTime.AddFilter(stats.IndexStatusFilter)
-}
-
-func (s *IndexStats) SetGSIClientFilters() {
-	s.numDocsPending.AddFilter(stats.GSIClientFilter)
-	s.numDocsQueued.AddFilter(stats.GSIClientFilter)
-	s.lastRollbackTime.AddFilter(stats.GSIClientFilter)
-	s.progressStatTime.AddFilter(stats.GSIClientFilter)
-	s.indexState.AddFilter(stats.GSIClientFilter)
-}
-
 func (s *IndexStats) SetPlannerFilters() {
 	s.itemsCount.AddFilter(stats.PlannerFilter)
 	s.buildProgress.AddFilter(stats.PlannerFilter)
@@ -580,6 +566,20 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.lastRollbackTime.AddFilter(stats.PlannerFilter)
 	s.progressStatTime.AddFilter(stats.PlannerFilter)
 	s.indexState.AddFilter(stats.PlannerFilter)
+}
+
+func (s *IndexStats) SetIndexStatusFilters() {
+	s.buildProgress.AddFilter(stats.IndexStatusFilter)
+	s.completionProgress.AddFilter(stats.IndexStatusFilter)
+	s.lastScanTime.AddFilter(stats.IndexStatusFilter)
+}
+
+func (s *IndexStats) SetGSIClientFilters() {
+	s.numDocsPending.AddFilter(stats.GSIClientFilter)
+	s.numDocsQueued.AddFilter(stats.GSIClientFilter)
+	s.lastRollbackTime.AddFilter(stats.GSIClientFilter)
+	s.progressStatTime.AddFilter(stats.GSIClientFilter)
+	s.indexState.AddFilter(stats.GSIClientFilter)
 }
 
 func (s *IndexStats) getPartitions() []common.PartitionId {
@@ -795,6 +795,7 @@ func (s *IndexerStats) Init() {
 
 	s.SetPlannerFilters()
 	s.SetRebalanceFilters()
+	s.SetSmartBatchingFilters()
 	s.SetIndexStatusFilters()
 	s.SetSummaryFilters()
 
@@ -804,6 +805,14 @@ func (s *IndexerStats) Init() {
 
 func (s *IndexerStats) SetRebalanceFilters() {
 	s.indexerStateHolder.AddFilter(stats.RebalancerFilter)
+}
+
+// SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
+func (s *IndexerStats) SetSmartBatchingFilters() {
+	s.avgResidentPercent.AddFilter(stats.SmartBatchingFilter)
+	s.memoryQuota.AddFilter(stats.SmartBatchingFilter)
+	s.memoryUsed.AddFilter(stats.SmartBatchingFilter)
+	s.storageMode.AddFilter(stats.SmartBatchingFilter)
 }
 
 func (s *IndexerStats) SetIndexStatusFilters() {
@@ -2420,11 +2429,12 @@ func (spec *statsSpec) OverrideFilter(filt string) {
 }
 
 var statsFilterMap = map[string]uint64{
-	"planner":          stats.PlannerFilter,
 	"indexStatus":      stats.IndexStatusFilter,
-	"rebalancer":       stats.RebalancerFilter,
 	"gsiClient":        stats.GSIClientFilter,
 	"n1qlStorageStats": stats.N1QLStorageStatsFilter,
+	"planner":          stats.PlannerFilter,
+	"rebalancer":       stats.RebalancerFilter,
+	"smartBatching":    stats.SmartBatchingFilter,
 	"summary":          stats.SummaryFilter,
 }
 

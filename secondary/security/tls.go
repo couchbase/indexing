@@ -9,8 +9,10 @@
 package security
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -494,6 +496,53 @@ func MakeClient(u string) (*http.Client, error) {
 type RequestParams struct {
 	Timeout   time.Duration
 	UserAgent string
+}
+
+// GetWithAuthAndTimeout submits a REST call with the specified timeoutSecs and returns
+// the response. To match Planner's historical usage this also converts any HTTP error
+// to a user-friendly response.
+func GetWithAuthAndTimeout(url string, timeoutSecs uint32) (*http.Response, error) {
+	params := &RequestParams{Timeout: time.Duration(timeoutSecs) * time.Second}
+	response, err := GetWithAuth(url, params)
+	if err == nil && response.StatusCode != http.StatusOK {
+		return response, convertHttpError(response)
+	}
+	return response, err
+}
+
+// convertHttpError checks for an error in an http response. If present it reads and closes the
+// response body (which avoids leaking the TSL connection) and converts the response body
+// to a user-friendly error message.
+func convertHttpError(r *http.Response) error {
+	if r.StatusCode != http.StatusOK {
+		if r.Body != nil {
+			defer r.Body.Close()
+
+			buf := new(bytes.Buffer)
+			if _, err := buf.ReadFrom(r.Body); err == nil {
+				return fmt.Errorf("response status:%v cause:%v", r.StatusCode, string(buf.Bytes()))
+			}
+		}
+		return fmt.Errorf("response status:%v cause:Unknown", r.StatusCode)
+	}
+	return nil
+}
+
+// ConvertHttpResponse function unmarshals a successful HTTP response. Caller
+// passes in a pointer to an object of the correct type to unmarshal to.
+func ConvertHttpResponse(r *http.Response, resp interface{}) error {
+	defer r.Body.Close()
+
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(r.Body); err != nil {
+		return err
+	}
+
+	if err := json.Unmarshal(buf.Bytes(), resp); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 //

@@ -16,6 +16,7 @@ import (
 	"io/ioutil"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,24 +44,42 @@ type Callbacks struct {
 }
 
 type Rebalancer struct {
-	// Transfer token maps from ttid to token
-	transferTokens map[string]*c.TransferToken // all TTs for this rebalance
-	acceptedTokens map[string]*c.TransferToken // accepted TTs
-	sourceTokens   map[string]*c.TransferToken // TTs for which a source index exists (move case)
-	mu             sync.RWMutex                // for transferTokens, acceptedTokens, sourceTokens, currBatchTokens
+	clusterVersion int64 // to check for down-level nodes
 
-	currBatchTokens      []string   // ttids of all TTs in current batch
-	transferTokenBatches [][]string // slice of all TT batches (2nd dimension is ttid)
+	// transferTokens is the master's map by [ttid] of all transfer tokens (originally from Planner or passed
+	// in for move index case)
+	// ##### ALERT: State may differ in certain cases between these and metakv. #####
+	transferTokens map[string]*c.TransferToken
 
-	drop         map[string]bool
-	pendingBuild int32
-	dropQueue    chan string
+	// toBuildTTsByDestId is the master's map by [DestId][ttid] of unstarted to-build TTs; DestId is the nodeUUID
+	toBuildTTsByDestId map[string]map[string]*c.TransferToken
+
+	// buildingTTsByDestId is the master's map by [DestId][ttid] of currently building and/or
+	// dropping TTs (i.e. those published but not yet completely finished); DestId is the nodeUUID.
+	// We don't consider a new batch slot to open up until a previously published token is deleted,
+	// as the source node's resources for an index are not freed up until it is dropped.
+	buildingTTsByDestId map[string]map[string]*c.TransferToken
+
+	// acceptedTokens is a destination node's map by [ttid] of its TTs; these never reach state TransferTokenDeleted
+	acceptedTokens map[string]*c.TransferToken
+
+	// sourceTokens is a source node's map by [ttid] of its TTs that need index drops after moving off the node
+	sourceTokens map[string]*c.TransferToken
+
+	nodeLoads     NodeLoadSlice // most recent workload info for each indexer node (sortable)
+	nodeLoadsTime time.Time     // last time indexer stats in nodeLoads were gathered
+
+	dropQueue  chan string         // ttids of source indexes waiting to be submitted for drop
+	dropQueued map[string]struct{} // set of ttids already added to dropQueue, as metakv can send duplicate notifications
+
+	mu sync.RWMutex // for transferTokens, acceptedTokens, sourceTokens, toBuildTTsByDestId, buildingTTsByDestId,
+	// nodeLoads, nodeLoadsTime, dropQueue, dropQueued
 
 	rebalToken *RebalanceToken
-	nodeId     string
-	master     bool
+	nodeUUID   string // this node's new-style node ID (32-digit random hex assigned by ns_server)
+	master     bool   // is this the rebalance master node?
 
-	cb Callbacks
+	cb Callbacks // rebalance progress and done callback functions
 
 	cancel         chan struct{} // closed to signal rebalance canceled
 	done           chan struct{} // closed to signal rebalance done (not canceled)
@@ -76,11 +95,11 @@ type Rebalancer struct {
 
 	localaddr string
 
-	wg sync.WaitGroup
+	wg sync.WaitGroup // group of all currently running Rebalance goroutines
 
 	cleanupOnce sync.Once
 
-	waitForTokenPublish chan struct{}
+	waitForTokenPublish chan struct{} // blocks observeRebalance until closed
 
 	retErr error
 
@@ -88,29 +107,33 @@ type Rebalancer struct {
 
 	lastKnownProgress map[c.IndexInstId]float64
 
-	change     *service.TopologyChange
-	runPlanner bool // should this rebalance run the planner?
+	topologyChange *service.TopologyChange       // some info passed in on topology change being done
+	runPlanner     bool                          // should this rebalance run the planner?
+	globalTopology *manager.ClusterIndexMetadata // cluster topology from getGlobalTopology at start of rebalance
 
 	runParam *runParams
 }
 
-// NewRebalancer creates the Rebalancer object that will master a rebalance and starts
-// go routines that perform it asynchronously. If this is a worker node it launches
+// NewRebalancer creates the Rebalancer object that will run the rebalance on this node and starts
+// go routines that perform it asynchronously. If this is a worker node it also launches
 // an observeRebalance go routine that does the token processing for this node. If this
 // is the master that will be launched later by initRebalAsync --> doRebalance.
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
-	nodeId string, master bool, progress ProgressCallback, done DoneCallback,
-	supvMsgch MsgChannel, localaddr string, config c.Config, change *service.TopologyChange,
+	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
+	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
 	runPlanner bool, runParam *runParams) *Rebalancer {
 
-	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v", nodeId,
-		rebalToken, master, localaddr, runPlanner, runParam)
+	clusterVersion := common.GetClusterVersion()
+	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
+		rebalToken, master, localaddr, runPlanner, runParam, clusterVersion)
 
 	r := &Rebalancer{
+		clusterVersion: clusterVersion,
+
 		transferTokens: transferTokens,
 		rebalToken:     rebalToken,
 		master:         master,
-		nodeId:         nodeId,
+		nodeUUID:       nodeUUID,
 
 		cb: Callbacks{progress, done},
 
@@ -125,17 +148,15 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		acceptedTokens: make(map[string]*c.TransferToken),
 		sourceTokens:   make(map[string]*c.TransferToken),
-		drop:           make(map[string]bool),
 		dropQueue:      make(chan string, 10000),
+		dropQueued:     make(map[string]struct{}),
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
 		lastKnownProgress:   make(map[c.IndexInstId]float64),
 
-		change:     change,
-		runPlanner: runPlanner,
-
-		transferTokenBatches: make([][]string, 0),
+		topologyChange: topologyChange,
+		runPlanner:     runPlanner,
 
 		runParam: runParam,
 	}
@@ -148,7 +169,6 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		close(r.waitForTokenPublish)
 		go r.observeRebalance()
 	}
-
 	go r.processDropIndexQueue()
 
 	return r
@@ -259,7 +279,7 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 }
 
 func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) error {
-	const method string = "Rebalancer::makeDropIndexRequest" // for logging
+	const method string = "Rebalancer::makeDropIndexRequest:" // for logging
 	req := manager.IndexRequest{Index: *defn}
 	body, err := json.Marshal(&req)
 	if err != nil {
@@ -312,16 +332,16 @@ func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) e
 	return nil
 }
 
-// initRebalAsync runs as a helper go routine for NewRebalancer on the rebalance
-// master. It calls the planner if needed, then launches a separate go routine,
-// doRebalance, to manage the fine-grained steps of the rebalance.
+// initRebalAsync runs in the rebalance master as a helper go routine for NewRebalancer.
+// It calls the planner if needed, then launches a separate go routine, doRebalance, to
+// manage the fine-grained steps of the rebalance.
 func (r *Rebalancer) initRebalAsync() {
 
 	var hostToIndexToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 	//short circuit
 	if len(r.transferTokens) == 0 && !r.runPlanner {
 		r.cb.progress(1.0, r.cancel)
-		r.finish(nil)
+		r.finishRebalance(nil)
 		return
 	}
 
@@ -345,17 +365,15 @@ func (r *Rebalancer) initRebalAsync() {
 
 			default:
 				allWarmedup, _ := checkAllIndexersWarmedup(cfg["clusterAddr"].String())
-
 				if allWarmedup {
-
-					topology, err := getGlobalTopology(r.localaddr)
+					globalTopology, err := getGlobalTopology(r.localaddr)
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Error Fetching Topology %v", err)
-						go r.finish(err)
+						go r.finishRebalance(err)
 						return
 					}
-
-					l.Infof("Rebalancer::initRebalAsync Global Topology %v", topology)
+					r.globalTopology = globalTopology
+					l.Infof("Rebalancer::initRebalAsync Global Topology %v", globalTopology)
 
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
 					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
@@ -376,12 +394,12 @@ func (r *Rebalancer) initRebalAsync() {
 					}
 
 					start := time.Now()
-					r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.change,
-						r.nodeId, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
+					r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
+						r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
 						minIterPerTemp, maxIterPerTemp)
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
-						go r.finish(err)
+						go r.finishRebalance(err)
 						return
 					}
 					if len(hostToIndexToRemove) > 0 {
@@ -416,41 +434,33 @@ func (r *Rebalancer) Cancel() {
 	r.wg.Wait()
 }
 
-func (r *Rebalancer) finish(err error) {
-
-	if err == nil && r.master && r.change != nil {
+func (r *Rebalancer) finishRebalance(err error) {
+	if err == nil && r.master && r.topologyChange != nil {
 		// Note that this function tansfers the ownership of only those
 		// tokens, which are not owned by keep nodes. Ownership of other
 		// tokens remains unchanged.
-
 		keepNodes := make(map[string]bool)
-		for _, node := range r.change.KeepNodes {
+		for _, node := range r.topologyChange.KeepNodes {
 			keepNodes[string(node.NodeInfo.NodeID)] = true
 		}
 
-		cfg := r.config.Load()
-
 		// Suppress error if any. The background task to handle failover
 		// will do necessary retry for transferring ownership.
+		cfg := r.config.Load()
 		_ = transferScheduleTokens(keepNodes, cfg["clusterAddr"].String())
 	}
-
 	r.retErr = err
 	r.cleanupOnce.Do(r.doFinish)
-
 }
 
 func (r *Rebalancer) doFinish() {
-
 	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
-
 	atomic.StoreInt32(&r.isDone, 1)
 	close(r.done)
 	r.cancelMetakv()
 
 	r.wg.Wait()
 	r.cb.done(r.retErr, r.cancel)
-
 }
 
 func (r *Rebalancer) isFinish() bool {
@@ -488,20 +498,19 @@ func (r *Rebalancer) addToWaitGroup() bool {
 
 }
 
-// doRebalance runs as a go routine helper to initRebalanceAsync that manages
-// the fine-grained steps of a rebalance. It creates the transfer token batches
-// and publishes the first one. (If more than one batch exists the others will
-// be published later by processTokenAsMaster.) Then it launches an
-// observeRebalance go routine that does the real rebalance work for the master.
+// doRebalance runs in the rebalance master as a go routine helper to initRebalanceAsync
+// that manages the fine-grained steps of a rebalance. It creates the transfer token
+// batches and publishes the first one. (If more than one batch exists the others will
+// be published later by processTokenAsMaster.) Then it launches an observeRebalance go
+// routine that does the real rebalance work for the master.
 func (r *Rebalancer) doRebalance() {
 
 	if r.master && r.runPlanner && r.removeDupIndex {
 		<-r.dropIndexDone // wait for duplicate index removal to finish
 	}
 	if r.transferTokens != nil {
-
 		if ddl, err := r.checkDDLRunning(); ddl {
-			r.finish(err)
+			r.finishRebalance(err)
 			return
 		}
 
@@ -511,63 +520,653 @@ func (r *Rebalancer) doRebalance() {
 			return
 
 		default:
-			r.createTransferBatches()
-			r.publishTransferTokenBatch()
+			// Start the rebalance master work
+			r.publishDeferredTokens() // won't be built so these can all go at once
+			r.publishTransferTokenBatch(true)
 			close(r.waitForTokenPublish)
 			go r.observeRebalance()
 		}
 	} else {
 		r.cb.progress(1.0, r.cancel)
-		r.finish(nil)
+		r.finishRebalance(nil)
 		return
 	}
-
 }
 
-// createTransferBatches is a helper for doRebalance (master node only) that creates
-// all the transfer token batches.
-func (r *Rebalancer) createTransferBatches() {
-
-	cfg := r.config.Load()
-	batchSize := cfg["rebalance.transferBatchSize"].Int()
-
-	var batch []string
-	for ttid, _ := range r.transferTokens {
-		if batch == nil {
-			batch = make([]string, 0, batchSize)
-		}
-		batch = append(batch, ttid)
-
-		if len(batch) == batchSize {
-			r.transferTokenBatches = append(r.transferTokenBatches, batch)
-			batch = nil
-		}
-	}
-
-	if len(batch) != 0 {
-		r.transferTokenBatches = append(r.transferTokenBatches, batch)
-	}
-
-	l.Infof("Rebalancer::createTransferBatches Transfer Batches %v", r.transferTokenBatches)
-}
-
-// publishTransferTokenBatch publishes the next batch of transfer tokens into
-// metakv so they will start being processed. For batches other than the first,
-// it is only called once the prior batch completes.
-func (r *Rebalancer) publishTransferTokenBatch() {
+// publishDeferredTokens publishes all transfer tokens that are for user-deferred index builds.
+// Rebalance will only move the metadata but not build these, so they can all be published at
+// once with negligible load generated, and there is no need to include them in the Smart
+// Batching computations.
+func (r *Rebalancer) publishDeferredTokens() {
+	const method string = "Rebalancer::publishDeferredTokens:" // for logging
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	var publishedIds strings.Builder
+	published := 0
+	for ttid, tt := range r.transferTokens {
+		if tt.IsUserDeferred() { // rebalance will not build this index
+			setTransferTokenInMetakv(ttid, r.transferTokens[ttid])
+			fmt.Fprintf(&publishedIds, " %v", ttid)
+			published++
+		}
+	}
+	if published > 0 {
+		l.Infof("%v Published %v deferred tokens: %v", method, published, publishedIds.String())
+	} else {
+		l.Infof("%v No deferred tokens to publish", method)
+	}
+}
 
-	r.currBatchTokens = r.transferTokenBatches[0]
-	r.transferTokenBatches = r.transferTokenBatches[1:]
+// mapTransferTokensByDestId populates r.toBuildTTsByDestId from r.transferTokens
+// and also initializes r.buildingTTsByDestId to an empty map. r.toBuildTTsByDestId only
+// includes transfer tokens that will need building (i.e. omits deferred).
+func (r *Rebalancer) mapTransferTokensByDestId() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.toBuildTTsByDestId = make(map[string]map[string]*c.TransferToken)
+	r.buildingTTsByDestId = make(map[string]map[string]*c.TransferToken)
+	for ttid, tt := range r.transferTokens {
+		if tt.IsUserDeferred() { // rebalance will not build this index
+			continue
+		}
+		destId := tt.DestId
+		destIdMap := r.toBuildTTsByDestId[destId]
+		if destIdMap == nil {
+			destIdMap = make(map[string]*c.TransferToken)
+			r.toBuildTTsByDestId[destId] = destIdMap
+		}
+		destIdMap[ttid] = tt
+	}
+}
 
-	l.Infof("Rebalancer::publishTransferTokenBatch Registered Transfer Token In Metakv %v", r.currBatchTokens)
+// numBuildingTokensLOCKED returns the number of r.buildingTTsByDestId that are still building.
+// It also deletes those that are finished from this map tree.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) numBuildingTokensLOCKED() (building int) {
+	for _, buildingTTs := range r.buildingTTsByDestId {
+		for ttid, tt := range buildingTTs {
+			if tt.State == c.TransferTokenDeleted {
+				delete(buildingTTs, ttid)
+				continue
+			}
+			building++
+		}
+	}
+	return building
+}
 
-	for _, ttid := range r.currBatchTokens {
-		setTransferTokenInMetakv(ttid, r.transferTokens[ttid])
+// numToBuildTokensLOCKED returns the number of tokens still in the r.toBuildTTsByDestId map
+// tree. These are the ones that will need building but have not yet been submitted for builds.
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) numToBuildTokensLOCKED() (toBuild int) {
+	for _, toBuildTTs := range r.toBuildTTsByDestId {
+		toBuild += len(toBuildTTs)
+	}
+	return toBuild
+}
+
+// impliedStreams returns a set of stream keys for the DCP init streams implied by the
+// transfer tokens in ttMap.
+func impliedStreams(ttMap map[string]*common.TransferToken) (impliedStreams map[string]struct{}) {
+	impliedStreams = make(map[string]struct{})
+	for _, tt := range ttMap {
+		impliedStreams[streamKeyFromTT(tt)] = struct{}{}
+	}
+	return impliedStreams
+}
+
+// publishTransferTokenBatch is called by the master to publish the first or next batch of
+// transfer tokens into metakv so they will start being processed. The batches are generated
+// dynamically based on unfinished builds and concurrency constraints. An entire batch does
+// not need to complete before an additional batch is published. This moves token references
+// from r.toBuildTTsByDestId to r.buildingTTsByDestId. If there are no pending tokens left this will
+// not publish anything, which is okay because caller processTokenAsMaster detects rebalance
+// complete independently based on all r.TransferTokens reaching TransferTokenDeleted state.
+func (r *Rebalancer) publishTransferTokenBatch(first bool) {
+
+	if first {
+		r.mapTransferTokensByDestId() // init r.toBuildTTsByDestId and r.buildingTTsByDestId
+		r.initNodeLoads()
+	}
+	r.getNodeIndexerStats(r.config.Load()) // will only fire if first call or enough time has passed
+
+	// Support batchSize being changed dynamically during a rebalance. It now denotes the total
+	// number of builds (index moves) allowed in progress concurrently, not the number to start.
+	cfg := r.config.Load()
+	batchSize := cfg["rebalance.transferBatchSize"].Int() // max concurrent builds for cluster
+	if batchSize == 0 {                                   // unlimited
+		batchSize = math.MaxInt32
+	} else if batchSize < 0 {
+		batchSize = 1
 	}
 
+	r.mu.Lock()
+	startTokens := r.createBatchLOCKED(batchSize)
+	var publishedIds strings.Builder
+	for ttid, tt := range startTokens {
+		setTransferTokenInMetakv(ttid, tt)
+		fmt.Fprintf(&publishedIds, " %v", ttid)
+	}
+	r.mu.Unlock()
+	l.Infof("Rebalancer::publishTransferTokenBatch: first %v, published %v transfer tokens: %v",
+		first, len(startTokens), publishedIds.String())
+}
+
+// createBatchLOCKED returns a map from ttid to token of the next set of tokens to publish. These
+// will be added incrementally to the existing work, which may still be ongoing. batchSize is the
+// maximum number of builds for the entire cluster, including those already running. The new
+// returned set of tokens to publish will be at most batchSize minus the number already running,
+// but fewer (including 0) will be returned if there are not that many to-build tokens remaining.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) createBatchLOCKED(batchSize int) (toBuildTokens map[string]*c.TransferToken) {
+
+	numBuilding := r.numBuildingTokensLOCKED() // # tokens published but not yet deleted (100% done)
+
+	// If there are pre-7.1.0 nodes we cannot pipeline the work due to MB-48191
+	if r.clusterVersion < common.INDEXER_71_VERSION && numBuilding > 0 {
+		return nil
+	}
+	numToSelect := batchSize - numBuilding // max number of builds to start = open build "slots"
+	if numToSelect <= 0 {
+		return nil
+	}
+	numRemaining := r.numToBuildTokensLOCKED() // # tokens still to be built
+	if numRemaining == 0 {
+		return nil
+	}
+
+	// Only publish the next batch if there are enough open build slots for a reasonable chance
+	// of stream sharing or if it's an edge case where we must publish to make any progress
+	if numToSelect >= numRemaining || (batchSize >= 8 && numToSelect >= batchSize/4) ||
+		(batchSize <= 7 && numToSelect >= 2) || batchSize == 1 {
+
+		// Select a "smart" subset of pending tokens to spread work over index nodes and
+		// maximize the possibility of stream sharing
+		toBuildTokens = r.selectSmartToBuildTokensLOCKED(batchSize, numToSelect)
+	}
+	return toBuildTokens
+}
+
+// selectSmartToBuildTokensLOCKED is the core of the "Smart Batching for Rebalance" feature. It
+// returns a map from ttid to token of up to numToSelect tokens still in the r.toBuildTTsByDestId
+// map tree (i.e. TTs that still need to be built) selected to both spread the work around Index
+// nodes and to maximize the possibility of stream sharing. There are guaranteed to be at least
+// numToSelect candidate tokens. batchSize is the maximum number of builds for the entire cluster,
+// including those already running, used to compute the maximum builds allowed to run per node.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect int) (selectedTokens map[string]*c.TransferToken) {
+	selectedTokens = make(map[string]*c.TransferToken)
+
+	numIndexNodes := len(r.topologyChange.KeepNodes) // total index nodes remaining
+	maxPerNode := batchSize / numIndexNodes          // max concurrent builds per node
+	if maxPerNode < 3 {                              // legacy transferBatchSize default (could all be on one node)
+		maxPerNode = 3
+	}
+	if maxPerNode > batchSize {
+		maxPerNode = batchSize
+	}
+
+	// Sort the nodes ascending by current load. (Note that nodeLoads also includes nodes
+	// being ejected, but there will not be any transfer tokens with them as DestId.)
+	sort.Sort(r.nodeLoads)
+
+	cfg := r.config.Load()
+	maxStreamsPerNode := cfg["max_parallel_collection_builds"].Int() // indexer will error if builds need more than this
+
+	// Calculate number of tokens we could select for each node (not considering numToSelect overall limit)
+	// and the sets of already-building streams for each, which we cannot reuse due to indexer limitations.
+	// Also initialize the set of new streams for each node and find index of first high-load node.
+	numNodes := len(r.nodeLoads)
+	goalsForNodes := make([]int, numNodes) // decremented when a token is selected, as is numToSelect
+	forbiddenStreamsForNodes := make([]map[string]struct{}, numNodes)
+	newStreamsForNodes := make([]map[string]struct{}, numNodes)
+	firstHighLoadNode := 0
+	for node, nodeLoad := range r.nodeLoads {
+		buildingTTsForNode := r.buildingTTsByDestId[nodeLoad.nodeUUID]
+		goalsForNodes[node] = maxPerNode - len(buildingTTsForNode)
+		forbiddenStreamsForNodes[node] = impliedStreams(buildingTTsForNode)
+		if nodeLoad.getLoad() == 0 { // low load
+			firstHighLoadNode++
+		}
+	}
+
+	// Low-load nodes are at the front and we fully load them up with builds one by one
+	for node := 0; node < firstHighLoadNode && numToSelect > 0; node++ {
+		nodeUUID := r.nodeLoads[node].nodeUUID
+		toBuildTTsForNode := r.toBuildTTsByDestId[nodeUUID]          // tokens (by ttid) available to select for node
+		selectedTTsForNode := make(map[string]*common.TransferToken) // tokens (by ttid) selected for node
+
+		for numToSelect > 0 && goalsForNodes[node] > 0 {
+			ttid, tt := r.selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode,
+				forbiddenStreamsForNodes[node], newStreamsForNodes[node], maxStreamsPerNode)
+			if tt != nil {
+				numToSelect--
+				goalsForNodes[node]--
+				selectedTokens[ttid] = tt
+				selectedTTsForNode[ttid] = tt
+
+				newStreamsForNode := newStreamsForNodes[node]
+				if newStreamsForNode == nil {
+					newStreamsForNode = make(map[string]struct{})
+					newStreamsForNodes[node] = newStreamsForNode
+				}
+				newStreamsForNode[streamKeyFromTT(tt)] = struct{}{}
+
+				r.moveTokenToBuildingLOCKED(ttid, tt)
+			} else {
+				break // no legally selectable token for this node was found
+			}
+		} // for next selection on current node
+
+		// Update the number of indexes now (soon to be) on each node based on tokens selected
+		r.updateNodeIndexCountsLOCKED(nodeUUID, selectedTTsForNode)
+	} // for each low-load destination node
+
+	// High-load nodes are at the back and we assign builds to them round-robin
+	var selectedTTsForNodes map[string]map[string]*common.TransferToken // tts selected per hi-load node by [DestId][ttid]
+	if numToSelect > 0 {
+		selectedTTsForNodes = make(map[string]map[string]*common.TransferToken)
+	}
+	priorNumToSelect := math.MaxInt32                       // to terminate outer loop when no more progress made
+	for numToSelect > 0 && numToSelect < priorNumToSelect { // for next full round robin cycle
+		priorNumToSelect = numToSelect
+
+		// Round robin once over each high-load dest node
+		for node := firstHighLoadNode; node < numNodes && numToSelect > 0 && goalsForNodes[node] > 0; node++ {
+			nodeUUID := r.nodeLoads[node].nodeUUID
+			ttid, tt := r.selectSmartToBuildTokenLOCKED(r.toBuildTTsByDestId[nodeUUID], selectedTTsForNodes[nodeUUID],
+				forbiddenStreamsForNodes[node], newStreamsForNodes[node], maxStreamsPerNode)
+			if tt != nil {
+				numToSelect--
+				goalsForNodes[node]--
+				selectedTokens[ttid] = tt
+
+				selectedTTsForNode := selectedTTsForNodes[nodeUUID]
+				if selectedTTsForNode == nil {
+					selectedTTsForNode = make(map[string]*common.TransferToken)
+					selectedTTsForNodes[nodeUUID] = selectedTTsForNode
+				}
+				selectedTTsForNode[ttid] = tt
+
+				newStreamsForNode := newStreamsForNodes[node]
+				if newStreamsForNode == nil {
+					newStreamsForNode = make(map[string]struct{})
+					newStreamsForNodes[node] = newStreamsForNode
+				}
+				newStreamsForNode[streamKeyFromTT(tt)] = struct{}{}
+
+				r.moveTokenToBuildingLOCKED(ttid, tt)
+			}
+		} // round robin once over each high-load dest node
+	} // for next full round robin cycle
+	for node := firstHighLoadNode; node < numNodes; node++ {
+		nodeUUID := r.nodeLoads[node].nodeUUID
+		r.updateNodeIndexCountsLOCKED(nodeUUID, selectedTTsForNodes[nodeUUID])
+	}
+
+	return selectedTokens
+}
+
+// selectSmartToBuildTokenLOCKED attempts to select one token to build from those available to build
+// for a node, in the following priority order (Smart Batching for Rebalance feature):
+//   1. Replica repairs (stream-sharing preferred) - reduce scan load on other replicas, smoothing
+//      load across nodes
+//   2. Partitions of same index - share a stream and all have identical keys
+//   3. Indexes on same collection - share a stream but have different keys, adding fields Projector
+//      must forward
+//   4. Everything else
+// A selected token must satisfy the constraints that it cannot need a DCP init stream that indexer
+// already has running for that node (as indexer supports only one copy of a stream at a time) nor
+// push the total number of streams for that node above the maximum allowed.
+//
+// Return: ID and ptr to selected token iff any legally selectable token is found, else "", nil
+// Arguments:
+//   toBuildTTsForNode: tokens by [ttid] available to select for the node
+//   selectedTTsForNode: tokens by [ttid] already selected for the node
+//   forbiddenStreamsForNode: set of keys of streams already running on the node for prior builds
+//   newStreamsForNode: set of keys of streams to be started on the node for already-selected tokens
+//   maxStreamsPerNode: limit on number of streams the node is allowed to run concurrently
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken,
+	forbiddenStreamsForNode, newStreamsForNode map[string]struct{}, maxStreamsPerNode int) (ttid string, tt *common.TransferToken) {
+
+	// 1. Replica repairs (stream-sharing preferred)
+	ttid, tt = r.findReplicaRepairTokenLOCKED(toBuildTTsForNode, selectedTTsForNode)
+	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
+		return ttid, tt
+	}
+
+	// 2. Partitions of same index
+	ttid, tt = r.findSamePartitionLOCKED(toBuildTTsForNode, selectedTTsForNode)
+	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
+		return ttid, tt
+	}
+
+	// 3. Indexes on same collection
+	ttid, tt = r.findSameCollectionLOCKED(toBuildTTsForNode, selectedTTsForNode)
+	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
+		return ttid, tt
+	}
+
+	// 4. Everything else; since no prior selection succeeded, any token selected here will
+	//    require an additional stream on the node
+	tt = nil
+	for ttid, tt = range toBuildTTsForNode { // get any toBuild token for this node
+		break
+	}
+	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
+		return ttid, tt
+	}
+
+	return "", nil
+}
+
+// tokenOkayToBuild determines whether starting a build for transfer token tt is okay given the
+// constraints that only one DCP init stream at a time can run for a given collection and there
+// is also a cap on number of init streams allowed to run concurrently.
+func tokenOkayToBuild(tt *common.TransferToken,
+	forbiddenStreamsForNode, newStreamsForNode map[string]struct{}, maxStreamsPerNode int) bool {
+
+	// Can't build if it requires a forbidden stream (one that is already running in indexer)
+	streamKey := streamKeyFromTT(tt)
+	if _, member := forbiddenStreamsForNode[streamKey]; member {
+		return false
+	}
+
+	totalStreams := len(forbiddenStreamsForNode) + len(newStreamsForNode)
+	if _, member := newStreamsForNode[streamKey]; !member { // needs a new stream
+		totalStreams++
+	}
+	if totalStreams > maxStreamsPerNode {
+		return false
+	}
+
+	return true
+}
+
+// NodeLoad holds statistics about each Index node retained by a rebalance, used to estimate current load.
+type NodeLoad struct {
+	nodeUUID string // UUID of the Index node
+
+	// Indexer stats info from nodes
+	avgResidentPercent int64  // used for Plasma
+	memoryQuota        int64  // used for MOI
+	memoryUsed         int64  // used for MOI
+	numIndexes         int64  // to detect empty nodes; tracked locally instead of from stats so it updates instantly
+	storageMode        string // common.MemoryOptimized or common.PlasmaDB; "" if never retrieved
+}
+
+// NodeLoad.getLoad returns 0 or 1 for nodes deemed to have low or high loads, respectively.
+func (nl *NodeLoad) getLoad() int {
+	switch nl.storageMode {
+	case common.PlasmaDB:
+		if nl.numIndexes == 0 || nl.avgResidentPercent >= 50 {
+			return 0
+		}
+		return 1
+	case common.MemoryOptimized:
+		if nl.numIndexes == 0 || (nl.memoryQuota > 0 && nl.memoryUsed <= nl.memoryQuota/2) {
+			return 0
+		}
+		return 1
+	default:
+		return 1 // stats never successfully retrieved; safer to assume high load
+	}
+}
+
+// NodeLoad.addStats sets the passed-in stats that match NodeLoad fields into those fields.
+func (nl *NodeLoad) addStats(stats *common.Statistics) {
+	// int64s get changed to float64s in transit by Go's default JSON unmarshal rules for
+	// numeric fields that were typed as interface{}
+	if value := stats.Get("avg_resident_percent"); value != nil {
+		nl.avgResidentPercent = int64(value.(float64))
+	}
+	if value := stats.Get("memory_quota"); value != nil {
+		nl.memoryQuota = int64(value.(float64))
+	}
+	if value := stats.Get("memory_used"); value != nil {
+		nl.memoryUsed = int64(value.(float64))
+	}
+	if value := stats.Get("storage_mode"); value != nil {
+		nl.storageMode = value.(string)
+	}
+}
+
+// NodeLoad.setStatsHighLoad sets fake stats in the receiver indicating the node is highly loaded.
+func (nl *NodeLoad) setStatsHighLoad() {
+	nl.avgResidentPercent = 0
+	nl.memoryQuota = 1
+	nl.memoryUsed = 1 // used same as quota implies 100% of memory used
+	nl.numIndexes = math.MaxInt64
+}
+
+// NodeLoadSlice implements sort.Interface to enable sorting by load (which is really just
+// two categories: low and high load).
+type NodeLoadSlice []*NodeLoad
+
+// NodeLoadSlice.Len is a sort.Interface method returning the number of elements in the slice.
+func (nls NodeLoadSlice) Len() int {
+	return len(nls)
+}
+
+// NodeLoadSlice.Less is a sort.Interface method that returns whether slice entry i should sort before entry j.
+func (nls NodeLoadSlice) Less(i, j int) bool {
+	return nls[i].getLoad() < nls[j].getLoad()
+}
+
+// NodeLoadSlice.Swap is a sort.Interface method that swaps two elements in the slice.
+func (nls NodeLoadSlice) Swap(i, j int) {
+	nls[i], nls[j] = nls[j], nls[i]
+}
+
+// initNodeLoads initializes r.nodeLoads with an entry for each Index node
+// containing its nodeUUID and number of indexes determined from r.globalTopology.
+func (r *Rebalancer) initNodeLoads() {
+	var nodeLoads NodeLoadSlice
+	for _, metadata := range r.globalTopology.Metadata {
+		nodeLoad := &NodeLoad{nodeUUID: metadata.NodeUUID}
+		for _, indexTopology := range metadata.IndexTopologies {
+			for _, defn := range indexTopology.Definitions {
+				for _, inst := range defn.Instances {
+					nodeLoad.numIndexes += int64(len(inst.Partitions))
+				}
+			}
+		}
+		nodeLoads = append(nodeLoads, nodeLoad)
+	}
+	r.mu.Lock()
+	r.nodeLoads = nodeLoads
+	r.mu.Unlock()
+}
+
+// getOrCreateNodeLoadLOCKED searches r.nodeLoads for the entry for nodeUUID, returning
+// it if found, else creates a new one, adds it to r.nodeLoads, and returns it.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) getOrCreateNodeLoadLOCKED(nodeUUID string) (nodeLoad *NodeLoad) {
+	// Find the existing entry for this node
+	for _, nodeLoad = range r.nodeLoads {
+		if nodeLoad.nodeUUID == nodeUUID {
+			return nodeLoad
+		}
+	}
+
+	// If existing node entry not found (should not happen), add an entry for it
+	nodeLoad = &NodeLoad{nodeUUID: nodeUUID}
+	r.nodeLoads = append(r.nodeLoads, nodeLoad)
+	return nodeLoad
+}
+
+// setNodeUUIDStatsHighLoadLOCKED sets fake stats for nodeUUID's entry in r.nodeLoads
+// indicating the node is highly loaded (used when we could not get stats from the node).
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) setNodeUUIDStatsHighLoadLOCKED(nodeUUID string) {
+	nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
+	nodeLoad.setStatsHighLoad()
+}
+
+// getNodeIndexerStats gets a subset of indexer stats from each Index node via REST and
+// adds this information to r.nodeLoads, which should already have an entry for every node.
+// The stats are used to decide whether a node has high or low current load. The stats
+// gathering is only done if enough time has passed since the last gather. Failures are
+// worked around by setting fake stats indicating unreachable nodes are highly loaded.
+func (r *Rebalancer) getNodeIndexerStats(config common.Config) {
+
+	doGetStats := false // get the stats in this call?
+	now := time.Now()
+	r.mu.Lock() // for r.nodeLoadsTime
+	if now.Sub(r.nodeLoadsTime) >= 1*time.Minute {
+		r.nodeLoadsTime = now // don't try again for the wait period even if some/all fail
+		doGetStats = true
+	}
+	r.mu.Unlock()
+
+	if doGetStats {
+		// Parallel REST call to all index nodes
+		statsMap, errMap, err := common.GetIndexStats(config, "smartBatching", 3)
+
+		r.mu.Lock() // for r.nodeLoads, including in children
+		defer r.mu.Unlock()
+
+		if err != nil {
+			// Could not get stats for some nodes, so set fake stats for them showing highly loaded.
+			// Note we used a short REST timeout so slow nodes do not greatly drag down speed of rebalance.
+			// It is reasonable to assume such slow-responding nodes should be marked as highly loaded.
+			if errMap != nil { // specific nodes failed
+				for nodeUUID := range errMap {
+					r.setNodeUUIDStatsHighLoadLOCKED(nodeUUID)
+				}
+			} else { // failure prevented any nodes from being called
+				for _, nodeLoad := range r.nodeLoads {
+					nodeLoad.setStatsHighLoad()
+				}
+			}
+		}
+
+		// Copy in the new stats for nodes that succeeded
+		for nodeUUID, stats := range statsMap {
+			nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
+			nodeLoad.addStats(stats)
+		}
+	}
+}
+
+// updateNodeIndexCountsLOCKED updates r.nodeLoads numIndexes counts based on tokens selected to
+// build on the given dest node, adding the total number of new builds to the dest's count and
+// decrementing each move source's count (no decrement for replica repair as there was no source).
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) updateNodeIndexCountsLOCKED(destNodeUUID string, selectedTTsForNode map[string]*common.TransferToken) {
+	for _, tt := range selectedTTsForNode {
+		numPartns := len(tt.IndexInst.Defn.Partitions)
+		r.updateNodeIndexCountLOCKED(destNodeUUID, numPartns)
+		if tt.TransferMode == common.TokenTransferModeMove {
+			r.updateNodeIndexCountLOCKED(tt.SourceId, -1*numPartns)
+		}
+	}
+}
+
+// updateNodeIndexCountLOCKED adds the specified increment/decrement to the given node's numIndexes entry in r.nodeLoads.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) updateNodeIndexCountLOCKED(nodeUUID string, delta int) {
+	for i := range r.nodeLoads {
+		if r.nodeLoads[i].nodeUUID == nodeUUID {
+			r.nodeLoads[i].numIndexes += int64(delta)
+			break
+		}
+	}
+}
+
+// moveTokenToBuildingLOCKED moves a token from the r.toBuildTTsByDestId map tree
+// to the r.buildingTTsByDestId map tree.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) moveTokenToBuildingLOCKED(ttid string, tt *common.TransferToken) {
+	destId := tt.DestId
+	buildingMap := r.buildingTTsByDestId[destId]
+	if buildingMap == nil {
+		buildingMap = make(map[string]*common.TransferToken)
+		r.buildingTTsByDestId[destId] = buildingMap
+	}
+	buildingMap[ttid] = tt
+	delete(r.toBuildTTsByDestId[destId], ttid)
+}
+
+// streamKeyFromTT returns a key for the init stream indexer will use for the given transfer token. This is for
+// local tracking only so does not need to use just the bucket if it is in default scope and collection.
+func streamKeyFromTT(tt *common.TransferToken) string {
+	defn := tt.IndexInst.Defn
+	return strings.Join([]string{defn.Bucket, defn.Scope, defn.Collection}, ":")
+}
+
+// findReplicaRepairTokenLOCKED searches toBuildTTsForNode for a replica repair token, preferring those that
+// would share a stream with a token in selectedTTsForNode, and returns the (ttid, tt) of one if found.
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) findReplicaRepairTokenLOCKED(
+	toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
+
+	// Non-stream-sharing replica repair token and ID, if found
+	var rrtt *common.TransferToken
+	var rrttid string
+
+	streamsForNode := impliedStreams(selectedTTsForNode) // streams already needed
+	for ttid, tt := range toBuildTTsForNode {
+		if tt.TransferMode == common.TokenTransferModeCopy { // replica repair
+			if _, member := streamsForNode[streamKeyFromTT(tt)]; member { // will share an existing stream
+				return ttid, tt
+			} else if rrtt == nil { // remember first non-stream-sharing RR token
+				rrttid = ttid
+				rrtt = tt
+			}
+		}
+	}
+	return rrttid, rrtt // == "", nil if no RR token found
+}
+
+// findSamePartitionLOCKED looks for a token in toBuildTTsForNode that is another partition of a
+// partitioned index that already has a token in selectedTTsForNode and returns its (ttid, tt) if found.
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) findSamePartitionLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
+
+	// Get the instIds and realInstIds of all tokens in selectedTTsForNode
+	instIds := make(map[common.IndexInstId]struct{})
+	realInstIds := make(map[common.IndexInstId]struct{})
+	for _, tt := range selectedTTsForNode {
+		instIds[tt.InstId] = struct{}{}
+		realInstIds[tt.RealInstId] = struct{}{}
+	}
+
+	// Search for a match in toBuildTTsForNode
+	for ttid, tt := range toBuildTTsForNode {
+		if _, member := realInstIds[tt.RealInstId]; member {
+			return ttid, tt
+		}
+		if _, member := realInstIds[tt.InstId]; member {
+			return ttid, tt
+		}
+		if _, member := instIds[tt.RealInstId]; member {
+			return ttid, tt
+		}
+	}
+	return "", nil
+}
+
+// findSameCollectionLOCKED looks for a token in toBuildTTsForNode that is for the same collection
+// as an index that already has a token in selectedTTsForNode and returns its (ttid, tt) if found.
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) findSameCollectionLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
+
+	// Get the collections of all index tokens in selectedTTsForNode
+	collections := make(map[string]struct{})
+	for _, tt := range selectedTTsForNode {
+		collections[streamKeyFromTT(tt)] = struct{}{}
+	}
+
+	// Search for a match in toBuildTTsForNode
+	for ttid, tt := range toBuildTTsForNode {
+		if _, member := collections[streamKeyFromTT(tt)]; member {
+			return ttid, tt
+		}
+	}
+	return "", nil
 }
 
 // observeRebalance runs as a go routine on both master and worker nodes of a rebalance.
@@ -576,7 +1175,6 @@ func (r *Rebalancer) publishTransferTokenBatch() {
 // on each mutation of a TT until an error occurs or its stop channel is closed. These
 // callbacks trigger the individual index movement steps of the rebalance.
 func (r *Rebalancer) observeRebalance() {
-
 	l.Infof("Rebalancer::observeRebalance %v master:%v", r.rebalToken, r.master)
 
 	<-r.waitForTokenPublish
@@ -584,41 +1182,53 @@ func (r *Rebalancer) observeRebalance() {
 	err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, r.processTokens, r.metakvCancel)
 	if err != nil {
 		l.Infof("Rebalancer::observeRebalance Exiting On Metakv Error %v", err)
-		r.finish(err)
+		r.finishRebalance(err)
 	}
-
 	l.Infof("Rebalancer::observeRebalance exiting err %v", err)
-
 }
 
 // processTokens is the callback registered on the metakv transfer token directory for
 // a rebalance and gets called by metakv for each token and each change to a token.
 // This decodes the token and hands it off to processTransferToken.
 func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
+	const method string = "Rebalancer::processTokens:" // for logging
 
 	if kve.Path == RebalanceTokenPath || kve.Path == MoveIndexTokenPath {
-		l.Infof("Rebalancer::processTokens RebalanceToken %v %v", kve.Path, kve.Value)
-
+		l.Infof("%v RebalanceToken %v %v", method, kve.Path, kve.Value)
 		if kve.Value == nil {
-			l.Infof("Rebalancer::processTokens Rebalance Token Deleted. Mark Done.")
+			l.Infof("%v Rebalance Token Deleted. Mark Done.", method)
 			r.cancelMetakv()
-			r.finish(nil)
+			r.finishRebalance(nil)
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
 			ttid, tt, err := r.decodeTransferToken(kve.Path, kve.Value)
 			if err != nil {
-				l.Errorf("Rebalancer::processTokens Unable to decode transfer token. Ignored")
+				l.Errorf("%v Unable to decode transfer token. Ignored.", method)
 				return nil
 			}
 			r.processTransferToken(ttid, tt)
 		} else {
-			l.Infof("Rebalancer::processTokens Received empty or deleted transfer token %v", kve.Path)
+			l.Infof("%v Received empty or deleted transfer token %v", method, kve.Path)
+		}
+
+		// In a cluster with down-level nodes, we cannot overlap builds/merges with drops/prunes as
+		// it can trigger bug MB-48191 in those nodes which existed until version 7.1.0. This dance
+		// suffers from ordering and timing interactions between token state changes, queuing drops,
+		// and publishing more tokens, making it extremely hard to queue drops or publish tokens in
+		// all the places in code this might need to occur to avoid a publish attempt being blocked
+		// and never occurring again, triggering a rebalance hang. Thus the code block below is used
+		// instead to brute-force solve this problem by attempting to queue and publish after every
+		// transfer token state change. These are idempotent, so safe. It just burns a little more
+		// CPU to check these so often during rebalance on a cluster with down-level nodes.
+		if r.clusterVersion < common.INDEXER_71_VERSION {
+			r.maybeQueueDropIndexesForDownLevelCluster()
+			if r.master {
+				r.publishTransferTokenBatch(false)
+			}
 		}
 	}
-
 	return nil
-
 }
 
 // processTransferTokens performs the work needed from this node, if any, for a
@@ -642,15 +1252,15 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 	// "processed" var ensures only the incoming token state gets processed by this
 	// call, as metakv will call parent processTokens again for each TT state change.
 	var processed bool
-	if tt.MasterId == r.nodeId {
+	if tt.MasterId == r.nodeUUID {
 		processed = r.processTokenAsMaster(ttid, tt)
 	}
 
-	if tt.SourceId == r.nodeId && !processed {
+	if tt.SourceId == r.nodeUUID && !processed {
 		processed = r.processTokenAsSource(ttid, tt)
 	}
 
-	if tt.DestId == r.nodeId && !processed {
+	if tt.DestId == r.nodeUUID && !processed {
 		processed = r.processTokenAsDest(ttid, tt)
 	}
 }
@@ -661,10 +1271,11 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 // true iff it is considered to have processed this token (including handling
 // some error cases).
 func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool {
+	const method string = "Rebalancer::processTokenAsSource:" // for logging
 
 	if tt.RebalId != r.rebalToken.RebalId {
-		l.Warnf("Rebalancer::processTokenAsSource Found TransferToken with Unknown "+
-			"RebalanceId. Local RId %v Token %v. Ignored.", r.rebalToken.RebalId, tt)
+		l.Warnf("%v Found TransferToken with Unknown "+
+			"RebalanceId. Local RId %v Token %v. Ignored.", method, r.rebalToken.RebalId, tt)
 		return true
 	}
 
@@ -678,18 +1289,21 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.sourceTokens[ttid] = tt
-		logging.Infof("Rebalancer::processTokenAsSource Processing transfer token: %v", tt)
+		logging.Infof("%v Processing transfer token: %v", method, tt)
 
-		//TODO batch this rather than one per index
-		r.queueDropIndex(ttid)
+		// If there are pre-7.1.0 nodes we cannot pipeline the work due to MB-48191
+		if r.clusterVersion >= common.INDEXER_71_VERSION {
+			//TODO batch this rather than one per index
+			r.queueDropIndexLOCKED(ttid) // this is the ONLY place drops are queued in >= 7.1.0 cluster
+		}
 
 	default:
 		return false
 	}
 	return true
-
 }
 
+// processDropIndexQueue runs in a goroutine on all nodes of the rebalance.
 func (r *Rebalancer) processDropIndexQueue() {
 
 	notifych := make(chan bool, 2)
@@ -710,7 +1324,7 @@ func (r *Rebalancer) processDropIndexQueue() {
 			var tt c.TransferToken
 			logging.Infof("Rebalancer::processDropIndexQueue processing drop index request for ttid: %v", ttid)
 			if first {
-				// If it is the first drop, let wait to give a chance for the target's metaadta
+				// If it is the first drop, let wait to give a chance for the target's metadata
 				// being synchronized with the cbq nodes.  This is to ensure that the cbq nodes
 				// can direct scan to the target nodes, before we start dropping the index in the source.
 				time.Sleep(time.Duration(waitTime) * time.Second)
@@ -730,77 +1344,66 @@ func (r *Rebalancer) processDropIndexQueue() {
 			}
 
 			if tt.State == c.TransferTokenReady {
-				if !r.drop[ttid] {
-					if r.addToWaitGroup() {
-						notifych <- true
-						go r.dropIndexWhenIdle(ttid, &tt, notifych)
-					} else {
-						logging.Warnf("Rebalancer::processDropIndexQueue Skip processing drop index request for tt: %v as rebalancer can not add to wait group", tt)
-					}
+				if r.addToWaitGroup() {
+					notifych <- true
+					go r.dropIndexWhenIdle(ttid, &tt, notifych)
 				} else {
-					logging.Infof("Rebalancer::processDropIndexQueue: Skip processing tt: %v as it is already added to drop list: %v", tt, r.drop)
+					logging.Warnf("Rebalancer::processDropIndexQueue Skip processing drop index request for tt: %v as rebalancer can not add to wait group", tt)
 				}
 			} else {
-				logging.Warnf("Rebalancer::processDropIndexQueue Skipping drop index request for tt: %v", tt)
+				logging.Warnf("Rebalancer::processDropIndexQueue Skipping drop index request for tt: %v as state: %v != TransferTokenReady", tt, tt.State.String())
 			}
 		}
 	}
 }
 
-//
-// Must hold lock when calling this function
-//
-func (r *Rebalancer) queueDropIndex(ttid string) {
+// queueDropIndexLOCKED queues a ttid to be submitted for source index drop iff it has not already
+// been queued in the past (since metakv can send duplicate notifications). The queuing mechanism
+// submits these sequentially to indexer so each gets the full indexer.rebalance.httpTimeout,
+// as drops can take a long time due to Projector stream bookkeeping.
+// Caller must be holding r.mu write locked (for r.dropQueue, r.dropQueued).
+// TODO Add a bulk drop index API to indexer so multiple drops can be sent at once as builds are.
+func (r *Rebalancer) queueDropIndexLOCKED(ttid string) {
+	const method string = "Rebalancer::queueDropIndexLOCKED:" // for logging
 
 	select {
 	case <-r.cancel:
-		l.Warnf("Rebalancer::queueDropIndex: Cannot drop index when rebalance being cancel.")
+		l.Warnf("%v Cannot drop index when rebalance being canceled.", method)
 		return
 
 	case <-r.done:
-		l.Warnf("Rebalancer::queueDropIndex: Cannot drop index when rebalance is done.")
+		l.Warnf("%v Cannot drop index when rebalance is done.", method)
 		return
 
 	default:
-		if r.checkIndexReadyToDrop() {
-			select {
-			case r.dropQueue <- ttid:
-				logging.Infof("Rebalancer::queueDropIndex Successfully queued index for drop, ttid: %v", ttid)
-			default:
-				tt := r.sourceTokens[ttid]
-				if tt.State == c.TransferTokenReady {
-					if !r.drop[ttid] {
-						if r.addToWaitGroup() {
-							go r.dropIndexWhenIdle(ttid, tt, nil)
-						} else {
-							logging.Warnf("Rebalancer::queueDropIndex Could not add to wait group, hence not attempting drop, ttid: %v", ttid)
-						}
-					} else {
-						logging.Infof("Rebalancer::queueDropIndex Did not queue drop index as index is already in drop list, ttid: %v, drop list: %v", ttid, r.drop)
-					}
-				} else {
-					logging.Infof("Rebalancer::queueDropIndex Did not queue index for drop as tt state is: %v, ttid: %v", tt.State, ttid)
-				}
-			}
+		indexName := r.sourceTokens[ttid].IndexInst.Defn.Name
+		if _, member := r.dropQueued[ttid]; !member {
+			r.dropQueued[ttid] = struct{}{}
+			r.dropQueue <- ttid
+			logging.Infof("%v Queued index %v for drop, ttid: %v", method, indexName, ttid)
 		} else {
-			logging.Warnf("Rebalancer::queueDropIndex Failed to queue index for drop, ttid: %v", ttid)
+			logging.Warnf("%v Skipped index %v that was previously queued for drop, ttid: %v",
+				method, indexName, ttid)
 		}
 	}
 }
 
-//
-// Must hold lock when calling this function
-//
-func (r *Rebalancer) dropIndexWhenReady() {
+// maybeQueueDropIndexesForDownLevelCluster applies only to cluster levels < 7.1.0. This
+// queues all the drops for source tokens on this node once all the builds for this node's currently
+// received source AND dest tokens are done. This is to avoid overlapping builds/merges with drops/
+// prunes to work around MB-48191. In these clusters, no new tokens are published until the prior
+// batch completely finishes, which is the other half of avoiding build and drop overlaps.
+func (r *Rebalancer) maybeQueueDropIndexesForDownLevelCluster() {
+	const method string = "Rebalancer::maybeQueueDropIndexesForDownLevelCluster:" // for logging
 
-	if r.checkIndexReadyToDrop() {
-		for ttid, tt := range r.sourceTokens {
-			if tt.State == c.TransferTokenReady {
-				if !r.drop[ttid] {
-					r.queueDropIndex(ttid)
-				}
-			}
+	if r.clusterVersion < common.INDEXER_71_VERSION {
+		r.mu.Lock()
+		dropTokenIds := r.checkAllSourceIndexesReadyToDropLOCKED()
+		for _, ttid := range dropTokenIds {
+			r.queueDropIndexLOCKED(ttid)
 		}
+		r.mu.Unlock()
+		logging.Infof("%v queued ttids for drop: %v", method, dropTokenIds)
 	}
 }
 
@@ -832,20 +1435,13 @@ func isIndexNotFoundRebal(errMsg string) bool {
 // Changes the TT state to TransferTokenCommit when the drop is completed.
 func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifych chan bool) {
 	defer r.wg.Done()
+
 	defer func() {
 		if notifych != nil {
 			// Blocking wait to ensure indexes are dropped sequentially
 			<-notifych
 		}
 	}()
-
-	r.mu.Lock()
-	if r.drop[ttid] {
-		r.mu.Unlock()
-		return
-	}
-	r.drop[ttid] = true
-	r.mu.Unlock()
 
 	missingStatRetry := 0
 loop:
@@ -961,6 +1557,9 @@ loop:
 	}
 }
 
+// needRetryForDrop is called after multiple unsuccessful attempts to get the stats for an index to be
+// dropped. It determines whether we should keep retrying or assume it was already dropped. It is only
+// assumed already to be dropped if there is no entry for it in the local metadata.
 func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
 
 	localMeta, err := getLocalMeta(r.localaddr)
@@ -994,14 +1593,15 @@ func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
 // processTokenAsDest performs the work of the destination node of an index
 // move reflected by the transfer token. It directly handles TT states
 // TransferTokenCreated and TransferTokenInitiate, and indirectly (via token
-// tokenMergeOrReady call here or in buildAcceptedIndexes --> waitForIndexBuild)
+// destTokenToMergeOrReadyLOCKED call here or in buildAcceptedIndexes --> waitForIndexBuild)
 // states TransferTokenInProgress and TransferTokenMerge. Returns true iff it is
 // considered to have processed this token (including handling some error cases).
 func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
+	const method string = "Rebalancer::processTokenAsDest:" // for logging
 
 	if tt.RebalId != r.rebalToken.RebalId {
-		l.Warnf("Rebalancer::processTokenAsDest Found TransferToken with Unknown "+
-			"RebalanceId. Local RId %v Token %v. Ignored.", r.rebalToken.RebalId, tt)
+		l.Warnf("%v Found TransferToken with Unknown "+
+			"RebalanceId. Local RId %v Token %v. Ignored.", method, r.rebalToken.RebalId, tt)
 		return true
 	}
 
@@ -1016,7 +1616,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		indexDefn.SetCollectionDefaults()
 
 		indexDefn.Nodes = nil
-		indexDefn.Deferred = true
+		indexDefn.Deferred = true // prevent the build from happening on indexer for now; just move the metadata
 		indexDefn.InstId = tt.InstId
 		indexDefn.RealInstId = tt.RealInstId
 
@@ -1025,7 +1625,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			ir := manager.IndexRequest{Index: indexDefn}
 			body, err := json.Marshal(&ir)
 			if err != nil {
-				l.Errorf("Rebalancer::processTokenAsDest Error marshal clone index %v", err)
+				l.Errorf("%v Error marshal clone index %v", method, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return nil, true
 			}
@@ -1045,7 +1645,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
 		if err != nil {
 			// Error from HTTP layer, not from index processing code
-			l.Errorf("Rebalancer::processTokenAsDest Error register clone index on %v %v", r.localaddr+url, err)
+			l.Errorf("%v Error register clone index on %v %v", method, r.localaddr+url, err)
 			// If the error is io.EOF, then it is possible that server side
 			// may have closed the connection while client is about the send the request.
 			// Though this is extremely unlikely, this is observed for multiple users
@@ -1070,12 +1670,13 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 				}
 				resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
 				if err != nil {
-					l.Errorf("Rebalancer::processTokenAsDest Error register clone index during retry on %v %v", r.localaddr+url, err)
+					l.Errorf("%v Error register clone index during retry on %v %v",
+						method, r.localaddr+url, err)
 					r.setTransferTokenError(ttid, tt, err.Error())
 					return true
 				} else {
-					l.Infof("Rebalancer::processTokenAsDest Successful POST of createIndexRebalance during retry on %v, defnId: %v, instId: %v",
-						r.localaddr+url, indexDefn.DefnId, indexDefn.InstId)
+					l.Infof("%v Successful POST of createIndexRebalance during retry on %v, defnId: %v, instId: %v",
+						method, r.localaddr+url, indexDefn.DefnId, indexDefn.InstId)
 				}
 			} else {
 				r.setTransferTokenError(ttid, tt, err.Error())
@@ -1085,19 +1686,19 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 
 		response := new(manager.IndexResponse)
 		if err := convertResponse(resp, response); err != nil {
-			l.Errorf("Rebalancer::processTokenAsDest Error unmarshal response %v %v", r.localaddr+url, err)
+			l.Errorf("%v Error unmarshal response %v %v", method, r.localaddr+url, err)
 			r.setTransferTokenError(ttid, tt, err.Error())
 			return true
 		}
 		if response.Code == manager.RESP_ERROR {
 			// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
 			if !isMissingBSC(response.Error) {
-				l.Errorf("Rebalancer::processTokenAsDest Error cloning index %v %v", r.localaddr+url, response.Error)
+				l.Errorf("%v Error cloning index %v %v", method, r.localaddr+url, response.Error)
 				r.setTransferTokenError(ttid, tt, response.Error)
 				return true
 			}
 			// Ok: failed to create dest index because b/s/c was dropped. Skip to TransferTokenCommit state.
-			l.Infof("Rebalancer::processTokenAsDest Create destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
+			l.Infof("%v Create destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
 			tt.State = c.TransferTokenCommit
 		} else {
 			tt.State = c.TransferTokenAccepted
@@ -1114,36 +1715,33 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		defer r.mu.Unlock()
 		att, ok := r.acceptedTokens[ttid]
 		if !ok {
-			l.Errorf("Rebalancer::processTokenAsDest Unknown TransferToken for Initiate %v %v", ttid, tt)
+			l.Errorf("%v Unknown TransferToken for Initiate %v %v", method, ttid, tt)
 			r.setTransferTokenError(ttid, tt, "Unknown TransferToken For Initiate")
 			return true
 		}
-		if tt.IndexInst.Defn.Deferred && tt.IndexInst.State == c.INDEX_STATE_READY {
-
-			atomic.AddInt32(&r.pendingBuild, 1)
-			r.tokenMergeOrReady(ttid, tt)
+		// User-deferred index will move its metadata but not be built by Rebalance, so skip TransferTokenInProgress
+		if tt.IsUserDeferred() {
+			r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 			att.State = tt.State
-
-		} else {
+		} else { // non-user-deferred: Rebalance will build this index
 			att.State = c.TransferTokenInProgress
 			tt.State = c.TransferTokenInProgress
 			setTransferTokenInMetakv(ttid, tt)
-			atomic.AddInt32(&r.pendingBuild, 1)
 		}
-		logging.Infof("Rebalancer::processTokenAsDest, Incremening pendingBuild due to ttid: %v, pendingBuild value: %v", ttid, atomic.LoadInt32(&r.pendingBuild))
 
-		if r.checkIndexReadyToBuild() == true {
+		buildTokens := r.checkAllAcceptedIndexesReadyToBuildLOCKED()
+		if buildTokens != nil {
 			if !r.addToWaitGroup() {
 				return true
 			}
-			go r.buildAcceptedIndexes()
+			go r.buildAcceptedIndexes(buildTokens)
 		}
 
 	case c.TransferTokenInProgress:
-		// Nothing to do here; TT state transitions done in tokenMergeOrReady
+		// Nothing to do here; TT state transitions done in destTokenToMergeOrReadyLOCKED
 
 	case c.TransferTokenMerge:
-		// Nothing to do here; TT state transitions done in tokenMergeOrReady
+		// Nothing to do here; TT state transitions done in destTokenToMergeOrReadyLOCKED
 
 	default:
 		return false
@@ -1156,11 +1754,11 @@ func (r *Rebalancer) checkValidNotifyStateDest(ttid string, tt *c.TransferToken)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if tto, ok := r.acceptedTokens[ttid]; ok {
-		if tt.State <= tto.State {
+	if att, ok := r.acceptedTokens[ttid]; ok {
+		if tt.State <= att.State {
 			l.Warnf("Rebalancer::checkValidNotifyStateDest Detected Invalid State "+
 				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
-				tto.State, tt.State)
+				att.State, tt.State)
 			return false
 		}
 	}
@@ -1185,45 +1783,76 @@ func (r *Rebalancer) checkValidNotifyStateSource(ttid string, tt *c.TransferToke
 
 }
 
-func (r *Rebalancer) checkIndexReadyToBuild() bool {
+// checkAllAcceptedIndexesReadyToBuildLOCKED determines whether all TTs accepted so far have reached
+// a state where a build request can be sent to Indexer for those that need to be built. If so,
+// it returns a map from ttid to tt of those that need building, else it returns nil. This is done
+// so a group of builds can be submitted in a single call to Indexer.
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) checkAllAcceptedIndexesReadyToBuildLOCKED() (buildTokens map[string]*common.TransferToken) {
 
+	// acceptedTokens are destination-owned copies and thus should never be set to
+	// TransferTokenDeleted state, so that state is not checked here
 	for ttid, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenMerge &&
-			tt.State != c.TransferTokenInProgress &&
+		if tt.State != c.TransferTokenInProgress &&
+			tt.State != c.TransferTokenMerge &&
 			tt.State != c.TransferTokenReady &&
 			tt.State != c.TransferTokenCommit {
-			l.Infof("Rebalancer::checkIndexReadyToBuild Not ready to build %v %v", ttid, tt)
-			return false
+			l.Infof("Rebalancer::checkAllAcceptedIndexesReadyToBuildLOCKED Not ready to build %v %v", ttid, tt)
+			return nil
+		}
+		if tt.State == c.TransferTokenInProgress { // needs build
+			if buildTokens == nil {
+				buildTokens = make(map[string]*common.TransferToken)
+			}
+			buildTokens[ttid] = tt
 		}
 	}
-	return true
-
+	return buildTokens
 }
 
-// buildAcceptedIndexes runs in a go routine and submits a request to Indexer to build all indexes
-// for accepted transfer tokens that are ready to start building. The builds occur asynchronously
+// checkAllSourceIndexesReadyToDropLOCKED determines whether all TTs this node is the dest OR source
+// for so far are done building. If so, it returns a slice of ttids of the source tokens that need
+// to be queued for dropping, else it returns nil. This function is only used when the cluster
+// contains pre-7.1.0 nodes, where we must avoid overlapping builds/merges and drops/prunes to work
+// around MB-48191.
+// Caller must be holding r.mu at least read locked.
+func (r *Rebalancer) checkAllSourceIndexesReadyToDropLOCKED() (dropTokens []string) {
+	// Check for any unbuilt dest tokens for this node
+	for _, tt := range r.acceptedTokens {
+		if tt.State < c.TransferTokenReady || tt.State == c.TransferTokenMerge {
+			return nil
+		}
+	}
+
+	for ttid, tt := range r.sourceTokens {
+		// Check for any unbuilt source tokens for this node
+		if tt.State < c.TransferTokenReady || tt.State == c.TransferTokenMerge {
+			return nil
+		}
+
+		// Source tokens still needing drop
+		if tt.State == c.TransferTokenReady {
+			dropTokens = append(dropTokens, ttid)
+		}
+	}
+	return dropTokens
+}
+
+// buildAcceptedIndexes runs in a go routine and submits a request to Indexer to build all indexes for
+// accepted transfer tokens that are ready to start building (buildTokens). The builds occur asynchronously
 // in Indexer handleBuildIndex. This function calls waitForIndexBuild to wait for them to finish.
-func (r *Rebalancer) buildAcceptedIndexes() {
+func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.TransferToken) {
+	const method string = "Rebalancer::buildAcceptedIndexes:" // for logging
 
 	defer r.wg.Done()
 
-	var idList client.IndexIdList                   // defnIds of the indexes to build
-	ttMap := make(map[string]*common.TransferToken) // ttids to tts of the building indexes
-	var errStr string
-	r.mu.Lock()
-	for ttid, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenReady &&
-			tt.State != c.TransferTokenCommit &&
-			tt.State != c.TransferTokenMerge {
-
-			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
-			ttMap[ttid] = tt
-		}
+	var idList client.IndexIdList // defnIds of the indexes to build
+	for _, tt := range buildTokens {
+		idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
 	}
-	r.mu.Unlock()
 
 	if len(idList.DefnIds) == 0 {
-		l.Infof("Rebalancer::buildAcceptedIndexes Nothing to build")
+		l.Infof("%v Nothing to build", method)
 		return
 	}
 
@@ -1234,7 +1863,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		ir := manager.IndexRequest{IndexIds: idList}
 		body, err := json.Marshal(&ir)
 		if err != nil {
-			l.Errorf("Rebalancer::buildAcceptedIndexes Error marshalling index inst list: %v, err: %v", idList, err)
+			l.Errorf("%v Error marshalling index inst list: %v, err: %v", method, idList, err)
 			return nil, err
 		}
 		bodybuf := bytes.NewBuffer(body)
@@ -1244,6 +1873,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	var bodybuf *bytes.Buffer
 	var resp *http.Response
 	var err error
+	var errStr string
 
 	bodybuf, err = getReqBody()
 	if err != nil {
@@ -1254,17 +1884,19 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
 	if err != nil {
 		// Error from HTTP layer, not from index processing code
-		l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index on %v %v", r.localaddr+url, err)
+		l.Errorf("%v Error register clone index on %v %v", method, r.localaddr+url, err)
 		if strings.HasSuffix(err.Error(), ": EOF") {
 			// Retry build again before failing rebalance
 			bodybuf, err = getReqBody()
 			resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
 			if err != nil {
-				l.Errorf("Rebalancer::buildAcceptedIndexes Error register clone index during retry on %v %v", r.localaddr+url, err)
+				l.Errorf("%v Error register clone index during retry on %v %v",
+					method, r.localaddr+url, err)
 				errStr = err.Error()
 				goto cleanup
 			} else {
-				l.Infof("Rebalancer::buildAcceptedIndexes Successful POST of buildIndexRebalance during retry on %v, instIdList: %v", r.localaddr+url, idList)
+				l.Infof("%v Successful POST of buildIndexRebalance during retry on %v, instIdList: %v",
+					method, r.localaddr+url, idList)
 			}
 		} else {
 			errStr = err.Error()
@@ -1273,7 +1905,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	}
 
 	if err := convertResponse(resp, response); err != nil {
-		l.Errorf("Rebalancer::buildAcceptedIndexes Error unmarshal response %v %v", r.localaddr+url, err)
+		l.Errorf("%v Error unmarshal response %v %v", method, r.localaddr+url, err)
 		errStr = err.Error()
 		goto cleanup
 	}
@@ -1282,7 +1914,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		// or a JSON string of a marshaled map[IndexInstId]string of error messages per instance ID. The
 		// keys for any entries having magic error string ErrIndexNotFoundRebal.Error are the submitted
 		// defnIds instead of instIds, as the metadata could not be found for these.
-		l.Errorf("Rebalancer::buildAcceptedIndexes Error cloning index %v %v", r.localaddr+url, response.Error)
+		l.Errorf("%v Error cloning index %v %v", method, r.localaddr+url, response.Error)
 		errStr = response.Error
 		if errStr == common.ErrMarshalFailed.Error() { // no detailed error info available
 			goto cleanup
@@ -1301,12 +1933,11 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 			if isMissingBSC(errStr) {
 				// id is an instId. Move the TT for this instId to TransferTokenCommit
 				r.mu.Lock()
-				for ttid, tt := range ttMap {
+				for ttid, tt := range buildTokens {
 					if id == tt.IndexInst.InstId {
-						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", tt)
+						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
-						atomic.AddInt32(&r.pendingBuild, -1)
 						break
 					}
 				}
@@ -1315,12 +1946,11 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 				// id is a defnId. Move all TTs for this defnId to TransferTokenCommit
 				defnId := c.IndexDefnId(id)
 				r.mu.Lock()
-				for ttid, tt := range ttMap {
+				for ttid, tt := range buildTokens {
 					if defnId == tt.IndexInst.Defn.DefnId {
-						l.Infof("Rebalancer::buildAcceptedIndexes Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", tt)
+						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", method, tt)
 						tt.State = c.TransferTokenCommit
 						setTransferTokenInMetakv(ttid, tt)
-						atomic.AddInt32(&r.pendingBuild, -1)
 					}
 				}
 				r.mu.Unlock()
@@ -1330,8 +1960,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 		}
 	}
 
-	r.waitForIndexBuild(ttMap)
-
+	r.waitForIndexBuild(buildTokens)
 	return
 
 cleanup: // fail the rebalance; mark all accepted transfer tokens with error
@@ -1343,10 +1972,11 @@ cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 	return
 }
 
-// waitForIndexBuild waits for all currently running rebalamnce-initiated index
+// waitForIndexBuild waits for all currently running rebalance-initiated index
 // builds to complete. Transfer token state changes and some processing are
-// delegated to tokenMergeOrReady.
+// delegated to destTokenToMergeOrReadyLOCKED.
 func (r *Rebalancer) waitForIndexBuild(buildTokens map[string]*common.TransferToken) {
+	const method string = "Rebalancer::waitForIndexBuild:" // for logging
 
 	buildStartTime := time.Now()
 	cfg := r.config.Load()
@@ -1356,31 +1986,31 @@ loop:
 	for {
 		select {
 		case <-r.cancel:
-			l.Infof("Rebalancer::waitForIndexBuild Cancel Received")
+			l.Infof("%v Cancel Received", method)
 			break loop
 		case <-r.done:
-			l.Infof("Rebalancer::waitForIndexBuild Done Received")
+			l.Infof("%v Done Received", method)
 			break loop
 		default:
 
 			stats, err := getLocalStats(r.localaddr, false)
 			if err != nil {
-				l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Local Stats %v %v", r.localaddr, err)
+				l.Errorf("%v Error Fetching Local Stats %v %v", method, r.localaddr, err)
 				break
 			}
 
 			statsMap := stats.ToMap()
 			if statsMap == nil {
-				l.Infof("Rebalancer::waitForIndexBuild Nil Stats. Retrying...")
+				l.Infof("%v Nil Stats. Retrying...", method)
 				break
 			}
 
 			if state, ok := statsMap["indexer_state"]; ok {
 				if state == "Paused" {
-					l.Errorf("Rebalancer::waitForIndexBuild Paused state detected for %v", r.localaddr)
+					l.Errorf("%v Paused state detected for %v", method, r.localaddr)
 					r.mu.Lock()
 					for ttid, tt := range r.acceptedTokens {
-						l.Errorf("Rebalancer::waitForIndexBuild Token State Changed to Error %v %v", ttid, tt)
+						l.Errorf("%v Token State Changed to Error %v %v", method, ttid, tt)
 						r.setTransferTokenError(ttid, tt, "Indexer In Paused State")
 					}
 					r.mu.Unlock()
@@ -1390,7 +2020,7 @@ loop:
 
 			localMeta, err := getLocalMeta(r.localaddr)
 			if err != nil {
-				l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Local Meta %v %v", r.localaddr, err)
+				l.Errorf("%v Error Fetching Local Meta %v %v", method, r.localaddr, err)
 				break
 			}
 
@@ -1408,14 +2038,12 @@ loop:
 
 				indexState, err := getIndexStatusFromMeta(tt, localMeta)
 				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-					l.Infof("Rebalancer::waitForIndexBuild Could not get index status; bucket/scope/collection likely dropped. Skipping. indexState %v, err %v, tt %v.",
-						indexState, err, tt)
+					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
+						" Skipping. indexState %v, err %v, tt %v.", method, indexState, err, tt)
 					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 					setTransferTokenInMetakv(ttid, tt)
-
-					atomic.AddInt32(&r.pendingBuild, -1)
 				} else if err != "" {
-					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
+					l.Errorf("%v Error Fetching Index Status %v %v", method, r.localaddr, err)
 					break
 				}
 
@@ -1435,7 +2063,7 @@ loop:
 					num_queued = statsMap[sname_queued].(float64)
 					num_processed = statsMap[sname_processed].(float64)
 				} else {
-					l.Infof("Rebalancer::waitForIndexBuild Missing Stats %v %v. Retrying...", sname_queued, sname_pend)
+					l.Infof("%v Missing Stats %v %v. Retrying...", method, sname_queued, sname_pend)
 					break
 				}
 
@@ -1456,31 +2084,27 @@ loop:
 					remainingBuildTime = 0
 				}
 
-				l.Infof("Rebalancer::waitForIndexBuild Index: %v:%v:%v:%v State: %v"+
+				l.Infof("%v Index: %v:%v:%v:%v State: %v"+
 					" Pending: %v EstTime: %v Partitions: %v Destination: %v",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
+					method, defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 					tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 
 				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-					r.tokenMergeOrReady(ttid, tt)
+					r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 				}
 			}
 			r.mu.Unlock()
 
 			if allTokensReady {
-				l.Infof("Rebalancer::waitForIndexBuild Batch Done")
+				l.Infof("%v Batch Done", method)
 				break loop
 			}
 			time.Sleep(3 * time.Second)
 		}
 	}
-} // waitForIndexBuild
-
-func (r *Rebalancer) checkIndexReadyToDrop() bool {
-	return atomic.LoadInt32(&r.pendingBuild) == 0
 }
 
-// tokenMergeOrReady handles dest TT transitions from TransferTokenInProgress,
+// destTokenToMergeOrReadyLOCKED handles dest TT transitions from TransferTokenInProgress,
 // possibly through TransferTokenMerge, and then to TransferTokenReady (move
 // case) or TransferTokenCommit (non-move case == replica repair; no source
 // index to delete). TransferTokenMerge state is for partitioned indexes where
@@ -1488,7 +2112,11 @@ func (r *Rebalancer) checkIndexReadyToDrop() bool {
 // index. There cannot be two IndexDefns of the same index, so in this situation
 // the moving partition (called a "proxy") gets a "fake" IndexDefn that later
 // must "merge" with the "real" IndexDefn once it has completed its move.
-func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
+//
+// tt arg points to an entry in r.acceptedTokens map.
+// Caller must be holding r.mu write locked.
+func (r *Rebalancer) destTokenToMergeOrReadyLOCKED(ttid string, tt *c.TransferToken) {
+	const method string = "Rebalancer::destTokenToMergeOrReadyLOCKED:" // for logging
 
 	// There is no proxy (no merge needed)
 	if tt.RealInstId == 0 {
@@ -1507,11 +2135,6 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 			tt.State = c.TransferTokenCommit // no source to delete in non-move case
 		}
 		setTransferTokenInMetakv(ttid, tt)
-		atomic.AddInt32(&r.pendingBuild, -1)
-		logging.Infof("Rebalancer::tokenMergeOrReady, Decrementing pendingBuild due to ttid: %v, pendingBuild value: %v", ttid, atomic.LoadInt32(&r.pendingBuild))
-
-		r.dropIndexWhenReady()
-
 	} else {
 		// There is a proxy (merge needed). The proxy partitions need to be move
 		// to the real index instance before Token can move to Ready state.
@@ -1529,17 +2152,17 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 
 			var err error
 			select {
-			case err = <-respch:
 			case <-r.cancel:
-				l.Infof("Rebalancer::tokenMergeOrReady: rebalancer cancel Received")
+				l.Infof("%v rebalancer cancel Received", method)
 				return
 			case <-r.done:
-				l.Infof("Rebalancer::tokenMergeOrReady: rebalancer done Received")
+				l.Infof("%v rebalancer done Received", method)
 				return
+			case err = <-respch:
 			}
-
 			if err != nil {
-				// If there is an error, move back to InProgress state.
+				// If there is an error, rewind state to TransferTokenInProgress so cleanup
+				// will be done after the intentional crash this block then produces.
 				// An error condition indicates that merge has not been
 				// committed yet, so we are safe to revert.
 				tt.State = c.TransferTokenInProgress
@@ -1567,10 +2190,6 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 				if newTT := r.acceptedTokens[ttid]; newTT != nil {
 					newTT.State = tt.State
 				}
-				atomic.AddInt32(&r.pendingBuild, -1)
-				logging.Infof("Rebalancer::tokenMergeOrReady, Decrementing pendingBuild due to ttid: %v, pendingBuild value: %v", ttid, atomic.LoadInt32(&r.pendingBuild))
-
-				r.dropIndexWhenReady()
 			}
 
 		}(ttid, *tt)
@@ -1593,7 +2212,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		l.Errorf("Rebalancer::processTokenAsMaster Detected TransferToken in Error state %v. Abort.", tt)
 
 		r.cancelMetakv()
-		go r.finish(errors.New(tt.Error))
+		go r.finishRebalance(errors.New(tt.Error))
 		return true
 	}
 
@@ -1621,18 +2240,15 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		}
 
 		r.updateMasterTokenState(ttid, c.TransferTokenDeleted)
-
-		if r.checkAllTokensDone() {
+		if r.checkAllTokensDone() { // rebalance completed
 			if r.cb.progress != nil {
 				r.cb.progress(1.0, r.cancel)
 			}
 			l.Infof("Rebalancer::processTokenAsMaster No Tokens Found. Mark Done.")
 			r.cancelMetakv()
-			go r.finish(nil)
+			go r.finishRebalance(nil)
 		} else {
-			if r.checkCurrBatchDone() {
-				r.publishTransferTokenBatch()
-			}
+			r.publishTransferTokenBatch(false)
 		}
 
 	default:
@@ -1647,17 +2263,17 @@ func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err
 
 }
 
+// updateMasterTokenState updates the state of the master versions of transfer tokens
+// in the r.transferTokens map.
 func (r *Rebalancer) updateMasterTokenState(ttid string, state c.TokenState) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if tt, ok := r.transferTokens[ttid]; ok {
 		tt.State = state
-		r.transferTokens[ttid] = tt
 	} else {
 		return false
 	}
-
 	return true
 }
 
@@ -1778,28 +2394,14 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	return
 }
 
+// checkAllTokensDone returns true iff processing for all transfer tokens
+// of the current rebalance is complete (i.e. the rebalance is finished).
 func (r *Rebalancer) checkAllTokensDone() bool {
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for _, tt := range r.transferTokens {
-		if tt.State != c.TransferTokenDeleted {
-			return false
-		}
-	}
-	return true
-}
-
-// checkCurrBatchDone returns true iff all transfer tokens in the current
-// batch have finished processing (reached TransferTokenDeleted state).
-func (r *Rebalancer) checkCurrBatchDone() bool {
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, ttid := range r.currBatchTokens {
-		tt := r.transferTokens[ttid]
 		if tt.State != c.TransferTokenDeleted {
 			return false
 		}
