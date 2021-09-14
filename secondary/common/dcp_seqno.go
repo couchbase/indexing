@@ -1514,11 +1514,13 @@ func WatchClusterVersionChanges(clusterAddr string) {
 		return
 	}
 
-	path := "/poolsStreaming/" + DEFAULT_POOL
+	// Note: As clusterAddr is always localhost we will not use TLS for this.
+	urlStr := fmt.Sprintf("http://%s/poolsStreaming/%s", clusterAddr, DEFAULT_POOL)
 	params := &security.RequestParams{
 		UserAgent: "WatchClusterVersionChanges",
 	}
-	res, err := security.GetWithAuth(clusterAddr+path, params)
+
+	res, err := security.GetWithAuthNonTLS(urlStr, params)
 	if err != nil {
 		logging.Errorf("WatchClusterVersionChanges: Error while getting with auth, err: %v", err)
 		selfRestart()
@@ -1529,7 +1531,7 @@ func WatchClusterVersionChanges(clusterAddr string) {
 		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
 		res.Body.Close()
 
-		logging.Errorf("WatchClusterVersionChanges: HTTP error %v getting %q: %s", res.Status, path, bod)
+		logging.Errorf("WatchClusterVersionChanges: HTTP error %v getting %q: %s", res.Status, urlStr, bod)
 		selfRestart()
 		return
 	}
