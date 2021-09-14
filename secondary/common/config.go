@@ -81,6 +81,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	// security parameters
+	// Note: If we set this to false and set node to node encryption level to all we will
+	// need both TLS and NonTLS versions for ports that are accessed both from local host
+	// and remote host. Eg: Adminport connections from local host might fail as they will
+	// not use TLS where as server will be configured to use TLS connections.
 	"security.encryption.encryptLocalhost": ConfigValue{
 		true,
 		"enable encryption on local host",
