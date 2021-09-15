@@ -259,10 +259,16 @@ var greedyPlannerFuncTestCases = []greedyPlannerFuncTestCase{
 		map[string]bool{"127.0.0.1:9002": true},
 	},
 	{
-		"Place Equivalent Index With 1 Replica - 3 non-empty nodes - 1 SG",
+		"Place Equivalent Index With 1 Replica - 3 non-empty nodes - 1 SG - Skip least loaded node",
 		"../testdata/planner/greedy/topologies/3_nodes_equiv_index.json",
 		"../testdata/planner/greedy/new_equiv_index_1_replica.json",
 		map[string]bool{"127.0.0.1:9000": true, "127.0.0.1:9002": true},
+	},
+	{
+		"Place Equivalent Index With 1 Replica - 3 non-empty nodes - 1 SG - Use least loaded node",
+		"../testdata/planner/greedy/topologies/3_nodes_equiv_index_1.json",
+		"../testdata/planner/greedy/new_equiv_index_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
 	},
 }
 
