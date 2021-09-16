@@ -3129,12 +3129,18 @@ func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string,
 	}
 
 	cinfo.RLock()
-	if cinfo.GetClusterVersion() < common.INDEXER_70_VERSION {
+	cVersion := cinfo.GetClusterVersion()
+	cinfo.RUnlock()
+
+	if cVersion < common.INDEXER_70_VERSION {
 		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
 			" is supported only on fully upgraded cluster.", bucket)
 		return false, retMsg, nil
 	}
-	cinfo.RUnlock()
+
+	if cVersion >= common.INDEXER_71_VERSION {
+		return true, "", nil
+	}
 
 	ver, err := common.GetInternalClusterVersion(cinfo)
 	if err != nil {

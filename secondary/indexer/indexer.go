@@ -1840,10 +1840,15 @@ func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
 		return true, "", nil
 	}
 
-	if idx.clusterInfoClient.ClusterVersion() < common.INDEXER_70_VERSION {
+	cVersion := idx.clusterInfoClient.ClusterVersion()
+	if cVersion < common.INDEXER_70_VERSION {
 		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
 			" is supported only on fully upgraded cluster.", bucket)
 		return false, retMsg, nil
+	}
+
+	if cVersion >= common.INDEXER_71_VERSION {
+		return true, "", nil
 	}
 
 	cinfo := idx.clusterInfoClient.GetClusterInfoCache()

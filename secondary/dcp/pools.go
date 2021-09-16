@@ -319,7 +319,10 @@ func maybeAddAuth(req *http.Request, ah AuthHandler) {
 	}
 }
 
-func queryRestAPI(
+// queryRestAPIOnLocalhost is only used for communication with ns_server
+// And ns_server communication is always on localhost so skipping TLS for the
+// Get calls here. This used only in client.parseURLResponse and bucket.parseURLResponse
+func queryRestAPIOnLocalhost(
 	baseURL *url.URL,
 	path string,
 	authHandler AuthHandler,
@@ -334,7 +337,7 @@ func queryRestAPI(
 		u.Path = path
 	}
 
-	res, err := security.GetWithAuth(u.String(), reqParams)
+	res, err := security.GetWithAuthNonTLS(u.String(), reqParams)
 	if err != nil {
 		return err
 	}
@@ -417,7 +420,7 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 		u.Path = path
 	}
 
-	res, err := security.GetWithAuth(u.String(), nil)
+	res, err := security.GetWithAuthNonTLS(u.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -462,15 +465,19 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 	return nil
 }
 
+// parseURLResponse is used for communication with ns_server and we always talk to ns_server
+// on localhost we use queryRestAPIOnLocalhost which will skip TLS.
 func (c *Client) parseURLResponse(path string, out interface{}) error {
 	params := &security.RequestParams{
 		Timeout:   HttpRequestTimeout,
 		UserAgent: c.UserAgent,
 	}
-	return queryRestAPI(c.BaseURL, path, c.ah, out, params)
+	return queryRestAPIOnLocalhost(c.BaseURL, path, c.ah, out, params)
 
 }
 
+// Note: This function is not being used currently. queryRestAPIOnLocalhost in this function does
+// not use TLS.
 func (b *Bucket) parseURLResponse(path string, out interface{}) error {
 	nodes := b.Nodes()
 	if len(nodes) == 0 {
@@ -492,7 +499,7 @@ func (b *Bucket) parseURLResponse(path string, out interface{}) error {
 			Scheme: "http",
 		}
 
-		err := queryRestAPI(url, path, b.pool.client.ah, out, &security.RequestParams{Timeout: HttpRequestTimeout})
+		err := queryRestAPIOnLocalhost(url, path, b.pool.client.ah, out, &security.RequestParams{Timeout: HttpRequestTimeout})
 		if err == nil {
 			return err
 		}

@@ -86,6 +86,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	// security parameters
+	// Note: If we set this to false and set node to node encryption level to all we will
+	// need both TLS and NonTLS versions for ports that are accessed both from local host
+	// and remote host. Eg: Adminport connections from local host might fail as they will
+	// not use TLS where as server will be configured to use TLS connections.
 	"security.encryption.encryptLocalhost": ConfigValue{
 		true,
 		"enable encryption on local host",
@@ -1780,6 +1784,27 @@ var SystemConfig = Config{
 		float64(0.5),
 		"Max ratio of pages to be scanned during a purge attempt",
 		float64(0.5),
+		false,
+		false,
+	},
+	"indexer.plasma.reader.purge.enabled": ConfigValue{
+		true,
+		"Enable mvcc purge from reader",
+		true,
+		false,
+		false,
+	},
+	"indexer.plasma.reader.purge.threshold": ConfigValue{
+		float64(5),
+		"Reader Purge Threshold.  Initialized to 5 (20% valid record per page).",
+		float64(5),
+		false,
+		false,
+	},
+	"indexer.plasma.reader.purge.pageRatio": ConfigValue{
+		float64(0.25),
+		" number of items in a page relative to (active max page items + active delta chain length)",
+		float64(0.25),
 		false,
 		false,
 	},

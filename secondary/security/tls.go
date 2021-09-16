@@ -438,7 +438,7 @@ func getTLSTransport(host string) (*http.Transport, error) {
 		}).DialContext,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		TLSHandshakeTimeout:   60 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	transport.TLSClientConfig = tlsConfig
@@ -547,10 +547,12 @@ func ConvertHttpResponse(r *http.Response, resp interface{}) error {
 
 //
 // GetWithAuth performs an HTTP(S) GET request with optional URL parameters
-// and Basic Authentication.
+// and Basic Authentication. If encryption is enabled, the request is made over HTTPS.
+// This function will make use of encrypt port mapping to translate non-SSL port to SSL port.
+// params may be nil. eTag may be the empty string, in which case it is not transmitted.
 //
 func GetWithAuth(u string, params *RequestParams) (*http.Response, error) {
-	return GetWithAuthAndETag(u, params, "")
+	return getWithAuthInternal(u, params, "", true)
 }
 
 //
@@ -560,14 +562,45 @@ func GetWithAuth(u string, params *RequestParams) (*http.Response, error) {
 // be the empty string, in which case it is not transmitted.
 //
 func GetWithAuthAndETag(u string, params *RequestParams, eTag string) (*http.Response, error) {
-	url, err := GetURL(u)
-	if err != nil {
-		return nil, err
+	return getWithAuthInternal(u, params, eTag, true)
+}
+
+//
+// GetWithAuthNonTLS performs an HTTP GET with Basic Auth. This function will not convert HTTP URL
+// to HTTPS using Encrypted Port Mapping.
+//
+func GetWithAuthNonTLS(u string, params *RequestParams) (*http.Response, error) {
+	return getWithAuthInternal(u, params, "", false)
+}
+
+func getWithAuthInternal(u string, params *RequestParams, eTag string, allowTls bool) (*http.Response, error) {
+
+	var url *url.URL
+	var err error
+
+	if allowTls {
+		url, err = GetURL(u)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if strings.HasPrefix(u, "https://") {
+			return nil, fmt.Errorf("URL String %s starts with https and allowTls is set to false", u)
+		}
+
+		if !strings.HasPrefix(u, "http://") {
+			u = "http://" + u
+		}
+
+		url, err = url.Parse(u)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	start := time.Now()
 	defer func() {
-		logging.Verbosef("GetWithAuth: url %v elapsed %v", url.String(), time.Now().Sub(start))
+		logging.Verbosef("getWithAuthInternal: url %v elapsed %v", url.String(), time.Now().Sub(start))
 	}()
 
 	req, err := http.NewRequest("GET", url.String(), nil)
@@ -588,9 +621,14 @@ func GetWithAuthAndETag(u string, params *RequestParams, eTag string) (*http.Res
 		return nil, err
 	}
 
-	client, err := MakeClient(url.String())
-	if err != nil {
-		return nil, err
+	var client *http.Client
+	if allowTls {
+		client, err = MakeClient(url.String())
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		client = &http.Client{}
 	}
 
 	if params != nil && params.Timeout >= time.Duration(0) {

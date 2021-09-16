@@ -7026,10 +7026,12 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	}
 
 	if len(filteredNodeList) == 0 {
+		solution.PrintLayout()
 		return nil, ErrNoAvailableIndexer
 	}
 
 	if len(filteredNodeList) < len(indexes) {
+		solution.PrintLayout()
 		return nil, ErrNoAvailableIndexer
 	}
 
@@ -7047,12 +7049,13 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	}
 
 	getNextIndexer := func(i int) *IndexerNode {
-
 		// Update the filled nodes map, server group map and forced equivalent index
 		// placement count before returning the node
 		useNode := func(node *IndexerNode) {
 			if numForcePlaceEquivalent > 0 {
-				numForcePlaceEquivalent--
+				if p.equivIndexMap[node.IndexerId] {
+					numForcePlaceEquivalent--
+				}
 			}
 
 			filledServerGroups[node.ServerGroup] = true
@@ -7098,6 +7101,7 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	for i, idx := range indexes {
 		indexer := getNextIndexer(i)
 		if indexer == nil {
+			solution.PrintLayout()
 			return nil, ErrNoAvailableIndexer
 		}
 
