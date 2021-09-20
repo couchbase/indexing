@@ -29,6 +29,7 @@ var options struct {
 	certFile    string
 	keyFile     string
 	httpsPort   string
+	caFile      string
 }
 
 func argParse() string {
@@ -44,6 +45,7 @@ func argParse() string {
 	fset.StringVar(&options.certFile, "certFile", "", "Index https X509 certificate file")
 	fset.StringVar(&options.keyFile, "keyFile", "", "Index https cert key file")
 	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
+	fset.StringVar(&options.caFile, "caFile", "", "Multiple Root/Client CAs")
 
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
@@ -154,7 +156,9 @@ func main() {
 		}
 	*/
 
-	projector.NewProjector(options.numVbuckets, config, certFile, keyFile)
+	caFile := options.caFile
+
+	projector.NewProjector(options.numVbuckets, config, certFile, keyFile, caFile)
 
 	<-done
 }

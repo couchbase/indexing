@@ -473,9 +473,10 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 
 	certFile := idx.config["certFile"].String()
 	keyFile := idx.config["keyFile"].String()
+	caFile := idx.config["caFile"].String()
 	clusterAddr := idx.config["clusterAddr"].String()
 	logger := func(err error) { common.Console(clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, caFile, encryptLocalHost); err != nil {
 		return err
 	}
 

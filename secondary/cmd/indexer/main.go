@@ -52,6 +52,7 @@ func main() {
 	isEnterprise := fset.Bool("isEnterprise", true, "Enterprise Edition")
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
+	caFile := fset.String("caFile", "", "Multiple Root/Client CAs")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
@@ -96,6 +97,7 @@ func main() {
 	config.SetValue("indexer.httpsPort", *httpsPort)
 	config.SetValue("indexer.certFile", *certFile)
 	config.SetValue("indexer.keyFile", *keyFile)
+	config.SetValue("indexer.caFile", *caFile)
 	config.SetValue("indexer.streamInitPort", *streamInitPort)
 	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)

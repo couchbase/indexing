@@ -1970,7 +1970,7 @@ func (c *GsiClient) initSecurityContext(encryptLocalHost bool) (err error) {
 
 	pInitOnce.Do(func() {
 		logger := func(err error) { common.Console(c.cluster, err.Error()) }
-		if err = security.InitSecurityContextForClient(logger, c.cluster, "", "", encryptLocalHost); err != nil {
+		if err = security.InitSecurityContextForClient(logger, c.cluster, "", "", "", encryptLocalHost); err != nil {
 			return
 		}
 

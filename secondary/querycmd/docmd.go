@@ -987,11 +987,11 @@ func mustNotHave(fset *flag.FlagSet, keys ...string) error {
 	return nil
 }
 
-func InitSecurityContext(clusterAddr, localhost string, certFile string, keyFile string, encryptLocalHost bool) error {
+func InitSecurityContext(clusterAddr, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) error {
 	logging.Infof("Initializing security context")
 
 	logger := func(err error) { logging.Errorf("[InitSecurityContext] Failed with error %v ", err) }
-	err := security.InitSecurityContextForClient(logger, localhost, certFile, keyFile, encryptLocalHost)
+	err := security.InitSecurityContextForClient(logger, localhost, certFile, keyFile, caFile, encryptLocalHost)
 	if err != nil {
 		logging.Errorf("InitSecurityContextForClient failed with error %v", err)
 		return err

@@ -58,6 +58,7 @@ type Projector struct {
 
 	certFile             string
 	keyFile              string
+	caFile               string
 	reqch                chan apcommon.Request
 	enableSecurityChange chan bool
 	//Statistics
@@ -70,7 +71,7 @@ type Projector struct {
 
 // NewProjector creates a news projector instance and
 // starts a corresponding adminport.
-func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) *Projector {
+func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string) *Projector {
 	p := &Projector{
 		topics:               make(map[string]*Feed),
 		topicSerialize:       make(map[string]*sync.Mutex),
@@ -78,6 +79,7 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 		pooln:                "default", // TODO: should this be configurable ?
 		certFile:             certFile,
 		keyFile:              keyFile,
+		caFile:               caFile,
 		enableSecurityChange: make(chan bool),
 		statsCmdCh:           make(chan []interface{}, 1),
 		statsStopCh:          make(chan bool, 1),
@@ -1000,7 +1002,7 @@ func requestRead(r io.Reader, data []byte) (err error) {
 func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 
 	logger := func(err error) { c.Console(p.clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, p.clusterAddr, p.certFile, p.keyFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, p.clusterAddr, p.certFile, p.keyFile, p.caFile, encryptLocalHost); err != nil {
 		return err
 	}
 
