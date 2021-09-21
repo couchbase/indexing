@@ -269,7 +269,7 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v) with {\"num_replica\":2}",
 			indexName, bucketName, fieldName1, fieldName2)
 		executeN1qlStmt(n1qlStmt, bucketName, method, t)
-		time.Sleep(6 * time.Second) // these take some time to build
+		//time.Sleep(6 * time.Second) // these take some time to build
 		log.Printf("%v: %v index is now active.", method, indexName)
 	}
 
@@ -287,7 +287,7 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 				"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1}",
 				indexName, bucketName, fieldName1, fieldName2)
 			executeN1qlStmt(n1qlStmt, bucketName, method, t)
-			time.Sleep(15 * time.Second) // these take some time to build
+			//time.Sleep(15 * time.Second) // these take some time to build
 			log.Printf("%v: %v index is now active.", method, indexName)
 		}
 	} else {
