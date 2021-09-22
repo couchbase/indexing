@@ -1,11 +1,17 @@
 package protoProjector
 
-import "time"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/collatejson"
-import qexpr "github.com/couchbase/query/expression"
-import qparser "github.com/couchbase/query/expression/parser"
-import qvalue "github.com/couchbase/query/value"
+import (
+	"time"
+
+	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	qexpr "github.com/couchbase/query/expression"
+
+	qparser "github.com/couchbase/query/expression/parser"
+
+	qvalue "github.com/couchbase/query/value"
+)
 
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
 // and compile them for evaluation.

@@ -898,6 +898,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 						isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
 						defn.NumPartitions = instance.NumPartitions
 
+						secExprs, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc)
+
 						status := IndexStatus{
 							DefnId:       defn.DefnId,
 							InstId:       common.IndexInstId(instance.InstId),
@@ -906,7 +908,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 							Scope:        defn.Scope,
 							Collection:   defn.Collection,
 							IsPrimary:    defn.IsPrimary,
-							SecExprs:     defn.SecExprs,
+							SecExprs:     secExprs,
 							WhereExpr:    defn.WhereExpr,
 							IndexType:    string(defn.Using),
 							Status:       stateStr,
@@ -3760,6 +3762,7 @@ func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *Inde
 
 	// TODO: Scheduled: Should we rename it to ScheduledBuild ?
 
+	secExprs, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc)
 	// Use DefnId for InstId as a placeholder value because InstId cannot zero.
 	return &IndexStatus{
 		DefnId:       defn.DefnId,
@@ -3769,7 +3772,7 @@ func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *Inde
 		Scope:        defn.Scope,
 		Collection:   defn.Collection,
 		IsPrimary:    defn.IsPrimary,
-		SecExprs:     defn.SecExprs,
+		SecExprs:     secExprs,
 		WhereExpr:    defn.WhereExpr,
 		IndexType:    common.GetStorageMode().String(),
 		Status:       "Scheduled for Creation",

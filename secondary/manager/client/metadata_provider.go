@@ -176,6 +176,7 @@ type event struct {
 	status   []c.IndexState
 	topology map[int]map[c.PartitionId]c.IndexerId
 	notifyCh chan error
+	all      bool // all instance should satisfy event
 }
 
 type IndexerStatus struct {
@@ -910,7 +911,7 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
 	var states []c.IndexState
 	if idxDefn.Deferred {
-		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_CATCHUP, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	} else {
 		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	}
@@ -933,7 +934,7 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
 	// Use nil topolgy as at this point the topology is unknown. This can lead
 	// to false notification in case of restart of unrelated indexer process.
-	e := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil}
+	e := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil, all: true}
 	if !o.repo.registerEvent(e) {
 		// This means that the event has already occurred.
 		return nil
@@ -1230,13 +1231,13 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	var states []c.IndexState
-	if !idxDefn.Deferred && !asyncCreate {
+	if !idxDefn.Deferred {
 		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	} else {
-		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_CATCHUP, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	}
 
-	err = o.repo.waitForEvent(idxDefn.DefnId, states, topologyMap)
+	err = o.repo.waitForAllEvent(idxDefn.DefnId, states, topologyMap)
 	if err != nil {
 		return fmt.Errorf("%v\n", err)
 	}
@@ -1907,20 +1908,42 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	// Array index related information
 	//
 	isArrayIndex := false
+	isArrayFlattened := false
 	arrayExprCount := 0
-	for _, exp := range secExprs {
-		isArray, _, _, err := queryutil.IsArrayExpression(exp)
+	skipFlattenExprsTillPos := 0
+	for pos, exp := range secExprs {
+		// As `secExprs` in flattened array index are exploded,
+		// skip some `secExprs`
+		if isArrayIndex && isArrayFlattened && pos < skipFlattenExprsTillPos {
+			continue
+		}
+
+		isArray, _, isFlatten, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Fails to create index.  Error in parsing expression %v : %v", exp, err)), false
 		}
 		if isArray == true {
 			isArrayIndex = isArray
+			isArrayFlattened = isFlatten
 			arrayExprCount++
+		}
+		if isArray && isFlatten {
+			numFlattenKeys, err := queryutil.NumFlattenKeys(exp)
+			if err != nil {
+				return nil, errors.New(fmt.Sprintf("Fails to create index.  Error while retrieving flatten keys in expression %v : %v ", exp, err)), false
+			}
+			skipFlattenExprsTillPos = pos + numFlattenKeys
 		}
 	}
 
 	if arrayExprCount > 1 {
 		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
+	}
+
+	if isArrayIndex && isArrayFlattened && (version < c.INDEXER_71_VERSION || clusterVersion < c.INDEXER_71_VERSION) {
+		return nil,
+			errors.New("Fail to create index with flatten array. This option is available only after all nodes in the cluster are atleast running on server 7.1 version"),
+			false
 	}
 
 	//
@@ -1964,6 +1987,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Nodes:              nodes,
 		Immutable:          immutable,
 		IsArrayIndex:       isArrayIndex,
+		IsArrayFlattened:   isArrayFlattened,
 		NumReplica:         uint32(numReplica),
 		HashScheme:         c.CRC32,
 		NumPartitions:      uint32(numPartition),
@@ -4657,6 +4681,41 @@ func (r *metadataRepo) hasWellFormedInstMatchingStatusNoLock(defnId c.IndexDefnI
 	return false
 }
 
+// Only Consider instance with Active RState and full partitions
+// all argument if true will ensure every instance for this defnId (usually replicas)
+// matches one of the status from status argument.
+// when all = false function retains the behaviour of hasWellFormedInstMatchingStatusNoLock that is
+// at least one instance should match the allowed statuses.
+func (r *metadataRepo) hasWellFormedAllInstMatchingStatusNoLock(defnId c.IndexDefnId, status []c.IndexState, all bool) bool {
+
+	if meta, ok := r.indices[defnId]; ok && meta != nil && meta.Definition != nil && len(meta.Instances) != 0 {
+		for _, inst := range meta.Instances {
+			instMatches := false
+			for _, s := range status {
+				if inst.State == s && isWellFormed(meta.Definition, inst) {
+					if !all {
+						return true // at least one of the instance matches allowed status, no need to check further  - old behaviour
+					}
+					instMatches = true // this instance matches one of the allowed statuses, continue checking other instances - new behaviour
+					break
+				}
+			}
+			// this instance is not in any allowed status,
+			// if all=false then continue with remaining instances - old behaviour;
+			// if all = true && instMatches = false we are done here else continue checking remaining instances -- new behaviour.
+			if all && instMatches == false {
+				return false
+			}
+		}
+		// if all = true and we reached here means all instances have matched some allowed status
+		// if all was false and we reached here then no instance matched allowed status
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
 // Only Consider instance with Active RState
 func (r *metadataRepo) getDefnErrorIgnoreStatusNoLock(defnId c.IndexDefnId) error {
 
@@ -5229,6 +5288,7 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 	return result
 }
 
+// wait for one of the instance to satisfy the event
 func (r *metadataRepo) waitForEvent(defnId c.IndexDefnId, status []c.IndexState, topology map[int]map[c.PartitionId]c.IndexerId) error {
 
 	event := &event{defnId: defnId, status: status, notifyCh: make(chan error, 1), topology: topology}
@@ -5243,12 +5303,27 @@ func (r *metadataRepo) waitForEvent(defnId c.IndexDefnId, status []c.IndexState,
 	return nil
 }
 
+// wait for all instances to satisfy the event.
+func (r *metadataRepo) waitForAllEvent(defnId c.IndexDefnId, status []c.IndexState, topology map[int]map[c.PartitionId]c.IndexerId) error {
+
+	event := &event{defnId: defnId, status: status, notifyCh: make(chan error, 1), topology: topology, all: true}
+	if r.registerEvent(event) {
+		logging.Debugf("metadataRepo.waitForAllEvent(): wait event : id %v status %v", event.defnId, event.status)
+		err, ok := <-event.notifyCh
+		if ok && err != nil {
+			logging.Debugf("metadataRepo.waitForAllEvent(): wait arrives : id %v status %v", event.defnId, event.status)
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *metadataRepo) registerEvent(event *event) bool {
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	if !r.hasWellFormedInstMatchingStatusNoLock(event.defnId, event.status) {
+	if !r.hasWellFormedAllInstMatchingStatusNoLock(event.defnId, event.status, event.all) {
 		logging.Debugf("metadataRepo.registerEvent(): add event : id %v status %v", event.defnId, event.status)
 		r.notifiers[event.defnId] = event
 		return true
@@ -5264,7 +5339,7 @@ func (r *metadataRepo) notifyEvent() {
 	defer r.mutex.Unlock()
 
 	for defnId, event := range r.notifiers {
-		if r.hasWellFormedInstMatchingStatusNoLock(defnId, event.status) {
+		if r.hasWellFormedAllInstMatchingStatusNoLock(defnId, event.status, event.all) {
 			delete(r.notifiers, defnId)
 			close(event.notifyCh)
 		} else if err := r.getDefnErrorIgnoreStatusNoLock(defnId); err != nil {

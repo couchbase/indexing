@@ -8,34 +8,41 @@
 
 package n1ql
 
-import "fmt"
-import "os"
-import "sync"
-import "time"
-import "path"
-import "strings"
-import "encoding/gob"
-import "strconv"
-import "io/ioutil"
-import "sync/atomic"
-import "net/url"
-import "runtime/debug"
+import (
+	"encoding/gob"
+	"fmt"
+	"io/ioutil"
+	"net/url"
+	"os"
+	"path"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
-import l "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
+	l "github.com/couchbase/indexing/secondary/logging"
 
-import "github.com/couchbase/indexing/secondary/security"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
-import "github.com/couchbase/query/datastore"
-import "github.com/couchbase/query/errors"
-import "github.com/couchbase/query/expression"
-import "github.com/couchbase/query/expression/parser"
-import "github.com/couchbase/query/timestamp"
-import "github.com/couchbase/query/value"
-import qlog "github.com/couchbase/query/logging"
-import json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/collatejson"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/security"
+
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/errors"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
+	"github.com/couchbase/query/timestamp"
+	"github.com/couchbase/query/value"
+
+	qlog "github.com/couchbase/query/logging"
+
+	json "github.com/couchbase/indexing/secondary/common/json"
+)
 
 const DONEREQUEST = 1
 const BACKFILLPREFIX = "scan-results"
@@ -488,13 +495,45 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	}
 
 	// index keys
-	secStrs := make([]string, len(rangeKey))
-	desc := make([]bool, len(rangeKey))
+	secStrs := make([]string, 0)
+	desc := make([]bool, 0)
 
-	for i, key := range rangeKey {
+	// For flattened array index, explode the secExprs string. E.g.,
+	// for the index:
+	// create index idx on default(org,
+	//        DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC, v.year) for v in dob end, email)
+	// The secExprs array will contain
+	// [`org`, `DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC, v.year) for v in dob end`,
+	//         `DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC, v.year) for v in dob end`,
+	//         `DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC, v.year) for v in dob end`,
+	//         `email`]
+	//
+	// The number of times the "FLATTEN_KEYS" expression is repated inside the secExprs
+	// is proportional to the number of fields in the "FLATTEN_KEYS" expression.
+	//
+	// The `secExprs` slice is exploded for two reasons:
+	//   a. To match the DESC attributes for flattened array expressions. In the
+	//      above example, the desc slice is constructed as [false, false, true, false, false].
+	//      The length of desc slice and len(secExprs) are made equal
+	//   b. For scans which depend on key positions (like group, groupAggrs),
+	//      match the key position in scans with the key positions in secExprs.
+	//      E.g., keyPos 4 in scans will map to keyPos 4 in secExprs i.e. `email`
+	for _, key := range rangeKey {
 		s := expression.NewStringer().Visit(key.Expr)
-		secStrs[i] = s
-		desc[i] = key.HasAttribute(datastore.IK_DESC)
+		isArray, _, isFlatten := key.Expr.IsArrayIndexKey()
+
+		if isArray && isFlatten {
+			if all, ok := key.Expr.(*expression.All); ok && all.Flatten() {
+				fk := all.FlattenKeys()
+				for pos, _ := range fk.Operands() {
+					secStrs = append(secStrs, s)
+					desc = append(desc, fk.HasDesc(pos))
+				}
+			}
+		} else {
+			secStrs = append(secStrs, s)
+			desc = append(desc, key.HasAttribute(datastore.IK_DESC))
+		}
 	}
 
 	// with
@@ -819,12 +858,14 @@ func newSecondaryIndexFromMetaData(
 	}
 
 	if indexDefn.SecExprs != nil {
-		exprs := make(expression.Expressions, 0, len(indexDefn.SecExprs))
-		for _, secExpr := range indexDefn.SecExprs {
+		origSecExprs, origDesc, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc)
+		exprs := make(expression.Expressions, 0, len(origSecExprs))
+		for _, secExpr := range origSecExprs {
 			expr, _ := parser.Parse(secExpr)
 			exprs = append(exprs, expr)
 		}
 		si.secExprs = exprs
+		si.desc = origDesc
 	}
 
 	if len(indexDefn.PartitionKeys) != 0 {
@@ -1188,6 +1229,7 @@ func (si *secondaryIndex2) Scan2(
 
 // RangeKey2 implements Index2{} interface.
 func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
+
 	if si != nil && si.secExprs != nil {
 		idxkeys := make(datastore.IndexKeys, 0, len(si.secExprs))
 		for i, exprS := range si.secExprs {

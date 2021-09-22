@@ -155,7 +155,7 @@ retry:
 	slice.id = sliceId
 
 	// Array related initialization
-	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
+	_, slice.isArrayDistinct, slice.isArrayFlattened, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +260,7 @@ type fdbSlice struct {
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
+	isArrayFlattened  bool
 
 	keySzConf        keySizeConfig
 	keySzConfChanged int32 //0 or 1: indicates if key size config has changeed or not
@@ -576,7 +577,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		}
 
 		if oldEntriesBytes, oldKeyCount, _, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
-			tmpBuf, fdb.isArrayDistinct, false, fdb.keySzConf); err != nil {
+			tmpBuf, fdb.isArrayDistinct, fdb.isArrayFlattened, false, fdb.keySzConf); err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 			return fdb.deleteSecArrayIndex(docid, workerId)
@@ -595,7 +596,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
 		newEntriesBytes, newKeyCount, newbufLen, err = ArrayIndexItems(key, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true, fdb.keySzConf)
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct, fdb.isArrayFlattened, true, fdb.keySzConf)
 		if err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
@@ -863,7 +864,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
-		tmpBuf, fdb.isArrayDistinct, false, fdb.keySzConf)
+		tmpBuf, fdb.isArrayDistinct, fdb.isArrayFlattened, false, fdb.keySzConf)
 
 	if err != nil {
 		// TODO: Do not crash for non-storage operation. Force delete the old entries
