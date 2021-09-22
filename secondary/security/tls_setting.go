@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/cbauth"
+	cbtls "github.com/couchbase/goutils/tls"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -358,8 +359,12 @@ func (p *SecurityContext) refreshCert(certFile string, keyFile string, setting *
 		logging.Warnf("certifcate location is missing.  Cannot refresh certifcate")
 		return nil
 	}
+	var privateKeyPassphrase []byte
+	if setting.tlsPreference != nil {
+		privateKeyPassphrase = setting.tlsPreference.PrivateKeyPassphrase
+	}
 
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	cert, err := cbtls.LoadX509KeyPair(certFile, keyFile, privateKeyPassphrase)
 	if err != nil {
 		err1 := fmt.Errorf("Fail to due generate SSL certificate: %v", err)
 		if p.logger != nil {
