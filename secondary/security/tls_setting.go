@@ -188,11 +188,42 @@ func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionC
 	}
 }
 
+// Used by cbindex to add cacert
+func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig, encryptConfig *cbauth.ClusterEncryptionConfig, certFile string) {
+
+	newSetting := &SecuritySetting{}
+
+	oldSetting := GetSecuritySetting()
+	if oldSetting != nil {
+		temp := *oldSetting
+		newSetting = &temp
+	}
+
+	newSetting.tlsPreference = tlsConfig
+	newSetting.encryptionEnabled = encryptConfig.EncryptData
+	newSetting.disableNonSSLPort = encryptConfig.DisableNonSSLPorts
+
+	if certFile != "" {
+		certInBytes, err := ioutil.ReadFile(certFile)
+		if err != nil {
+			logging.Errorf("Fail to due load SSL certificate from file: %v", err)
+		}
+		newSetting.certInBytes = certInBytes
+	}
+
+	UpdateSecuritySetting(newSetting)
+}
+
 func buildLocalAddr(localhost string) (map[string]bool, error) {
 
-	hostname, _, err := net.SplitHostPort(localhost)
-	if err != nil {
-		return nil, err
+	var hostname string
+	var err error
+
+	if localhost != "" {
+		hostname, _, err = net.SplitHostPort(localhost)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	addrs, err := net.InterfaceAddrs()
@@ -218,7 +249,10 @@ func buildLocalAddr(localhost string) (map[string]bool, error) {
 			ips[ip.String()] = true
 		}
 	}
-	ips[hostname] = true
+
+	if localhost != "" {
+		ips[hostname] = true
+	}
 
 	return ips, nil
 }

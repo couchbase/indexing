@@ -1,27 +1,33 @@
 package querycmd
 
-import json "github.com/couchbase/indexing/secondary/common/json"
-import "flag"
-import "fmt"
-import "io"
-import "bytes"
-import "strings"
-import "strconv"
-import "net"
-import "errors"
-import "time"
-import "net/http"
-import "io/ioutil"
-import "os"
+import (
+	"bytes"
+	"crypto/tls"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
-import c "github.com/couchbase/indexing/secondary/common"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/query/expression"
-import "github.com/couchbase/query/parser/n1ql"
+	"github.com/couchbase/cbauth"
+	json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/parser/n1ql"
+)
 
 // Command object containing parsed result from command-line
 // or program constructued list of args.
@@ -57,6 +63,9 @@ type Command struct {
 	ConfigKey string
 	ConfigVal string
 	Help      bool
+
+	CACert string
+	UseTLS bool
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -96,6 +105,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
 	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
 	fset.StringVar(&cmdOptions.Using, "using", "gsi", "storage type to use")
+
+	// TLS Options
+	fset.BoolVar(&cmdOptions.UseTLS, "use_tls", false, "Enable TLS connections")
+	fset.StringVar(&cmdOptions.CACert, "cacert", "", "CACert")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -684,5 +697,28 @@ func mustNotHave(fset *flag.FlagSet, keys ...string) error {
 			return fmt.Errorf("Invalid flags. Flag '%s' cannot appear for this operation", key)
 		}
 	}
+	return nil
+}
+
+func InitSecurityContext(clusterAddr, localhost string, certFile string, keyFile string, encryptLocalHost bool) error {
+	logging.Infof("Initializing security context")
+
+	logger := func(err error) { logging.Errorf("[InitSecurityContext] Failed with error %v ", err) }
+	err := security.InitSecurityContextForClient(logger, localhost, certFile, keyFile, encryptLocalHost)
+	if err != nil {
+		logging.Errorf("InitSecurityContextForClient failed with error %v", err)
+		return err
+	}
+
+	encryptionConfig := &cbauth.ClusterEncryptionConfig{DisableNonSSLPorts: true, EncryptData: true}
+
+	tlsConfig := &cbauth.TLSConfig{
+		MinVersion:               tls.VersionTLS12,
+		PreferServerCipherSuites: true,
+	}
+
+	security.SetTLSConfigAndCACert(tlsConfig, encryptionConfig, certFile)
+	logging.Infof("Done InitSecurityContext EncryptionEnabled: %v, DisableNonSSLPorts", security.EncryptionEnabled(), security.DisableNonSSLPort())
+
 	return nil
 }
