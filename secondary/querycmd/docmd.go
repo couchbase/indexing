@@ -3,6 +3,7 @@ package querycmd
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -82,6 +83,9 @@ type Command struct {
 	WaitForClientBootstrap int64
 
 	NumBuilds int64
+
+	CACert string
+	UseTLS bool
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -136,6 +140,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	fset.StringVar(&scheme, "scheme", string(c.SINGLE), "Partition scheme for partitioned index.")
 	fset.StringVar(&partitionKeys, "partitionKeys", "", "Comma separated fields for partition key for partitioned index.")
+
+	// TLS Options
+	fset.BoolVar(&cmdOptions.UseTLS, "use_tls", false, "Enable TLS connections")
+	fset.StringVar(&cmdOptions.CACert, "cacert", "", "CACert")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -976,5 +984,28 @@ func mustNotHave(fset *flag.FlagSet, keys ...string) error {
 			return fmt.Errorf("Invalid flags. Flag '%s' cannot appear for this operation", key)
 		}
 	}
+	return nil
+}
+
+func InitSecurityContext(clusterAddr, localhost string, certFile string, keyFile string, encryptLocalHost bool) error {
+	logging.Infof("Initializing security context")
+
+	logger := func(err error) { logging.Errorf("[InitSecurityContext] Failed with error %v ", err) }
+	err := security.InitSecurityContextForClient(logger, localhost, certFile, keyFile, encryptLocalHost)
+	if err != nil {
+		logging.Errorf("InitSecurityContextForClient failed with error %v", err)
+		return err
+	}
+
+	encryptionConfig := &cbauth.ClusterEncryptionConfig{DisableNonSSLPorts: true, EncryptData: true}
+
+	tlsConfig := &cbauth.TLSConfig{
+		MinVersion:               tls.VersionTLS12,
+		PreferServerCipherSuites: true,
+	}
+
+	security.SetTLSConfigAndCACert(tlsConfig, encryptionConfig, certFile)
+	logging.Infof("Done InitSecurityContext EncryptionEnabled: %v, DisableNonSSLPorts", security.EncryptionEnabled(), security.DisableNonSSLPort())
+
 	return nil
 }
