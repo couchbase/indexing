@@ -76,6 +76,7 @@ var ErrIndexerConnection = errors.New("Unable to connect to all indexer nodes")
 var ErrBucketUUIDChanged = errors.New("Bucket UUID has changed. Bucket may have been dropped and recreated.")
 var ErrScopeIdChanged = errors.New("ScopeId has changed. Scope may have been dropped and recreated.")
 var ErrCollectionIdChanged = errors.New("CollectionId has changed. Collection may have been dropped and recreated.")
+var ErrIndexScopeLimitReached = errors.New("Limit for number of indexes that can be created per scope has been reached.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
@@ -87,6 +88,7 @@ var NonRetryableErrorsInCreate = []error{
 	ErrBucketUUIDChanged,
 	ErrScopeIdChanged,
 	ErrCollectionIdChanged,
+	ErrIndexScopeLimitReached,
 }
 
 var RetryableErrorsInCreate = []error{
