@@ -3986,17 +3986,6 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	case common.INIT_STREAM:
 		idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
 
-		state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
-
-		//skip processing merge ack for inactive or recovery streams.
-		if state == STREAM_PREPARE_RECOVERY ||
-			state == STREAM_RECOVERY ||
-			state == STREAM_INACTIVE {
-			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
-				streamId, keyspaceId, state)
-			return
-		}
-
 		//if MAINT_STREAM is not running
 		//i. all indexes dropped
 		//ii. all indexes get reset due to rollback to 0
