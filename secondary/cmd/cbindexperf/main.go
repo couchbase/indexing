@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"os"
 	"runtime"
@@ -12,6 +10,10 @@ import (
 	"runtime/pprof"
 	"strings"
 	"time"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/querycmd"
 )
 
 func handleError(err error) {
@@ -33,6 +35,8 @@ func main() {
 	memprofile := flag.String("memprofile", "", "write mem profile to file")
 	logLevel := flag.String("logLevel", "error", "Log Level")
 	gcpercent := flag.Int("gcpercent", 100, "GC percentage")
+	useTls := flag.Bool("use_tls", false, "Set to enable TLS Connections")
+	caCert := flag.String("cacert", "", "CA Cert")
 
 	flag.Parse()
 
@@ -68,6 +72,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("Failed to initialize cbauth: %s\n", err)
 		os.Exit(1)
+	}
+
+	if *useTls {
+		querycmd.InitSecurityContext(*cluster, "", *caCert, "", true)
 	}
 
 	// Go runtime has default gc percent as 100.
