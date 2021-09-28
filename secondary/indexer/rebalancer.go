@@ -93,7 +93,7 @@ type Rebalancer struct {
 
 	supvMsgch MsgChannel
 
-	localaddr string
+	localaddr string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
 
 	wg sync.WaitGroup // group of all currently running Rebalance goroutines
 

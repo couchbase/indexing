@@ -150,19 +150,22 @@ type indexer struct {
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk              Timekeeper         //handle to timekeeper
-	storageMgr      StorageManager     //handle to storage manager
-	compactMgr      CompactionManager  //handle to compaction manager
-	mutMgr          MutationManager    //handle to mutation manager
-	rebalMgr        RebalanceMgr       //handle to rebalance manager
-	ddlSrvMgr       *DDLServiceMgr     //handle to ddl service manager
-	schedIdxCreator *schedIndexCreator // handle to scheduled index creator
-	clustMgrAgent   ClustMgrAgent      //handle to ClustMgrAgent
-	kvSender        KVSender           //handle to KVSender
-	settingsMgr     settingsManager
-	statsMgr        *statsManager
-	scanCoord       ScanCoordinator //handle to ScanCoordinator
-	config          common.Config
+	tk                 Timekeeper                  //handle to timekeeper
+	storageMgr         StorageManager              //handle to storage manager
+	compactMgr         CompactionManager           //handle to compaction manager
+	mutMgr             MutationManager             //handle to mutation manager
+	rebalMgr           RebalanceMgr                //handle to rebalance manager
+	ddlSrvMgr          *DDLServiceMgr              //handle to ddl service manager
+	schedIdxCreator    *schedIndexCreator          //handle to scheduled index creator
+	clustMgrAgent      ClustMgrAgent               //handle to ClustMgrAgent
+	kvSender           KVSender                    //handle to KVSender
+	settingsMgr        settingsManager             //handle to settings manager
+	statsMgr           *statsManager               //handle to statistics manager
+	scanCoord          ScanCoordinator             //handle to ScanCoordinator
+	autofailoverSrvMgr *AutofailoverServiceManager //handle to AutofailoverServiceManager
+	cpuThrottle        *CpuThrottle                //handle to CPU throttler (for Autofailover)
+
+	config common.Config
 
 	kvlock    sync.Mutex   //fine-grain lock for KVSender
 	stateLock sync.RWMutex //lock to protect the keyspaceIdStatus map
@@ -237,6 +240,10 @@ type buildDoneSpec struct {
 
 type resetList []common.IndexInstId
 
+// NewIndexer is the constructor for the Indexer interface implemented by the indexer class.
+// config is a few hard-coded defaults but does NOT contain most indexer config values as
+// passed in. Instead NewSettingsManager below merges common/config.go values into this and
+// saves the result in idx.config, so only try to access config values after that point.
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
@@ -307,7 +314,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	var res Message
 
 	// Setting manager must be the first component to initialized.  In particular, setting manager will
-	// read from indexer settings from metakv, including clsuter-level storage mode.   Since metakv is
+	// read the indexer settings from metakv, including cluster-level storage mode.  Since metakv is
 	// eventually consistent, if setting cannot read the latest settings from metakv during this step,
 	// those new settings will be delievered to the indexer through a callback.
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
@@ -315,7 +322,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error %+v", res)
 		return nil, res
 	}
-	clusterAddr := idx.config["clusterAddr"].String() // "127.0.0.1:<admin_port>"
+	clusterAddr := idx.config["clusterAddr"].String() // "127.0.0.1:<cluster_admin_port>" (eg 8091)
+	host, _, _ := net.SplitHostPort(clusterAddr)
+	port := idx.config["httpPort"].String()
+	httpAddr := net.JoinHostPort(host, port) // "127.0.0.1:<indexer_http_port"> (eg 9102, 9108, ...)
+
+	// CPU throttling is disabled until CpuThrottle.SetCpuThrottling(true) is called
+	idx.cpuThrottle = NewCpuThrottle(idx.config["cpu.throttle.target"].Float64())
+	idx.autofailoverSrvMgr = NewAutofailoverServiceManager(httpAddr, idx.cpuThrottle)
 
 	// Initialize auditing
 	err := audit.InitAuditService(clusterAddr)
@@ -356,7 +370,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	go common.WatchClusterVersionChanges(idx.config["clusterAddr"].String())
 
 	//Start Mutation Manager
-	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config,
+		idx.cpuThrottle)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Mutation Manager Init Error %+v", res)
 		return nil, res
@@ -390,7 +405,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//Start Scan Coordinator
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh,
-		idx.config, snapshotNotifych, snapshotReqCh, idx.stats.Clone())
+		idx.config, snapshotNotifych, snapshotReqCh, idx.stats.Clone(), idx.cpuThrottle)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error %+v", res)
 		return nil, res
@@ -473,7 +488,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.run()
 
 	return idx, &MsgSuccess{}
-
 }
 
 func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
@@ -663,7 +677,7 @@ func (idx *indexer) initFromConfig() {
 	}
 	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
 
-	// Check if clsuter storage mode is set
+	// Check if cluster storage mode is set
 	storageMode := idx.config["settings.storage_mode"].String()
 	if storageMode != "" {
 		if common.SetClusterStorageModeStr(storageMode) {
@@ -1584,6 +1598,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
+	idx.cpuThrottle.SetCpuTarget(idx.config["cpu.throttle.target"].Float64())
+
 	idx.config = newConfig
 	idx.compactMgrCmdCh <- msg
 	<-idx.compactMgrCmdCh

@@ -63,14 +63,12 @@ type scanCoordinator struct {
 	indexPartnMap IndexPartnMap
 	indexDefnMap  map[common.IndexDefnId][]common.IndexInstId
 
-	reqCounter uint64
-	config     common.ConfigHolder
-
-	stats IndexerStatsHolder
-
-	indexerState atomic.Value
-
-	numDecodeErrors uint32 // Number of errors in collatejson decode.
+	reqCounter      uint64
+	config          common.ConfigHolder
+	stats           IndexerStatsHolder
+	indexerState    atomic.Value
+	numDecodeErrors uint32       // Number of errors in collatejson decode.
+	cpuThrottle     *CpuThrottle // for Autofailover CPU throttling
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -80,7 +78,7 @@ type scanCoordinator struct {
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	config common.Config, snapshotNotifych []chan IndexSnapshot,
-	snapshotReqCh []MsgChannel, stats *IndexerStats) (ScanCoordinator, Message) {
+	snapshotReqCh []MsgChannel, stats *IndexerStats, cpuThrottle *CpuThrottle) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
@@ -90,6 +88,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		snapshotReqCh:    snapshotReqCh,
 		logPrefix:        "ScanCoordinator",
 		reqCounter:       0,
+		cpuThrottle:      cpuThrottle,
 	}
 
 	s.config.Store(config)
@@ -235,6 +234,7 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 //
 /////////////////////////////////////////////////////////////////////////
 
+// serverCallback is the single routine that starts each index scan.
 func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, conn net.Conn,
 	cancelCh <-chan bool) {
 
@@ -314,6 +314,13 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 		}
 	}
 
+	// If Autofailover is enabled, do any needed CPU throttling
+	cpuThrottleDelayMs := s.cpuThrottle.GetActiveThrottleDelayMs()
+	if cpuThrottleDelayMs > 0 {
+		time.Sleep(time.Duration(cpuThrottleDelayMs) * time.Millisecond)
+	}
+
+	// Pre-scan checks passed, so get a snapshot for the scan
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
 	if err != nil {
@@ -322,7 +329,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 			return
 		}
 	}
-
 	defer DestroyIndexSnapshot(is)
 
 	logging.LazyVerbose(func() string {
@@ -397,6 +403,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 		}
 	}
 
+	// Do the scan
 	s.processRequest(req, w, is, t0)
 
 	if len(req.Ctxs) != 0 {

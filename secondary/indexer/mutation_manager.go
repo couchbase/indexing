@@ -79,6 +79,7 @@ type mutationMgr struct {
 
 	vbMap         *VbMapHolder
 	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all keyspaceIds
+	cpuThrottle   *CpuThrottle     // for Autofailover CPU throttling
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -93,7 +94,7 @@ type mutationMgr struct {
 //supvRespch to indicate its completion or any error that may have happened.
 //If supvRespch or supvCmdch is closed, mutation manager will termiate its loop.
 func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config common.Config) (MutationManager, Message) {
+	config common.Config, cpuThrottle *CpuThrottle) (MutationManager, Message) {
 
 	//Init the mutationMgr struct
 	m := &mutationMgr{
@@ -118,6 +119,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		maxMemory:      0,
 		vbMap:          &VbMapHolder{},
 		numVbsPerNode:  make(map[string]int64),
+		cpuThrottle:    cpuThrottle,
 	}
 	m.vbMap.Init()
 	m.indexInstMap.Init()
@@ -1013,7 +1015,6 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 	stats := m.stats.Get()
 	go m.persistMutationQueue(q, streamId, keyspaceId, ts, changeVec, countVec, stats, hasAllSB)
 	m.supvCmdch <- &MsgSuccess{}
-
 }
 
 //persistMutationQueue implements the actual persist for the queue
@@ -1032,6 +1033,13 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		defer m.flusherWaitGroup.Done()
 
 		start := time.Now().UnixNano()
+
+		// If Autofailover is enabled, do any needed CPU throttling
+		cpuThrottleDelayMs := m.cpuThrottle.GetActiveThrottleDelayMs()
+		if cpuThrottleDelayMs > 0 {
+			time.Sleep(time.Duration(cpuThrottleDelayMs) * time.Millisecond)
+		}
+
 		flusher := NewFlusher(config, stats)
 		sts := Timestamp(ts.Seqnos)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, keyspaceId,
@@ -1069,7 +1077,6 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 			keyspaceStats.flushLatDist.Add(time.Now().UnixNano() - start)
 		}
 	}(m.config)
-
 }
 
 //handleDrainMutationQueue handles drain queue message from

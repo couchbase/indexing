@@ -13,12 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net"
 	"net/http"
 	u "net/url"
-	"os"
 	"path"
 	"runtime/debug"
 	"sort"
@@ -122,36 +120,59 @@ type IndexStatusResponse struct {
 }
 
 type IndexStatus struct {
-	DefnId       common.IndexDefnId `json:"defnId,omitempty"`
-	InstId       common.IndexInstId `json:"instId,omitempty"`
-	Name         string             `json:"name,omitempty"`
-	Bucket       string             `json:"bucket,omitempty"`
-	Scope        string             `json:"scope,omitempty"`
-	Collection   string             `json:"collection,omitempty"`
-	IsPrimary    bool               `json:"isPrimary,omitempty"`
-	SecExprs     []string           `json:"secExprs,omitempty"`
-	WhereExpr    string             `json:"where,omitempty"`
-	IndexType    string             `json:"indexType,omitempty"`
-	Status       string             `json:"status,omitempty"`
-	Definition   string             `json:"definition"`
-	Hosts        []string           `json:"hosts,omitempty"`
-	Error        string             `json:"error,omitempty"`
-	Completion   int                `json:"completion"`
-	Progress     float64            `json:"progress"`
-	Scheduled    bool               `json:"scheduled"`
-	Partitioned  bool               `json:"partitioned"`
-	NumPartition int                `json:"numPartition"`
+	DefnId common.IndexDefnId `json:"defnId,omitempty"`
+	InstId common.IndexInstId `json:"instId,omitempty"`
 
-	// PartitionMap is a map from node host:port to partitionIds,
-	// telling which partition(s) are on which node(s). If an
-	// index is not partitioned, it will have a single
-	// partition with ID 0.
+	// Name is the IndexName decorated with replica and partition info for the UI (i.e. display
+	// name). See index.go FormatIndexPartnDisplayName.
+	Name string `json:"name,omitempty"`
+
+	Bucket     string   `json:"bucket,omitempty"`
+	Scope      string   `json:"scope,omitempty"`
+	Collection string   `json:"collection,omitempty"`
+	IsPrimary  bool     `json:"isPrimary,omitempty"`
+	SecExprs   []string `json:"secExprs,omitempty"`
+	WhereExpr  string   `json:"where,omitempty"`
+	IndexType  string   `json:"indexType,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	Definition string   `json:"definition"`
+
+	// Hosts in non-consolidated results has only one entry giving the host:index_http_port of the
+	// node this IndexStatus is about. In consolidated results it lists all nodes holding any
+	// partition of the instance.
+	Hosts []string `json:"hosts,omitempty"`
+
+	Error       string  `json:"error,omitempty"`
+	Completion  int     `json:"completion"`
+	Progress    float64 `json:"progress"`
+	Scheduled   bool    `json:"scheduled"`
+	Partitioned bool    `json:"partitioned"`
+
+	// NumPartition in non-consolidated results gives the number of partitions of the index on the
+	// node this IndexStatus is about. In consolidated results it gives the total number of
+	// partitions the index has. A non-partitioned index is treated as having 1 partition.
+	NumPartition int `json:"numPartition"`
+
+	// PartitionMap is a map from host:index_http_port to partitionIds, telling which partition(s)
+	// are on which node(s). In non-consolidated results this will have only one entry whose key
+	// is the node this IndexStatus is about and whose value lists the (1-based) partition numbers
+	// on that node. In consolidated results it will have a key for every host holding any
+	// partitions of the instance, each of whose values lists the partition numbers on that node.
+	// If an index is not partitioned, it will have a single partition with ID 0. (Partitioned
+	// indexes do not have a partion 0.)
 	PartitionMap map[string][]int `json:"partitionMap"`
 
-	NodeUUID     string `json:"nodeUUID,omitempty"`
-	NumReplica   int    `json:"numReplica"`
-	IndexName    string `json:"indexName"`
-	ReplicaId    int    `json:"replicaId"`
+	// NodeUUID in non-consolidated results holds the UUID (32-digit random hex assigned by
+	// ns_server) of the node this IndexStatus is about. In consolidated results NodeUUID is always
+	// set to "", even for non-partitioned indexes.
+	NodeUUID string `json:"nodeUUID,omitempty"`
+
+	NumReplica int `json:"numReplica"`
+
+	// IndexName is the N1QL name of the index.
+	IndexName string `json:"indexName"`
+
+	ReplicaId    int    `json:"replicaId"` // 0-based
 	Stale        bool   `json:"stale"`
 	LastScanTime string `json:"lastScanTime,omitempty"`
 }
@@ -197,35 +218,16 @@ type requestHandlerContext struct {
 	hostKey     string        // this node's mem+disk cache key
 	eTagPeriod  time.Duration // for computing ETag expiries on rounded time boundaries
 
-	///////////////////////////////////////////////////////////////////////////
-	// IndexStatus caches of info from all indexer nodes. New info is written
-	// into the memory cache first and eventually persisted to disk. Lookups
-	// check the memory cache first. Only the latest known full set of status
-	// data (i.e. for all indexes on a node) is cached for each node - partial
-	// sets are never cached.
-
-	// Index metadata cache
-	metaCache map[string]*LocalIndexMetadata      // IndexMetadata mem cache (key = host2key(host:httpPort))
-	metaCh    chan map[string]*LocalIndexMetadata // metaCache persistence feed
-	metaDir   string                              // metaCache persistence directory
-	metaMutex sync.RWMutex                        // metaCache mutex
-
-	// IndexStats subset cache
-	statsCache map[string]*common.Statistics      // IndexStats subset mem cache (key = host2key(host:httpPort))
-	statsCh    chan map[string]*common.Statistics // statsCache persistence feed
-	statsDir   string                             // statsCache persistence directory
-	statsMutex sync.RWMutex                       // statsCache mutex
-	///////////////////////////////////////////////////////////////////////////
-
 	// Current ETag info for /getIndexStatus global results
 	getIndexStatusETag       uint64       // current valid checksum of cached getIndexStatus full results
 	getIndexStatusETagExpiry int64        // getIndexStatusETag expiration UnixNano time
 	getIndexStatusMutex      sync.RWMutex // sync for the above ETag info
 
-	doneCh        chan bool
-	schedTokenMon *schedTokenMonitor
-	stReqRecCount uint64
+	// requestHandlerCache is the mem + disk cache for LocalIndexMetadata, and subset of IndexStats
+	rhc *requestHandlerCache
 
+	schedTokenMon    *schedTokenMonitor
+	stReqRecCount    uint64
 	useGreedyPlanner bool
 }
 
@@ -251,7 +253,7 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		handlerContext.config = config
 		handlerContext.clusterUrl = config["clusterAddr"].String()
 		handlerContext.hostname = getHostname(handlerContext.clusterUrl)
-		handlerContext.hostKey = host2key(handlerContext.hostname)
+		handlerContext.hostKey = Host2key(handlerContext.hostname)
 		handlerContext.eTagPeriod = time.Duration(config["settings.eTagPeriod"].Int()) * time.Second
 
 		// Scatter-gather endpoints. These are the entry points to a single indexer that will
@@ -266,6 +268,8 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		mux.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
 		mux.HandleFunc("/buildIndexRebalance", handlerContext.buildIndexRequestRebalance)
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
+		mux.HandleFunc( // stripped-down version of getIndexStatus
+			"/getCachedIndexTopology", handlerContext.handleCachedIndexTopologyRequest)
 		mux.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
 		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
@@ -277,31 +281,17 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		mux.HandleFunc("/getInternalVersion", handlerContext.handleInternalVersionRequest)
 
 		cacheDir := path.Join(config["storage_dir"].String(), "cache")
-		handlerContext.metaDir = path.Join(cacheDir, "meta")
-		handlerContext.statsDir = path.Join(cacheDir, "stats")
-
-		os.MkdirAll(handlerContext.metaDir, 0755)
-		os.MkdirAll(handlerContext.statsDir, 0755)
-
-		handlerContext.metaCh = make(chan map[string]*LocalIndexMetadata, 100)
-		handlerContext.statsCh = make(chan map[string]*common.Statistics, 100)
-		handlerContext.doneCh = make(chan bool)
-
-		handlerContext.metaCache = make(map[string]*LocalIndexMetadata)
-		handlerContext.statsCache = make(map[string]*common.Statistics)
+		handlerContext.rhc = NewRequestHandlerCache(cacheDir)
 
 		handlerContext.schedTokenMon = newSchedTokenMonitor(mgr)
-
 		handlerContext.useGreedyPlanner = config["planner.useGreedyPlanner"].Bool()
-
-		go handlerContext.runPersistor()
 	})
 }
 
 // Close permanently shuts down the HTTP(S) server created by RegisterRequestHandler.
 func (m *requestHandlerContext) Close() {
 	m.finalizer.Do(func() {
-		close(m.doneCh)
+		m.rhc.Shutdown()
 		m.schedTokenMon.Close()
 	})
 }
@@ -557,6 +547,8 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		return
 	}
 
+	// getAll=true means keep details of partitioned and replicated indexes separate by host;
+	// otherwise they are consolidated into one entry per index.
 	getAll := false
 	val := r.FormValue("getAll")
 	if len(val) != 0 && val == "true" {
@@ -583,6 +575,23 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	}
 }
 
+// handleCachedIndexTopologyRequest handles "/getCachedIndexTopology" which is a stripped-down
+// version of "/getIndexStatus" that reads entirely from the local node's memory cache and avoids
+// ClusterInfoCache. It returns only the subset of information needed by Autofailover.
+func (m *requestHandlerContext) handleCachedIndexTopologyRequest(
+	w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::handleCachedIndexTopologyRequest" // for logging
+
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		return
+	}
+
+	indexStatuses := m.getCachedIndexTopology(creds)
+	resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
+	send(http.StatusOK, w, resp)
+}
+
 func (m *requestHandlerContext) getBucket(r *http.Request) string {
 
 	return r.FormValue("bucket")
@@ -601,22 +610,6 @@ func (m *requestHandlerContext) getCollection(r *http.Request) string {
 func (m *requestHandlerContext) getIndex(r *http.Request) string {
 
 	return r.FormValue("index")
-}
-
-// memCacheLocalIndexMetadata adds an entry to the local metadata memory cache.
-// hostKey is host2key(host:httpPort).
-func (m *requestHandlerContext) memCacheLocalIndexMetadata(hostKey string, value *LocalIndexMetadata) {
-	m.metaMutex.Lock()
-	m.metaCache[hostKey] = value
-	m.metaMutex.Unlock()
-}
-
-// memCacheStats adds an entry to the local IndexStats subset memory cache.
-// hostKey is host2key(host:httpPort).
-func (m *requestHandlerContext) memCacheStats(hostKey string, value *common.Statistics) {
-	m.statsMutex.Lock()
-	m.statsCache[hostKey] = value
-	m.statsMutex.Unlock()
 }
 
 // buildTopologyMapPerCollection is a helper for getIndexStatus. It creates
@@ -638,7 +631,7 @@ func buildTopologyMapPerCollection(topologies []IndexTopology) map[string]map[st
 	return topoMap
 }
 
-// mergeCounter is a helper for getIndexStatus.
+// mergeCounter is a helper for getIndexStatus and getCachedIndexTopology.
 func mergeCounter(defnId common.IndexDefnId, counter common.Counter,
 	numReplicas map[common.IndexDefnId]common.Counter) {
 
@@ -672,12 +665,32 @@ func addHost(defnId common.IndexDefnId, hostAddr string, defnToHostMap map[commo
 	defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
 }
 
+// getScheduledIndexes is a helper for getIndexStatus and getCachedIndexTopology that returns
+// statuses for scheduled but not yet created indexes.
+func (m *requestHandlerContext) getScheduledIndexes(
+	defns map[common.IndexDefnId]common.IndexDefn) []IndexStatus {
+	schedIndexes := m.schedTokenMon.getIndexes()
+	schedIndexList := make([]IndexStatus, 0, len(schedIndexes)) // return value
+
+	for _, idx := range schedIndexes {
+		if _, ok := defns[idx.DefnId]; ok {
+			continue
+		}
+		schedIndexList = append(schedIndexList, *idx)
+	}
+	return schedIndexList
+}
+
 // getIndexStatus returns statuses of all indexer nodes. An unresponsive node's status is served
 // from the cache of whichever responsive node has the newest data cached. Only if no responsive
 // node has a cached value will an unresponsive node's status be omitted. (The caches were only
 // added in common.INDEXER_65_VERSION.) Status consists of two parts:
 //   1. LocalIndexMetadata
 //   2. A subset of IndexStats (currently: buildProgress, completionProgress, lastScanTime)
+//
+// getAll true means preserve per-node information about partitioned indexes; false means
+//   consolidate the statuses of all nodes hosting some partitions/replicas of an instance into a
+//   single entry (whose NodeUUID will be set to "").
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) (
 	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
 
@@ -696,15 +709,15 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
-	defns := make(map[common.IndexDefnId]common.IndexDefn)
-	indexStatuses = make([]IndexStatus, 0) // return 1: flat list of statuses
-	failedNodes = make([]string, 0)        // return 2: flat list of unreachable indexer nodes
+	defns := make(map[common.IndexDefnId]common.IndexDefn) // map from defnId to defn
+	indexStatuses = make([]IndexStatus, 0)                 // return 1: flat list of statuses
+	failedNodes = make([]string, 0)                        // return 2: flat list of unreachable indexer nodes
 
-	// IndexStatus pieces by node to cache to local disk, corresponding to metaCache and statsCache
-	metaToCache := make(map[string]*LocalIndexMetadata)
-	statsToCache := make(map[string]*common.Statistics)
-	fullSet := true      // do the results contain all index defns?
-	allFromCache := true // are all results from local cache?
+	// IndexStatus pieces to compute ETags from (full sets across hosts)
+	metaAcrossHosts := make(map[string]*LocalIndexMetadata)
+	statsAcrossHosts := make(map[string]*common.Statistics)
+	fullSet := true           // do the results contain all index defns?
+	allFromLocalCache := true // are all results from local cache?
 
 	defnToHostMap := make(map[common.IndexDefnId][]string)
 	isInstanceDeferred := make(map[common.IndexInstId]bool)
@@ -712,6 +725,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 	keepKeys := make([]string, 0, len(nids)) // memory cache keys of current indexer nodes
 	for _, nid := range nids {
+		nodeMetaFromLocalCache := true  // is localMeta for current node from local cache?
+		nodeStatsFromLocalCache := true // is stats for current node from local cache?
 
 		// mgmtAddr is this node's "cluster" address (host:uiPort), NOT a key for caches
 		// address here will be with encrypted port if encryption is enabled.
@@ -737,17 +752,18 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		}
 
 		hostname := addrForKey
-		hostKey := host2key(hostname) // key to caches
+		hostKey := Host2key(hostname) // key to caches
 		keepKeys = append(keepKeys, hostKey)
 		stale := false
-		metaToCache[hostKey] = nil
 
 		//
 		// Get metadata for all indexes of current node
 		//
 		// TODO: It is not required to fetch metadata for entire node when target is for a specific
 		// bucket or collection
-		localMeta, latest, localMetaIsFromCache, err := m.getLocalIndexMetadataForNode(addr, hostname, cinfo)
+		metaAcrossHosts[hostKey] = nil
+		localMeta, latest, localMetaIsFromCache, err := m.getLocalIndexMetadataForNode(
+			addr, hostname, cinfo)
 		if localMeta == nil || err != nil {
 			logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 			failedNodes = append(failedNodes, mgmtAddr)
@@ -757,18 +773,19 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 			stale = true
 		}
 		if !localMetaIsFromCache {
-			allFromCache = false
+			allFromLocalCache = false
+			nodeMetaFromLocalCache = false
 		}
-		metaToCache[hostKey] = localMeta
+		metaAcrossHosts[hostKey] = localMeta
 		topoMap := buildTopologyMapPerCollection(localMeta.IndexTopologies)
 
 		//
 		// Get stats subset for all indexes of current node
 		//
-		statsToCache[hostKey] = nil
+		statsAcrossHosts[hostKey] = nil
 		var stats *common.Statistics = nil
 		if localMetaIsFromCache && localMeta.AllIndexesActive { // try cache
-			stats, _ = m.getStatsFromCache(hostKey)
+			stats = m.rhc.GetStatsFromCache(hostKey)
 		}
 		if stats == nil { // full-bore stats retrieval needed
 			stats, latest, err = m.getStatsForNode(addr, hostname, cinfo)
@@ -780,30 +797,31 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 			if !latest {
 				stale = true
 			}
-			allFromCache = false
+			allFromLocalCache = false
+			nodeStatsFromLocalCache = false
 		}
-		statsToCache[hostKey] = stats
+		statsAcrossHosts[hostKey] = stats
 
 		//
 		// Process all the data for current host
 		//
-		if !localMetaIsFromCache {
+		if !localMetaIsFromCache { // localMeta.AllIndexesActive is not already set correctly
 			localMeta.AllIndexesActive = true // will change to false below if any non-active found
 		}
 		for _, defn := range localMeta.IndexDefinitions {
 			defn.SetCollectionDefaults()
 			if !shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
 				// Do not cache partial results
-				metaToCache[hostKey] = nil
-				statsToCache[hostKey] = nil
+				metaAcrossHosts[hostKey] = nil
+				statsAcrossHosts[hostKey] = nil
 				fullSet = false
 				continue
 			}
 			accessAllowed := permissionCache.IsAllowed(defn.Bucket, defn.Scope, defn.Collection, "list")
 			if !accessAllowed {
 				// Do not cache partial results
-				metaToCache[hostKey] = nil
-				statsToCache[hostKey] = nil
+				metaAcrossHosts[hostKey] = nil
+				statsAcrossHosts[hostKey] = nil
 				fullSet = false
 				continue
 			}
@@ -819,50 +837,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 						state != common.INDEX_STATE_DELETED &&
 						state != common.INDEX_STATE_NIL {
 
-						stateStr := "Not Available"
-						switch state {
-						case common.INDEX_STATE_READY:
-							stateStr = "Created"
-						case common.INDEX_STATE_INITIAL:
-							stateStr = "Building"
-						case common.INDEX_STATE_CATCHUP:
-							stateStr = "Building"
-						case common.INDEX_STATE_ACTIVE:
-							stateStr = "Ready"
-						}
-						if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
-							stateStr = "Moving"
-						}
-						if state == common.INDEX_STATE_INITIAL || state == common.INDEX_STATE_CATCHUP {
-							if len(instance.OldStorageMode) != 0 {
-								if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
-									stateStr = "Building (Upgrading)"
-								}
-								if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
-									stateStr = "Building (Downgrading)"
-								}
-							}
-						}
-						if state == common.INDEX_STATE_READY {
-							if len(instance.OldStorageMode) != 0 {
-								if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
-									stateStr = "Created (Upgrading)"
-								}
-								if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
-									stateStr = "Created (Downgrading)"
-								}
-							}
-						}
-						if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
-							if indexerState == "Paused" {
-								stateStr = "Paused"
-							} else if indexerState == "Bootstrap" || indexerState == "Warmup" {
-								stateStr = "Warmup"
-							}
-						}
-						if len(errStr) != 0 {
-							stateStr = "Error"
-						}
+						stateStr := getStateStr(&instance, state, len(errStr) != 0, stats)
 
 						name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
 						prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
@@ -903,10 +878,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 						status := IndexStatus{
 							DefnId:       defn.DefnId,
 							InstId:       common.IndexInstId(instance.InstId),
-							Name:         name,
+							Name:         name, // display name only
 							Bucket:       defn.Bucket,
 							Scope:        defn.Scope,
 							Collection:   defn.Collection,
+							IndexName:    defn.Name, // real index name
 							IsPrimary:    defn.IsPrimary,
 							SecExprs:     secExprs,
 							WhereExpr:    defn.WhereExpr,
@@ -923,7 +899,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 							PartitionMap: partitionMap,
 							NodeUUID:     localMeta.NodeUUID,
 							NumReplica:   int(defn.GetNumReplica()),
-							IndexName:    defn.Name,
 							ReplicaId:    int(instance.ReplicaId),
 							Stale:        stale,
 							LastScanTime: lastScanTime,
@@ -931,35 +906,35 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 						indexStatuses = append(indexStatuses, status)
 					}
-				}
+				} // for each instance
 			}
 			defns[defn.DefnId] = defn
 		}
 
-		// Memory cache the data if it is a full set
-		metaToCacheHost := metaToCache[hostKey]
-		statsToCacheHost := statsToCache[hostKey]
-		if metaToCacheHost != nil && statsToCacheHost != nil {
+		// Cache any updated data if it is a full set for nid
+		metaToCacheForHost := metaAcrossHosts[hostKey]
+		if metaToCacheForHost != nil && !nodeMetaFromLocalCache {
 			if hostKey == m.hostKey { // fresh info being cached is for *current host*
 				// Ideally clearing the dirty flag would have been done in setETagLocalIndexMetadata,
 				// but we don't know what code path entered it so its data might never be cached.
-				// Thought of doing the caching there too but if triggered by a different code path
-				// it then would not match what we cache on disk.
 				m.mgr.getMetadataRepo().ClearMetaDirty()
 			}
 			// If LocalIndexMetadata came from a pre-Cheshire-Cat node, it won't have computed the
 			// ETag and ETagExpiry fields, so do it here. This can still prevent having to send full
 			// result back to external caller, though not the re-getting of the LIM each time.
-			if metaToCacheHost.ETag == common.HTTP_VAL_ETAG_INVALID {
-				m.setETagLocalIndexMetadata(metaToCacheHost)
+			if metaToCacheForHost.ETag == common.HTTP_VAL_ETAG_INVALID {
+				m.setETagLocalIndexMetadata(metaToCacheForHost)
 			}
-			m.memCacheLocalIndexMetadata(hostKey, metaToCacheHost)
-			m.memCacheStats(hostKey, statsToCacheHost)
+			m.rhc.CacheLocalIndexMetadata(hostKey, metaToCacheForHost)
+		}
+		statsToCacheForHost := statsAcrossHosts[hostKey]
+		if statsToCacheForHost != nil && !nodeStatsFromLocalCache {
+			m.rhc.CacheStats(hostKey, statsToCacheForHost)
 		}
 	} // for each nid
 
-	// Delete obsolete entries from LocalIndexMetadata and IndexStats subset memory caches
-	m.cleanupMemoryCaches(keepKeys)
+	// Delete cache entries of former Index nodes that are no longer in the cluster
+	m.rhc.DeleteObsoleteCacheEntries(keepKeys)
 
 	//Fix replica count
 	for i, index := range indexStatuses {
@@ -996,27 +971,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	}
 
 	if !getAll {
-		indexStatuses = m.consolideIndexStatus(indexStatuses)
+		indexStatuses = m.consolidateIndexStatus(indexStatuses)
 	}
 
-	schedIndexes := m.schedTokenMon.getIndexes()
-	schedIndexList := make([]IndexStatus, 0, len(schedIndexes))
-	for _, idx := range schedIndexes {
-		if _, ok := defns[idx.DefnId]; ok {
-			continue
-		}
-
-		schedIndexList = append(schedIndexList, *idx)
-	}
-
+	// Add statuses of scheduled indexes that are not built yet
+	schedIndexList := m.getScheduledIndexes(defns)
 	indexStatuses = append(indexStatuses, schedIndexList...)
-
-	// If anything changed since cached, stage latest data for persisting
-	// to disk cache. Changed data already went to memory cache above.
-	if !allFromCache {
-		m.metaCh <- metaToCache
-		m.statsCh <- statsToCache
-	}
 
 	// Compute eTagResponse
 	// 1. If got full set of index statuses (the only thing we compute getIndexStatus ETags for):
@@ -1025,16 +985,135 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	// 2. Else partial set: leave eTagResponse as original zero value == common.HTTP_VAL_ETAG_INVALID
 	if fullSet {
 		eTagCurr, eTagExpiry := m.getGetIndexStatusETagInfo()
-		if allFromCache && time.Now().UnixNano() < eTagExpiry {
+		if allFromLocalCache && time.Now().UnixNano() < eTagExpiry {
 			eTagResponse = eTagCurr
 		} else {
-			eTagResponse, err = m.setETagGetIndexStatus(metaToCache, statsToCache)
+			eTagResponse, err = m.setETagGetIndexStatus(metaAcrossHosts, statsAcrossHosts)
 			if err != nil {
 				return nil, nil, common.HTTP_VAL_ETAG_INVALID, err
 			}
 		}
 	}
+
 	return indexStatuses, failedNodes, eTagResponse, nil
+}
+
+// getCachedIndexTopology is a stripped-down version of getIndexStatus that reads entirely from the
+// local node's memory cache and avoids ClusterInfoCache. It returns only the subset of information
+// needed by Autofailover.
+func (m *requestHandlerContext) getCachedIndexTopology(creds cbauth.Creds) (indexStatuses []IndexStatus) {
+	const method string = "requestHandlerContext::getCachedIndexTopology:" // for logging
+
+	indexStatuses = make([]IndexStatus, 0)                      // return value
+	permissionCache := common.NewSessionPermissionsCache(creds) // access permissions
+	defns := make(map[common.IndexDefnId]common.IndexDefn)      // map from defnId to defn
+	numReplicas := make(map[common.IndexDefnId]common.Counter)
+
+	metaAcrossHosts := m.rhc.GetAllCachedLocalIndexMetadata()
+	for hostKey, localMeta := range metaAcrossHosts {
+		topoMap := buildTopologyMapPerCollection(localMeta.IndexTopologies)
+
+		for _, defn := range localMeta.IndexDefinitions {
+			defn.SetCollectionDefaults()
+			accessAllowed := permissionCache.IsAllowed(
+				defn.Bucket, defn.Scope, defn.Collection, "list")
+			if !accessAllowed {
+				continue
+			}
+			mergeCounter(defn.DefnId, defn.NumReplica2, numReplicas)
+			if topology, ok := topoMap[defn.Bucket][defn.Scope][defn.Collection]; ok && topology != nil {
+				instances := topology.GetIndexInstancesByDefn(defn.DefnId)
+				for _, instance := range instances {
+					state, _ := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(instance.InstId))
+					if state != common.INDEX_STATE_CREATED &&
+						state != common.INDEX_STATE_DELETED &&
+						state != common.INDEX_STATE_NIL {
+
+						// hostKey is substituted in this routine for the host:httpPort hostnames
+						// getIndexStatus gets from ClusterInfoCache
+						partitionMap := make(map[string][]int)
+						for _, partnDef := range instance.Partitions {
+							partitionMap[hostKey] = append(partitionMap[hostKey], int(partnDef.PartId))
+						}
+
+						// Only populate the fields needed for IsAutofailoverSafe method
+						status := IndexStatus{
+							Bucket:     defn.Bucket,
+							Scope:      defn.Scope,
+							Collection: defn.Collection,
+							IndexName:  defn.Name, // real index name
+
+							Hosts:        []string{hostKey},
+							PartitionMap: partitionMap,
+							NodeUUID:     localMeta.NodeUUID,
+						}
+						indexStatuses = append(indexStatuses, status)
+					}
+				} // for each instance
+			}
+			defns[defn.DefnId] = defn
+		} // for each defn
+	} // for each hostKey (node)
+
+	// Add statuses of scheduled indexes that are not built yet
+	schedIndexList := m.getScheduledIndexes(defns)
+	indexStatuses = append(indexStatuses, schedIndexList...)
+
+	logging.Infof("%v Returning %v IndexStatuses", method, len(indexStatuses))
+	return indexStatuses
+}
+
+// getStateStr is a helper for getIndexStatus that returns the IndexStatus.Status string for the
+// given instance given its state, stateError, and stats.
+func getStateStr(instance *IndexInstDistribution, state common.IndexState, stateError bool,
+	stats *common.Statistics) string {
+
+	if stateError {
+		return "Error"
+	}
+
+	stateStr := "Not Available"
+	switch state {
+	case common.INDEX_STATE_READY:
+		stateStr = "Created"
+	case common.INDEX_STATE_INITIAL:
+		stateStr = "Building"
+	case common.INDEX_STATE_CATCHUP:
+		stateStr = "Building"
+	case common.INDEX_STATE_ACTIVE:
+		stateStr = "Ready"
+	}
+	if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
+		stateStr = "Moving"
+	}
+	if state == common.INDEX_STATE_INITIAL || state == common.INDEX_STATE_CATCHUP {
+		if len(instance.OldStorageMode) != 0 {
+			if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
+				stateStr = "Building (Upgrading)"
+			}
+			if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
+				stateStr = "Building (Downgrading)"
+			}
+		}
+	}
+	if state == common.INDEX_STATE_READY {
+		if len(instance.OldStorageMode) != 0 {
+			if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
+				stateStr = "Created (Upgrading)"
+			}
+			if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
+				stateStr = "Created (Downgrading)"
+			}
+		}
+	}
+	if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
+		if indexerState == "Paused" {
+			stateStr = "Paused"
+		} else if indexerState == "Bootstrap" || indexerState == "Warmup" {
+			stateStr = "Warmup"
+		}
+	}
+	return stateStr
 }
 
 // generateETagExpiry returns the next expiration UnixNano time of ETags based on
@@ -1103,7 +1182,9 @@ func (m *requestHandlerContext) setETagGetIndexStatus(
 	return eTag, nil
 }
 
-func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []IndexStatus {
+// consolidateIndexStatus consolidates the status entries of partitioned instances, which might be
+// hosted on more than one node, into a single entry (with NodeUUID == "").
+func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) []IndexStatus {
 
 	statusMap := make(map[common.IndexInstId]IndexStatus)
 
@@ -1646,8 +1727,8 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		if !m.mgr.getMetadataRepo().IsMetaDirty() {
 			eTagRequest := getETagFromHttpHeader(r)
 			if eTagRequest != common.HTTP_VAL_ETAG_INVALID { // also ...INVALID if missing or garbage
-				cachedMeta, err := m.getLocalIndexMetadataFromCache(m.hostKey)
-				if err == nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
+				cachedMeta := m.rhc.GetLocalIndexMetadataFromCache(m.hostKey)
+				if eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
 					// Valid ETag; respond 304 Not Modified with the same ETag
 					sendNotModified(w, eTagRequest)
 					return
@@ -1862,7 +1943,7 @@ func shouldProcess(t *target, defnBucket, defnScope, defnColl, defnName string) 
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
-	const method string = "RequestHandler::handleCachedLocalIndexMetadataRequest" // for logging
+	const method string = "RequestHandler::handleCachedLocalIndexMetadataRequest:" // for logging
 
 	creds, ok := doAuth(r, w, method)
 	if !ok {
@@ -1873,7 +1954,7 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 	host := r.FormValue("host")
 	host = strings.Trim(host, "\"")
 
-	meta, err := m.getLocalIndexMetadataFromCache(host2key(host))
+	meta := m.rhc.GetLocalIndexMetadataFromCache(Host2key(host))
 	if meta != nil {
 		newMeta := *meta
 		newMeta.IndexDefinitions = make([]common.IndexDefn, 0, len(meta.IndexDefinitions))
@@ -1894,14 +1975,14 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 		send(http.StatusOK, w, newMeta)
 
 	} else {
-		logging.Debugf("%v: host %v, err %v", method, host, err)
+		logging.Debugf("%v host %v", method, host)
 		msg := fmt.Sprintf("No cached LocalIndexMetadata available for %v", host)
 		sendHttpError(w, msg, http.StatusNotFound)
 	}
 }
 
 func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http.Request) {
-	const method string = "RequestHandler::handleCachedStats" // for logging
+	const method string = "RequestHandler::handleCachedStats:" // for logging
 
 	_, ok := doAuth(r, w, method)
 	if !ok {
@@ -1911,11 +1992,11 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 	host := r.FormValue("host")
 	host = strings.Trim(host, "\"")
 
-	stats, err := m.getStatsFromCache(host2key(host))
+	stats := m.rhc.GetStatsFromCache(Host2key(host))
 	if stats != nil {
 		send(http.StatusOK, w, stats)
 	} else {
-		logging.Debugf("%v: host %v, err %v", method, host, err)
+		logging.Debugf("%v host %v", method, host)
 		msg := fmt.Sprintf("No cached stats available for %v", host)
 		sendHttpError(w, msg, http.StatusNotFound)
 	}
@@ -2486,7 +2567,9 @@ func (s indexStatusSorter) Less(i, j int) bool {
 // be from that host (or from local cache if the source host reported they have not changed
 // based on the cached ETag), else they will be from whatever indexer host has the most
 // recent cached version.
-func (m *requestHandlerContext) getLocalIndexMetadataForNode(addr string, host string, cinfo *common.ClusterInfoCache) (localMeta *LocalIndexMetadata, latest bool, isFromCache bool, err error) {
+func (m *requestHandlerContext) getLocalIndexMetadataForNode(
+	addr string, host string, cinfo *common.ClusterInfoCache) (
+	localMeta *LocalIndexMetadata, latest bool, isFromCache bool, err error) {
 
 	meta, isFromCache, err := m.getLocalIndexMetadataFromREST(addr, host)
 	if err == nil {
@@ -2523,7 +2606,7 @@ func (m *requestHandlerContext) getLocalIndexMetadataFromREST(addr string, hostn
 	localMeta *LocalIndexMetadata, isFromCache bool, err error) {
 
 	var eTag uint64 // 0 = missing or invalid
-	metaCached, _ := m.getLocalIndexMetadataFromCache(host2key(hostname))
+	metaCached := m.rhc.GetLocalIndexMetadataFromCache(Host2key(hostname))
 	if metaCached != nil {
 		eTag = metaCached.ETag
 	}
@@ -2570,146 +2653,6 @@ func (m *requestHandlerContext) getCachedLocalIndexMetadataFromREST(addr string,
 	}
 
 	return nil, err
-}
-
-// getLocalIndexMetadataFromCache looks up the cached LocalIndexMetadata for the given
-// hostname from the cache (memory first, and if not found then disk). If missing
-// from memory but found on disk, it also copies the disk version to the memory cache.
-// hostKey is host2key(host:httpPort).
-func (m *requestHandlerContext) getLocalIndexMetadataFromCache(hostKey string) (*LocalIndexMetadata, error) {
-
-	// Look in memory cache
-	m.metaMutex.RLock()
-	localMeta, ok := m.metaCache[hostKey]
-	m.metaMutex.RUnlock()
-	if ok && localMeta != nil {
-		if logging.IsEnabled(logging.Debug) {
-			logging.Debugf("getLocalIndexMetadataFromCache: found metadata in memory cache %v", hostKey)
-		}
-		return localMeta, nil
-	}
-
-	// Not found in mem cache; look in disk cache
-	filepath := path.Join(m.metaDir, hostKey)
-	content, err := ioutil.ReadFile(filepath)
-	if err != nil {
-		// Log only as Debug as the file may not exist since the data may not yet have been cached
-		logging.Debugf("getLocalIndexMetadataFromCache: fail to read metadata from file %v.  Error %v", filepath, err)
-		return nil, err
-	}
-
-	localMeta = new(LocalIndexMetadata)
-	if err := json.Unmarshal(content, localMeta); err != nil {
-		logging.Errorf("getLocalIndexMetadataFromCache: fail to unmarshal metadata from file %v.  Error %v", filepath, err)
-		return nil, err
-	}
-
-	// Found on disk but not in mem, so add to mem cache
-	m.memCacheLocalIndexMetadata(hostKey, localMeta)
-	if logging.IsEnabled(logging.Debug) {
-		logging.Debugf("getLocalIndexMetadataFromCache: saved metadata to memory cache %v", hostKey)
-	}
-
-	return localMeta, nil
-}
-
-func (m *requestHandlerContext) saveLocalIndexMetadataToDisk(hostKey string, meta *LocalIndexMetadata) error {
-
-	filepath := path.Join(m.metaDir, hostKey)
-	temp := filepath + ".tmp"
-
-	content, err := json.Marshal(meta)
-	if err != nil {
-		logging.Errorf("saveLocalIndexMetadataToDisk: fail to marshal metadata to file %v.  Error %v", filepath, err)
-		return err
-	}
-
-	err = common.WriteFileWithSync(temp, content, 0755)
-	if err != nil {
-		logging.Errorf("saveLocalIndexMetadataToDisk: fail to save metadata to file %v.  Error %v", temp, err)
-		return err
-	}
-
-	err = os.Rename(temp, filepath)
-	if err != nil {
-		logging.Errorf("saveLocalIndexMetadataToDisk: fail to rename metadata to file %v.  Error %v", filepath, err)
-		return err
-	}
-
-	logging.Debugf("saveLocalIndexMetadataToDisk: successfully written metadata to disk for %v", hostKey)
-
-	return nil
-}
-
-// cleanupMemoryCaches deletes obsolete entries from all getIndexStatus memory caches.
-// keepKeys correspond to the current indexer nodes; all other entries are deleted.
-func (m *requestHandlerContext) cleanupMemoryCaches(keepKeys []string) {
-
-	// metaCache
-	m.metaMutex.Lock()
-	for cacheKey := range m.metaCache {
-		keep := false
-		for _, keepKey := range keepKeys {
-			if cacheKey == keepKey {
-				keep = true
-				break
-			}
-		}
-		if !keep {
-			delete(m.metaCache, cacheKey)
-		}
-	}
-	m.metaMutex.Unlock()
-
-	// statsCache
-	m.statsMutex.Lock()
-	for cacheKey := range m.statsCache {
-		keep := false
-		for _, keepKey := range keepKeys {
-			if cacheKey == keepKey {
-				keep = true
-				break
-			}
-		}
-		if !keep {
-			delete(m.statsCache, cacheKey)
-		}
-	}
-	m.statsMutex.Unlock()
-}
-
-// cleanupLocalIndexMetadataOnDisk takes a list of hostnames of indexer nodes that currently
-// exist, reads all filenames in the disk directory of the LocalIndexMetadata cache,
-// and deletes any that do not correspond to an entry in the hostKeys list.
-func (m *requestHandlerContext) cleanupLocalIndexMetadataOnDisk(hostKeys []string) {
-
-	// Disk files that exist
-	files, err := ioutil.ReadDir(m.metaDir)
-	if err != nil {
-		logging.Errorf("cleanupLocalIndexMetadataOnDisk: failed to read directory %v. Error %v", m.metaDir, err)
-		return
-	}
-
-	for _, file := range files {
-		filename := file.Name()
-
-		found := false
-		for _, hostKey := range hostKeys {
-			if hostKey == filename {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			filepath := path.Join(m.metaDir, filename)
-			if err := os.RemoveAll(filepath); err != nil {
-				logging.Errorf("cleanupLocalIndexMetadataOnDisk: failed to remove file %v. Error %v", filepath, err)
-			} else if logging.IsEnabled(logging.Debug) {
-				logging.Debugf("cleanupLocalIndexMetadataOnDisk: successfully removed file %v.", filepath)
-			}
-		}
-	}
 }
 
 ///////////////////////////////////////////////////////
@@ -2812,165 +2755,6 @@ func (m *requestHandlerContext) getCachedStatsFromREST(addr string, host string)
 	}
 
 	return nil, err
-}
-
-// getStatsFromCache looks up the cached subset of IndexStats for the given
-// hostname from the cache (memory first, and if not found then disk). If missing
-// from memory but found on disk, it also copies the disk version to the memory cache.
-// hostKey is host2Key(host:httpPort).
-func (m *requestHandlerContext) getStatsFromCache(hostKey string) (*common.Statistics, error) {
-
-	// Look in memory cache
-	m.statsMutex.RLock()
-	stats, ok := m.statsCache[hostKey]
-	m.statsMutex.RUnlock()
-	if ok && stats != nil {
-		if logging.IsEnabled(logging.Debug) {
-			logging.Debugf("getStatsFromCache: found stats in memory cache %v", hostKey)
-		}
-		return stats, nil
-	}
-
-	// Not found in mem cache; look in disk cache
-	filepath := path.Join(m.statsDir, hostKey)
-	content, err := ioutil.ReadFile(filepath)
-	if err != nil {
-		// Log only as Debug as the file may not exist since the data may not yet have been cached
-		logging.Debugf("getStatsFromCache: fail to read stats from file %v.  Error %v", filepath, err)
-		return nil, err
-	}
-
-	stats = new(common.Statistics)
-	if err := json.Unmarshal(content, stats); err != nil {
-		logging.Errorf("getStatsFromCache: fail to unmarshal stats from file %v.  Error %v", filepath, err)
-		return nil, err
-	}
-
-	// Found on disk but not in mem, so add to mem cache
-	m.memCacheStats(hostKey, stats)
-	if logging.IsEnabled(logging.Debug) {
-		logging.Debugf("getStatsFromCache: saved stats to memory cache %v", hostKey)
-	}
-
-	return stats, nil
-}
-
-func (m *requestHandlerContext) saveStatsToDisk(hostKey string, stats *common.Statistics) error {
-
-	filepath := path.Join(m.statsDir, hostKey)
-	temp := filepath + ".tmp"
-
-	content, err := json.Marshal(stats)
-	if err != nil {
-		logging.Errorf("saveStatsToDisk: fail to marshal stats to file %v.  Error %v", filepath, err)
-		return err
-	}
-
-	err = common.WriteFileWithSync(temp, content, 0755)
-	if err != nil {
-		logging.Errorf("saveStatsToDisk: fail to save stats to file %v.  Error %v", temp, err)
-		return err
-	}
-
-	err = os.Rename(temp, filepath)
-	if err != nil {
-		logging.Errorf("saveStatsToDisk: fail to rename stats to file %v.  Error %v", filepath, err)
-		return err
-	}
-
-	logging.Debugf("saveStatsToDisk: successfully written stats to disk for %v", hostKey)
-
-	return nil
-}
-
-// cleanupStatsOnDisk takes a list of hostnames of indexer nodes that currently
-// exist, reads all filenames in the disk directory of the IndexStats subset cache,
-// and deletes any that do not correspond to an entry in the hostKeys list.
-func (m *requestHandlerContext) cleanupStatsOnDisk(hostKeys []string) {
-
-	// Disk files that exist
-	files, err := ioutil.ReadDir(m.statsDir)
-	if err != nil {
-		logging.Errorf("cleanupStatsOnDisk: failed to read directory %v. Error %v", m.statsDir, err)
-		return
-	}
-
-	for _, file := range files {
-		filename := file.Name()
-
-		found := false
-		for _, hostKey := range hostKeys {
-			if hostKey == filename {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			filepath := path.Join(m.statsDir, filename)
-			if err := os.RemoveAll(filepath); err != nil {
-				logging.Errorf("cleanupStatsOnDisk: failed to remove file %v. Error %v", filepath, err)
-			} else if logging.IsEnabled(logging.Debug) {
-				logging.Debugf("cleanupStatsOnDisk: successfully removed file %v.", filepath)
-			}
-		}
-	}
-}
-
-///////////////////////////////////////////////////////
-// persistor
-///////////////////////////////////////////////////////
-
-// runPersistor runs in a Go routine and persists IndexStatus data
-// from all indexer nodes to local disk cache.
-func (m *requestHandlerContext) runPersistor() {
-	updateMeta := func(metaToCache map[string]*LocalIndexMetadata) {
-		hostKeys := make([]string, 0, len(metaToCache))
-		for hostKey, meta := range metaToCache {
-			if meta != nil {
-				m.saveLocalIndexMetadataToDisk(hostKey, meta)
-			}
-			hostKeys = append(hostKeys, hostKey)
-		}
-		m.cleanupLocalIndexMetadataOnDisk(hostKeys)
-	}
-
-	updateStats := func(statsToCache map[string]*common.Statistics) {
-		hostKeys := make([]string, 0, len(statsToCache))
-		for hostKey, stats := range statsToCache {
-			if stats != nil {
-				m.saveStatsToDisk(hostKey, stats)
-			}
-			hostKeys = append(hostKeys, hostKey)
-		}
-		m.cleanupStatsOnDisk(hostKeys)
-	}
-
-	for {
-		select {
-		case metaToCache, ok := <-m.metaCh:
-			if !ok {
-				return
-			}
-			for len(m.metaCh) > 0 { // discard all but newest
-				metaToCache = <-m.metaCh
-			}
-			updateMeta(metaToCache)
-
-		case statsToCache, ok := <-m.statsCh:
-			if !ok {
-				return
-			}
-			for len(m.statsCh) > 0 { // discard all but newest
-				statsToCache = <-m.statsCh
-			}
-			updateStats(statsToCache)
-
-		case <-m.doneCh:
-			logging.Infof("request_handler persistor exits")
-			return
-		}
-	}
 }
 
 func (m *requestHandlerContext) handleScheduleCreateRequest(w http.ResponseWriter, r *http.Request) {
@@ -3648,16 +3432,6 @@ func (m *requestHandlerContext) handleInternalVersionRequest(w http.ResponseWrit
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
-}
-
-// host2key converts a host:httpPort string to a key for the metaCache and statsCache.
-// This is also used as the filename for the disk halves of these caches.
-func host2key(hostname string) string {
-
-	hostname = strings.Replace(hostname, ".", "_", -1)
-	hostname = strings.Replace(hostname, ":", "_", -1)
-
-	return hostname
 }
 
 //
