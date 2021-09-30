@@ -473,9 +473,10 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 
 	certFile := idx.config["certFile"].String()
 	keyFile := idx.config["keyFile"].String()
+	caFile := idx.config["caFile"].String()
 	clusterAddr := idx.config["clusterAddr"].String()
 	logger := func(err error) { common.Console(clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, caFile, encryptLocalHost); err != nil {
 		return err
 	}
 
@@ -3985,17 +3986,6 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	case common.INIT_STREAM:
 		idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
-
-		state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
-
-		//skip processing merge ack for inactive or recovery streams.
-		if state == STREAM_PREPARE_RECOVERY ||
-			state == STREAM_RECOVERY ||
-			state == STREAM_INACTIVE {
-			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
-				streamId, keyspaceId, state)
-			return
-		}
 
 		//if MAINT_STREAM is not running
 		//i. all indexes dropped

@@ -197,7 +197,7 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 //
 func (gsi *gsiKeyspace) SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
 
-	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile)
+	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
 }
 
 // KeyspaceId implements datastore.Indexer{} interface.
@@ -2031,7 +2031,7 @@ func getSingletonClient(clusterURL string, conf c.Config,
 
 		if securityconf != nil {
 			security.Refresh(securityconf.TLSConfig, securityconf.ClusterEncryptionConfig,
-				securityconf.CertFile, securityconf.KeyFile)
+				securityconf.CertFile, securityconf.KeyFile, securityconf.CAFile)
 		}
 
 		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)

@@ -60,6 +60,10 @@ func main() {
 		os.Exit(0)
 	}
 
+	if cmdOptions.UseTLS {
+		querycmd.InitSecurityContext(cmdOptions.Server, "", "", "", cmdOptions.CACert, true)
+	}
+
 	if os.Getenv("CBAUTH_REVRPC_URL") == "" && cmdOptions.Auth != "" {
 		// unfortunately, above is read at init, so we have to respawn
 		revrpc := fmt.Sprintf("http://%v@%v/query2", cmdOptions.Auth, cmdOptions.Server)

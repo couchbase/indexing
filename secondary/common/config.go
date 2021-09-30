@@ -895,6 +895,13 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
+	"indexer.caFile": ConfigValue{
+		"",
+		"ssl ca file",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
 	"indexer.isEnterprise": ConfigValue{
 		true,
 		"enterprise edition",

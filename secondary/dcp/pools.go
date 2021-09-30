@@ -655,6 +655,25 @@ func (p *Pool) getCollectionManifest(bucketn string) (retry bool,
 	return
 }
 
+//This function always uses default pool
+// Note: Call this only when cluster version is atleast 7.0
+// It is allowed to query the collections endpoint only if all
+// the nodes in the cluster are upgraded to 7.0 version or later
+func (c *Client) GetCollectionManifest(bucketn string) (
+	manifest *collections.CollectionManifest, err error) {
+	manifest = &collections.CollectionManifest{}
+	err = c.parseURLResponse("pools/default/buckets/"+bucketn+"/scopes", manifest)
+	return
+}
+
+func (c *Client) GetIndexScopeLimit(bucketn, scope string) (uint32, error) {
+	manifest, err := c.GetCollectionManifest(bucketn)
+	if err != nil {
+		return 0, err
+	}
+	return manifest.GetIndexScopeLimit(scope), nil
+}
+
 // refreshBucket only calls terseBucket endpoint to fetch the bucket info.
 func (p *Pool) RefreshBucket(bucketn string, resetBucketMap bool) error {
 	if resetBucketMap {
