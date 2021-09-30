@@ -370,10 +370,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dataport.bufferTimeout": ConfigValue{
-		25, // 25ms
+		1, // 1ms
 		"timeout in milliseconds, to flush vbucket-mutations from, " +
 			"endpoint, does not affect existing feeds.",
-		25,    // 25ms
+		1,     // 1ms
 		false, // mutable
 		false, // case-insensitive
 	},
