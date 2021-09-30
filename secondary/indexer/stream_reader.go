@@ -45,6 +45,7 @@ type mutationStreamReader struct {
 	supvRespch MsgChannel //channel to send any message to supervisor
 
 	syncStopCh StopChannel
+	syncSendCh chan bool
 
 	keyspaceIdQueueMap KeyspaceIdQueueMap //keyspaceId to mutation queue map
 
@@ -107,6 +108,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 		supvCmdch:           supvCmdch,
 		supvRespch:          supvRespch,
 		syncStopCh:          make(StopChannel),
+		syncSendCh:          make(chan bool),
 		keyspaceIdQueueMap:  CopyKeyspaceIdQueueMap(keyspaceIdQueueMap),
 		keyspaceIdEnableOSO: make(KeyspaceIdEnableOSO),
 		killch:              make(chan bool),
@@ -157,6 +159,11 @@ func (r *mutationStreamReader) Shutdown() {
 	//stop sync worker
 	close(r.syncStopCh)
 
+	select {
+	case r.syncSendCh <- true:
+	default:
+	}
+
 	close(r.stopch)
 
 	//close the mutation stream
@@ -181,6 +188,12 @@ func (r *mutationStreamReader) run() {
 				case []*protobuf.VbKeyVersions:
 					vbKeyVer := msg.([]*protobuf.VbKeyVersions)
 					r.handleVbKeyVersions(vbKeyVer)
+
+					// Invoke syncWorker as there are mutations
+					select {
+					case r.syncSendCh <- true:
+					default:
+					}
 
 				default:
 					r.handleStreamInfoMsg(msg)
@@ -389,26 +402,41 @@ func (r *mutationStreamReader) panicHandler() {
 
 func (r *mutationStreamReader) syncWorker() {
 
-	ticker := time.NewTicker(time.Millisecond * time.Duration(r.syncBatchInterval))
-
 	fastpath := true
 	inactivityTick := 0
 
+	// If there are no mutations, then this go-routine will not be invoked
+	// After the last mutataion, this method is invoked every "syncBatchInterval"
+	// milliseconds until fastpath becomes false.
 	for {
 		select {
-		case <-ticker.C:
-			if r.maybeSendSync(fastpath) {
-				inactivityTick = 0
-				fastpath = true
-			} else {
-				if inactivityTick > int(r.syncBatchInterval)*r.numWorkers {
-					fastpath = false
-				} else {
-					inactivityTick++
+		case <-r.syncSendCh:
+			ticker := time.NewTicker(time.Duration(r.syncBatchInterval) * time.Millisecond)
+			for {
+				select {
+				case <-ticker.C:
+					if r.maybeSendSync(fastpath) {
+						inactivityTick = 0
+						fastpath = true
+					} else {
+						if inactivityTick > int(r.syncBatchInterval)*r.numWorkers {
+							fastpath = false
+							break
+						} else {
+							inactivityTick++
+						}
+					}
+				case <-r.syncStopCh:
+					ticker.Stop()
+					return
+				}
+
+				if !fastpath {
+					ticker.Stop()
+					break // break the inner for loop and want for new mutations
 				}
 			}
 		case <-r.syncStopCh:
-			ticker.Stop()
 			return
 		}
 	}
