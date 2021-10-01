@@ -23,6 +23,7 @@ import (
 	"unsafe"
 
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1775,6 +1776,12 @@ func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*
 
 func makeWithMetaProvider(
 	cluster string, config common.Config, needRefresh bool, encryptLocalHost bool) (c *GsiClient, err error) {
+
+	// Note: Query client settings changed before the first query is run
+	// will not generate an event as we will not have a client by then.
+	if err := systemevent.InitSystemEventLogger(cluster); err != nil {
+		return nil, err
+	}
 
 	c = &GsiClient{
 		cluster:      cluster,

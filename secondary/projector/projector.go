@@ -22,6 +22,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	projC "github.com/couchbase/indexing/secondary/projector/client"
 	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/projector/memmanager"
@@ -96,6 +97,12 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	ef := config["projector.routerEndpointFactory"]
 	config["projector.routerEndpointFactory"] = ef
 
+	// Initialize SystemEventLogger
+	err = systemevent.InitSystemEventLogger(p.clusterAddr)
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
 	// Start cluster info client
 	cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
 	c.CrashOnError(err)
@@ -149,11 +156,25 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	go c.MemstatLogger(int64(config["projector.memstatTick"].Int()))
 	go p.watcherDameon(watchInterval, staleTimeout)
 
-	callb := func(cfg c.Config) {
+	callb := func(newConfig c.Config) {
 		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
-		cfg.LogConfig(p.logPrefix)
-		p.ResetConfig(cfg)
+		newConfig.LogConfig(p.logPrefix)
+
+		oldConfig := p.config.Clone()
+
+		p.ResetConfig(newConfig)
 		p.ResetFeedConfig()
+
+		diffOld, diffNew := oldConfig.SectionConfig("projector.",
+			false).Diff(newConfig.SectionConfig("projector.", false))
+		if len(diffOld) != 0 {
+			systemevent.InfoEvent("Projector",
+				systemevent.EVENTID_PROJECTOR_SETTINGS_CHANGE,
+				map[string]interface{}{
+					"NewSetting": diffNew.Map(),
+					"OldSetting": diffOld.Map(),
+				})
+		}
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))
 
