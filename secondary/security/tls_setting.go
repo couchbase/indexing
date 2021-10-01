@@ -205,7 +205,9 @@ func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionC
 }
 
 // Used by cbindex to add cacert
-func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig, encryptConfig *cbauth.ClusterEncryptionConfig, certFile string) {
+func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig,
+	encryptConfig *cbauth.ClusterEncryptionConfig,
+	certFile, caFile string) {
 
 	newSetting := &SecuritySetting{}
 
@@ -222,9 +224,19 @@ func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig, encryptConfig *cbauth.Cl
 	if certFile != "" {
 		certInBytes, err := ioutil.ReadFile(certFile)
 		if err != nil {
-			logging.Errorf("Fail to due load SSL certificate from file: %v", err)
+			logging.Errorf("Fail to load SSL certificate"+
+				" from File: %v, err; %v", certFile, err)
 		}
 		newSetting.certInBytes = certInBytes
+	}
+
+	if caFile != "" {
+		caCertInBytes, err := ioutil.ReadFile(caFile)
+		if err != nil {
+			logging.Errorf("Fail to load SSL certificate"+
+				" from File: %v, err; %v", caFile, err)
+		}
+		newSetting.caInBytes = caCertInBytes
 	}
 
 	UpdateSecuritySetting(newSetting)

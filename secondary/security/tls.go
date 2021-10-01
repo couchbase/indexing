@@ -88,7 +88,7 @@ func setupClientTLSConfig(host string) (*tls.Config, error) {
 	//  Set up cert pool for rootCAs
 	caCertPool, err := getCertPool(setting)
 	if err != nil {
-		return nil, fmt.Errorf("%v Can't establish ssl connection to %v", host)
+		return nil, fmt.Errorf("%v Can't establish ssl connection to %v", err, host)
 	}
 
 	tlsConfig.RootCAs = caCertPool

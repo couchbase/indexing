@@ -1004,7 +1004,7 @@ func InitSecurityContext(clusterAddr, localhost string, certFile, keyFile, caFil
 		PreferServerCipherSuites: true,
 	}
 
-	security.SetTLSConfigAndCACert(tlsConfig, encryptionConfig, certFile)
+	security.SetTLSConfigAndCACert(tlsConfig, encryptionConfig, certFile, caFile)
 	logging.Infof("Done InitSecurityContext EncryptionEnabled: %v, DisableNonSSLPorts", security.EncryptionEnabled(), security.DisableNonSSLPort())
 
 	return nil
