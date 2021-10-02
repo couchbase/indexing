@@ -159,6 +159,7 @@ if [ "$CIBOT" = "true" ]; then
     git fetch -q ssh://review.couchbase.org/gometa $revspec && git cherry-pick FETCH_HEAD
     test $? -eq 0 && echo "$revspec" | awk -F/ '{print $4 "," $5}' >> ~/gerrit.list
   done
+  autolist="`ssh review.couchbase.org gerrit query \"project:query status:open branch:master reviewer:self\" | grep number: | awk '{print $2}' | sort -n`"
   for patch_id in $GERRIT $autolist
   do
     cd $WORKSPACE/goproj/src/github.com/couchbase/query
