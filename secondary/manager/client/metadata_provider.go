@@ -81,6 +81,7 @@ type MetadataProvider struct {
 	indexerVersion     uint64
 	clusterVersion     uint64
 	statsNotifyCh      chan map[c.IndexInstId]map[c.PartitionId]c.Statistics
+	limitsCfg          *c.LimitsCache
 }
 
 //
@@ -221,6 +222,13 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 		return nil, err
 	}
 	s.clusterVersion = cinfo.GetClusterVersion()
+
+	lc, err1 := c.NewLimitsCache()
+	if err1 != nil {
+		return nil, err1
+	}
+
+	s.limitsCfg = lc
 
 	return s, nil
 }

@@ -115,7 +115,7 @@ func (w *snapshotWaiter) Error(err error) {
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych []chan IndexSnapshot,
-	snapshotReqCh []MsgChannel) (StorageManager, Message) {
+	snapshotReqCh []MsgChannel, stats *IndexerStats) (StorageManager, Message) {
 
 	//Init the storageMgr struct
 	s := &storageMgr{
@@ -129,6 +129,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	s.indexPartnMap.Init()
 	s.indexSnapMap.Init()
 	s.waitersMap.Init()
+	s.stats.Set(stats)
 
 	s.streamKeyspaceIdInstList.Init()
 	s.streamKeyspaceIdInstsPerWorker.Init()

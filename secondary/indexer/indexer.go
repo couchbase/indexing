@@ -6671,8 +6671,9 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 	go func() {
 		//Start Storage Manager
 		var res Message
+		stats := idx.stats.Clone()
 		idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
-			idx.indexPartnMap, idx.config, snapshotNotifych, snapshotReqCh)
+			idx.indexPartnMap, idx.config, snapshotNotifych, snapshotReqCh, stats)
 		if res.GetMsgType() == MSG_ERROR {
 			err := res.(*MsgError).GetError()
 			logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)
