@@ -1259,6 +1259,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		//process any pending collection drop
 		if instIdList, ok := idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId]; ok &&
 			len(instIdList) != 0 {
+			logging.Infof("Indexer::StorageSnapDone Cleaning up index data for stream: %v, keyspaceId: %v, instIdList: %v",
+				streamId, keyspaceId, instIdList)
 			idx.cleanupIndexDataForCollectionDrop(streamId, keyspaceId, instIdList)
 			delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
 		}
@@ -4167,12 +4169,22 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
-	idx.cleanupIndexData(deletedInsts, nil)
-	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+	// If there is a pending collection drop at this point, it means
+	// flush is in progress. Skip clean-up here as the index data will
+	// be cleaned-up once flush is done
+	if val, ok := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; !ok || val == false {
+		idx.stopKeyspaceIdStream(streamId, keyspaceId, true)
+		idx.cleanupIndexData(deletedInsts, nil)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
-	logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
-		streamId, keyspaceId, STREAM_INACTIVE)
+		logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
+			streamId, keyspaceId, STREAM_INACTIVE)
+	} else {
+		idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId] =
+			append(idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId], deletedInstIds...)
+		logging.Infof("Indexer::handleKeyspaceNotFound Skip clean-up of index data as "+
+			"flush is in progress %v %v", streamId, keyspaceId)
+	}
 }
 
 func (idx *indexer) handleDcpSystemEvent(cmd Message) {
