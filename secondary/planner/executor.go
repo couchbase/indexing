@@ -22,6 +22,7 @@ import (
 
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -476,11 +477,34 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 // Integration with Metadata Provider
 /////////////////////////////////////////////////////////////
 
-func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool, useGreedyPlanner bool) (*Solution, error) {
+func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool, useGreedyPlanner bool, enforceLimits bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	if enforceLimits {
+		scopeSet := make(map[string]bool)
+		for _, indexSpec := range indexSpecs {
+			if _, found := scopeSet[indexSpec.Bucket+":"+indexSpec.Scope]; !found {
+				scopeSet[indexSpec.Bucket+":"+indexSpec.Scope] = true
+				scopeLimit, err := GetIndexScopeLimit(clusterUrl, indexSpec)
+				if err != nil {
+					return nil, err
+				}
+
+				if scopeLimit != collections.NUM_INDEXES_NIL {
+					numIndexes := GetNumIndexesPerScope(plan, indexSpec)
+					// GetNewIndexesPerScope will be called only once per Bucket+Scope
+					newIndexes := GetNewIndexesPerScope(indexSpecs, indexSpec.Bucket, indexSpec.Scope)
+					if numIndexes+newIndexes > scopeLimit {
+						errMsg := fmt.Sprintf("%v Limit : %v", common.ErrIndexScopeLimitReached.Error(), scopeLimit)
+						return nil, errors.New(errMsg)
+					}
+				}
+			}
+		}
 	}
 
 	if override && len(nodes) != 0 {
@@ -507,6 +531,47 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 
 	detail := logging.IsEnabled(logging.Info)
 	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner)
+}
+
+func GetNumIndexesPerScope(plan *Plan, indexSpec *IndexSpec) uint32 {
+	var numIndexes uint32 = 0
+	for _, indexernode := range plan.Placement {
+		for _, index := range indexernode.Indexes {
+			if index.Bucket == indexSpec.Bucket && index.Scope == indexSpec.Scope {
+				numIndexes = numIndexes + 1
+			}
+		}
+	}
+	return numIndexes
+}
+
+func GetNewIndexesPerScope(indexSpecs []*IndexSpec, bucket string, scope string) uint32 {
+	var newIndexes uint32 = 0
+	for _, indexSpec := range indexSpecs {
+		if indexSpec.Bucket == bucket && indexSpec.Scope == scope {
+			newIndexes = newIndexes + uint32(indexSpec.NumPartition*indexSpec.Replica)
+		}
+	}
+	return newIndexes
+}
+
+// Alternate approach: Get Scope Limit from clusterInfoClient from proxy.go
+// But in order to get Scope limit only bucket and scope name is required and multiple calls need
+// not be made to fetch bucket list, pool etc. For future use of this function this Implementation
+// removes the dependency on Fetching ClusterInfoCache and uses only one API call.
+func GetIndexScopeLimit(clusterUrl string, indexSpec *IndexSpec) (uint32, error) {
+	clusterURL, err := common.ClusterAuthUrl(clusterUrl)
+	if err != nil {
+		return 0, err
+	}
+	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		return 0, err
+	}
+	cinfo.Lock()
+	defer cinfo.Unlock()
+	cinfo.SetUserAgent("Planner:Executor:GetIndexScopeLimit")
+	return cinfo.GetIndexScopeLimit(indexSpec.Bucket, indexSpec.Scope)
 }
 
 func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {

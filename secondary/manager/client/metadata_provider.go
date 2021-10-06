@@ -1182,7 +1182,15 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	var layout map[int]map[c.IndexerId][]c.PartitionId
 	var definitions map[c.IndexerId][]c.IndexDefn
 
-	if o.canSkipPlanner(watcherMap, idxDefn) {
+	enforceLimits, err := o.limitsCfg.EnforceLimits()
+	if err != nil {
+		return err
+	}
+	if o.GetClusterVersion() < c.INDEXER_71_VERSION {
+		enforceLimits = false
+	}
+
+	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits {
 		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
 			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
@@ -1191,8 +1199,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 			return err
 		}
 	} else {
-		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica)
-		if err != nil && strings.Contains(err.Error(), "Index already exist") {
+		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
+		if err != nil && (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error())) {
 			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 			return err
 		}
@@ -2111,7 +2119,7 @@ func (o *MetadataProvider) verifyNodeList(nodeList []string, watcherMap map[c.In
 }
 
 func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, watcherMap map[c.IndexerId]int,
-	allowLostReplica bool, actualNumReplica uint32) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
+	allowLostReplica bool, actualNumReplica uint32, enforceLimits bool) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
 
 	spec := o.prepareIndexSpec(defn)
 	nodes, err := o.prepareNodeList(defn.Nodes, watcherMap)
@@ -2121,7 +2129,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 
-	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes, len(defn.Nodes) != 0, useGreedyPlanner)
+	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes, len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits)
 	if err != nil {
 		return nil, nil, err
 	}

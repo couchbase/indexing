@@ -659,15 +659,31 @@ func (p *Pool) getCollectionManifest(bucketn string) (retry bool,
 // Note: Call this only when cluster version is atleast 7.0
 // It is allowed to query the collections endpoint only if all
 // the nodes in the cluster are upgraded to 7.0 version or later
-func (c *Client) GetCollectionManifest(bucketn string) (
+func (c *Client) GetCollectionManifest(bucketn string) (retry bool,
 	manifest *collections.CollectionManifest, err error) {
 	manifest = &collections.CollectionManifest{}
 	err = c.parseURLResponse("pools/default/buckets/"+bucketn+"/scopes", manifest)
+	if err != nil {
+		// bucket list is out of sync with cluster bucket list
+		if strings.Contains(err.Error(), "HTTP error 404") {
+			retry = true
+			return
+		}
+		return
+	}
 	return
 }
 
 func (c *Client) GetIndexScopeLimit(bucketn, scope string) (uint32, error) {
-	manifest, err := c.GetCollectionManifest(bucketn)
+	retryCount := 0
+loop:
+	retry, manifest, err := c.GetCollectionManifest(bucketn)
+	if retry && retryCount <= 5 {
+		retryCount++
+		logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for GetIndexScopeLimit..", bucketn)
+		time.Sleep(500 * time.Millisecond)
+		goto loop
+	}
 	if err != nil {
 		return 0, err
 	}

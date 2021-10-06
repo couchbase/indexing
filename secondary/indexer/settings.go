@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
@@ -338,14 +339,26 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 		return nil
 	}
 
-	config := s.config.Clone()
-	config.Update(value)
-	initGlobalSettings(s.config, config)
-	s.config = config
+	oldConfig := s.config.Clone()
+
+	newConfig := s.config.Clone()
+	newConfig.Update(value)
+	initGlobalSettings(s.config, newConfig)
+
+	s.config = newConfig
 
 	indexerConfig := s.config.SectionConfig("indexer.", true)
 	s.supvMsgch <- &MsgConfigUpdate{
 		cfg: indexerConfig,
+	}
+
+	diffOld, diffNew := oldConfig.SectionConfig("indexer.", false).Diff(
+		newConfig.SectionConfig("indexer.", false))
+	if len(diffOld) != 0 {
+		systemevent.InfoEvent("Indexer:SettingsManager",
+			systemevent.EVENTID_INDEXER_SETTINGS_CHANGE,
+			map[string]interface{}{"NewSetting": diffNew.Map(),
+				"OldSetting": diffOld.Map()})
 	}
 
 	return err

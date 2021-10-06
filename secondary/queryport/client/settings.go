@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	"github.com/couchbase/indexing/secondary/planner"
 )
 
@@ -102,11 +103,25 @@ func (s *ClientSettings) metaKVCallback(kve metakv.KVEntry) error {
 	if kve.Path == common.IndexingSettingsMetaPath {
 		logging.Infof("New settings received: \n%s", string(kve.Value))
 
-		config := s.config.Clone()
-		config.Update(kve.Value)
-		s.config = config
+		oldConfig := s.config.Clone()
+
+		newConfig := s.config.Clone()
+		newConfig.Update(kve.Value)
+
+		s.config = newConfig
 
 		s.handleSettings(s.config)
+
+		diffOld, diffNew := oldConfig.SectionConfig("queryport.",
+			false).Diff(newConfig.SectionConfig("queryport.", false))
+		if len(diffOld) != 0 {
+			systemevent.InfoEvent("GSIClient:ClientSettings",
+				systemevent.EVENTID_QUERY_CLIENT_SETTINGS_CHANGE,
+				map[string]interface{}{
+					"NewSetting": diffNew.Map(),
+					"OldSetting": diffOld.Map(),
+				})
+		}
 	}
 
 	return nil

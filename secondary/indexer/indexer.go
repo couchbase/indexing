@@ -33,6 +33,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
@@ -318,6 +319,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	// Initialize auditing
 	err := audit.InitAuditService(clusterAddr)
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
+	// Initialize SystemEventLogger
+	err = systemevent.InitSystemEventLogger(clusterAddr)
 	if err != nil {
 		common.CrashOnError(err)
 	}

@@ -3030,6 +3030,23 @@ func (config Config) Clone() Config {
 	return clone
 }
 
+// Gives diff of two configs and returns different values in two Config objects
+// first one has values from receiver and second has values from parameter
+func (config Config) Diff(other Config) (Config, Config) {
+	diffThis := make(Config)
+	diffOther := make(Config)
+	for key, _ := range other {
+		if config[key].Immutable {
+			continue
+		}
+		if config[key] != other[key] {
+			diffThis[key] = config[key]
+			diffOther[key] = other[key]
+		}
+	}
+	return diffThis, diffOther
+}
+
 // Override will clone `config` object and update parameters with
 // values from `others` instance. Will skip immutable fields.
 func (config Config) Override(others ...Config) Config {
@@ -3151,6 +3168,15 @@ func (config Config) SetValue(key string, value interface{}) error {
 	config[key] = cv
 
 	return nil
+}
+
+// Map will return key value map from the config
+func (config Config) Map() map[string]interface{} {
+	kvs := make(map[string]interface{})
+	for key, value := range config {
+		kvs[key] = value.Value
+	}
+	return kvs
 }
 
 // Json will marshal config into JSON string.
