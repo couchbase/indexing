@@ -168,6 +168,12 @@ func (s *settingsManager) handleSettings(w http.ResponseWriter, r *http.Request,
 				return
 			}
 
+			if bytes, err = common.MapSettings(bytes); err != nil {
+				logging.Errorf("Fail to map settings.  Error: %v", err)
+				s.writeError(w, err)
+				return
+			}
+
 			err = config.Update(bytes)
 		}
 

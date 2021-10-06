@@ -1626,6 +1626,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.enable_page_bloom_filter": ConfigValue{
+		false, // keep in sync with index_settings_manager.erl and indexer.plasma.backIndex.enablePageBloomFilter
+		"Enable maintenance and use of bloom filter for lookup of swapped out items",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.backIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -3026,6 +3033,66 @@ func (config Config) Update(data interface{}) error {
 		return nil
 	}
 	return nil
+}
+
+// Ensure these are valid configs
+var configMap = map[string]string{
+	"indexer.settings.enable_page_bloom_filter": "indexer.plasma.backIndex.enablePageBloomFilter",
+}
+
+func MapSettings(value []byte) ([]byte, error) {
+	newConfig, err := NewConfig(value)
+	if err != nil {
+		return value, err
+	}
+
+	logging.Infof("MapSettings: config before mapping: %v", string(newConfig.Json()))
+
+	var dstKey string
+	var srcVal interface{}
+
+	for key1, key2 := range configMap {
+		val1, key1IsPresent := newConfig[key1]
+		val2, key2IsPresent := newConfig[key2]
+
+		// If both key1 and key2 are present, then prefer key1
+		if key1IsPresent {
+			// Either both key1 and key2 are present or only key1 is present
+			// map key1 into key2
+			dstKey = key2
+			srcVal = val1.Value
+
+		} else if key2IsPresent {
+			// Only key2 is present
+			// map key2 into key1
+			dstKey = key1
+			srcVal = val2.Value
+
+		}
+
+		if cv, ok := SystemConfig[dstKey]; ok {
+
+			if dstCV, ok := newConfig[dstKey]; !ok {
+				// dstKey is not present, populate default value
+				newConfig[dstKey] = cv
+			} else if dstCV.Value == srcVal {
+				// dstKey already has target value, skip mapping
+				continue
+			}
+
+			if err := newConfig.SetValue(dstKey, srcVal); err != nil {
+				return value, fmt.Errorf("MapSettings: error during set : dstKey[%v] srcVal[%v] [%v]", dstKey, srcVal, err)
+			}
+
+		} else {
+			return value, fmt.Errorf("MapSettings: invalid config param %q in configMap", dstKey)
+		}
+	}
+
+	newValue := newConfig.Json()
+	logging.Infof("MapSettings: config after mapping: %v", string(newValue))
+
+	return newValue, nil
 }
 
 // Clone a new config object.
