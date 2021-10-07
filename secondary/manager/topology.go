@@ -11,6 +11,7 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
@@ -273,7 +274,9 @@ func (t *IndexTopology) UpdateStateForIndexInst(defnId common.IndexDefnId, instI
 					if t.Definitions[i].Instances[j].State != uint32(state) {
 						t.Definitions[i].Instances[j].State = uint32(state)
 						logging.Debugf("IndexTopology.UpdateStateForIndexInst(): Update index '%v' inst '%v' state to '%v'",
-							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+							defnId, t.Definitions[i].Instances[j].InstId, common.IndexState(t.Definitions[i].Instances[j].State))
+						inst := t.Definitions[i].Instances[j]
+						postIndexPartitionStateChangeEvent(defnId, &inst)
 						return true
 					}
 				}
@@ -450,6 +453,8 @@ func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, ins
 
 					if len(newPartitions) != 0 {
 						t.Definitions[i].Instances[j].Partitions = append(t.Definitions[i].Instances[j].Partitions, newPartitions...)
+						inst := t.Definitions[i].Instances[j]
+						postIndexPartitionMergedEvent(defnId, &inst, newPartitions)
 						return true
 					}
 				}
@@ -479,6 +484,9 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 					for _, partnId := range partitions {
 						for k, partition := range t.Definitions[i].Instances[j].Partitions {
 							if uint64(partnId) == partition.PartId {
+
+								inst := t.Definitions[i].Instances[j]
+								postIndexPartitionDroppedEvent(defnId, &inst, []IndexPartDistribution{partition})
 
 								// remove partition from the existing instance
 								if k == len(t.Definitions[i].Instances[j].Partitions)-1 {
@@ -560,6 +568,8 @@ func (t *IndexTopology) DeleteAllPartitionsForIndexInst(defnId common.IndexDefnI
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
 				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					inst := t.Definitions[i].Instances[j]
+					postIndexPartitionDroppedEvent(defnId, &inst, nil)
 					t.Definitions[i].Instances[j].Partitions = nil
 				}
 			}
@@ -604,6 +614,8 @@ func (t *IndexTopology) ChangeStateForIndexInst(defnId common.IndexDefnId, instI
 						t.Definitions[i].Instances[j].State = uint32(toState)
 						logging.Debugf("IndexTopology.UpdateStateForIndexInst(): Update index '%v' inst '%v' state to '%v'",
 							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+						inst := t.Definitions[i].Instances[j]
+						postIndexPartitionStateChangeEvent(defnId, &inst)
 					}
 				}
 			}
@@ -667,6 +679,9 @@ func (t *IndexTopology) RemoveIndexInstanceById(defnId common.IndexDefnId, instI
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
 				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+
+					inst := t.Definitions[i].Instances[j]
+					postIndexPartitionDroppedEvent(defnId, &inst, nil)
 
 					if j == len(t.Definitions[i].Instances)-1 {
 						t.Definitions[i].Instances = t.Definitions[i].Instances[:j]
@@ -859,4 +874,67 @@ func transformSlice(slice *IndexSliceLocator) *mc.IndexSliceLocator {
 	sl.IndexerId = slice.IndexerId
 
 	return sl
+}
+
+// Post System Events
+var IndexStateToEventIDMap = map[common.IndexState]systemevent.SystemEventID{
+	common.INDEX_STATE_READY:   systemevent.EVENTID_INDEX_PARTITION_CREATED,
+	common.INDEX_STATE_INITIAL: systemevent.EVENTID_INDEX_PARTITION_BUILDING,
+	common.INDEX_STATE_ACTIVE:  systemevent.EVENTID_INDEX_PARTITION_ONLINE,
+	common.INDEX_STATE_DELETED: systemevent.EVENTID_INDEX_PARTITION_DROPPED,
+}
+
+func postIndexPartitionStateChangeEvent(defnId common.IndexDefnId,
+	inst *IndexInstDistribution) {
+	mod := "IndexPartitionStateChange"
+
+	eventID, ok := IndexStateToEventIDMap[common.IndexState(inst.State)]
+	if !ok {
+		return
+	}
+
+	for _, partn := range inst.Partitions {
+		iid := partn.SinglePartition.Slices[0].IndexerId
+		se := systemevent.NewDDLSystemEvent(mod, defnId,
+			common.IndexInstId(inst.InstId), inst.ReplicaId,
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid)
+		systemevent.InfoEvent("Indexer", eventID, se)
+	}
+}
+
+func postIndexPartitionDroppedEvent(defnId common.IndexDefnId,
+	inst *IndexInstDistribution, droppedPartns []IndexPartDistribution) {
+	mod := "IndexPartitionDropped"
+
+	if droppedPartns == nil {
+		droppedPartns = inst.Partitions
+	}
+
+	for _, partn := range droppedPartns {
+		iid := partn.SinglePartition.Slices[0].IndexerId
+		se := systemevent.NewDDLSystemEvent(mod, defnId,
+			common.IndexInstId(inst.InstId), inst.ReplicaId,
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid)
+		systemevent.InfoEvent("Indexer",
+			systemevent.EVENTID_INDEX_PARTITION_DROPPED, se)
+	}
+}
+
+func postIndexPartitionMergedEvent(defnId common.IndexDefnId,
+	inst *IndexInstDistribution, newPartitions []IndexPartDistribution) {
+	mod := "IndexPartitionMerged"
+
+	if newPartitions == nil {
+		newPartitions = inst.Partitions
+	}
+
+	for _, partn := range newPartitions {
+		iid := partn.SinglePartition.Slices[0].IndexerId
+		se := systemevent.NewDDLSystemEvent(mod, defnId,
+			common.IndexInstId(inst.InstId), inst.ReplicaId,
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid)
+		systemevent.InfoEvent("Indexer",
+			systemevent.EVENTID_INDEX_PARTITION_MERGED, se)
+	}
+
 }

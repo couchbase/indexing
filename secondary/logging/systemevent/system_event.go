@@ -6,32 +6,67 @@ import (
 	"time"
 
 	sel "github.com/couchbase/goutils/systemeventlog"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
 
+type SystemEventID sel.EventId
+
 // Indexing's EventId range: 2048-3071
 const (
-	EVENTID_INDEXER_SETTINGS_CHANGE sel.EventId = 2048 + iota
+	// ****
+	// Setting Change events
+	// ****
+	// Below events are logged after the component gets a callback on settings
+	// change and applies the settings
+	EVENTID_INDEXER_SETTINGS_CHANGE SystemEventID = 2048 + iota
 	EVENTID_PROJECTOR_SETTINGS_CHANGE
 	EVENTID_QUERY_CLIENT_SETTINGS_CHANGE
+
+	// ***
+	// Crash events
+	// ***
 	EVENTID_INDEXER_CRASH
 	EVENTID_PROJECTOR_CRASH
 	EVENTID_QUERY_CLIENT_CRASH
+
+	// ****
+	// DDL Events
+	// ****
+	// Logged when index state changes to INDEX_STATE_READY
+	EVENTID_INDEX_PARTITION_CREATED
+	// Logged when index state changes to INDEX_STATE_INITIAL
+	EVENTID_INDEX_PARTITION_BUILDING
+	// Logged when index state changes to INDEX_STATE_ACTIVE
+	EVENTID_INDEX_PARTITION_ONLINE
+	// Logged when index or index partition is deleted or pruned
+	EVENTID_INDEX_PARTITION_DROPPED
+	// Logged when index partition is added during merge
+	EVENTID_INDEX_PARTITION_MERGED
+
+	// *****
 	// Note: Add events here. Don't add events above in between the Events.
 	// EventID once assigned should not be changed.
+	// *****
+
 	EVENTID_UNDEFINED
-	EVENTID_INDEXING_LIMIT sel.EventId = 3071
+	EVENTID_INDEXING_LIMIT SystemEventID = 3071
 )
 
 // Add description in the below map when new Event is added
-var eventIDToDescriptionMap = map[sel.EventId]string{
+var eventIDToDescriptionMap = map[SystemEventID]string{
 	EVENTID_INDEXER_SETTINGS_CHANGE:      "Indexer Settings Changed",
 	EVENTID_PROJECTOR_SETTINGS_CHANGE:    "Projector Settings Changed",
 	EVENTID_QUERY_CLIENT_SETTINGS_CHANGE: "Query Client Settings Changed",
 	EVENTID_INDEXER_CRASH:                "Indexer Process Crashed",
 	EVENTID_PROJECTOR_CRASH:              "Projector Process Crashed",
 	EVENTID_QUERY_CLIENT_CRASH:           "Query Client Crashed",
+	EVENTID_INDEX_PARTITION_CREATED:      "Index Instance or Partition Created",
+	EVENTID_INDEX_PARTITION_BUILDING:     "Index Instance or Partition Building",
+	EVENTID_INDEX_PARTITION_ONLINE:       "Index Instance or Partition Online",
+	EVENTID_INDEX_PARTITION_DROPPED:      "Index Instance or Partition Dropped",
+	EVENTID_INDEX_PARTITION_MERGED:       "Index Partition Merged",
 }
 
 // Configuration values for SystemEventLogger
@@ -91,7 +126,7 @@ func getErrLogger() func(msg string) {
 	}
 }
 
-func LogSystemEvent(subComponent string, eventId sel.EventId,
+func LogSystemEvent(subComponent string, eventId SystemEventID,
 	severity sel.EventSeverity, extraAttributes interface{}) {
 
 	if eventId < EVENTID_INDEXER_SETTINGS_CHANGE ||
@@ -108,29 +143,65 @@ func LogSystemEvent(subComponent string, eventId sel.EventId,
 		return
 	}
 
-	seInfo := sel.SystemEventInfo{EventId: eventId, Description: des}
+	seInfo := sel.SystemEventInfo{EventId: sel.EventId(eventId),
+		Description: des}
 	se := sel.NewSystemEvent(subComponent, seInfo, severity,
 		extraAttributes)
 
 	systemEventLogger.Log(se)
 }
 
-func InfoEvent(subComponent string, eventId sel.EventId,
+func InfoEvent(subComponent string, eventId SystemEventID,
 	extraAttributes interface{}) {
 	LogSystemEvent(subComponent, eventId, sel.SEInfo, extraAttributes)
 }
 
-func WarnEvent(subComponent string, eventId sel.EventId,
+func WarnEvent(subComponent string, eventId SystemEventID,
 	extraAttributes interface{}) {
 	LogSystemEvent(subComponent, eventId, sel.SEWarning, extraAttributes)
 }
 
-func ErrorEvent(subComponent string, eventId sel.EventId,
+func ErrorEvent(subComponent string, eventId SystemEventID,
 	extraAttributes interface{}) {
 	LogSystemEvent(subComponent, eventId, sel.SEError, extraAttributes)
 }
 
-func FatalEvent(subComponent string, eventId sel.EventId,
+func FatalEvent(subComponent string, eventId SystemEventID,
 	extraAttributes interface{}) {
 	LogSystemEvent(subComponent, eventId, sel.SEFatal, extraAttributes)
+}
+
+//
+// System Events
+//
+
+type ddlSystemEvent struct {
+	Group          string             `json:"group"`
+	Module         string             `json:"module"`
+	DefinitionID   common.IndexDefnId `json:"definition_id"`
+	InstanceID     common.IndexInstId `json:"instance_id"`
+	ReplicaID      uint64             `json:"replica_id,omitempty"`
+	PartitionID    uint64             `json:"partition_id,omitempty"`
+	RealInstanceID common.IndexInstId `json:"real_instance_id,omitempty"`
+	IsProxyInst    bool               `json:"is_proxy_instance,omitempty"`
+
+	// For Debug as the node name in event does not contain port number
+	IndexerID string `json:"indexer_id,omitempty"`
+}
+
+func NewDDLSystemEvent(mod string, defnId common.IndexDefnId,
+	instId common.IndexInstId, replicaId uint64, partnId uint64,
+	realInstId common.IndexInstId, indexerId string) ddlSystemEvent {
+	e := ddlSystemEvent{
+		Group:          "DDL",
+		Module:         mod,
+		DefinitionID:   defnId,
+		InstanceID:     instId,
+		ReplicaID:      replicaId,
+		PartitionID:    partnId,
+		RealInstanceID: realInstId,
+		IndexerID:      indexerId,
+		IsProxyInst:    realInstId != 0,
+	}
+	return e
 }
