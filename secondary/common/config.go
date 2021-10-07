@@ -3040,16 +3040,17 @@ var configMap = map[string]string{
 	"indexer.settings.enable_page_bloom_filter": "indexer.plasma.backIndex.enablePageBloomFilter",
 }
 
-func MapSettings(value []byte) ([]byte, error) {
+func MapSettings(value []byte) ([]byte, bool, error) {
 	newConfig, err := NewConfig(value)
 	if err != nil {
-		return value, err
+		return value, false, err
 	}
 
 	logging.Infof("MapSettings: config before mapping: %v", string(newConfig.Json()))
 
 	var dstKey string
 	var srcVal interface{}
+	var updated bool
 
 	for key1, key2 := range configMap {
 		val1, key1IsPresent := newConfig[key1]
@@ -3068,6 +3069,9 @@ func MapSettings(value []byte) ([]byte, error) {
 			dstKey = key1
 			srcVal = val2.Value
 
+		} else {
+			// Both are not present, nothing to map
+			continue
 		}
 
 		if cv, ok := SystemConfig[dstKey]; ok {
@@ -3080,19 +3084,21 @@ func MapSettings(value []byte) ([]byte, error) {
 				continue
 			}
 
-			if err := newConfig.SetValue(dstKey, srcVal); err != nil {
-				return value, fmt.Errorf("MapSettings: error during set : dstKey[%v] srcVal[%v] [%v]", dstKey, srcVal, err)
+			if err := newConfig.SetValue(dstKey, srcVal); err == nil {
+				updated = true
+			} else {
+				return value, false, fmt.Errorf("MapSettings: error during set : dstKey[%v] srcVal[%v] [%v]", dstKey, srcVal, err)
 			}
 
 		} else {
-			return value, fmt.Errorf("MapSettings: invalid config param %q in configMap", dstKey)
+			return value, false, fmt.Errorf("MapSettings: invalid config param %q in configMap", dstKey)
 		}
 	}
 
 	newValue := newConfig.Json()
 	logging.Infof("MapSettings: config after mapping: %v", string(newValue))
 
-	return newValue, nil
+	return newValue, updated, nil
 }
 
 // Clone a new config object.

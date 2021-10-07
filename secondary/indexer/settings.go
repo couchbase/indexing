@@ -168,7 +168,7 @@ func (s *settingsManager) handleSettings(w http.ResponseWriter, r *http.Request,
 				return
 			}
 
-			if bytes, err = common.MapSettings(bytes); err != nil {
+			if bytes, _, err = common.MapSettings(bytes); err != nil {
 				logging.Errorf("Fail to map settings.  Error: %v", err)
 				s.writeError(w, err)
 				return
@@ -571,21 +571,40 @@ func isValidDaysOfWeek(value []byte) bool {
 // Try upgrading the config and fix any issues in config values
 // Return true if upgraded, else false
 func tryUpgradeConfig(value []byte) ([]byte, bool) {
-	conf, _ := common.NewConfig(value)
+	conf, err := common.NewConfig(value)
+	if err != nil {
+		logging.Errorf("tryUpgradeConfig: Failed to parse config err [%v]", err)
+		return value, false
+	}
+
+	var upgradedCompactionDaysSetting, upgradedBloomSetting bool
+
+	// Correct compaction days setting
 	if val, ok := conf[compactionDaysSetting]; ok {
 		if !isValidDaysOfWeek(value) {
+
+			// Try correcting the value
 			conf.SetValue(compactionDaysSetting, strings.Title(val.String()))
-			if isValidDaysOfWeek(conf.Json()) {
-				return conf.Json(), true
-			} else {
-				logging.Errorf("%v has invalid value %v. Setting it to empty value. "+
+
+			if !isValidDaysOfWeek(conf.Json()) {
+				// Could not correct the value
+
+				logging.Errorf("tryUpgradeConfig: %v has invalid value %v. Setting it to empty value. "+
 					"Update the setting to a valid value.",
 					compactionDaysSetting, val.String())
+
 				conf.SetValue(compactionDaysSetting, "")
-				return conf.Json(), true
 			}
+
+			upgradedCompactionDaysSetting = true
 		}
 	}
 
-	return value, false
+	// Correct plasma bloom filter setting
+	if value, upgradedBloomSetting, err = common.MapSettings(conf.Json()); err != nil {
+		logging.Errorf("tryUpgradeConfig: Failed to map settings err [%v]", err)
+		return value, false
+	}
+
+	return value, upgradedCompactionDaysSetting || upgradedBloomSetting
 }
