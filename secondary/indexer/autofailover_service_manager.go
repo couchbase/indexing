@@ -161,7 +161,7 @@ func (this *cpuThrottleExpirer) resetCpuThrottleExpiry() {
 
 		go this.runExpiryCountdown()
 	} else { // resetting existing ticker
-		this.expiryTicker.Reset(CPU_THROTTLE_EXPIRY_SEC * time.Second)
+		// kjc Reset added in Go 1.15; resolve after clarity on Neo Go version: this.expiryTicker.Reset(CPU_THROTTLE_EXPIRY_SEC * time.Second)
 		this.expiryMutex.Unlock()
 	}
 }
