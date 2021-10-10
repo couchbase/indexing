@@ -70,7 +70,7 @@ type ServiceMgr struct {
 
 	cinfo *c.ClusterInfoCache
 
-	localhttp string
+	localhttp string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
 
 	moveStatusCh chan error
 
@@ -293,6 +293,9 @@ func (m *ServiceMgr) handleIndexerReady(cmd Message) {
 
 }
 
+// registerWithServer registers this object as the singleton handler implementing the ns_server RPC
+// interface Manager (defined in cbauth/service/interface.go) by calling RegisterManager
+// (defined in cbauth/service/revrpc.go).
 func (m *ServiceMgr) registerWithServer() {
 
 	cfg := m.config.Load()

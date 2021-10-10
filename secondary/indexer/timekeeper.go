@@ -51,8 +51,7 @@ type timekeeper struct {
 
 	lock sync.RWMutex //lock to protect this structure
 
-	indexerState common.IndexerState
-
+	indexerState      common.IndexerState
 	clusterInfoClient *common.ClusterInfoClient
 }
 
@@ -79,8 +78,8 @@ const KV_RETRY_INTERVAL = 5000
 //by a synchronous response of the supvCmdch.
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
-func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config common.Config, c *common.ClusterInfoClient) (Timekeeper, Message) {
+func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Config,
+	c *common.ClusterInfoClient) (Timekeeper, Message) {
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
@@ -580,6 +579,8 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	if tk.checkKeyspaceActiveInStream(streamId, keyspaceId) == false {
 		logging.Tracef("Timekeeper::handleSync Received Sync for "+
 			"Inactive KeyspaceId %v Stream %v. Ignored.", keyspaceId, streamId)
+		// DO NOT tk.supvCmdch <- &MsgSuccess{} in this case as nothing is waiting to consume it so
+		// such a message would incorrectly unblock the next service request before it should.
 		return
 	}
 
@@ -639,17 +640,13 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	}
 
 	if flushWasAborted {
-
 		tk.processFlushAbort(streamId, keyspaceId)
 		return
 	}
 
-	if _, ok := keyspaceIdFlushInProgressTsMap[keyspaceId]; ok {
+	if fts, ok := keyspaceIdFlushInProgressTsMap[keyspaceId]; ok {
 		//store the last flushed TS
-		fts := keyspaceIdFlushInProgressTsMap[keyspaceId]
-
 		keyspaceIdLastFlushedTsMap[keyspaceId] = fts
-
 		if fts != nil {
 			tk.ss.updateLastMutationVbuuid(streamId, keyspaceId, fts)
 		}
@@ -796,52 +793,6 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 	default:
 		logging.Errorf("Timekeeper::handleFlushDoneMaintStream Invalid Stream State %v.", state)
 
-	}
-
-	tk.supvCmdch <- &MsgSuccess{}
-}
-
-func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
-
-	logging.Tracef("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
-
-	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
-
-	state := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
-
-	switch state {
-
-	case STREAM_ACTIVE:
-
-		if tk.checkCatchupStreamReadyToMerge(cmd) {
-			//if stream is ready to merge, further processing is
-			//not required, return from here.
-			return
-		}
-
-		//check if there is any pending TS for this keyspaceId/stream.
-		//It can be processed now.
-		tk.processPendingTS(streamId, keyspaceId)
-
-	case STREAM_PREPARE_RECOVERY:
-
-		//check if there is any pending TS for this keyspaceId/stream.
-		//It can be processed now.
-		found := tk.processPendingTS(streamId, keyspaceId)
-
-		//if no more pending TS were found and there is no abort or flush
-		//in progress recovery can be initiated
-		if !found {
-			if tk.checkKeyspaceReadyForRecovery(streamId, keyspaceId) {
-				tk.initiateRecovery(streamId, keyspaceId)
-			}
-		}
-	default:
-
-		logging.Errorf("Timekeeper::handleFlushDoneCatchupStream Invalid State Detected. "+
-			"CATCHUP_STREAM Can Only Be Flushed in ACTIVE or PREPARE_RECOVERY state. "+
-			"Current State %v.", state)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -2670,8 +2621,7 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 	if streamId == common.CATCHUP_STREAM {
 
 		//get the lowest TS for this keyspace in MAINT_STREAM
-		keyspaceIdTsListMap := tk.ss.streamKeyspaceIdTsListMap[common.MAINT_STREAM]
-		tsList := keyspaceIdTsListMap[keyspaceId]
+		tsList := tk.ss.streamKeyspaceIdTsListMap[common.MAINT_STREAM][keyspaceId]
 		var maintTs *common.TsVbuuid
 		if tsList.Len() > 0 {
 			e := tsList.Front()
@@ -2682,8 +2632,7 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 		}
 
 		//get the lastFlushedTs of CATCHUP_STREAM
-		keyspaceIdLastFlushedTsMap := tk.ss.streamKeyspaceIdLastFlushedTsMap[common.CATCHUP_STREAM]
-		lastFlushedTs := keyspaceIdLastFlushedTsMap[keyspaceId]
+		lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[common.CATCHUP_STREAM][keyspaceId]
 		if lastFlushedTs == nil {
 			return false
 		}
@@ -2707,7 +2656,7 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 	return false
 }
 
-//generates a new StabilityTS
+//generates a new StabilityTS. Runs in a go routine per keyspace.
 func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	keyspaceId string) {
 
@@ -2727,9 +2676,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 
 		//persist TS which completes the build
 		if tk.isBuildCompletionTs(streamId, keyspaceId, tsElem.ts) {
-
 			if hasTS, ok := tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId]; !ok || !hasTS {
-
 				//NOTE For OSO mode, it is fine to create snap as DISK type, as there is no
 				//open OSO snapshot at this stage. This snapshot is eligible for recovery.
 				logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
@@ -2754,104 +2701,66 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			if keyspaceStats != nil {
 				keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 			}
-
 		}
-	} else if tk.processPendingTS(streamId, keyspaceId) {
+		return
+	}
+
+	if tk.processPendingTS(streamId, keyspaceId) {
 		//nothing to do
-	} else {
-		if !tk.hasInitStateIndex(streamId, keyspaceId) &&
-			tk.ss.checkCommitOverdue(streamId, keyspaceId) {
+		return
+	}
 
-			tsVbuuid := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId].Copy()
+	// Is it overdue to persist a snapshot for this streamId and keyspaceId? This path skips the
+	// mutation manager flush that is usually the first step and instead triggers just the snapshot
+	// creation which normally follows that, since no mutations have arrived to trigger a snapshot.
+	if !tk.hasInitStateIndex(streamId, keyspaceId) && tk.ss.checkCommitOverdue(streamId, keyspaceId) {
+		tsVbuuid := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId].Copy()
+		if tsVbuuid.IsSnapAligned() {
+			logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit", streamId, keyspaceId)
+			tsVbuuid.SetSnapType(common.FORCE_COMMIT)
+			tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
+			tk.sendNewStabilityTS(&TsListElem{ts: tsVbuuid}, keyspaceId, streamId)
+		}
+	}
 
-			if tsVbuuid.IsSnapAligned() {
-				logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit", streamId, keyspaceId)
-				tsVbuuid.SetSnapType(common.FORCE_COMMIT)
-				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
-				tk.sendNewStabilityTS(&TsListElem{ts: tsVbuuid}, keyspaceId, streamId)
+	//For INIT_STREAM, if there is no new/pending TS, check for stream merge.
+	//fetchKVSeq is set to true here to allow merge to fetch latest bucket/collection seqnos
+	//for the check. This is an expensive operation and is only done if there is no
+	//flush activity.
+	if streamId == common.INIT_STREAM {
+		if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
+			!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
+
+			lastKVSeqFetchTime := tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId]
+
+			//if there is no flush activity, check for stream merge every 5 seconds by
+			//fetching the KV Seqnums(expensive check)
+			if time.Since(lastKVSeqFetchTime) > time.Duration(5*time.Second) {
+				lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
+				logging.Infof("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge.", streamId, keyspaceId)
+				tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, true /*fetchKVSeq*/)
+				tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Now()
 			}
 		}
-
-		//For INIT_STREAM, if there is no new/pending TS, check for stream merge.
-		//fetchKVSeq is set to true here to allow merge to fetch latest bucket/collection seqnos
-		//for the check. This is an expensive operation and is only done if there is no
-		//flush activity.
-		if streamId == common.INIT_STREAM {
-			if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
-				!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
-
-				lastKVSeqFetchTime := tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId]
-
-				//if there is no flush activity, check for stream merge every 5 seconds by
-				//fetching the KV Seqnums(expensive check)
-				if time.Since(lastKVSeqFetchTime) > time.Duration(5*time.Second) {
-					lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
-					logging.Infof("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge.", streamId, keyspaceId)
-					tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, true /*fetchKVSeq*/)
-					tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Now()
-				}
-			}
-		}
 	}
-}
-
-//merge a new Ts with one already pending for the stream-bucket,
-//if large snapshots are being processed
-func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
-	keyspaceId string, newTs *common.TsVbuuid) {
-
-	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
-	var lts *common.TsVbuuid
-	merge := false
-
-	//get the last generated but not yet processed timestamp
-	if tsList.Len() > 0 {
-		e := tsList.Back()
-		tsElem := e.Value.(*TsListElem)
-		lts = tsElem.ts
-	}
-
-	//if either of the last generated or newTs has a large snapshot,
-	//merging is required
-	if lts != nil {
-		if lts.HasLargeSnapshot() || newTs.HasLargeSnapshot() {
-			merge = true
-		}
-	}
-
-	//when TS merge happens, all the pending TS in list are merged such that
-	//there is only a single TS in list which has all the latest snapshots seen
-	//by indexer.
-	if merge {
-		if lts.HasLargeSnapshot() {
-			newTs.SetLargeSnapshot(true)
-		}
-
-		tsList.Init()
-	}
-
-	tsList.PushBack(&TsListElem{ts: newTs})
-
 }
 
 //processPendingTS checks if there is any pending TS for the given stream and
-//keyspace. If any TS is found, it is sent to supervisor.
+//keyspace. If any TS is found, it is sent to supervisor (indexer).
+//Caller of this method always holds tk.lock write locked.
 func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId string) bool {
 
 	//if there is a flush already in progress for this stream and keyspaceId
 	//or flush is disabled, nothing to be done
 	keyspaceIdFlushInProgressTsMap := tk.ss.streamKeyspaceIdFlushInProgressTsMap[streamId]
 	keyspaceIdFlushEnabledMap := tk.ss.streamKeyspaceIdFlushEnabledMap[streamId]
-
 	if keyspaceIdFlushInProgressTsMap[keyspaceId] != nil ||
 		keyspaceIdFlushEnabledMap[keyspaceId] == false {
 		return false
 	}
 
-	//if there are pending TS for this keyspaceId, send New TS
-	keyspaceIdTsListMap := tk.ss.streamKeyspaceIdTsListMap[streamId]
-	tsList := keyspaceIdTsListMap[keyspaceId]
-
+	// If there are pending TS for this keyspaceId, send the oldest one to indexer
+	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 	if tsList.Len() > 0 {
 		e := tsList.Front()
 		tsElem := e.Value.(*TsListElem)
@@ -2898,7 +2807,8 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 	return false
 }
 
-//sendNewStabilityTS sends the given TS to supervisor
+// sendNewStabilityTS sends the given TS to supervisor (indexer), which causes it to trigger
+// creation of a new snapshot (either in-memory or disk).
 func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	streamId common.StreamId) {
 
@@ -3236,35 +3146,6 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 		}
 	}
 
-}
-
-//splits a Ts if current HWT is less than Snapshot End for the vbucket.
-//It is important to send TS to flusher only upto the HWT as that's the
-//only guaranteed seqno that can be flushed.
-func (tk *timekeeper) maybeSplitTs(ts *common.TsVbuuid, keyspaceId string,
-	streamId common.StreamId) *common.TsVbuuid {
-
-	hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
-
-	var newTs *common.TsVbuuid
-	for i, s := range ts.Snapshots {
-
-		//process upto hwt or snapEnd, whichever is lower
-		if hwt.Seqnos[i] < s[1] {
-			if newTs == nil {
-				newTs = ts.Copy()
-			}
-			newTs.Seqnos[i] = hwt.Seqnos[i]
-		}
-	}
-
-	if newTs != nil {
-		tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
-		tsList.PushFront(&TsListElem{ts: newTs})
-		return newTs
-	} else {
-		return ts
-	}
 }
 
 //changeIndexStateForKeyspaceId changes the state of all indexes in the given keyspaceId
