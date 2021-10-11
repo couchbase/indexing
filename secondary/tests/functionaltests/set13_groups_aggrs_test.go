@@ -2046,3 +2046,204 @@ func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProje
 		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
+
+type GroupAggrDocumentKeyDoc1 struct {
+	Attr1 string `json:"Attr1,omitempty"`
+	Id string `json:"Id,omitempty"`
+}
+
+type GroupAggrDocumentKeyDoc2 struct {
+	Attr1 string `json:"Attr1,omitempty"`
+	Id string `json:"Id,omitempty"`
+	Attr2 string `json:"Attr2,omitempty"`
+	Attr3 string `json:"Attr3,omitempty"`
+}
+
+func makeGroupAggrDocumentKeyDocs1() tc.KeyValues {
+
+	docs := make(tc.KeyValues)
+
+	docs["e::g::1"] = GroupAggrDocumentKeyDoc1{Attr1:"doct", Id:"e::g::1"}
+	docs["e::g::2"] = GroupAggrDocumentKeyDoc1{Attr1:"doct", Id:"e::g::2"}
+	docs["e::g::3"] = GroupAggrDocumentKeyDoc1{Attr1:"doct", Id:"e::g::3"}
+
+	return docs
+}
+
+func makeGroupAggrDocumentKeyDocs2() tc.KeyValues {
+
+	docs := make(tc.KeyValues)
+
+	docs["e::z::1"] = GroupAggrDocumentKeyDoc2{Attr1:"docz", Id:"e::z::1", Attr2:"abc", Attr3:"male"}
+	docs["e::z::2"] = GroupAggrDocumentKeyDoc2{Attr1:"docz", Id:"e::z::2", Attr2:"abc", Attr3:"male"}
+	docs["e::z::3"] = GroupAggrDocumentKeyDoc2{Attr1:"docz", Id:"e::z::3", Attr2:"abc", Attr3:"male"}
+
+	return docs
+}
+
+func getGroupAggrDocumentKeyFilter1() qc.Scans {
+	scans := make(qc.Scans, 1)
+
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "doct", High: "doct", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	return scans
+}
+
+
+func getGroupAggrDocumentKeyFilter2() qc.Scans {
+	scans := make(qc.Scans, 1)
+	filter1 := make([]*qc.CompositeElementFilter, 3)
+	filter1[0] = &qc.CompositeElementFilter{Low: "docz", High: "docz", Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: "abc", High: "abc", Inclusion: qc.Inclusion(uint32(3))}
+	filter1[2] = &qc.CompositeElementFilter{Low: "male", High: "male", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	return scans
+}
+
+func getGroupAggrDocumentKey1() (*qc.GroupAggr, *qc.IndexProjection) {
+
+	groups := make([]*qc.GroupKey, 1)
+
+	g1 := &qc.GroupKey{
+		EntryKeyId: 2,
+		KeyPos:     -1,
+		Expr:	"(split(cover ((meta(`d`).`id`)), \"::\")[2])",
+	}
+
+	groups[0] = g1
+
+	dependsOnIndexKeys := make([]int32, 1)
+	dependsOnIndexKeys[0] = int32(1)
+	indexKeyNames := []string{"(`d`.`Attr1`)", "(meta(`d`).`id`)"}
+	ga := &qc.GroupAggr{
+		Group:              groups,
+		DependsOnIndexKeys: dependsOnIndexKeys,
+		IndexKeyNames: indexKeyNames,
+		AllowPartialAggr:true,
+		OnePerPrimaryKey:false,
+	}
+
+	entry := make([]int64, 1)
+	entry[0] = 2
+	proj := &qc.IndexProjection{
+		EntryKeys: entry,
+	}
+
+	return ga, proj
+}
+
+func getGroupAggrDocumentKey2() (*qc.GroupAggr, *qc.IndexProjection) {
+
+	groups := make([]*qc.GroupKey, 1)
+
+	g1 := &qc.GroupKey{
+		EntryKeyId: 4,
+		KeyPos:     -1,
+		Expr:	"(split(cover ((meta(`d`).`id`)), \"::\")[2])",
+	}
+
+	groups[0] = g1
+
+	dependsOnIndexKeys := make([]int32, 1)
+	dependsOnIndexKeys[0] = int32(3)
+	indexKeyNames := []string{"(`d`.`Attr1`)", "(`d`.`Attr2`)", "(`d`.`Attr3`)", "(meta(`d`).`id`)"}
+	ga := &qc.GroupAggr{
+		Group:              groups,
+		DependsOnIndexKeys: dependsOnIndexKeys,
+		IndexKeyNames: indexKeyNames,
+		AllowPartialAggr:true,
+		OnePerPrimaryKey:false,
+	}
+
+	entry := make([]int64, 1)
+	entry[0] = 4
+	proj := &qc.IndexProjection{
+		EntryKeys: entry,
+	}
+
+
+	return ga, proj
+}
+
+// test group aggrgate where group by clause uses document key i.e META().id
+func TestGroupAggrDocumentKey(t *testing.T) {
+
+	log.Printf("In TestGroupAggrDocumentKey()")
+	var bucket = "default"
+	//test 1 single key index
+	var index1 = "documentkey_idx1"
+	secondaryindex.DropSecondaryIndex(index1, bucket, indexManagementAddress)
+	//test 2 composite key index
+	var index2 = "documentkey_idx2"
+	secondaryindex.DropSecondaryIndex(index2, bucket, indexManagementAddress)
+
+	log.Printf("Populating the default bucket for TestGroupAggrDocumentKey single key index")
+	docs1 := makeGroupAggrDocumentKeyDocs1()
+	kvutility.SetKeyValues(docs1, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucket, indexManagementAddress,
+		"Attr1=\"doct\"", []string{"Attr1"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index1 for TestGroupAggrDocumentKey", t)
+
+	scans := getGroupAggrDocumentKeyFilter1()
+	ga, proj := getGroupAggrDocumentKey1()
+	_, scanResults, err := secondaryindex.Scan3(index1, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+
+	n1qlEquivalent := "SELECT RAW g FROM default AS d  USE INDEX (`#primary`) WHERE d.Attr1 = \"doct\" GROUP BY (SPLIT(META(d).id, \"::\")[2]) AS g ORDER BY g ASC;"
+	results, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, false, gocb.NotBounded)
+	if err != nil {
+		FailTestIfError(err, "Error in", t)
+	}
+	// Generate expectedResponse based on results
+	expectedResponse := make(tc.GroupAggrScanResponse,0)
+	for _, result := range results {
+		rows := make([]interface{},0)
+		res := result.(string)
+		if res != "" {
+			rows = append(rows, value.NewValue(res))
+		} else {
+			rows = append(rows, value.NewMissingValue())
+		}
+		expectedResponse = append(expectedResponse,  rows)
+	}
+	err = tv.ValidateGroupAggrResult(expectedResponse, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// test 2 composite key index
+	log.Printf("Populating the default bucket for TestGroupAggrDocumentKey composite key index")
+	docs2 := makeGroupAggrDocumentKeyDocs2()
+	kvutility.SetKeyValues(docs2, "default", "", clusterconfig.KVAddress)
+
+	err = secondaryindex.CreateSecondaryIndex(index2, bucket, indexManagementAddress,
+		"Attr1=\"docz\" AND Attr2=\"abc\" AND Attr3=\"male\"", []string{"Attr1", "Attr2", "Attr3"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index2 for TestGroupAggrDocumentKey ", t)
+
+	scans = getGroupAggrDocumentKeyFilter2()
+	ga, proj = getGroupAggrDocumentKey2()
+	_, scanResults, err = secondaryindex.Scan3(index2, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+
+	n1qlEquivalent = "SELECT RAW g FROM default AS d  USE INDEX (`#primary`) WHERE d.Attr1 = \"docz\" AND d.Attr2 = \"abc\" AND d.Attr3 = \"male\" GROUP BY (SPLIT(META(d).id, \"::\")[2]) AS g ORDER BY g ASC;"
+	results, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, false, gocb.NotBounded)
+	if err != nil {
+		FailTestIfError(err, "Error in", t)
+	}
+	// Generate expectedResponse based on results
+	expectedResponse = make(tc.GroupAggrScanResponse,0)
+	for _, result := range results {
+		rows := make([]interface{},0)
+		res := result.(string)
+		if res != "" {
+			rows = append(rows, value.NewValue(res))
+		} else {
+			rows = append(rows, value.NewMissingValue())
+		}
+		expectedResponse = append(expectedResponse,  rows)
+	}
+	err = tv.ValidateGroupAggrResult(expectedResponse, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+}

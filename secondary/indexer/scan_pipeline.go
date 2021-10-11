@@ -290,7 +290,7 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if checkDistinct {
-			if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
+			if len(previousRow) != 0 && distinctCompare(entry, previousRow, false) {
 				return nil // Ignore the entry as it is same as previous entry
 			}
 		}
@@ -738,11 +738,17 @@ func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilt
 }
 
 // Compare secondary entries and return true
-// if the secondary keys of entries are equal
-func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
+// if the secondary keys of entries are equal, when compareDocIDs is true compare docIds in addition to keys.
+func distinctCompare(entryBytes1, entryBytes2 []byte, compareDocIDs bool) bool {
 	entry1 := secondaryIndexEntry(entryBytes1)
 	entry2 := secondaryIndexEntry(entryBytes2)
-	if bytes.Compare(entryBytes1[:entry1.lenKey()], entryBytes2[:entry2.lenKey()]) == 0 {
+	lenKey1 := entry1.lenKey()
+	lenKey2 := entry2.lenKey()
+	if compareDocIDs {
+		lenKey1 += entry1.lenDocId()
+		lenKey2 += entry2.lenDocId()
+	}
+	if bytes.Compare(entryBytes1[:lenKey1], entryBytes2[:lenKey2]) == 0 {
 		return true
 	}
 	return false
@@ -1370,6 +1376,7 @@ type entryCache struct {
 
 	hit  int64
 	miss int64
+	compareDocIDs bool
 }
 
 func (e *entryCache) Init(r *ScanRequest) {
@@ -1382,7 +1389,11 @@ func (e *entryCache) Init(r *ScanRequest) {
 
 	e.entry = (*entrybuf)[:0]
 	e.compkeybuf = (*compkeybuf)[:0]
-
+	e.compareDocIDs = false
+	//Expr depends on meta().id, we need to include docid in key commparision
+	if r.GroupAggr != nil && r.GroupAggr.DependsOnPrimaryKey {
+		e.compareDocIDs = true
+	}
 }
 
 func (e *entryCache) EqualsEntry(other []byte) bool {
@@ -1397,8 +1408,7 @@ func (e *entryCache) EqualsEntry(other []byte) bool {
 			panic(r)
 		}
 	}()
-
-	return distinctCompare(e.entry, other)
+	return distinctCompare(e.entry, other, e.compareDocIDs)
 }
 
 func (e *entryCache) Get() ([][]byte, value.Values) {

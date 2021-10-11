@@ -1965,7 +1965,7 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 						return err
 					}
 				}
-				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow, false) {
 					return nil // Ignore the entry as it is same as previous entry
 				}
 			}
