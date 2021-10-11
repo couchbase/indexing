@@ -44,6 +44,9 @@ const (
 	EVENTID_INDEX_PARTITION_DROPPED
 	// Logged when index partition is added during merge
 	EVENTID_INDEX_PARTITION_MERGED
+	// Logged when there is an Error in the system and some residue of that
+	// index instance or partition in the system
+	EVENTID_INDEX_PARTITION_ERROR
 
 	// *****
 	// Note: Add events here. Don't add events above in between the Events.
@@ -67,6 +70,7 @@ var eventIDToDescriptionMap = map[SystemEventID]string{
 	EVENTID_INDEX_PARTITION_ONLINE:       "Index Instance or Partition Online",
 	EVENTID_INDEX_PARTITION_DROPPED:      "Index Instance or Partition Dropped",
 	EVENTID_INDEX_PARTITION_MERGED:       "Index Partition Merged",
+	EVENTID_INDEX_PARTITION_ERROR:        "Index Instance or Partition Error State Change",
 }
 
 // Configuration values for SystemEventLogger
@@ -184,6 +188,7 @@ type ddlSystemEvent struct {
 	PartitionID    uint64             `json:"partition_id,omitempty"`
 	RealInstanceID common.IndexInstId `json:"real_instance_id,omitempty"`
 	IsProxyInst    bool               `json:"is_proxy_instance,omitempty"`
+	ErrorString    string             `json:"error_string,omitempty"`
 
 	// For Debug as the node name in event does not contain port number
 	IndexerID string `json:"indexer_id,omitempty"`
@@ -191,7 +196,7 @@ type ddlSystemEvent struct {
 
 func NewDDLSystemEvent(mod string, defnId common.IndexDefnId,
 	instId common.IndexInstId, replicaId uint64, partnId uint64,
-	realInstId common.IndexInstId, indexerId string) ddlSystemEvent {
+	realInstId common.IndexInstId, indexerId string, errorStr string) ddlSystemEvent {
 	e := ddlSystemEvent{
 		Group:          "DDL",
 		Module:         mod,
@@ -202,6 +207,7 @@ func NewDDLSystemEvent(mod string, defnId common.IndexDefnId,
 		RealInstanceID: realInstId,
 		IndexerID:      indexerId,
 		IsProxyInst:    realInstId != 0,
+		ErrorString:    errorStr,
 	}
 	return e
 }

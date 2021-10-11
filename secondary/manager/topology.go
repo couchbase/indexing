@@ -590,6 +590,8 @@ func (t *IndexTopology) SetErrorForIndexInst(defnId common.IndexDefnId, instId c
 				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
 					if t.Definitions[i].Instances[j].Error != errorStr {
 						t.Definitions[i].Instances[j].Error = errorStr
+						inst := t.Definitions[i].Instances[j]
+						postIndexPartitionErrorEvent(defnId, &inst)
 						logging.Debugf("IndexTopology.SetErrorForIndexInst(): Set error for index '%v' inst '%v.  Error = '%v'",
 							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
 						return true
@@ -897,7 +899,8 @@ func postIndexPartitionStateChangeEvent(defnId common.IndexDefnId,
 		iid := partn.SinglePartition.Slices[0].IndexerId
 		se := systemevent.NewDDLSystemEvent(mod, defnId,
 			common.IndexInstId(inst.InstId), inst.ReplicaId,
-			partn.PartId, common.IndexInstId(inst.RealInstId), iid)
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid,
+			"")
 		systemevent.InfoEvent("Indexer", eventID, se)
 	}
 }
@@ -914,7 +917,8 @@ func postIndexPartitionDroppedEvent(defnId common.IndexDefnId,
 		iid := partn.SinglePartition.Slices[0].IndexerId
 		se := systemevent.NewDDLSystemEvent(mod, defnId,
 			common.IndexInstId(inst.InstId), inst.ReplicaId,
-			partn.PartId, common.IndexInstId(inst.RealInstId), iid)
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid,
+			"")
 		systemevent.InfoEvent("Indexer",
 			systemevent.EVENTID_INDEX_PARTITION_DROPPED, se)
 	}
@@ -932,9 +936,31 @@ func postIndexPartitionMergedEvent(defnId common.IndexDefnId,
 		iid := partn.SinglePartition.Slices[0].IndexerId
 		se := systemevent.NewDDLSystemEvent(mod, defnId,
 			common.IndexInstId(inst.InstId), inst.ReplicaId,
-			partn.PartId, common.IndexInstId(inst.RealInstId), iid)
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid,
+			"")
 		systemevent.InfoEvent("Indexer",
 			systemevent.EVENTID_INDEX_PARTITION_MERGED, se)
 	}
 
+}
+
+func postIndexPartitionErrorEvent(defnId common.IndexDefnId,
+	inst *IndexInstDistribution) {
+	mod := "IndexErrorStateChange"
+
+	for _, partn := range inst.Partitions {
+		errStr := inst.Error
+		iid := partn.SinglePartition.Slices[0].IndexerId
+		se := systemevent.NewDDLSystemEvent(mod, defnId,
+			common.IndexInstId(inst.InstId), inst.ReplicaId,
+			partn.PartId, common.IndexInstId(inst.RealInstId), iid,
+			errStr)
+		if errStr != "" {
+			systemevent.ErrorEvent("Indexer",
+				systemevent.EVENTID_INDEX_PARTITION_ERROR, se)
+		} else {
+			systemevent.InfoEvent("Indexer",
+				systemevent.EVENTID_INDEX_PARTITION_ERROR, se)
+		}
+	}
 }
