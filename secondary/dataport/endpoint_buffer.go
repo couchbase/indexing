@@ -57,8 +57,19 @@ func (b *endpointBuffers) addKeyVersions(
 			case c.Sync:
 				endpoint.stats.syncCount.Add(1)
 			case c.StreamBegin:
+				if _, ok := endpoint.keyspaceIdVBMap[keyspaceId]; !ok {
+					endpoint.keyspaceIdVBMap[keyspaceId] = make(map[uint16]bool)
+				}
+				endpoint.keyspaceIdVBMap[keyspaceId][vbno] = true
+
 				endpoint.stats.beginCount.Add(1)
 			case c.StreamEnd:
+
+				delete(endpoint.keyspaceIdVBMap[keyspaceId], vbno)
+				if len(endpoint.keyspaceIdVBMap[keyspaceId]) == 0 {
+					delete(endpoint.keyspaceIdVBMap, keyspaceId)
+				}
+
 				endpoint.stats.endCount.Add(1)
 			case c.Snapshot:
 				endpoint.stats.snapCount.Add(1)
