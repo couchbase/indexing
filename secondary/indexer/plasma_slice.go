@@ -397,7 +397,10 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
 	bCfg.EvictUseMemEstimate = slice.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
 	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
-	bCfg.EnablePageBloomFilter = slice.sysconf["plasma.backIndex.enablePageBloomFilter"].Bool()
+
+	// Will also change based on indexer.plasma.backIndex.enablePageBloomFilter
+	bCfg.EnablePageBloomFilter = slice.sysconf["settings.enable_page_bloom_filter"].Bool()
+
 	bCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
 	bCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
 	bCfg.EnableInMemoryCompression = slice.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
@@ -2422,7 +2425,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.ReaderPurgeThreshold = mdb.sysconf["plasma.reader.purge.threshold"].Float64()
 		mdb.backstore.ReaderPurgePageRatio = mdb.sysconf["plasma.reader.purge.pageRatio"].Float64()
 
-		mdb.backstore.EnablePageBloomFilter = mdb.sysconf["plasma.backIndex.enablePageBloomFilter"].Bool()
+		// Will also change based on indexer.plasma.backIndex.enablePageBloomFilter
+		mdb.backstore.EnablePageBloomFilter = mdb.sysconf["settings.enable_page_bloom_filter"].Bool()
+
 		mdb.backstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
 		mdb.backstore.BloomFilterExpectedMaxItems = mdb.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
 
