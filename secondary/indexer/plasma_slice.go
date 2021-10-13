@@ -381,6 +381,9 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
 	mCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.mainIndex.bloomFilterExpectedMaxItems"].Uint64()
 	mCfg.EnableInMemoryCompression = slice.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
+	mCfg.CompressDuringBurst = slice.sysconf["plasma.mainIndex.enableCompressDuringBurst"].Bool()
+	mCfg.DecompressDuringSwapin = slice.sysconf["plasma.mainIndex.enableDecompressDuringSwapin"].Bool()
+	mCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
@@ -404,6 +407,9 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
 	bCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
 	bCfg.EnableInMemoryCompression = slice.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
+	bCfg.CompressDuringBurst = slice.sysconf["plasma.backIndex.enableCompressDuringBurst"].Bool()
+	bCfg.DecompressDuringSwapin = slice.sysconf["plasma.backIndex.enableDecompressDuringSwapin"].Bool()
+	bCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -2385,6 +2391,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 
 	mdb.mainstore.EnableInMemoryCompression = mdb.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
+	mdb.mainstore.CompressDuringBurst = mdb.sysconf["plasma.mainIndex.enableCompressDuringBurst"].Bool()
+	mdb.mainstore.DecompressDuringSwapin = mdb.sysconf["plasma.mainIndex.enableDecompressDuringSwapin"].Bool()
+	mdb.mainstore.CompressBeforeEvictPercent = mdb.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
+
 	mdb.mainstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 	mdb.mainstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
 	mdb.mainstore.MaxSMRInstPerCtx = mdb.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
@@ -2447,6 +2457,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
 
 		mdb.backstore.EnableInMemoryCompression = mdb.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
+		mdb.backstore.CompressDuringBurst = mdb.sysconf["plasma.backIndex.enableCompressDuringBurst"].Bool()
+		mdb.backstore.DecompressDuringSwapin = mdb.sysconf["plasma.backIndex.enableDecompressDuringSwapin"].Bool()
+		mdb.backstore.CompressBeforeEvictPercent = mdb.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
+
 		mdb.backstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 		mdb.backstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
 		mdb.backstore.MaxSMRInstPerCtx = mdb.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
