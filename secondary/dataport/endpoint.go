@@ -294,8 +294,9 @@ func (endpoint *RouterEndpoint) WaitForExit() error {
 
 // run
 func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
-	flushTick := time.NewTicker(endpoint.bufferTm)
 	harakiri := time.NewTimer(endpoint.harakiriTm)
+	flushTick := time.NewTimer(endpoint.bufferTm)
+	flushTickActive := true
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -321,7 +322,6 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 
 	raddr := endpoint.raddr
 	lastActiveTime := time.Now()
-	lastFlushTime := time.Now()
 	buffers := newEndpointBuffers(raddr)
 
 	messageCount := 0
@@ -340,7 +340,6 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 			endpoint.stats.flushCount.Add(1)
 		}
 		messageCount = 0
-		lastFlushTime = time.Now()
 		return
 	}
 
@@ -370,9 +369,18 @@ loop:
 				})
 
 				messageCount++ // count queued up mutations.
-				if messageCount > endpoint.bufferSize || time.Since(lastFlushTime) > time.Duration(1*time.Millisecond) {
+				if messageCount > endpoint.bufferSize {
 					if err := flushBuffers(); err != nil {
 						break loop
+					}
+				} else {
+					// Received a message but could not flush as the number of messages
+					// in buffer are less then minimum number of messages required for
+					// flush. If flushTick is not active, reset flushTick so that these
+					// messages will be flushed in the next "endpoint.bufferTm" duration
+					if !flushTickActive {
+						flushTick.Reset(endpoint.bufferTm)
+						flushTickActive = true
 					}
 				}
 
@@ -391,7 +399,7 @@ loop:
 					endpoint.bufferTm = time.Duration(cv.Int())
 					endpoint.bufferTm *= time.Millisecond
 					flushTick.Stop()
-					flushTick = time.NewTicker(endpoint.bufferTm)
+					flushTick.Reset(endpoint.bufferTm)
 				}
 				if cv, ok := config["harakiriTimeout"]; ok {
 					endpoint.harakiriTm = time.Duration(cv.Int())
@@ -421,6 +429,10 @@ loop:
 			if err := flushBuffers(); err != nil {
 				break loop
 			}
+			// FlushTick has fired. FlushTick will be re-activated
+			// when there are any new messages
+			flushTickActive = false
+
 			// FIXME: Ideally we don't have to reload the harakir here,
 			// because _this_ execution path happens only when there is
 			// little activity in the data-path. On the other hand,

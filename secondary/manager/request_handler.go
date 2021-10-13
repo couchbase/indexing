@@ -1728,7 +1728,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 			eTagRequest := getETagFromHttpHeader(r)
 			if eTagRequest != common.HTTP_VAL_ETAG_INVALID { // also ...INVALID if missing or garbage
 				cachedMeta := m.rhc.GetLocalIndexMetadataFromCache(m.hostKey)
-				if eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
+				if cachedMeta != nil && eTagValid(eTagRequest, cachedMeta.ETag, cachedMeta.ETagExpiry) {
 					// Valid ETag; respond 304 Not Modified with the same ETag
 					sendNotModified(w, eTagRequest)
 					return
