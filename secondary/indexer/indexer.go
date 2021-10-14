@@ -150,20 +150,22 @@ type indexer struct {
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk                 Timekeeper                  //handle to timekeeper
-	storageMgr         StorageManager              //handle to storage manager
-	compactMgr         CompactionManager           //handle to compaction manager
-	mutMgr             MutationManager             //handle to mutation manager
-	rebalMgr           RebalanceMgr                //handle to rebalance manager
-	ddlSrvMgr          *DDLServiceMgr              //handle to ddl service manager
-	schedIdxCreator    *schedIndexCreator          //handle to scheduled index creator
-	clustMgrAgent      ClustMgrAgent               //handle to ClustMgrAgent
-	kvSender           KVSender                    //handle to KVSender
-	settingsMgr        settingsManager             //handle to settings manager
-	statsMgr           *statsManager               //handle to statistics manager
-	scanCoord          ScanCoordinator             //handle to ScanCoordinator
-	autofailoverSrvMgr *AutofailoverServiceManager //handle to AutofailoverServiceManager
-	cpuThrottle        *CpuThrottle                //handle to CPU throttler (for Autofailover)
+	tk              Timekeeper         //handle to timekeeper
+	storageMgr      StorageManager     //handle to storage manager
+	compactMgr      CompactionManager  //handle to compaction manager
+	mutMgr          MutationManager    //handle to mutation manager
+	ddlSrvMgr       *DDLServiceMgr     //handle to ddl service manager
+	schedIdxCreator *schedIndexCreator //handle to scheduled index creator
+	clustMgrAgent   ClustMgrAgent      //handle to ClustMgrAgent
+	kvSender        KVSender           //handle to KVSender
+	settingsMgr     settingsManager    //handle to settings manager
+	statsMgr        *statsManager      //handle to statistics manager
+	scanCoord       ScanCoordinator    //handle to ScanCoordinator
+	cpuThrottle     *CpuThrottle       //handle to CPU throttler (for Autofailover)
+
+	// masterMgr holds AutofailoverServiceManager and RebalanceServiceManager singletons as
+	// ns_server only supports registering a single object for RPC calls.
+	masterMgr *MasterServiceManager
 
 	config common.Config
 
@@ -329,7 +331,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	// CPU throttling is disabled until CpuThrottle.SetCpuThrottling(true) is called
 	idx.cpuThrottle = NewCpuThrottle(idx.config["cpu.throttle.target"].Float64())
-	idx.autofailoverSrvMgr = NewAutofailoverServiceManager(httpAddr, idx.cpuThrottle)
+	autofailoverMgr := NewAutofailoverServiceManager(httpAddr, idx.cpuThrottle)
 
 	// Initialize auditing
 	err := audit.InitAuditService(clusterAddr)
@@ -475,12 +477,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Rebalance Manager
-	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.wrkrPrioRecvCh,
-		idx.config, idx.rebalanceRunning, idx.rebalanceToken)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
-		return nil, res
-	}
+	rebalMgr := NewRebalanceServiceManager(idx.rebalMgrCmdCh, idx.wrkrRecvCh,
+		idx.wrkrPrioRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
+
+	// Register service managers with ns_server for RCP callbacks. This returns a single
+	// MasterServiceManager object that implements all the interfaces we want callbacks for via
+	// delegation to the API-specific objects passed to it.
+	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, rebalMgr)
 
 	go idx.monitorKVNodes()
 

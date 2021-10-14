@@ -17,7 +17,7 @@ import (
 	"time"
 	"unsafe"
 
-	// kjc waiting for ns_server implementation: "github.com/couchbase/cbauth/service"
+	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 )
@@ -47,7 +47,6 @@ func NewAutofailoverServiceManager(httpAddr string, cpuThrottle *CpuThrottle) *A
 	var diskFailures uint64 = 0
 	m.diskFailures = (unsafe.Pointer)(&diskFailures)
 
-	go m.registerWithServer()
 	return m
 }
 
@@ -59,22 +58,6 @@ func (m *AutofailoverServiceManager) AddDiskFailures(diskFailures uint64) {
 // getDiskFailures returns the value of m.diskFailures. Thread-safe.
 func (m *AutofailoverServiceManager) getDiskFailures() uint64 {
 	return atomic.LoadUint64((*uint64)(m.diskFailures))
-}
-
-// registerWithServer runs in a goroutine that registers this object as the singleton handler
-// implementing the ns_server RPC interface AutofailoverManager (defined in
-// cbauth/service/interface.go) by calling RegisterAutofailoverManager
-// (defined in cbauth/service/revrpc.go).
-func (m *AutofailoverServiceManager) registerWithServer() {
-	const method = "AutofailoverServiceManager::registerWithServer:" // for logging
-
-	// kjc waiting for RegisterAutofailoverManager from ns_server: err := service.RegisterAutofailoverManager(m, nil)
-	err := error(nil) // kjc temp replacement for the above
-	if err != nil {
-		logging.Errorf("%v Failed to register with Cluster Manager. err: %v", method, err)
-		return
-	}
-	logging.Infof("%v Registered with Cluster Manager", method)
 }
 
 // getLastKnownIndexTopology sends a loopback HTTP REST call to the local Index service to get the
@@ -161,7 +144,7 @@ func (this *cpuThrottleExpirer) resetCpuThrottleExpiry() {
 
 		go this.runExpiryCountdown()
 	} else { // resetting existing ticker
-		// kjc Reset added in Go 1.15; resolve after clarity on Neo Go version: this.expiryTicker.Reset(CPU_THROTTLE_EXPIRY_SEC * time.Second)
+		this.expiryTicker.Reset(CPU_THROTTLE_EXPIRY_SEC * time.Second)
 		this.expiryMutex.Unlock()
 	}
 }
@@ -196,11 +179,10 @@ func (this *cpuThrottleExpirer) runExpiryCountdown() {
 // unhealthy for the full Autofailover threshold time set by the user (default 120 sec but can be
 // reduced to as little as 5 sec) before ns_server will actually trigger an Autofailover.
 //
-// Returns
-//   diskFailures -- ever-increasing count of disk read/write failures Index (including Plasma and
-//      MOI) have detected since boot. ns_server uses another Autofailover user-setting to determine
-//      whether Index needs to be failed over based on sustained disk failures.
-func (m *AutofailoverServiceManager) HealthCheck() (diskFailures uint64) {
+// Returns the following field populated in HealthInfo:
+//   DiskFailures -- ever-increasing count of disk read/write failures Index (including Plasma and
+//      MOI) have detected since boot
+func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) {
 	const method = "AutofailoverServiceManager::HealthCheck:" // for logging
 	logging.Infof("%v Called", method)
 
@@ -208,12 +190,14 @@ func (m *AutofailoverServiceManager) HealthCheck() (diskFailures uint64) {
 	m.cpuThrottle.SetCpuThrottling(true)
 	m.ctExpirer.resetCpuThrottleExpiry()
 
-	diskFailures = m.getDiskFailures()
-	logging.Infof("%v Returning diskFailures: %v", method, diskFailures)
-	return diskFailures
+	healthInfo := &service.HealthInfo{
+		DiskFailures: int(m.getDiskFailures()),
+	}
+	logging.Infof("%v Returning healthInfo: %+v", method, *healthInfo)
+	return healthInfo, nil
 }
 
-// IsAutofailoverSafe will be called by ns_server on a random healthy Index node if it wants to
+// IsSafe will be called by ns_server on a random healthy Index node if it wants to
 // Autofailover a set of unhealthy Index nodes and the safety decision is not being made by
 // co-located KV. "Safe" means no indexes or partitions would be lost by failing over all the
 // specified nodes, as they all have at least one replica on another Index node not being failed
@@ -228,8 +212,8 @@ func (m *AutofailoverServiceManager) HealthCheck() (diskFailures uint64) {
 //     actual error or, if none, a user-readable message indicating what index partitions would be
 //     lost by this failover. In the unsafe case, ns_server will pass this to the UI to aid the user
 //     in making a decision whether to manually failover.
-func (m *AutofailoverServiceManager) IsAutofailoverSafe(nodeUUIDs []string) (error error) {
-	const method = "AutofailoverServiceManager::IsAutofailoverSafe:" // for logging
+func (m *AutofailoverServiceManager) IsSafe(nodeUUIDs []service.NodeID) (error error) {
+	const method = "AutofailoverServiceManager::IsSafe:" // for logging
 	logging.Infof("%v Called with nodeUUIDs %v", method, nodeUUIDs)
 
 	statusResp, err := m.getLastKnownIndexTopology()
@@ -242,21 +226,21 @@ func (m *AutofailoverServiceManager) IsAutofailoverSafe(nodeUUIDs []string) (err
 	indexStatuses := statusResp.Status // detailed status of index topology for all nodes
 
 	// Create set of nodes proposed to be failed over
-	failoverNodeUUIDs := make(map[string]struct{})
+	failoverNodeUUIDs := make(map[service.NodeID]struct{})
 	for _, nodeUUID := range nodeUUIDs {
 		failoverNodeUUIDs[nodeUUID] = struct{}{}
 	}
 
 	// Create map from nodeUUID to host:index_http_port for userMessage.
 	// Also separate the statuses of kept vs to-be-failed-over nodes.
-	nodeToHostMap := make(map[string]string)
+	nodeToHostMap := make(map[service.NodeID]string)
 	keepStatuses := make([]*manager.IndexStatus, 0)
 	failoverStatuses := make([]*manager.IndexStatus, 0)
 	numStatuses := len(indexStatuses)
 	for statusIdx := 0; statusIdx < numStatuses; statusIdx++ { // avoid range; it would make copies
 		indexStatusPtr := &indexStatuses[statusIdx]
-		nodeToHostMap[indexStatusPtr.NodeUUID] = indexStatusPtr.Hosts[0]
-		if _, member := failoverNodeUUIDs[indexStatusPtr.NodeUUID]; member {
+		nodeToHostMap[service.NodeID(indexStatusPtr.NodeUUID)] = indexStatusPtr.Hosts[0]
+		if _, member := failoverNodeUUIDs[service.NodeID(indexStatusPtr.NodeUUID)]; member {
 			failoverStatuses = append(failoverStatuses, indexStatusPtr)
 		} else {
 			keepStatuses = append(keepStatuses, indexStatusPtr)

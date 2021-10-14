@@ -38,12 +38,10 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 )
 
-//RebalanceMgr manages the integration with ns-server and
-//execution of all cluster wide operations like rebalance/failover
-type RebalanceMgr interface {
-}
-
-type ServiceMgr struct {
+// RebalanceServiceManager implements the ns_server cbauth/service.Manager interface, which drives
+// Rebalance and Failover through RPC. This class also handles index move, which is an internal GSI
+// feature that does not involve ns_server.
+type RebalanceServiceManager struct {
 	mu *sync.RWMutex // protects m.rebalancer, m.rebalancerF, and other shared fields that do not have their own mutexes
 
 	state   state         // state of the current rebalance, failover, or index move
@@ -132,13 +130,15 @@ var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress an
 
 var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 
-// NewRebalanceMgr is the RebalanceMgr constructor. Indexer constructs a singleton RebalanceMgr at boot.
-func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch MsgChannel, config c.Config,
-	rebalanceRunning bool, rebalanceToken *RebalanceToken) (RebalanceMgr, Message) {
+// NewRebalanceServiceManager is the constructor for the RebalanceServiceManager class. Indexer
+// constructs a singleton at boot.
+func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
+	supvPrioMsgch MsgChannel, config c.Config, rebalanceRunning bool,
+	rebalanceToken *RebalanceToken) *RebalanceServiceManager {
 
-	l.Infof("RebalanceMgr::NewRebalanceMgr %v %v ", rebalanceRunning, rebalanceToken)
+	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
 
-	mgr := &ServiceMgr{
+	mgr := &RebalanceServiceManager{
 		mu: &sync.RWMutex{},
 
 		state:   NewState(),
@@ -164,8 +164,8 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 		panic("Unable to initialize cluster_info - " + err.Error())
 	}
 	cinfo.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
-	cinfo.SetLogPrefix("ServiceMgr: ")
-	cinfo.SetUserAgent("ServiceMgr")
+	cinfo.SetLogPrefix("RebalanceServiceManager: ")
+	cinfo.SetUserAgent("RebalanceServiceManager")
 
 	mgr.cinfo = cinfo
 
@@ -190,19 +190,18 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch M
 	go mgr.run()
 	go mgr.initService(mgr.cleanupPending)
 
-	return mgr, &MsgSuccess{}
+	return mgr
 }
 
-func (m *ServiceMgr) initService(cleanupPending bool) {
+func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 
-	l.Infof("RebalanceMgr::initService Init")
+	l.Infof("RebalanceServiceManager::initService Init")
 
 	//allow trivial cleanups to finish to reduce noise
 	if cleanupPending {
 		time.Sleep(5 * time.Second)
 	}
 
-	go m.registerWithServer()
 	go m.updateNodeList()
 
 	mux := GetHTTPMux()
@@ -214,12 +213,12 @@ func (m *ServiceMgr) initService(cleanupPending bool) {
 	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
-// updateNodeList updates ServiceMgr.state.servers node list on start or restart.
-func (m *ServiceMgr) updateNodeList() {
+// updateNodeList updates RebalanceServiceManager.state.servers node list on start or restart.
+func (m *RebalanceServiceManager) updateNodeList() {
 
 	topology, err := getGlobalTopology(m.localhttp)
 	if err != nil {
-		l.Errorf("ServiceMgr::updateNodeList Error Fetching Topology %v", err)
+		l.Errorf("RebalanceServiceManager::updateNodeList Error Fetching Topology %v", err)
 		return
 	}
 
@@ -234,12 +233,12 @@ func (m *ServiceMgr) updateNodeList() {
 			s.servers = nodeList
 		}
 	})
-	l.Infof("ServiceMgr::updateNodeList Updated Node List %v", nodeList)
+	l.Infof("RebalanceServiceManager::updateNodeList Updated Node List %v", nodeList)
 }
 
 //run starts the rebalance manager loop which listens to messages
 //from it supervisor(indexer)
-func (m *ServiceMgr) run() {
+func (m *RebalanceServiceManager) run() {
 
 	//main Rebalance Manager loop
 loop:
@@ -263,7 +262,7 @@ loop:
 	}
 }
 
-func (m *ServiceMgr) handleSupervisorCommands(cmd Message) {
+func (m *RebalanceServiceManager) handleSupervisorCommands(cmd Message) {
 	switch cmd.GetMsgType() {
 
 	case CONFIG_SETTINGS_UPDATE:
@@ -273,41 +272,23 @@ func (m *ServiceMgr) handleSupervisorCommands(cmd Message) {
 		m.handleIndexerReady(cmd)
 
 	default:
-		l.Fatalf("ServiceMgr::handleSupervisorCommands Unknown Message %+v", cmd)
+		l.Fatalf("RebalanceServiceManager::handleSupervisorCommands Unknown Message %+v", cmd)
 		c.CrashOnError(errors.New("Unknown Msg On Supv Channel"))
 	}
 
 }
 
-func (m *ServiceMgr) handleConfigUpdate(cmd Message) {
+func (m *RebalanceServiceManager) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	m.config.Store(cfgUpdate.GetConfig())
 	m.supvCmdch <- &MsgSuccess{}
 }
 
-func (m *ServiceMgr) handleIndexerReady(cmd Message) {
+func (m *RebalanceServiceManager) handleIndexerReady(cmd Message) {
 
 	m.supvCmdch <- &MsgSuccess{}
 
 	go m.recoverRebalance()
-
-}
-
-// registerWithServer registers this object as the singleton handler implementing the ns_server RPC
-// interface Manager (defined in cbauth/service/interface.go) by calling RegisterManager
-// (defined in cbauth/service/revrpc.go).
-func (m *ServiceMgr) registerWithServer() {
-
-	cfg := m.config.Load()
-	l.Infof("ServiceMgr::registerWithServer nodeuuid %v ", cfg["nodeuuid"].String())
-
-	err := service.RegisterManager(m, nil)
-	if err != nil {
-		l.Infof("ServiceMgr::registerWithServer error %v", err)
-		return
-	}
-
-	l.Infof("ServiceMgr::registerWithServer success %v")
 
 }
 
@@ -319,13 +300,13 @@ func (m *ServiceMgr) registerWithServer() {
 /////////////////////////////////////////////////////////////////////////
 
 // GetNodeInfo is an external API called by ns_server (via cbauth).
-func (m *ServiceMgr) GetNodeInfo() (*service.NodeInfo, error) {
+func (m *RebalanceServiceManager) GetNodeInfo() (*service.NodeInfo, error) {
 
 	return m.nodeInfo, nil
 }
 
 // Shutdown is an external API called by ns_server (via cbauth).
-func (m *ServiceMgr) Shutdown() error {
+func (m *RebalanceServiceManager) Shutdown() error {
 
 	return nil
 }
@@ -333,10 +314,10 @@ func (m *ServiceMgr) Shutdown() error {
 // GetTaskList is an external API called by ns_server (via cbauth).
 // If rev is non-nil, respond only when the revision changes from that,
 // else respond immediately.
-func (m *ServiceMgr) GetTaskList(rev service.Revision,
+func (m *RebalanceServiceManager) GetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
 
-	l.Infof("ServiceMgr::GetTaskList %v", rev)
+	l.Infof("RebalanceServiceManager::GetTaskList %v", rev)
 
 	currState, err := m.wait(rev, cancel)
 	if err != nil {
@@ -344,14 +325,14 @@ func (m *ServiceMgr) GetTaskList(rev service.Revision,
 	}
 
 	taskList := stateToTaskList(currState)
-	l.Infof("ServiceMgr::GetTaskList returns %v", taskList)
+	l.Infof("RebalanceServiceManager::GetTaskList returns %v", taskList)
 
 	return taskList, nil
 }
 
 // CancelTask is an external API called by ns_server (via cbauth).
-func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
-	l.Infof("ServiceMgr::CancelTask %v %v", id, rev)
+func (m *RebalanceServiceManager) CancelTask(id string, rev service.Revision) error {
+	l.Infof("RebalanceServiceManager::CancelTask %v %v", id, rev)
 
 	currState := m.copyState()
 	tasks := stateToTaskList(currState).Tasks
@@ -375,7 +356,7 @@ func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
 	}
 
 	if rev != nil && !bytes.Equal(rev, task.Rev) {
-		l.Errorf("ServiceMgr::CancelTask %v %v", rev, task.Rev)
+		l.Errorf("RebalanceServiceManager::CancelTask %v %v", rev, task.Rev)
 		return service.ErrConflict
 	}
 
@@ -385,10 +366,10 @@ func (m *ServiceMgr) CancelTask(id string, rev service.Revision) error {
 // GetCurrentTopology is an external API called by ns_server (via cbauth).
 // If rev is non-nil, respond only when the revision changes from that,
 // else respond immediately.
-func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
+func (m *RebalanceServiceManager) GetCurrentTopology(rev service.Revision,
 	cancel service.Cancel) (*service.Topology, error) {
 
-	l.Infof("ServiceMgr::GetCurrentTopology %v", rev)
+	l.Infof("RebalanceServiceManager::GetCurrentTopology %v", rev)
 
 	currState, err := m.wait(rev, cancel)
 	if err != nil {
@@ -397,7 +378,7 @@ func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
 
 	topology := m.stateToTopology(currState)
 
-	l.Infof("ServiceMgr::GetCurrentTopology returns %v", topology)
+	l.Infof("RebalanceServiceManager::GetCurrentTopology returns %v", topology)
 
 	return topology, nil
 }
@@ -408,12 +389,12 @@ func (m *ServiceMgr) GetCurrentTopology(rev service.Revision,
 //
 //All errors need to be reported as return value. Status of prepared task is not
 //considered for failure reporting.
-func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error {
-	l.Infof("ServiceMgr::PrepareTopologyChange %v", change)
+func (m *RebalanceServiceManager) PrepareTopologyChange(change service.TopologyChange) error {
+	l.Infof("RebalanceServiceManager::PrepareTopologyChange %v", change)
 
 	currState := m.copyState()
 	if currState.rebalanceID != "" {
-		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v",
+		l.Errorf("RebalanceServiceManager::PrepareTopologyChange err %v %v",
 			service.ErrConflict, currState.rebalanceID)
 		if change.Type == service.TopologyChangeTypeRebalance {
 			m.setStateIsBalanced(false)
@@ -447,13 +428,13 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 		s.servers = nodeList
 	})
 
-	logging.Infof("ServiceMgr::PrepareTopologyChange Success. isBalanced %v",
+	logging.Infof("RebalanceServiceManager::PrepareTopologyChange Success. isBalanced %v",
 		currState.isBalanced)
 	return nil
 }
 
 // prepareFailover does sanity checks for the failover case under PrepareTopologyChange.
-func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
+func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -465,7 +446,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 	var err error
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
 
-		l.Infof("ServiceMgr::prepareFailover Found Rebalance In Progress %v", m.rebalanceToken)
+		l.Infof("RebalanceServiceManager::prepareFailover Found Rebalance In Progress %v", m.rebalanceToken)
 
 		if m.rebalancerF != nil {
 			m.rebalancerF.Cancel()
@@ -480,7 +461,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 			}
 		}
 		if !masterAlive {
-			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup")
+			l.Infof("RebalanceServiceManager::prepareFailover Master Missing From Cluster Node List. Cleanup")
 			err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 		} else {
 			err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
@@ -489,14 +470,14 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 	}
 
 	if m.rebalanceRunning && m.rebalanceToken.Source == RebalSourceClusterOp {
-		l.Infof("ServiceMgr::prepareFailover Found Node In Prepared State. Cleanup.")
+		l.Infof("RebalanceServiceManager::prepareFailover Found Node In Prepared State. Cleanup.")
 		err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 		return err
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 
-		l.Infof("ServiceMgr::prepareFailover Found Move Index In Progress %v. Aborting.", m.rebalanceToken)
+		l.Infof("RebalanceServiceManager::prepareFailover Found Move Index In Progress %v. Aborting.", m.rebalanceToken)
 
 		masterAlive := false
 		masterCleanup := false
@@ -508,7 +489,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 		}
 
 		if !masterAlive {
-			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex As Master.")
+			l.Infof("RebalanceServiceManager::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex As Master.")
 			masterCleanup = true
 		}
 
@@ -539,7 +520,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 }
 
 // prepareRebalance does sanity checks for the rebalance case under PrepareTopologyChange.
-func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
+func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -549,18 +530,18 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		m.setStateIsBalanced(false)
 		err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 			"failed/aborted rebalance/failover/move index. please retry the request later.")
-		l.Errorf("ServiceMgr::prepareRebalance %v", err)
+		l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
 		return err
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 		err = errors.New("indexer rebalance failure - move index in progress")
-		l.Errorf("ServiceMgr::prepareRebalance %v", err)
+		l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
 		return err
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
-		l.Warnf("ServiceMgr::prepareRebalance Found Rebalance In Progress. Cleanup.")
+		l.Warnf("RebalanceServiceManager::prepareRebalance Found Rebalance In Progress. Cleanup.")
 		if m.rebalancerF != nil {
 			m.rebalancerF.Cancel()
 			m.rebalancerF = nil
@@ -571,14 +552,14 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 	}
 
 	if m.checkRebalanceRunning() {
-		l.Warnf("ServiceMgr::prepareRebalance Found Rebalance Running Flag. Cleanup Prepare Phase")
+		l.Warnf("RebalanceServiceManager::prepareRebalance Found Rebalance Running Flag. Cleanup Prepare Phase")
 		if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
 			return err
 		}
 	}
 
 	if m.checkLocalCleanupPending() {
-		l.Warnf("ServiceMgr::prepareRebalance Found Pending Local Cleanup Token. Run Cleanup.")
+		l.Warnf("RebalanceServiceManager::prepareRebalance Found Pending Local Cleanup Token. Run Cleanup.")
 		if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
 			return err
 		}
@@ -586,21 +567,21 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		if m.checkLocalCleanupPending() {
 			err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 				"failed/aborted rebalance/failover/move index. please retry the request later.")
-			l.Errorf("ServiceMgr::prepareRebalance %v", err)
+			l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
 			return err
 		}
 	}
 
 	if c.GetBuildMode() == c.ENTERPRISE {
 		m.p.ddlRunning, m.p.ddlRunningIndexNames = m.checkDDLRunning()
-		l.Infof("ServiceMgr::prepareRebalance Found DDL Running %v", m.p.ddlRunningIndexNames)
+		l.Infof("RebalanceServiceManager::prepareRebalance Found DDL Running %v", m.p.ddlRunningIndexNames)
 	}
 
-	l.Infof("ServiceMgr::prepareRebalance Init Prepare Phase")
+	l.Infof("RebalanceServiceManager::prepareRebalance Init Prepare Phase")
 
 	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
 		err := errors.New("indexer - node receiving prepare request not part of cluster")
-		l.Errorf("ServiceMgr::prepareRebalance %v", err)
+		l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
 		return err
 	} else {
 		if err := m.initPreparePhaseRebalance(); err != nil {
@@ -615,8 +596,8 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 // StartTopologyChange is an external API called by ns_server (via cbauth) only on the
 // GSI master node to initiate a rebalance or failover that has already been prepared
 // via PrepareTopologyChange calls on all indexer nodes.
-func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
-	l.Infof("ServiceMgr::StartTopologyChange %v", change)
+func (m *RebalanceServiceManager) StartTopologyChange(change service.TopologyChange) error {
+	l.Infof("RebalanceServiceManager::StartTopologyChange %v", change)
 
 	// To avoid having more than one Rebalancer object at a time, we must hold mu write locked from
 	// the check for nil m.rebalancer through execution of children startFailover or startRebalance
@@ -627,7 +608,7 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 	currState := m.copyState()
 	rebalancer := m.rebalancer
 	if currState.rebalanceID != change.ID || rebalancer != nil {
-		l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v %v", service.ErrConflict,
+		l.Errorf("RebalanceServiceManager::StartTopologyChange err %v %v %v %v", service.ErrConflict,
 			currState.rebalanceID, change.ID, rebalancer)
 		if change.Type == service.TopologyChangeTypeRebalance {
 			m.setStateIsBalanced(false)
@@ -638,7 +619,7 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 	if change.CurrentTopologyRev != nil {
 		haveRev := DecodeRev(change.CurrentTopologyRev)
 		if haveRev != currState.rev {
-			l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v", service.ErrConflict,
+			l.Errorf("RebalanceServiceManager::StartTopologyChange err %v %v %v", service.ErrConflict,
 				haveRev, currState.rev)
 			if change.Type == service.TopologyChangeTypeRebalance {
 				m.setStateIsBalanced(false)
@@ -660,11 +641,11 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 		err = service.ErrNotSupported
 	}
 
-	logging.Infof("ServiceMgr::StartTopologyChange returns Error %v. isBalanced %v.", err, currState.isBalanced)
+	logging.Infof("RebalanceServiceManager::StartTopologyChange returns Error %v. isBalanced %v.", err, currState.isBalanced)
 	return err
 }
 
-func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
+func (m *RebalanceServiceManager) startFailover(change service.TopologyChange) error {
 
 	ctx := &rebalanceContext{
 		rev:    0,
@@ -686,7 +667,7 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 // these pass it registers the rebalance token and creates the Rebalancer object
 // that will master the rebalance. This object launhes go routines to perform the
 // rebalance asynchronously.
-func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
+func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) error {
 
 	var runPlanner bool
 	var skipRebalance bool
@@ -694,7 +675,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
 		err := errors.New("Node receiving Start request not part of cluster")
-		l.Errorf("ServiceMgr::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
+		l.Errorf("RebalanceServiceManager::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
 			change.KeepNodes[0].NodeInfo.NodeID)
 		m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 		return err
@@ -704,27 +685,27 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 		err = m.cleanupOrphanTokens(change)
 		if err != nil {
-			l.Errorf("ServiceMgr::startRebalance Error During Cleanup Orphan Tokens %v", err)
+			l.Errorf("RebalanceServiceManager::startRebalance Error During Cleanup Orphan Tokens %v", err)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 			return err
 		}
 
 		rtoken, err := m.checkExistingGlobalRToken()
 		if err != nil {
-			l.Errorf("ServiceMgr::startRebalance Error Checking Global RToken %v", err)
+			l.Errorf("RebalanceServiceManager::startRebalance Error Checking Global RToken %v", err)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 			return err
 		}
 
 		if rtoken != nil {
-			l.Errorf("ServiceMgr::startRebalance Found Existing Global RToken %v", rtoken)
+			l.Errorf("RebalanceServiceManager::startRebalance Found Existing Global RToken %v", rtoken)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 			return errors.New("Protocol Conflict Error: Existing Rebalance Token Found")
 		}
 
 		err, skipRebalance = m.initStartPhase(change)
 		if err != nil {
-			l.Errorf("ServiceMgr::startRebalance Error During Start Phase Init %v", err)
+			l.Errorf("RebalanceServiceManager::startRebalance Error During Start Phase Init %v", err)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 			return err
 		}
@@ -732,13 +713,13 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 		cfg := m.config.Load()
 
 		if c.GetBuildMode() != c.ENTERPRISE {
-			l.Infof("ServiceMgr::startRebalance skip planner for non-enterprise edition")
+			l.Infof("RebalanceServiceManager::startRebalance skip planner for non-enterprise edition")
 			runPlanner = false
 		} else if cfg["rebalance.disable_index_move"].Bool() {
-			l.Infof("ServiceMgr::startRebalance skip planner as disable_index_move is set")
+			l.Infof("RebalanceServiceManager::startRebalance skip planner as disable_index_move is set")
 			runPlanner = false
 		} else if skipRebalance {
-			l.Infof("ServiceMgr::startRebalance skip planner due to skipRebalance flag")
+			l.Infof("RebalanceServiceManager::startRebalance skip planner due to skipRebalance flag")
 			runPlanner = false
 		} else {
 			runPlanner = true
@@ -775,7 +756,7 @@ func isSingleNodeRebal(change service.TopologyChange) bool {
 
 }
 
-func (m *ServiceMgr) isNoOpRebal(change service.TopologyChange) bool {
+func (m *RebalanceServiceManager) isNoOpRebal(change service.TopologyChange) bool {
 
 	cfg := m.config.Load()
 	onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
@@ -792,7 +773,7 @@ func (m *ServiceMgr) isNoOpRebal(change service.TopologyChange) bool {
 // get a quick reply even if indexer is processing other work, to try to avoid causing
 // a rebalance timeout failure. It returns true and a slice of index names currently
 // in DDL processing if DDL is currently running, else false and an empty slice.
-func (m *ServiceMgr) checkDDLRunning() (bool, []string) {
+func (m *RebalanceServiceManager) checkDDLRunning() (bool, []string) {
 
 	respCh := make(MsgChannel)
 	m.supvPrioMsgch <- &MsgCheckDDLInProgress{respCh: respCh}
@@ -803,7 +784,7 @@ func (m *ServiceMgr) checkDDLRunning() (bool, []string) {
 	return ddlInProgress, inProgressIndexNames
 }
 
-func (m *ServiceMgr) checkRebalanceRunning() bool {
+func (m *RebalanceServiceManager) checkRebalanceRunning() bool {
 	return m.rebalanceRunning
 }
 
@@ -811,14 +792,14 @@ func (m *ServiceMgr) checkRebalanceRunning() bool {
 // checks for an existing rebalance token or, if not found, an existing move token.
 // If one is found it is returned, else nil is returned. Errors are only returned
 // if an existing token is found but cannot be retrieved.
-func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
+func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, error) {
 
 	var rtoken RebalanceToken
 	var found bool
 	var err error
 	found, err = c.MetakvGet(RebalanceTokenPath, &rtoken)
 	if err != nil {
-		l.Errorf("ServiceMgr::checkExistingGlobalRToken Error Fetching "+
+		l.Errorf("RebalanceServiceManager::checkExistingGlobalRToken Error Fetching "+
 			"Rebalance Token From Metakv %v. Path %v", err, RebalanceTokenPath)
 		return nil, err
 	}
@@ -828,7 +809,7 @@ func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
 
 	found, err = c.MetakvGet(MoveIndexTokenPath, &rtoken)
 	if err != nil {
-		l.Errorf("ServiceMgr::checkExistingGlobalRToken Error Fetching "+
+		l.Errorf("RebalanceServiceManager::checkExistingGlobalRToken Error Fetching "+
 			"MoveIndex Token From Metakv %v. Path %v", err, MoveIndexTokenPath)
 		return nil, err
 	}
@@ -841,7 +822,7 @@ func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
 }
 
 // initPreparePhaseRebalance is a helper for prepareRebalance.
-func (m *ServiceMgr) initPreparePhaseRebalance() error {
+func (m *RebalanceServiceManager) initPreparePhaseRebalance() error {
 
 	err := m.registerRebalanceRunning(true)
 	if err != nil {
@@ -857,9 +838,9 @@ func (m *ServiceMgr) initPreparePhaseRebalance() error {
 }
 
 // runCleanupPhaseLOCKED caller should be holding mutex mu write(?) locked.
-func (m *ServiceMgr) runCleanupPhaseLOCKED(path string, isMaster bool) error {
+func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 
-	l.Infof("ServiceMgr::runCleanupPhase path %v isMaster %v", path, isMaster)
+	l.Infof("RebalanceServiceManager::runCleanupPhase path %v isMaster %v", path, isMaster)
 
 	if m.monitorStopCh != nil {
 		close(m.monitorStopCh)
@@ -876,13 +857,13 @@ func (m *ServiceMgr) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 	if m.indexerReady {
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("ServiceMgr::runCleanupPhase Error Fetching Metakv Tokens %v", err)
+			l.Errorf("RebalanceServiceManager::runCleanupPhase Error Fetching Metakv Tokens %v", err)
 		}
 
 		if rtokens != nil && len(rtokens.TT) != 0 {
 			err := m.cleanupTransferTokens(rtokens.TT)
 			if err != nil {
-				l.Errorf("ServiceMgr::runCleanupPhase Error Cleaning Transfer Tokens %v", err)
+				l.Errorf("RebalanceServiceManager::runCleanupPhase Error Cleaning Transfer Tokens %v", err)
 			}
 		}
 	}
@@ -900,21 +881,21 @@ func (m *ServiceMgr) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 	return nil
 }
 
-func (m *ServiceMgr) cleanupGlobalRToken(path string) error {
+func (m *RebalanceServiceManager) cleanupGlobalRToken(path string) error {
 
 	var rtoken RebalanceToken
 	found, err := c.MetakvGet(path, &rtoken)
 	if err != nil {
-		l.Errorf("ServiceMgr::cleanupGlobalRToken Error Fetching Rebalance Token From Metakv %v. Path %v", err, path)
+		l.Errorf("RebalanceServiceManager::cleanupGlobalRToken Error Fetching Rebalance Token From Metakv %v. Path %v", err, path)
 		return err
 	}
 
 	if found {
-		l.Infof("ServiceMgr::cleanupGlobalRToken Delete Global Rebalance Token %v", rtoken)
+		l.Infof("RebalanceServiceManager::cleanupGlobalRToken Delete Global Rebalance Token %v", rtoken)
 
 		err := c.MetakvDel(path)
 		if err != nil {
-			l.Fatalf("ServiceMgr::cleanupGlobalRToken Unable to delete RebalanceToken from "+
+			l.Fatalf("RebalanceServiceManager::cleanupGlobalRToken Unable to delete RebalanceToken from "+
 				"Meta Storage. %v. Err %v", rtoken, err)
 			return err
 		}
@@ -926,11 +907,11 @@ func (m *ServiceMgr) cleanupGlobalRToken(path string) error {
 // Rebalance Tokens (RT) and Move Tokens (MT) whose master nodes are not alive, and
 // Transfer Tokens (TT) whose current owners are not alive. "Alive" means the node is
 // in the topology change.KeepNodes list.
-func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
+func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyChange) error {
 
 	rtokens, err := m.getCurrRebalTokens()
 	if err != nil {
-		l.Errorf("ServiceMgr::cleanupOrphanTokens Error Fetching Metakv Tokens %v", err)
+		l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Error Fetching Metakv Tokens %v", err)
 		return err
 	}
 
@@ -940,7 +921,7 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 
 	masterAlive := false
 	if rtokens.RT != nil {
-		l.Infof("ServiceMgr::cleanupOrphanTokens Found Token %v", rtokens.RT)
+		l.Infof("RebalanceServiceManager::cleanupOrphanTokens Found Token %v", rtokens.RT)
 
 		for _, node := range change.KeepNodes {
 			if rtokens.RT.MasterId == string(node.NodeInfo.NodeID) {
@@ -949,10 +930,10 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 			}
 		}
 		if !masterAlive {
-			l.Infof("ServiceMgr::cleanupOrphanTokens Cleaning Up Token %v", rtokens.RT)
+			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token %v", rtokens.RT)
 			err := c.MetakvDel(RebalanceTokenPath)
 			if err != nil {
-				l.Errorf("ServiceMgr::cleanupOrphanTokens Unable to delete RebalanceToken from "+
+				l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete RebalanceToken from "+
 					"Meta Storage. %v. Err %v", rtokens.RT, err)
 				return err
 			}
@@ -961,7 +942,7 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 
 	masterAlive = false
 	if rtokens.MT != nil {
-		l.Infof("ServiceMgr::cleanupOrphanTokens Found Rebalance Token %v", rtokens.MT)
+		l.Infof("RebalanceServiceManager::cleanupOrphanTokens Found Rebalance Token %v", rtokens.MT)
 
 		for _, node := range change.KeepNodes {
 			if rtokens.MT.MasterId == string(node.NodeInfo.NodeID) {
@@ -970,10 +951,10 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 			}
 		}
 		if !masterAlive {
-			l.Infof("ServiceMgr::cleanupOrphanTokens Cleaning Up Token %v", rtokens.MT)
+			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token %v", rtokens.MT)
 			err := c.MetakvDel(MoveIndexTokenPath)
 			if err != nil {
-				l.Errorf("ServiceMgr::cleanupOrphanTokens Unable to delete MoveIndex Token from "+
+				l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete MoveIndex Token from "+
 					"Meta Storage. %v. Err %v", rtokens.MT, err)
 				return err
 			}
@@ -994,10 +975,10 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 		}
 
 		if !ownerAlive {
-			l.Infof("ServiceMgr::cleanupOrphanTokens Cleaning Up Token Owner %v %v %v", ownerId, ttid, tt)
+			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token Owner %v %v %v", ownerId, ttid, tt)
 			err := c.MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
-				l.Errorf("ServiceMgr::cleanupOrphanTokens Unable to delete TransferToken from "+
+				l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete TransferToken from "+
 					"Meta Storage. %v. Err %v", ttid, err)
 				return err
 			}
@@ -1008,10 +989,10 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 
 }
 
-func (m *ServiceMgr) cleanupTransferTokens(tts map[string]*c.TransferToken) error {
+func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.TransferToken) error {
 
 	if tts == nil || len(tts) == 0 {
-		l.Infof("ServiceMgr::cleanupTransferTokens No Tokens Found For Cleanup")
+		l.Infof("RebalanceServiceManager::cleanupTransferTokens No Tokens Found For Cleanup")
 		return nil
 	}
 
@@ -1031,7 +1012,7 @@ func (m *ServiceMgr) cleanupTransferTokens(tts map[string]*c.TransferToken) erro
 	// cleanup transfer token
 	for ttid, tt := range tts {
 
-		l.Infof("ServiceMgr::cleanupTransferTokens Cleaning Up %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", ttid, tt)
 
 		if tt.MasterId == string(m.nodeInfo.NodeID) {
 			m.cleanupTransferTokensForMaster(ttid, tt)
@@ -1048,15 +1029,15 @@ func (m *ServiceMgr) cleanupTransferTokens(tts map[string]*c.TransferToken) erro
 	return nil
 }
 
-func (m *ServiceMgr) cleanupTransferTokensForMaster(ttid string, tt *c.TransferToken) error {
+func (m *RebalanceServiceManager) cleanupTransferTokensForMaster(ttid string, tt *c.TransferToken) error {
 
 	switch tt.State {
 
 	case c.TransferTokenCommit, c.TransferTokenDeleted:
-		l.Infof("ServiceMgr::cleanupTransferTokensForMaster Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokensForMaster Cleanup Token %v %v", ttid, tt)
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
-			l.Errorf("ServiceMgr::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
+			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", tt, err)
 			return err
 		}
@@ -1067,13 +1048,13 @@ func (m *ServiceMgr) cleanupTransferTokensForMaster(ttid string, tt *c.TransferT
 
 }
 
-func (m *ServiceMgr) cleanupTransferTokensForSource(ttid string, tt *c.TransferToken) error {
+func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt *c.TransferToken) error {
 
 	switch tt.State {
 
 	case c.TransferTokenReady:
 		var err error
-		l.Infof("ServiceMgr::cleanupTransferTokensForSource Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokensForSource Cleanup Token %v %v", ttid, tt)
 		defn := tt.IndexInst.Defn
 		defn.InstId = tt.InstId
 		defn.RealInstId = tt.RealInstId
@@ -1081,7 +1062,7 @@ func (m *ServiceMgr) cleanupTransferTokensForSource(ttid string, tt *c.TransferT
 		if err == nil {
 			err = c.MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
-				l.Errorf("ServiceMgr::cleanupTransferTokensForSource Unable to delete TransferToken In "+
+				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForSource Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
 				return err
 			}
@@ -1092,11 +1073,11 @@ func (m *ServiceMgr) cleanupTransferTokensForSource(ttid string, tt *c.TransferT
 
 }
 
-func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) error {
+func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) error {
 
 	cleanup := func() error {
 		var err error
-		l.Infof("ServiceMgr::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt)
 		defn := tt.IndexInst.Defn
 		defn.InstId = tt.InstId
 		defn.RealInstId = tt.RealInstId
@@ -1104,7 +1085,7 @@ func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferTok
 		if err == nil {
 			err = c.MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
-				l.Errorf("ServiceMgr::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
 				return err
 			}
@@ -1128,7 +1109,7 @@ func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferTok
 
 		if !ok {
 			if err := c.MetakvDel(RebalanceMetakvDir + ttid); err != nil {
-				l.Errorf("ServiceMgr::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
 				return err
 			}
@@ -1147,12 +1128,12 @@ func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferTok
 	return nil
 }
 
-func (m *ServiceMgr) cleanupIndex(indexDefn c.IndexDefn) error {
+func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 
 	req := manager.IndexRequest{Index: indexDefn}
 	body, err := json.Marshal(&req)
 	if err != nil {
-		l.Errorf("ServiceMgr::cleanupIndex Error marshal drop index %v", err)
+		l.Errorf("RebalanceServiceManager::cleanupIndex Error marshal drop index %v", err)
 		return err
 	}
 
@@ -1163,22 +1144,22 @@ func (m *ServiceMgr) cleanupIndex(indexDefn c.IndexDefn) error {
 	url := "/dropIndex"
 	resp, err := postWithAuth(localaddr+url, "application/json", bodybuf)
 	if err != nil {
-		l.Errorf("ServiceMgr::cleanupIndex Error drop index on %v %v", localaddr+url, err)
+		l.Errorf("RebalanceServiceManager::cleanupIndex Error drop index on %v %v", localaddr+url, err)
 		return err
 	}
 	defer resp.Body.Close()
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	response := new(manager.IndexResponse)
 	if err := json.Unmarshal(bytes, &response); err != nil {
-		l.Errorf("ServiceMgr::cleanupIndex Error unmarshal response %v %v", localaddr+url, err)
+		l.Errorf("RebalanceServiceManager::cleanupIndex Error unmarshal response %v %v", localaddr+url, err)
 		return err
 	}
 	if response.Code == manager.RESP_ERROR {
 		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
-			l.Errorf("ServiceMgr::cleanupIndex Error dropping index %v %v. Ignored.", localaddr+url, response.Error)
+			l.Errorf("RebalanceServiceManager::cleanupIndex Error dropping index %v %v. Ignored.", localaddr+url, response.Error)
 			return nil
 		}
-		l.Errorf("ServiceMgr::cleanupIndex Error dropping index %v %v", localaddr+url, response.Error)
+		l.Errorf("RebalanceServiceManager::cleanupIndex Error dropping index %v %v", localaddr+url, response.Error)
 		return err
 	}
 
@@ -1186,9 +1167,9 @@ func (m *ServiceMgr) cleanupIndex(indexDefn c.IndexDefn) error {
 
 }
 
-func (m *ServiceMgr) cleanupRebalanceRunning() error {
+func (m *RebalanceServiceManager) cleanupRebalanceRunning() error {
 
-	l.Infof("ServiceMgr::cleanupRebalanceRunning Cleanup")
+	l.Infof("RebalanceServiceManager::cleanupRebalanceRunning Cleanup")
 
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
@@ -1202,7 +1183,7 @@ func (m *ServiceMgr) cleanupRebalanceRunning() error {
 
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		l.Fatalf("ServiceMgr::cleanupRebalanceRunning Unable to delete RebalanceRunning In Local"+
+		l.Fatalf("RebalanceServiceManager::cleanupRebalanceRunning Unable to delete RebalanceRunning In Local"+
 			"Meta Storage. Err %v", errMsg)
 		c.CrashOnError(errMsg)
 	}
@@ -1216,9 +1197,9 @@ func (m *ServiceMgr) cleanupRebalanceRunning() error {
 
 }
 
-func (m *ServiceMgr) cleanupLocalRToken() error {
+func (m *RebalanceServiceManager) cleanupLocalRToken() error {
 
-	l.Infof("ServiceMgr::cleanupLocalRToken Cleanup")
+	l.Infof("RebalanceServiceManager::cleanupLocalRToken Cleanup")
 
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
@@ -1232,7 +1213,7 @@ func (m *ServiceMgr) cleanupLocalRToken() error {
 
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		l.Fatalf("ServiceMgr::cleanupLocalRToken Unable to delete Rebalance Token In Local"+
+		l.Fatalf("RebalanceServiceManager::cleanupLocalRToken Unable to delete Rebalance Token In Local"+
 			"Meta Storage. Path %v Err %v", RebalanceTokenPath, errMsg)
 		c.CrashOnError(errMsg)
 	}
@@ -1242,7 +1223,7 @@ func (m *ServiceMgr) cleanupLocalRToken() error {
 }
 
 // monitorStartPhaseInit runs in a goroutine and checks whether rebalanceToken is created in a reasonable time.
-func (m *ServiceMgr) monitorStartPhaseInit(stopch StopChannel) error {
+func (m *RebalanceServiceManager) monitorStartPhaseInit(stopch StopChannel) error {
 
 	cfg := m.config.Load()
 	startPhaseBeginTimeout := cfg["rebalance.startPhaseBeginTimeout"].Int()
@@ -1261,12 +1242,12 @@ loop:
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				if m.rebalanceToken == nil && elapsed > startPhaseBeginTimeout {
-					l.Infof("ServiceMgr::monitorStartPhaseInit Timeout Waiting for RebalanceToken. Cleanup Prepare Phase")
+					l.Infof("RebalanceServiceManager::monitorStartPhaseInit Timeout Waiting for RebalanceToken. Cleanup Prepare Phase")
 					//TODO handle server side differently
 					m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 					done = true
 				} else if m.rebalanceToken != nil {
-					l.Infof("ServiceMgr::monitorStartPhaseInit Found RebalanceToken %v.", m.rebalanceToken)
+					l.Infof("RebalanceServiceManager::monitorStartPhaseInit Found RebalanceToken %v.", m.rebalanceToken)
 					m.monitorStopCh = nil
 					done = true
 				}
@@ -1284,24 +1265,24 @@ loop:
 
 }
 
-func (m *ServiceMgr) rebalanceJanitor() {
+func (m *RebalanceServiceManager) rebalanceJanitor() {
 
 	for {
 		time.Sleep(time.Second * 30)
 
-		l.Infof("ServiceMgr::rebalanceJanitor Running Periodic Cleanup")
+		l.Infof("RebalanceServiceManager::rebalanceJanitor Running Periodic Cleanup")
 		m.mu.Lock()
 		if !m.rebalanceRunning {
 			rtokens, err := m.getCurrRebalTokens()
 			if err != nil {
-				l.Errorf("ServiceMgr::rebalanceJanitor Error Fetching Metakv Tokens %v", err)
+				l.Errorf("RebalanceServiceManager::rebalanceJanitor Error Fetching Metakv Tokens %v", err)
 			}
 
 			if rtokens != nil && len(rtokens.TT) != 0 {
-				l.Infof("ServiceMgr::rebalanceJanitor Found %v tokens. Cleaning up.", len(rtokens.TT))
+				l.Infof("RebalanceServiceManager::rebalanceJanitor Found %v tokens. Cleaning up.", len(rtokens.TT))
 				err := m.cleanupTransferTokens(rtokens.TT)
 				if err != nil {
-					l.Errorf("ServiceMgr::rebalanceJanitor Error Cleaning Transfer Tokens %v", err)
+					l.Errorf("RebalanceServiceManager::rebalanceJanitor Error Cleaning Transfer Tokens %v", err)
 				}
 			}
 		}
@@ -1313,7 +1294,7 @@ func (m *ServiceMgr) rebalanceJanitor() {
 // initStartPhase is a helper for startRebalance (master node only). It generates and
 // registers the rebalance token. If there was a problem registering the global token
 // it returns true as its second return value, indicating the rebalance should be skipped.
-func (m *ServiceMgr) initStartPhase(change service.TopologyChange) (error, bool) {
+func (m *RebalanceServiceManager) initStartPhase(change service.TopologyChange) (error, bool) {
 
 	var err error
 	var skipRebalance bool
@@ -1337,7 +1318,7 @@ func (m *ServiceMgr) initStartPhase(change service.TopologyChange) (error, bool)
 	return nil, skipRebalance
 }
 
-func (m *ServiceMgr) genRebalanceToken() error {
+func (m *RebalanceServiceManager) genRebalanceToken() error {
 
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
@@ -1361,7 +1342,7 @@ func (m *ServiceMgr) genRebalanceToken() error {
 // registerRebalanceRunning is called under PrepareTopologyChange so uses the
 // indexer's high-priority message channel to get a quick reply even if indexer
 // is processing other work, to try to avoid causing a rebalance timeout failure.
-func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
+func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error {
 	respch := make(MsgChannel)
 	m.supvPrioMsgch <- &MsgClustMgrLocal{
 		mType:    CLUST_MGR_SET_LOCAL,
@@ -1381,9 +1362,9 @@ func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 		if errMsg == ErrDDLRunning {
 			m.p.ddlRunning = true
 			m.p.ddlRunningIndexNames = resp.GetInProgressIndexes()
-			l.Infof("ServiceMgr::registerRebalanceRunning Found DDL Running %v", m.p.ddlRunningIndexNames)
+			l.Infof("RebalanceServiceManager::registerRebalanceRunning Found DDL Running %v", m.p.ddlRunningIndexNames)
 		} else {
-			l.Errorf("ServiceMgr::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
+			l.Errorf("RebalanceServiceManager::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
 				"Meta Storage. Err %v", errMsg)
 
 			return errMsg
@@ -1396,7 +1377,7 @@ func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 	return nil
 }
 
-func (m *ServiceMgr) registerLocalRebalanceToken() error {
+func (m *RebalanceServiceManager) registerLocalRebalanceToken() error {
 
 	rtoken, err := json.Marshal(m.rebalanceToken)
 	if err != nil {
@@ -1416,30 +1397,30 @@ func (m *ServiceMgr) registerLocalRebalanceToken() error {
 
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		l.Errorf("ServiceMgr::registerLocalRebalanceToken Unable to set RebalanceToken In Local"+
+		l.Errorf("RebalanceServiceManager::registerLocalRebalanceToken Unable to set RebalanceToken In Local"+
 			"Meta Storage. Err %v", errMsg)
 		return err
 	}
-	l.Infof("ServiceMgr::registerLocalRebalanceToken Registered Rebalance Token In Local Meta %v", m.rebalanceToken)
+	l.Infof("RebalanceServiceManager::registerLocalRebalanceToken Registered Rebalance Token In Local Meta %v", m.rebalanceToken)
 
 	return nil
 
 }
 
-func (m *ServiceMgr) registerRebalanceTokenInMetakv() error {
+func (m *RebalanceServiceManager) registerRebalanceTokenInMetakv() error {
 
 	err := c.MetakvSet(RebalanceTokenPath, m.rebalanceToken)
 	if err != nil {
-		l.Errorf("ServiceMgr::registerRebalanceTokenInMetakv Unable to set RebalanceToken In "+
+		l.Errorf("RebalanceServiceManager::registerRebalanceTokenInMetakv Unable to set RebalanceToken In "+
 			"Meta Storage. Err %v", err)
 		return err
 	}
-	l.Infof("ServiceMgr::registerRebalanceTokenInMetakv Registered Global Rebalance Token In Metakv %v", m.rebalanceToken)
+	l.Infof("RebalanceServiceManager::registerRebalanceTokenInMetakv Registered Global Rebalance Token In Metakv %v", m.rebalanceToken)
 
 	return nil
 }
 
-func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool {
+func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool {
 
 	cfg := m.config.Load()
 	globalTokenWaitTimeout := cfg["rebalance.globalTokenWaitTimeout"].Int()
@@ -1451,32 +1432,32 @@ func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool
 		var rtoken RebalanceToken
 		found, err := c.MetakvGet(RebalanceTokenPath, &rtoken)
 		if err != nil {
-			l.Errorf("ServiceMgr::observeGlobalRebalanceToken Error Checking Rebalance Token In Metakv %v", err)
+			l.Errorf("RebalanceServiceManager::observeGlobalRebalanceToken Error Checking Rebalance Token In Metakv %v", err)
 			continue
 		}
 
 		if found {
 			if reflect.DeepEqual(rtoken, rebalToken) {
-				l.Infof("ServiceMgr::observeGlobalRebalanceToken Global And Local Rebalance Token Match %v", rtoken)
+				l.Infof("RebalanceServiceManager::observeGlobalRebalanceToken Global And Local Rebalance Token Match %v", rtoken)
 				return true
 			} else {
-				l.Errorf("ServiceMgr::observeGlobalRebalanceToken Mismatch in Global and Local Rebalance Token. Global %v. Local %v.", rtoken, rebalToken)
+				l.Errorf("RebalanceServiceManager::observeGlobalRebalanceToken Mismatch in Global and Local Rebalance Token. Global %v. Local %v.", rtoken, rebalToken)
 				return false
 			}
 		}
 
-		l.Infof("ServiceMgr::observeGlobalRebalanceToken Waiting for Global Rebalance Token In Metakv")
+		l.Infof("RebalanceServiceManager::observeGlobalRebalanceToken Waiting for Global Rebalance Token In Metakv")
 		time.Sleep(time.Second * time.Duration(1))
 		elapsed += 1
 	}
 
-	l.Errorf("ServiceMgr::observeGlobalRebalanceToken Timeout Waiting for Global Rebalance Token In Metakv")
+	l.Errorf("RebalanceServiceManager::observeGlobalRebalanceToken Timeout Waiting for Global Rebalance Token In Metakv")
 
 	return false
 
 }
 
-func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange) (error, bool) {
+func (m *RebalanceServiceManager) registerGlobalRebalanceToken(change service.TopologyChange) (error, bool) {
 
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
@@ -1493,7 +1474,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 		}
 
 		if err = m.cinfo.Fetch(); err != nil {
-			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
+			l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
 			continue
 		}
 
@@ -1503,13 +1484,13 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 		if len(nids) != allKnownNodes {
 
 			if isSingleNodeRebal(change) {
-				l.Infof("ServiceMgr::registerGlobalRebalanceToken ClusterInfo Node List doesn't "+
+				l.Infof("RebalanceServiceManager::registerGlobalRebalanceToken ClusterInfo Node List doesn't "+
 					"match Known Nodes in Rebalance Request. Skip Rebalance. cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
 				return nil, true
 			}
 
 			err = errors.New("ClusterInfo Node List doesn't match Known Nodes in Rebalance Request")
-			l.Errorf("ServiceMgr::registerGlobalRebalanceToken %v %v %v Retrying %v", err, nids, allKnownNodes, i)
+			l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken %v %v %v Retrying %v", err, nids, allKnownNodes, i)
 			continue
 		}
 		valid = true
@@ -1517,7 +1498,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 	}
 
 	if !valid {
-		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
+		l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
 		return err, true
 	}
 
@@ -1530,18 +1511,18 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
-				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Local Service Address %v", err)
+				l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error Fetching Local Service Address %v", err)
 				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
 			}
 
 			if addr == localaddr {
-				l.Infof("ServiceMgr::registerGlobalRebalanceToken skip local service %v", addr)
+				l.Infof("RebalanceServiceManager::registerGlobalRebalanceToken skip local service %v", addr)
 				continue
 			}
 
 			body, err := json.Marshal(&m.rebalanceToken)
 			if err != nil {
-				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
+				l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
 				return err, true
 			}
 
@@ -1549,17 +1530,17 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 			resp, err := postWithAuth(addr+url, "application/json", bodybuf)
 			if err != nil {
-				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
+				l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
 				return err, true
 			}
 			ioutil.ReadAll(resp.Body)
 			resp.Body.Close()
 		} else {
-			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Service Address %v", err)
+			l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error Fetching Service Address %v", err)
 			return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node %v", err)), true
 		}
 
-		l.Infof("ServiceMgr::registerGlobalRebalanceToken Successfully registered rebalance token on %v", addr+url)
+		l.Infof("RebalanceServiceManager::registerGlobalRebalanceToken Successfully registered rebalance token on %v", addr+url)
 	}
 
 	return nil, false
@@ -1570,7 +1551,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 //   1. Rebalance progress
 //   2. Rebalance done
 //   3. MoveIndex done
-func (m *ServiceMgr) runRebalanceCallback(cancel <-chan struct{}, body func()) {
+func (m *RebalanceServiceManager) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 	done := make(chan struct{})
 
 	go func() {
@@ -1594,14 +1575,14 @@ func (m *ServiceMgr) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 }
 
 // rebalanceProgressCallback is the Rebalancer.cb.progress callback function for a Rebalance.
-func (m *ServiceMgr) rebalanceProgressCallback(progress float64, cancel <-chan struct{}) {
+func (m *RebalanceServiceManager) rebalanceProgressCallback(progress float64, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() {
 		m.updateRebalanceProgressLOCKED(progress)
 	})
 }
 
 // updateRebalanceProgressLOCKED caller should be holding mutex mu write locked.
-func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
+func (m *RebalanceServiceManager) updateRebalanceProgressLOCKED(progress float64) {
 	rev := m.rebalanceCtx.incRev()
 	changeID := m.rebalanceCtx.change.ID
 	task := &service.Task{
@@ -1623,18 +1604,18 @@ func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 }
 
 // failoverDoneCallback is the Rebalancer.cb.done callback function for Failovers.
-func (m *ServiceMgr) failoverDoneCallback(err error, cancel <-chan struct{}) {
+func (m *RebalanceServiceManager) failoverDoneCallback(err error, cancel <-chan struct{}) {
 	m.rebalanceOrFailoverDoneCallback(err, cancel, true)
 }
 
 // rebalanceDoneCallback is the Rebalancer.cb.done callback function for Rebalances.
-func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
+func (m *RebalanceServiceManager) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 	m.rebalanceOrFailoverDoneCallback(err, cancel, false)
 }
 
 // rebalanceOrFailoverDoneCallback is a delegate for both failoverDoneCallback and
 // rebalanceDoneCallback. isFailover arg distinguishes between these.
-func (m *ServiceMgr) rebalanceOrFailoverDoneCallback(err error, cancel <-chan struct{}, isFailover bool) {
+func (m *RebalanceServiceManager) rebalanceOrFailoverDoneCallback(err error, cancel <-chan struct{}, isFailover bool) {
 
 	m.runRebalanceCallback(cancel, func() {
 
@@ -1653,7 +1634,7 @@ func (m *ServiceMgr) rebalanceOrFailoverDoneCallback(err error, cancel <-chan st
 // Non-nil err means the rebalance failed.
 // forceUnbalanced flag forces isBalanced = false (for failovers and cancels).
 // Caller should be holding mutex mu write locked.
-func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, forceUnbalanced bool) {
+func (m *RebalanceServiceManager) onRebalanceDoneLOCKED(err error, forceUnbalanced bool) {
 	isMaster := m.rebalancer != nil
 	isBalancedNew := !forceUnbalanced // new isBalanced state to set; below should only change this to false
 	if isMaster {
@@ -1696,13 +1677,13 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, forceUnbalanced bool) {
 	m.setStateIsBalanced(isBalancedNew) // set new isBalanced state
 	m.rebalancer = nil
 	m.rebalancerF = nil
-	l.Infof("ServiceMgr::onRebalanceDoneLOCKED Rebalance Done: "+
+	l.Infof("RebalanceServiceManager::onRebalanceDoneLOCKED Rebalance Done: "+
 		"isBalanced %v, isMaster %v, forceUnbalanced %v, err: %v",
 		isBalancedNew, isMaster, forceUnbalanced, err)
 }
 
 // notifyWaiters sends the current (new) state to all state waiters.
-func (m *ServiceMgr) notifyWaiters() {
+func (m *RebalanceServiceManager) notifyWaiters() {
 	currState := m.copyState()
 
 	m.waitersMu.Lock()
@@ -1717,7 +1698,7 @@ func (m *ServiceMgr) notifyWaiters() {
 
 // addWaiter creates and returns a state notification channel of type
 // waiter (for the current go routine) and adds it to the waiters list.
-func (m *ServiceMgr) addWaiter() waiter {
+func (m *RebalanceServiceManager) addWaiter() waiter {
 	ch := make(waiter, 1)
 
 	m.waitersMu.Lock()
@@ -1729,14 +1710,14 @@ func (m *ServiceMgr) addWaiter() waiter {
 
 // removeWaiter removes the channel of type waiter (for the current
 // go routine) from the waiters list.
-func (m *ServiceMgr) removeWaiter(w waiter) {
+func (m *RebalanceServiceManager) removeWaiter(w waiter) {
 	m.waitersMu.Lock()
 	delete(m.waiters, w)
 	m.waitersMu.Unlock()
 }
 
 // copyState retuns a shallow copy of the m.state object.
-func (m *ServiceMgr) copyState() state {
+func (m *RebalanceServiceManager) copyState() state {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state
@@ -1744,7 +1725,7 @@ func (m *ServiceMgr) copyState() state {
 
 // updateState executes a caller-supplied function that makes arbitrary updates to
 // to the m.state object, then increments the state revision # and notifies waiters.
-func (m *ServiceMgr) updateState(body func(state *state)) {
+func (m *RebalanceServiceManager) updateState(body func(state *state)) {
 	m.stateMu.Lock()
 	body(&m.state)
 	m.state.rev++
@@ -1754,28 +1735,28 @@ func (m *ServiceMgr) updateState(body func(state *state)) {
 }
 
 // getStateIsBalanced gets the m.state.isBalanced flag.
-func (m *ServiceMgr) getStateIsBalanced() bool {
+func (m *RebalanceServiceManager) getStateIsBalanced() bool {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state.isBalanced
 }
 
 // setStateIsBalanced sets the m.state.isBalanced flag to the value passed in.
-func (m *ServiceMgr) setStateIsBalanced(isBal bool) {
+func (m *RebalanceServiceManager) setStateIsBalanced(isBal bool) {
 	m.stateMu.Lock()
 	m.state.isBalanced = isBal
 	m.stateMu.Unlock()
 }
 
 // getStateRebalanceID gets the m.state.rebalanceID string.
-func (m *ServiceMgr) getStateRebalanceID() string {
+func (m *RebalanceServiceManager) getStateRebalanceID() string {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state.rebalanceID
 }
 
 // getStateServers gets the m.state.servers slice.
-func (m *ServiceMgr) getStateServers() []service.NodeID {
+func (m *RebalanceServiceManager) getStateServers() []service.NodeID {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 	return m.state.servers
@@ -1790,7 +1771,7 @@ func (m *ServiceMgr) getStateServers() []service.NodeID {
 // error. cbauth will then send a nil-rev follow-up call immediately. Note
 // that this follow-up call will not be sent until indexer first replies to
 // the cancel.
-func (m *ServiceMgr) wait(rev service.Revision,
+func (m *RebalanceServiceManager) wait(rev service.Revision,
 	cancel service.Cancel) (state, error) {
 
 	currState := m.copyState()
@@ -1817,7 +1798,7 @@ func (m *ServiceMgr) wait(rev service.Revision,
 }
 
 // cancelActualTask cancels a PrepareTopologyChange or StartTopologyChange.
-func (m *ServiceMgr) cancelActualTask(task *service.Task) error {
+func (m *RebalanceServiceManager) cancelActualTask(task *service.Task) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1839,7 +1820,7 @@ func (m *ServiceMgr) cancelActualTask(task *service.Task) error {
 }
 
 // cancelPrepareTaskLOCKED caller should be holding mutex mu write locked.
-func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
+func (m *RebalanceServiceManager) cancelPrepareTaskLOCKED() error {
 	if m.rebalancer != nil {
 		return service.ErrConflict
 	}
@@ -1859,7 +1840,7 @@ func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 }
 
 // cancelRebalanceTaskLOCKED caller should be holding mutex mu write locked.
-func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
+func (m *RebalanceServiceManager) cancelRebalanceTaskLOCKED(task *service.Task) error {
 	switch task.Status {
 	case service.TaskStatusRunning:
 		return m.cancelRunningRebalanceTaskLOCKED()
@@ -1872,21 +1853,21 @@ func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
 
 // cancelRunningRebalanceTaskLOCKED cancels a currently running rebalance.
 // Caller should be holding mutex mu write locked.
-func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
+func (m *RebalanceServiceManager) cancelRunningRebalanceTaskLOCKED() error {
 	m.rebalancer.Cancel()
 	m.onRebalanceDoneLOCKED(nil, true)
 	return nil
 }
 
 // cancelFailedRebalanceTask cancels a failed rebalance.
-func (m *ServiceMgr) cancelFailedRebalanceTask() error {
+func (m *RebalanceServiceManager) cancelFailedRebalanceTask() error {
 	m.updateState(func(s *state) {
 		s.rebalanceTask = nil
 	})
 	return nil
 }
 
-func (m *ServiceMgr) stateToTopology(s state) *service.Topology {
+func (m *RebalanceServiceManager) stateToTopology(s state) *service.Topology {
 	topology := &service.Topology{}
 
 	topology.Rev = EncodeRev(s.rev)
@@ -1934,7 +1915,7 @@ func stateToTaskList(s state) *service.TaskList {
 
 // recoverRebalance is called only during bootstrap to clean up any prior
 // failed rebalances or index moves.
-func (m *ServiceMgr) recoverRebalance() {
+func (m *RebalanceServiceManager) recoverRebalance() {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1942,11 +1923,11 @@ func (m *ServiceMgr) recoverRebalance() {
 	m.indexerReady = true
 
 	if m.cleanupPending {
-		l.Infof("ServiceMgr::recoverRebalance Init Pending Cleanup")
+		l.Infof("RebalanceServiceManager::recoverRebalance Init Pending Cleanup")
 
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("ServiceMgr::recoverRebalance Error Fetching Metakv Tokens %v", err)
+			l.Errorf("RebalanceServiceManager::recoverRebalance Error Fetching Metakv Tokens %v", err)
 			c.CrashOnError(err)
 		}
 
@@ -1971,9 +1952,9 @@ func (m *ServiceMgr) recoverRebalance() {
 
 }
 
-func (m *ServiceMgr) doRecoverRebalance(gtoken *RebalanceToken) {
+func (m *RebalanceServiceManager) doRecoverRebalance(gtoken *RebalanceToken) {
 
-	l.Infof("ServiceMgr::doRecoverRebalance Found Global Rebalance Token %v", gtoken)
+	l.Infof("RebalanceServiceManager::doRecoverRebalance Found Global Rebalance Token %v", gtoken)
 
 	if gtoken.MasterId == string(m.nodeInfo.NodeID) {
 		m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
@@ -1983,17 +1964,17 @@ func (m *ServiceMgr) doRecoverRebalance(gtoken *RebalanceToken) {
 
 }
 
-func (m *ServiceMgr) doRecoverMoveIndex(gtoken *RebalanceToken) {
+func (m *RebalanceServiceManager) doRecoverMoveIndex(gtoken *RebalanceToken) {
 
-	l.Infof("ServiceMgr::doRecoverMoveIndex Found Global Rebalance Token %v.", gtoken)
+	l.Infof("RebalanceServiceManager::doRecoverMoveIndex Found Global Rebalance Token %v.", gtoken)
 	m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 }
 
-func (m *ServiceMgr) checkLocalCleanupPending() bool {
+func (m *RebalanceServiceManager) checkLocalCleanupPending() bool {
 
 	rtokens, err := m.getCurrRebalTokens()
 	if err != nil {
-		l.Errorf("ServiceMgr::checkLocalCleanupPending Error Fetching Metakv Tokens %v", err)
+		l.Errorf("RebalanceServiceManager::checkLocalCleanupPending Error Fetching Metakv Tokens %v", err)
 		return true
 	}
 
@@ -2001,7 +1982,7 @@ func (m *ServiceMgr) checkLocalCleanupPending() bool {
 		for _, tt := range rtokens.TT {
 			ownerId := m.getTransferTokenOwner(tt)
 			if ownerId == string(m.nodeInfo.NodeID) {
-				l.Infof("ServiceMgr::checkLocalCleanupPending Found Local Pending Cleanup Token %v", tt)
+				l.Infof("RebalanceServiceManager::checkLocalCleanupPending Found Local Pending Cleanup Token %v", tt)
 				return true
 			}
 		}
@@ -2010,11 +1991,11 @@ func (m *ServiceMgr) checkLocalCleanupPending() bool {
 	return false
 }
 
-func (m *ServiceMgr) checkGlobalCleanupPending() bool {
+func (m *RebalanceServiceManager) checkGlobalCleanupPending() bool {
 
 	rtokens, err := m.getCurrRebalTokens()
 	if err != nil {
-		l.Errorf("ServiceMgr::checkGlobalCleanupPending Error Fetching Metakv Tokens %v", err)
+		l.Errorf("RebalanceServiceManager::checkGlobalCleanupPending Error Fetching Metakv Tokens %v", err)
 		return true
 	}
 
@@ -2024,11 +2005,11 @@ func (m *ServiceMgr) checkGlobalCleanupPending() bool {
 			ownerId := m.getTransferTokenOwner(tt)
 			for _, s := range servers {
 				if ownerId == string(s) {
-					l.Infof("ServiceMgr::checkGlobalCleanupPending Found Global Pending Cleanup for Owner %v Token %v", ownerId, tt)
+					l.Infof("RebalanceServiceManager::checkGlobalCleanupPending Found Global Pending Cleanup for Owner %v Token %v", ownerId, tt)
 					return true
 				}
 			}
-			l.Infof("ServiceMgr::checkGlobalCleanupPending Found Global Pending Cleanup Token Without Owner Token %v", tt)
+			l.Infof("RebalanceServiceManager::checkGlobalCleanupPending Found Global Pending Cleanup Token Without Owner Token %v", tt)
 		}
 	}
 
@@ -2038,7 +2019,7 @@ func (m *ServiceMgr) checkGlobalCleanupPending() bool {
 // getTransferTokenOwner returns the node ID of the token's owning node. Owner
 // defined for each state here should match those processed by/under rebalancer
 // functions processTokenAsMaster, processTokenAsSource, and processTokenAsDest.
-func (m *ServiceMgr) getTransferTokenOwner(tt *c.TransferToken) string {
+func (m *RebalanceServiceManager) getTransferTokenOwner(tt *c.TransferToken) string {
 
 	switch tt.State {
 	case c.TransferTokenReady:
@@ -2060,26 +2041,26 @@ func (m *ServiceMgr) getTransferTokenOwner(tt *c.TransferToken) string {
 //
 /////////////////////////////////////////////////////////////////////////
 
-func (m *ServiceMgr) handleListRebalanceTokens(w http.ResponseWriter, r *http.Request) {
+func (m *RebalanceServiceManager) handleListRebalanceTokens(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleListRebalanceTokens Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("RebalanceServiceManager::handleListRebalanceTokens Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		l.Infof("ServiceMgr::handleListRebalanceTokens Processing Request req: %v", c.GetHTTPReqInfo(r))
+		l.Infof("RebalanceServiceManager::handleListRebalanceTokens Processing Request req: %v", c.GetHTTPReqInfo(r))
 		rinfo, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("ServiceMgr::handleListRebalanceTokens Error %v", err)
+			l.Errorf("RebalanceServiceManager::handleListRebalanceTokens Error %v", err)
 			m.writeError(w, err)
 			return
 		}
 		out, err1 := json.Marshal(rinfo)
 		if err1 != nil {
-			l.Errorf("ServiceMgr::handleListRebalanceTokens Error %v", err1)
+			l.Errorf("RebalanceServiceManager::handleListRebalanceTokens Error %v", err1)
 			m.writeError(w, err1)
 		} else {
 			m.writeJson(w, out)
@@ -2091,29 +2072,29 @@ func (m *ServiceMgr) handleListRebalanceTokens(w http.ResponseWriter, r *http.Re
 
 }
 
-func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Request) {
+func (m *RebalanceServiceManager) handleCleanupRebalance(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleCleanupRebalance Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("RebalanceServiceManager::handleCleanupRebalance Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
 
-		l.Infof("ServiceMgr::handleCleanupRebalance Processing Request req: %v", c.GetHTTPReqInfo(r))
+		l.Infof("RebalanceServiceManager::handleCleanupRebalance Processing Request req: %v", c.GetHTTPReqInfo(r))
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
 		if !m.indexerReady {
-			l.Errorf("ServiceMgr::handleCleanupRebalance Cannot Process Request %v", c.ErrIndexerInBootstrap)
+			l.Errorf("RebalanceServiceManager::handleCleanupRebalance Cannot Process Request %v", c.ErrIndexerInBootstrap)
 			m.writeError(w, c.ErrIndexerInBootstrap)
 			return
 		}
 
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("ServiceMgr::handleCleanupRebalance Error %v", err)
+			l.Errorf("RebalanceServiceManager::handleCleanupRebalance Error %v", err)
 		}
 
 		if rtokens != nil {
@@ -2121,13 +2102,13 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 				m.setStateIsBalanced(false)
 				err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 				if err != nil {
-					l.Errorf("ServiceMgr::handleCleanupRebalance RebalanceTokenPath Error %v", err)
+					l.Errorf("RebalanceServiceManager::handleCleanupRebalance RebalanceTokenPath Error %v", err)
 				}
 			}
 			if rtokens.MT != nil {
 				err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 				if err != nil {
-					l.Errorf("ServiceMgr::handleCleanupRebalance MoveIndexTokenPath Error %v", err)
+					l.Errorf("RebalanceServiceManager::handleCleanupRebalance MoveIndexTokenPath Error %v", err)
 				}
 			}
 		}
@@ -2136,7 +2117,7 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 		err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 
 		if err != nil {
-			l.Errorf("ServiceMgr::handleCleanupRebalance Error %v", err)
+			l.Errorf("RebalanceServiceManager::handleCleanupRebalance Error %v", err)
 			m.writeError(w, err)
 		} else {
 			m.writeOk(w)
@@ -2147,23 +2128,23 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func (m *ServiceMgr) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
+func (m *RebalanceServiceManager) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleNodeuuid Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("RebalanceServiceManager::handleNodeuuid Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
-		l.Infof("ServiceMgr::handleNodeuuid Processing Request req: %v", c.GetHTTPReqInfo(r))
+		l.Infof("RebalanceServiceManager::handleNodeuuid Processing Request req: %v", c.GetHTTPReqInfo(r))
 		m.writeBytes(w, []byte(m.nodeInfo.NodeID))
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))
 	}
 }
 
-func (m *ServiceMgr) getCurrRebalTokens() (*RebalTokens, error) {
+func (m *RebalanceServiceManager) getCurrRebalTokens() (*RebalTokens, error) {
 
 	metainfo, err := metakv.ListAllChildren(RebalanceMetakvDir)
 	if err != nil {
@@ -2196,7 +2177,7 @@ func (m *ServiceMgr) getCurrRebalTokens() (*RebalTokens, error) {
 			json.Unmarshal(kv.Value, &tt)
 			rinfo.TT[ttid] = &tt
 		} else {
-			l.Errorf("ServiceMgr::getCurrRebalTokens Unknown Token %v. Ignored.", kv)
+			l.Errorf("RebalanceServiceManager::getCurrRebalTokens Unknown Token %v. Ignored.", kv)
 		}
 
 	}
@@ -2204,11 +2185,11 @@ func (m *ServiceMgr) getCurrRebalTokens() (*RebalTokens, error) {
 	return &rinfo, nil
 }
 
-func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http.Request) {
+func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleRegisterRebalanceToken Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
@@ -2216,12 +2197,12 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(bytes, &rebalToken); err != nil {
-			l.Errorf("ServiceMgr::handleRegisterRebalanceToken %v", err)
+			l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
 			m.writeError(w, err)
 			return
 		}
 
-		l.Infof("ServiceMgr::handleRegisterRebalanceToken New Rebalance Token %v", rebalToken)
+		l.Infof("RebalanceServiceManager::handleRegisterRebalanceToken New Rebalance Token %v", rebalToken)
 
 		if m.observeGlobalRebalanceToken(rebalToken) {
 
@@ -2230,14 +2211,14 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 
 			if !m.rebalanceRunning {
 				errStr := fmt.Sprintf("Node %v not in Prepared State for Rebalance", string(m.nodeInfo.NodeID))
-				l.Errorf("ServiceMgr::handleRegisterRebalanceToken %v", errStr)
+				l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", errStr)
 				m.writeError(w, errors.New(errStr))
 				return
 			}
 
 			m.rebalanceToken = &rebalToken
 			if err := m.registerLocalRebalanceToken(); err != nil {
-				l.Errorf("ServiceMgr::handleRegisterRebalanceToken %v", err)
+				l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
 				m.writeError(w, err)
 				return
 			}
@@ -2250,7 +2231,7 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 
 		} else {
 			err := errors.New("Rebalance Token Wait Timeout")
-			l.Errorf("ServiceMgr::handleRegisterRebalanceToken %v", err)
+			l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
 			m.writeError(w, err)
 			return
 		}
@@ -2268,7 +2249,7 @@ func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 
 	resp, err := getWithAuth(addr + url)
 	if err != nil {
-		l.Errorf("ServiceMgr::getGlobalTopology Error gathering global topology %v %v", addr+url, err)
+		l.Errorf("RebalanceServiceManager::getGlobalTopology Error gathering global topology %v %v", addr+url, err)
 		return nil, err
 	}
 
@@ -2276,7 +2257,7 @@ func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	defer resp.Body.Close()
 	if err := json.Unmarshal(bytes, &topology); err != nil {
-		l.Errorf("ServiceMgr::getGlobalTopology Error unmarshal global topology %v %v %s",
+		l.Errorf("RebalanceServiceManager::getGlobalTopology Error unmarshal global topology %v %v %s",
 			addr+url, err, l.TagUD(string(bytes)))
 		return nil, err
 	}
@@ -2291,31 +2272,31 @@ func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 //
 /////////////////////////////////////////////////////////////////////////
 
-func (m *ServiceMgr) listenMoveIndex() {
+func (m *RebalanceServiceManager) listenMoveIndex() {
 
-	l.Infof("ServiceMgr::listenMoveIndex %v", m.nodeInfo)
+	l.Infof("RebalanceServiceManager::listenMoveIndex %v", m.nodeInfo)
 
 	cancel := make(chan struct{})
 	for {
 		err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, m.processMoveIndex, cancel)
 		if err != nil {
-			l.Infof("ServiceMgr::listenMoveIndex metakv err %v. Retrying...", err)
+			l.Infof("RebalanceServiceManager::listenMoveIndex metakv err %v. Retrying...", err)
 			time.Sleep(2 * time.Second)
 		}
 	}
 
 }
 
-func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
+func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 	if kve.Path == MoveIndexTokenPath {
-		l.Infof("ServiceMgr::processMoveIndex MoveIndexToken Received %v %s", kve.Path, kve.Value)
+		l.Infof("RebalanceServiceManager::processMoveIndex MoveIndexToken Received %v %s", kve.Path, kve.Value)
 
 		var rebalToken RebalanceToken
 		if kve.Value == nil { //move index token deleted
 			return nil
 		} else {
 			if err := json.Unmarshal(kve.Value, &rebalToken); err != nil {
-				l.Errorf("ServiceMgr::processMoveIndex Error reading move index token %v", err)
+				l.Errorf("RebalanceServiceManager::processMoveIndex Error reading move index token %v", err)
 				return err
 			}
 		}
@@ -2332,7 +2313,7 @@ func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
 				// If master (source) receving a token with error, then cancel move index
 				// and return the error to user.
 				if len(rebalToken.Error) != 0 {
-					l.Infof("ServiceMgr::processMoveIndex received error from destination")
+					l.Infof("RebalanceServiceManager::processMoveIndex received error from destination")
 
 					if m.rebalancer != nil {
 						m.rebalancer.Cancel()
@@ -2344,21 +2325,21 @@ func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
 				}
 			}
 
-			l.Infof("ServiceMgr::processMoveIndex Skip MoveIndex Token for Self Node")
+			l.Infof("RebalanceServiceManager::processMoveIndex Skip MoveIndex Token for Self Node")
 			return nil
 
 		} else {
 			// If destination receving a token with error, then skip.  The destination is
 			// the one that posted the error.
 			if len(rebalToken.Error) != 0 {
-				l.Infof("ServiceMgr::processMoveIndex Skip MoveIndex Token with error")
+				l.Infof("RebalanceServiceManager::processMoveIndex Skip MoveIndex Token with error")
 				return nil
 			}
 		}
 
 		if m.rebalanceRunning {
 			err := errors.New("Cannot Process Move Index - Rebalance In Progress")
-			l.Errorf("ServiceMgr::processMoveIndex %v %v", err, m.rebalanceToken)
+			l.Errorf("RebalanceServiceManager::processMoveIndex %v %v", err, m.rebalanceToken)
 			m.setErrorInMoveIndexToken(&rebalToken, err)
 			return nil
 		} else {
@@ -2367,7 +2348,7 @@ func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
 			var err error
 			if err = m.registerRebalanceRunning(true); err != nil || m.p.ddlRunning {
 				if m.p.ddlRunning {
-					l.Errorf("ServiceMgr::processMoveIndex Found index build running. Cannot process move index.")
+					l.Errorf("RebalanceServiceManager::processMoveIndex Found index build running. Cannot process move index.")
 					fmtMsg := "move index failure - index build is in progress for indexes: %v."
 					err = errors.New(fmt.Sprintf(fmtMsg, m.p.ddlRunningIndexNames))
 				}
@@ -2390,8 +2371,8 @@ func (m *ServiceMgr) processMoveIndex(kve metakv.KVEntry) error {
 	return nil
 }
 
-func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
-	const method string = "ServiceMgr::handleMoveIndex" // for logging
+func (m *RebalanceServiceManager) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
+	const method = "RebalanceServiceManager::handleMoveIndex" // for logging
 
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
@@ -2492,8 +2473,8 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
-	const method string = "ServiceMgr::handleMoveIndexInternal" // for logging
+func (m *RebalanceServiceManager) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
+	const method = "RebalanceServiceManager::handleMoveIndexInternal" // for logging
 
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
@@ -2543,23 +2524,23 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (m *ServiceMgr) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
+func (m *RebalanceServiceManager) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
 
-	l.Infof("ServiceMgr::doHandleMoveIndex %v", l.TagUD(req))
+	l.Infof("RebalanceServiceManager::doHandleMoveIndex %v", l.TagUD(req))
 
 	nodes, err := validateMoveIndexReq(req)
 	if err != nil {
-		l.Errorf("ServiceMgr::doHandleMoveIndex %v", err)
+		l.Errorf("RebalanceServiceManager::doHandleMoveIndex %v", err)
 		return http.StatusBadRequest, err.Error()
 	}
 
 	err, noop := m.initMoveIndex(req, nodes)
 	if err != nil {
-		l.Errorf("ServiceMgr::doHandleMoveIndex %v %v", err, m.rebalanceToken)
+		l.Errorf("RebalanceServiceManager::doHandleMoveIndex %v %v", err, m.rebalanceToken)
 		return http.StatusInternalServerError, err.Error()
 	} else if noop {
 		warnStr := "No Index Movement Required for Specified Destination List"
-		l.Warnf("ServiceMgr::doHandleMoveIndex %v", warnStr)
+		l.Warnf("RebalanceServiceManager::doHandleMoveIndex %v", warnStr)
 		return http.StatusBadRequest, warnStr
 	} else {
 		go m.monitorMoveIndex()
@@ -2567,22 +2548,22 @@ func (m *ServiceMgr) doHandleMoveIndex(req *manager.IndexRequest) (int, string) 
 	}
 }
 
-func (m *ServiceMgr) monitorMoveIndex() {
+func (m *RebalanceServiceManager) monitorMoveIndex() {
 	select {
 	case err := <-m.moveStatusCh:
 		if err != nil {
 			cfg := m.config.Load()
 			clusterAddr := cfg["clusterAddr"].String()
-			l.Errorf("ServiceMgr::doHandleMoveIndex MoveIndex failed: %v", err.Error())
+			l.Errorf("RebalanceServiceManager::doHandleMoveIndex MoveIndex failed: %v", err.Error())
 			c.Console(clusterAddr, fmt.Sprintf("MoveIndex failed: %v", err.Error()))
 		} else {
-			l.Infof("ServiceMgr: Move Index succeeded")
+			l.Infof("RebalanceServiceManager: Move Index succeeded")
 		}
 	}
 }
 
-func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
-	const method string = "ServiceMgr::initMoveIndex" // for logging
+func (m *RebalanceServiceManager) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
+	const method = "RebalanceServiceManager::initMoveIndex" // for logging
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2668,7 +2649,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	return nil, false
 }
 
-func (m *ServiceMgr) genMoveIndexToken() error {
+func (m *RebalanceServiceManager) genMoveIndexToken() error {
 
 	cfg := m.config.Load()
 	ustr, _ := c.NewUUID()
@@ -2680,7 +2661,7 @@ func (m *ServiceMgr) genMoveIndexToken() error {
 	return nil
 }
 
-func (m *ServiceMgr) setErrorInMoveIndexToken(token *RebalanceToken, err error) error {
+func (m *RebalanceServiceManager) setErrorInMoveIndexToken(token *RebalanceToken, err error) error {
 
 	token.Error = err.Error()
 
@@ -2688,21 +2669,21 @@ func (m *ServiceMgr) setErrorInMoveIndexToken(token *RebalanceToken, err error) 
 		return err
 	}
 
-	l.Infof("ServiceMgr::setErrorInMoveIndexToken done")
+	l.Infof("RebalanceServiceManager::setErrorInMoveIndexToken done")
 
 	return nil
 }
 
-func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken, upsert bool) error {
+func (m *RebalanceServiceManager) registerMoveIndexTokenInMetakv(token *RebalanceToken, upsert bool) error {
 
 	updateRToken := func() error {
 		err := c.MetakvSet(MoveIndexTokenPath, token)
 		if err != nil {
-			l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to set "+
+			l.Errorf("RebalanceServiceManager::registerMoveIndexTokenInMetakv Unable to set "+
 				"RebalanceToken In Meta Storage. Err %v", err)
 			return err
 		}
-		l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Registered Global Rebalance"+
+		l.Infof("RebalanceServiceManager::registerMoveIndexTokenInMetakv Registered Global Rebalance"+
 			"Token In Metakv %v %v", MoveIndexTokenPath, token)
 		return nil
 	}
@@ -2710,7 +2691,7 @@ func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken, upser
 	var rtoken RebalanceToken
 	found, err := c.MetakvGet(MoveIndexTokenPath, &rtoken)
 	if err != nil {
-		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to get "+
+		l.Errorf("RebalanceServiceManager::registerMoveIndexTokenInMetakv Unable to get "+
 			"RebalanceToken from Meta Storage. Err %v", err)
 		return err
 	}
@@ -2722,21 +2703,21 @@ func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken, upser
 	} else if found && rtoken.RebalId == token.RebalId { // Caller's token is same as the token in metakv. Update the token
 		return updateRToken()
 	} else if found && upsert { // Caller has a different token than the token in metakv. Return err
-		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Move token: %v is different "+
+		l.Errorf("RebalanceServiceManager::registerMoveIndexTokenInMetakv Move token: %v is different "+
 			"from the token in metakv. found: %v, rtoken: %v", token, found, rtoken)
 		return errors.New("Inconsistent MoveToken in metakv")
 	} else { // The token in metakv is different from the caller's version and the caller is trying to update it.
 		// Ignore the update as the caller's version of the token might have been deleted
-		l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Move token: %v is probably deleted "+
+		l.Infof("RebalanceServiceManager::registerMoveIndexTokenInMetakv Move token: %v is probably deleted "+
 			"from metakv. found: %v, rtoken: %v", found, rtoken)
 	}
 
 	return nil
 }
 
-func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
+func (m *RebalanceServiceManager) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
 	reqNodes []string) (map[string]*c.TransferToken, error) {
-	const method string = "ServiceMgr::generateTransferTokenForMoveIndex" // for logging
+	const method = "RebalanceServiceManager::generateTransferTokenForMoveIndex" // for logging
 
 	topology, err := getGlobalTopology(m.localhttp)
 	if err != nil {
@@ -2852,7 +2833,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 	return transferTokens, nil
 }
 
-func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
+func (m *RebalanceServiceManager) getNodeIdFromDest(dest string) (string, error) {
 
 	isDest := func(addr, addrSSL string) bool {
 		if security.EncryptionEnabled() && security.DisableNonSSLPort() {
@@ -2871,7 +2852,7 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 	defer m.cinfo.Unlock()
 
 	if err := m.cinfo.FetchNodesAndSvsInfo(); err != nil {
-		l.Errorf("ServiceMgr::getNodeIdFromDest Error Fetching Cluster Information %v", err)
+		l.Errorf("RebalanceServiceManager::getNodeIdFromDest Error Fetching Cluster Information %v", err)
 		return "", err
 	}
 
@@ -2899,7 +2880,7 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
 			resp, err := getWithAuth(haddr + url)
 			if err != nil {
-				l.Errorf("ServiceMgr::getNodeIdFromDest Unable to Fetch Node UUID %v %v", haddr, err)
+				l.Errorf("RebalanceServiceManager::getNodeIdFromDest Unable to Fetch Node UUID %v %v", haddr, err)
 				return "", err
 			} else {
 				bytes, _ := ioutil.ReadAll(resp.Body)
@@ -2910,12 +2891,12 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 
 	}
 	errStr := fmt.Sprintf("Unable to find Index service for destination %v or desintation is not part of the cluster", dest)
-	l.Errorf("ServiceMgr::getNodeIdFromDest %v", errStr)
+	l.Errorf("RebalanceServiceManager::getNodeIdFromDest %v", errStr)
 
 	return "", errors.New(errStr)
 }
 
-func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, destId string) (string, *c.TransferToken, error) {
+func (m *RebalanceServiceManager) genTransferToken(indexInst *c.IndexInst, sourceId string, destId string) (string, *c.TransferToken, error) {
 
 	ustr, _ := c.NewUUID()
 
@@ -2955,19 +2936,19 @@ func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, d
 }
 
 // moveIndexDoneCallback is the Rebalancer.cb.done callback function for a MoveIndex.
-func (m *ServiceMgr) moveIndexDoneCallback(err error, cancel <-chan struct{}) {
+func (m *RebalanceServiceManager) moveIndexDoneCallback(err error, cancel <-chan struct{}) {
 	m.runRebalanceCallback(cancel, func() { m.onMoveIndexDoneLOCKED(err) })
 }
 
 // onMoveIndexDoneLOCKED is invoked when a MoveIndex completes (succeeds or fails).
 // Its caller should be holding mutex mu write(?) locked.
-func (m *ServiceMgr) onMoveIndexDoneLOCKED(err error) {
+func (m *RebalanceServiceManager) onMoveIndexDoneLOCKED(err error) {
 
 	if err != nil {
-		l.Errorf("ServiceMgr::onMoveIndexDone Err %v", err)
+		l.Errorf("RebalanceServiceManager::onMoveIndexDone Err %v", err)
 	}
 
-	l.Infof("ServiceMgr::onMoveIndexDone Cleanup")
+	l.Infof("RebalanceServiceManager::onMoveIndexDone Cleanup")
 
 	if m.rebalancer != nil {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
@@ -3036,7 +3017,7 @@ func validateMoveIndexReq(req *manager.IndexRequest) ([]string, error) {
 //
 /////////////////////////////////////////////////////////////////////////
 
-func (m *ServiceMgr) setLocalMeta(key string, value string) error {
+func (m *RebalanceServiceManager) setLocalMeta(key string, value string) error {
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
 		mType:  CLUST_MGR_SET_LOCAL,
@@ -3053,7 +3034,7 @@ func (m *ServiceMgr) setLocalMeta(key string, value string) error {
 	return err
 }
 
-func (m *ServiceMgr) getLocalMeta(key string) (string, error) {
+func (m *RebalanceServiceManager) getLocalMeta(key string) (string, error) {
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
 		mType:  CLUST_MGR_GET_LOCAL,
@@ -3070,22 +3051,22 @@ func (m *ServiceMgr) getLocalMeta(key string) (string, error) {
 	return val, err
 }
 
-func (m *ServiceMgr) resetRunParams() {
+func (m *RebalanceServiceManager) resetRunParams() {
 	m.p.ddlRunning = false
 	m.p.ddlRunningIndexNames = nil
 }
 
-func (m *ServiceMgr) writeOk(w http.ResponseWriter) {
+func (m *RebalanceServiceManager) writeOk(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK\n"))
 }
 
-func (m *ServiceMgr) writeError(w http.ResponseWriter, err error) {
+func (m *RebalanceServiceManager) writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusBadRequest)
 	w.Write([]byte(err.Error() + "\n"))
 }
 
-func (m *ServiceMgr) writeJson(w http.ResponseWriter, json []byte) {
+func (m *RebalanceServiceManager) writeJson(w http.ResponseWriter, json []byte) {
 	header := w.Header()
 	header["Content-Type"] = []string{"application/json"}
 	w.WriteHeader(http.StatusOK)
@@ -3093,24 +3074,24 @@ func (m *ServiceMgr) writeJson(w http.ResponseWriter, json []byte) {
 	w.Write([]byte("\n"))
 }
 
-func (m *ServiceMgr) writeBytes(w http.ResponseWriter, bytes []byte) {
+func (m *RebalanceServiceManager) writeBytes(w http.ResponseWriter, bytes []byte) {
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
 }
 
-func (m *ServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+func (m *RebalanceServiceManager) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
 	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		m.writeError(w, err)
 	} else if valid == false {
-		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "ServiceMgr::validateAuth", "")
+		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "RebalanceServiceManager::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
 	}
 	return creds, valid
 }
 
-func (m *ServiceMgr) getLocalHttpAddr() string {
+func (m *RebalanceServiceManager) getLocalHttpAddr() string {
 
 	cfg := m.config.Load()
 	addr := cfg["clusterAddr"].String()
@@ -3152,12 +3133,12 @@ func send(status int, w http.ResponseWriter, res interface{}) {
 
 	if buf, err := json.Marshal(res); err == nil {
 		w.WriteHeader(status)
-		l.Debugf("ServiceMgr::sendResponse: sending response back to caller. %v", string(buf))
+		l.Debugf("RebalanceServiceManager::sendResponse: sending response back to caller. %v", string(buf))
 		w.Write(buf)
 	} else {
 		// note : buf is nil if err != nil
-		l.Debugf("ServiceMgr::sendResponse: fail to marshall response back to caller. %s", err)
-		sendHttpError(w, "ServiceMgr::sendResponse: Unable to marshall response", http.StatusInternalServerError)
+		l.Debugf("RebalanceServiceManager::sendResponse: fail to marshall response back to caller. %s", err)
+		sendHttpError(w, "RebalanceServiceManager::sendResponse: Unable to marshall response", http.StatusInternalServerError)
 	}
 }
 
