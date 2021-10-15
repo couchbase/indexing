@@ -66,8 +66,12 @@ type Rebalancer struct {
 	// sourceTokens is a source node's map by [ttid] of its TTs that need index drops after moving off the node
 	sourceTokens map[string]*c.TransferToken
 
-	nodeLoads     NodeLoadSlice // most recent workload info for each indexer node (sortable)
-	nodeLoadsTime time.Time     // last time indexer stats in nodeLoads were gathered
+	// nodeLoads is a sortable slice of the most recent workload info for each indexer node;
+	// nil for index move case
+	nodeLoads NodeLoadSlice
+
+	// nodeLoadsTime holds the last time the indexer stats in nodeLoads were gathered
+	nodeLoadsTime time.Time
 
 	dropQueue  chan string         // ttids of source indexes waiting to be submitted for drop
 	dropQueued map[string]struct{} // set of ttids already added to dropQueue, as metakv can send duplicate notifications
@@ -91,25 +95,21 @@ type Rebalancer struct {
 	metakvCancel chan struct{} // close this to end metakv.RunObserveChildren callbacks
 	muCleanup    sync.RWMutex  // for metakvCancel
 
-	supvMsgch MsgChannel
-
-	localaddr string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
-
-	wg sync.WaitGroup // group of all currently running Rebalance goroutines
-
-	cleanupOnce sync.Once
-
+	supvMsgch           MsgChannel
+	localaddr           string         // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
+	wg                  sync.WaitGroup // group of all currently running Rebalance goroutines
+	cleanupOnce         sync.Once
 	waitForTokenPublish chan struct{} // blocks observeRebalance until closed
+	retErr              error
+	config              c.ConfigHolder
+	lastKnownProgress   map[c.IndexInstId]float64
 
-	retErr error
+	topologyChange *service.TopologyChange // some info passed in on topology change being done
+	runPlanner     bool                    // should this rebalance run the planner?
 
-	config c.ConfigHolder
-
-	lastKnownProgress map[c.IndexInstId]float64
-
-	topologyChange *service.TopologyChange       // some info passed in on topology change being done
-	runPlanner     bool                          // should this rebalance run the planner?
-	globalTopology *manager.ClusterIndexMetadata // cluster topology from getGlobalTopology at start of rebalance
+	// globalTopology is the cluster topology from getGlobalTopology at start of rebalance; nil in
+	// index move case
+	globalTopology *manager.ClusterIndexMetadata
 
 	runParam *runParams
 }
@@ -758,9 +758,6 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 				break // no legally selectable token for this node was found
 			}
 		} // for next selection on current node
-
-		// Update the number of indexes now (soon to be) on each node based on tokens selected
-		r.updateNodeIndexCountsLOCKED(nodeUUID, selectedTTsForNode)
 	} // for each low-load destination node
 
 	// High-load nodes are at the back and we assign builds to them round-robin
@@ -775,8 +772,9 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 		// Round robin once over each high-load dest node
 		for node := firstHighLoadNode; node < numNodes && numToSelect > 0 && goalsForNodes[node] > 0; node++ {
 			nodeUUID := r.nodeLoads[node].nodeUUID
-			ttid, tt := r.selectSmartToBuildTokenLOCKED(r.toBuildTTsByDestId[nodeUUID], selectedTTsForNodes[nodeUUID],
-				forbiddenStreamsForNodes[node], newStreamsForNodes[node], maxStreamsPerNode)
+			ttid, tt := r.selectSmartToBuildTokenLOCKED(r.toBuildTTsByDestId[nodeUUID],
+				selectedTTsForNodes[nodeUUID], forbiddenStreamsForNodes[node],
+				newStreamsForNodes[node], maxStreamsPerNode)
 			if tt != nil {
 				numToSelect--
 				goalsForNodes[node]--
@@ -800,10 +798,6 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 			}
 		} // round robin once over each high-load dest node
 	} // for next full round robin cycle
-	for node := firstHighLoadNode; node < numNodes; node++ {
-		nodeUUID := r.nodeLoads[node].nodeUUID
-		r.updateNodeIndexCountsLOCKED(nodeUUID, selectedTTsForNodes[nodeUUID])
-	}
 
 	return selectedTokens
 }
@@ -885,7 +879,7 @@ func tokenOkayToBuild(tt *common.TransferToken,
 	return true
 }
 
-// NodeLoad holds statistics about each Index node retained by a rebalance, used to estimate current load.
+// NodeLoad holds stats about each Index node retained by a rebal, used to estimate current load.
 type NodeLoad struct {
 	nodeUUID string // UUID of the Index node
 
@@ -893,20 +887,30 @@ type NodeLoad struct {
 	avgResidentPercent int64  // used for Plasma
 	memoryQuota        int64  // used for MOI
 	memoryUsed         int64  // used for MOI
-	numIndexes         int64  // to detect empty nodes; tracked locally instead of from stats so it updates instantly
 	storageMode        string // common.MemoryOptimized or common.PlasmaDB; "" if never retrieved
+}
+
+// NewNodeLoad is the constructor for the NodeLoad class. It initializes the stats to high load.
+// These will be updated by any future successful stats retrievals. storageMode is unknown until
+// stats are retrieved.
+func NewNodeLoad(nodeUUID string) *NodeLoad {
+	nodeLoad := &NodeLoad{
+		nodeUUID: nodeUUID,
+	}
+	nodeLoad.setStatsHighLoad()
+	return nodeLoad
 }
 
 // NodeLoad.getLoad returns 0 or 1 for nodes deemed to have low or high loads, respectively.
 func (nl *NodeLoad) getLoad() int {
 	switch nl.storageMode {
 	case common.PlasmaDB:
-		if nl.numIndexes == 0 || nl.avgResidentPercent >= 50 {
+		if nl.avgResidentPercent >= 50 {
 			return 0
 		}
 		return 1
 	case common.MemoryOptimized:
-		if nl.numIndexes == 0 || (nl.memoryQuota > 0 && nl.memoryUsed <= nl.memoryQuota/2) {
+		if nl.memoryQuota > 0 && nl.memoryUsed <= nl.memoryQuota/2 {
 			return 0
 		}
 		return 1
@@ -938,7 +942,6 @@ func (nl *NodeLoad) setStatsHighLoad() {
 	nl.avgResidentPercent = 0
 	nl.memoryQuota = 1
 	nl.memoryUsed = 1 // used same as quota implies 100% of memory used
-	nl.numIndexes = math.MaxInt64
 }
 
 // NodeLoadSlice implements sort.Interface to enable sorting by load (which is really just
@@ -960,19 +963,17 @@ func (nls NodeLoadSlice) Swap(i, j int) {
 	nls[i], nls[j] = nls[j], nls[i]
 }
 
-// initNodeLoads initializes r.nodeLoads with an entry for each Index node
-// containing its nodeUUID and number of indexes determined from r.globalTopology.
+// initNodeLoads initializes r.nodeLoads with an entry for each Index node containing its nodeUUID
+// and number of indexes determined from r.globalTopology. NO-OP if globalTopology == nil.
 func (r *Rebalancer) initNodeLoads() {
 	var nodeLoads NodeLoadSlice
+
+	if r.globalTopology == nil {
+		return
+	}
+
 	for _, metadata := range r.globalTopology.Metadata {
-		nodeLoad := &NodeLoad{nodeUUID: metadata.NodeUUID}
-		for _, indexTopology := range metadata.IndexTopologies {
-			for _, defn := range indexTopology.Definitions {
-				for _, inst := range defn.Instances {
-					nodeLoad.numIndexes += int64(len(inst.Partitions))
-				}
-			}
-		}
+		nodeLoad := NewNodeLoad(metadata.NodeUUID)
 		nodeLoads = append(nodeLoads, nodeLoad)
 	}
 	r.mu.Lock()
@@ -991,8 +992,8 @@ func (r *Rebalancer) getOrCreateNodeLoadLOCKED(nodeUUID string) (nodeLoad *NodeL
 		}
 	}
 
-	// If existing node entry not found (should not happen), add an entry for it
-	nodeLoad = &NodeLoad{nodeUUID: nodeUUID}
+	// If existing node entry not found, add an entry for it
+	nodeLoad = NewNodeLoad(nodeUUID)
 	r.nodeLoads = append(r.nodeLoads, nodeLoad)
 	return nodeLoad
 }
@@ -1030,8 +1031,8 @@ func (r *Rebalancer) getNodeIndexerStats(config common.Config) {
 
 		if err != nil {
 			// Could not get stats for some nodes, so set fake stats for them showing highly loaded.
-			// Note we used a short REST timeout so slow nodes do not greatly drag down speed of rebalance.
-			// It is reasonable to assume such slow-responding nodes should be marked as highly loaded.
+			// We used a short REST timeout so slow nodes do not drag down speed of rebalance. It is
+			// reasonable to treat such nodes as highly loaded.
 			if errMap != nil { // specific nodes failed
 				for nodeUUID := range errMap {
 					r.setNodeUUIDStatsHighLoadLOCKED(nodeUUID)
@@ -1047,31 +1048,6 @@ func (r *Rebalancer) getNodeIndexerStats(config common.Config) {
 		for nodeUUID, stats := range statsMap {
 			nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
 			nodeLoad.addStats(stats)
-		}
-	}
-}
-
-// updateNodeIndexCountsLOCKED updates r.nodeLoads numIndexes counts based on tokens selected to
-// build on the given dest node, adding the total number of new builds to the dest's count and
-// decrementing each move source's count (no decrement for replica repair as there was no source).
-// Caller must be holding r.mu write locked.
-func (r *Rebalancer) updateNodeIndexCountsLOCKED(destNodeUUID string, selectedTTsForNode map[string]*common.TransferToken) {
-	for _, tt := range selectedTTsForNode {
-		numPartns := len(tt.IndexInst.Defn.Partitions)
-		r.updateNodeIndexCountLOCKED(destNodeUUID, numPartns)
-		if tt.TransferMode == common.TokenTransferModeMove {
-			r.updateNodeIndexCountLOCKED(tt.SourceId, -1*numPartns)
-		}
-	}
-}
-
-// updateNodeIndexCountLOCKED adds the specified increment/decrement to the given node's numIndexes entry in r.nodeLoads.
-// Caller must be holding r.mu write locked.
-func (r *Rebalancer) updateNodeIndexCountLOCKED(nodeUUID string, delta int) {
-	for i := range r.nodeLoads {
-		if r.nodeLoads[i].nodeUUID == nodeUUID {
-			r.nodeLoads[i].numIndexes += int64(delta)
-			break
 		}
 	}
 }

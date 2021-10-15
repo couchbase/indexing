@@ -228,7 +228,7 @@ func (b *Bucket) replaceConnPools(with []*connectionPool) {
 	}
 }
 
-func (b Bucket) getConnPool(i int) *connectionPool {
+func (b *Bucket) getConnPool(i int) *connectionPool {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -248,7 +248,7 @@ func (b Bucket) getConnPool(i int) *connectionPool {
 	return nil
 }
 
-func (b Bucket) getMasterNode(i int) string {
+func (b *Bucket) getMasterNode(i int) string {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -268,7 +268,7 @@ func (b Bucket) getMasterNode(i int) string {
 	return ""
 }
 
-func (b Bucket) authHandler() (ah AuthHandler) {
+func (b *Bucket) authHandler() (ah AuthHandler) {
 	if b.pool != nil {
 		ah = b.pool.client.ah
 	}
@@ -280,7 +280,7 @@ func (b Bucket) authHandler() (ah AuthHandler) {
 
 // NodeAddresses gets the (sorted) list of memcached node addresses
 // (hostname:port).
-func (b Bucket) NodeAddresses() []string {
+func (b *Bucket) NodeAddresses() []string {
 	vsm := b.VBServerMap()
 	rv := make([]string, len(vsm.ServerList))
 	copy(rv, vsm.ServerList)
@@ -290,7 +290,7 @@ func (b Bucket) NodeAddresses() []string {
 
 // CommonAddressSuffix finds the longest common suffix of all
 // host:port strings in the node list.
-func (b Bucket) CommonAddressSuffix() string {
+func (b *Bucket) CommonAddressSuffix() string {
 	input := []string{}
 	for _, n := range b.Nodes() {
 		input = append(input, n.Hostname)
@@ -511,7 +511,7 @@ type basicAuth struct {
 	u, p string
 }
 
-func (b basicAuth) GetCredentials() (string, string) {
+func (b *basicAuth) GetCredentials() (string, string) {
 	return b.u, b.p
 }
 
@@ -522,7 +522,7 @@ func basicAuthFromURL(us string) (ah AuthHandler) {
 	}
 	if user := u.User; user != nil {
 		pw, _ := user.Password()
-		ah = basicAuth{user.Username(), pw}
+		ah = &basicAuth{user.Username(), pw}
 	}
 	return
 }
