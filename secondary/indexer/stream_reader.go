@@ -1265,12 +1265,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 			return
 		}
 
-		//if current snapshot start from 0 and the filter doesn't have any snapshot
-		if w.markFirstSnap && snapStart == 0 && filter.Snapshots[meta.vbucket][1] == 0 {
-			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = true
-		} else {
-			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
-		}
+		w.setFirstSnap(filter, meta, snapStart, snapEnd)
 
 		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
@@ -1278,7 +1273,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 			enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
 			if enableOSO {
 
-				filterOSO := w.keyspaceIdFilter[meta.keyspaceId]
+				filterOSO := w.keyspaceIdFilterOSO[meta.keyspaceId]
 
 				//first regular snapshot after OSO
 				if filter.Snapshots[meta.vbucket][0] == 0 &&
@@ -1295,7 +1290,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 						resetStream()
 					}
 
-					if snapStart < filterOSO.Seqnos[meta.vbucket] {
+					if snapEnd < filterOSO.Seqnos[meta.vbucket] {
 
 						logging.Errorf("MutationStreamReader::updateSnapInFilter %v %v "+
 							"Received Snapshot For Vbucket %v lower than last seqno. Seqno %v. "+
@@ -1358,6 +1353,30 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	} else {
 		logging.Debugf("MutationStreamReader::updateSnapInFilter Missing"+
 			"keyspaceId %v in Filter for Stream %v", meta.keyspaceId, w.streamId)
+	}
+
+}
+
+func (w *streamWorker) setFirstSnap(filter *common.TsVbuuid,
+	meta *MutationMeta, snapStart uint64, snapEnd uint64) {
+
+	enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
+	anyOSOSnap := false
+	if enableOSO {
+		filterOSO := w.keyspaceIdFilterOSO[meta.keyspaceId]
+		if filterOSO.Snapshots[meta.vbucket][0] == 1 {
+			anyOSOSnap = true
+		}
+	}
+
+	//if current snapshot start from 0, the filter doesn't have any snapshot and
+	//there is no previous OSO snapshot for this vbucket
+	if w.markFirstSnap && snapStart == 0 &&
+		filter.Snapshots[meta.vbucket][1] == 0 &&
+		!anyOSOSnap {
+		w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = true
+	} else {
+		w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
 	}
 
 }
