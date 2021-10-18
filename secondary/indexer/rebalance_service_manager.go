@@ -656,7 +656,7 @@ func (m *RebalanceServiceManager) startFailover(change service.TopologyChange) e
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), nil, false, nil)
+		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), &change, false, nil)
 
 	return nil
 }
