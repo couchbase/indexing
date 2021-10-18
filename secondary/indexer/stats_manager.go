@@ -1169,10 +1169,15 @@ func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 
 	var found bool
 
-	addToStatsMap := func(s *IndexStats) {
-		prefix := common.GetStatsPrefix(s.bucket, s.scope, s.collection,
-			s.name, s.replicaId, 0, false)
-		key := prefix[:len(prefix)-1]
+	addToStatsMap := func(s *IndexStats, instId common.IndexInstId) {
+		var key string
+		if !t.redact {
+			prefix := common.GetStatsPrefix(s.bucket, s.scope, s.collection,
+				s.name, s.replicaId, 0, false)
+			key = prefix[:len(prefix)-1]
+		} else {
+			key = fmt.Sprintf("%v", instId)
+		}
 
 		statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
 		if t.partition {
@@ -1190,40 +1195,40 @@ func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 			statsMap["indexer"] = is.constructIndexerStats(t.skipEmpty, t.version)
 		}
 		permissionCache := common.NewSessionPermissionsCache(t.creds)
-		for _, s := range is.indexes {
+		for id, s := range is.indexes {
 			if querySystemCatalog || permissionCache.IsAllowed(s.bucket, s.scope, s.collection, "list") {
-				addToStatsMap(s)
+				addToStatsMap(s, id)
 			}
 		}
 		found = true
 	} else if t.level == "bucket" {
-		for _, s := range is.indexes {
+		for id, s := range is.indexes {
 			if s.bucket == t.bucket {
-				addToStatsMap(s)
+				addToStatsMap(s, id)
 			}
 		}
 	} else if t.level == "scope" {
-		for _, s := range is.indexes {
+		for id, s := range is.indexes {
 			if s.bucket == t.bucket &&
 				s.scope == t.scope {
-				addToStatsMap(s)
+				addToStatsMap(s, id)
 			}
 		}
 	} else if t.level == "collection" {
-		for _, s := range is.indexes {
+		for id, s := range is.indexes {
 			if s.bucket == t.bucket &&
 				s.scope == t.scope &&
 				s.collection == t.collection {
-				addToStatsMap(s)
+				addToStatsMap(s, id)
 			}
 		}
 	} else if t.level == "index" {
-		for _, s := range is.indexes {
+		for id, s := range is.indexes {
 			if s.name == t.index &&
 				s.bucket == t.bucket &&
 				s.scope == t.scope &&
 				s.collection == t.collection {
-				addToStatsMap(s)
+				addToStatsMap(s, id)
 			}
 		}
 	}
