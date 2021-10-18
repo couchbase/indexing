@@ -448,6 +448,8 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 			if p.logger != nil {
 				p.logger(err1)
 			}
+			logging.Fatalf(err1.Error())
+			return err
 		}
 
 		certInBytes, err := ioutil.ReadFile(certFile)
