@@ -45,6 +45,7 @@ type mutationStreamReader struct {
 	supvRespch MsgChannel //channel to send any message to supervisor
 
 	syncStopCh StopChannel
+	syncSendCh chan bool
 
 	keyspaceIdQueueMap KeyspaceIdQueueMap //keyspaceId to mutation queue map
 
@@ -107,6 +108,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 		supvCmdch:           supvCmdch,
 		supvRespch:          supvRespch,
 		syncStopCh:          make(StopChannel),
+		syncSendCh:          make(chan bool),
 		keyspaceIdQueueMap:  CopyKeyspaceIdQueueMap(keyspaceIdQueueMap),
 		keyspaceIdEnableOSO: make(KeyspaceIdEnableOSO),
 		killch:              make(chan bool),
@@ -157,6 +159,11 @@ func (r *mutationStreamReader) Shutdown() {
 	//stop sync worker
 	close(r.syncStopCh)
 
+	select {
+	case r.syncSendCh <- true:
+	default:
+	}
+
 	close(r.stopch)
 
 	//close the mutation stream
@@ -181,6 +188,12 @@ func (r *mutationStreamReader) run() {
 				case []*protobuf.VbKeyVersions:
 					vbKeyVer := msg.([]*protobuf.VbKeyVersions)
 					r.handleVbKeyVersions(vbKeyVer)
+
+					// Invoke syncWorker as there are mutations
+					select {
+					case r.syncSendCh <- true:
+					default:
+					}
 
 				default:
 					r.handleStreamInfoMsg(msg)
@@ -389,26 +402,41 @@ func (r *mutationStreamReader) panicHandler() {
 
 func (r *mutationStreamReader) syncWorker() {
 
-	ticker := time.NewTicker(time.Millisecond * time.Duration(r.syncBatchInterval))
-
 	fastpath := true
 	inactivityTick := 0
 
+	// If there are no mutations, then this go-routine will not be invoked
+	// After the last mutataion, this method is invoked every "syncBatchInterval"
+	// milliseconds until fastpath becomes false.
 	for {
 		select {
-		case <-ticker.C:
-			if r.maybeSendSync(fastpath) {
-				inactivityTick = 0
-				fastpath = true
-			} else {
-				if inactivityTick > int(r.syncBatchInterval)*r.numWorkers {
-					fastpath = false
-				} else {
-					inactivityTick++
+		case <-r.syncSendCh:
+			ticker := time.NewTicker(time.Duration(r.syncBatchInterval) * time.Millisecond)
+			for {
+				select {
+				case <-ticker.C:
+					if r.maybeSendSync(fastpath) {
+						inactivityTick = 0
+						fastpath = true
+					} else {
+						if inactivityTick > int(r.syncBatchInterval)*r.numWorkers {
+							fastpath = false
+							break
+						} else {
+							inactivityTick++
+						}
+					}
+				case <-r.syncStopCh:
+					ticker.Stop()
+					return
+				}
+
+				if !fastpath {
+					ticker.Stop()
+					break // break the inner for loop and want for new mutations
 				}
 			}
 		case <-r.syncStopCh:
-			ticker.Stop()
 			return
 		}
 	}
@@ -1237,12 +1265,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 			return
 		}
 
-		//if current snapshot start from 0 and the filter doesn't have any snapshot
-		if w.markFirstSnap && snapStart == 0 && filter.Snapshots[meta.vbucket][1] == 0 {
-			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = true
-		} else {
-			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
-		}
+		w.setFirstSnap(filter, meta, snapStart, snapEnd)
 
 		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
@@ -1250,7 +1273,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 			enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
 			if enableOSO {
 
-				filterOSO := w.keyspaceIdFilter[meta.keyspaceId]
+				filterOSO := w.keyspaceIdFilterOSO[meta.keyspaceId]
 
 				//first regular snapshot after OSO
 				if filter.Snapshots[meta.vbucket][0] == 0 &&
@@ -1267,7 +1290,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 						resetStream()
 					}
 
-					if snapStart < filterOSO.Seqnos[meta.vbucket] {
+					if snapEnd < filterOSO.Seqnos[meta.vbucket] {
 
 						logging.Errorf("MutationStreamReader::updateSnapInFilter %v %v "+
 							"Received Snapshot For Vbucket %v lower than last seqno. Seqno %v. "+
@@ -1330,6 +1353,30 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	} else {
 		logging.Debugf("MutationStreamReader::updateSnapInFilter Missing"+
 			"keyspaceId %v in Filter for Stream %v", meta.keyspaceId, w.streamId)
+	}
+
+}
+
+func (w *streamWorker) setFirstSnap(filter *common.TsVbuuid,
+	meta *MutationMeta, snapStart uint64, snapEnd uint64) {
+
+	enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
+	anyOSOSnap := false
+	if enableOSO {
+		filterOSO := w.keyspaceIdFilterOSO[meta.keyspaceId]
+		if filterOSO.Snapshots[meta.vbucket][0] == 1 {
+			anyOSOSnap = true
+		}
+	}
+
+	//if current snapshot start from 0, the filter doesn't have any snapshot and
+	//there is no previous OSO snapshot for this vbucket
+	if w.markFirstSnap && snapStart == 0 &&
+		filter.Snapshots[meta.vbucket][1] == 0 &&
+		!anyOSOSnap {
+		w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = true
+	} else {
+		w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
 	}
 
 }

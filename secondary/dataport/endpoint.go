@@ -51,6 +51,7 @@ type RouterEndpoint struct {
 	bufferSize int           // size of buffer to wait till flush
 	bufferTm   time.Duration // timeout to flush endpoint-buffer
 	harakiriTm time.Duration // timeout after which endpoint commits harakiri
+	syncTm     time.Duration // timeout after which endpoint sends sync message
 
 	// gen-server
 	ch    chan []interface{} // carries control commands
@@ -65,6 +66,9 @@ type RouterEndpoint struct {
 	// Book-keeping for verifying sequence order.
 	// TODO: This introduces a map lookup in mutation path. Need to anlayse perf implication.
 	seqOrders map[string]dcpTransport.SeqOrderState
+
+	// Mapping between vbuckets and keyspace
+	keyspaceIdVBMap map[string]map[uint16]bool
 }
 
 type EndpointStats struct {
@@ -169,18 +173,20 @@ func NewRouterEndpoint(
 	}
 
 	endpoint := &RouterEndpoint{
-		topic:      topic,
-		raddr:      raddr,
-		cluster:    cluster,
-		finch:      make(chan bool),
-		timestamp:  time.Now().UnixNano(),
-		keyChSize:  config["keyChanSize"].Int(),
-		block:      config["remoteBlock"].Bool(),
-		bufferSize: config["bufferSize"].Int(),
-		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
-		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
-		stats:      &EndpointStats{},
-		seqOrders:  make(map[string]dcpTransport.SeqOrderState),
+		topic:           topic,
+		raddr:           raddr,
+		cluster:         cluster,
+		finch:           make(chan bool),
+		timestamp:       time.Now().UnixNano(),
+		keyChSize:       config["keyChanSize"].Int(),
+		block:           config["remoteBlock"].Bool(),
+		bufferSize:      config["bufferSize"].Int(),
+		bufferTm:        time.Duration(config["bufferTimeout"].Int()),
+		harakiriTm:      time.Duration(config["harakiriTimeout"].Int()),
+		syncTm:          time.Duration(config["syncTimeout"].Int()),
+		stats:           &EndpointStats{},
+		seqOrders:       make(map[string]dcpTransport.SeqOrderState),
+		keyspaceIdVBMap: make(map[string]map[uint16]bool),
 	}
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
@@ -196,6 +202,7 @@ func NewRouterEndpoint(
 
 	endpoint.bufferTm *= time.Millisecond
 	endpoint.harakiriTm *= time.Millisecond
+	endpoint.syncTm *= time.Millisecond
 
 	endpoint.logPrefix = fmt.Sprintf(
 		"ENDP[<-(%v,%4x)<-%v #%v]",
@@ -297,6 +304,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	harakiri := time.NewTimer(endpoint.harakiriTm)
 	flushTick := time.NewTimer(endpoint.bufferTm)
 	flushTickActive := true
+	syncTick := time.NewTicker(endpoint.syncTm)
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -410,6 +418,13 @@ loop:
 						logging.Infof(fmsg, prefix, endpoint.harakiriTm)
 					}
 				}
+				if cv, ok := config["syncTimeout"]; ok {
+					endpoint.syncTm = time.Duration(cv.Int()) * time.Millisecond
+					syncTick.Stop()
+					syncTick.Reset(endpoint.syncTm)
+					fmsg := "%v reloaded syncTm: %v\n"
+					logging.Infof(fmsg, prefix, endpoint.syncTm)
+				}
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
 
@@ -440,6 +455,36 @@ loop:
 			// hence the precaution.
 			lastActiveTime = time.Now()
 
+		case <-syncTick.C:
+			// Sync message to indexer requires keyspaceId and vbno.
+			// Without these, indexer would filter the mutation and log the
+			// message. This can lead to unnecessary log flooding.
+			//
+			// In mixed mode cluster, this problem can not be solved from indexer
+			// side. To avoid that, projector keeps a track of keyspaceId and vbno's
+			// that it is currently processing. It uses the first vbucket no.
+			// belonging to the first keyspace it encounteres in the map to
+			// send the sync message to indexer
+			for keyspaceId, vbmap := range endpoint.keyspaceIdVBMap {
+				for vb, _ := range vbmap {
+					kv := c.NewKeyVersions(0 /*seqno*/, nil, 1, 0 /*ctime*/)
+					kv.AddSync()
+					data := &c.DataportKeyVersions{keyspaceId, vb, 0, kv, 0, false}
+
+					buffers.addKeyVersions(
+						data.KeyspaceId, data.Vbno, data.Vbuuid,
+						data.Opaque2, data.OSO, kv, endpoint)
+					messageCount++
+					if err := flushBuffers(); err != nil {
+						logging.Errorf("%v Error observed during flush, err: %v", err)
+						break loop
+					}
+
+					// break here as only one message is enough to keep TCP connection alive
+					break
+				}
+				break
+			}
 		case <-harakiri.C:
 			if time.Since(lastActiveTime) > endpoint.harakiriTm {
 				logging.Infof("%v committed harakiri\n", endpoint.logPrefix)

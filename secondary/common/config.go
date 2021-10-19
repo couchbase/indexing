@@ -198,10 +198,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.syncTimeout": ConfigValue{
-		2000,
+		20000,
 		"timeout, in milliseconds, for sending periodic Sync messages, " +
 			"changing this value does not affect existing feeds.",
-		2000,
+		20000,
 		false, // mutable
 		false, // case-insensitive
 	},

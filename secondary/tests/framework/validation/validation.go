@@ -161,7 +161,7 @@ func ValidateGroupAggrWithN1QL(clusterAddr, bucketName, username, password, n1ql
 	groupAggr *qc.GroupAggr, indexProjection *qc.IndexProjection,
 	actualResp tc.GroupAggrScanResponseActual) error {
 
-	results, err := tc.ExecuteN1QLStatement(clusterAddr, bucketName, username, password, n1qlstatement, true, gocb.NotBounded)
+	results, err := tc.ExecuteN1QLStatement(clusterAddr, bucketName, username, password, n1qlstatement, true, gocb.RequestPlus)
 	if err != nil {
 		return err
 	}

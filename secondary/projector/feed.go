@@ -1467,6 +1467,7 @@ func (feed *Feed) repairEndpoints(
 		} else if (endpoint == nil) || !endpoint.Ping() {
 			topic, typ := feed.topic, feed.endpointType
 			config := feed.config.SectionConfig("dataport.", true /*trim*/)
+			config.Set("syncTimeout", feed.config["syncTimeout"])
 			endpoint, e = feed.epFactory(topic, typ, raddr, config)
 			if e != nil {
 				fmsg := "%v ##%x endpoint-factory %q: %v\n"
@@ -1539,6 +1540,7 @@ func (feed *Feed) resetConfig(config c.Config) {
 	}
 	// pass the configuration to active endpoints
 	econf := config.SectionConfig("dataport.", true /*trim*/)
+	econf.Set("syncTimeout", config["syncTimeout"])
 	for _, endpoint := range feed.endpoints {
 		endpoint.ResetConfig(econf)
 	}
@@ -1943,6 +1945,7 @@ func (feed *Feed) startEndpoints(
 			} else if endpoint == nil || !endpoint.Ping() {
 				topic, typ := feed.topic, feed.endpointType
 				config := feed.config.SectionConfig("dataport.", true /*trim*/)
+				config.Set("syncTimeout", feed.config["syncTimeout"])
 				endpoint, e = feed.epFactory(topic, typ, raddr, config)
 				if e != nil {
 					fmsg := "%v ##%x endpoint-factory %q: %v\n"

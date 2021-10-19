@@ -2692,18 +2692,6 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	if tk.ss.checkNewTSDue(streamId, keyspaceId) {
 		tsElem := tk.ss.getNextStabilityTS(streamId, keyspaceId)
 
-		//persist TS which completes the build
-		if tk.isBuildCompletionTs(streamId, keyspaceId, tsElem.ts) {
-			if hasTS, ok := tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId]; !ok || !hasTS {
-				//NOTE For OSO mode, it is fine to create snap as DISK type, as there is no
-				//open OSO snapshot at this stage. This snapshot is eligible for recovery.
-				logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
-					"type as DISK_SNAP due to BuildCompletionTS", streamId, keyspaceId)
-				tsElem.ts.SetSnapType(common.DISK_SNAP)
-				tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = true
-			}
-		}
-
 		if tk.ss.canFlushNewTS(streamId, keyspaceId) {
 			tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
 		} else {
@@ -2936,6 +2924,19 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 
 	//for init build, if there is no snapshot option set
 	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
+
+		//persist TS which completes the build
+		if tk.isBuildCompletionTs(streamId, keyspaceId, flushTs) {
+			if hasTS, ok := tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId]; !ok || !hasTS {
+				//NOTE For OSO mode, it is fine to create snap as DISK type, as there is no
+				//open OSO snapshot at this stage. This snapshot is eligible for recovery.
+				logging.Infof("Timekeeper::setSnapshotType %v %v setting snapshot "+
+					"type as DISK_SNAP due to BuildCompletionTS", streamId, keyspaceId)
+				flushTs.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = true
+			}
+		}
+
 		if flushTs.GetSnapType() == common.NO_SNAP {
 			isMergeCandidate := false
 
@@ -2968,6 +2969,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 				flushTs.SetSnapType(common.DISK_SNAP)
 				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
 			}
+
 		} else if flushTs.GetSnapType() == common.NO_SNAP_OSO {
 			// if storage type is MOI, generate snapshot during initial build.
 			if common.GetStorageMode() == common.MOI {
