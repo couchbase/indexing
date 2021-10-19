@@ -104,14 +104,15 @@ type Rebalancer struct {
 	config              c.ConfigHolder
 	lastKnownProgress   map[c.IndexInstId]float64
 
-	topologyChange *service.TopologyChange // some info passed in on topology change being done
-	runPlanner     bool                    // should this rebalance run the planner?
+	// topologyChange is populated in Rebalance and Failover cases only, else nil
+	topologyChange *service.TopologyChange
 
-	// globalTopology is the cluster topology from getGlobalTopology at start of rebalance; nil in
-	// index move case
+	runPlanner bool // should this rebalance run the planner?
+
+	// globalTopology is cluster topology from getGlobalTopology in Rebalance case only, else nil
 	globalTopology *manager.ClusterIndexMetadata
 
-	runParam *runParams
+	runParams *runParams
 }
 
 // NewRebalancer creates the Rebalancer object that will run the rebalance on this node and starts
@@ -121,11 +122,11 @@ type Rebalancer struct {
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
-	runPlanner bool, runParam *runParams) *Rebalancer {
+	runPlanner bool, runParams *runParams) *Rebalancer {
 
 	clusterVersion := common.GetClusterVersion()
 	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
-		rebalToken, master, localaddr, runPlanner, runParam, clusterVersion)
+		rebalToken, master, localaddr, runPlanner, runParams, clusterVersion)
 
 	r := &Rebalancer{
 		clusterVersion: clusterVersion,
@@ -157,8 +158,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		topologyChange: topologyChange,
 		runPlanner:     runPlanner,
-
-		runParam: runParam,
+		runParams:      runParams,
 	}
 
 	r.config.Store(config)
@@ -495,10 +495,9 @@ func (r *Rebalancer) addToWaitGroup() bool {
 	} else {
 		return false
 	}
-
 }
 
-// doRebalance runs in the rebalance master as a go routine helper to initRebalanceAsync
+// doRebalance runs in the rebalance master as a go routine helper to initRebalAsync
 // that manages the fine-grained steps of a rebalance. It creates the transfer token
 // batches and publishes the first one. (If more than one batch exists the others will
 // be published later by processTokenAsMaster.) Then it launches an observeRebalance go
@@ -698,9 +697,14 @@ func (r *Rebalancer) createBatchLOCKED(batchSize int) (toBuildTokens map[string]
 func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect int) (selectedTokens map[string]*c.TransferToken) {
 	selectedTokens = make(map[string]*c.TransferToken)
 
-	numIndexNodes := len(r.topologyChange.KeepNodes) // total index nodes remaining
-	maxPerNode := batchSize / numIndexNodes          // max concurrent builds per node
-	if maxPerNode < 3 {                              // legacy transferBatchSize default (could all be on one node)
+	var numIndexNodes int // total index nodes remaining if known (Rebalance), else assumes 1 (Move)
+	if r.topologyChange != nil {
+		numIndexNodes = len(r.topologyChange.KeepNodes)
+	} else {
+		numIndexNodes = 1
+	}
+	maxPerNode := batchSize / numIndexNodes // max concurrent builds per node
+	if maxPerNode < 3 {                     // legacy transferBatchSize default (could all be on one node)
 		maxPerNode = 3
 	}
 	if maxPerNode > batchSize {
@@ -2387,10 +2391,10 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 
 func (r *Rebalancer) checkDDLRunning() (bool, error) {
 
-	if r.runParam != nil && r.runParam.ddlRunning {
+	if r.runParams != nil && r.runParams.ddlRunning {
 		l.Errorf("Rebalancer::doRebalance Found index build running. Cannot process rebalance.")
 		fmtMsg := "indexer rebalance failure - index build is in progress for indexes: %v."
-		err := errors.New(fmt.Sprintf(fmtMsg, r.runParam.ddlRunningIndexNames))
+		err := errors.New(fmt.Sprintf(fmtMsg, r.runParams.ddlRunningIndexNames))
 		return true, err
 	}
 	return false, nil

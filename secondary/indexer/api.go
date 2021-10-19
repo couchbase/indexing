@@ -24,6 +24,7 @@ type target struct {
 	skipEmpty  bool
 	partition  bool
 	pretty     bool
+	redact     bool
 	creds      cbauth.Creds
 }
 
@@ -127,7 +128,7 @@ func (api *restServer) routeRequest(
 func (api *restServer) statsHandler(req request) {
 	// Example: _/api/stats/bucket/index (_ is a blank)
 	if req.r.Method == "GET" {
-		var partition, pretty, skipEmpty bool
+		var partition, pretty, skipEmpty, redact bool
 		if req.r.URL.Query().Get("partition") == "true" {
 			partition = true
 		}
@@ -137,10 +138,13 @@ func (api *restServer) statsHandler(req request) {
 		if req.r.URL.Query().Get("skipEmpty") == "true" {
 			skipEmpty = true
 		}
+		if req.r.URL.Query().Get("redact") == "true" {
+			redact = true
+		}
 		stats := api.statsMgr.stats.Get()
 		segs := strings.Split(req.url, "/")
 		t := &target{version: req.version, skipEmpty: skipEmpty,
-			partition: partition, pretty: pretty, creds: req.creds}
+			partition: partition, pretty: pretty, redact: redact, creds: req.creds}
 		switch req.version {
 		case "v1":
 			if len(segs) == 3 { // Indexer node level stats

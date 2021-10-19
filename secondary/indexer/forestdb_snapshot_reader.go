@@ -104,7 +104,7 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 						return err
 					}
 				}
-				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow, false) {
 					return nil // Ignore the entry as it is same as previous entry
 				}
 			}
