@@ -41,31 +41,27 @@ import (
 // DDLServiceMgr Definition
 //
 type DDLServiceMgr struct {
-	indexerId   common.IndexerId
-	config      common.ConfigHolder
-	provider    *client.MetadataProvider
-	supvCmdch   MsgChannel //supervisor sends commands on this channel
-	supvMsgch   MsgChannel //channel to send any message to supervisor
-	nodeID      service.NodeID
-	localAddr   string
-	clusterAddr string
-	settings    *ddlSettings
-	nodes       map[service.NodeID]bool
-	donech      chan bool
-	killch      chan bool
-	allowDDL    bool
-	mutex       sync.Mutex
+	indexerId                    common.IndexerId
+	config                       common.ConfigHolder
+	supvCmdch                    MsgChannel //supervisor sends commands on this channel
+	supvMsgch                    MsgChannel //channel to send any message to supervisor
+	nodeID                       service.NodeID
+	localAddr                    string
+	clusterAddr                  string
+	settings                     *ddlSettings
+	retryUpdateStorageModeDoneCh chan bool
+	killch                       chan bool
 
-	commandListener  *mc.CommandListener
-	listenerDonech   chan bool
-	btCleanerStopCh  chan bool
-	buildCleanupLck  sync.Mutex
-	dtCleanerStopCh  chan bool
-	dropCleanupLck   sync.Mutex
+	allowDDL      bool         // allow new DDL to start? false during Rebalance
+	allowDDLMutex sync.RWMutex // protects allowDDL
+
+	commandListener *mc.CommandListener
+	listenerDonech  chan bool
+
+	tokenCleanerStopCh            chan struct{} // close to stop runTokenCleaner goroutine
+	handleClusterStorageModeMutex sync.Mutex    // serializes handleClusterStorageMode calls
+
 	deleteTokenCache map[common.IndexDefnId]int64 // unixnano timestamp
-
-	dropInstTokCleanerStopCh chan bool
-	dropInstTokCleanupLck    sync.Mutex
 }
 
 const DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL = 24 * time.Hour
@@ -77,8 +73,8 @@ type ddlSettings struct {
 	numReplica   int32
 	numPartition int32
 
-	storageMode string
-	mutex       sync.RWMutex
+	storageMode      string
+	storageModeMutex sync.RWMutex // protects storageMode
 
 	allowPartialQuorum uint32
 	useGreedyPlanner   uint32
@@ -89,7 +85,7 @@ type ddlSettings struct {
 //////////////////////////////////////////////////////////////
 
 var gDDLServiceMgr *DDLServiceMgr
-var gDDLServiceMgrLck sync.Mutex
+var gDDLServiceMgrLck sync.RWMutex // protects gDDLServiceMgr, which is assigned only once
 
 //////////////////////////////////////////////////////////////
 // DDLServiceMgr
@@ -111,20 +107,18 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	settings := &ddlSettings{numReplica: numReplica}
 
 	mgr := &DDLServiceMgr{
-		indexerId:                indexerId,
-		supvCmdch:                supvCmdch,
-		supvMsgch:                supvMsgch,
-		localAddr:                localaddr,
-		clusterAddr:              addr,
-		nodeID:                   nodeId,
-		settings:                 settings,
-		donech:                   nil,
-		killch:                   make(chan bool),
-		allowDDL:                 true,
-		btCleanerStopCh:          make(chan bool),
-		dtCleanerStopCh:          make(chan bool),
-		deleteTokenCache:         make(map[common.IndexDefnId]int64),
-		dropInstTokCleanerStopCh: make(chan bool),
+		indexerId:                    indexerId,
+		supvCmdch:                    supvCmdch,
+		supvMsgch:                    supvMsgch,
+		localAddr:                    localaddr,
+		clusterAddr:                  addr,
+		nodeID:                       nodeId,
+		settings:                     settings,
+		retryUpdateStorageModeDoneCh: nil,
+		killch:                       make(chan bool),
+		allowDDL:                     true,
+		tokenCleanerStopCh:           make(chan struct{}),
+		deleteTokenCache:             make(map[common.IndexDefnId]int64),
 	}
 
 	mgr.startCommandListner()
@@ -143,17 +137,11 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux.HandleFunc("/transferScheduleCreateTokens", mgr.handleTransferScheduleCreateTokens)
 
 	go mgr.run()
+	go mgr.runTokenCleaner()
 
-	gDDLServiceMgrLck.Lock()
-	defer gDDLServiceMgrLck.Unlock()
-	gDDLServiceMgr = mgr
-
-	go mgr.buildTokenCleaner()
-	go mgr.delTokenCleaner()
-	go mgr.dropInstTokenCleaner()
+	setDDLServiceMgr(mgr)
 
 	logging.Infof("DDLServiceMgr: intialized. Local nodeUUID %v", mgr.nodeID)
-
 	return mgr, &MsgSuccess{}
 }
 
@@ -161,11 +149,19 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 // Get DDLServiceMgr singleton
 //
 func getDDLServiceMgr() *DDLServiceMgr {
-
-	gDDLServiceMgrLck.Lock()
-	defer gDDLServiceMgrLck.Unlock()
+	gDDLServiceMgrLck.RLock()
+	defer gDDLServiceMgrLck.RUnlock()
 
 	return gDDLServiceMgr
+}
+
+//
+// Set DDLServiceMgr singleton
+//
+func setDDLServiceMgr(mgr *DDLServiceMgr) {
+	gDDLServiceMgrLck.Lock()
+	gDDLServiceMgr = mgr
+	gDDLServiceMgrLck.Unlock()
 }
 
 //////////////////////////////////////////////////////////////
@@ -186,9 +182,7 @@ loop:
 					logging.Infof("DDL Rebalance Manager: Shutting Down")
 					close(m.killch)
 					m.commandListener.Close()
-					close(m.btCleanerStopCh)
-					close(m.dtCleanerStopCh)
-					close(m.dropInstTokCleanerStopCh)
+					close(m.tokenCleanerStopCh)
 					m.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -199,6 +193,52 @@ loop:
 			}
 		}
 	}
+}
+
+// runTokenCleaner runs in a goroutine that periodically deletes old DDL command tokens from metakv.
+func (m *DDLServiceMgr) runTokenCleaner() {
+	const method = "DDLServiceMgr::runTokenCleaner:" // for logging
+	const period = 5 * time.Minute                   // period of cleanup runs
+
+	logging.Infof("%v Starting with period %v", method, period)
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+
+		case <-ticker.C:
+			m.cleanupTokens()
+
+		case <-m.tokenCleanerStopCh:
+			logging.Infof("%v Shutting down", method)
+			return
+		}
+	}
+}
+
+// cleanupTokens is a helper for runTokenCleaner. It does one pass of deleting old DDL command
+// tokens from metakv.
+func (m *DDLServiceMgr) cleanupTokens() {
+	const method = "DDLServiceMgr::cleanupTokens:" // for logging
+
+	// Use latest metadata provider.
+	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, method)
+	if err != nil {
+		logging.Errorf("%v newMetadataProvider returned error: %v. Skipping cleanup.",
+			method, err)
+		return
+	}
+	if provider == nil {
+		logging.Errorf("%v nil MetadataProvider. Skipping cleanup.", method)
+		return
+	}
+	defer provider.Close()
+
+	// Clean up old tokens
+	m.cleanupCreateCommand(provider)
+	m.cleanupBuildCommand(provider)
+	m.cleanupDelCommand(provider)
+	m.cleanupDropInstanceCommand(provider)
 }
 
 func (m *DDLServiceMgr) handleSupervisorCommands(cmd Message) {
@@ -267,48 +307,21 @@ func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 // Recover DDL command
 //
 func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel bool) {
+	const method = "DDLServiceMgr::rebalanceDone:" // for logging
 
-	logging.Infof("DDLServiceMgr: handling rebalance done")
+	logging.Infof("%v Called", method)
+	defer logging.Infof("%v Returned", method)
 
-	nodes := getNodesInfo(change, isCancel)
+	m.startProcessDDL()
 
 	// nodes can be empty but it cannot be nil.
-	// If emtpy, then no node will be considered.
-	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:rebalanceDone")
+	nodes := getNodesInfo(change, isCancel)
+	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, method)
 	if err != nil {
-		logging.Errorf("DDLServiceMgr:rebalanceDone(): Failed to initialize metadata provider.  Error=%v.", err)
+		logging.Errorf("%v Failed to initialize metadata provider.  Error=%v.", method, err)
 		return
 	}
-
-	gDDLServiceMgrLck.Lock()
-	defer gDDLServiceMgrLck.Unlock()
-
-	defer func() {
-		m.startProcessDDL()
-		if m.provider != nil {
-			m.provider.Close()
-			m.provider = nil
-		}
-	}()
-
-	m.nodes = nodes
-
-	// Close the current provider and update new provider
-	if m.provider != nil {
-		m.provider.Close()
-		m.provider = nil
-	}
-
-	m.provider = provider
-
-	// TODO: Investigate if gDDLServiceMgrLck has to be held for the
-	// below methods
-	m.cleanupCreateCommand()
-	m.cleanupDelCommand(false, m.provider)
-	m.cleanupDropInstanceCommand(false, m.provider)
-	m.cleanupBuildCommand(false, m.provider)
-	m.handleClusterStorageMode(httpAddrMap)
+	m.handleClusterStorageMode(httpAddrMap, provider)
 }
 
 func getNodesInfo(change *service.TopologyChange, isCancel bool) map[service.NodeID]bool {
@@ -326,20 +339,20 @@ func getNodesInfo(change *service.TopologyChange, isCancel bool) map[service.Nod
 }
 
 func (m *DDLServiceMgr) stopProcessDDL() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.allowDDLMutex.Lock()
+	defer m.allowDDLMutex.Unlock()
 	m.allowDDL = false
 }
 
 func (m *DDLServiceMgr) canProcessDDL() bool {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.allowDDLMutex.RLock()
+	defer m.allowDDLMutex.RUnlock()
 	return m.allowDDL
 }
 
 func (m *DDLServiceMgr) startProcessDDL() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.allowDDLMutex.Lock()
+	defer m.allowDDLMutex.Unlock()
 	m.allowDDL = true
 }
 
@@ -350,10 +363,10 @@ func (m *DDLServiceMgr) startProcessDDL() {
 //
 // Recover drop index command
 //
-func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.MetadataProvider) {
-
-	m.dropCleanupLck.Lock()
-	defer m.dropCleanupLck.Unlock()
+func (m *DDLServiceMgr) cleanupDelCommand(provider *client.MetadataProvider) {
+	if !m.canProcessDDL() {
+		return
+	}
 
 	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
@@ -362,21 +375,6 @@ func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.Metada
 	}
 
 	if len(entries) == 0 {
-		return
-	}
-
-	if provider == nil {
-		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDelCommand")
-		if err != nil {
-			logging.Errorf("DDLServiceMgr: cleanupDelCommand error in newMetadataProvider %v. Skip cleanup.", err)
-			return
-		}
-		defer provider.Close()
-	}
-
-	if provider == nil {
-		logging.Errorf("DDLServiceMgr: cleanupDelCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -421,15 +419,16 @@ func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.Metada
 			// This means the indexer must have been able to process the deleted token before DDLServiceManager has a chance to clean it up.
 			//
 			// 1) It will skip DELETED index.  DELETED index will be cleaned up by lifecycle manager periodically.
-			// 2) At this point, the metadata provider has been connected to all indexer at least once (refreshOnTopology gurantees that).   So
-			//    metadata provider has a snapshot of the metadata from each indexer at some point in time.   It will return index even if metadata
+			// 2) At this point, metadata provider has been connected to all indexer at least once,
+			//    so it has a snapshot of the metadata from each indexer at some point in time.
+			//    It will return index even if metadata
 			//    provider is not connected to the indexer at the exact moment when this call is made.
 			//
 			//
 			if provider.FindIndexIgnoreStatus(command.DefnId) == nil {
 				// There is no index in the cluster,  remove token
 
-				if checkDDL && !m.canProcessDDL() {
+				if !m.canProcessDDL() {
 					return
 				}
 				var timestamp int64
@@ -443,14 +442,16 @@ func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.Metada
 					continue
 				}
 
-				// MetakvDel failures are assumed to be rare and hence priortizing map cleanup because
+				// MetakvDel failures are assumed to be rare and hence priortizing map cleanup
 				// In case of error
-				// a) if error was before metakv marked the token as deleted. Next iteration of cleanupDelCommand
-				// would find the same delete token and will process the request after another 24 hours
-				// b) if error is a after metakv marked the token as deleted and during the phase of sending response of delete operation to caller
-				// then metakv has deleted the toekn and hence it will not appear in next iteration of cleanupDelCommand
-				// in such cases we will leak the command.DefnId entry in deleteTokenCache map.
-				// Hence not worrying about the rare case of error on MetakvDel for token deletion and priortizing map cleanup.
+				// a) If error was before metakv marked the token as deleted, next iteration of
+				// cleanupDelCommand would find the same delete token and will process the request
+				// b) If error is after metakv marked the token as deleted and during the phase of
+				// sending response of delete operation to caller then metakv has deleted the token
+				// and hence it will not appear in next iteration of cleanupDelCommand.
+				// In such cases we will leak the command.DefnId entry in deleteTokenCache map.
+				// Hence not worrying about the rare case of error on MetakvDel for token deletion
+				// and priortizing map cleanup.
 				delete(m.deleteTokenCache, command.DefnId)
 
 				if err := common.MetakvDel(entry.Path); err != nil {
@@ -465,26 +466,6 @@ func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.Metada
 	}
 }
 
-func (m *DDLServiceMgr) delTokenCleaner() {
-
-	ticker := time.NewTicker(10 * time.Minute)
-	// drop token cleaner will run every 10 minutes.
-	logging.Infof("DDLServiceMgr: starting delTokenCleaner ...")
-	for {
-		select {
-
-		case <-ticker.C:
-			if m.canProcessDDL() {
-				m.cleanupDelCommand(true, nil)
-			}
-
-		case <-m.dtCleanerStopCh:
-			logging.Infof("DDLServiceMgr: stopping delTokenCleaner ...")
-			return
-		}
-	}
-}
-
 //////////////////////////////////////////////////////////////
 // Build Token
 //////////////////////////////////////////////////////////////
@@ -492,10 +473,10 @@ func (m *DDLServiceMgr) delTokenCleaner() {
 //
 // Recover build index command
 //
-func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.MetadataProvider) {
-
-	m.buildCleanupLck.Lock()
-	defer m.buildCleanupLck.Unlock()
+func (m *DDLServiceMgr) cleanupBuildCommand(provider *client.MetadataProvider) {
+	if !m.canProcessDDL() {
+		return
+	}
 
 	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
@@ -504,21 +485,6 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 	}
 
 	if len(entries) == 0 {
-		return
-	}
-
-	if provider == nil {
-		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupBuildCommand")
-		if err != nil {
-			logging.Errorf("DDLServiceMgr: cleanupBuildCommand error in newMetadataProvider %v. Skip cleanup.", err)
-			return
-		}
-		defer provider.Close()
-	}
-
-	if provider == nil {
-		logging.Errorf("DDLServiceMgr: cleanupBuildCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -535,8 +501,9 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 			}
 
 			//
-			// At this point, the metadata provider has been connected to all indexer at least once (refreshOnTopology gurantees that).   So
-			// metadata provider has a snapshot of the metadata from each indexer at some point in time.   It will return index even if metadata
+			// At this point, metadata provider has been connected to all indexer at least once.
+			// So it has a snapshot of the metadata from each indexer at some point in time.
+			// It will return index even if metadata
 			// provider is not connected to the indexer at the exact moment when this call is made.
 			//
 			cleanup := true
@@ -560,8 +527,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 				}
 			}
 
-			// Just for extra safety.
-			if checkDDL && !m.canProcessDDL() {
+			if !m.canProcessDDL() {
 				return
 			}
 
@@ -577,30 +543,17 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 	}
 }
 
-func (m *DDLServiceMgr) buildTokenCleaner() {
-
-	ticker := time.NewTicker(10 * time.Minute)
-	logging.Infof("DDLServiceMgr: starting buildTokenCleaner ...")
-	for {
-		select {
-
-		case <-ticker.C:
-			if m.canProcessDDL() {
-				m.cleanupBuildCommand(true, nil)
-			}
-
-		case <-m.btCleanerStopCh:
-			logging.Infof("DDLServiceMgr: stopping buildTokenCleaner ...")
-			return
-		}
-	}
-}
-
 //////////////////////////////////////////////////////////////
 // Create Token
 //////////////////////////////////////////////////////////////
 
-func (m *DDLServiceMgr) cleanupCreateCommand() {
+// cleanupCreateCommand deletes old create DDL command tokens from metakv. Unlike other DDL tokens,
+// these are normally cleaned up as soon as processed, so this is only to catch any that "leaked"
+// due to a failure in the normal processing.
+func (m *DDLServiceMgr) cleanupCreateCommand(provider *client.MetadataProvider) {
+	if !m.canProcessDDL() {
+		return
+	}
 
 	// Get all virtual paths of create tokens from metakv. Since they are
 	// big value tokens there are no values stored directly in these paths,
@@ -668,7 +621,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 			} else {
 				foundAnyIndexer := false
 				for indexerId, _ := range token.Definitions {
-					_, _, _, err := m.provider.FindServiceForIndexer(indexerId)
+					_, _, _, err := provider.FindServiceForIndexer(indexerId)
 					if err == nil {
 						foundAnyIndexer = true
 						break
@@ -703,7 +656,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 		time.Sleep(time.Second)
 
 		// make sure if all watchers are still alive
-		if m.provider.AllWatchersAlive() {
+		if provider.AllWatchersAlive() {
 
 			// Go through the list of tokens that have failed before.
 			for defnId, requestIds := range malformed {
@@ -1071,10 +1024,10 @@ func (m *DDLServiceMgr) processCreateCommand() {
 //
 // Recover drop instance command
 //
-func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *client.MetadataProvider) {
-
-	m.dropInstTokCleanupLck.Lock()
-	defer m.dropInstTokCleanupLck.Unlock()
+func (m *DDLServiceMgr) cleanupDropInstanceCommand(provider *client.MetadataProvider) {
+	if !m.canProcessDDL() {
+		return
+	}
 
 	entries, err := metakv.ListAllChildren(mc.DropInstanceDDLCommandTokenPath)
 	if err != nil {
@@ -1083,22 +1036,6 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 	}
 
 	if len(entries) == 0 {
-		return
-	}
-
-	if provider == nil {
-		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDropInstanceCommand")
-		if err != nil {
-			logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand error in newMetadataProvider %v. Skip cleanup.", err)
-			return
-		}
-
-		defer provider.Close()
-	}
-
-	if provider == nil {
-		logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand nil MetadataProvider. Skip cleanup.")
 		return
 	}
 
@@ -1131,8 +1068,9 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 			// This means the indexer must have been able to process the deleted token before DDLServiceManager has a chance to clean it up.
 			//
 			// 1) It will skip DELETED index.  DELETED index will be cleaned up by lifecycle manager periodically.
-			// 2) At this point, the metadata provider has been connected to all indexer at least once (refreshOnTopology gurantees that).   So
-			//    metadata provider has a snapshot of the metadata from each indexer at some point in time.   It will return index even if metadata
+			// 2) At this point, metadata provider has been connected to all indexer at least once.
+			//    So it has a snapshot of the metadata from each indexer at some point in time.
+			//    It will return index even if metadata
 			//    provider is not connected to the indexer at the exact moment when this call is made.
 			//
 			//
@@ -1149,7 +1087,7 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 					continue
 				}
 
-				if checkDDL && !m.canProcessDDL() {
+				if !m.canProcessDDL() {
 					return
 				}
 
@@ -1166,42 +1104,27 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 	}
 }
 
-func (m *DDLServiceMgr) dropInstTokenCleaner() {
-
-	ticker := time.NewTicker(10 * time.Minute)
-	// drop token cleaner will run every 10 minutes.
-	logging.Infof("DDLServiceMgr: starting dropInstTokenCleaner ...")
-	for {
-		select {
-
-		case <-ticker.C:
-			if m.canProcessDDL() {
-				m.cleanupDropInstanceCommand(true, nil)
-			}
-
-		case <-m.dropInstTokCleanerStopCh:
-			logging.Infof("DDLServiceMgr: stopping dropInstTokenCleaner ...")
-			return
-		}
-	}
-}
-
 //////////////////////////////////////////////////////////////
 // Storage Mode
 //////////////////////////////////////////////////////////////
 
-//
-// Update clsuter storage mode if necessary
-//
-func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) {
+// handleClusterStorageMode attempts to update cluster storage mode if necessary at the end of
+// Rebalance. It tries once in the foreground but if that fails it launches a goroutine to keep
+// retrying in the background, which will continue until it succeeds or a new rebalance calls this
+// method again, causing it to close m.retryUpdateStorageModeDoneCh, ending the background retries.
+func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string, provider *client.MetadataProvider) {
 
-	if m.donech != nil {
-		close(m.donech)
-		m.donech = nil
+	// Avoid any possibility of collision with the next Rebalance
+	m.handleClusterStorageModeMutex.Lock()
+	defer m.handleClusterStorageModeMutex.Unlock()
+
+	if m.retryUpdateStorageModeDoneCh != nil {
+		close(m.retryUpdateStorageModeDoneCh)
+		m.retryUpdateStorageModeDoneCh = nil
 	}
 
-	m.provider.RefreshIndexerVersion()
-	if m.provider.GetIndexerVersion() != common.INDEXER_CUR_VERSION {
+	provider.RefreshIndexerVersion()
+	if provider.GetIndexerVersion() != common.INDEXER_CUR_VERSION {
 		return
 	}
 
@@ -1209,7 +1132,7 @@ func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) 
 	initialized := false
 	indexCount := 0
 
-	indexes, _ := m.provider.ListIndex()
+	indexes, _ := provider.ListIndex()
 	for _, index := range indexes {
 
 		for _, inst := range index.Instances {
@@ -1247,19 +1170,21 @@ func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) 
 	}
 
 	if indexCount == 0 {
-		storageMode = m.provider.GetStorageMode()
+		storageMode = provider.GetStorageMode()
 	}
 
 	// if storage mode for all indexes converge, then change storage mode setting
 	clusterStorageMode := common.GetClusterStorageMode()
 	if storageMode != common.StorageMode(common.NOT_SET) && storageMode != clusterStorageMode {
 		if !m.updateStorageMode(storageMode, httpAddrMap) {
-			m.donech = make(chan bool)
-			go m.retryUpdateStorageMode(storageMode, httpAddrMap, m.donech)
+			m.retryUpdateStorageModeDoneCh = make(chan bool)
+			go m.retryUpdateStorageMode(storageMode, httpAddrMap, m.retryUpdateStorageModeDoneCh)
 		}
 	}
 }
 
+// retryUpdateStorageMode runs in a goroutine to retry updateStorageMode in the background if the
+// foreground call made by handleClusterStorageMode failed.
 func (m *DDLServiceMgr) retryUpdateStorageMode(storageMode common.StorageMode, httpAddrMap map[string]string, donech chan bool) {
 
 	for true {
@@ -1275,11 +1200,15 @@ func (m *DDLServiceMgr) retryUpdateStorageMode(storageMode common.StorageMode, h
 	}
 }
 
+// updateStorageMode attempts to update the cluster storage mode (done after Rebalance). It returns
+// true on success, false on failure.
 func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAddrMap map[string]string) bool {
+	const method = "DDLServiceMgr::updateStorageMode:" // for logging
 
 	clusterStorageMode := common.GetClusterStorageMode()
 	if storageMode == clusterStorageMode {
-		logging.Infof("DDLServiceMgr: All indexes have converged to cluster storage mode %v after rebalance.", storageMode)
+		logging.Infof("%v All indexes have converged to cluster storage mode %v after rebalance.",
+			method, storageMode)
 		return true
 	}
 
@@ -1288,7 +1217,8 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 
 	body, err := json.Marshal(&settings)
 	if err != nil {
-		logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.  Error:%v", storageMode, err)
+		logging.Errorf("%v Unable to change storage mode to %v after rebalance.  Error:%v",
+			method, storageMode, err)
 		return false
 	}
 	bodybuf := bytes.NewBuffer(body)
@@ -1297,12 +1227,14 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 
 		resp, err := postWithAuth(addr+"/internal/settings", "application/json", bodybuf)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). Encountered error when try to change setting.  Retry with another indexer node. Error:%v", err)
+			logging.Errorf("%v Encountered error when try to change setting.  Retry with another indexer node. Error:%v",
+				method, err)
 			continue
 		}
 
 		if resp != nil && resp.StatusCode != 200 {
-			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). HTTP status (%v) when try to change setting.  Retry with another indexer node.", resp.Status)
+			logging.Errorf("%v HTTP status (%v) when try to change setting.  Retry with another indexer node.",
+				method, resp.Status)
 			continue
 		}
 
@@ -1310,11 +1242,13 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 			resp.Body.Close()
 		}
 
-		logging.Infof("DDLServiceMgr: cluster storage mode changed to %v after rebalance.", storageMode)
+		logging.Infof("%v Cluster storage mode changed to %v after rebalance.",
+			method, storageMode)
 		return true
 	}
 
-	logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.", storageMode)
+	logging.Errorf("%v Unable to change storage mode to %v after rebalance.",
+		method, storageMode)
 	return false
 }
 
@@ -1842,30 +1776,6 @@ func (m *DDLServiceMgr) startCommandListner() {
 // Metadata Provider
 //////////////////////////////////////////////////////////////
 
-func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
-
-	if m.provider != nil {
-		m.provider.Close()
-		m.provider = nil
-	}
-
-	nodes := make(map[service.NodeID]bool)
-	for key, value := range m.nodes {
-		nodes[key] = value
-	}
-
-	// nodes can be empty but it cannot be nil.
-	// If emtpy, then no node will be considered.
-	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:refreshMetadataProvider")
-	if err != nil {
-		return nil, err
-	}
-
-	m.provider = provider
-	return httpAddrMap, nil
-}
-
 func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, settings *ddlSettings,
 	logPrefix string) (*client.MetadataProvider, map[string]string, error) {
 
@@ -2001,39 +1911,6 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 }
 
 //////////////////////////////////////////////////////////////
-// Topology change
-//////////////////////////////////////////////////////////////
-
-//
-// Callback to notify there is a topology change
-//
-func (m *DDLServiceMgr) refreshOnTopologyChange(change *service.TopologyChange, isCancel bool) (map[string]string, error) {
-
-	logging.Infof("DDLServiceMgr.refreshOnTopologyChange()")
-
-	m.nodes = make(map[service.NodeID]bool)
-	for _, node := range change.KeepNodes {
-		m.nodes[node.NodeInfo.NodeID] = true
-	}
-
-	if isCancel {
-		for _, node := range change.EjectNodes {
-			m.nodes[node.NodeID] = true
-		}
-	}
-
-	// If fail to intiialize metadata provider, then just continue.  It will try
-	// to repair metadata provider upon the first DDL comes.
-	httpAddrMap, err := m.refreshMetadataProvider()
-	if err != nil {
-		logging.Errorf("DDLServiceMgr: notifyNewTopologyChange(): Failed to initialize metadata provider.  Error=%v.", err)
-		return nil, err
-	}
-
-	return httpAddrMap, nil
-}
-
-//////////////////////////////////////////////////////////////
 // Settings
 //////////////////////////////////////////////////////////////
 
@@ -2046,9 +1923,8 @@ func (s *ddlSettings) NumPartition() int32 {
 }
 
 func (s *ddlSettings) StorageMode() string {
-
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
+	s.storageModeMutex.RLock()
+	defer s.storageModeMutex.RUnlock()
 
 	return s.storageMode
 }
@@ -2096,8 +1972,8 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	storageMode := config["settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
-			s.mutex.Lock()
-			defer s.mutex.Unlock()
+			s.storageModeMutex.Lock()
+			defer s.storageModeMutex.Unlock()
 			s.storageMode = storageMode
 		}()
 	}
