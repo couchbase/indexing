@@ -87,6 +87,19 @@ func (h *StatsHolder) Set(s *common.Statistics) {
 	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
+func (h *StatsHolder) Clone() common.Statistics {
+	clone := make(common.Statistics)
+	curr := h.Get()
+	if curr == nil {
+		return clone
+	}
+
+	for k, v := range *curr {
+		clone[k] = v
+	}
+	return clone
+}
+
 type topologyChange struct {
 	Bucket      string   `json:"bucket,omitempty"`
 	Scope       string   `json:"scope,omitempty"`
@@ -274,6 +287,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 				op == client.OPCODE_RESET_INDEX ||
 				op == client.OPCODE_RESET_INDEX_ON_ROLLBACK ||
 				op == client.OPCODE_BROADCAST_STATS ||
+				op == client.OPCODE_BOOTSTRAP_STATS_UPDATE ||
 				op == client.OPCODE_REBALANCE_RUNNING {
 				m.bootstraps <- req
 				return
@@ -285,7 +299,8 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 			op == client.OPCODE_CHECK_TOKEN_EXIST ||
 			op == client.OPCODE_CLIENT_STATS ||
 			op == client.OPCODE_REBALANCE_RUNNING ||
-			op == client.OPCODE_BROADCAST_STATS {
+			op == client.OPCODE_BROADCAST_STATS ||
+			op == client.OPCODE_BOOTSTRAP_STATS_UPDATE {
 			m.parallels <- req
 
 		} else if op == client.OPCODE_UPDATE_INDEX_INST ||
@@ -441,7 +456,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 
 	start := time.Now()
 	defer func() {
-		if op != client.OPCODE_BROADCAST_STATS {
+		if op != client.OPCODE_BROADCAST_STATS && op != client.OPCODE_BOOTSTRAP_STATS_UPDATE {
 			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v len(outgoings) %v len(parallels) %v error %v",
 				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings), len(m.outgoings), len(m.parallels), err)
 		}
@@ -476,6 +491,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleNotifyStats(content)
+	case client.OPCODE_BOOTSTRAP_STATS_UPDATE:
+		m.handleUpdateStats(content)
 	case client.OPCODE_RESET_INDEX:
 		err = m.handleResetIndex(content)
 	case client.OPCODE_RESET_INDEX_ON_ROLLBACK:
@@ -2620,7 +2637,23 @@ func (m *LifecycleMgr) handleNotifyStats(buf []byte) {
 		if err := json.Unmarshal(buf, &stats); err == nil {
 			m.stats.Set(&stats)
 		} else {
-			logging.Errorf("lifecycleMgr: fail to marshall index stats.  Error = %v", err)
+			logging.Errorf("lifecycleMgr:handleNotifyStats fail to unmarshall index stats.  Error = %v", err)
+		}
+	}
+}
+
+func (m *LifecycleMgr) handleUpdateStats(buf []byte) {
+
+	if len(buf) > 0 {
+		stats := make(common.Statistics)
+		if err := json.Unmarshal(buf, &stats); err == nil {
+			clone := m.stats.Clone()
+			for k, v := range stats {
+				clone[k] = v
+			}
+			m.stats.Set(&clone)
+		} else {
+			logging.Errorf("lifecycleMgr:handleUpdateStats fail to unmarshall index stats.  Error = %v", err)
 		}
 	}
 }

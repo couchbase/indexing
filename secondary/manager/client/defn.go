@@ -59,6 +59,7 @@ const (
 	OPCODE_DELETE_COLLECTION                        = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
 	OPCODE_CLIENT_STATS                             = OPCODE_DELETE_COLLECTION + 1
 	OPCODE_INVALID_COLLECTION                       = OPCODE_CLIENT_STATS + 1
+	OPCODE_BOOTSTRAP_STATS_UPDATE                   = OPCODE_INVALID_COLLECTION + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -127,6 +128,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_CLIENT_STATS"
 	case OPCODE_INVALID_COLLECTION:
 		return "OPCODE_INVALID_COLLECTION"
+	case OPCODE_BOOTSTRAP_STATS_UPDATE:
+		return "OPCODE_BOOTSTRAP_STATS_UPDATE"
 	}
 	return fmt.Sprintf("%v", op)
 }

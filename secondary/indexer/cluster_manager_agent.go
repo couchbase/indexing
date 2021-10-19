@@ -169,6 +169,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case INDEX_STATS_BROADCAST:
 		c.handleBroadcastStats(cmd)
 
+	case INDEX_BOOTSTRAP_STATS_UPDATE:
+		c.handleUpdateBootstrapStats(cmd)
+
 	case CONFIG_SETTINGS_UPDATE:
 		c.handleConfigUpdate(cmd)
 
@@ -381,6 +384,15 @@ func (c *clustMgrAgent) handleBroadcastStats(cmd Message) {
 	stats := cmd.(*MsgStatsRequest).GetStats()
 	if stats != nil {
 		c.mgr.NotifyStats(stats)
+	}
+}
+
+func (c *clustMgrAgent) handleUpdateBootstrapStats(cmd Message) {
+
+	c.supvCmdch <- &MsgSuccess{}
+	stats := cmd.(*MsgStatsRequest).GetStats()
+	if stats != nil {
+		c.mgr.UpdateStats(stats)
 	}
 }
 

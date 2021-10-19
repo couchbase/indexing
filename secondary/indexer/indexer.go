@@ -1362,7 +1362,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
-	case INDEX_STATS_DONE, INDEX_STATS_BROADCAST:
+	case INDEX_STATS_DONE, INDEX_STATS_BROADCAST,
+		INDEX_BOOTSTRAP_STATS_UPDATE:
 		idx.sendMsgToClustMgr(msg)
 
 	case INDEXER_KEYSPACE_NOT_FOUND:
@@ -7328,7 +7329,7 @@ func (idx *indexer) initFromPersistedState() error {
 			continue
 		}
 
-		idx.broadcastBootstrapStats(bootstrapStats, inst.InstId)
+		idx.updateBootstrapStats(bootstrapStats, inst.InstId)
 	}
 
 	return nil
@@ -7359,6 +7360,30 @@ func (idx *indexer) sendInstMapToWorker(wCh MsgChannel, wStr string,
 	}
 	err := <-respCh
 	return err
+}
+
+// broadcast stats to clients
+func (idx *indexer) updateBootstrapStats(stats *IndexerStats,
+	id common.IndexInstId) {
+
+	idxStats := stats.indexes[id]
+
+	state := idx.indexInstMap[id].State
+	idxStats.indexState.Set((uint64)(state))
+
+	idxStats.numDocsPending.Set(math.MaxInt64)
+	idxStats.numDocsQueued.Set(math.MaxInt64)
+	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
+	idxStats.progressStatTime.Set(time.Now().UnixNano())
+
+	statsForIndex := make(common.Statistics)
+	statsForIndex[fmt.Sprintf("%v", id)] = idxStats
+	// Marshall stats to byte slice
+
+	idx.internalRecvCh <- &MsgStatsRequest{
+		mType: INDEX_BOOTSTRAP_STATS_UPDATE,
+		stats: statsForIndex,
+	}
 }
 
 // broadcast stats to clients
