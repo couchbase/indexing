@@ -152,6 +152,7 @@ const (
 	UPDATE_INDEX_PARTITION_MAP
 	UPDATE_KEYSPACE_STATS_MAP
 	UPDATE_MAP_WORKER
+	ADD_INDEX_INSTANCE
 
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
@@ -801,6 +802,39 @@ func (m *MsgUpdateWorker) GetIndexPartnMap() IndexPartnMap {
 }
 
 func (m *MsgUpdateWorker) GetRespCh() chan error {
+	return m.respCh
+}
+
+//ADD_INDEX_INSTANCE
+type MsgAddIndexInst struct {
+	workerCh   MsgChannel
+	workerStr  string
+	indexInst  common.IndexInst
+	instPartns PartitionInstMap
+	respCh     chan error
+}
+
+func (m *MsgAddIndexInst) GetMsgType() MsgType {
+	return ADD_INDEX_INSTANCE
+}
+
+func (m *MsgAddIndexInst) GetWorkerCh() MsgChannel {
+	return m.workerCh
+}
+
+func (m *MsgAddIndexInst) GetWorkerStr() string {
+	return m.workerStr
+}
+
+func (m *MsgAddIndexInst) GetIndexInst() common.IndexInst {
+	return m.indexInst
+}
+
+func (m *MsgAddIndexInst) GetInstPartnMap() PartitionInstMap {
+	return m.instPartns
+}
+
+func (m *MsgAddIndexInst) GetRespCh() chan error {
 	return m.respCh
 }
 

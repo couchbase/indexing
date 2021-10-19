@@ -1421,6 +1421,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case UPDATE_MAP_WORKER:
 		idx.handleUpdateMapToWorker(msg)
 
+	case ADD_INDEX_INSTANCE:
+		idx.handleAddIndexInstanceAtWorker(msg)
+
 	case STORAGE_UPDATE_SNAP_MAP:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
@@ -7137,6 +7140,16 @@ func (idx *indexer) recoverRebalanceState() {
 	logging.Infof("Indexer::recoverRebalanceState RebalanceRunning %v RebalanceToken %v", idx.rebalanceRunning, idx.rebalanceToken)
 }
 
+func (idx *indexer) handleAddIndexInstanceAtWorker(msg Message) {
+	req := msg.(*MsgAddIndexInst)
+	workerCh := req.GetWorkerCh()
+	workerStr := req.GetWorkerStr()
+	respCh := req.GetRespCh()
+
+	err := idx.sendMessageToWorker(msg, workerCh, workerStr)
+	respCh <- err
+}
+
 func (idx *indexer) handleUpdateMapToWorker(msg Message) {
 	req := msg.(*MsgUpdateWorker)
 	workerCh := req.GetWorkerCh()
@@ -7308,7 +7321,13 @@ func (idx *indexer) initFromPersistedState() error {
 		localIndexInstMap[inst.InstId] = inst
 		localIndexPartnMap[inst.InstId] = partnInstMap
 
-		//update index maps in storage manager
+		// update index maps in storage manager
+		// Note: Unlike scan coordinator, storage manager can not incrementally update
+		// indexInstMap and indexPartnMap. This is because stale=ok scans might request
+		// for a snapshot while inst update is in progress. This can lead to concurrent
+		// map access violation. Hence, storage manager has to clone the entire map, update
+		// the instance in the clone and update the original instance maps. It works for
+		// scan coordinator as the instance updates and reads are mutex protected
 		err = idx.sendInstMapToWorker(idx.storageMgrCmdCh, "StorageMgr", localIndexInstMap, localIndexPartnMap)
 		if err != nil { // continue in case of error
 			continue
@@ -7324,7 +7343,7 @@ func (idx *indexer) initFromPersistedState() error {
 		}
 
 		//update index maps in scan coordinator
-		err = idx.sendInstMapToWorker(idx.scanCoordCmdCh, "ScanCoordinator", localIndexInstMap, localIndexPartnMap)
+		err = idx.addInstAtWorker(idx.scanCoordCmdCh, "ScanCoordinator", inst, partnInstMap)
 		if err != nil { // continue in case of error
 			continue
 		}
@@ -7357,6 +7376,29 @@ func (idx *indexer) sendInstMapToWorker(wCh MsgChannel, wStr string,
 		indexInstMap:  instMap,
 		indexPartnMap: partnMap,
 		respCh:        respCh,
+	}
+	err := <-respCh
+	return err
+}
+
+func (idx *indexer) addInstAtWorker(wCh MsgChannel, wStr string,
+	indexInst common.IndexInst, instPartns PartitionInstMap) error {
+
+	instClone := indexInst
+	instClone.Pc = indexInst.Pc.Clone()
+
+	instPartnsClone := make(PartitionInstMap)
+	for k, v := range instPartns {
+		instPartnsClone[k] = v
+	}
+
+	respCh := make(chan error)
+	idx.internalRecvCh <- &MsgAddIndexInst{
+		workerCh:   wCh,
+		workerStr:  wStr,
+		indexInst:  instClone,
+		instPartns: instPartnsClone,
+		respCh:     respCh,
 	}
 	err := <-respCh
 	return err
