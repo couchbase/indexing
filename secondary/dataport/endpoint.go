@@ -485,6 +485,7 @@ loop:
 				}
 				break
 			}
+			lastActiveTime = time.Now()
 		case <-harakiri.C:
 			if time.Since(lastActiveTime) > endpoint.harakiriTm {
 				logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
