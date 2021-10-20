@@ -48,7 +48,7 @@ func TestFlattenArrayIndexTestSetup(t *testing.T) {
 
 	// Create primary index for scan validation
 	n1qlstatement := "create primary index on default"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.NotBounded)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
 	FailTestIfError(err, "Error in creating primary index", t)
 }
 
@@ -65,7 +65,7 @@ func TestScanOnFlattenedAraryIndex(t *testing.T) {
 	filter1[0] = &qc.CompositeElementFilter{Low: "A", High: "M", Inclusion: qc.Inclusion(uint32(3))}
 	filter1[1] = &qc.CompositeElementFilter{Low: "M", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
 	filter1[2] = &qc.CompositeElementFilter{Low: int64(50), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
-	filter1[3] = &qc.CompositeElementFilter{Low: "$1000", High: "$99999", Inclusion: qc.Inclusion(uint32(1))}
+	filter1[3] = &qc.CompositeElementFilter{Low: "$1000", High: "$99999", Inclusion: qc.Inclusion(uint32(3))}
 	scans[0] = &qc.Scan{Filter: filter1}
 
 	scanResults, _, err := secondaryindex.Scan3(idx1, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
@@ -74,7 +74,7 @@ func TestScanOnFlattenedAraryIndex(t *testing.T) {
 	// Scan using primary index
 	n1qlEquivalent := "select meta().id from default USE INDEX(`#primary`) where default.company >= \"A\" AND default.company <= \"M\" AND " +
 		"ANY v in default.friends SATISFIES v.name >= \"M\" and v.name <= \"Z\" AND v.age >= 50 AND v.age <= 100 END AND " +
-		"default.balance >= \"$1000\""
+		"default.balance >= \"$1000\" AND default.balance <= \"$99999\""
 
 	scanResultsPrimary, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
 	FailTestIfError(err, "Error while creating primary index", t)
@@ -96,6 +96,13 @@ func TestScanOnFlattenedAraryIndex(t *testing.T) {
 
 func TestGroupAggrFlattenArrayIndex(t *testing.T) {
 	log.Printf("In TestGroupAggrArrayIndex()")
+
+	tmpclient = secondaryindex.UseClient
+	secondaryindex.UseClient = "gsi"
+
+	defer func() {
+		secondaryindex.UseClient = tmpclient
+	}()
 
 	var i1 = "ga_flatten_arr1"
 	var i2 = "ga_flatten_arr2"
