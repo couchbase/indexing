@@ -47,7 +47,7 @@ type RebalanceToken struct {
 	RebalId  string
 	Source   RebalSource
 	Error    string
-	MasterIP string
+	MasterIP string // real IP address of master node, not 127.0.0.1, so followers can reach it
 }
 
 type RebalTokens struct {

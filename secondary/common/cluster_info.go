@@ -96,6 +96,8 @@ type ClusterInfoClient struct {
 
 type NodeId int
 
+// NewClusterInfoCache constructs a new, non-shared ClusterInfoCache object, so consumer does not
+// need to lock it unless it is multi-threaded.
 func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
 	c := &ClusterInfoCache{
 		url:           clusterUrl,
