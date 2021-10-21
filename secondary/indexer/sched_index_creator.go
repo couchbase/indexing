@@ -42,7 +42,8 @@ var DEFAULT_MAX_CREATION_RETRIES = 1000
 /////////////////////////////////////////////////////////////////////
 
 var gSchedIndexCreator *schedIndexCreator
-var gSchedIndexCreatorLck sync.Mutex
+var gSchedIndexCreatorLck sync.RWMutex // protects gSchedIndexCreator which is assigned only once
+
 var useSecondsFromCtime bool
 
 func init() {
@@ -55,11 +56,19 @@ func init() {
 // Get schedIndexCreator singleton
 //
 func getSchedIndexCreator() *schedIndexCreator {
-
-	gSchedIndexCreatorLck.Lock()
-	defer gSchedIndexCreatorLck.Unlock()
+	gSchedIndexCreatorLck.RLock()
+	defer gSchedIndexCreatorLck.RUnlock()
 
 	return gSchedIndexCreator
+}
+
+//
+// Set schedIndexCreator singleton
+//
+func setSchedIndexCreator(sic *schedIndexCreator) {
+	gSchedIndexCreatorLck.Lock()
+	gSchedIndexCreator = sic
+	gSchedIndexCreatorLck.Unlock()
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -81,17 +90,19 @@ func getSchedIndexCreator() *schedIndexCreator {
 // 4. Similar to DDL service manager, scheduled index creator observes mutual
 //    exclusion with rebalance operation.
 type schedIndexCreator struct {
-	indexerId       common.IndexerId
-	config          common.ConfigHolder
-	provider        *client.MetadataProvider
-	proMutex        sync.Mutex
-	supvCmdch       MsgChannel //supervisor sends commands on this channel
-	supvMsgch       MsgChannel //channel to send any message to supervisor
-	clusterAddr     string
-	settings        *ddlSettings
-	killch          chan bool
-	allowDDL        bool
-	mutex           sync.Mutex
+	indexerId   common.IndexerId
+	config      common.ConfigHolder
+	provider    *client.MetadataProvider
+	proMutex    sync.Mutex
+	supvCmdch   MsgChannel //supervisor sends commands on this channel
+	supvMsgch   MsgChannel //channel to send any message to supervisor
+	clusterAddr string
+	settings    *ddlSettings
+	killch      chan bool
+
+	allowDDL      bool         // allow new DDL to start? false during Rebalance
+	allowDDLMutex sync.RWMutex // protects allowDDL
+
 	mon             *schedTokenMonitor
 	indexQueue      *schedIndexQueue
 	queueMutex      sync.Mutex
@@ -204,12 +215,9 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 	go mgr.orphanTokenMover()
 	go mgr.keyspaceMonitor()
 
-	gSchedIndexCreatorLck.Lock()
-	defer gSchedIndexCreatorLck.Unlock()
-	gSchedIndexCreator = mgr
+	setSchedIndexCreator(mgr)
 
 	logging.Infof("schedIndexCreator: intialized.")
-
 	return mgr, &MsgSuccess{}
 }
 
@@ -254,26 +262,23 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 }
 
 func (m *schedIndexCreator) stopProcessDDL() {
+	m.allowDDLMutex.Lock()
+	defer m.allowDDLMutex.Unlock()
 
-	func() {
-		m.mutex.Lock()
-		defer m.mutex.Unlock()
-
-		m.allowDDL = false
-	}()
+	m.allowDDL = false
 }
 
 func (m *schedIndexCreator) canProcessDDL() bool {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.allowDDLMutex.RLock()
+	defer m.allowDDLMutex.RUnlock()
 
 	return m.allowDDL
 }
 
 func (m *schedIndexCreator) startProcessDDL() {
 	func() {
-		m.mutex.Lock()
-		defer m.mutex.Unlock()
+		m.allowDDLMutex.Lock()
+		defer m.allowDDLMutex.Unlock()
 
 		m.allowDDL = true
 	}()
