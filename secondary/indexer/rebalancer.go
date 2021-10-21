@@ -76,8 +76,9 @@ type Rebalancer struct {
 	dropQueue  chan string         // ttids of source indexes waiting to be submitted for drop
 	dropQueued map[string]struct{} // set of ttids already added to dropQueue, as metakv can send duplicate notifications
 
-	mu sync.RWMutex // for transferTokens, acceptedTokens, sourceTokens, toBuildTTsByDestId, buildingTTsByDestId,
-	// nodeLoads, nodeLoadsTime, dropQueue, dropQueued
+	// bigMutex is shared among at least transferTokens, acceptedTokens, sourceTokens,
+	// toBuildTTsByDestId, buildingTTsByDestId, nodeLoads, nodeLoadsTime, dropQueue, dropQueued
+	bigMutex sync.RWMutex
 
 	rebalToken *RebalanceToken
 	nodeUUID   string // this node's new-style node ID (32-digit random hex assigned by ns_server)
@@ -332,8 +333,8 @@ func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) e
 	return nil
 }
 
-// initRebalAsync runs in the rebalance master as a helper go routine for NewRebalancer.
-// It calls the planner if needed, then launches a separate go routine, doRebalance, to
+// initRebalAsync runs as a goroutine in the rebalance master as a helper for NewRebalancer.
+// It calls the planner if needed, then launches a separate goroutine, doRebalance, to
 // manage the fine-grained steps of the rebalance.
 func (r *Rebalancer) initRebalAsync() {
 
@@ -497,7 +498,7 @@ func (r *Rebalancer) addToWaitGroup() bool {
 	}
 }
 
-// doRebalance runs in the rebalance master as a go routine helper to initRebalAsync
+// doRebalance runs in a goroutine in the rebalance master as a helper to initRebalAsync
 // that manages the fine-grained steps of a rebalance. It creates the transfer token
 // batches and publishes the first one. (If more than one batch exists the others will
 // be published later by processTokenAsMaster.) Then it launches an observeRebalance go
@@ -539,8 +540,9 @@ func (r *Rebalancer) doRebalance() {
 func (r *Rebalancer) publishDeferredTokens() {
 	const method string = "Rebalancer::publishDeferredTokens:" // for logging
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+
 	var publishedIds strings.Builder
 	published := 0
 	for ttid, tt := range r.transferTokens {
@@ -561,8 +563,11 @@ func (r *Rebalancer) publishDeferredTokens() {
 // and also initializes r.buildingTTsByDestId to an empty map. r.toBuildTTsByDestId only
 // includes transfer tokens that will need building (i.e. omits deferred).
 func (r *Rebalancer) mapTransferTokensByDestId() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	const method = "Rebalancer::mapTransferTokensByDestId:" // for logging
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+
 	r.toBuildTTsByDestId = make(map[string]map[string]*c.TransferToken)
 	r.buildingTTsByDestId = make(map[string]map[string]*c.TransferToken)
 	for ttid, tt := range r.transferTokens {
@@ -581,7 +586,7 @@ func (r *Rebalancer) mapTransferTokensByDestId() {
 
 // numBuildingTokensLOCKED returns the number of r.buildingTTsByDestId that are still building.
 // It also deletes those that are finished from this map tree.
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) numBuildingTokensLOCKED() (building int) {
 	for _, buildingTTs := range r.buildingTTsByDestId {
 		for ttid, tt := range buildingTTs {
@@ -597,7 +602,7 @@ func (r *Rebalancer) numBuildingTokensLOCKED() (building int) {
 
 // numToBuildTokensLOCKED returns the number of tokens still in the r.toBuildTTsByDestId map
 // tree. These are the ones that will need building but have not yet been submitted for builds.
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) numToBuildTokensLOCKED() (toBuild int) {
 	for _, toBuildTTs := range r.toBuildTTsByDestId {
 		toBuild += len(toBuildTTs)
@@ -623,6 +628,7 @@ func impliedStreams(ttMap map[string]*common.TransferToken) (impliedStreams map[
 // not publish anything, which is okay because caller processTokenAsMaster detects rebalance
 // complete independently based on all r.TransferTokens reaching TransferTokenDeleted state.
 func (r *Rebalancer) publishTransferTokenBatch(first bool) {
+	const method = "Rebalancer::publishTransferTokenBatch:" // for logging
 
 	if first {
 		r.mapTransferTokensByDestId() // init r.toBuildTTsByDestId and r.buildingTTsByDestId
@@ -640,14 +646,14 @@ func (r *Rebalancer) publishTransferTokenBatch(first bool) {
 		batchSize = 1
 	}
 
-	r.mu.Lock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 	startTokens := r.createBatchLOCKED(batchSize)
 	var publishedIds strings.Builder
 	for ttid, tt := range startTokens {
 		setTransferTokenInMetakv(ttid, tt)
 		fmt.Fprintf(&publishedIds, " %v", ttid)
 	}
-	r.mu.Unlock()
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 	l.Infof("Rebalancer::publishTransferTokenBatch: first %v, published %v transfer tokens: %v",
 		first, len(startTokens), publishedIds.String())
 }
@@ -657,7 +663,7 @@ func (r *Rebalancer) publishTransferTokenBatch(first bool) {
 // maximum number of builds for the entire cluster, including those already running. The new
 // returned set of tokens to publish will be at most batchSize minus the number already running,
 // but fewer (including 0) will be returned if there are not that many to-build tokens remaining.
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) createBatchLOCKED(batchSize int) (toBuildTokens map[string]*c.TransferToken) {
 
 	numBuilding := r.numBuildingTokensLOCKED() // # tokens published but not yet deleted (100% done)
@@ -693,7 +699,7 @@ func (r *Rebalancer) createBatchLOCKED(batchSize int) (toBuildTokens map[string]
 // nodes and to maximize the possibility of stream sharing. There are guaranteed to be at least
 // numToSelect candidate tokens. batchSize is the maximum number of builds for the entire cluster,
 // including those already running, used to compute the maximum builds allowed to run per node.
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect int) (selectedTokens map[string]*c.TransferToken) {
 	selectedTokens = make(map[string]*c.TransferToken)
 
@@ -825,7 +831,7 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 //   forbiddenStreamsForNode: set of keys of streams already running on the node for prior builds
 //   newStreamsForNode: set of keys of streams to be started on the node for already-selected tokens
 //   maxStreamsPerNode: limit on number of streams the node is allowed to run concurrently
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken,
 	forbiddenStreamsForNode, newStreamsForNode map[string]struct{}, maxStreamsPerNode int) (ttid string, tt *common.TransferToken) {
 
@@ -970,6 +976,8 @@ func (nls NodeLoadSlice) Swap(i, j int) {
 // initNodeLoads initializes r.nodeLoads with an entry for each Index node containing its nodeUUID
 // and number of indexes determined from r.globalTopology. NO-OP if globalTopology == nil.
 func (r *Rebalancer) initNodeLoads() {
+	const method = "Rebalancer::initNodeLoads:" // for logging
+
 	var nodeLoads NodeLoadSlice
 
 	if r.globalTopology == nil {
@@ -980,14 +988,14 @@ func (r *Rebalancer) initNodeLoads() {
 		nodeLoad := NewNodeLoad(metadata.NodeUUID)
 		nodeLoads = append(nodeLoads, nodeLoad)
 	}
-	r.mu.Lock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 	r.nodeLoads = nodeLoads
-	r.mu.Unlock()
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 }
 
 // getOrCreateNodeLoadLOCKED searches r.nodeLoads for the entry for nodeUUID, returning
 // it if found, else creates a new one, adds it to r.nodeLoads, and returns it.
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) getOrCreateNodeLoadLOCKED(nodeUUID string) (nodeLoad *NodeLoad) {
 	// Find the existing entry for this node
 	for _, nodeLoad = range r.nodeLoads {
@@ -1004,7 +1012,7 @@ func (r *Rebalancer) getOrCreateNodeLoadLOCKED(nodeUUID string) (nodeLoad *NodeL
 
 // setNodeUUIDStatsHighLoadLOCKED sets fake stats for nodeUUID's entry in r.nodeLoads
 // indicating the node is highly loaded (used when we could not get stats from the node).
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) setNodeUUIDStatsHighLoadLOCKED(nodeUUID string) {
 	nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
 	nodeLoad.setStatsHighLoad()
@@ -1016,22 +1024,23 @@ func (r *Rebalancer) setNodeUUIDStatsHighLoadLOCKED(nodeUUID string) {
 // gathering is only done if enough time has passed since the last gather. Failures are
 // worked around by setting fake stats indicating unreachable nodes are highly loaded.
 func (r *Rebalancer) getNodeIndexerStats(config common.Config) {
+	const method = "Rebalancer::getNodeIndexerStats:" // for logging
 
 	doGetStats := false // get the stats in this call?
 	now := time.Now()
-	r.mu.Lock() // for r.nodeLoadsTime
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "") // for r.nodeLoadsTime
 	if now.Sub(r.nodeLoadsTime) >= 1*time.Minute {
 		r.nodeLoadsTime = now // don't try again for the wait period even if some/all fail
 		doGetStats = true
 	}
-	r.mu.Unlock()
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 
 	if doGetStats {
 		// Parallel REST call to all index nodes
 		statsMap, errMap, err := common.GetIndexStats(config, "smartBatching", 3)
 
-		r.mu.Lock() // for r.nodeLoads, including in children
-		defer r.mu.Unlock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "") // for r.nodeLoads, including in children
+		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 
 		if err != nil {
 			// Could not get stats for some nodes, so set fake stats for them showing highly loaded.
@@ -1058,7 +1067,7 @@ func (r *Rebalancer) getNodeIndexerStats(config common.Config) {
 
 // moveTokenToBuildingLOCKED moves a token from the r.toBuildTTsByDestId map tree
 // to the r.buildingTTsByDestId map tree.
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) moveTokenToBuildingLOCKED(ttid string, tt *common.TransferToken) {
 	destId := tt.DestId
 	buildingMap := r.buildingTTsByDestId[destId]
@@ -1079,7 +1088,7 @@ func streamKeyFromTT(tt *common.TransferToken) string {
 
 // findReplicaRepairTokenLOCKED searches toBuildTTsForNode for a replica repair token, preferring those that
 // would share a stream with a token in selectedTTsForNode, and returns the (ttid, tt) of one if found.
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) findReplicaRepairTokenLOCKED(
 	toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
 
@@ -1103,7 +1112,7 @@ func (r *Rebalancer) findReplicaRepairTokenLOCKED(
 
 // findSamePartitionLOCKED looks for a token in toBuildTTsForNode that is another partition of a
 // partitioned index that already has a token in selectedTTsForNode and returns its (ttid, tt) if found.
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) findSamePartitionLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
 
 	// Get the instIds and realInstIds of all tokens in selectedTTsForNode
@@ -1131,7 +1140,7 @@ func (r *Rebalancer) findSamePartitionLOCKED(toBuildTTsForNode, selectedTTsForNo
 
 // findSameCollectionLOCKED looks for a token in toBuildTTsForNode that is for the same collection
 // as an index that already has a token in selectedTTsForNode and returns its (ttid, tt) if found.
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) findSameCollectionLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
 
 	// Get the collections of all index tokens in selectedTTsForNode
@@ -1266,8 +1275,9 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 			return true
 		}
 
-		r.mu.Lock()
-		defer r.mu.Unlock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+
 		r.sourceTokens[ttid] = tt
 		logging.Infof("%v Processing transfer token: %v", method, tt)
 
@@ -1285,6 +1295,7 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 
 // processDropIndexQueue runs in a goroutine on all nodes of the rebalance.
 func (r *Rebalancer) processDropIndexQueue() {
+	const method = "Rebalancer::processDropIndexQueue:" // for logging
 
 	notifych := make(chan bool, 2)
 
@@ -1311,12 +1322,12 @@ func (r *Rebalancer) processDropIndexQueue() {
 				first = false
 			}
 
-			r.mu.Lock()
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 			tt1, ok := r.sourceTokens[ttid]
 			if ok {
 				tt = *tt1
 			}
-			r.mu.Unlock()
+			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 			if !ok {
 				l.Warnf("Rebalancer::processDropIndexQueue: Cannot find token %v in r.sourceTokens. Skip drop index.", ttid)
@@ -1341,7 +1352,7 @@ func (r *Rebalancer) processDropIndexQueue() {
 // been queued in the past (since metakv can send duplicate notifications). The queuing mechanism
 // submits these sequentially to indexer so each gets the full indexer.rebalance.httpTimeout,
 // as drops can take a long time due to Projector stream bookkeeping.
-// Caller must be holding r.mu write locked (for r.dropQueue, r.dropQueued).
+// Caller must be holding r.bigMutex write locked (for r.dropQueue, r.dropQueued).
 // TODO Add a bulk drop index API to indexer so multiple drops can be sent at once as builds are.
 func (r *Rebalancer) queueDropIndexLOCKED(ttid string) {
 	const method string = "Rebalancer::queueDropIndexLOCKED:" // for logging
@@ -1377,12 +1388,12 @@ func (r *Rebalancer) maybeQueueDropIndexesForDownLevelCluster() {
 	const method string = "Rebalancer::maybeQueueDropIndexesForDownLevelCluster:" // for logging
 
 	if r.clusterVersion < common.INDEXER_71_VERSION {
-		r.mu.Lock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 		dropTokenIds := r.checkAllSourceIndexesReadyToDropLOCKED()
 		for _, ttid := range dropTokenIds {
 			r.queueDropIndexLOCKED(ttid)
 		}
-		r.mu.Unlock()
+		c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 		logging.Infof("%v queued ttids for drop: %v", method, dropTokenIds)
 	}
 }
@@ -1410,10 +1421,13 @@ func isIndexNotFoundRebal(errMsg string) bool {
 	return errMsg == common.ErrIndexNotFoundRebal.Error()
 }
 
-// dropIndexWhenIdle performs the source index drop asynchronously. This is the last real
-// action of an index move during rebalance; the remainder are token bookkeeping operations.
-// Changes the TT state to TransferTokenCommit when the drop is completed.
+// dropIndexWhenIdle runs in a goroutine per index and performs the source index drop
+// asynchronously. This is the last real action of an index move during rebalance; the remainder are
+// token bookkeeping operations. Changes the TT state to TransferTokenCommit when the drop is
+// completed.
 func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifych chan bool) {
+	const method = "Rebalancer::dropIndexWhenIdle:" // for logging
+
 	defer r.wg.Done()
 
 	defer func() {
@@ -1429,22 +1443,22 @@ loop:
 	labelselect:
 		select {
 		case <-r.cancel:
-			l.Infof("Rebalancer::dropIndexWhenIdle Cancel Received")
+			l.Infof("%v Cancel Received", method)
 			break loop
 		case <-r.done:
-			l.Infof("Rebalancer::dropIndexWhenIdle Done Received")
+			l.Infof("%v Done Received", method)
 			break loop
 		default:
 
 			stats, err := getLocalStats(r.localaddr, true)
 			if err != nil {
-				l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Local Stats %v %v", r.localaddr, err)
+				l.Errorf("%v Error Fetching Local Stats %v %v", method, r.localaddr, err)
 				break
 			}
 
 			statsMap := stats.ToMap()
 			if statsMap == nil {
-				l.Infof("Rebalancer::dropIndexWhenIdle Nil Stats. Retrying...")
+				l.Infof("%v Nil Stats. Retrying...", method)
 				break
 			}
 
@@ -1466,7 +1480,8 @@ loop:
 					num_completed = statsMap[sname_completed].(float64)
 					num_requests = statsMap[sname_requests].(float64)
 				} else {
-					l.Infof("Rebalancer::dropIndexWhenIdle Missing Stats %v %v. Retrying...", sname_completed, sname_requests)
+					l.Infof("%v Missing Stats %v %v. Retrying...",
+						method, sname_completed, sname_requests)
 					missingStatRetry++
 					if missingStatRetry > 10 {
 						if r.needRetryForDrop(ttid, tt) {
@@ -1481,7 +1496,9 @@ loop:
 			}
 
 			if pending > 0 {
-				l.Infof("Rebalancer::dropIndexWhenIdle Index %v:%v:%v:%v Pending Scan %v", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Scope, tt.IndexInst.Defn.Collection, tt.IndexInst.Defn.Name, pending)
+				l.Infof("%v Index %v:%v:%v:%v Pending Scan %v", method,
+					tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Scope, tt.IndexInst.Defn.Collection,
+					tt.IndexInst.Defn.Name, pending)
 				break
 			}
 
@@ -1491,7 +1508,7 @@ loop:
 			req := manager.IndexRequest{Index: defn}
 			body, err := json.Marshal(&req)
 			if err != nil {
-				l.Errorf("Rebalancer::dropIndexWhenIdle Error marshal drop index %v", err)
+				l.Errorf("%v Error marshal drop index %v", method, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return
 			}
@@ -1502,14 +1519,14 @@ loop:
 			resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
 			if err != nil {
 				// Error from HTTP layer, not from index processing code
-				l.Errorf("Rebalancer::dropIndexWhenIdle Error drop index on %v %v", r.localaddr+url, err)
+				l.Errorf("%v Error drop index on %v %v", method, r.localaddr+url, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return
 			}
 
 			response := new(manager.IndexResponse)
 			if err := convertResponse(resp, response); err != nil {
-				l.Errorf("Rebalancer::dropIndexWhenIdle Error unmarshal response %v %v", r.localaddr+url, err)
+				l.Errorf("%v Error unmarshal response %v %v", method, r.localaddr+url, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return
 			}
@@ -1517,23 +1534,24 @@ loop:
 			if response.Code == manager.RESP_ERROR {
 				// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
 				if !isMissingBSC(response.Error) {
-					l.Errorf("Rebalancer::dropIndexWhenIdle Error dropping index %v %v", r.localaddr+url, response.Error)
+					l.Errorf("%v Error dropping index %v %v",
+						method, r.localaddr+url, response.Error)
 					r.setTransferTokenError(ttid, tt, response.Error)
 					return
 				}
 				// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
-				l.Infof("Rebalancer::dropIndexWhenIdle Source index already dropped due to bucket/scope/collection dropped. tt %v.", tt)
+				l.Infof("%v Source index already dropped due to bucket/scope/collection dropped. tt %v.", method, tt)
 			}
 			tt.State = c.TransferTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
 
-			r.mu.Lock()
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 			r.sourceTokens[ttid] = tt
-			r.mu.Unlock()
+			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 			break loop
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -1541,28 +1559,30 @@ loop:
 // dropped. It determines whether we should keep retrying or assume it was already dropped. It is only
 // assumed already to be dropped if there is no entry for it in the local metadata.
 func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
+	const method = "Rebalancer::needRetryForDrop:" // for logging
 
 	localMeta, err := getLocalMeta(r.localaddr)
 	if err != nil {
-		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Local Meta %v %v", r.localaddr, err)
+		l.Errorf("%v Error Fetching Local Meta %v %v", method, r.localaddr, err)
 		return true
 	}
 	indexState, errStr := getIndexStatusFromMeta(tt, localMeta)
 	if errStr != "" {
-		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Index Status %v %v", r.localaddr, errStr)
+		l.Errorf("%v Error Fetching Index Status %v %v", method, r.localaddr, errStr)
 		return true
 	}
 
 	if indexState == c.INDEX_STATE_NIL {
 		//if index cannot be found in metadata, most likely its drop has already succeeded.
 		//instead of waiting indefinitely, it is better to assume success and proceed.
-		l.Infof("Rebalancer::dropIndexWhenIdle Missing Metadata for %v. Assume success and abort retry", tt.IndexInst)
+		l.Infof("%v Missing Metadata for %v. Assume success and abort retry",
+			method, tt.IndexInst)
 		tt.State = c.TransferTokenCommit
 		setTransferTokenInMetakv(ttid, tt)
 
-		r.mu.Lock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 		r.sourceTokens[ttid] = tt
-		r.mu.Unlock()
+		c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 		return false
 	}
@@ -1685,14 +1705,15 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		}
 		setTransferTokenInMetakv(ttid, tt)
 
-		r.mu.Lock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 		r.acceptedTokens[ttid] = tt
-		r.mu.Unlock()
+		c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 
 	case c.TransferTokenInitiate:
 
-		r.mu.Lock()
-		defer r.mu.Unlock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+
 		att, ok := r.acceptedTokens[ttid]
 		if !ok {
 			l.Errorf("%v Unknown TransferToken for Initiate %v %v", method, ttid, tt)
@@ -1730,44 +1751,44 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 }
 
 func (r *Rebalancer) checkValidNotifyStateDest(ttid string, tt *c.TransferToken) bool {
+	const method = "Rebalancer::checkValidNotifyStateDest:" // for logging
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 	if att, ok := r.acceptedTokens[ttid]; ok {
 		if tt.State <= att.State {
-			l.Warnf("Rebalancer::checkValidNotifyStateDest Detected Invalid State "+
+			l.Warnf("%v Detected Invalid State "+
 				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
-				att.State, tt.State)
+				method, att.State, tt.State)
 			return false
 		}
 	}
 	return true
-
 }
 
 func (r *Rebalancer) checkValidNotifyStateSource(ttid string, tt *c.TransferToken) bool {
+	const method = "Rebalancer::checkValidNotifyStateSource:" // for logging
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 	if tto, ok := r.sourceTokens[ttid]; ok {
 		if tt.State <= tto.State {
-			l.Warnf("Rebalancer::checkValidNotifyStateSource Detected Invalid State "+
+			l.Warnf("%v Detected Invalid State "+
 				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
-				tto.State, tt.State)
+				method, tto.State, tt.State)
 			return false
 		}
 	}
 	return true
-
 }
 
 // checkAllAcceptedIndexesReadyToBuildLOCKED determines whether all TTs accepted so far have reached
 // a state where a build request can be sent to Indexer for those that need to be built. If so,
 // it returns a map from ttid to tt of those that need building, else it returns nil. This is done
 // so a group of builds can be submitted in a single call to Indexer.
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) checkAllAcceptedIndexesReadyToBuildLOCKED() (buildTokens map[string]*common.TransferToken) {
 
 	// acceptedTokens are destination-owned copies and thus should never be set to
@@ -1795,7 +1816,7 @@ func (r *Rebalancer) checkAllAcceptedIndexesReadyToBuildLOCKED() (buildTokens ma
 // to be queued for dropping, else it returns nil. This function is only used when the cluster
 // contains pre-7.1.0 nodes, where we must avoid overlapping builds/merges and drops/prunes to work
 // around MB-48191.
-// Caller must be holding r.mu at least read locked.
+// Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) checkAllSourceIndexesReadyToDropLOCKED() (dropTokens []string) {
 	// Check for any unbuilt dest tokens for this node
 	for _, tt := range r.acceptedTokens {
@@ -1912,7 +1933,7 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 		for id, errStr := range errMap {
 			if isMissingBSC(errStr) {
 				// id is an instId. Move the TT for this instId to TransferTokenCommit
-				r.mu.Lock()
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if id == tt.IndexInst.InstId {
 						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
@@ -1921,11 +1942,11 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 						break
 					}
 				}
-				r.mu.Unlock()
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 			} else if isIndexNotFoundRebal(errStr) {
 				// id is a defnId. Move all TTs for this defnId to TransferTokenCommit
 				defnId := c.IndexDefnId(id)
-				r.mu.Lock()
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 				for ttid, tt := range buildTokens {
 					if defnId == tt.IndexInst.Defn.DefnId {
 						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", method, tt)
@@ -1933,7 +1954,7 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 						setTransferTokenInMetakv(ttid, tt)
 					}
 				}
-				r.mu.Unlock()
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 			} else {
 				goto cleanup // unrecoverable error
 			}
@@ -1944,17 +1965,18 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 	return
 
 cleanup: // fail the rebalance; mark all accepted transfer tokens with error
-	r.mu.Lock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
 	for ttid, tt := range r.acceptedTokens {
 		r.setTransferTokenError(ttid, tt, errStr)
 	}
-	r.mu.Unlock()
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
 	return
 }
 
-// waitForIndexBuild waits for all currently running rebalance-initiated index
-// builds to complete. Transfer token state changes and some processing are
-// delegated to destTokenToMergeOrReadyLOCKED.
+// waitForIndexBuild waits for the most recently submitted (by parent buildAcceptedIndexes) set of
+// rebalance-initiated index builds to complete in order to move each of their transfer token states
+// forward in child destTokenToMergeOrReadyLOCKED. Its primary purpose is thus to update the TT
+// states; it does not produce a sync point at the end of the builds.
 func (r *Rebalancer) waitForIndexBuild(buildTokens map[string]*common.TransferToken) {
 	const method string = "Rebalancer::waitForIndexBuild:" // for logging
 
@@ -1988,12 +2010,12 @@ loop:
 			if state, ok := statsMap["indexer_state"]; ok {
 				if state == "Paused" {
 					l.Errorf("%v Paused state detected for %v", method, r.localaddr)
-					r.mu.Lock()
+					lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 					for ttid, tt := range r.acceptedTokens {
 						l.Errorf("%v Token State Changed to Error %v %v", method, ttid, tt)
 						r.setTransferTokenError(ttid, tt, "Indexer In Paused State")
 					}
-					r.mu.Unlock()
+					c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
 					break
 				}
 			}
@@ -2004,7 +2026,7 @@ loop:
 				break
 			}
 
-			r.mu.Lock()
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 			allTokensReady := true
 			for ttid, tt := range buildTokens {
 				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
@@ -2073,13 +2095,13 @@ loop:
 					r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 				}
 			}
-			r.mu.Unlock()
+			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 
 			if allTokensReady {
 				l.Infof("%v Batch Done", method)
 				break loop
 			}
-			time.Sleep(3 * time.Second)
+			time.Sleep(1 * time.Second)
 		}
 	}
 }
@@ -2094,7 +2116,7 @@ loop:
 // must "merge" with the "real" IndexDefn once it has completed its move.
 //
 // tt arg points to an entry in r.acceptedTokens map.
-// Caller must be holding r.mu write locked.
+// Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) destTokenToMergeOrReadyLOCKED(ttid string, tt *c.TransferToken) {
 	const method string = "Rebalancer::destTokenToMergeOrReadyLOCKED:" // for logging
 
@@ -2164,8 +2186,8 @@ func (r *Rebalancer) destTokenToMergeOrReadyLOCKED(ttid string, tt *c.TransferTo
 
 			// if rebalancer is still active, then update its runtime state.
 			if !r.isFinish() {
-				r.mu.Lock()
-				defer r.mu.Unlock()
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+				defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 				if newTT := r.acceptedTokens[ttid]; newTT != nil {
 					newTT.State = tt.State
@@ -2246,8 +2268,10 @@ func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err
 // updateMasterTokenState updates the state of the master versions of transfer tokens
 // in the r.transferTokens map.
 func (r *Rebalancer) updateMasterTokenState(ttid string, state c.TokenState) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	const method = "Rebalancer::updateMasterTokenState:" // for logging
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 	if tt, ok := r.transferTokens[ttid]; ok {
 		tt.State = state
@@ -2330,6 +2354,7 @@ func (r *Rebalancer) updateProgress() {
 
 // computeProgress is a helper for updateProgress called periodically to compute the progress of index builds.
 func (r *Rebalancer) computeProgress() (progress float64) {
+	const method = "Rebalancer::computeProgress:" // for logging
 
 	url := "/getIndexStatus?getAll=true"
 	resp, err := getWithAuth(r.localaddr + url)
@@ -2346,8 +2371,8 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		return
 	}
 
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
 
 	totTokens := len(r.transferTokens)
 
@@ -2377,9 +2402,10 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 // checkAllTokensDone returns true iff processing for all transfer tokens
 // of the current rebalance is complete (i.e. the rebalance is finished).
 func (r *Rebalancer) checkAllTokensDone() bool {
+	const method = "Rebalancer::checkAllTokensDone:" // for logging
 
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
 
 	for _, tt := range r.transferTokens {
 		if tt.State != c.TransferTokenDeleted {

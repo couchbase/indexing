@@ -42,13 +42,15 @@ import (
 // Rebalance and Failover through RPC. This class also handles index move, which is an internal GSI
 // feature that does not involve ns_server.
 type RebalanceServiceManager struct {
-	mu *sync.RWMutex // protects m.rebalancer, m.rebalancerF, and other shared fields that do not have their own mutexes
+	// svcMgrMu protects m.rebalancer, m.rebalancerF, and other shared fields that do not have their
+	// own mutexes
+	svcMgrMu *sync.RWMutex
 
 	state   state         // state of the current rebalance, failover, or index move
-	stateMu *sync.RWMutex // protects state field; may be taken *after* mu mutex
+	stateMu *sync.RWMutex // protects state field; may be taken *after* svcMgrMu mutex
 
 	waiters   waiters       // set of channels of states for go routines waiting for next state change
-	waitersMu *sync.RWMutex // protects waiters field; may be taken *after* mu mutex
+	waitersMu *sync.RWMutex // protects waiters field; may be taken *after* svcMgrMu mutex
 
 	rebalancer   *Rebalancer //runs the rebalance, failover, or index move
 	rebalancerF  *Rebalancer //follower rebalancer handle
@@ -139,7 +141,7 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
 
 	mgr := &RebalanceServiceManager{
-		mu: &sync.RWMutex{},
+		svcMgrMu: &sync.RWMutex{},
 
 		state:   NewState(),
 		stateMu: &sync.RWMutex{},
@@ -435,9 +437,10 @@ func (m *RebalanceServiceManager) PrepareTopologyChange(change service.TopologyC
 
 // prepareFailover does sanity checks for the failover case under PrepareTopologyChange.
 func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange) error {
+	const method = "RebalanceServiceManager::prepareFailover:" // for logging
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	if !m.indexerReady {
 		return nil
@@ -446,7 +449,7 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 	var err error
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
 
-		l.Infof("RebalanceServiceManager::prepareFailover Found Rebalance In Progress %v", m.rebalanceToken)
+		l.Infof("%v Found Rebalance In Progress %v", method, m.rebalanceToken)
 
 		if m.rebalancerF != nil {
 			m.rebalancerF.Cancel()
@@ -461,7 +464,7 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 			}
 		}
 		if !masterAlive {
-			l.Infof("RebalanceServiceManager::prepareFailover Master Missing From Cluster Node List. Cleanup")
+			l.Infof("%v Master Missing From Cluster Node List. Cleanup", method)
 			err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 		} else {
 			err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
@@ -470,14 +473,14 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 	}
 
 	if m.rebalanceRunning && m.rebalanceToken.Source == RebalSourceClusterOp {
-		l.Infof("RebalanceServiceManager::prepareFailover Found Node In Prepared State. Cleanup.")
+		l.Infof("%v Found Node In Prepared State. Cleanup.", method)
 		err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 		return err
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 
-		l.Infof("RebalanceServiceManager::prepareFailover Found Move Index In Progress %v. Aborting.", m.rebalanceToken)
+		l.Infof("%v Found Move Index In Progress %v. Aborting.", method, m.rebalanceToken)
 
 		masterAlive := false
 		masterCleanup := false
@@ -489,7 +492,8 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 		}
 
 		if !masterAlive {
-			l.Infof("RebalanceServiceManager::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex As Master.")
+			l.Infof("%v Master Missing From Cluster Node List. Cleanup MoveIndex As Master.",
+				method)
 			masterCleanup = true
 		}
 
@@ -521,27 +525,28 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 
 // prepareRebalance does sanity checks for the rebalance case under PrepareTopologyChange.
 func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange) error {
+	const method = "RebalanceServiceManager::prepareRebalance:" // for logging
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	var err error
 	if m.cleanupPending {
 		m.setStateIsBalanced(false)
 		err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 			"failed/aborted rebalance/failover/move index. please retry the request later.")
-		l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
+		l.Errorf("%v %v", method, err)
 		return err
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 		err = errors.New("indexer rebalance failure - move index in progress")
-		l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
+		l.Errorf("%v %v", method, err)
 		return err
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
-		l.Warnf("RebalanceServiceManager::prepareRebalance Found Rebalance In Progress. Cleanup.")
+		l.Warnf("%v Found Rebalance In Progress. Cleanup.", method)
 		if m.rebalancerF != nil {
 			m.rebalancerF.Cancel()
 			m.rebalancerF = nil
@@ -552,14 +557,14 @@ func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange
 	}
 
 	if m.checkRebalanceRunning() {
-		l.Warnf("RebalanceServiceManager::prepareRebalance Found Rebalance Running Flag. Cleanup Prepare Phase")
+		l.Warnf("%v Found Rebalance Running Flag. Cleanup Prepare Phase", method)
 		if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
 			return err
 		}
 	}
 
 	if m.checkLocalCleanupPending() {
-		l.Warnf("RebalanceServiceManager::prepareRebalance Found Pending Local Cleanup Token. Run Cleanup.")
+		l.Warnf("%v Found Pending Local Cleanup Token. Run Cleanup.", method)
 		if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
 			return err
 		}
@@ -567,21 +572,21 @@ func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange
 		if m.checkLocalCleanupPending() {
 			err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 				"failed/aborted rebalance/failover/move index. please retry the request later.")
-			l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
+			l.Errorf("%v %v", method, err)
 			return err
 		}
 	}
 
 	if c.GetBuildMode() == c.ENTERPRISE {
 		m.p.ddlRunning, m.p.ddlRunningIndexNames = m.checkDDLRunning()
-		l.Infof("RebalanceServiceManager::prepareRebalance Found DDL Running %v", m.p.ddlRunningIndexNames)
+		l.Infof("%v Found DDL Running %v", method, m.p.ddlRunningIndexNames)
 	}
 
-	l.Infof("RebalanceServiceManager::prepareRebalance Init Prepare Phase")
+	l.Infof("%v Init Prepare Phase", method)
 
 	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
 		err := errors.New("indexer - node receiving prepare request not part of cluster")
-		l.Errorf("RebalanceServiceManager::prepareRebalance %v", err)
+		l.Errorf("%v %v", method, err)
 		return err
 	} else {
 		if err := m.initPreparePhaseRebalance(); err != nil {
@@ -597,18 +602,20 @@ func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange
 // GSI master node to initiate a rebalance or failover that has already been prepared
 // via PrepareTopologyChange calls on all indexer nodes.
 func (m *RebalanceServiceManager) StartTopologyChange(change service.TopologyChange) error {
-	l.Infof("RebalanceServiceManager::StartTopologyChange %v", change)
+	const method = "RebalanceServiceManager::StartTopologyChange:" // for logging
 
-	// To avoid having more than one Rebalancer object at a time, we must hold mu write locked from
+	l.Infof("%v change: %v", method, change)
+
+	// To avoid having more than one Rebalancer object at a time, we must hold svcMgrMu write locked from
 	// the check for nil m.rebalancer through execution of children startFailover or startRebalance
 	// which will overwrite this field.
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	currState := m.copyState()
 	rebalancer := m.rebalancer
 	if currState.rebalanceID != change.ID || rebalancer != nil {
-		l.Errorf("RebalanceServiceManager::StartTopologyChange err %v %v %v %v", service.ErrConflict,
+		l.Errorf("%v err %v %v %v %v", method, service.ErrConflict,
 			currState.rebalanceID, change.ID, rebalancer)
 		if change.Type == service.TopologyChangeTypeRebalance {
 			m.setStateIsBalanced(false)
@@ -619,8 +626,7 @@ func (m *RebalanceServiceManager) StartTopologyChange(change service.TopologyCha
 	if change.CurrentTopologyRev != nil {
 		haveRev := DecodeRev(change.CurrentTopologyRev)
 		if haveRev != currState.rev {
-			l.Errorf("RebalanceServiceManager::StartTopologyChange err %v %v %v", service.ErrConflict,
-				haveRev, currState.rev)
+			l.Errorf("%v err %v %v %v", method, service.ErrConflict, haveRev, currState.rev)
 			if change.Type == service.TopologyChangeTypeRebalance {
 				m.setStateIsBalanced(false)
 			}
@@ -641,7 +647,7 @@ func (m *RebalanceServiceManager) StartTopologyChange(change service.TopologyCha
 		err = service.ErrNotSupported
 	}
 
-	logging.Infof("RebalanceServiceManager::StartTopologyChange returns Error %v. isBalanced %v.", err, currState.isBalanced)
+	logging.Infof("%v returns Error %v. isBalanced %v.", method, err, currState.isBalanced)
 	return err
 }
 
@@ -875,7 +881,7 @@ func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error 
 	return nil
 }
 
-// runCleanupPhaseLOCKED caller should be holding mutex mu write(?) locked.
+// runCleanupPhaseLOCKED caller should be holding mutex svcMgrMu write(?) locked.
 func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 
 	l.Infof("RebalanceServiceManager::runCleanupPhase path %v isMaster %v", path, isMaster)
@@ -1262,6 +1268,7 @@ func (m *RebalanceServiceManager) cleanupLocalRToken() error {
 
 // monitorStartPhaseInit runs in a goroutine and checks whether rebalanceToken is created in a reasonable time.
 func (m *RebalanceServiceManager) monitorStartPhaseInit(stopch StopChannel) error {
+	const method = "RebalanceServiceManager::monitorStartPhaseInit:" // for logging
 
 	cfg := m.config.Load()
 	startPhaseBeginTimeout := cfg["rebalance.startPhaseBeginTimeout"].Int()
@@ -1277,15 +1284,17 @@ loop:
 
 		default:
 			func() {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+				defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+
 				if m.rebalanceToken == nil && elapsed > startPhaseBeginTimeout {
-					l.Infof("RebalanceServiceManager::monitorStartPhaseInit Timeout Waiting for RebalanceToken. Cleanup Prepare Phase")
+					l.Infof("%v Timeout Waiting for RebalanceToken. Cleanup Prepare Phase",
+						method)
 					//TODO handle server side differently
 					m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 					done = true
 				} else if m.rebalanceToken != nil {
-					l.Infof("RebalanceServiceManager::monitorStartPhaseInit Found RebalanceToken %v.", m.rebalanceToken)
+					l.Infof("%v Found RebalanceToken %v.", method, m.rebalanceToken)
 					m.monitorStopCh = nil
 					done = true
 				}
@@ -1304,27 +1313,29 @@ loop:
 }
 
 func (m *RebalanceServiceManager) rebalanceJanitor() {
+	const method = "RebalanceServiceManager::rebalanceJanitor::" // for logging
 
 	for {
 		time.Sleep(time.Second * 30)
 
-		l.Infof("RebalanceServiceManager::rebalanceJanitor Running Periodic Cleanup")
-		m.mu.Lock()
+		l.Infof("%v Running Periodic Cleanup", method)
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 		if !m.rebalanceRunning {
 			rtokens, err := m.getCurrRebalTokens()
 			if err != nil {
-				l.Errorf("RebalanceServiceManager::rebalanceJanitor Error Fetching Metakv Tokens %v", err)
+				l.Errorf("%v Error Fetching Metakv Tokens %v", method, err)
 			}
 
 			if rtokens != nil && len(rtokens.TT) != 0 {
-				l.Infof("RebalanceServiceManager::rebalanceJanitor Found %v tokens. Cleaning up.", len(rtokens.TT))
+				l.Infof("%v Found %v tokens. Cleaning up.", method, len(rtokens.TT))
 				err := m.cleanupTransferTokens(rtokens.TT)
 				if err != nil {
-					l.Errorf("RebalanceServiceManager::rebalanceJanitor Error Cleaning Transfer Tokens %v", err)
+					l.Errorf("%v Error Cleaning Transfer Tokens %v", method, err)
 				}
 			}
 		}
-		m.mu.Unlock()
+		c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+
 	}
 
 }
@@ -1565,10 +1576,11 @@ func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken Rebalan
 //   3. MoveIndex done
 func (m *RebalanceServiceManager) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 	done := make(chan struct{})
+	const method = "RebalanceServiceManager::runRebalanceCallback:" // for logging
 
 	go func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 		select {
 		case <-cancel:
@@ -1593,7 +1605,7 @@ func (m *RebalanceServiceManager) rebalanceProgressCallback(progress float64, ca
 	})
 }
 
-// updateRebalanceProgressLOCKED caller should be holding mutex mu write locked.
+// updateRebalanceProgressLOCKED caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) updateRebalanceProgressLOCKED(progress float64) {
 	rev := m.rebalanceCtx.incRev()
 	changeID := m.rebalanceCtx.change.ID
@@ -1645,7 +1657,7 @@ func (m *RebalanceServiceManager) rebalanceOrFailoverDoneCallback(err error, can
 // onRebalanceDoneLOCKED is invoked when a Rebalance or Failover completes (succeeds or fails).
 // Non-nil err means the rebalance failed.
 // forceUnbalanced flag forces isBalanced = false (for failovers and cancels).
-// Caller should be holding mutex mu write locked.
+// Caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) onRebalanceDoneLOCKED(err error, forceUnbalanced bool) {
 	isMaster := m.rebalancer != nil
 	isBalancedNew := !forceUnbalanced // new isBalanced state to set; below should only change this to false
@@ -1811,8 +1823,10 @@ func (m *RebalanceServiceManager) wait(rev service.Revision,
 
 // cancelActualTask cancels a PrepareTopologyChange or StartTopologyChange.
 func (m *RebalanceServiceManager) cancelActualTask(task *service.Task) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	const method = "RebalanceServiceManager::cancelActualTask:" // for logging
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	if m.rebalancer != nil {
 		change := &m.rebalanceCtx.change
@@ -1831,7 +1845,7 @@ func (m *RebalanceServiceManager) cancelActualTask(task *service.Task) error {
 	}
 }
 
-// cancelPrepareTaskLOCKED caller should be holding mutex mu write locked.
+// cancelPrepareTaskLOCKED caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) cancelPrepareTaskLOCKED() error {
 	if m.rebalancer != nil {
 		return service.ErrConflict
@@ -1851,7 +1865,7 @@ func (m *RebalanceServiceManager) cancelPrepareTaskLOCKED() error {
 	return nil
 }
 
-// cancelRebalanceTaskLOCKED caller should be holding mutex mu write locked.
+// cancelRebalanceTaskLOCKED caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) cancelRebalanceTaskLOCKED(task *service.Task) error {
 	switch task.Status {
 	case service.TaskStatusRunning:
@@ -1864,7 +1878,7 @@ func (m *RebalanceServiceManager) cancelRebalanceTaskLOCKED(task *service.Task) 
 }
 
 // cancelRunningRebalanceTaskLOCKED cancels a currently running rebalance.
-// Caller should be holding mutex mu write locked.
+// Caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) cancelRunningRebalanceTaskLOCKED() error {
 	m.rebalancer.Cancel()
 	m.onRebalanceDoneLOCKED(nil, true)
@@ -1928,18 +1942,19 @@ func stateToTaskList(s state) *service.TaskList {
 // recoverRebalance is called only during bootstrap to clean up any prior
 // failed rebalances or index moves.
 func (m *RebalanceServiceManager) recoverRebalance() {
+	const method = "RebalanceServiceManager::recoverRebalance:" // for logging
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	m.indexerReady = true
 
 	if m.cleanupPending {
-		l.Infof("RebalanceServiceManager::recoverRebalance Init Pending Cleanup")
+		l.Infof("%v Init Pending Cleanup", method)
 
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("RebalanceServiceManager::recoverRebalance Error Fetching Metakv Tokens %v", err)
+			l.Errorf("%v Error Fetching Metakv Tokens %v", method, err)
 			c.CrashOnError(err)
 		}
 
@@ -2085,28 +2100,29 @@ func (m *RebalanceServiceManager) handleListRebalanceTokens(w http.ResponseWrite
 }
 
 func (m *RebalanceServiceManager) handleCleanupRebalance(w http.ResponseWriter, r *http.Request) {
+	const method = "RebalanceServiceManager::handleCleanupRebalance:" // for logging
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("RebalanceServiceManager::handleCleanupRebalance Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("%v Validation Failure req: %v", method, c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
 
-		l.Infof("RebalanceServiceManager::handleCleanupRebalance Processing Request req: %v", c.GetHTTPReqInfo(r))
-		m.mu.Lock()
-		defer m.mu.Unlock()
+		l.Infof("%v Processing Request req: %v", method, c.GetHTTPReqInfo(r))
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 		if !m.indexerReady {
-			l.Errorf("RebalanceServiceManager::handleCleanupRebalance Cannot Process Request %v", c.ErrIndexerInBootstrap)
+			l.Errorf("%v Cannot Process Request %v", method, c.ErrIndexerInBootstrap)
 			m.writeError(w, c.ErrIndexerInBootstrap)
 			return
 		}
 
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("RebalanceServiceManager::handleCleanupRebalance Error %v", err)
+			l.Errorf("%v Error %v", method, err)
 		}
 
 		if rtokens != nil {
@@ -2114,13 +2130,13 @@ func (m *RebalanceServiceManager) handleCleanupRebalance(w http.ResponseWriter, 
 				m.setStateIsBalanced(false)
 				err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 				if err != nil {
-					l.Errorf("RebalanceServiceManager::handleCleanupRebalance RebalanceTokenPath Error %v", err)
+					l.Errorf("%v RebalanceTokenPath Error %v", method, err)
 				}
 			}
 			if rtokens.MT != nil {
 				err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 				if err != nil {
-					l.Errorf("RebalanceServiceManager::handleCleanupRebalance MoveIndexTokenPath Error %v", err)
+					l.Errorf("%v MoveIndexTokenPath Error %v", method, err)
 				}
 			}
 		}
@@ -2129,7 +2145,7 @@ func (m *RebalanceServiceManager) handleCleanupRebalance(w http.ResponseWriter, 
 		err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 
 		if err != nil {
-			l.Errorf("RebalanceServiceManager::handleCleanupRebalance Error %v", err)
+			l.Errorf("%v Error %v", method, err)
 			m.writeError(w, err)
 		} else {
 			m.writeOk(w)
@@ -2200,10 +2216,11 @@ func (m *RebalanceServiceManager) getCurrRebalTokens() (*RebalTokens, error) {
 // handleRegisterRebalanceToken handles REST API /registerRebalanceToken used to register a
 // rebalance token on Rebalance follower Index nodes.
 func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWriter, r *http.Request) {
+	const method = "RebalanceServiceManager::handleRegisterRebalanceToken:" // for logging
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		l.Errorf("%v Validation Failure req: %v", method, c.GetHTTPReqInfo(r))
 		return
 	}
 
@@ -2211,28 +2228,28 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(bytes, &rebalToken); err != nil {
-			l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
+			l.Errorf("%v %v", method, err)
 			m.writeError(w, err)
 			return
 		}
 
-		l.Infof("RebalanceServiceManager::handleRegisterRebalanceToken New Rebalance Token %v", rebalToken)
+		l.Infof("%v New Rebalance Token %v", method, rebalToken)
 
 		if m.observeGlobalRebalanceToken(rebalToken) {
 
-			m.mu.Lock()
-			defer m.mu.Unlock()
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+			defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 			if !m.rebalanceRunning {
 				errStr := fmt.Sprintf("Node %v not in Prepared State for Rebalance", string(m.nodeInfo.NodeID))
-				l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", errStr)
+				l.Errorf("%v %v", method, errStr)
 				m.writeError(w, errors.New(errStr))
 				return
 			}
 
 			m.rebalanceToken = &rebalToken
 			if err := m.registerLocalRebalanceToken(m.rebalanceToken); err != nil {
-				l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
+				l.Errorf("%v %v", method, err)
 				m.writeError(w, err)
 				return
 			}
@@ -2245,7 +2262,7 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 
 		} else {
 			err := errors.New("Rebalance Token Wait Timeout")
-			l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
+			l.Errorf("%v %v", method, err)
 			m.writeError(w, err)
 			return
 		}
@@ -2302,20 +2319,22 @@ func (m *RebalanceServiceManager) listenMoveIndex() {
 
 func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 	if kve.Path == MoveIndexTokenPath {
-		l.Infof("RebalanceServiceManager::processMoveIndex MoveIndexToken Received %v %s", kve.Path, kve.Value)
+		const method = "RebalanceServiceManager::processMoveIndex:" // for logging
+
+		l.Infof("%v MoveIndexToken Received %v %s", method, kve.Path, kve.Value)
 
 		var rebalToken RebalanceToken
 		if kve.Value == nil { //move index token deleted
 			return nil
 		} else {
 			if err := json.Unmarshal(kve.Value, &rebalToken); err != nil {
-				l.Errorf("RebalanceServiceManager::processMoveIndex Error reading move index token %v", err)
+				l.Errorf("%v Error reading move index token %v", method, err)
 				return err
 			}
 		}
 
-		m.mu.Lock()
-		defer m.mu.Unlock()
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 		//skip if token was generated by self
 		if rebalToken.MasterId == string(m.nodeInfo.NodeID) {
@@ -2326,7 +2345,7 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 				// If master (source) receving a token with error, then cancel move index
 				// and return the error to user.
 				if len(rebalToken.Error) != 0 {
-					l.Infof("RebalanceServiceManager::processMoveIndex received error from destination")
+					l.Infof("%v received error from destination", method)
 
 					if m.rebalancer != nil {
 						m.rebalancer.Cancel()
@@ -2338,21 +2357,21 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 				}
 			}
 
-			l.Infof("RebalanceServiceManager::processMoveIndex Skip MoveIndex Token for Self Node")
+			l.Infof("%v Skip MoveIndex Token for Self Node", method)
 			return nil
 
 		} else {
 			// If destination receving a token with error, then skip.  The destination is
 			// the one that posted the error.
 			if len(rebalToken.Error) != 0 {
-				l.Infof("RebalanceServiceManager::processMoveIndex Skip MoveIndex Token with error")
+				l.Infof("%v Skip MoveIndex Token with error", method)
 				return nil
 			}
 		}
 
 		if m.rebalanceRunning {
 			err := errors.New("Cannot Process Move Index - Rebalance In Progress")
-			l.Errorf("RebalanceServiceManager::processMoveIndex %v %v", err, m.rebalanceToken)
+			l.Errorf("%v %v %v", method, err, m.rebalanceToken)
 			m.setErrorInMoveIndexToken(&rebalToken, err)
 			return nil
 		} else {
@@ -2361,7 +2380,7 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 			var err error
 			if err = m.registerRebalanceRunning(true); err != nil || m.p.ddlRunning {
 				if m.p.ddlRunning {
-					l.Errorf("RebalanceServiceManager::processMoveIndex Found index build running. Cannot process move index.")
+					l.Errorf("%v Found index build running. Cannot process move index.", method)
 					fmtMsg := "move index failure - index build is in progress for indexes: %v."
 					err = errors.New(fmt.Sprintf(fmtMsg, m.p.ddlRunningIndexNames))
 				}
@@ -2578,8 +2597,8 @@ func (m *RebalanceServiceManager) monitorMoveIndex() {
 func (m *RebalanceServiceManager) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
 	const method = "RebalanceServiceManager::initMoveIndex" // for logging
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	var err error
 	if !m.indexerReady {
@@ -2954,7 +2973,7 @@ func (m *RebalanceServiceManager) moveIndexDoneCallback(err error, cancel <-chan
 }
 
 // onMoveIndexDoneLOCKED is invoked when a MoveIndex completes (succeeds or fails).
-// Its caller should be holding mutex mu write(?) locked.
+// Its caller should be holding mutex svcMgrMu write(?) locked.
 func (m *RebalanceServiceManager) onMoveIndexDoneLOCKED(err error) {
 
 	if err != nil {
