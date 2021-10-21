@@ -134,6 +134,12 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		c.CrashOnError(fmt.Errorf("Fail to initialize security context: %v", err))
 	}
 
+	// Initialize auditing
+	err = audit.InitAuditService(p.clusterAddr)
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
