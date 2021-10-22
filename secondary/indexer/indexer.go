@@ -1613,8 +1613,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.tkCmdCh
 	idx.scanCoordCmdCh <- msg
 	<-idx.scanCoordCmdCh
-	idx.kvSenderCmdCh <- msg
-	<-idx.kvSenderCmdCh
+
+	// sendMsgToKVSender lock protects writes and reads to
+	// kvSenderCmdCh so that message crossover is prevented
+	idx.sendMsgToKVSender(msg)
+
 	idx.mutMgrCmdCh <- msg
 	<-idx.mutMgrCmdCh
 	idx.statsMgrCmdCh <- msg
@@ -4529,9 +4532,10 @@ func (idx *indexer) shutdownWorkers() {
 		idx.sendMsgToClustMgr(&MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN})
 	}
 
-	//shutdown kv sender
-	idx.kvSenderCmdCh <- &MsgGeneral{mType: KV_SENDER_SHUTDOWN}
-	<-idx.kvSenderCmdCh
+	// shutdown kv sender
+	// sendMsgToKVSender lock protects writes and reads to
+	// kvSenderCmdCh so that message crossover is prevented
+	idx.sendMsgToKVSender(&MsgGeneral{mType: KV_SENDER_SHUTDOWN})
 
 	// shutdown ddl manager
 	idx.ddlSrvMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
