@@ -3314,19 +3314,7 @@ func (idx *indexer) handleResetStream(msg Message) {
 			}
 
 			idx.streamKeyspaceIdOSOException[streamId][keyspaceId] = true
-
-			logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v State %v "+
-				"SessionId %v. Initiate Recovery.", streamId, keyspaceId, STREAM_PREPARE_RECOVERY, sessionId)
-
-			//create zero ts for rollback to 0
-			numVbuckets := idx.config["numVbuckets"].Int()
-			restartTs := common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
-
-			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-				streamId:   streamId,
-				keyspaceId: keyspaceId,
-				sessionId:  sessionId,
-				restartTs:  restartTs})
+			idx.initRecoveryForOSO(streamId, keyspaceId, sessionId)
 		}
 	}
 }
@@ -3814,6 +3802,14 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 					idx.restartMaintStreamForCatchup(bucket, restartTs)
 				}
 			}
+
+			//If any OSO exception has been recorded, initiate recovery when the stream request
+			//finishes. Any earlier recovery attempts would have been skipped as this stream
+			//request was in progress. If a recovery is already in progress, this call to
+			//initiate recovery will get skipped.
+			if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
+				idx.initRecoveryForOSO(streamId, keyspaceId, sessionId)
+			}
 		}
 	}
 
@@ -4068,6 +4064,31 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	<-idx.tkCmdCh
 
 	idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
+
+	//If any OSO exception has been recorded, initiate recovery when the stream request
+	//finishes. Any earlier recovery attempts would have been skipped as this stream
+	//request was in progress. If a recovery is already in progress, this call to
+	//initiate recovery will get skipped.
+	if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
+		idx.initRecoveryForOSO(streamId, keyspaceId, sessionId)
+	}
+}
+
+func (idx *indexer) initRecoveryForOSO(streamId common.StreamId,
+	keyspaceId string, sessionId uint64) {
+
+	logging.Infof("Indexer::initRecoveryForOSO StreamId %v KeyspaceId %v SessionId %v. "+
+		"Initiate Recovery.", streamId, keyspaceId, sessionId)
+
+	//create zero ts for rollback to 0
+	numVbuckets := idx.config["numVbuckets"].Int()
+	restartTs := common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+
+	idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		sessionId:  sessionId,
+		restartTs:  restartTs})
 
 }
 
@@ -6315,6 +6336,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		logging.Infof("Indexer::startKeyspaceIdStream %v %v. Disable OSO due to "+
 			"exception.", streamId, keyspaceId)
 		enableOSO = false
+
+		//clear the OSO exception for regular mode
+		logging.Infof("Indexer::startKeyspaceIdStream %v %v. "+
+			"Clear OSOException due to stream restart.", streamId, keyspaceId)
+		delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 	}
 
 	var cid string
