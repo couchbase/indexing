@@ -2286,8 +2286,8 @@ func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.
 	ttidpos := strings.Index(path, TransferTokenTag)
 	ttid := path[ttidpos:]
 
-	var tt c.TransferToken
-	err := json.Unmarshal(value, &tt)
+	tt := &c.TransferToken{}
+	err := json.Unmarshal(value, tt)
 	if err != nil {
 		l.Fatalf("Rebalancer::decodeTransferToken Failed unmarshalling value for %s: %s\n%s",
 			path, err.Error(), string(value))
@@ -2296,7 +2296,7 @@ func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.
 
 	l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt)
 
-	return ttid, &tt, nil
+	return ttid, tt, nil
 
 }
 

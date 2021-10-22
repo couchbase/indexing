@@ -66,7 +66,7 @@ type RebalanceServiceManager struct {
 	supvMsgch     MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
 	supvPrioMsgch MsgChannel //channel to send msg to supervisor for high-priority handling (idx.wrkrPrioRecvCh)
 
-	cinfo *c.ClusterInfoCache
+	cinfo *c.ClusterInfoCache // long-lived unshared local instance
 
 	localhttp string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
 
@@ -837,6 +837,44 @@ func (m *RebalanceServiceManager) initPreparePhaseRebalance() error {
 	return nil
 }
 
+// registerRebalanceRunning is called under PrepareTopologyChange so uses the
+// indexer's high-priority message channel to get a quick reply even if indexer
+// is processing other work, to try to avoid causing a rebalance timeout failure.
+func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error {
+	respch := make(MsgChannel)
+	m.supvPrioMsgch <- &MsgClustMgrLocal{
+		mType:    CLUST_MGR_SET_LOCAL,
+		key:      RebalanceRunning,
+		value:    "",
+		respch:   respch,
+		checkDDL: checkDDL,
+	}
+
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	m.resetRunParams()
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		if errMsg == ErrDDLRunning {
+			m.p.ddlRunning = true
+			m.p.ddlRunningIndexNames = resp.GetInProgressIndexes()
+			l.Infof("RebalanceServiceManager::registerRebalanceRunning Found DDL Running %v", m.p.ddlRunningIndexNames)
+		} else {
+			l.Errorf("RebalanceServiceManager::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
+				"Meta Storage. Err %v", errMsg)
+
+			return errMsg
+		}
+	}
+
+	// for ddl service manager
+	stopDDLProcessing()
+
+	return nil
+}
+
 // runCleanupPhaseLOCKED caller should be holding mutex mu write(?) locked.
 func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 
@@ -1294,92 +1332,61 @@ func (m *RebalanceServiceManager) rebalanceJanitor() {
 // initStartPhase is a helper for startRebalance (master node only). It generates and
 // registers the rebalance token. If there was a problem registering the global token
 // it returns true as its second return value, indicating the rebalance should be skipped.
-func (m *RebalanceServiceManager) initStartPhase(change service.TopologyChange) (error, bool) {
+func (m *RebalanceServiceManager) initStartPhase(
+	change service.TopologyChange) (err error, skipRebalance bool) {
 
-	var err error
-	var skipRebalance bool
-
-	if err = m.genRebalanceToken(); err != nil {
+	err = func() error {
+		m.cinfo.Lock()
+		defer m.cinfo.Unlock()
+		return m.cinfo.Fetch() // can be very slow; do here so multiple children don't need to
+	}()
+	if err != nil {
 		return err, true
 	}
 
-	if err = m.registerLocalRebalanceToken(); err != nil {
+	var masterIP string // real IP address of this node (Rebal master), so other nodes can reach it
+	masterIP, err = func() (string, error) {
+		m.cinfo.RLock()
+		defer m.cinfo.RUnlock()
+		return m.cinfo.GetLocalHostname()
+	}()
+	if err != nil {
+		return err, true
+	}
+	m.rebalanceToken = m.genRebalanceToken(masterIP)
+
+	if err = m.registerLocalRebalanceToken(m.rebalanceToken); err != nil {
 		return err, true
 	}
 
-	if err = m.registerRebalanceTokenInMetakv(); err != nil {
+	if err = m.registerRebalanceTokenInMetakv(m.rebalanceToken); err != nil {
 		return err, true
 	}
 
-	if err, skipRebalance = m.registerGlobalRebalanceToken(change); err != nil {
+	if err, skipRebalance = m.registerGlobalRebalanceToken(m.rebalanceToken, change); err != nil {
 		return err, skipRebalance
 	}
 
 	return nil, skipRebalance
 }
 
-func (m *RebalanceServiceManager) genRebalanceToken() error {
-
-	m.cinfo.Lock()
-	defer m.cinfo.Unlock()
-
-	var localIP string
-	if err := m.cinfo.Fetch(); err == nil {
-		localIP, _ = m.cinfo.GetLocalHostname()
-	}
-
+// genRebalanceToken creates and returns a new rebalance token. masterIP must be the true IP of this
+// node, not 127.0.0.1 from m.localhttp, so other nodes can find the Rebalance master.
+func (m *RebalanceServiceManager) genRebalanceToken(masterIP string) *RebalanceToken {
 	cfg := m.config.Load()
-
-	m.rebalanceToken = &RebalanceToken{
+	return &RebalanceToken{
 		MasterId: cfg["nodeuuid"].String(),
 		RebalId:  m.getStateRebalanceID(),
 		Source:   RebalSourceClusterOp,
-		MasterIP: localIP,
+		MasterIP: masterIP,
 	}
-	return nil
 }
 
-// registerRebalanceRunning is called under PrepareTopologyChange so uses the
-// indexer's high-priority message channel to get a quick reply even if indexer
-// is processing other work, to try to avoid causing a rebalance timeout failure.
-func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error {
-	respch := make(MsgChannel)
-	m.supvPrioMsgch <- &MsgClustMgrLocal{
-		mType:    CLUST_MGR_SET_LOCAL,
-		key:      RebalanceRunning,
-		value:    "",
-		respch:   respch,
-		checkDDL: checkDDL,
-	}
+// registerLocalRebalanceToken registers rebalToken in local metadata storage.
+func (m *RebalanceServiceManager) registerLocalRebalanceToken(rebalToken *RebalanceToken) error {
+	const method = "RebalanceServiceManager::registerLocalRebalanceToken:" // for logging
 
-	respMsg := <-respch
-	resp := respMsg.(*MsgClustMgrLocal)
-
-	m.resetRunParams()
-
-	errMsg := resp.GetError()
-	if errMsg != nil {
-		if errMsg == ErrDDLRunning {
-			m.p.ddlRunning = true
-			m.p.ddlRunningIndexNames = resp.GetInProgressIndexes()
-			l.Infof("RebalanceServiceManager::registerRebalanceRunning Found DDL Running %v", m.p.ddlRunningIndexNames)
-		} else {
-			l.Errorf("RebalanceServiceManager::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
-				"Meta Storage. Err %v", errMsg)
-
-			return errMsg
-		}
-	}
-
-	// for ddl service manager
-	stopDDLProcessing()
-
-	return nil
-}
-
-func (m *RebalanceServiceManager) registerLocalRebalanceToken() error {
-
-	rtoken, err := json.Marshal(m.rebalanceToken)
+	rtoken, err := json.Marshal(rebalToken)
 	if err != nil {
 		return err
 	}
@@ -1397,27 +1404,122 @@ func (m *RebalanceServiceManager) registerLocalRebalanceToken() error {
 
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		l.Errorf("RebalanceServiceManager::registerLocalRebalanceToken Unable to set RebalanceToken In Local"+
-			"Meta Storage. Err %v", errMsg)
+		l.Errorf("%v Unable to set RebalanceToken In Local Meta Storage. Err %v",
+			method, errMsg)
 		return err
 	}
-	l.Infof("RebalanceServiceManager::registerLocalRebalanceToken Registered Rebalance Token In Local Meta %v", m.rebalanceToken)
+	l.Infof("%v Registered Rebalance Token In Local Meta %v", method, rebalToken)
 
 	return nil
-
 }
 
-func (m *RebalanceServiceManager) registerRebalanceTokenInMetakv() error {
+// registerRebalanceTokenInMetakv registers rebalToken in the Metakv repository.
+func (m *RebalanceServiceManager) registerRebalanceTokenInMetakv(rebalToken *RebalanceToken) error {
+	const method = "RebalanceServiceManager::registerRebalanceTokenInMetakv:" // for logging
 
-	err := c.MetakvSet(RebalanceTokenPath, m.rebalanceToken)
+	err := c.MetakvSet(RebalanceTokenPath, rebalToken)
 	if err != nil {
-		l.Errorf("RebalanceServiceManager::registerRebalanceTokenInMetakv Unable to set RebalanceToken In "+
-			"Meta Storage. Err %v", err)
+		l.Errorf("%v Unable to set RebalanceToken In Metakv Storage. Err %v", method, err)
 		return err
 	}
-	l.Infof("RebalanceServiceManager::registerRebalanceTokenInMetakv Registered Global Rebalance Token In Metakv %v", m.rebalanceToken)
+	l.Infof("%v Registered Global Rebalance Token In Metakv %v", method, rebalToken)
 
 	return nil
+}
+
+// registerGlobalRebalanceToken registers rebalToken with all remote Index nodes by calling REST API
+// /registerRebalanceToken, which is handled by handleRegisterRebalanceToken in this class. This may
+// return skipRebalance == true even if returning err == nil, for "non-error" failure cases. Parent
+// should have called cinfo.Fetch already so this function does not unless first iteration fails.
+func (m *RebalanceServiceManager) registerGlobalRebalanceToken(rebalToken *RebalanceToken,
+	change service.TopologyChange) (err error, skipRebalance bool) {
+	const method = "RebalanceServiceManager::registerGlobalRebalanceToken" // for logging
+
+	numKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
+
+	m.cinfo.Lock()
+	defer m.cinfo.Unlock()
+
+	var nids []c.NodeId
+	valid := false
+	const maxRetry = 10
+	for i := 0; i <= maxRetry; i++ {
+		nids = m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+		if len(nids) != numKnownNodes { // invalid case
+			if isSingleNodeRebal(change) {
+				l.Infof("%v ClusterInfo Node List doesn't match Known Nodes in Rebalance"+
+					" Request. Skip Rebalance. cinfo.nodes : %v, change : %v",
+					method, m.cinfo.Nodes(), change)
+				return nil, true
+			}
+
+			err = errors.New("ClusterInfo Node List doesn't match Known Nodes in Rebalance Request")
+			l.Errorf("%v err: %v, nids: %v, allKnownNodes: %v. Retrying %v",
+				method, err, nids, numKnownNodes, i)
+
+			if i+1 <= maxRetry { // will retry
+				time.Sleep(2 * time.Second)
+
+				// cinfo.Fetch has its own internal retries
+				if err = m.cinfo.Fetch(); err != nil {
+					l.Errorf("%v Error on iter %v fetching cluster information: %v", method, i, err)
+				}
+			}
+
+			continue // maxRetry loop
+		} // if incorrect number of nodes
+		valid = true
+		break
+	}
+
+	if !valid {
+		l.Errorf("%v cinfo.nodes: %v, change: %v", method, m.cinfo.Nodes(), change)
+		return err, true
+	}
+
+	url := "/registerRebalanceToken"
+	for _, nid := range nids {
+
+		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
+		if err == nil {
+
+			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				l.Errorf("%v Error Fetching Local Service Address %v", method, err)
+				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
+			}
+
+			if addr == localaddr {
+				l.Infof("%v Skip local service %v", method, addr)
+				continue
+			}
+
+			body, err := json.Marshal(&rebalToken)
+			if err != nil {
+				l.Errorf("%v Error registering rebalance token on %v, err: %v",
+					method, addr+url, err)
+				return err, true
+			}
+
+			bodybuf := bytes.NewBuffer(body)
+
+			resp, err := postWithAuth(addr+url, "application/json", bodybuf)
+			if err != nil {
+				l.Errorf("%v Error registering rebalance token on %v, err: %v",
+					method, addr+url, err)
+				return err, true
+			}
+			ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+		} else {
+			l.Errorf("%v Error Fetching Service Address %v", method, err)
+			return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node %v", err)), true
+		}
+
+		l.Infof("%v Successfully registered rebalance token on %v", method, addr+url)
+	}
+
+	return nil, false
 }
 
 func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool {
@@ -1454,96 +1556,6 @@ func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken Rebalan
 	l.Errorf("RebalanceServiceManager::observeGlobalRebalanceToken Timeout Waiting for Global Rebalance Token In Metakv")
 
 	return false
-
-}
-
-func (m *RebalanceServiceManager) registerGlobalRebalanceToken(change service.TopologyChange) (error, bool) {
-
-	m.cinfo.Lock()
-	defer m.cinfo.Unlock()
-
-	var err error
-	var nids []c.NodeId
-
-	maxRetry := 10
-	valid := false
-	for i := 0; i <= maxRetry; i++ {
-
-		if i != 0 {
-			time.Sleep(2 * time.Second)
-		}
-
-		if err = m.cinfo.Fetch(); err != nil {
-			l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
-			continue
-		}
-
-		nids = m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
-
-		allKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
-		if len(nids) != allKnownNodes {
-
-			if isSingleNodeRebal(change) {
-				l.Infof("RebalanceServiceManager::registerGlobalRebalanceToken ClusterInfo Node List doesn't "+
-					"match Known Nodes in Rebalance Request. Skip Rebalance. cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
-				return nil, true
-			}
-
-			err = errors.New("ClusterInfo Node List doesn't match Known Nodes in Rebalance Request")
-			l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken %v %v %v Retrying %v", err, nids, allKnownNodes, i)
-			continue
-		}
-		valid = true
-		break
-	}
-
-	if !valid {
-		l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
-		return err, true
-	}
-
-	url := "/registerRebalanceToken"
-
-	for _, nid := range nids {
-
-		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
-		if err == nil {
-
-			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
-			if err != nil {
-				l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error Fetching Local Service Address %v", err)
-				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
-			}
-
-			if addr == localaddr {
-				l.Infof("RebalanceServiceManager::registerGlobalRebalanceToken skip local service %v", addr)
-				continue
-			}
-
-			body, err := json.Marshal(&m.rebalanceToken)
-			if err != nil {
-				l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
-				return err, true
-			}
-
-			bodybuf := bytes.NewBuffer(body)
-
-			resp, err := postWithAuth(addr+url, "application/json", bodybuf)
-			if err != nil {
-				l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
-				return err, true
-			}
-			ioutil.ReadAll(resp.Body)
-			resp.Body.Close()
-		} else {
-			l.Errorf("RebalanceServiceManager::registerGlobalRebalanceToken Error Fetching Service Address %v", err)
-			return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node %v", err)), true
-		}
-
-		l.Infof("RebalanceServiceManager::registerGlobalRebalanceToken Successfully registered rebalance token on %v", addr+url)
-	}
-
-	return nil, false
 
 }
 
@@ -2185,6 +2197,8 @@ func (m *RebalanceServiceManager) getCurrRebalTokens() (*RebalTokens, error) {
 	return &rinfo, nil
 }
 
+// handleRegisterRebalanceToken handles REST API /registerRebalanceToken used to register a
+// rebalance token on Rebalance follower Index nodes.
 func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
@@ -2217,13 +2231,13 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 			}
 
 			m.rebalanceToken = &rebalToken
-			if err := m.registerLocalRebalanceToken(); err != nil {
+			if err := m.registerLocalRebalanceToken(m.rebalanceToken); err != nil {
 				l.Errorf("RebalanceServiceManager::handleRegisterRebalanceToken %v", err)
 				m.writeError(w, err)
 				return
 			}
 
-			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
+			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 				m.localhttp, m.config.Load(), nil, false, &m.p)
 			m.writeOk(w)
@@ -2240,7 +2254,6 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 		m.writeError(w, errors.New("Unsupported method"))
 		return
 	}
-
 }
 
 func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
@@ -2352,17 +2365,17 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 					fmtMsg := "move index failure - index build is in progress for indexes: %v."
 					err = errors.New(fmt.Sprintf(fmtMsg, m.p.ddlRunningIndexNames))
 				}
-				m.setErrorInMoveIndexToken(&rebalToken, err)
+				m.setErrorInMoveIndexToken(m.rebalanceToken, err)
 				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 				return nil
 			}
 
-			if err = m.registerLocalRebalanceToken(); err != nil {
-				m.setErrorInMoveIndexToken(&rebalToken, err)
+			if err = m.registerLocalRebalanceToken(m.rebalanceToken); err != nil {
+				m.setErrorInMoveIndexToken(m.rebalanceToken, err)
 				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 				return nil
 			}
-			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
+			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
 				m.localhttp, m.config.Load(), nil, false, nil)
 		}
@@ -2627,7 +2640,7 @@ func (m *RebalanceServiceManager) initMoveIndex(req *manager.IndexRequest, nodes
 		return err, false
 	}
 
-	if err = m.registerLocalRebalanceToken(); err != nil {
+	if err = m.registerLocalRebalanceToken(m.rebalanceToken); err != nil {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 		return err, false
 	}
