@@ -1450,10 +1450,16 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			// cluster to host all the replica.  Also do not repair if the index
 			// could be deleted by user.
 			numReplica := s.findNumReplica(index)
-			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
+
+			missingReplica := 0
+			if index.Instance != nil {
+				missingReplica = int(index.Instance.Defn.NumReplica+1) - numReplica
+			}
+
+			if index.Instance != nil && missingReplica > 0 &&
 				numReplica < numLiveNode && !index.pendingDelete {
 
-				targets := s.FindIndexerWithNoReplica(index)
+				targets := s.FindNodesForReplicaRepair(index, missingReplica)
 				if len(targets) == 0 && !indexer.ExcludeAny(s) {
 					targets = []*IndexerNode{indexer}
 				}
@@ -2886,13 +2892,25 @@ func (s *Solution) FindIndexerWithReplica(name, bucket, scope, collection string
 }
 
 //
-// Find the indexer node that does not contain the replica
-// This ignores any indexer that is deleted or cannot rebalance
+// Find possible targets to place lost replicas.
+// Returns the exact list of nodes on which can be directly used to
+// place the lost replicas.
 //
-func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) []*IndexerNode {
+func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica int) []*IndexerNode {
 
-	result := make([]*IndexerNode, 0, len(s.Placement))
-	for _, indexer := range s.Placement {
+	// TODO: Make this function aware of equivalent indexes.
+
+	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	nodes := shuffleNode(rs, s.Placement)
+
+	// TODO: Need to evaluate the cost of calculating replica and SG maps
+	// before replica repair.
+	replicaNodes := make(map[string]bool)
+	replicaServerGroups := make(map[string]bool)
+
+	result := make([]*IndexerNode, 0, len(nodes))
+	for _, indexer := range nodes {
 		if indexer.IsDeleted() || indexer.ExcludeAny(s) {
 			continue
 		}
@@ -2901,6 +2919,8 @@ func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) []*IndexerNode {
 		for _, index := range indexer.Indexes {
 			if source.IsReplica(index) {
 				found = true
+				replicaNodes[indexer.IndexerId] = true
+				replicaServerGroups[indexer.ServerGroup] = true
 				break
 			}
 		}
@@ -2908,6 +2928,40 @@ func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) []*IndexerNode {
 		if !found {
 			result = append(result, indexer)
 		}
+	}
+
+	if len(result) > numNewReplica {
+		final := make([]*IndexerNode, 0, len(result))
+
+		// Fill all the server groups first
+		for _, indexer := range result {
+			if numNewReplica <= 0 {
+				break
+			}
+
+			if _, ok := replicaServerGroups[indexer.ServerGroup]; !ok {
+				final = append(final, indexer)
+				replicaNodes[indexer.IndexerId] = true
+				replicaServerGroups[indexer.ServerGroup] = true
+				numNewReplica--
+			}
+		}
+
+		// Fill rest of the nodes
+		for _, indexer := range result {
+			if numNewReplica <= 0 {
+				break
+			}
+
+			if _, ok := replicaNodes[indexer.IndexerId]; !ok {
+				final = append(final, indexer)
+				replicaNodes[indexer.IndexerId] = true
+				replicaServerGroups[indexer.ServerGroup] = true
+				numNewReplica--
+			}
+		}
+
+		return final
 	}
 
 	return result

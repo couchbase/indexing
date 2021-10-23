@@ -1,0 +1,153 @@
+{
+	"placement": [
+		{
+			"nodeId": "127.0.0.1:9000",
+			"nodeUUID": "c6fe7e12b609acc9767c7b671c908773",
+			"indexerId": "c6fe7e12b609acc9767c7b671c908773",
+			"cpuUsage": 1,
+			"actualMemUsage": 100000000,
+			"actualMemOverhead": 165423720,
+			"serverGroup":"Group 1",
+			"indexes": [
+				{
+					"defnId": 1062966916559205703,
+					"instId": 1062966916559205703,
+					"name": "idx1",
+					"bucket": "default",
+					"numOfDocs": 168168,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"actualMemUsage": 100000000,
+					"cpuUsage": 1,
+					"actualMemOverhead": 165423720,
+					"numReplica": 1,
+					"instance": {
+						"InstId": 1062966916559205703,
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 0,
+						"Defn": {
+							"defnId": 1062966916559205703,
+							"name": "idx1",
+							"bucket": "default",
+							"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+							"secExprs": [
+								"field1"
+							],
+							"numReplica": 1,
+							"partitionScheme": "SINGLE"
+						}
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "f18c1f3d3c1fabf2a63b51d06f536bf9",
+			"indexerId": "f18c1f3d3c1fabf2a63b51d06f536bf9",
+			"cpuUsage": 1,
+			"actualMemUsage": 200000000,
+			"actualMemOverhead": 165423720,
+			"serverGroup":"Group 1",
+			"indexes": [
+				{
+					"defnId": 4650686066397790614,
+					"instId": 4650686066397790614,
+					"name": "idx2",
+					"bucket": "default",
+					"mutationRate": 0,
+					"scanRate": 0,
+					"actualMemUsage": 200000000,
+					"cpuUsage": 1,
+					"actualMemOverhead": 165423720,
+					"numReplica": 1,
+					"instance": {
+						"InstId": 4650686066397790614,
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 0,
+						"Defn": {
+							"defnId": 4650686066397790614,
+							"name": "idx2",
+							"bucket": "default",
+							"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+							"secExprs": [
+								"field2"
+							],
+							"numReplica": 1,
+							"partitionScheme": "SINGLE"
+						}
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "d70e7e12b609acd0767c7b671c908889",
+			"indexerId": "d70e7e12b609acd0767c7b671c908889",
+			"cpuUsage": 1,
+			"actualMemUsage": 300000000,
+			"actualMemOverhead": 165423720,
+			"serverGroup":"Group 1",
+			"indexes": [
+				{
+					"defnId": 3162966916559205745,
+					"instId": 3162966916559205745,
+					"name": "idx3",
+					"bucket": "default",
+					"numOfDocs": 168168,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"actualMemUsage": 300000000,
+					"cpuUsage": 1,
+					"actualMemOverhead": 165423720,
+					"numReplica": 1,
+					"instance": {
+						"InstId": 3162966916559205745,
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 0,
+						"Defn": {
+							"defnId": 3162966916559205745,
+							"name": "idx3",
+							"bucket": "default",
+							"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+							"secExprs": [
+								"field3"
+							],
+							"numReplica": 1,
+							"partitionScheme": "SINGLE"
+						}
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9003",
+			"nodeUUID": "bd457e12b609acc9767c7b671c442255",
+			"indexerId": "bd457e12b609acc9767c7b671c442255",
+			"cpuUsage": 0,
+			"memUsage": 0,
+			"memOverhead": 0,
+			"serverGroup":"Group 2"
+		}
+	],
+	"memQuota": 60000000000,
+	"cpuQuota": 8,
+	"isLive": true
+}
