@@ -115,12 +115,11 @@ func (s *ClientSettings) metaKVCallback(kve metakv.KVEntry) error {
 		diffOld, diffNew := oldConfig.SectionConfig("queryport.",
 			false).Diff(newConfig.SectionConfig("queryport.", false))
 		if len(diffOld) != 0 {
-			systemevent.InfoEvent("GSIClient:ClientSettings",
-				systemevent.EVENTID_QUERY_CLIENT_SETTINGS_CHANGE,
-				map[string]interface{}{
-					"NewSetting": diffNew.Map(),
-					"OldSetting": diffOld.Map(),
-				})
+			se := systemevent.NewSettingsChangeEvent(
+				"ClientSettings:metaKVCallback",
+				diffOld.Map(), diffNew.Map())
+			eventID := systemevent.EVENTID_QUERY_CLIENT_SETTINGS_CHANGE
+			systemevent.InfoEvent("GSIClient", eventID, se)
 		}
 	}
 

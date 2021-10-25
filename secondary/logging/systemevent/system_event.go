@@ -211,3 +211,21 @@ func NewDDLSystemEvent(mod string, defnId common.IndexDefnId,
 	}
 	return e
 }
+
+type settingsChangeEvent struct {
+	Group       string                 `json:"group"`
+	Module      string                 `json:"module"`
+	OldSettings map[string]interface{} `json:"old_setting"`
+	NewSettings map[string]interface{} `json:"new_setting"`
+}
+
+func NewSettingsChangeEvent(mod string, oldSetting,
+	newSettings map[string]interface{}) settingsChangeEvent {
+	e := settingsChangeEvent{
+		Group:       "SettingsChange",
+		Module:      mod,
+		NewSettings: newSettings,
+		OldSettings: oldSetting,
+	}
+	return e
+}
