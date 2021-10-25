@@ -2194,9 +2194,11 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 
 		flushTs := getSeqTsFromTsVbuuid(ts)
 
+		enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+
 		//if HWT is greater than flush in progress TS, this means the flush
 		//in progress will finish.
-		if tsHWT.GreaterThanEqual(flushTs) {
+		if tsHWT.GreaterThanEqual(flushTs) || enableOSO {
 			logging.Infof("Timekeeper::flushOrAbortInProgressTS Processing Flush TS %v "+
 				"before recovery for keyspaceId %v streamId %v", ts, keyspaceId, streamId)
 		} else {
