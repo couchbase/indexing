@@ -36,7 +36,7 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 // key as JSON object.
 func N1QLTransform(
 	docid []byte, docval qvalue.AnnotatedValue, context qexpr.Context,
-	cExprs []interface{},
+	cExprs []interface{}, numFlattenKeys int,
 	encodeBuf []byte, stats *IndexEvaluatorStats) ([]byte, []byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
@@ -57,7 +57,7 @@ func N1QLTransform(
 			logging.Errorf(fmsg, arg1, arg2, err)
 			return nil, nil, nil
 		}
-		isArray, _, _ := expr.IsArrayIndexKey()
+		isArray, _, isFlattened := expr.IsArrayIndexKey()
 		if isArray == false {
 			if scalar == nil { //nil is ERROR condition
 				exprstr := qexpr.NewStringer().Visit(expr)
@@ -86,7 +86,6 @@ func N1QLTransform(
 				logging.Errorf(fmsg, arg1, arg2)
 				return nil, nil, nil
 			}
-
 			if isLeadingKey {
 				//if array is leading key and empty, skip indexing the entry
 				if isArrayEmpty(vector) {
@@ -96,12 +95,34 @@ func N1QLTransform(
 				if isArrayMissing(vector) {
 					return nil, nil, nil
 				}
+
+				if isFlattened {
+					if isArrayNull(vector) { // Populate "null" for all keys
+						vector = populateValueForFlattenKeys(numFlattenKeys, qvalue.NULL_VALUE)
+					} else {
+						vector = filterVectorForMissingEntries(vector)
+						if len(vector) == 0 {
+							return nil, nil, nil
+						}
+					}
+				}
 			} else {
-				//if array is non-leading key and empty, treat it as missing
-				if isArrayEmpty(vector) {
-					vector = []qvalue.Value{missing}
+				if isFlattened {
+					if isArrayEmpty(vector) { // Populate "missing" for all keys
+						vector = populateValueForFlattenKeys(numFlattenKeys, missing)
+					} else if isArrayMissing(vector) { // Populate qvalue.MISSING_VALUE for all "keys"
+						vector = populateValueForFlattenKeys(numFlattenKeys, qvalue.MISSING_VALUE)
+					} else if isArrayNull(vector) { // Populate "null" for all keys
+						vector = populateValueForFlattenKeys(numFlattenKeys, qvalue.NULL_VALUE)
+					}
+				} else {
+					//if array is non-leading key and empty, treat it as missing
+					if isArrayEmpty(vector) {
+						vector = []qvalue.Value{missing}
+					}
 				}
 			}
+
 			isLeadingKey = false
 
 			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(vector)))
@@ -144,6 +165,41 @@ func N1QLTransform(
 	return nil, nil, nil
 }
 
+func populateValueForFlattenKeys(numFlattenKeys int, value qvalue.Value) []qvalue.Value {
+	flattenKeyVals := make(qvalue.Values, numFlattenKeys)
+	for i := 0; i < numFlattenKeys; i++ {
+		flattenKeyVals[i] = value
+	}
+	vector := []qvalue.Value{qvalue.NewValue(flattenKeyVals)}
+	return vector
+}
+
+// For flattened array index, if the array is the leading expression
+// in the index, filter all the values where the first key in
+// the expression is MISSING. E.g., for the expression
+// "distinct array flatten_keys(v.name, v.age, v.email) for v in friends"
+// [[test 10 abcd@abcd.com] [MISSING 11 efgh@abcd.com]], the second
+// entry in the array i.e. [MISSING 11 efgh@abcd.com] will be filtered from
+// the result and only [test 10 abcd@abcd.com] is returned to the user
+func filterVectorForMissingEntries(vector qvalue.Values) qvalue.Values {
+	index := 0 // Index is a monotonically increasing counter
+	end := len(vector)
+	for index < end {
+		if vector[index] == nil {
+			break
+		}
+		leadingVal, ok := vector[index].Index(0)
+		if ok && leadingVal.Type() == qvalue.MISSING {
+			vector[index] = vector[end-1] // Swap with last element of the slice and set last element to nil
+			vector[end-1] = nil
+			end--
+		} else {
+			index++
+		}
+	}
+	return vector[0:end]
+}
+
 func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, error) {
 	codec := collatejson.NewCodec(16)
 	encoded, err := codec.EncodeN1QLValue(val, encodeBuf[:0])
@@ -166,4 +222,8 @@ func isArrayEmpty(vector qvalue.Values) bool {
 
 func isArrayMissing(vector qvalue.Values) bool {
 	return (len(vector) == 1 && vector[0].Type() == qvalue.MISSING)
+}
+
+func isArrayNull(vector qvalue.Values) bool {
+	return (len(vector) == 1 && vector[0].Type() == qvalue.NULL)
 }

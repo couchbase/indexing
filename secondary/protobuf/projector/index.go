@@ -110,6 +110,10 @@ type IndexEvaluator struct {
 	version    FeedVersion
 	xattrs     []string
 	stats      *IndexEvaluatorStats
+
+	// For flattened array index, this variable represents
+	// the number of keys in the flatten_keys expression
+	numFlattenKeys int
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -140,6 +144,17 @@ func NewIndexEvaluator(
 		if err != nil {
 			return nil, err
 		}
+
+		for _, skExpr := range ie.skExprs {
+			expr := skExpr.(qexpr.Expression)
+			isArray, _, isFlattened := expr.IsArrayIndexKey()
+			if isArray && isFlattened {
+				// Populate numFlattenKeys and break
+				ie.numFlattenKeys = expr.(*qexpr.All).FlattenSize()
+				break
+			}
+		}
+
 		// expression to evaluate partition key
 		exprs = defn.GetPartnExpressions()
 		xattrExprs = append(xattrExprs, exprs...)
@@ -498,7 +513,7 @@ func (ie *IndexEvaluator) evaluate(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, context, ie.skExprs, encodeBuf, ie.stats)
+		return N1QLTransform(docid, docval, context, ie.skExprs, ie.numFlattenKeys, encodeBuf, ie.stats)
 	}
 	return nil, nil, nil
 }
@@ -515,7 +530,7 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, nil, ie.stats)
+		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, 0, nil, ie.stats)
 		return out, err
 	}
 	return nil, nil
@@ -535,7 +550,7 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, encodeBuf, ie.stats)
+		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, 0, encodeBuf, ie.stats)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false
