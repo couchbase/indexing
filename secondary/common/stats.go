@@ -254,9 +254,12 @@ func GetIndexStats(config Config, filter string, httpTimeoutSecs uint32) (statsM
 	return statsMap, errMap, err
 }
 
-// parallelStatsRestCall makes the same stats REST call to all Index nodes in parallel and returns the results
-// mapped by nodeUUID (string). Adapted from planner/proxy.go restHelperNoLock.
+// parallelStatsRestCall makes the same stats REST call to all Index nodes in parallel and returns
+// the results mapped by nodeUUID (string). A nodeUUID will be added to respMap on success or errMap
+// on failure and will be left out of the other map.
 func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string, httpTimeoutSecs uint32) (respMap map[string]*Statistics, errMap map[string]error) {
+	const method = "stats::parallelStatsRestCall:" // for logging
+
 	respMap = make(map[string]*Statistics) // return 1: indexer stats by nodeUUID
 	errMap = make(map[string]error)        // return 2: errors by nodeUUID
 	var mu sync.Mutex
@@ -268,8 +271,8 @@ func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string
 		// obtain the admin port for the indexer node
 		addr, err := cinfo.GetServiceAddress(nid, INDEX_HTTP_SERVICE, true)
 		if err != nil {
-			logging.Errorf("stats::parallelStatsRestCall: Error getting service address for nodeUUID %v. Error: %v",
-				nodeUUID, err)
+			logging.Errorf("%v Error getting service address for nodeUUID %v. Error: %v",
+				method, nodeUUID, err)
 			errMap[nodeUUID] = err
 			continue
 		}
@@ -283,12 +286,13 @@ func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string
 			resp, err = restGetStats(addr, filter, httpTimeoutSecs) // make the REST call
 			dur := time.Since(t0)
 			if dur > 30*time.Second || err != nil {
-				logging.Warnf("stats::parallelStatsRestCall took %v for addr %v with err %v", dur, addr, err)
+				logging.Warnf("%v Took %v for addr %v with err %v", method, dur, addr, err)
 			}
 			if err == nil {
 				err = security.ConvertHttpResponse(resp, stats)
 				if err != nil {
-					logging.Errorf("stats::parallelStatsRestCall SetResponse for addr %v with err %v", addr, err)
+					logging.Errorf("%v ConvertHttpResponse for addr %v with err %v",
+						method, addr, err)
 				}
 			}
 
@@ -297,7 +301,6 @@ func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string
 
 			if err != nil {
 				errMap[nodeUUID] = err
-				respMap[nodeUUID] = nil
 			} else {
 				respMap[nodeUUID] = stats
 			}
