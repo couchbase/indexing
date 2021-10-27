@@ -174,12 +174,11 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		diffOld, diffNew := oldConfig.SectionConfig("projector.",
 			false).Diff(newConfig.SectionConfig("projector.", false))
 		if len(diffOld) != 0 {
-			systemevent.InfoEvent("Projector",
-				systemevent.EVENTID_PROJECTOR_SETTINGS_CHANGE,
-				map[string]interface{}{
-					"NewSetting": diffNew.Map(),
-					"OldSetting": diffOld.Map(),
-				})
+			se := systemevent.NewSettingsChangeEvent(
+				"NewProjector:callb",
+				diffOld.Map(), diffNew.Map())
+			eventID := systemevent.EVENTID_PROJECTOR_SETTINGS_CHANGE
+			systemevent.InfoEvent("Projector", eventID, se)
 		}
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))

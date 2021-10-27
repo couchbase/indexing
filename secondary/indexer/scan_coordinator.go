@@ -89,6 +89,9 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		logPrefix:        "ScanCoordinator",
 		reqCounter:       0,
 		cpuThrottle:      cpuThrottle,
+		indexInstMap:     make(common.IndexInstMap),
+		indexPartnMap:    make(IndexPartnMap),
+		indexDefnMap:     make(map[common.IndexDefnId][]common.IndexInstId),
 	}
 
 	s.config.Store(config)
@@ -191,6 +194,9 @@ func (s *scanCoordinator) listenSnapshot(index int) {
 
 func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	switch cmd.GetMsgType() {
+	case ADD_INDEX_INSTANCE:
+		s.handleAddIndexInstance(cmd)
+
 	case UPDATE_INDEX_INSTANCE_MAP:
 		s.handleUpdateIndexInstMap(cmd)
 
@@ -1031,6 +1037,28 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		}
 		replych <- true
 	}()
+}
+
+// The updates to indexInstMap and indexPartnMap are mutex protected. Readers
+// will acquire RLock before accessing them. Also, the inst and partnMap are
+// cloned at source. Hence, it is safe to update indexInstMap and indexPartnMap
+// by acquiring lock
+func (s *scanCoordinator) handleAddIndexInstance(cmd Message) {
+	logging.Infof("ScanCoordinator::handleAddIndexInstance %v", cmd)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	req := cmd.(*MsgAddIndexInst)
+	inst := req.GetIndexInst()
+	partnMap := req.GetInstPartnMap()
+
+	s.indexInstMap[inst.InstId] = inst
+	s.indexPartnMap[inst.InstId] = partnMap
+
+	defnId := inst.Defn.DefnId
+	s.indexDefnMap[defnId] = append(s.indexDefnMap[defnId], inst.InstId)
+
+	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {

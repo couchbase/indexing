@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -1403,6 +1404,148 @@ func TraceHandler(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	pprof.Trace(rw, r)
+}
+
+// Enum values for lockType arguments of TraceXxxLock/Unlock funcs.
+const (
+	LOCK_READ  = iota // acquire lock for read
+	LOCK_WRITE        // acquire lock for write
+)
+const LOCK_LOG_DUR = 500 * time.Millisecond // minimum lock wait/hold duration before logging it
+
+// TraceMutexLOCK assists logging how long it took to lock a Mutex. This logs how long it took
+// iff >= LOCK_LOG_DUR. It returns the time at which the lock was acquired.
+//
+// Arguments
+//   lock -- pointer to the mutex to lock
+//   lockName -- name of the mutex (for logging)
+//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+func TraceMutexLOCK(lock *sync.Mutex, lockName, caller, parent string) time.Time {
+
+	lockTryTime := time.Now()
+	lock.Lock()
+	lockGotTime := time.Now()
+
+	if lockWaitDur := lockGotTime.Sub(lockTryTime); lockWaitDur >= LOCK_LOG_DUR {
+		traceLockLog(LOCK_WAIT, lockWaitDur, LOCK_WRITE, lockName, caller, parent)
+	}
+	return lockGotTime
+}
+
+// TraceMutexUNLOCK assists logging how long a Mutex was held. This logs the hold time
+// iff >= LOCK_LOG_DUR.
+//
+// Arguments
+//   lockGotTime -- time the lock was originally acquired (return value from TraceMutexLOCK)
+//   lock -- pointer to the mutex to unlock
+//   lockName -- name of the mutex (for logging)
+//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+func TraceMutexUNLOCK(lockGotTime time.Time, lock *sync.Mutex, lockName, caller, parent string) {
+
+	lock.Unlock()
+	lockReleasedTime := time.Now()
+
+	if lockHoldDur := lockReleasedTime.Sub(lockGotTime); lockHoldDur >= LOCK_LOG_DUR {
+		traceLockLog(LOCK_HOLD, lockHoldDur, LOCK_WRITE, lockName, caller, parent)
+	}
+}
+
+// TraceRWMutexLOCK assists logging how long it took to lock an RWMutex. This logs how long it took
+// iff >= LOCK_LOG_DUR. It returns the time at which the lock was acquired.
+//
+// Arguments
+//   lockType -- LOCK_READ or LOCK_WRITE
+//   lock -- pointer to the mutex to lock
+//   lockName -- name of the mutex (for logging)
+//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+func TraceRWMutexLOCK(lockType int, lock *sync.RWMutex, lockName, caller, parent string) time.Time {
+
+	lockTryTime := time.Now()
+	if lockType == LOCK_READ {
+		lock.RLock()
+	} else { // LOCK_WRITE
+		lock.Lock()
+	}
+	lockGotTime := time.Now()
+
+	if lockWaitDur := lockGotTime.Sub(lockTryTime); lockWaitDur >= LOCK_LOG_DUR {
+		traceLockLog(LOCK_WAIT, lockWaitDur, lockType, lockName, caller, parent)
+	}
+	return lockGotTime
+}
+
+// TraceRWMutexUNLOCK assists logging how long an RWMutex was held. This logs the hold time
+// iff >= LOCK_LOG_DUR.
+//
+// Arguments
+//   lockGotTime -- time the lock was originally acquired (return value from TraceRWMutexLOCK)
+//   lockType -- LOCK_READ or LOCK_WRITE
+//   lock -- pointer to the mutex to unlock
+//   lockName -- name of the mutex (for logging)
+//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+func TraceRWMutexUNLOCK(lockGotTime time.Time,
+	lockType int, lock *sync.RWMutex, lockName, caller, parent string) {
+
+	if lockType == LOCK_READ {
+		lock.RUnlock()
+	} else { // LOCK_WRITE
+		lock.Unlock()
+	}
+	lockReleasedTime := time.Now()
+
+	if lockHoldDur := lockReleasedTime.Sub(lockGotTime); lockHoldDur >= LOCK_LOG_DUR {
+		traceLockLog(LOCK_HOLD, lockHoldDur, lockType, lockName, caller, parent)
+	}
+}
+
+// Enum values for lockAction argument of traceLockLog function.
+const (
+	LOCK_HOLD = iota // held mutex
+	LOCK_WAIT        // waited for mutex
+)
+
+// traceLockLog is a helper for the Trace[RW]MutexLOCK/UNLOCK functions to log long waits/holds.
+// Examples:
+//   util::traceLockLog: Long hold of myMutex.Lock() 784ms in myClass::myMethod:
+//     called by parentClass::parentMethod:
+//   util::traceLockLog: Long wait for myMutex.RLock() 511ms in myClass::myMethod:
+//     called by parentClass::parentMethod:
+//
+// Arguments
+//   lockAction -- LOCK_WAIT or LOCK_HOLD
+//   lockDur -- duration of the lock hold or wait
+//   lockType -- LOCK_READ or LOCK_WRITE
+//   lockName -- name of the mutex (for logging)
+//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+func traceLockLog(lockAction int, lockDur time.Duration, lockType int,
+	lockName, caller, parent string) {
+	const method = "util::traceLockLog:" // for logging
+
+	var bld strings.Builder
+	bldPtr := &bld
+
+	fmt.Fprintf(bldPtr, "%v Long ", method)
+	if lockAction == LOCK_HOLD {
+		fmt.Fprintf(bldPtr, "hold of %v.", lockName)
+	} else { // LOCK_WAIT
+		fmt.Fprintf(bldPtr, "wait for %v.", lockName)
+	}
+	if lockType == LOCK_READ {
+		fmt.Fprintf(bldPtr, "RLock")
+	} else { // LOCK_WRITE
+		fmt.Fprintf(bldPtr, "Lock")
+	}
+	fmt.Fprintf(bldPtr, "() %v in %v", lockDur, caller)
+	if parent != "" {
+		fmt.Fprintf(bldPtr, " called by %v", parent)
+	}
+
+	logging.Warnf(bld.String())
 }
 
 func ExpvarHandler(rw http.ResponseWriter, r *http.Request) {

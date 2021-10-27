@@ -169,8 +169,9 @@ type indexer struct {
 
 	config common.Config
 
-	kvlock    sync.Mutex   //fine-grain lock for KVSender
-	stateLock sync.RWMutex //lock to protect the keyspaceIdStatus map
+	kvlock       sync.Mutex   //fine-grain lock for KVSender
+	clustMgrLock sync.Mutex   // lock to protect concurrent reads and writes from clustMgrAgentCmdCh
+	stateLock    sync.RWMutex //lock to protect the keyspaceIdStatus map
 
 	stats *IndexerStats
 
@@ -606,7 +607,8 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	if refreshEncrypt {
 		// restart lifecyclemgr
 		logging.Infof("handleSecurityChange: restarting index manager")
-		if err := idx.sendMsgToWorker(msg, idx.clustMgrAgentCmdCh); err != nil {
+
+		if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 			exitFn(fmt.Sprintf("Fail to restart lifecycle mgr on security change. Error %v", err))
 		}
 
@@ -1360,9 +1362,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
-	case INDEX_STATS_DONE, INDEX_STATS_BROADCAST:
-		idx.clustMgrAgentCmdCh <- msg
-		<-idx.clustMgrAgentCmdCh
+	case INDEX_STATS_DONE, INDEX_STATS_BROADCAST,
+		INDEX_BOOTSTRAP_STATS_UPDATE:
+		idx.sendMsgToClustMgr(msg)
 
 	case INDEXER_KEYSPACE_NOT_FOUND:
 		idx.handleKeyspaceNotFound(msg)
@@ -1418,6 +1420,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case UPDATE_MAP_WORKER:
 		idx.handleUpdateMapToWorker(msg)
+
+	case ADD_INDEX_INSTANCE:
+		idx.handleAddIndexInstanceAtWorker(msg)
 
 	case STORAGE_UPDATE_SNAP_MAP:
 		idx.storageMgrCmdCh <- msg
@@ -1612,8 +1617,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.tkCmdCh
 	idx.scanCoordCmdCh <- msg
 	<-idx.scanCoordCmdCh
-	idx.kvSenderCmdCh <- msg
-	<-idx.kvSenderCmdCh
+
+	// sendMsgToKVSender lock protects writes and reads to
+	// kvSenderCmdCh so that message crossover is prevented
+	idx.sendMsgToKVSender(msg)
+
 	idx.mutMgrCmdCh <- msg
 	<-idx.mutMgrCmdCh
 	idx.statsMgrCmdCh <- msg
@@ -1624,8 +1632,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.ddlSrvMgrCmdCh
 	idx.schedIdxCreatorCmdCh <- msg
 	<-idx.schedIdxCreatorCmdCh
-	idx.clustMgrAgentCmdCh <- msg
-	<-idx.clustMgrAgentCmdCh
+
+	idx.sendMsgToClustMgr(msg)
+
 	idx.storageMgrCmdCh <- msg
 	<-idx.storageMgrCmdCh
 	idx.updateSliceWithConfig(newConfig)
@@ -2419,7 +2428,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 				tgtInstVersion: uint64(target.Version),
 				respch:         clustMgrRespch,
 			}
-			if err := idx.sendMsgToClusterMgr(msg); err != nil {
+			if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 				common.CrashOnError(err)
 			}
 
@@ -3630,7 +3639,7 @@ func (idx *indexer) resetSingleIndexOnRollback(inst *common.IndexInst,
 		respch: respch,
 	}
 
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+	if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -4524,13 +4533,13 @@ func (idx *indexer) shutdownWorkers() {
 
 	if idx.enableManager {
 		//shutdown cluster manager
-		idx.clustMgrAgentCmdCh <- &MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN}
-		<-idx.clustMgrAgentCmdCh
+		idx.sendMsgToClustMgr(&MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN})
 	}
 
-	//shutdown kv sender
-	idx.kvSenderCmdCh <- &MsgGeneral{mType: KV_SENDER_SHUTDOWN}
-	<-idx.kvSenderCmdCh
+	// shutdown kv sender
+	// sendMsgToKVSender lock protects writes and reads to
+	// kvSenderCmdCh so that message crossover is prevented
+	idx.sendMsgToKVSender(&MsgGeneral{mType: KV_SENDER_SHUTDOWN})
 
 	// shutdown ddl manager
 	idx.ddlSrvMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
@@ -4781,6 +4790,16 @@ func (idx *indexer) sendMsgToKVSender(cmd Message) {
 	//send stream update to kv sender
 	idx.kvSenderCmdCh <- cmd
 	<-idx.kvSenderCmdCh
+}
+
+func (idx *indexer) sendMsgToClustMgr(cmd Message) (Message, bool) {
+	idx.clustMgrLock.Lock()
+	defer idx.clustMgrLock.Unlock()
+
+	//send stream update to kv sender
+	idx.clustMgrAgentCmdCh <- cmd
+	resp, ok := <-idx.clustMgrAgentCmdCh
+	return resp, ok
 }
 
 // sendStreamUpdateToWorker synchronously sends a message to a worker and awaits the
@@ -5113,8 +5132,16 @@ func (idx *indexer) sendUpdatedKeyspaceStatsMapToWorker(msgUpdateKeyspaceStatsMa
 func (idx *indexer) sendMessageToWorker(msg Message, workerCmdCh chan Message, workerStr string) error {
 
 	if msg != nil {
-		workerCmdCh <- msg
-		if resp, ok := <-workerCmdCh; ok {
+		var resp Message
+		var ok bool
+		if workerCmdCh == idx.clustMgrAgentCmdCh && workerStr == "clusterMgrAgent" {
+			resp, ok = idx.sendMsgToClustMgr(msg)
+		} else {
+			workerCmdCh <- msg
+			resp, ok = <-workerCmdCh
+		}
+
+		if ok {
 			if resp.GetMsgType() == MSG_ERROR {
 				logging.Errorf("Indexer::sendMessageToWorker - Error received from %v processing "+
 					"Msg %v Err %v. Aborted.", workerStr, msg, resp)
@@ -6704,35 +6731,34 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
 
-	//set topic names based on indexer id
-	idx.initStreamTopicName()
-
-	//close any old streams with projector
-	idx.closeAllStreams()
-
 	idx.recoverRebalanceState()
 
-	start := time.Now()
-	err := idx.recoverIndexInstMap()
-	if err != nil {
-		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
-		return err
-	}
-
-	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
-
-	idx.validateIndexInstMap()
-
-	// Cleanup orphan indexes, if any.
-	idx.cleanupOrphanIndexes()
-
-	// Upgrade storage depending on the storage mode of the indexes residing on this node.
-	// This step does not depend on the cluster storage mode (from metakv).   The indexer
-	// may need to restart if the bootstrap storage mode is different than the storage mode of
-	// the upgraded indexes.
-	needsRestart := idx.upgradeStorage()
-
 	go func() {
+		//set topic names based on indexer id
+		idx.initStreamTopicName()
+
+		//close any old streams with projector
+		idx.closeAllStreams()
+
+		start := time.Now()
+		err := idx.recoverIndexInstMap()
+		if err != nil {
+			logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+		}
+
+		logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
+
+		idx.validateIndexInstMap()
+
+		// Cleanup orphan indexes, if any.
+		idx.cleanupOrphanIndexes()
+
+		// Upgrade storage depending on the storage mode of the indexes residing on this node.
+		// This step does not depend on the cluster storage mode (from metakv).   The indexer
+		// may need to restart if the bootstrap storage mode is different than the storage mode of
+		// the upgraded indexes.
+		needsRestart := idx.upgradeStorage()
+
 		//Start Storage Manager
 		var res Message
 		stats := idx.stats.Clone()
@@ -6746,7 +6772,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 		}
 
 		//Recover indexes from local metadata.
-		err := idx.initFromPersistedState()
+		err = idx.initFromPersistedState()
 		if err != nil {
 			//sending error will cause indexer to restart
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
@@ -6944,13 +6970,13 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 	<-idx.scanCoordCmdCh
 
 	// Persist node uuid in Metadata store
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+	clustMgrMsg := &MsgClustMgrLocal{
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   INDEXER_NODE_UUID,
 		value: idx.config["nodeuuid"].String(),
 	}
 
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 	resp := respMsg.(*MsgClustMgrLocal)
 
 	errMsg := resp.GetError()
@@ -6985,12 +7011,12 @@ func (idx *indexer) handleReadPersistedStats(msg Message) {
 func (idx *indexer) bootstrap2() error {
 
 	if common.GetStorageMode() == common.MOI {
-		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		clustMgrMsg := &MsgClustMgrLocal{
 			mType: CLUST_MGR_GET_LOCAL,
 			key:   INDEXER_STATE_KEY,
 		}
 
-		respMsg := <-idx.clustMgrAgentCmdCh
+		respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 		resp := respMsg.(*MsgClustMgrLocal)
 
 		val := resp.GetValue()
@@ -7032,7 +7058,7 @@ func (idx *indexer) bootstrap2() error {
 
 	// ready to process DDL
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+	if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 		return err
 	}
 
@@ -7062,12 +7088,12 @@ func (idx *indexer) bootstrap2() error {
 
 func (idx *indexer) recoverRebalanceState() {
 
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+	clustMgrMsg := &MsgClustMgrLocal{
 		mType: CLUST_MGR_GET_LOCAL,
 		key:   RebalanceRunning,
 	}
 
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 	resp := respMsg.(*MsgClustMgrLocal)
 
 	val := resp.GetValue()
@@ -7083,12 +7109,12 @@ func (idx *indexer) recoverRebalanceState() {
 		idx.rebalanceRunning = false
 	}
 
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+	clustMgrMsg = &MsgClustMgrLocal{
 		mType: CLUST_MGR_GET_LOCAL,
 		key:   RebalanceTokenTag,
 	}
 
-	respMsg = <-idx.clustMgrAgentCmdCh
+	respMsg, _ = idx.sendMsgToClustMgr(clustMgrMsg)
 	resp = respMsg.(*MsgClustMgrLocal)
 
 	val = resp.GetValue()
@@ -7111,6 +7137,16 @@ func (idx *indexer) recoverRebalanceState() {
 	}
 
 	logging.Infof("Indexer::recoverRebalanceState RebalanceRunning %v RebalanceToken %v", idx.rebalanceRunning, idx.rebalanceToken)
+}
+
+func (idx *indexer) handleAddIndexInstanceAtWorker(msg Message) {
+	req := msg.(*MsgAddIndexInst)
+	workerCh := req.GetWorkerCh()
+	workerStr := req.GetWorkerStr()
+	respCh := req.GetRespCh()
+
+	err := idx.sendMessageToWorker(msg, workerCh, workerStr)
+	respCh <- err
 }
 
 func (idx *indexer) handleUpdateMapToWorker(msg Message) {
@@ -7154,12 +7190,12 @@ func (idx *indexer) genIndexerId() {
 	if idx.enableManager {
 
 		//try to fetch IndexerId from manager
-		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		clustMgrMsg := &MsgClustMgrLocal{
 			mType: CLUST_MGR_GET_LOCAL,
 			key:   INDEXER_ID_KEY,
 		}
 
-		respMsg := <-idx.clustMgrAgentCmdCh
+		respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 		resp := respMsg.(*MsgClustMgrLocal)
 
 		val := resp.GetValue()
@@ -7178,13 +7214,13 @@ func (idx *indexer) genIndexerId() {
 			//}
 
 			idx.id = idx.config["nodeuuid"].String()
-			idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+			clustMgrMsg := &MsgClustMgrLocal{
 				mType: CLUST_MGR_SET_LOCAL,
 				key:   INDEXER_ID_KEY,
 				value: idx.id,
 			}
 
-			respMsg := <-idx.clustMgrAgentCmdCh
+			respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 			resp := respMsg.(*MsgClustMgrLocal)
 
 			errMsg := resp.GetError()
@@ -7284,7 +7320,13 @@ func (idx *indexer) initFromPersistedState() error {
 		localIndexInstMap[inst.InstId] = inst
 		localIndexPartnMap[inst.InstId] = partnInstMap
 
-		//update index maps in storage manager
+		// update index maps in storage manager
+		// Note: Unlike scan coordinator, storage manager can not incrementally update
+		// indexInstMap and indexPartnMap. This is because stale=ok scans might request
+		// for a snapshot while inst update is in progress. This can lead to concurrent
+		// map access violation. Hence, storage manager has to clone the entire map, update
+		// the instance in the clone and update the original instance maps. It works for
+		// scan coordinator as the instance updates and reads are mutex protected
 		err = idx.sendInstMapToWorker(idx.storageMgrCmdCh, "StorageMgr", localIndexInstMap, localIndexPartnMap)
 		if err != nil { // continue in case of error
 			continue
@@ -7300,12 +7342,12 @@ func (idx *indexer) initFromPersistedState() error {
 		}
 
 		//update index maps in scan coordinator
-		err = idx.sendInstMapToWorker(idx.scanCoordCmdCh, "ScanCoordinator", localIndexInstMap, localIndexPartnMap)
+		err = idx.addInstAtWorker(idx.scanCoordCmdCh, "ScanCoordinator", inst, partnInstMap)
 		if err != nil { // continue in case of error
 			continue
 		}
 
-		idx.broadcastBootstrapStats(bootstrapStats, inst.InstId)
+		idx.updateBootstrapStats(bootstrapStats, inst.InstId)
 	}
 
 	return nil
@@ -7336,6 +7378,53 @@ func (idx *indexer) sendInstMapToWorker(wCh MsgChannel, wStr string,
 	}
 	err := <-respCh
 	return err
+}
+
+func (idx *indexer) addInstAtWorker(wCh MsgChannel, wStr string,
+	indexInst common.IndexInst, instPartns PartitionInstMap) error {
+
+	instClone := indexInst
+	instClone.Pc = indexInst.Pc.Clone()
+
+	instPartnsClone := make(PartitionInstMap)
+	for k, v := range instPartns {
+		instPartnsClone[k] = v
+	}
+
+	respCh := make(chan error)
+	idx.internalRecvCh <- &MsgAddIndexInst{
+		workerCh:   wCh,
+		workerStr:  wStr,
+		indexInst:  instClone,
+		instPartns: instPartnsClone,
+		respCh:     respCh,
+	}
+	err := <-respCh
+	return err
+}
+
+// broadcast stats to clients
+func (idx *indexer) updateBootstrapStats(stats *IndexerStats,
+	id common.IndexInstId) {
+
+	idxStats := stats.indexes[id]
+
+	state := idx.indexInstMap[id].State
+	idxStats.indexState.Set((uint64)(state))
+
+	idxStats.numDocsPending.Set(math.MaxInt64)
+	idxStats.numDocsQueued.Set(math.MaxInt64)
+	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
+	idxStats.progressStatTime.Set(time.Now().UnixNano())
+
+	statsForIndex := make(common.Statistics)
+	statsForIndex[fmt.Sprintf("%v", id)] = idxStats
+	// Marshall stats to byte slice
+
+	idx.internalRecvCh <- &MsgStatsRequest{
+		mType: INDEX_BOOTSTRAP_STATS_UPDATE,
+		stats: statsForIndex,
+	}
 }
 
 // broadcast stats to clients
@@ -7416,7 +7505,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 		updateStatusOnly: true,
 	}
 
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+	if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in marking metadata as deleted",
 			indexInst.InstId, partnId, err)
 		common.CrashOnError(err)
@@ -7456,7 +7545,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 		partnId:   partnInst.Defn.GetPartitionId(),
 	}
 
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+	if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in deleting metadata. "+
 			"Metadata will be deleted on next indexer restart.", indexInst.InstId, partnId, err)
 	}
@@ -7474,9 +7563,9 @@ func (idx *indexer) recoverIndexInstMap() error {
 
 func (idx *indexer) recoverInstMapFromManager() error {
 
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrTopology{}
+	clustMgrMsg := &MsgClustMgrTopology{}
 
-	resp := <-idx.clustMgrAgentCmdCh
+	resp, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 
 	switch resp.GetMsgType() {
 
@@ -7650,7 +7739,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	msg := &MsgClustMgrResetIndexOnUpgrade{
 		inst: *inst,
 	}
-	idx.sendMsgToClusterMgr(msg)
+	idx.sendMsgToClustMgrAndProcessResponse(msg)
 }
 
 func (idx *indexer) validateIndexInstMap() {
@@ -8118,7 +8207,7 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 		syncUpdate:    syncUpdate,
 		respCh:        respCh}
 
-	return idx.sendMsgToClusterMgr(msg)
+	return idx.sendMsgToClustMgrAndProcessResponse(msg)
 
 }
 
@@ -8132,7 +8221,7 @@ func (idx *indexer) updateMetaInfoForDeleteKeyspace(bucket,
 		collection: collection,
 		streamId:   streamId}
 
-	return idx.sendMsgToClusterMgr(msg)
+	return idx.sendMsgToClustMgrAndProcessResponse(msg)
 }
 
 func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
@@ -8140,14 +8229,14 @@ func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
 	temp := indexInst
 	temp.Pc = nil
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{temp}}
-	return idx.sendMsgToClusterMgr(msg)
+	return idx.sendMsgToClustMgrAndProcessResponse(msg)
 }
 
-func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
+func (idx *indexer) sendMsgToClustMgrAndProcessResponse(msg Message) error {
 
-	idx.clustMgrAgentCmdCh <- msg
+	res, ok := idx.sendMsgToClustMgr(msg)
 
-	if res, ok := <-idx.clustMgrAgentCmdCh; ok {
+	if ok {
 
 		switch res.GetMsgType() {
 
@@ -8155,13 +8244,13 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 			return nil
 
 		case MSG_ERROR:
-			logging.Errorf("Indexer::sendMsgToClusterMgr Error "+
+			logging.Errorf("Indexer::sendMsgToClustMgrAndProcessResponse Error "+
 				"from Cluster Manager %v", res)
 			err := res.(*MsgError).GetError()
 			return err.cause
 
 		default:
-			logging.Fatalf("Indexer::sendMsgToClusterMgr Unknown Response "+
+			logging.Fatalf("Indexer::sendMsgToClustMgrAndProcessResponse Unknown Response "+
 				"from Cluster Manager %v", res)
 			common.CrashOnError(errors.New("Unknown Response"))
 
@@ -8169,7 +8258,7 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 
 	} else {
 
-		logging.Fatalf("clustMgrAgent::sendMsgToClusterMgr Unexpected Channel Close " +
+		logging.Fatalf("clustMgrAgent::sendMsgToClustMgrAndProcessResponse Unexpected Channel Close " +
 			"from Cluster Manager")
 		common.CrashOnError(errors.New("Unknown Response"))
 
@@ -8226,8 +8315,7 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 		}
 	}
 
-	idx.clustMgrAgentCmdCh <- msg
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(msg)
 
 	err := respMsg.(*MsgClustMgrLocal).GetError()
 	if err == nil {
@@ -8235,7 +8323,7 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			idx.rebalanceRunning = true
 
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
-			idx.sendMsgToClusterMgr(msg)
+			idx.sendMsgToClustMgrAndProcessResponse(msg)
 
 		} else if key == RebalanceTokenTag {
 			var rebalToken RebalanceToken
@@ -8250,8 +8338,7 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 
 func (idx *indexer) handleGetLocalMeta(msg Message) {
 
-	idx.clustMgrAgentCmdCh <- msg
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(msg)
 	respch := msg.(*MsgClustMgrLocal).GetRespCh()
 	respch <- respMsg
 
@@ -8259,8 +8346,7 @@ func (idx *indexer) handleGetLocalMeta(msg Message) {
 
 func (idx *indexer) handleDelLocalMeta(msg Message) {
 
-	idx.clustMgrAgentCmdCh <- msg
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(msg)
 
 	key := msg.(*MsgClustMgrLocal).GetKey()
 
@@ -8759,8 +8845,7 @@ func (idx *indexer) setProfilerOptions(config common.Config) {
 
 func (idx *indexer) getIndexInstForKeyspaceId(keyspaceId string) ([]common.IndexInstId, error) {
 
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrTopology{}
-	resp := <-idx.clustMgrAgentCmdCh
+	resp, _ := idx.sendMsgToClustMgr(&MsgClustMgrTopology{})
 
 	var result []common.IndexInstId = nil
 
@@ -9073,13 +9158,13 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 	}
 
 	//Send message to index manager to update the internal state
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+	clustMgrMsg := &MsgClustMgrLocal{
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   INDEXER_STATE_KEY,
 		value: fmt.Sprintf("%s", common.INDEXER_PAUSED),
 	}
 
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 	resp := respMsg.(*MsgClustMgrLocal)
 
 	errMsg := resp.GetError()
@@ -9159,13 +9244,13 @@ func (idx *indexer) doUnpause() {
 	//Notify Index Manager
 	//TODO Need to make sure the DDLs don't start getting
 	//processed before stream requests
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+	clustMgrMsg := &MsgClustMgrLocal{
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   INDEXER_STATE_KEY,
 		value: fmt.Sprintf("%s", common.INDEXER_ACTIVE),
 	}
 
-	respMsg := <-idx.clustMgrAgentCmdCh
+	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 	resp := respMsg.(*MsgClustMgrLocal)
 
 	errMsg := resp.GetError()

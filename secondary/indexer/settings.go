@@ -361,10 +361,10 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 	diffOld, diffNew := oldConfig.SectionConfig("indexer.", false).Diff(
 		newConfig.SectionConfig("indexer.", false))
 	if len(diffOld) != 0 {
-		systemevent.InfoEvent("Indexer:SettingsManager",
-			systemevent.EVENTID_INDEXER_SETTINGS_CHANGE,
-			map[string]interface{}{"NewSetting": diffNew.Map(),
-				"OldSetting": diffOld.Map()})
+		se := systemevent.NewSettingsChangeEvent("settingsManager:applySettings",
+			diffOld.Map(), diffNew.Map())
+		eventID := systemevent.EVENTID_INDEXER_SETTINGS_CHANGE
+		systemevent.InfoEvent("Indexer", eventID, se)
 	}
 
 	return err

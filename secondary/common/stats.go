@@ -222,6 +222,8 @@ func (spec *StatsIndexSpec) GetInstances() []IndexInstId {
 	return spec.Instances
 }
 
+const STATS_LOG_DUR = 500 * time.Millisecond // minimum duration of a stats action before logging it
+
 // GetIndexStats gets the index and/or indexer stats selected by the given filter from all indexer
 // nodes in parallel (generalized from planner/proxy.go getIndexStats, which is integrated with
 // Planner data structures) and returns them in a map from nodeUUID to stats. The filter strings
@@ -230,33 +232,56 @@ func (spec *StatsIndexSpec) GetInstances() []IndexInstId {
 // calls succeeded and others failed, the successful ones will be returned in statsMap while
 // errors from the failing ones will be returned in errMap (and the first one decorated in err).
 func GetIndexStats(config Config, filter string, httpTimeoutSecs uint32) (statsMap map[string]*Statistics, errMap map[string]error, err error) {
-	const method string = "stats::GetIndexStats" // for logging
+	const method string = "stats::GetIndexStats:" // for logging
 
+	timeStart := time.Now()
 	clusterURL := config["clusterAddr"].String()
 	cinfo, err := FetchNewClusterInfoCache2(clusterURL, DEFAULT_POOL, "GetIndexStats")
-	if err != nil {
-		logging.Errorf("%v: Error fetching cluster info cache: %v", method, err)
-		return nil, nil, err
+	timeFinish := time.Now()
+	if dur := timeFinish.Sub(timeStart); dur >= STATS_LOG_DUR {
+		logging.Warnf("%v Slow: FetchNewClusterInfoCache2 %v", method, dur)
 	}
-	err = cinfo.FetchNodesAndSvsInfo()
 	if err != nil {
-		logging.Errorf("%v: Error fetching node and service info: %v", method, err)
+		logging.Errorf("%v Error fetching cluster info cache: %v", method, err)
 		return nil, nil, err
 	}
 
+	timeStart = timeFinish
+	err = cinfo.FetchNodesAndSvsInfo()
+	timeFinish = time.Now()
+	if dur := timeFinish.Sub(timeStart); dur >= STATS_LOG_DUR {
+		logging.Warnf("%v Slow: FetchNodesAndSvsInfo %v", method, dur)
+	}
+	if err != nil {
+		logging.Errorf("%v Error fetching node and service info: %v", method, err)
+		return nil, nil, err
+	}
+
+	timeStart = timeFinish
 	nids := cinfo.GetNodesByServiceType(INDEX_HTTP_SERVICE)
+	timeFinish = time.Now()
+	if dur := timeFinish.Sub(timeStart); dur >= STATS_LOG_DUR {
+		logging.Warnf("%v Slow: GetNodesByServiceType %v", method, dur)
+	}
+
+	timeStart = timeFinish
 	statsMap, errMap = parallelStatsRestCall(cinfo, nids, filter, httpTimeoutSecs)
 	for nodeUUID, nodeErr := range errMap {
-		err = fmt.Errorf("%v: Error retrieving stats for nodeUUID %v. Error: %v",
+		err = fmt.Errorf("%v Error retrieving stats for nodeUUID %v. Error: %v",
 			method, nodeUUID, nodeErr)
 		break // just wanted the first one found
 	}
+	timeFinish = time.Now()
+	if dur := timeFinish.Sub(timeStart); dur >= STATS_LOG_DUR {
+		logging.Warnf("%v Slow: parallelStatsRestCall %v", method, dur)
+	}
+
 	return statsMap, errMap, err
 }
 
 // parallelStatsRestCall makes the same stats REST call to all Index nodes in parallel and returns
 // the results mapped by nodeUUID (string). A nodeUUID will be added to respMap on success or errMap
-// on failure and will be left out of the other map.
+// on failure and will be left out of the other map. Adapted from planner/proxy.go restHelperNoLock.
 func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string, httpTimeoutSecs uint32) (respMap map[string]*Statistics, errMap map[string]error) {
 	const method = "stats::parallelStatsRestCall:" // for logging
 
@@ -277,37 +302,8 @@ func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string
 			continue
 		}
 
-		restCall := func(nid NodeId, addr string) {
-			defer wg.Done()
-
-			var resp *http.Response
-			stats := new(Statistics)
-			t0 := time.Now()
-			resp, err = restGetStats(addr, filter, httpTimeoutSecs) // make the REST call
-			dur := time.Since(t0)
-			if dur > 30*time.Second || err != nil {
-				logging.Warnf("%v Took %v for addr %v with err %v", method, dur, addr, err)
-			}
-			if err == nil {
-				err = security.ConvertHttpResponse(resp, stats)
-				if err != nil {
-					logging.Errorf("%v ConvertHttpResponse for addr %v with err %v",
-						method, addr, err)
-				}
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			if err != nil {
-				errMap[nodeUUID] = err
-			} else {
-				respMap[nodeUUID] = stats
-			}
-		}
-
 		wg.Add(1)
-		go restCall(nid, addr)
+		go restCall(nid, addr, filter, httpTimeoutSecs, nodeUUID, &mu, &wg, respMap, errMap)
 	}
 
 	wg.Wait()
@@ -315,6 +311,41 @@ func parallelStatsRestCall(cinfo *ClusterInfoCache, nids []NodeId, filter string
 	mu.Unlock()
 
 	return respMap, errMap
+}
+
+// restCall runs in a goroutine as a helper for parallelStatsRestCall, which launches one of these
+// for each Index node so they can run in parallel.
+func restCall(nid NodeId, addr string, filter string, httpTimeoutSecs uint32, nodeUUID string,
+	mu *sync.Mutex, wg *sync.WaitGroup, respMap map[string]*Statistics, errMap map[string]error) {
+	const method = "stats::restCall:" // for logging
+
+	defer wg.Done()
+
+	stats := new(Statistics)
+	timeStart := time.Now()
+	resp, err := restGetStats(addr, filter, httpTimeoutSecs) // make the REST call
+	if dur := time.Since(timeStart); dur >= STATS_LOG_DUR {
+		logging.Warnf("%v Slow: restGetStats %v for addr %v", method, dur, addr)
+	}
+	if err != nil {
+		logging.Errorf("%v restGetStats for addr %v returned err: %v", method, addr, err)
+	}
+	if err == nil {
+		err = security.ConvertHttpResponse(resp, stats)
+		if err != nil {
+			logging.Errorf("%v ConvertHttpResponse for addr %v returned err: %v",
+				method, addr, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if err != nil {
+		errMap[nodeUUID] = err
+	} else {
+		respMap[nodeUUID] = stats
+	}
 }
 
 // restGetStats gets the marshalled index stats from a specific indexer host using the given filter.

@@ -662,6 +662,18 @@ func (m *IndexManager) NotifyStats(stats common.Statistics) error {
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_BROADCAST_STATS, "", buf)
 }
 
+func (m *IndexManager) UpdateStats(stats common.Statistics) error {
+
+	logging.Debugf("IndexManager.UpdateStats(): making request for update stats")
+
+	buf, e := json.Marshal(&stats)
+	if e != nil {
+		return e
+	}
+
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_BOOTSTRAP_STATS_UPDATE, "", buf)
+}
+
 func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 	logging.Debugf("IndexManager.NotifyConfigUpdate(): making request for new config update")
