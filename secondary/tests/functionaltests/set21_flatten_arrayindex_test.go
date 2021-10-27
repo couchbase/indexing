@@ -12,6 +12,8 @@ import (
 	"gopkg.in/couchbase/gocb.v1"
 )
 
+var kvdocs_flatten tc.KeyValues
+
 func TestFlattenArrayIndexTestSetup(t *testing.T) {
 	var bucket = "default"
 	var arr_field = "friends"
@@ -21,6 +23,7 @@ func TestFlattenArrayIndexTestSetup(t *testing.T) {
 	kvutility.FlushBucket(bucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	kvdocs := generateDocs(1000, "users_simplearray.prod")
+	kvdocs_flatten = kvdocs
 
 	// Modify array docs for better distibution of duplicate array elements
 	fn := func(item string, id int) map[string]interface{} {
@@ -396,4 +399,402 @@ func TestGroupAggrFlattenArrayIndex(t *testing.T) {
 	scans[0] = &qc.Scan{Filter: filter1}
 
 	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, "test_oneperprimarykey", t)
+}
+
+func TestNullAndMissingValuesFlattenArrayIndex(t *testing.T) {
+	log.Printf("In TestNullAndMissingValuesFlattenArrayIndex")
+
+	idx1 := "ga_flatten_arr1"
+	idx2 := "ga_flatten_arr2"
+	bucket := "default"
+	arr_field := "friends"
+	leadingArrField := "name"
+
+	// Setup
+	// Randomly select some documents and modify the array filed
+
+	count := 0
+	limit := randomNum(25, 50)
+
+	// Map of all docs that contain `arr_field` as null (JSON null)
+	docsWithNullEntries := make(map[string]bool)
+	for docId, v := range kvdocs_flatten {
+		doc := v.(map[string]interface{})
+		doc[arr_field] = nil // JSON_NULL
+		kvdocs_flatten[docId] = doc
+		docsWithNullEntries[docId] = true
+		count++
+		if count > limit {
+			break
+		}
+	}
+
+	count = 0
+	limit = randomNum(25, 50)
+
+	// Map of all docs that contain `arr_field` missing in the document
+	docsWithMissingArrField := make(map[string]bool)
+	for docId, v := range kvdocs_flatten {
+		doc := v.(map[string]interface{})
+		if doc[arr_field] != nil {
+			delete(doc, arr_field)
+			kvdocs_flatten[docId] = doc
+			docsWithMissingArrField[docId] = true
+			count++
+		}
+		if count > limit {
+			break
+		}
+	}
+
+	// Map of all docs that contain missing leading key (i.e. v.name for v in friends missing)
+	docsWithCompleteMissingLeadingKeyInArrEntry := make(map[string]bool)
+	for docId, v := range kvdocs_flatten {
+		doc := v.(map[string]interface{})
+		if doc[arr_field] != nil {
+			if arrValue, ok := doc[arr_field].([]interface{}); ok {
+				deleted := false
+				for i, v := range arrValue {
+					subDocVal := v.(map[string]interface{})
+					delete(subDocVal, leadingArrField)
+					arrValue[i] = subDocVal
+					deleted = true
+				}
+				if deleted {
+					doc[arr_field] = arrValue
+					docsWithCompleteMissingLeadingKeyInArrEntry[docId] = true
+				}
+			}
+			kvdocs_flatten[docId] = doc
+			count++
+		}
+		if count > limit {
+			break
+		}
+	}
+
+	count = 0
+	limit = randomNum(25, 50)
+
+	// Map of all docs that contain leading key (i.e. v.name for v in friends)
+	// partially missing i.e. of the multiple array entries, only some are missing
+	docsWithPartialMissingLeadingKeyInArrEntry := make(map[string]bool)
+	for docId, v := range kvdocs_flatten {
+		doc := v.(map[string]interface{})
+		if doc[arr_field] != nil {
+			if arrValue, ok := doc[arr_field].([]interface{}); ok {
+				deleted := false
+				for i, v := range arrValue {
+					// There is more than one object in array
+					// If there is only one object in the array, ignore it as it would become
+					// a document with completeMissingLeadingEntry if we were to process it and
+					// this becomes a problem for test validation
+					if len(arrValue) > 1 {
+						subDocVal := v.(map[string]interface{})
+						if _, ok := subDocVal[leadingArrField]; ok {
+							delete(subDocVal, leadingArrField)
+							arrValue[i] = subDocVal
+							deleted = true
+							break // Break after first deletion
+						}
+					}
+				}
+				if deleted {
+					doc[arr_field] = arrValue
+					docsWithPartialMissingLeadingKeyInArrEntry[docId] = true
+				}
+			}
+			kvdocs_flatten[docId] = doc
+			count++
+		}
+		if count > limit {
+			break
+		}
+	}
+
+	kvutility.SetKeyValues(kvdocs_flatten, bucket, "", clusterconfig.KVAddress)
+
+	// Tests for flattned array as leading key
+	// Use "ga_flatten_arr2" index from previous tests
+
+	// Scenario-5
+	// The `arr_field` is null in the document. All the three keys
+	// of flattened array index will have "null" values. Scan for all
+	// such values and compare with `docsWithNullEntries`
+
+	log.Printf("Scenario-1: Scanning for docsWithNullEntries with array as non-leading key")
+	scans := make(qc.Scans, 1)
+
+	filter1 := make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[2] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[3] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err := secondaryindex.Scan3(idx1, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanResultsWithExpectedValues(scanResults, docsWithNullEntries, true, t)
+
+	// Scenario-2
+	// The `arr_field` is missing in the document. All the three keys
+	// of flattened array index will have "missing" values. Scan for all
+	// such values and compare with `docsWithMissingEntries`
+
+	log.Printf("Scenario-2: Scanning for docsWithMissingEntries with array as non-leading key")
+
+	scans = make(qc.Scans, 1)
+
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	filter1[2] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	filter1[3] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx1, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanResultsWithExpectedValues(scanResults, docsWithMissingArrField, true, t)
+
+	// Scenario-3
+	// The first key (`v.name`) is missing in `arr_field`. Remaining keys
+	// of flattened array expression will have valid values. Scan for all
+	// such values and compare with merged `docsWithCompleteMissingLeadingKeyInArrEntry`
+	// and `docsWithPartialMissingLeadingKeyInArrEntry` - As array is non-leading key,
+	// documents in both the maps will be returned
+
+	log.Printf("Scenario-3: Scanning for docs with 'missing' entry for " +
+		"first key in array expression with array as non-leading key")
+
+	scans = make(qc.Scans, 1)
+
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	filter1[2] = &qc.CompositeElementFilter{Low: 20, High: 100, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[3] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))} // Any valid value of email
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx1, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanResultsWithExpectedValues(scanResults,
+		mergeDocs(docsWithCompleteMissingLeadingKeyInArrEntry, docsWithPartialMissingLeadingKeyInArrEntry), true, t)
+
+	// Scenario-4
+	// The leading key of array expression is missing in the document for some
+	// objects of the array. Other objects have non-missing values. Scan for
+	// valid values and the documents in `docsWithPartialMissingLeadingKeyInArrEntry`
+	// should be present in the scan results. As there can be more scan results
+	// disable the length check with expected values in validation
+
+	log.Printf("Scenario-4: Scanning for docs with valid entry for first key in array expression with array as non-leading key")
+	log.Printf("Add docs in docsWithPartialMissingLeadingKeyInArrEntry should be present in results")
+
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))} // Any valid value of `name`
+	filter1[2] = &qc.CompositeElementFilter{Low: 20, High: 100, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[3] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))} // Any valid value of `email`
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx1, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanResultsWithExpectedValues(scanResults, docsWithPartialMissingLeadingKeyInArrEntry, false, t)
+
+	// Scenario-5
+	// The `arr_field` is null in the document. All the three keys
+	// of flattened array index will have "null" values. Scan for all
+	// such values and compare with `docsWithNullEntries`
+
+	log.Printf("Scenario-5: Scanning for docsWithNullEntries with array as leading key")
+	scans = make(qc.Scans, 1)
+
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[2] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[3] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx2, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanResultsWithExpectedValues(scanResults, docsWithNullEntries, true, t)
+
+	// Scenario-6
+	// The `arr_field` is missing in the document. All the three keys
+	// of flattened array index will have "missing" values. The length
+	// of scan results should be "0"
+
+	log.Printf("Scenario-6: Scanning for docsWithMissingEntries with array as leading entry")
+
+	scans = make(qc.Scans, 1)
+
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	filter1[2] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+	filter1[3] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx2, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	if len(scanResults) != 0 {
+		t.Fatalf("Scan results for missing leading key entries is non-zero. scanResults: %v, len(scanResults): %v", scanResults, len(scanResults))
+	}
+
+	// Scenario-7
+	// The first key (`v.name`) is missing in `arr_field`. Remaining keys
+	// of flattened array expression will have valid values.The length
+	// of scan results should be "0" as leading key is empty
+
+	log.Printf("Scenario-7: Scanning for docs with 'missing' entry for first key in array expression")
+
+	scans = make(qc.Scans, 1)
+
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))} // missing entry of leading key
+	filter1[1] = &qc.CompositeElementFilter{Low: 20, High: 100, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[2] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))} // Any valid value of email
+	filter1[3] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx2, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	if len(scanResults) != 0 {
+		t.Fatalf("Scan results for missing leading key entries is non-zero. scanResults: %v, len(scanResults): %v", scanResults, len(scanResults))
+	}
+
+	// Scenario-8
+	// ScanAll. docs in `docsWithCompleteMissingLeadingKeyInArrEntry` should not be present
+	// in scan results
+
+	log.Printf("Scenario-9: Scanning for all docs in the index")
+	log.Printf("Docs in docsWithCompleteMissingLeadingKeyInArrEntry should be present in results")
+
+	scanResults, err = secondaryindex.ScanAll(idx2, bucket, kvaddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	for docId, _ := range docsWithCompleteMissingLeadingKeyInArrEntry {
+		if _, ok := scanResults[docId]; ok {
+			t.Fatalf("DocID: %v present in docsWithCompleteMissingLeadingKeyInArrEntry: %v and also in scanResults: %v."+
+				"DocID should not be present in scan results", docId, docsWithCompleteMissingLeadingKeyInArrEntry, scanResults)
+		}
+	}
+
+	// Scenario-9
+	// The leading key of array expression is missing in the document for some
+	// objects of the array. Other objects have non-missing values. Scan for
+	// valid values and the documents in `docsWithPartialMissingLeadingKeyInArrEntry`
+	// should be present in the scan results. As there can be more scan results
+	// disable the length check with expected values in validation
+
+	log.Printf("Scenario-9: Scanning for docs with valid entry for first key in array expression")
+	log.Printf("Add docs in docsWithPartialMissingLeadingKeyInArrEntry should be present in results")
+
+	scans = make(qc.Scans, 1)
+
+	filter1 = make([]*qc.CompositeElementFilter, 4)
+	filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))} // Any valid value of `name`
+	filter1[1] = &qc.CompositeElementFilter{Low: 20, High: 100, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[2] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))} // Any valid value of `email`
+	filter1[3] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err = secondaryindex.Scan3(idx2, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	validateScanResultsWithExpectedValues(scanResults, docsWithPartialMissingLeadingKeyInArrEntry, false, t)
+
+}
+
+func TestEmptyArrayFlattenArrayIndex(t *testing.T) {
+	log.Printf("In TestEmptyArrayFlattenArrayIndex")
+
+	idx1 := "ga_flatten_arr1"
+	idx2 := "ga_flatten_arr2"
+	bucket := "default"
+	arr_field := "friends"
+
+	count := 0
+	limit := randomNum(25, 50)
+
+	// Map of all docs that contain `arr_field` empty
+	docsWithEmptyArrEntry := make(map[string]bool)
+	for docId, v := range kvdocs_flatten {
+		doc := v.(map[string]interface{})
+		if doc[arr_field] != nil {
+
+			doc[arr_field] = make([]interface{}, 0) // Empty document
+			docsWithEmptyArrEntry[docId] = true
+
+			kvdocs_flatten[docId] = doc
+			count++
+		}
+		if count > limit {
+			break
+		}
+	}
+
+	kvutility.SetKeyValues(kvdocs_flatten, bucket, "", kvaddress)
+
+	// Scenario-1
+	// Array index is non-leading key. ScanAll should not contain the documents
+	// with empty array index as well. Scan for "missing" documents should
+	// not contain these documents as empty array is treated differently
+
+	log.Printf("Scenario-1: Scanning for docs with missing entry for first key in array expression")
+	log.Printf("The docs in `docsWithEmptyArrayEntry` should not be presnt in scanResults")
+
+	scans := make(qc.Scans, 1)
+
+	filter1 := make([]*qc.CompositeElementFilter, 2)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))} // missing name
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	scanResults, _, err := secondaryindex.Scan3(idx1, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	for docId, _ := range docsWithEmptyArrEntry {
+		if _, ok := scanResults[docId]; ok { // docsWithEmptyArrEntry should not be present in scanResults
+			t.Fatalf("DocID: %v present in docsWithEmptyArrEntry: %v and also in scanResults: %v."+
+				"DocID should not be present in scan results", docId, docsWithEmptyArrEntry, scanResults)
+		}
+	}
+
+	// Scenario-2
+	// Array index is leading key. ScanAll should *not* return the document
+	// in docsWithEmptyArrayEntry
+	log.Printf("Scenario-1: Scanning for all docs in the index")
+	log.Printf("The docs in `docsWithEmptyArrayEntry` should not be presnt in scanResults")
+	scanResults, err = secondaryindex.ScanAll(idx2, bucket, kvaddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error during secondary index scan", t)
+	for docId, _ := range docsWithEmptyArrEntry {
+		if _, ok := scanResults[docId]; ok { // docsWithEmptyArrEntry should not be present in scanResults
+			t.Fatalf("DocID: %v present in docsWithEmptyArrEntry: %v and also in scanResults: %v."+
+				"DocID should not be present in scan results", docId, docsWithEmptyArrEntry, scanResults)
+		}
+	}
+
+}
+
+func validateScanResultsWithExpectedValues(actual tc.ScanResponseActual, expected map[string]bool, lenCheck bool, t *testing.T) {
+	if lenCheck && (len(actual) != len(expected)) {
+		t.Fatalf("Mismatch in length of actual and expected. Actual: %v, expected: %v", actual, expected)
+	}
+
+	for docId, _ := range expected {
+		if _, ok := actual[docId]; !ok {
+			t.Fatalf("DocId: %v present in expected but not in actual. Actual: %v, expected: %v", docId, actual, expected)
+		}
+	}
+}
+
+func mergeDocs(a, b map[string]bool) map[string]bool {
+	out := make(map[string]bool)
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
 }
