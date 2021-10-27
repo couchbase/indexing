@@ -1566,10 +1566,11 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 			return
 		}
 
+		newPartns := make([]*IndexUsage, 0, len(candidates))
+
 		for _, candidate := range candidates {
 			missing := s.findMissingPartition(candidate)
 			for _, partitionId := range missing {
-
 				// clone the original and update the partitionId
 				// Does not need to modify Instance.Pc
 				cloned := candidate.clone()
@@ -1578,19 +1579,23 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 
 				// repair only if there is no replica, otherwise, replica repair would have handle this.
 				if s.findNumReplica(cloned) == 0 {
-
-					n := rand.Intn(len(available))
-					indexer := available[n]
-
-					// add the new partition to the solution
-					s.addIndex(indexer, cloned, false)
-					allCloned = append(allCloned, cloned)
-
-					logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v,%v,%v)",
-						cloned.Bucket, cloned.Scope, cloned.Collection, cloned.Name,
-						cloned.Instance.ReplicaId, cloned.PartnId)
+					newPartns = append(newPartns, cloned)
 				}
 			}
+		}
+
+		for _, cloned := range newPartns {
+
+			n := rand.Intn(len(available))
+			indexer := available[n]
+
+			// add the new partition to the solution
+			s.addIndex(indexer, cloned, false)
+			allCloned = append(allCloned, cloned)
+
+			logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v,%v,%v)",
+				cloned.Bucket, cloned.Scope, cloned.Collection, cloned.Name,
+				cloned.Instance.ReplicaId, cloned.PartnId)
 		}
 
 		if len(allCloned) != 0 {
