@@ -90,6 +90,10 @@ chmod a+w CMakeLists.txt
 perl -pi -e 's/ADD_SUBDIRECTORY \(analytics\)/# No analytics/' CMakeLists.txt
 perl -pi -e 's/ADD_SUBDIRECTORY \(cbas-ui\)/# No cbas-ui/' CMakeLists.txt
 
+chmod a+w tlm/CMakeLists.txt
+perl -pi -e 's/ADD_SUBDIRECTORY \(analytics\)/# No analytics/' tlm/CMakeLists.txt
+perl -pi -e 's/ADD_SUBDIRECTORY \(cbas-ui\)/# No cbas-ui/' tlm/CMakeLists.txt
+
 note_version query        $WORKSPACE/goproj/src/github.com/couchbase/query
 note_version gometa       $WORKSPACE/goproj/src/github.com/couchbase/gometa
 note_version ns_server    $WORKSPACE/ns_server
