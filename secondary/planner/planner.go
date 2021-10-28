@@ -1585,9 +1585,18 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 		}
 
 		for _, cloned := range newPartns {
+			// Partition repair always places one replica at a time.
+			indexers := s.FindNodesForReplicaRepair(cloned, 1)
+			if len(indexers) < 1 {
+				logging.Warnf("Planner: Cannot repair lost partition (%v,%v,%v,%v,%v,%v)"+
+					" because of unavailaility of appropriate indexer nodes. The nodes "+
+					"can be excluded or deleted for rebalancing", cloned.Bucket, cloned.Scope,
+					cloned.Collection, cloned.Name, cloned.Instance.ReplicaId, cloned.PartnId)
 
-			n := rand.Intn(len(available))
-			indexer := available[n]
+				continue
+			}
+
+			indexer := indexers[0]
 
 			// add the new partition to the solution
 			s.addIndex(indexer, cloned, false)
@@ -2898,7 +2907,7 @@ func (s *Solution) FindIndexerWithReplica(name, bucket, scope, collection string
 
 //
 // Find possible targets to place lost replicas.
-// Returns the exact list of nodes on which can be directly used to
+// Returns the exact list of nodes which can be directly used to
 // place the lost replicas.
 //
 func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica int) []*IndexerNode {
