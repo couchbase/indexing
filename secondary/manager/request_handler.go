@@ -188,6 +188,11 @@ const (
 	RESP_ERROR   string = "error"
 )
 
+// XXX_LEVEL constants are used in the target.level field to indicate at what level of the hierarchy
+// index stats are requested. They are listed here from coarse to fine (e.g. INDEX_LEVEL means stats
+// for all indexes on the Index node, whereas lower levels get only indexes in the subtree). Those
+// other than INDEXER_LEVEL are also the keys used to specify these parameters in /getIndexStatus
+// and related REST calls.
 const (
 	INDEXER_LEVEL    string = "indexer"
 	BUCKET_LEVEL     string = "bucket"
@@ -196,6 +201,10 @@ const (
 	INDEX_LEVEL      string = "index"
 )
 
+// target represents a filter for /getIndexStatus and related REST calls to restrict the set of
+// indexes for which stats are returned. level is one of the XXX_LEVEL constants above, while the
+// other strings are optional filter parameters. All coarser-grained filters must be specified in
+// order to specify a finer-grained filter.
 type target struct {
 	bucket     string
 	scope      string
@@ -594,22 +603,22 @@ func (m *requestHandlerContext) handleCachedIndexTopologyRequest(
 
 func (m *requestHandlerContext) getBucket(r *http.Request) string {
 
-	return r.FormValue("bucket")
+	return r.FormValue(BUCKET_LEVEL)
 }
 
 func (m *requestHandlerContext) getScope(r *http.Request) string {
 
-	return r.FormValue("scope")
+	return r.FormValue(SCOPE_LEVEL)
 }
 
 func (m *requestHandlerContext) getCollection(r *http.Request) string {
 
-	return r.FormValue("collection")
+	return r.FormValue(COLLECTION_LEVEL)
 }
 
 func (m *requestHandlerContext) getIndex(r *http.Request) string {
 
-	return r.FormValue("index")
+	return r.FormValue(INDEX_LEVEL)
 }
 
 // buildTopologyMapPerCollection is a helper for getIndexStatus. It creates
@@ -691,7 +700,7 @@ func (m *requestHandlerContext) getScheduledIndexes(
 // getAll true means preserve per-node information about partitioned indexes; false means
 //   consolidate the statuses of all nodes hosting some partitions/replicas of an instance into a
 //   single entry (whose NodeUUID will be set to "").
-func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) (
+func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *target, getAll bool) (
 	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
 
 	cinfo := m.mgr.reqcic.GetClusterInfoCache()
@@ -810,7 +819,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		}
 		for _, defn := range localMeta.IndexDefinitions {
 			defn.SetCollectionDefaults()
-			if !shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
+			if !shouldProcess(target, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
 				// Do not cache partial results
 				metaAcrossHosts[hostKey] = nil
 				statsAcrossHosts[hostKey] = nil
@@ -1298,10 +1307,10 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 
 // getIndexStatement is a helper for handleIndexStatementRequest. It delegates to getIndexStatus,
 // then cherry picks the "create index" statements out of the results.
-func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) (
+func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, target *target) (
 	statements []string, eTagResponse uint64, err error) {
 
-	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, t, false)
+	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, target, false)
 	if err != nil {
 		return nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
@@ -1365,7 +1374,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	}
 }
 
-func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) (*ClusterIndexMetadata, error) {
+func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, target *target) (*ClusterIndexMetadata, error) {
 
 	cinfo, err := m.mgr.FetchNewClusterInfoCache()
 	if err != nil {
@@ -1385,17 +1394,17 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 		if err == nil {
 
 			url := "/getLocalIndexMetadata"
-			if len(t.bucket) != 0 {
-				url += "?bucket=" + u.QueryEscape(t.bucket)
+			if len(target.bucket) != 0 {
+				url += "?bucket=" + u.QueryEscape(target.bucket)
 			}
-			if len(t.scope) != 0 {
-				url += "&scope=" + u.QueryEscape(t.scope)
+			if len(target.scope) != 0 {
+				url += "&scope=" + u.QueryEscape(target.scope)
 			}
-			if len(t.collection) != 0 {
-				url += "&collection=" + u.QueryEscape(t.collection)
+			if len(target.collection) != 0 {
+				url += "&collection=" + u.QueryEscape(target.collection)
 			}
-			if len(t.index) != 0 {
-				url += "&index=" + u.QueryEscape(t.index)
+			if len(target.index) != 0 {
+				url += "&index=" + u.QueryEscape(target.index)
 			}
 
 			resp, err := getWithAuth(addr + url)
@@ -1918,21 +1927,21 @@ func (m *requestHandlerContext) setETagLocalIndexMetadata(meta *LocalIndexMetada
 }
 
 // shouldProcess is a helper for getIndexStatus that determines whether a given index
-// matches the filter parameters of the request.
-func shouldProcess(t *target, defnBucket, defnScope, defnColl, defnName string) bool {
-	if t.level == INDEXER_LEVEL {
+// matches the target filter parameters of the request.
+func shouldProcess(target *target, defnBucket, defnScope, defnColl, defnName string) bool {
+	if target.level == INDEXER_LEVEL {
 		return true
 	}
-	if t.level == BUCKET_LEVEL && (t.bucket == defnBucket) {
+	if target.level == BUCKET_LEVEL && (target.bucket == defnBucket) {
 		return true
 	}
-	if t.level == SCOPE_LEVEL && (t.bucket == defnBucket) && t.scope == defnScope {
+	if target.level == SCOPE_LEVEL && (target.bucket == defnBucket) && target.scope == defnScope {
 		return true
 	}
-	if t.level == COLLECTION_LEVEL && (t.bucket == defnBucket) && t.scope == defnScope && t.collection == defnColl {
+	if target.level == COLLECTION_LEVEL && (target.bucket == defnBucket) && target.scope == defnScope && target.collection == defnColl {
 		return true
 	}
-	if t.level == INDEX_LEVEL && (t.bucket == defnBucket) && t.scope == defnScope && t.collection == defnColl && t.index == defnName {
+	if target.level == INDEX_LEVEL && (target.bucket == defnBucket) && target.scope == defnScope && target.collection == defnColl && target.index == defnName {
 		return true
 	}
 	return false

@@ -479,7 +479,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//Start Rebalance Manager
 	rebalMgr := NewRebalanceServiceManager(idx.rebalMgrCmdCh, idx.wrkrRecvCh,
-		idx.wrkrPrioRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
+		idx.wrkrPrioRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken, idx.statsMgr)
 
 	// Register service managers with ns_server for RCP callbacks. This returns a single
 	// MasterServiceManager object that implements all the interfaces we want callbacks for via

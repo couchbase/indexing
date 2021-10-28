@@ -6,18 +6,20 @@ import (
 	"unsafe"
 )
 
+// BEGIN FILTERS ===================================================================================
 // List of filters for stats values
-const AllStatsFilter = 0x1
-const PlannerFilter = 0x2
-const IndexStatusFilter = 0x4
-const RebalancerFilter = 0x8
-const GSIClientFilter = 0x10
-const SmartBatchingFilter = 0x20
+const (
+	AllStatsFilter    = 0x1
+	PlannerFilter     = 0x2
+	IndexStatusFilter = 0x4
+	// RebalancerFilter = 0x8 // no longer used
+	GSIClientFilter        = 0x10
+	N1QLStorageStatsFilter = 0x20 // only used for storage stats
+	SummaryFilter          = 0x40
+	SmartBatchingFilter    = 0x80
+)
 
-// This filter is only used for storage stats
-const N1QLStorageStatsFilter = 0x20
-
-const SummaryFilter = 0x40
+// END FILTERS =====================================================================================
 
 // TODO: ns_server to provide a list of stats that will be
 // categorised as ExternalStats
