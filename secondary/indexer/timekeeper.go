@@ -2990,6 +2990,13 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 				flushTs.SetSnapType(common.INMEM_SNAP_OSO)
 			}
 
+			//generate in memory snapshot for snap aligned TS if
+			//there is no open snapshot. This can be used to serve scans
+			//after merge.
+			if flushTs.IsSnapAligned() && !flushTs.HasOpenOSOSnap() {
+				flushTs.SetSnapType(common.INMEM_SNAP_OSO)
+			}
+
 			snapPersistInterval := tk.getPersistIntervalInitBuild()
 			persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 			//create disk snapshot based on wall clock time
