@@ -65,6 +65,7 @@ type iterationTestCase struct {
 	threshold float64
 	success   bool
 	action    string
+	idxCount  int
 }
 
 type greedyPlannerFuncTestCase struct {
@@ -132,6 +133,7 @@ var iterationTestCases = []iterationTestCase{
 		0.35,
 		false,
 		"Remove 1",
+		0,
 	},
 	{
 		"Remove one node - success",
@@ -143,18 +145,24 @@ var iterationTestCases = []iterationTestCase{
 		0.25,
 		true,
 		"Remove 1",
+		0,
 	},
-	{
-		"Index rebuild - failure",
-		"",
-		"",
-		"../testdata/planner/plan/replica-repair-2-zone.json",
-		1,
-		1,
-		0.80,
-		false,
-		"Lost index",
-	},
+	/*
+		// This test is not needed due to deterministic initial placement
+		// of the lost replicas
+		{
+			"Index rebuild - failure",
+			"",
+			"",
+			"../testdata/planner/plan/replica-repair-2-zone.json",
+			1,
+			1,
+			0.80,
+			false,
+			"Lost index",
+			30,
+		},
+	*/
 	{
 		"Index rebuild - success",
 		"",
@@ -165,6 +173,31 @@ var iterationTestCases = []iterationTestCase{
 		0.80,
 		true,
 		"Lost index",
+		60,
+	},
+	{
+		"Index rebuild - initial placement - success",
+		"",
+		"",
+		"../testdata/planner/plan/replica-repair-unbalanced-sg.json",
+		0,
+		0,
+		0.99,
+		true,
+		"Lost index",
+		6,
+	},
+	{
+		"Index rebuild - initial placement - numReplica > numSG - success",
+		"",
+		"",
+		"../testdata/planner/plan/replica-repair-unbalanced-sg-1.json",
+		0,
+		0,
+		0.99,
+		true,
+		"Lost index",
+		9,
 	},
 }
 
@@ -884,19 +917,14 @@ func iterationTest(t *testing.T) {
 		}
 
 		if testcase.action == "Lost index" {
+			expCount := testcase.idxCount
 			count := 0
 			for _, node := range p1.GetResult().Placement {
 				count += len(node.Indexes)
 			}
 
-			if testcase.success {
-				if count != 60 {
-					t.Fatal(fmt.Errorf("Error: expected ccounut %v, actual count %v", 60, count))
-				}
-			} else {
-				if count != 30 {
-					t.Fatal(fmt.Errorf("Error: expected ccounut %v, actual count %v", 30, count))
-				}
+			if count != expCount {
+				t.Fatal(fmt.Errorf("Error: expected count %v, actual count %v", expCount, count))
 			}
 		}
 	}

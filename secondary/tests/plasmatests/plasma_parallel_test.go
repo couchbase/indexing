@@ -906,6 +906,7 @@ func getPlasmaDiagnostics() (backStore int, mainStore int) {
 	client := http.Client{Timeout: time.Duration(60 * time.Second)}
 	resp, err1 := client.Do(request)
 	common.CrashOnError(err1)
+	defer resp.Body.Close()
 	responseData, err := ioutil.ReadAll(resp.Body)
 	responseString := string(responseData)
 	fmt.Println(responseString)
@@ -946,6 +947,7 @@ func rebalancePageSizes(wg *sync.WaitGroup, backStore int, mainStore int, iterat
 		client := http.Client{Timeout: time.Duration(300 * time.Second)}
 		resp, err1 := client.Do(request)
 		common.CrashOnError(err1)
+		defer resp.Body.Close()
 		responseData, err := ioutil.ReadAll(resp.Body)
 		responseString := string(responseData)
 		fmt.Println(responseString)
@@ -955,6 +957,7 @@ func rebalancePageSizes(wg *sync.WaitGroup, backStore int, mainStore int, iterat
 		client = http.Client{Timeout: time.Duration(300 * time.Second)}
 		resp, err1 = client.Do(request)
 		common.CrashOnError(err1)
+		defer resp.Body.Close()
 		responseData, err = ioutil.ReadAll(resp.Body)
 		responseString = string(responseData)
 		fmt.Println(responseString)

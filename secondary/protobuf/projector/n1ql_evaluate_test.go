@@ -80,7 +80,7 @@ func TestN1QLTransform150(t *testing.T) {
 	}
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
 	context := qexpr.NewIndexContext()
-	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestN1QLTransform2000(t *testing.T) {
 	}
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
 	context := qexpr.NewIndexContext()
-	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func BenchmarkN1QLTransform150(b *testing.B) {
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
 	context := qexpr.NewIndexContext()
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
+		N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats)
 	}
 }
 
@@ -145,7 +145,7 @@ func BenchmarkN1QLTransform2000(b *testing.B) {
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
 	context := qexpr.NewIndexContext()
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
+		N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats)
 	}
 }
 

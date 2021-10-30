@@ -2537,11 +2537,23 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 	}
 
 	//if initFlushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
-	//merge cannot happen
+	//merge may not happen, get vbuuids from HWT and try merge
 	if maintFlushTs != nil && initFlushTs == nil {
-		logging.Debugf("%v, %v, %v, maintFlushTs %v, but initFlushTs is nil, merge can not happen.",
-			method, streamId, keyspaceId, maintFlushTs)
-		return false, nil
+		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
+		if cid != "" {
+			numVb := len(maintFlushTs.Seqnos)
+			tsVbuuidHWT := tk.ss.streamKeyspaceIdHWTMap[common.INIT_STREAM][keyspaceId]
+			//leave seq nos empty.
+			initFlushTs = common.NewTsVbuuid(bucket, numVb)
+			initFlushTs.Vbuuids = tsVbuuidHWT.Vbuuids
+			logging.Debugf("%v, %v, %v, maintFlushTs %v, but initFlushTs was nil, merge can still happen.\n "+
+				"new initFlushts %v, minMergeTs %v, tsvbuuids %v",
+				method, streamId, keyspaceId, maintFlushTs, initFlushTs, minMergeTs, tsVbuuidHWT)
+		} else {
+			logging.Debugf("%v, %v, %v, maintFlushTs %v, but initFlushTs was nil, merge can not happen.",
+				method, streamId, keyspaceId, maintFlushTs)
+			return false, nil
+		}
 	}
 
 	cluster := tk.config["clusterAddr"].String()
