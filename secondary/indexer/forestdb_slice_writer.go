@@ -49,15 +49,15 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	filepath := newFdbFile(path, false)
-	slice := &fdbSlice{}
-	slice.idxStats = idxStats
+	fdb := &fdbSlice{}
+	fdb.idxStats = idxStats
 
-	slice.get_bytes = 0
-	slice.insert_bytes = 0
-	slice.delete_bytes = 0
-	slice.extraSnapDataSize = 0
-	slice.flushedCount = 0
-	slice.committedCount = 0
+	fdb.get_bytes = 0
+	fdb.insert_bytes = 0
+	fdb.delete_bytes = 0
+	fdb.extraSnapDataSize = 0
+	fdb.flushedCount = 0
+	fdb.committedCount = 0
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
@@ -86,7 +86,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
 retry:
-	if slice.dbfile, err = forestdb.Open(filepath, config); err != nil {
+	if fdb.dbfile, err = forestdb.Open(filepath, config); err != nil {
 		if err == forestdb.FDB_RESULT_NO_DB_HEADERS {
 			logging.Warnf("NewForestDBSlice(): Open failed with no_db_header error...Resetting the forestdb file")
 			os.Remove(filepath)
@@ -98,11 +98,11 @@ retry:
 		return nil, err
 	}
 
-	slice.config = config
-	slice.sysconf = sysconf
+	fdb.config = config
+	fdb.sysconf = sysconf
 
 	//open a separate file handle for compaction
-	if slice.compactFd, err = forestdb.Open(filepath, config); err != nil {
+	if fdb.compactFd, err = forestdb.Open(filepath, config); err != nil {
 		if err == forestdb.FDB_CORRUPTION_ERR {
 			logging.Errorf("NewForestDBSlice(): Open failed error %v", forestdb.FDB_CORRUPTION_ERR)
 			return nil, errStorageCorrupted
@@ -112,7 +112,7 @@ retry:
 	}
 
 	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
-	if slice.statFd, err = forestdb.Open(filepath, config); err != nil {
+	if fdb.statFd, err = forestdb.Open(filepath, config); err != nil {
 		if err == forestdb.FDB_CORRUPTION_ERR {
 			logging.Errorf("NewForestDBSlice(): Open failed error %v", forestdb.FDB_CORRUPTION_ERR)
 			return nil, errStorageCorrupted
@@ -120,64 +120,64 @@ retry:
 
 		return nil, err
 	}
-	slice.fileVersion = slice.statFd.GetFileVersion()
-	logging.Infof("NewForestDBSlice(): file version %v", forestdb.FdbFileVersionToString(slice.fileVersion))
+	fdb.fileVersion = fdb.statFd.GetFileVersion()
+	logging.Infof("NewForestDBSlice(): file version %v", forestdb.FdbFileVersionToString(fdb.fileVersion))
 
 	// ForestDB does not support multiwriters
-	slice.numWriters = 1
-	slice.main = make([]*forestdb.KVStore, slice.numWriters)
-	for i := 0; i < slice.numWriters; i++ {
-		if slice.main[i], err = slice.dbfile.OpenKVStore("main", kvconfig); err != nil {
+	fdb.numWriters = 1
+	fdb.main = make([]*forestdb.KVStore, fdb.numWriters)
+	for i := 0; i < fdb.numWriters; i++ {
+		if fdb.main[i], err = fdb.dbfile.OpenKVStore("main", kvconfig); err != nil {
 			return nil, err
 		}
 	}
 
 	//create a separate back-index for non-primary indexes
 	if !isPrimary {
-		slice.back = make([]*forestdb.KVStore, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			if slice.back[i], err = slice.dbfile.OpenKVStore("back", kvconfig); err != nil {
+		fdb.back = make([]*forestdb.KVStore, fdb.numWriters)
+		for i := 0; i < fdb.numWriters; i++ {
+			if fdb.back[i], err = fdb.dbfile.OpenKVStore("back", kvconfig); err != nil {
 				return nil, err
 			}
 		}
 	}
 
 	// Make use of default kvstore provided by forestdb
-	if slice.meta, err = slice.dbfile.OpenKVStore("default", kvconfig); err != nil {
+	if fdb.meta, err = fdb.dbfile.OpenKVStore("default", kvconfig); err != nil {
 		return nil, err
 	}
 
-	slice.path = path
-	slice.currfile = filepath
-	slice.idxInstId = idxInstId
-	slice.idxDefnId = idxDefn.DefnId
-	slice.idxDefn = idxDefn
-	slice.id = sliceId
+	fdb.path = path
+	fdb.currfile = filepath
+	fdb.idxInstId = idxInstId
+	fdb.idxDefnId = idxDefn.DefnId
+	fdb.idxDefn = idxDefn
+	fdb.id = sliceId
 
 	// Array related initialization
-	_, slice.isArrayDistinct, slice.isArrayFlattened, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
+	_, fdb.isArrayDistinct, fdb.isArrayFlattened, fdb.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
 	}
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
-	slice.cmdCh = make(chan interface{}, sliceBufSize)
-	slice.stopCh = make([]DoneChannel, slice.numWriters)
+	fdb.cmdCh = make(chan interface{}, sliceBufSize)
+	fdb.stopCh = make([]DoneChannel, fdb.numWriters)
 
-	slice.isPrimary = isPrimary
+	fdb.isPrimary = isPrimary
 
-	for i := 0; i < slice.numWriters; i++ {
-		slice.stopCh[i] = make(DoneChannel)
-		go slice.handleCommandsWorker(i)
+	for i := 0; i < fdb.numWriters; i++ {
+		fdb.stopCh[i] = make(DoneChannel)
+		go fdb.handleCommandsWorker(i)
 	}
-	slice.keySzConf = getKeySizeConfig(slice.sysconf)
+	fdb.keySzConf = getKeySizeConfig(sysconf)
 
 	logging.Infof("ForestDBSlice:NewForestDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
+		"WriterThreads %v", sliceId, idxInstId, fdb.numWriters)
 
-	slice.setCommittedCount()
+	fdb.setCommittedCount()
 
-	return slice, nil
+	return fdb, nil
 }
 
 //kv represents a key/value pair in storage format
@@ -251,8 +251,8 @@ type fdbSlice struct {
 	totalCommitTime time.Duration
 
 	idxStats   *IndexStats
-	sysconf    common.Config
-	confLock   sync.RWMutex
+	sysconf    common.Config // system configuration settings
+	confLock   sync.RWMutex  // protects sysconf
 	statFdLock sync.Mutex
 
 	lastRollbackTs *common.TsVbuuid
@@ -1771,13 +1771,12 @@ func (fdb *fdbSlice) cancelCompactionIfExpire(abortTime time.Time, donech chan b
 
 func (fdb *fdbSlice) canRunCompaction(abortTime time.Time) bool {
 
-	fdb.confLock.RLock()
-	defer fdb.confLock.RUnlock()
-
 	// Once compaction starts, only need to find out if it past the end date.
+	fdb.confLock.RLock()
 	mode := strings.ToLower(fdb.sysconf["settings.compaction.compaction_mode"].String())
 	abort := fdb.sysconf["settings.compaction.abort_exceed_interval"].Bool()
 	interval := fdb.sysconf["settings.compaction.interval"].String()
+	fdb.confLock.RUnlock()
 
 	// No need to stop running compaction if in full compaction mode
 	if mode == "full" {
