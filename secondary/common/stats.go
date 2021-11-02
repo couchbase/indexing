@@ -222,7 +222,7 @@ func (spec *StatsIndexSpec) GetInstances() []IndexInstId {
 	return spec.Instances
 }
 
-const STATS_LOG_DUR = 500 * time.Millisecond // minimum duration of a stats action before logging it
+const STATS_LOG_DUR = 30 * time.Second // minimum duration of a stats action before logging it
 
 // GetIndexStats gets the index and/or indexer stats selected by the given filter from all indexer
 // nodes in parallel (generalized from planner/proxy.go getIndexStats, which is integrated with
@@ -231,11 +231,10 @@ const STATS_LOG_DUR = 500 * time.Millisecond // minimum duration of a stats acti
 // returned in err (decorated with its nodeUUID if it is from a stats REST call). If some REST
 // calls succeeded and others failed, the successful ones will be returned in statsMap while
 // errors from the failing ones will be returned in errMap (and the first one decorated in err).
-func GetIndexStats(config Config, filter string, httpTimeoutSecs uint32) (statsMap map[string]*Statistics, errMap map[string]error, err error) {
+func GetIndexStats(clusterURL string, filter string, httpTimeoutSecs uint32) (statsMap map[string]*Statistics, errMap map[string]error, err error) {
 	const method string = "stats::GetIndexStats:" // for logging
 
 	timeStart := time.Now()
-	clusterURL := config["clusterAddr"].String()
 	cinfo, err := FetchNewClusterInfoCache2(clusterURL, DEFAULT_POOL, "GetIndexStats")
 	timeFinish := time.Now()
 	if dur := timeFinish.Sub(timeStart); dur >= STATS_LOG_DUR {

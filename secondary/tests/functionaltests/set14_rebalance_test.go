@@ -38,7 +38,7 @@ var fieldNames []string = []string{
 	"favoriteFruit",
 }
 
-var indexNamePrefix string = "set14_idx_" // prefix of all index names created
+const indexNamePrefix = "set14_idx_" // prefix of all index names created
 
 ///////////////////////////////////////////////////////////////////////////////
 // UTILITY FUNCTIONS
@@ -158,7 +158,7 @@ func TestCreateIndexesBeforeRebalance(t *testing.T) {
 	log.Printf("%v: 1. Creating %v indexes: non-partitioned, 0-replica, non-deferred",
 		method, len(fieldNames))
 	for _, fieldName := range fieldNames {
-		indexName := indexNamePrefix + fieldName
+		indexName := indexNamePrefix + "PLAIN_" + fieldName
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v)", indexName, bucketName, fieldName)
 		executeN1qlStmt(n1qlStmt, bucketName, method, t)
 		log.Printf("%v: %v index is now active.", method, indexName)
@@ -234,7 +234,6 @@ func addTwoNodesAndRebalance(caller string, t *testing.T) {
 
 	log.Printf("%v: 3. Rebalancing", caller)
 	rebalance(t)
-	time.Sleep(5 * time.Second) // even tho rebalance fn waited, Rebalance may not really be finished yet
 
 	status := getClusterStatus()
 	if len(status) != 4 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
@@ -269,7 +268,6 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v) with {\"num_replica\":2}",
 			indexName, bucketName, fieldName1, fieldName2)
 		executeN1qlStmt(n1qlStmt, bucketName, method, t)
-		//time.Sleep(6 * time.Second) // these take some time to build
 		log.Printf("%v: %v index is now active.", method, indexName)
 	}
 
@@ -287,7 +285,6 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 				"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1}",
 				indexName, bucketName, fieldName1, fieldName2)
 			executeN1qlStmt(n1qlStmt, bucketName, method, t)
-			//time.Sleep(15 * time.Second) // these take some time to build
 			log.Printf("%v: %v index is now active.", method, indexName)
 		}
 	} else {
@@ -314,7 +311,6 @@ func TestIndexNodeRebalanceOut(t *testing.T) {
 	node := 1
 	log.Printf("%v: 1. Rebalancing index node %v out of the cluster", method, clusterconfig.Nodes[node])
 	removeNode(clusterconfig.Nodes[node], t)
-	time.Sleep(5 * time.Second) // even tho removeNode fn waited, Rebalance may not really be finished yet
 
 	status := getClusterStatus()
 	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[2]) && !isNodeIndex(status, clusterconfig.Nodes[3]) {

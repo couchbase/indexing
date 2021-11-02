@@ -70,14 +70,11 @@ type Rebalancer struct {
 	// nil for index move case
 	nodeLoads NodeLoadSlice
 
-	// nodeLoadsTime holds the last time the indexer stats in nodeLoads were gathered
-	nodeLoadsTime time.Time
-
 	dropQueue  chan string         // ttids of source indexes waiting to be submitted for drop
 	dropQueued map[string]struct{} // set of ttids already added to dropQueue, as metakv can send duplicate notifications
 
 	// bigMutex is shared among at least transferTokens, acceptedTokens, sourceTokens,
-	// toBuildTTsByDestId, buildingTTsByDestId, nodeLoads, nodeLoadsTime, dropQueue, dropQueued
+	// toBuildTTsByDestId, buildingTTsByDestId, nodeLoads, dropQueue, dropQueued
 	bigMutex sync.RWMutex
 
 	rebalToken *RebalanceToken
@@ -114,6 +111,7 @@ type Rebalancer struct {
 	globalTopology *manager.ClusterIndexMetadata
 
 	runParams *runParams
+	statsMgr  *statsManager // indexer's singleton, so Rebalance can get local stats directly
 }
 
 // NewRebalancer creates the Rebalancer object that will run the rebalance on this node and starts
@@ -123,7 +121,7 @@ type Rebalancer struct {
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
-	runPlanner bool, runParams *runParams) *Rebalancer {
+	runPlanner bool, runParams *runParams, statsMgr *statsManager) *Rebalancer {
 
 	clusterVersion := common.GetClusterVersion()
 	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
@@ -160,6 +158,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		topologyChange: topologyChange,
 		runPlanner:     runPlanner,
 		runParams:      runParams,
+		statsMgr:       statsMgr,
 	}
 
 	r.config.Store(config)
@@ -633,8 +632,9 @@ func (r *Rebalancer) publishTransferTokenBatch(first bool) {
 	if first {
 		r.mapTransferTokensByDestId() // init r.toBuildTTsByDestId and r.buildingTTsByDestId
 		r.initNodeLoads()
+		r.getNodeIndexerStats()        // synchronous initial stats gathering
+		go r.getNodeIndexerStatsLoop() // async periodic stats refreshes
 	}
-	r.getNodeIndexerStats(r.config.Load()) // will only fire if first call or enough time has passed
 
 	// Support batchSize being changed dynamically during a rebalance. It now denotes the total
 	// number of builds (index moves) allowed in progress concurrently, not the number to start.
@@ -736,7 +736,7 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 		buildingTTsForNode := r.buildingTTsByDestId[nodeLoad.nodeUUID]
 		goalsForNodes[node] = maxPerNode - len(buildingTTsForNode)
 		forbiddenStreamsForNodes[node] = impliedStreams(buildingTTsForNode)
-		if nodeLoad.getLoad() == 0 { // low load
+		if nodeLoad.getLoad() == LOAD_LOW {
 			firstHighLoadNode++
 		}
 	}
@@ -897,8 +897,15 @@ type NodeLoad struct {
 	avgResidentPercent int64  // used for Plasma
 	memoryQuota        int64  // used for MOI
 	memoryUsed         int64  // used for MOI
+	numIndexes         int64  // used for Plasma and MOI to check for 0 indexes special case
 	storageMode        string // common.MemoryOptimized or common.PlasmaDB; "" if never retrieved
 }
+
+// LOAD_XXX enum are node load levels returned by NodeLoad.getLoad.
+const (
+	LOAD_LOW = iota
+	LOAD_HIGH
+)
 
 // NewNodeLoad is the constructor for the NodeLoad class. It initializes the stats to high load.
 // These will be updated by any future successful stats retrievals. storageMode is unknown until
@@ -911,21 +918,28 @@ func NewNodeLoad(nodeUUID string) *NodeLoad {
 	return nodeLoad
 }
 
-// NodeLoad.getLoad returns 0 or 1 for nodes deemed to have low or high loads, respectively.
+// NodeLoad.getLoad returns LOAD_LOW or LOAD_HIGH for nodes deemed to have low or high loads,
+// respectively (where LOAD_LOW < LOAD_HIGH).
 func (nl *NodeLoad) getLoad() int {
+
+	// Plasma returns 0% instead of 100% avgResidentPercent if there are 0 indexes
+	if nl.numIndexes == 0 {
+		return LOAD_LOW
+	}
+
 	switch nl.storageMode {
 	case common.PlasmaDB:
 		if nl.avgResidentPercent >= 50 {
-			return 0
+			return LOAD_LOW
 		}
-		return 1
+		return LOAD_HIGH
 	case common.MemoryOptimized:
 		if nl.memoryQuota > 0 && nl.memoryUsed <= nl.memoryQuota/2 {
-			return 0
+			return LOAD_LOW
 		}
-		return 1
+		return LOAD_HIGH
 	default:
-		return 1 // stats never successfully retrieved; safer to assume high load
+		return LOAD_HIGH // stats never successfully retrieved; safer to assume high load
 	}
 }
 
@@ -942,6 +956,9 @@ func (nl *NodeLoad) addStats(stats *common.Statistics) {
 	if value := stats.Get("memory_used"); value != nil {
 		nl.memoryUsed = int64(value.(float64))
 	}
+	if value := stats.Get("num_indexes"); value != nil {
+		nl.numIndexes = int64(value.(float64))
+	}
 	if value := stats.Get("storage_mode"); value != nil {
 		nl.storageMode = value.(string)
 	}
@@ -952,6 +969,7 @@ func (nl *NodeLoad) setStatsHighLoad() {
 	nl.avgResidentPercent = 0
 	nl.memoryQuota = 1
 	nl.memoryUsed = 1 // used same as quota implies 100% of memory used
+	nl.numIndexes = math.MaxInt64
 }
 
 // NodeLoadSlice implements sort.Interface to enable sorting by load (which is really just
@@ -1018,50 +1036,61 @@ func (r *Rebalancer) setNodeUUIDStatsHighLoadLOCKED(nodeUUID string) {
 	nodeLoad.setStatsHighLoad()
 }
 
-// getNodeIndexerStats gets a subset of indexer stats from each Index node via REST and
-// adds this information to r.nodeLoads, which should already have an entry for every node.
-// The stats are used to decide whether a node has high or low current load. The stats
-// gathering is only done if enough time has passed since the last gather. Failures are
-// worked around by setting fake stats indicating unreachable nodes are highly loaded.
-func (r *Rebalancer) getNodeIndexerStats(config common.Config) {
+// getNodeIndexerStatsLoop asynchronously refreshes r.nodeLoads statistics periodically.
+func (r *Rebalancer) getNodeIndexerStatsLoop() {
+	const method = "Rebalancer::getNodeIndexerStatsLoop:" // for logging
+
+	l.Infof("%v Goroutine started", method)
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			r.getNodeIndexerStats()
+		case <-r.cancel:
+			l.Infof("%v Cancel received", method)
+			return
+		case <-r.done:
+			l.Infof("%v Done received", method)
+			return
+		}
+	}
+}
+
+// getNodeIndexerStats gets a subset of indexer stats from each Index node via parallel REST calls
+// and adds this information to r.nodeLoads, which should already have an entry for every node. The
+// stats are used to decide whether a node has high or low current load. Failures are worked around
+// by setting fake stats indicating unreachable nodes are highly loaded.
+func (r *Rebalancer) getNodeIndexerStats() {
 	const method = "Rebalancer::getNodeIndexerStats:" // for logging
 
-	doGetStats := false // get the stats in this call?
-	now := time.Now()
-	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "") // for r.nodeLoadsTime
-	if now.Sub(r.nodeLoadsTime) >= 1*time.Minute {
-		r.nodeLoadsTime = now // don't try again for the wait period even if some/all fail
-		doGetStats = true
-	}
-	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+	// Parallel REST call to all index nodes
+	clusterURL := r.config.Load()["clusterAddr"].String()
+	statsMap, errMap, err := common.GetIndexStats(clusterURL, "smartBatching", 30)
 
-	if doGetStats {
-		// Parallel REST call to all index nodes
-		statsMap, errMap, err := common.GetIndexStats(config, "smartBatching", 3)
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "") // for r.nodeLoads, including in children
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 
-		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "") // for r.nodeLoads, including in children
-		defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
-
-		if err != nil {
-			// Could not get stats for some nodes, so set fake stats for them showing highly loaded.
-			// We used a short REST timeout so slow nodes do not drag down speed of rebalance. It is
-			// reasonable to treat such nodes as highly loaded.
-			if errMap != nil { // specific nodes failed
-				for nodeUUID := range errMap {
-					r.setNodeUUIDStatsHighLoadLOCKED(nodeUUID)
-				}
-			} else { // failure prevented any nodes from being called
-				for _, nodeLoad := range r.nodeLoads {
-					nodeLoad.setStatsHighLoad()
-				}
+	if err != nil {
+		// Could not get stats for some nodes, so set fake stats for them showing highly loaded.
+		// We used a short REST timeout so slow nodes do not drag down speed of rebalance. It is
+		// reasonable to treat such nodes as highly loaded.
+		if errMap != nil { // specific nodes failed
+			for nodeUUID := range errMap {
+				r.setNodeUUIDStatsHighLoadLOCKED(nodeUUID)
+			}
+		} else { // failure prevented any nodes from being called
+			for _, nodeLoad := range r.nodeLoads {
+				nodeLoad.setStatsHighLoad()
 			}
 		}
+	}
 
-		// Copy in the new stats for nodes that succeeded
-		for nodeUUID, stats := range statsMap {
-			nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
-			nodeLoad.addStats(stats)
-		}
+	// Copy in the new stats for nodes that succeeded
+	for nodeUUID, stats := range statsMap {
+		nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
+		nodeLoad.addStats(stats)
 	}
 }
 
@@ -1421,12 +1450,21 @@ func isIndexNotFoundRebal(errMsg string) bool {
 	return errMsg == common.ErrIndexNotFoundRebal.Error()
 }
 
+// getStatsDefnKey returns the correct instId from a transfer token to look up stats for that index.
+func getStatsDefnKey(tt *c.TransferToken) common.IndexInstId {
+	if tt.RealInstId == 0 {
+		return tt.InstId // nonpartitioned index
+	}
+	return tt.RealInstId // partitioned index
+}
+
 // dropIndexWhenIdle runs in a goroutine per index and performs the source index drop
 // asynchronously. This is the last real action of an index move during rebalance; the remainder are
 // token bookkeeping operations. Changes the TT state to TransferTokenCommit when the drop is
 // completed.
 func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifych chan bool) {
 	const method = "Rebalancer::dropIndexWhenIdle:" // for logging
+	const sleepSecs = 1                             // seconds to sleep per loop iteration
 
 	defer r.wg.Done()
 
@@ -1438,6 +1476,11 @@ func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifyc
 	}()
 
 	missingStatRetry := 0
+	defn := &tt.IndexInst.Defn
+	defn.SetCollectionDefaults()
+	defn.InstId = tt.InstId
+	defn.RealInstId = tt.RealInstId
+
 loop:
 	for {
 	labelselect:
@@ -1448,42 +1491,27 @@ loop:
 		case <-r.done:
 			l.Infof("%v Done Received", method)
 			break loop
+
 		default:
-
-			stats, err := getLocalStats(r.localaddr, true)
-			if err != nil {
-				l.Errorf("%v Error Fetching Local Stats %v %v", method, r.localaddr, err)
+			allStats := r.statsMgr.stats.Get()
+			defnKey := getStatsDefnKey(tt)
+			defnStats := allStats.indexes[defnKey] // stats for current defn
+			if defnStats == nil {
+				l.Infof("%v Missing defnStats for instId %v. Retrying...", method, defnKey)
 				break
 			}
 
-			statsMap := stats.ToMap()
-			if statsMap == nil {
-				l.Infof("%v Nil Stats. Retrying...", method)
-				break
-			}
-
-			tt.IndexInst.Defn.SetCollectionDefaults()
-
-			pending := float64(0)
-			for _, partitionId := range tt.IndexInst.Defn.Partitions {
-
-				defn := tt.IndexInst.Defn
-
-				prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
-					defn.Name, tt.IndexInst.ReplicaId, int(partitionId), true)
-
-				sname_completed := common.GetIndexStatKey(prefix, "num_completed_requests")
-				sname_requests := common.GetIndexStatKey(prefix, "num_requests")
-
-				var num_completed, num_requests float64
-				if _, ok := statsMap[sname_completed]; ok {
-					num_completed = statsMap[sname_completed].(float64)
-					num_requests = statsMap[sname_requests].(float64)
+			var pending, numRequests, numCompletedRequests int64
+			for _, partitionId := range defn.Partitions {
+				partnStats := defnStats.partitions[partitionId] // stats for this partition
+				if partnStats != nil {
+					numRequests = partnStats.numRequests.GetValue().(int64)
+					numCompletedRequests = partnStats.numCompletedRequests.GetValue().(int64)
 				} else {
-					l.Infof("%v Missing Stats %v %v. Retrying...",
-						method, sname_completed, sname_requests)
+					l.Infof("%v Missing partnStats for instId %d partition %v. Retrying...",
+						method, defnKey, partitionId)
 					missingStatRetry++
-					if missingStatRetry > 10 {
+					if missingStatRetry > (50 / sleepSecs) {
 						if r.needRetryForDrop(ttid, tt) {
 							break labelselect
 						} else {
@@ -1492,20 +1520,16 @@ loop:
 					}
 					break labelselect
 				}
-				pending += num_requests - num_completed
+				pending += numRequests - numCompletedRequests
 			}
 
 			if pending > 0 {
-				l.Infof("%v Index %v:%v:%v:%v Pending Scan %v", method,
-					tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Scope, tt.IndexInst.Defn.Collection,
-					tt.IndexInst.Defn.Name, pending)
+				l.Infof("%v Index %v:%v:%v:%v has %v pending scans",
+					method, defn.Bucket, defn.Scope, defn.Collection, defn.Name, pending)
 				break
 			}
 
-			defn := tt.IndexInst.Defn
-			defn.InstId = tt.InstId
-			defn.RealInstId = tt.RealInstId
-			req := manager.IndexRequest{Index: defn}
+			req := manager.IndexRequest{Index: *defn}
 			body, err := json.Marshal(&req)
 			if err != nil {
 				l.Errorf("%v Error marshal drop index %v", method, err)
@@ -1550,9 +1574,9 @@ loop:
 			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
 			break loop
-		}
-		time.Sleep(1 * time.Second)
-	}
+		} // select
+		time.Sleep(sleepSecs * time.Second)
+	} // for
 }
 
 // needRetryForDrop is called after multiple unsuccessful attempts to get the stats for an index to be
@@ -1993,31 +2017,20 @@ loop:
 		case <-r.done:
 			l.Infof("%v Done Received", method)
 			break loop
+
 		default:
+			allStats := r.statsMgr.stats.Get()
 
-			stats, err := getLocalStats(r.localaddr, false)
-			if err != nil {
-				l.Errorf("%v Error Fetching Local Stats %v %v", method, r.localaddr, err)
-				break
-			}
-
-			statsMap := stats.ToMap()
-			if statsMap == nil {
-				l.Infof("%v Nil Stats. Retrying...", method)
-				break
-			}
-
-			if state, ok := statsMap["indexer_state"]; ok {
-				if state == "Paused" {
-					l.Errorf("%v Paused state detected for %v", method, r.localaddr)
-					lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
-					for ttid, tt := range r.acceptedTokens {
-						l.Errorf("%v Token State Changed to Error %v %v", method, ttid, tt)
-						r.setTransferTokenError(ttid, tt, "Indexer In Paused State")
-					}
-					c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
-					break
+			indexerState := allStats.indexerStateHolder.GetValue().(string)
+			if indexerState == "Paused" {
+				l.Errorf("%v Paused state detected for %v", method, r.localaddr)
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+				for ttid, tt := range r.acceptedTokens {
+					l.Errorf("%v Token State Changed to Error %v %v", method, ttid, tt)
+					r.setTransferTokenError(ttid, tt, "Indexer In Paused State")
 				}
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+				break
 			}
 
 			localMeta, err := getLocalMeta(r.localaddr)
@@ -2026,8 +2039,8 @@ loop:
 				break
 			}
 
-			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 			allTokensReady := true
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
 			for ttid, tt := range buildTokens {
 				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 					continue
@@ -2051,37 +2064,27 @@ loop:
 
 				defn := tt.IndexInst.Defn
 				defn.SetCollectionDefaults()
-
-				prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
-					defn.Name, tt.IndexInst.ReplicaId, 0, false)
-
-				sname_pend := common.GetIndexStatKey(prefix, "num_docs_pending")
-				sname_queued := common.GetIndexStatKey(prefix, "num_docs_queued")
-				sname_processed := common.GetIndexStatKey(prefix, "num_docs_processed")
-
-				var num_pend, num_queued, num_processed float64
-				if _, ok := statsMap[sname_pend]; ok {
-					num_pend = statsMap[sname_pend].(float64)
-					num_queued = statsMap[sname_queued].(float64)
-					num_processed = statsMap[sname_processed].(float64)
-				} else {
-					l.Infof("%v Missing Stats %v %v. Retrying...", method, sname_queued, sname_pend)
+				defnKey := getStatsDefnKey(tt)
+				defnStats := allStats.indexes[defnKey] // stats for current defn
+				if defnStats == nil {
+					l.Infof("%v Missing defnStats for instId %v. Retrying...", method, defnKey)
 					break
 				}
 
-				tot_remaining := num_pend + num_queued
+				numDocsPending := defnStats.numDocsPending.GetValue().(int64)
+				numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
+				numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
 
 				elapsed := time.Since(buildStartTime).Seconds()
 				if elapsed == 0 {
 					elapsed = 1
 				}
-
-				processing_rate := num_processed / elapsed
+				processing_rate := float64(numDocsProcessed) / elapsed
+				tot_remaining := numDocsPending + numDocsQueued
 				remainingBuildTime := maxRemainingBuildTime
 				if processing_rate != 0 {
-					remainingBuildTime = uint64(tot_remaining / processing_rate)
+					remainingBuildTime = uint64(float64(tot_remaining) / processing_rate)
 				}
-
 				if tot_remaining == 0 {
 					remainingBuildTime = 0
 				}
@@ -2101,9 +2104,9 @@ loop:
 				l.Infof("%v Batch Done", method)
 				break loop
 			}
-			time.Sleep(1 * time.Second)
-		}
-	}
+		} // select
+		time.Sleep(1 * time.Second)
+	} // for
 }
 
 // destTokenToMergeOrReadyLOCKED handles dest TT transitions from TransferTokenInProgress,
@@ -2521,28 +2524,6 @@ func (r *Rebalancer) getBuildProgress(status *manager.IndexStatusResponse, tt *c
 		}
 	}
 	return realInstProgress, count
-}
-
-//
-// This function gets the indexer stats for a specific indexer host.
-//
-func getLocalStats(addr string, partitioned bool) (*c.Statistics, error) {
-
-	queryStr := "/stats?async=true&consumerFilter=rebalancer"
-	if partitioned {
-		queryStr += "&partition=true"
-	}
-	resp, err := getWithAuth(addr + queryStr)
-	if err != nil {
-		return nil, err
-	}
-
-	stats := new(c.Statistics)
-	if err := convertResponse(resp, stats); err != nil {
-		return nil, err
-	}
-
-	return stats, nil
 }
 
 func getLocalMeta(addr string) (*manager.LocalIndexMetadata, error) {

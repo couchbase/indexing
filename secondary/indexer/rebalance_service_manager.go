@@ -52,30 +52,28 @@ type RebalanceServiceManager struct {
 	waiters   waiters       // set of channels of states for go routines waiting for next state change
 	waitersMu *sync.RWMutex // protects waiters field; may be taken *after* svcMgrMu mutex
 
-	rebalancer   *Rebalancer //runs the rebalance, failover, or index move
-	rebalancerF  *Rebalancer //follower rebalancer handle
+	rebalancer  *Rebalancer   // runs the rebalance, failover, or index move
+	rebalancerF *Rebalancer   // follower rebalancer handle
+	statsMgr    *statsManager // indexer's singleton, so rebalance can get local stats directly
+
 	rebalanceCtx *rebalanceContext
-
-	nodeInfo *service.NodeInfo
-
-	rebalanceRunning bool
-	rebalanceToken   *RebalanceToken
-
-	monitorStopCh StopChannel
+	nodeInfo     *service.NodeInfo
 
 	config        c.ConfigHolder
 	supvCmdch     MsgChannel //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
 	supvMsgch     MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
 	supvPrioMsgch MsgChannel //channel to send msg to supervisor for high-priority handling (idx.wrkrPrioRecvCh)
+	moveStatusCh  chan error
+	monitorStopCh StopChannel
 
 	cinfo *c.ClusterInfoCache // long-lived unshared local instance
 
 	localhttp string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
 
-	moveStatusCh chan error
-
-	cleanupPending bool // prior rebalance or move did not finish and will be cleaned up
-	indexerReady   bool
+	cleanupPending   bool // prior rebalance or move did not finish and will be cleaned up
+	indexerReady     bool
+	rebalanceRunning bool
+	rebalanceToken   *RebalanceToken
 
 	p runParams
 }
@@ -136,7 +134,7 @@ var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 // constructs a singleton at boot.
 func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	supvPrioMsgch MsgChannel, config c.Config, rebalanceRunning bool,
-	rebalanceToken *RebalanceToken) *RebalanceServiceManager {
+	rebalanceToken *RebalanceToken, statsMgr *statsManager) *RebalanceServiceManager {
 
 	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
 
@@ -153,6 +151,7 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		supvMsgch:     supvMsgch,
 		supvPrioMsgch: supvPrioMsgch,
 		moveStatusCh:  make(chan error),
+		statsMgr:      statsMgr,
 	}
 
 	mgr.config.Store(config)
@@ -662,7 +661,7 @@ func (m *RebalanceServiceManager) startFailover(change service.TopologyChange) e
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), &change, false, nil)
+		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), &change, false, nil, m.statsMgr)
 
 	return nil
 }
@@ -742,7 +741,7 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 
 	m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-		m.localhttp, m.config.Load(), &change, runPlanner, &m.p)
+		m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.statsMgr)
 
 	return nil
 }
@@ -2256,7 +2255,7 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 
 			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, &m.p)
+				m.localhttp, m.config.Load(), nil, false, &m.p, m.statsMgr)
 			m.writeOk(w)
 			return
 
@@ -2396,7 +2395,7 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 			}
 			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, nil)
+				m.localhttp, m.config.Load(), nil, false, nil, m.statsMgr)
 		}
 	}
 
@@ -2674,7 +2673,7 @@ func (m *RebalanceServiceManager) initMoveIndex(req *manager.IndexRequest, nodes
 	time.Sleep(2 * time.Second)
 
 	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false, nil)
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false, nil, m.statsMgr)
 
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true
