@@ -331,6 +331,28 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	is, err := s.getRequestedIndexSnapshot(req)
 	if err != nil {
 		logging.Infof("%s Error in getRequestedIndexSnapshot %v", req.LogPrefix, err)
+
+		if err == common.ErrScanTimedOut {
+			getSnapTs := func() *common.TsVbuuid {
+				lastSnapshot := s.lastSnapshot.Get()
+
+				sc, ok := lastSnapshot[req.IndexInstId]
+				if ok && sc != nil {
+					sc.Lock()
+					defer sc.Unlock()
+
+					ss := sc.snap
+					if ss == nil {
+						return nil
+					}
+					return sc.snap.Timestamp()
+				}
+				return nil
+			}
+
+			logSnapInfoAtTimeout(getSnapTs(), req.Ts, req.IndexInstId, req.LogPrefix, req.Stats.lastTsTime.Value())
+		}
+
 		if s.tryRespondWithError(w, req, err) {
 			return
 		}

@@ -11,8 +11,10 @@ package indexer
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 type StreamAddressMap map[common.StreamId]common.Endpoint
@@ -236,4 +238,41 @@ func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 // key. It is optimized to stop splitting at the first colon.
 func GetBucketFromKeyspaceId(keyspaceId string) string {
 	return strings.SplitN(keyspaceId, ":", 2)[0]
+}
+
+func logSnapInfoAtTimeout(snapTs, reqTs *common.TsVbuuid, instId common.IndexInstId, caller string, lastSnapTime int64) {
+	if snapTs == nil {
+		logging.Infof("%v::logSnapInfoAtTimeout nil snapTs at timeout for instId: %v", caller, instId)
+		return
+	}
+
+	if reqTs == nil {
+		logging.Infof("%v::logSnapInfoAtTimeout nil reqTs at timeout for instId: %v", caller, instId)
+		return
+	}
+
+	if snapTs.Bucket != reqTs.Bucket {
+		logging.Infof("%v::logSnapInfoAtTimeout Mismatch in bucket names at timeout. "+
+			"InstId: %v, snapTs.Bucket: %v, reqTs.Bucket: %v", caller, instId, snapTs.Bucket, reqTs.Bucket)
+		return
+	}
+
+	if len(snapTs.Seqnos) > len(reqTs.Seqnos) {
+		logging.Infof("%v::logSnapInfoAtTimeout Mismatch in seqnos length at timeout. "+
+			"InstId: %v, snapTs.Seqnos: %v, reqTs.Seqnos: %v", caller, instId, snapTs.Seqnos, reqTs.Seqnos)
+		return
+	}
+
+	for i, seqno := range snapTs.Seqnos {
+		if seqno < reqTs.Seqnos[i] {
+			logging.Infof("%v::logSnapInfoAtTimeout Vbucket seqno in snapTs is lagging reqTs at timeout. "+
+				"InstId: %v, snapTs.Seqnos[%v]: %v, reqTs.Seqnos[%v]: %v", caller, instId, i, snapTs.Seqnos[i], i, reqTs.Seqnos[i])
+
+			if time.Now().UnixNano()-lastSnapTime > int64(60*time.Second) {
+				logging.Infof("%v::logSnapInfoAtTimeout No snapshot has been generated since last 60 seconds, snapTs.Seqnos: %v, reqTs.Seqnos: %v",
+					caller, snapTs.Seqnos, reqTs.Seqnos)
+			}
+			return
+		}
+	}
 }
