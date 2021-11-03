@@ -1608,7 +1608,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
-	idx.cpuThrottle.SetCpuTarget(idx.config["cpu.throttle.target"].Float64())
+	idx.cpuThrottle.SetCpuTarget(newConfig["cpu.throttle.target"].Float64())
 
 	idx.config = newConfig
 	idx.compactMgrCmdCh <- msg
