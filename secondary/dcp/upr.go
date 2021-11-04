@@ -584,10 +584,10 @@ func isLocalIP(hostport string) (bool, error) {
 	return false, nil
 }
 
-// getLocalIP return the first external-IP4 configured for the first
-// interface connected to this node.
+// getLocalIP returns the first external IP configured for the first
+// interface connected to this node. This may be IPv4 or IPv6.
 // (This method is an exact implementation of GetLocalIP in common/util.go)
-// (Making a copy of it here to avoid package dependencies)
+// (Making a copy of it here to avoid package dependency cycle.)
 func getLocalIP() (net.IP, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {

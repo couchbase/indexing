@@ -61,7 +61,9 @@ type KVData struct {
 	finch       chan bool
 	stopScatter uint32
 
-	reqTsMutex *sync.RWMutex
+	reqTs      *protobuf.TsVbuuid
+	reqTsMutex *sync.RWMutex // Mutex protecting updates to reqTs
+
 	// Closing genServerStopCh will stop all incoming requests to the control path
 	genServerStopCh       chan bool
 	genServerFinCh        chan bool
@@ -276,8 +278,9 @@ func NewKVData(
 	// Gather stats pointers from all workers
 	kvdata.updateWorkerStats()
 
-	go kvdata.genServer(reqTs)
-	go kvdata.runScatter(reqTs, mutch)
+	kvdata.reqTs = reqTs
+	go kvdata.genServer()
+	go kvdata.runScatter(mutch)
 	logging.Infof("%v ##%x started, uuid: %v ...\n", kvdata.logPrefix, opaque, kvdata.uuid)
 	return kvdata, nil
 }
@@ -393,8 +396,7 @@ func (kvdata *KVData) updateWorkerStats() {
 }
 
 // go-routine handles data path.
-func (kvdata *KVData) runScatter(
-	ts *protobuf.TsVbuuid, mutch <-chan *mc.DcpEvent) {
+func (kvdata *KVData) runScatter(mutch <-chan *mc.DcpEvent) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -423,7 +425,7 @@ loop:
 					break loop
 				}
 				kvdata.stats.eventCount.Add(1)
-				seqno, err := kvdata.scatterMutation(m, ts)
+				seqno, err := kvdata.scatterMutation(m)
 				if err != nil {
 					fmsg := "%v ##%x Error during scatter mutation while posting: %v, err: %v"
 					logging.Errorf(fmsg, kvdata.logPrefix, kvdata.opaque, m.Opcode, err)
@@ -440,7 +442,7 @@ loop:
 	}
 }
 
-func (kvdata *KVData) genServer(reqTs *protobuf.TsVbuuid) {
+func (kvdata *KVData) genServer() {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -477,7 +479,7 @@ loop:
 	for {
 		select {
 		case msg := <-kvdata.sbch:
-			if breakloop := kvdata.handleCommand(msg, reqTs); breakloop {
+			if breakloop := kvdata.handleCommand(msg); breakloop {
 				break loop
 			}
 
@@ -489,7 +491,7 @@ loop:
 	}
 }
 
-func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid) bool {
+func (kvdata *KVData) handleCommand(msg []interface{}) bool {
 	cmd := msg[0].(byte)
 	switch cmd {
 	case kvCmdAddEngines:
@@ -550,7 +552,7 @@ func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid) bo
 	case kvCmdTs:
 		_ /*opaque*/ = msg[1].(uint16)
 		kvdata.reqTsMutex.Lock()
-		ts = ts.Union(msg[2].(*protobuf.TsVbuuid))
+		kvdata.reqTs = kvdata.reqTs.Union(msg[2].(*protobuf.TsVbuuid))
 		kvdata.reqTsMutex.Unlock()
 		respch := msg[3].(chan []interface{})
 		kvdata.stats.tsCount.Add(1)
@@ -603,8 +605,7 @@ func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid) bo
 	return false
 }
 
-func (kvdata *KVData) scatterMutation(
-	m *mc.DcpEvent, ts *protobuf.TsVbuuid) (seqno uint64, err error) {
+func (kvdata *KVData) scatterMutation(m *mc.DcpEvent) (seqno uint64, err error) {
 
 	vbno := m.VBucket
 	worker := kvdata.workers[int(vbno)%len(kvdata.workers)]
@@ -646,7 +647,7 @@ func (kvdata *KVData) scatterMutation(
 			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, arg1)
 
 			kvdata.reqTsMutex.RLock()
-			m.Seqno, _ = ts.SeqnoFor(vbno)
+			m.Seqno, _ = kvdata.reqTs.SeqnoFor(vbno)
 			kvdata.reqTsMutex.RUnlock()
 
 			if err = worker.Event(m); err != nil {

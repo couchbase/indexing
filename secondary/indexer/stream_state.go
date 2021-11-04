@@ -86,6 +86,9 @@ type StreamState struct {
 	//only used to log debug information for pending builds(INIT_STREAM only)
 	keyspaceIdPendBuildDebugLogTime map[string]uint64
 
+	//only used to log debug information for when flushTs check for merge fails(INIT_STREAM only)
+	keyspaceIdFlushCheckDebugLogTime map[string]uint64
+
 	//last time of KV seqnum fetch for stream merge check
 	streamKeyspaceIdLastKVSeqFetch map[common.StreamId]KeyspaceIdLastKVSeqFetch
 }
@@ -204,6 +207,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdEnableOSO:              make(map[common.StreamId]KeyspaceIdEnableOSO),
 		streamKeyspaceIdHWTOSO:                 make(map[common.StreamId]KeyspaceIdHWTOSO),
 		keyspaceIdPendBuildDebugLogTime:        make(map[string]uint64),
+		keyspaceIdFlushCheckDebugLogTime:       make(map[string]uint64),
 		streamKeyspaceIdLastKVSeqFetch:         make(map[common.StreamId]KeyspaceIdLastKVSeqFetch),
 	}
 
@@ -398,6 +402,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 
 	if streamId == common.INIT_STREAM {
 		ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
+		ss.keyspaceIdFlushCheckDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
 	}
 
 	ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_ACTIVE
@@ -457,6 +462,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 
 	if streamId == common.INIT_STREAM {
 		delete(ss.keyspaceIdPendBuildDebugLogTime, keyspaceId)
+		delete(ss.keyspaceIdFlushCheckDebugLogTime, keyspaceId)
 	}
 
 	if donech, ok := ss.streamKeyspaceIdFlushDone[streamId][keyspaceId]; ok && donech != nil {

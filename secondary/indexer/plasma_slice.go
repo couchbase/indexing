@@ -100,8 +100,8 @@ type plasmaSlice struct {
 	totalCommitTime time.Duration
 
 	idxStats *IndexStats
-	sysconf  common.Config
-	confLock sync.RWMutex
+	sysconf  common.Config // system configuration settings
+	confLock sync.RWMutex  // protects sysconf
 
 	isPersistorActive int32
 
@@ -167,6 +167,7 @@ type plasmaSlice struct {
 	numKeysSkipped int32
 }
 
+// newPlasmaSlice is the constructor for plasmaSlice.
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
@@ -210,7 +211,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		go plasma.RunMemQuotaTuner()
 	}
 
-	numReaders := slice.sysconf["plasma.numReaders"].Int()
+	numReaders := sysconf["plasma.numReaders"].Int()
 	slice.readers = make(chan *plasma.Reader, numReaders)
 
 	slice.isPrimary = isPrimary
@@ -290,126 +291,145 @@ func backupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(st
 
 func (slice *plasmaSlice) initStores() error {
 	var err error
-	cfg := plasma.DefaultConfig()
-	cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
-	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
-	cfg.RecoveryFlushBufferSize = int(slice.sysconf["plasma.recoveryFlushBufferSize"].Int())
-	cfg.SharedFlushBufferSize = int(slice.sysconf["plasma.sharedFlushBufferSize"].Int())
-	cfg.SharedRecoveryFlushBufferSize = int(slice.sysconf["plasma.sharedRecoveryFlushBufferSize"].Int())
-	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
-	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
-	cfg.AutoSwapper = true
-	cfg.NumEvictorThreads = int(float32(runtime.GOMAXPROCS(0))*
-		float32(slice.sysconf["plasma.evictionCPUPercent"].Int())/(100) + 0.5)
-	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
-	cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
-	cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second
-	cfg.PurgeThreshold = slice.sysconf["plasma.purger.highThreshold"].Float64()
-	cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
-	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
-	cfg.EnablePageChecksum = slice.sysconf["plasma.enablePageChecksum"].Bool()
-	cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
-	cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
-	cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
-	cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
-	cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
-	cfg.AutoTuneDiskQuota = int64(slice.sysconf["plasma.AutoTuneDiskQuota"].Uint64())
-	cfg.AutoTuneCleanerTargetFragRatio = slice.sysconf["plasma.AutoTuneCleanerTargetFragRatio"].Int()
-	cfg.AutoTuneCleanerMinBandwidthRatio = slice.sysconf["plasma.AutoTuneCleanerMinBandwidthRatio"].Float64()
-	cfg.AutoTuneDiskFullTimeLimit = slice.sysconf["plasma.AutoTuneDiskFullTimeLimit"].Int()
-	cfg.AutoTuneAvailDiskLimit = slice.sysconf["plasma.AutoTuneAvailDiskLimit"].Float64()
-	cfg.Compression = slice.sysconf["plasma.compression"].String()
-	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
-	cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
-	cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
-	cfg.MaxInstsPerShard = slice.sysconf["plasma.maxInstancePerShard"].Uint64()
-	cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
-	cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
-	cfg.EnableFullReplayOnError = slice.sysconf["plasma.recovery.enableFullReplayOnError"].Bool()
 
-	cfg.EnableReaderPurge = slice.sysconf["plasma.reader.purge.enabled"].Bool()
-	cfg.ReaderPurgeThreshold = slice.sysconf["plasma.reader.purge.threshold"].Float64()
-	cfg.ReaderPurgePageRatio = slice.sysconf["plasma.reader.purge.pageRatio"].Float64()
+	// This function encapsulates confLock.RLock + defer confLock.RUnlock
+	mCfg, bCfg := func() (mainCfg *plasma.Config, backCfg *plasma.Config) {
+		cfg := plasma.DefaultConfig() // scratchpad for configs shared between main and back indexes
 
-	cfg.StatsRunInterval = time.Duration(slice.sysconf["plasma.stats.runInterval"].Uint64()) * time.Second
-	cfg.StatsLogInterval = time.Duration(slice.sysconf["plasma.stats.logInterval"].Uint64()) * time.Second
-	cfg.StatsKeySizeThreshold = slice.sysconf["plasma.stats.threshold.keySize"].Uint64()
-	cfg.StatsPercentileThreshold = slice.sysconf["plasma.stats.threshold.percentile"].Float64()
-	cfg.StatsNumInstsThreshold = slice.sysconf["plasma.stats.threshold.numInstances"].Int()
-	cfg.StatsLoggerFileName = slice.sysconf["plasma.stats.logger.fileName"].String()
-	cfg.StatsLoggerFileSize = slice.sysconf["plasma.stats.logger.fileSize"].Uint64()
-	cfg.StatsLoggerFileCount = slice.sysconf["plasma.stats.logger.fileCount"].Uint64()
-	cfg.RecoveryCheckpointInterval = slice.sysconf["plasma.recovery.checkpointInterval"].Uint64()
-	cfg.BufMemQuotaRatio = slice.sysconf["plasma.BufMemQuotaRatio"].Float64()
-	cfg.MaxSMRWorkerPerCore = slice.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
-	cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
+		slice.confLock.RLock()
+		defer slice.confLock.RUnlock()
 
-	cfg.StorageDir = slice.storageDir
-	cfg.LogDir = slice.logDir
+		//
+		// 1. Set config values in cfg that are the same for main and back indexes
+		//
+		cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
+		cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
+		cfg.RecoveryFlushBufferSize = int(slice.sysconf["plasma.recoveryFlushBufferSize"].Int())
+		cfg.SharedFlushBufferSize = int(slice.sysconf["plasma.sharedFlushBufferSize"].Int())
+		cfg.SharedRecoveryFlushBufferSize = int(slice.sysconf["plasma.sharedRecoveryFlushBufferSize"].Int())
+		cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
+		cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
+		cfg.AutoSwapper = true
+		cfg.NumEvictorThreads = int(float32(runtime.GOMAXPROCS(0))*
+			float32(slice.sysconf["plasma.evictionCPUPercent"].Int())/(100) + 0.5)
+		cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
+		cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
+		cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second
+		cfg.PurgeThreshold = slice.sysconf["plasma.purger.highThreshold"].Float64()
+		cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
+		cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
+		cfg.EnablePageChecksum = slice.sysconf["plasma.enablePageChecksum"].Bool()
+		cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
+		cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
+		cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
+		cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
+		cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
+		cfg.AutoTuneDiskQuota = int64(slice.sysconf["plasma.AutoTuneDiskQuota"].Uint64())
+		cfg.AutoTuneCleanerTargetFragRatio = slice.sysconf["plasma.AutoTuneCleanerTargetFragRatio"].Int()
+		cfg.AutoTuneCleanerMinBandwidthRatio = slice.sysconf["plasma.AutoTuneCleanerMinBandwidthRatio"].Float64()
+		cfg.AutoTuneDiskFullTimeLimit = slice.sysconf["plasma.AutoTuneDiskFullTimeLimit"].Int()
+		cfg.AutoTuneAvailDiskLimit = slice.sysconf["plasma.AutoTuneAvailDiskLimit"].Float64()
+		cfg.Compression = slice.sysconf["plasma.compression"].String()
+		cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
+		cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
+		cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
+		cfg.MaxInstsPerShard = slice.sysconf["plasma.maxInstancePerShard"].Uint64()
+		cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
+		cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
+		cfg.EnableFullReplayOnError = slice.sysconf["plasma.recovery.enableFullReplayOnError"].Bool()
 
-	var mode plasma.IOMode
+		cfg.EnableReaderPurge = slice.sysconf["plasma.reader.purge.enabled"].Bool()
+		cfg.ReaderPurgeThreshold = slice.sysconf["plasma.reader.purge.threshold"].Float64()
+		cfg.ReaderPurgePageRatio = slice.sysconf["plasma.reader.purge.pageRatio"].Float64()
 
-	if slice.sysconf["plasma.useMmapReads"].Bool() {
-		mode = plasma.MMapIO
-	} else if slice.sysconf["plasma.useDirectIO"].Bool() {
-		mode = plasma.DirectIO
-	}
+		cfg.StatsRunInterval = time.Duration(slice.sysconf["plasma.stats.runInterval"].Uint64()) * time.Second
+		cfg.StatsLogInterval = time.Duration(slice.sysconf["plasma.stats.logInterval"].Uint64()) * time.Second
+		cfg.StatsKeySizeThreshold = slice.sysconf["plasma.stats.threshold.keySize"].Uint64()
+		cfg.StatsPercentileThreshold = slice.sysconf["plasma.stats.threshold.percentile"].Float64()
+		cfg.StatsNumInstsThreshold = slice.sysconf["plasma.stats.threshold.numInstances"].Int()
+		cfg.StatsLoggerFileName = slice.sysconf["plasma.stats.logger.fileName"].String()
+		cfg.StatsLoggerFileSize = slice.sysconf["plasma.stats.logger.fileSize"].Uint64()
+		cfg.StatsLoggerFileCount = slice.sysconf["plasma.stats.logger.fileCount"].Uint64()
+		cfg.RecoveryCheckpointInterval = slice.sysconf["plasma.recovery.checkpointInterval"].Uint64()
+		cfg.BufMemQuotaRatio = slice.sysconf["plasma.BufMemQuotaRatio"].Float64()
+		cfg.MaxSMRWorkerPerCore = slice.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
+		cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
-	cfg.IOMode = mode
+		cfg.StorageDir = slice.storageDir
+		cfg.LogDir = slice.logDir
 
-	var mCfg, bCfg plasma.Config
+		var mode plasma.IOMode
+		if slice.sysconf["plasma.useMmapReads"].Bool() {
+			mode = plasma.MMapIO
+		} else if slice.sysconf["plasma.useDirectIO"].Bool() {
+			mode = plasma.DirectIO
+		}
+		cfg.IOMode = mode
 
-	mCfg = cfg
-	bCfg = cfg
+		//
+		// 2. "Fork" main and back configs into two separate objects
+		//
+		cfg2 := cfg // make a second copy
+		mCfg := &cfg
+		bCfg := &cfg2
 
-	mCfg.MaxDeltaChainLen = slice.sysconf["plasma.mainIndex.maxNumPageDeltas"].Int()
-	mCfg.MaxPageItems = slice.sysconf["plasma.mainIndex.pageSplitThreshold"].Int()
-	mCfg.MinPageItems = slice.sysconf["plasma.mainIndex.pageMergeThreshold"].Int()
-	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
-	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
-	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
-	mCfg.EnablePeriodicEvict = slice.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
-	mCfg.EvictMinThreshold = slice.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
-	mCfg.EvictMaxThreshold = slice.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
-	mCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
-	mCfg.EvictDirtyPercent = slice.sysconf["plasma.mainIndex.evictDirtyPercent"].Float64()
-	mCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
-	mCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
-	mCfg.EvictUseMemEstimate = slice.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
-	mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
-	mCfg.EnablePageBloomFilter = slice.sysconf["plasma.mainIndex.enablePageBloomFilter"].Bool()
-	mCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
-	mCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.mainIndex.bloomFilterExpectedMaxItems"].Uint64()
-	mCfg.EnableInMemoryCompression = slice.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
-	mCfg.CompressDuringBurst = slice.sysconf["plasma.mainIndex.enableCompressDuringBurst"].Bool()
-	mCfg.DecompressDuringSwapin = slice.sysconf["plasma.mainIndex.enableDecompressDuringSwapin"].Bool()
-	mCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
+		//
+		// 3. Set main-specific config values only in the mCfg object
+		//
+		mCfg.MaxDeltaChainLen = slice.sysconf["plasma.mainIndex.maxNumPageDeltas"].Int()
+		mCfg.MaxPageItems = slice.sysconf["plasma.mainIndex.pageSplitThreshold"].Int()
+		mCfg.MinPageItems = slice.sysconf["plasma.mainIndex.pageMergeThreshold"].Int()
+		mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
+		mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
+		mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
+		mCfg.EnablePeriodicEvict = slice.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
+		mCfg.EvictMinThreshold = slice.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
+		mCfg.EvictMaxThreshold = slice.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
+		mCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
+		mCfg.EvictDirtyPercent = slice.sysconf["plasma.mainIndex.evictDirtyPercent"].Float64()
+		mCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
+		mCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
+		mCfg.EvictUseMemEstimate = slice.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
+		mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
+		mCfg.EnablePageBloomFilter = slice.sysconf["plasma.mainIndex.enablePageBloomFilter"].Bool()
+		mCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
+		mCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.mainIndex.bloomFilterExpectedMaxItems"].Uint64()
+		mCfg.EnableInMemoryCompression = slice.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
+		mCfg.CompressDuringBurst = slice.sysconf["plasma.mainIndex.enableCompressDuringBurst"].Bool()
+		mCfg.DecompressDuringSwapin = slice.sysconf["plasma.mainIndex.enableDecompressDuringSwapin"].Bool()
+		mCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
 
-	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
-	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
-	bCfg.MinPageItems = slice.sysconf["plasma.backIndex.pageMergeThreshold"].Int()
-	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
-	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
-	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
-	bCfg.EnablePeriodicEvict = slice.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
-	bCfg.EvictMinThreshold = slice.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
-	bCfg.EvictMaxThreshold = slice.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
-	bCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
-	bCfg.EvictDirtyPercent = slice.sysconf["plasma.backIndex.evictDirtyPercent"].Float64()
-	bCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
-	bCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
-	bCfg.EvictUseMemEstimate = slice.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
-	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
+		//
+		// 4. Set back-specific config values only in the bCfg object
+		//
+		bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
+		bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
+		bCfg.MinPageItems = slice.sysconf["plasma.backIndex.pageMergeThreshold"].Int()
+		bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
+		bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
+		bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
+		bCfg.EnablePeriodicEvict = slice.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
+		bCfg.EvictMinThreshold = slice.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
+		bCfg.EvictMaxThreshold = slice.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
+		bCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
+		bCfg.EvictDirtyPercent = slice.sysconf["plasma.backIndex.evictDirtyPercent"].Float64()
+		bCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
+		bCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
+		bCfg.EvictUseMemEstimate = slice.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
+		bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
 
-	// Will also change based on indexer.plasma.backIndex.enablePageBloomFilter
-	bCfg.EnablePageBloomFilter = slice.sysconf["settings.enable_page_bloom_filter"].Bool()
+		// Will also change based on indexer.plasma.backIndex.enablePageBloomFilter
+		bCfg.EnablePageBloomFilter = slice.sysconf["settings.enable_page_bloom_filter"].Bool()
 
-	bCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
-	bCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
-	bCfg.EnableInMemoryCompression = slice.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
-	bCfg.CompressDuringBurst = slice.sysconf["plasma.backIndex.enableCompressDuringBurst"].Bool()
-	bCfg.DecompressDuringSwapin = slice.sysconf["plasma.backIndex.enableDecompressDuringSwapin"].Bool()
-	bCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
+		bCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
+		bCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
+		bCfg.EnableInMemoryCompression = slice.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
+		bCfg.CompressDuringBurst = slice.sysconf["plasma.backIndex.enableCompressDuringBurst"].Bool()
+		bCfg.DecompressDuringSwapin = slice.sysconf["plasma.backIndex.enableDecompressDuringSwapin"].Bool()
+		bCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
+
+		return mCfg, bCfg
+	}()
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -425,7 +445,7 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New3(mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX)
+		slice.mainstore, mErr = plasma.New3(*mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -437,7 +457,7 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New3(bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX)
+			slice.backstore, bErr = plasma.New3(*bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
@@ -1462,7 +1482,11 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 				return nil
 			}
 
-			var concurr int = int(float32(runtime.GOMAXPROCS(0))*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.75)
+			mdb.confLock.RLock()
+			persistenceCPUPercent := mdb.sysconf["plasma.persistenceCPUPercent"].Int()
+			mdb.confLock.RUnlock()
+
+			var concurr int = int(float32(runtime.GOMAXPROCS(0))*float32(persistenceCPUPercent)/(100*2) + 0.75)
 
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -2988,7 +3012,10 @@ func (slice *plasmaSlice) numWritersPerPartition() int {
 //
 func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
 
+	slice.confLock.RLock()
 	sliceBufSize := slice.sysconf["settings.sliceBufSize"].Uint64()
+	slice.confLock.RUnlock()
+
 	numWriters := slice.numWritersPerPartition()
 
 	if sliceBufSize < uint64(numWriters) {
@@ -3045,10 +3072,11 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 	slice.keySzConfChanged = slice.keySzConfChanged[:numWriters]
 	slice.keySzConf = slice.keySzConf[:numWriters]
 
+	slice.confLock.RLock()
+	keyCfg := getKeySizeConfig(slice.sysconf)
+	slice.confLock.RUnlock()
+
 	for i := curNumWriters; i < numWriters; i++ {
-		slice.confLock.RLock()
-		keyCfg := getKeySizeConfig(slice.sysconf)
-		slice.confLock.RUnlock()
 		slice.encodeBuf[i] = make([]byte, 0, keyCfg.maxIndexEntrySize)
 		if slice.idxDefn.IsArrayIndex {
 			slice.arrayBuf1[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize)

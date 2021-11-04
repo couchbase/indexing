@@ -366,8 +366,8 @@ func IsIPLocal(ip string) bool {
 	return false
 }
 
-// GetLocalIP return the first external-IP4 configured for the first
-// interface connected to this node.
+// GetLocalIP returns the first external IP configured for the first
+// interface connected to this node. This may be IPv4 or IPv6.
 func GetLocalIP() (net.IP, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -393,8 +393,14 @@ func GetLocalIP() (net.IP, error) {
 				ip = v.IP
 			}
 			if ip != nil && !ip.IsLoopback() {
-				if ip = ip.To4(); ip != nil {
-					return ip, nil
+				if security.IsIpv6() {
+					if ip = ip.To16(); ip != nil {
+						return ip, nil
+					}
+				} else {
+					if ip = ip.To4(); ip != nil {
+						return ip, nil
+					}
 				}
 			}
 		}

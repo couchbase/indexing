@@ -2514,8 +2514,15 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspaceId string,
 	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid, fetchKVSeq bool) (bool, *common.TsVbuuid) {
-	const method = "Timekeeper::checkFlushTsValidForMerge"
+
 	var maintFlushTs *common.TsVbuuid
+
+	now := uint64(time.Now().UnixNano())
+	sinceLastLog := now - tk.ss.keyspaceIdFlushCheckDebugLogTime[keyspaceId]
+	forceLog := (sinceLastLog > uint64(300*time.Second))
+	if forceLog {
+		tk.ss.keyspaceIdFlushCheckDebugLogTime[keyspaceId] = now
+	}
 
 	//if the initFlushTs is past the lastFlushTs of this keyspace in MAINT_STREAM,
 	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
@@ -2546,12 +2553,17 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			//leave seq nos empty.
 			initFlushTs = common.NewTsVbuuid(bucket, numVb)
 			initFlushTs.Vbuuids = tsVbuuidHWT.Vbuuids
-			logging.Debugf("%v, %v, %v, maintFlushTs %v, but initFlushTs was nil, merge can still happen.\n "+
-				"new initFlushts %v, minMergeTs %v, tsvbuuids %v",
-				method, streamId, keyspaceId, maintFlushTs, initFlushTs, minMergeTs, tsVbuuidHWT)
+			if forceLog || logging.IsEnabled(logging.Verbose) {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, initFlushTs is nil "+
+					"and maintFlushTs is not nil. Proceeding with merge. MaintFlushTs: %v\n, new initFlushts %v\n, "+
+					"minMergeTs %v\n, tsvbuuids %v", streamId, keyspaceId, maintFlushTs, initFlushTs, minMergeTs, tsVbuuidHWT)
+			}
 		} else {
-			logging.Debugf("%v, %v, %v, maintFlushTs %v, but initFlushTs was nil, merge can not happen.",
-				method, streamId, keyspaceId, maintFlushTs)
+			if forceLog || logging.IsEnabled(logging.Verbose) {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, initFlushTs is nil "+
+					"and maintFlushTs is not nil. Merge can not happen as cid: %v. maintFlushTs: %v",
+					streamId, keyspaceId, cid, maintFlushTs)
+			}
 			return false, nil
 		}
 	}
@@ -2573,31 +2585,44 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			if cid != "" {
 				//vbuuids need to match for index merge
 				if !initFlushTs.CompareVbuuids(maintFlushTs) {
-					logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, vbuuids do not match, flushedPastMinMergeTs=false",
-						method, streamId, keyspaceId, maintFlushTs, initFlushTs)
+					if forceLog || logging.IsEnabled(logging.Verbose) {
+						logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, vbuuids do not match "+
+							"flushedPastMinMergeTs: %v, maintFlushTs %v, initFlushTs %v",
+							streamId, keyspaceId, flushedPastMinMergeTs, maintFlushTs, initFlushTs)
+					}
 					return false, nil
 				}
 				currCTs, err := common.CollectionSeqnos(cluster, "default", bucket, cid)
 				if err != nil {
-					logging.Errorf("%v, %v, %v, CollectionSeqnos err %v. Skipping stream merge. flushedPastMinMergeTs=false",
-						method, streamId, keyspaceId, err)
+					logging.Errorf("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, CollectionSeqnos err %v. Skipping stream merge. flushedPastMinMergeTs=false",
+						streamId, keyspaceId, err)
 					return false, nil
 				}
 				//if the collection high seqno has been reached
 				if initTsSeq.GreaterThanEqual(Timestamp(currCTs)) {
 					return true, initFlushTs
+				} else {
+					if forceLog || logging.IsEnabled(logging.Verbose) {
+						logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, cid: %v, flushedPastMinmergeTs: %v, "+
+							"initFlushTs: %v, currCTs: %v", streamId, keyspaceId, cid, flushedPastMinMergeTs, initFlushTs, currCTs)
+					}
 				}
 			}
-			logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, cid = %v, flushedPastMinMergeTs=false",
-				method, streamId, keyspaceId, maintFlushTs, initFlushTs, cid)
+			if forceLog || logging.IsEnabled(logging.Verbose) {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, cid: %v, flushedPastMinmergeTs: %v, "+
+					"maintFlushTs: %v, initFlushTs: %v", streamId, keyspaceId, cid, flushedPastMinMergeTs, maintFlushTs, initFlushTs)
+			}
 			return false, nil
 		}
 	}
 
 	//vbuuids need to match for index merge
 	if !initFlushTs.CompareVbuuids(maintFlushTs) {
-		logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, vbuuids do not match with flushedPastMinmergeTs=%v",
-			method, streamId, keyspaceId, maintFlushTs, initFlushTs, flushedPastMinMergeTs)
+		if forceLog || logging.IsEnabled(logging.Verbose) {
+			logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, vbuuids do not match "+
+				"flushedPastMinmergeTs=%v, maintFlushTs %v, initFlushTs %v",
+				streamId, keyspaceId, flushedPastMinMergeTs, maintFlushTs, initFlushTs)
+		}
 		return false, nil
 	}
 
@@ -2619,13 +2644,13 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			//TODO Collections compute the seqnos asynchronously
 			currBTs, err := common.BucketSeqnos(cluster, "default", bucket)
 			if err != nil {
-				logging.Errorf("%v, %v, %v, cid %v, BucketSeqnos err %v. Skipping stream merge.", method, streamId, keyspaceId, cid, err)
+				logging.Errorf("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, cid: %v, BucketSeqnos err: %v. Skipping stream merge.", streamId, keyspaceId, cid, err)
 				return false, nil
 			}
 
 			currCTs, err := common.CollectionSeqnos(cluster, "default", bucket, cid)
 			if err != nil {
-				logging.Errorf("%v, %v, %v, cid %v, CollectionSeqnos err %v. Skipping stream merge.", method, streamId, keyspaceId, cid, err)
+				logging.Errorf("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, cid: %v, CollectionSeqnos err: %v. Skipping stream merge.", streamId, keyspaceId, cid, err)
 				return false, nil
 			}
 
@@ -2634,14 +2659,24 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 				bucketTsSeq.GreaterThanEqual(maintTsSeq) {
 				return true, initFlushTs
 			} else {
-				logging.Debugf("%v, %v, %v, initTsSeq !GTE currTs and bucketTsSeq GTE maintTsSeq. Skipping stream merge. intitTsSeq %v, bucketTsSeq %v, maintTsSeq %v, intitFlushTs %v, currCTs %v",
-					method, streamId, keyspaceId, initTsSeq, bucketTsSeq, maintTsSeq, initFlushTs, currCTs)
+				if forceLog || logging.IsEnabled(logging.Verbose) {
+					logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, initTsSeq less than currCTs "+
+						"and bucketTsSeq greater than maintTsSeq. Skipping stream merge. "+
+						"intitTsSeq %v, currCTs: %v, bucketTsSeq %v, maintTsSeq %v, intitFlushTs %v",
+						streamId, keyspaceId, initTsSeq, currCTs, bucketTsSeq, maintTsSeq, initFlushTs)
+				}
 			}
 		} else {
-			logging.Debugf("%v, %v, %v, len(initTs)=0 fetchKVSeq=true cid is empty, skipping merge", method, streamId, keyspaceId)
+			if forceLog || logging.IsEnabled(logging.Verbose) {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, len(initTs)=0 fetchKVSeq=true cid is empty, skipping merge",
+					streamId, keyspaceId)
+			}
 		}
 	}
-	logging.Debugf("%v, %v, %v, maintFlushTs %v, initFlushTs %v, last return", method, streamId, keyspaceId, maintFlushTs, initFlushTs)
+	if forceLog || logging.IsEnabled(logging.Verbose) {
+		logging.Infof("Timekeeper::checkFlushTsValidForMerge: StreamId: %v, KeyspaceId: %v, maintFlushTs %v, initFlushTs %v, last return",
+			streamId, keyspaceId, maintFlushTs, initFlushTs)
+	}
 	return false, nil
 }
 

@@ -156,8 +156,8 @@ type memdbSlice struct {
 	totalCommitTime time.Duration
 
 	idxStats *IndexStats
-	sysconf  common.Config
-	confLock sync.RWMutex
+	sysconf  common.Config // system configuration settings
+	confLock sync.RWMutex  // protects sysconf
 
 	isPersistorActive int32
 
@@ -187,6 +187,7 @@ type memdbSlice struct {
 	exposeItemCopy bool
 }
 
+// NewMemDBSlice is the constructor for memdbSlice.
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, hasPersistance bool, numPartitions int,
@@ -197,84 +198,84 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		os.Mkdir(path, 0777)
 	}
 
-	slice := &memdbSlice{}
-	slice.idxStats = idxStats
-	slice.idxStats.residentPercent.Set(100)
-	slice.idxStats.cacheHitPercent.Set(100)
+	mdb := &memdbSlice{}
+	mdb.idxStats = idxStats
+	mdb.idxStats.residentPercent.Set(100)
+	mdb.idxStats.cacheHitPercent.Set(100)
 
-	slice.get_bytes = 0
-	slice.insert_bytes = 0
-	slice.delete_bytes = 0
-	slice.flushedCount = 0
-	slice.committedCount = 0
-	slice.sysconf = sysconf
-	slice.path = path
-	slice.idxInstId = idxInstId
-	slice.idxDefnId = idxDefn.DefnId
-	slice.idxDefn = idxDefn
-	slice.idxPartnId = partitionId
-	slice.id = sliceId
-	slice.numWriters = sysconf["numSliceWriters"].Int()
-	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
-	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
-	slice.numVbuckets = sysconf["numVbuckets"].Int()
-	slice.clusterAddr = sysconf["clusterAddr"].String()
-	slice.exposeItemCopy = sysconf["moi.exposeItemCopy"].Bool()
+	mdb.get_bytes = 0
+	mdb.insert_bytes = 0
+	mdb.delete_bytes = 0
+	mdb.flushedCount = 0
+	mdb.committedCount = 0
+	mdb.sysconf = sysconf
+	mdb.path = path
+	mdb.idxInstId = idxInstId
+	mdb.idxDefnId = idxDefn.DefnId
+	mdb.idxDefn = idxDefn
+	mdb.idxPartnId = partitionId
+	mdb.id = sliceId
+	mdb.numWriters = sysconf["numSliceWriters"].Int()
+	mdb.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
+	mdb.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
+	mdb.numVbuckets = sysconf["numVbuckets"].Int()
+	mdb.clusterAddr = sysconf["clusterAddr"].String()
+	mdb.exposeItemCopy = sysconf["moi.exposeItemCopy"].Bool()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
-	if sliceBufSize < uint64(slice.numWriters) {
-		sliceBufSize = uint64(slice.numWriters)
+	if sliceBufSize < uint64(mdb.numWriters) {
+		sliceBufSize = uint64(mdb.numWriters)
 	}
 
-	slice.encodeBuf = make([][]byte, slice.numWriters)
+	mdb.encodeBuf = make([][]byte, mdb.numWriters)
 	if idxDefn.IsArrayIndex {
-		slice.arrayBuf = make([][]byte, slice.numWriters)
+		mdb.arrayBuf = make([][]byte, mdb.numWriters)
 
 	}
-	slice.keySzConfChanged = make([]int32, slice.numWriters)
-	slice.keySzConf = make([]keySizeConfig, slice.numWriters)
-	slice.cmdCh = make([]chan *indexMutation, slice.numWriters)
+	mdb.keySzConfChanged = make([]int32, mdb.numWriters)
+	mdb.keySzConf = make([]keySizeConfig, mdb.numWriters)
+	mdb.cmdCh = make([]chan *indexMutation, mdb.numWriters)
 
-	for i := 0; i < slice.numWriters; i++ {
-		keyCfg := getKeySizeConfig(slice.sysconf)
-		slice.cmdCh[i] = make(chan *indexMutation, sliceBufSize/uint64(slice.numWriters))
-		slice.encodeBuf[i] = make([]byte, 0, keyCfg.maxIndexEntrySize+ENCODE_BUF_SAFE_PAD)
+	for i := 0; i < mdb.numWriters; i++ {
+		keyCfg := getKeySizeConfig(sysconf)
+		mdb.cmdCh[i] = make(chan *indexMutation, sliceBufSize/uint64(mdb.numWriters))
+		mdb.encodeBuf[i] = make([]byte, 0, keyCfg.maxIndexEntrySize+ENCODE_BUF_SAFE_PAD)
 		if idxDefn.IsArrayIndex {
-			slice.arrayBuf[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize+ENCODE_BUF_SAFE_PAD)
+			mdb.arrayBuf[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize+ENCODE_BUF_SAFE_PAD)
 		}
-		slice.keySzConf[i] = keyCfg
+		mdb.keySzConf[i] = keyCfg
 	}
-	slice.stopCh = make([]DoneChannel, slice.numWriters)
+	mdb.stopCh = make([]DoneChannel, mdb.numWriters)
 
-	slice.isPrimary = isPrimary
-	slice.hasPersistence = hasPersistance
+	mdb.isPrimary = isPrimary
+	mdb.hasPersistence = hasPersistance
 
 	// Check if there is a storage corruption error
-	err = slice.checkStorageCorruptionError()
+	err = mdb.checkStorageCorruptionError()
 	if err != nil {
 		logging.Errorf("memdbSlice:NewMemDBSlice Id %v IndexInstId %v "+
 			"fatal error occured: %v", sliceId, idxInstId, err)
 		return nil, err
 	}
 
-	slice.initStores()
+	mdb.initStores()
 
 	// Array related initialization
-	_, slice.isArrayDistinct, slice.isArrayFlattened, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
+	_, mdb.isArrayDistinct, mdb.isArrayFlattened, mdb.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
 	}
 
 	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v PartitionId %v "+
-		"WriterThreads %v Persistence %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.hasPersistence)
+		"WriterThreads %v Persistence %v", sliceId, idxInstId, partitionId, mdb.numWriters, mdb.hasPersistence)
 
-	for i := 0; i < slice.numWriters; i++ {
-		slice.stopCh[i] = make(DoneChannel)
-		go slice.handleCommandsWorker(i)
+	for i := 0; i < mdb.numWriters; i++ {
+		mdb.stopCh[i] = make(DoneChannel)
+		go mdb.handleCommandsWorker(i)
 	}
 
-	slice.setCommittedCount()
-	return slice, nil
+	mdb.setCommittedCount()
+	return mdb, nil
 }
 
 var (
@@ -309,30 +310,37 @@ func init() {
 	moiWriterSemaphoreCh = make(chan bool, moiWritersAllowed)
 }
 
-func (slice *memdbSlice) initStores() {
+func (mdb *memdbSlice) initStores() {
+
+	mdb.confLock.RLock()
+	useMemMgmt := mdb.sysconf["moi.useMemMgmt"].Bool()
+	useDeltaInterleaving := mdb.sysconf["moi.useDeltaInterleaving"].Bool()
+	ioConcurrency := mdb.sysconf["moi.persistence.io_concurrency"].Float64()
+	mdb.confLock.RUnlock()
+
 	cfg := memdb.DefaultConfig()
-	if slice.sysconf["moi.useMemMgmt"].Bool() {
+	if useMemMgmt {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
 	}
 
-	if slice.sysconf["moi.useDeltaInterleaving"].Bool() {
+	if useDeltaInterleaving {
 		cfg.UseDeltaInterleaving()
 	}
 
-	cfg.SetExposeItemCopy(slice.exposeItemCopy)
-	cfg.SetIOConcurrency(slice.sysconf["moi.persistence.io_concurrency"].Float64())
+	cfg.SetExposeItemCopy(mdb.exposeItemCopy)
+	cfg.SetIOConcurrency(ioConcurrency)
 
 	cfg.SetKeyComparator(byteItemCompare)
-	slice.mainstore = memdb.NewWithConfig(cfg)
-	slice.main = make([]*memdb.Writer, slice.numWriters)
-	for i := 0; i < slice.numWriters; i++ {
-		slice.main[i] = slice.mainstore.NewWriter()
+	mdb.mainstore = memdb.NewWithConfig(cfg)
+	mdb.main = make([]*memdb.Writer, mdb.numWriters)
+	for i := 0; i < mdb.numWriters; i++ {
+		mdb.main[i] = mdb.mainstore.NewWriter()
 	}
 
-	if !slice.isPrimary {
-		slice.back = make([]*nodetable.NodeTable, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
+	if !mdb.isPrimary {
+		mdb.back = make([]*nodetable.NodeTable, mdb.numWriters)
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.back[i] = nodetable.New(hashDocId, nodeEquality)
 		}
 	}
 }
@@ -995,16 +1003,17 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			tmpdir := filepath.Join(mdb.path, tmpDirName)
 			manifest := filepath.Join(tmpdir, "manifest.json")
 			os.RemoveAll(tmpdir)
+
 			mdb.confLock.RLock()
 			maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
+			mdb.confLock.RUnlock()
+
 			total := atomic.LoadInt64(&totalMemDBItems)
 			indexCount := mdb.GetCommittedCount()
 			// Compute number of workers to be used for taking backup
 			if total > 0 {
 				concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
 			}
-
-			mdb.confLock.RUnlock()
 
 			// Prepare for persistence.
 			if err := mdb.mainstore.PreparePersistence(tmpdir, s.info.MainSnap); err != nil {
