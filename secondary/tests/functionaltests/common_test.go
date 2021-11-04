@@ -51,6 +51,7 @@ var indexerLogLevel string
 var bucketOpWaitDur = time.Duration(15)
 var seed int
 var proddir, bagdir string
+var tmpclient string
 
 var reqscans = map[string]interface{}{
 	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
@@ -1373,4 +1374,28 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 // so that the client has updated stats from all indexer nodes.
 func waitForStatsUpdate() {
 	time.Sleep(10100 * time.Millisecond)
+}
+
+func executeGroupAggrTest(ga *qc.GroupAggr, proj *qc.IndexProjection,
+	n1qlEquivalent, index string, t *testing.T) {
+	var bucket = "default"
+	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
+		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+// with scans provided
+func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProjection,
+	n1qlEquivalent, index string, t *testing.T) {
+	var bucket = "default"
+	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) == 1 {
+		tc.PrintGroupAggrResultsActual(scanResults, "scanResults")
+	}
+	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
+		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
