@@ -45,6 +45,7 @@ type CpuThrottle struct {
 func NewCpuThrottle(cpuTarget float64) *CpuThrottle {
 	cpuThrottle := CpuThrottle{}
 
+	cpuThrottle.cpuTarget.SetFloat64(1.00) // create valid ptr before SetCpuTarget reads it
 	cpuThrottle.SetCpuTarget(cpuTarget)
 
 	var cpuThrottling int32 = 0 // disabled initially
@@ -105,10 +106,17 @@ func (this *CpuThrottle) getCpuTarget() float64 {
 // SetCpuTarget sets the CPU usage target in [0.50, 1.00] for throttling. Any value outside this
 // range is ignored.
 func (this *CpuThrottle) SetCpuTarget(cpuTarget float64) {
+	const method_SetCpuTarget = "CpuThrottle::SetCpuTarget:" // for logging
+
 	if cpuTarget < 0.50 || cpuTarget > 1.00 {
+		logging.Errorf("%v Invalid cpuTarget: %v ignored", method_SetCpuTarget, cpuTarget)
 		return
 	}
-	this.cpuTarget.SetFloat64(cpuTarget)
+	cpuTargetOld := this.getCpuTarget()
+	if cpuTarget != cpuTargetOld {
+		logging.Infof("%v New cpuTarget: %v", method_SetCpuTarget, cpuTarget)
+		this.cpuTarget.SetFloat64(cpuTarget)
+	}
 }
 
 // GetActiveThrottleDelayMs returns the number of milliseconds of throttling delay currently active.

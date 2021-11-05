@@ -184,7 +184,7 @@ func (this *cpuThrottleExpirer) runExpiryCountdown() {
 //      MOI) have detected since boot
 func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) {
 	const method = "AutofailoverServiceManager::HealthCheck:" // for logging
-	logging.Infof("%v Called", method)
+	callTime := time.Now()
 
 	// CPU throttling is only used when Autofailover is enabled
 	m.cpuThrottle.SetCpuThrottling(true)
@@ -193,7 +193,15 @@ func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) 
 	healthInfo := &service.HealthInfo{
 		DiskFailures: int(m.getDiskFailures()),
 	}
-	logging.Infof("%v Returning healthInfo: %+v", method, *healthInfo)
+
+	// To avoid log flooding, only log slow calls. Thus unfortunately we will never have a log
+	// message from the last call before Autofailover is triggered.
+	doneTime := time.Now()
+	dur := doneTime.Sub(callTime)
+	if dur >= 1*time.Second {
+		logging.Warnf("%v Slow call %v. callTime: %v, doneTime: %v, healthInfo: %+v",
+			method, dur, callTime, doneTime, *healthInfo)
+	}
 	return healthInfo, nil
 }
 
