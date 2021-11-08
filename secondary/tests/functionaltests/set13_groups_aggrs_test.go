@@ -18,8 +18,6 @@ import (
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 )
 
-var tmpclient string
-
 func TestGroupAggrSetup(t *testing.T) {
 	log.Printf("In TestGroupAggrSetup()")
 
@@ -2023,38 +2021,14 @@ func TestGroupAggrPrimary(t *testing.T) {
 	secondaryindex.UseClient = tmpclient
 }
 
-func executeGroupAggrTest(ga *qc.GroupAggr, proj *qc.IndexProjection,
-	n1qlEquivalent, index string, t *testing.T) {
-	var bucket = "default"
-	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
-		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
-}
-
-// with scans provided
-func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProjection,
-	n1qlEquivalent, index string, t *testing.T) {
-	var bucket = "default"
-	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	if len(scanResults) == 1 {
-		tc.PrintGroupAggrResultsActual(scanResults, "scanResults")
-	}
-	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
-		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
-}
-
 type GroupAggrDocumentKeyDoc1 struct {
 	Attr1 string `json:"Attr1,omitempty"`
-	Id string `json:"Id,omitempty"`
+	Id    string `json:"Id,omitempty"`
 }
 
 type GroupAggrDocumentKeyDoc2 struct {
 	Attr1 string `json:"Attr1,omitempty"`
-	Id string `json:"Id,omitempty"`
+	Id    string `json:"Id,omitempty"`
 	Attr2 string `json:"Attr2,omitempty"`
 	Attr3 string `json:"Attr3,omitempty"`
 }
@@ -2063,9 +2037,9 @@ func makeGroupAggrDocumentKeyDocs1() tc.KeyValues {
 
 	docs := make(tc.KeyValues)
 
-	docs["e::g::1"] = GroupAggrDocumentKeyDoc1{Attr1:"doct", Id:"e::g::1"}
-	docs["e::g::2"] = GroupAggrDocumentKeyDoc1{Attr1:"doct", Id:"e::g::2"}
-	docs["e::g::3"] = GroupAggrDocumentKeyDoc1{Attr1:"doct", Id:"e::g::3"}
+	docs["e::g::1"] = GroupAggrDocumentKeyDoc1{Attr1: "doct", Id: "e::g::1"}
+	docs["e::g::2"] = GroupAggrDocumentKeyDoc1{Attr1: "doct", Id: "e::g::2"}
+	docs["e::g::3"] = GroupAggrDocumentKeyDoc1{Attr1: "doct", Id: "e::g::3"}
 
 	return docs
 }
@@ -2074,9 +2048,9 @@ func makeGroupAggrDocumentKeyDocs2() tc.KeyValues {
 
 	docs := make(tc.KeyValues)
 
-	docs["e::z::1"] = GroupAggrDocumentKeyDoc2{Attr1:"docz", Id:"e::z::1", Attr2:"abc", Attr3:"male"}
-	docs["e::z::2"] = GroupAggrDocumentKeyDoc2{Attr1:"docz", Id:"e::z::2", Attr2:"abc", Attr3:"male"}
-	docs["e::z::3"] = GroupAggrDocumentKeyDoc2{Attr1:"docz", Id:"e::z::3", Attr2:"abc", Attr3:"male"}
+	docs["e::z::1"] = GroupAggrDocumentKeyDoc2{Attr1: "docz", Id: "e::z::1", Attr2: "abc", Attr3: "male"}
+	docs["e::z::2"] = GroupAggrDocumentKeyDoc2{Attr1: "docz", Id: "e::z::2", Attr2: "abc", Attr3: "male"}
+	docs["e::z::3"] = GroupAggrDocumentKeyDoc2{Attr1: "docz", Id: "e::z::3", Attr2: "abc", Attr3: "male"}
 
 	return docs
 }
@@ -2090,7 +2064,6 @@ func getGroupAggrDocumentKeyFilter1() qc.Scans {
 
 	return scans
 }
-
 
 func getGroupAggrDocumentKeyFilter2() qc.Scans {
 	scans := make(qc.Scans, 1)
@@ -2109,7 +2082,7 @@ func getGroupAggrDocumentKey1() (*qc.GroupAggr, *qc.IndexProjection) {
 	g1 := &qc.GroupKey{
 		EntryKeyId: 2,
 		KeyPos:     -1,
-		Expr:	"(split(cover ((meta(`d`).`id`)), \"::\")[2])",
+		Expr:       "(split(cover ((meta(`d`).`id`)), \"::\")[2])",
 	}
 
 	groups[0] = g1
@@ -2120,9 +2093,9 @@ func getGroupAggrDocumentKey1() (*qc.GroupAggr, *qc.IndexProjection) {
 	ga := &qc.GroupAggr{
 		Group:              groups,
 		DependsOnIndexKeys: dependsOnIndexKeys,
-		IndexKeyNames: indexKeyNames,
-		AllowPartialAggr:true,
-		OnePerPrimaryKey:false,
+		IndexKeyNames:      indexKeyNames,
+		AllowPartialAggr:   true,
+		OnePerPrimaryKey:   false,
 	}
 
 	entry := make([]int64, 1)
@@ -2141,7 +2114,7 @@ func getGroupAggrDocumentKey2() (*qc.GroupAggr, *qc.IndexProjection) {
 	g1 := &qc.GroupKey{
 		EntryKeyId: 4,
 		KeyPos:     -1,
-		Expr:	"(split(cover ((meta(`d`).`id`)), \"::\")[2])",
+		Expr:       "(split(cover ((meta(`d`).`id`)), \"::\")[2])",
 	}
 
 	groups[0] = g1
@@ -2152,9 +2125,9 @@ func getGroupAggrDocumentKey2() (*qc.GroupAggr, *qc.IndexProjection) {
 	ga := &qc.GroupAggr{
 		Group:              groups,
 		DependsOnIndexKeys: dependsOnIndexKeys,
-		IndexKeyNames: indexKeyNames,
-		AllowPartialAggr:true,
-		OnePerPrimaryKey:false,
+		IndexKeyNames:      indexKeyNames,
+		AllowPartialAggr:   true,
+		OnePerPrimaryKey:   false,
 	}
 
 	entry := make([]int64, 1)
@@ -2162,7 +2135,6 @@ func getGroupAggrDocumentKey2() (*qc.GroupAggr, *qc.IndexProjection) {
 	proj := &qc.IndexProjection{
 		EntryKeys: entry,
 	}
-
 
 	return ga, proj
 }
@@ -2198,16 +2170,16 @@ func TestGroupAggrDocumentKey(t *testing.T) {
 		FailTestIfError(err, "Error in", t)
 	}
 	// Generate expectedResponse based on results
-	expectedResponse := make(tc.GroupAggrScanResponse,0)
+	expectedResponse := make(tc.GroupAggrScanResponse, 0)
 	for _, result := range results {
-		rows := make([]interface{},0)
+		rows := make([]interface{}, 0)
 		res := result.(string)
 		if res != "" {
 			rows = append(rows, value.NewValue(res))
 		} else {
 			rows = append(rows, value.NewMissingValue())
 		}
-		expectedResponse = append(expectedResponse,  rows)
+		expectedResponse = append(expectedResponse, rows)
 	}
 	err = tv.ValidateGroupAggrResult(expectedResponse, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -2232,16 +2204,16 @@ func TestGroupAggrDocumentKey(t *testing.T) {
 		FailTestIfError(err, "Error in", t)
 	}
 	// Generate expectedResponse based on results
-	expectedResponse = make(tc.GroupAggrScanResponse,0)
+	expectedResponse = make(tc.GroupAggrScanResponse, 0)
 	for _, result := range results {
-		rows := make([]interface{},0)
+		rows := make([]interface{}, 0)
 		res := result.(string)
 		if res != "" {
 			rows = append(rows, value.NewValue(res))
 		} else {
 			rows = append(rows, value.NewMissingValue())
 		}
-		expectedResponse = append(expectedResponse,  rows)
+		expectedResponse = append(expectedResponse, rows)
 	}
 	err = tv.ValidateGroupAggrResult(expectedResponse, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
