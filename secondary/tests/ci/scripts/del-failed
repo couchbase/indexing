@@ -1,3 +1,7 @@
 #!/bin/bash
 cd /var/www
-rm `ls *fail* | awk -F- '{print "*"$2"-"$3"*"}' | sed 's/.fail.html//'`
+if [ "$1" == "all" ]; then
+  rm `find . -name '*fail*' | awk -F- '{print "*"$2"-"$3"*"}' | sed 's/.fail.html//'`
+else
+  rm `find . -name '*fail*' -mtime +2 | awk -F- '{print "*"$2"-"$3"*"}' | sed 's/.fail.html//'`
+fi
