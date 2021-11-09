@@ -167,8 +167,14 @@ func computeLoads(s *Solution, indexers []*IndexerNode) ([]int64, int64) {
 
 //
 // This function get a random node.
+// The first priority is given to the deleted nodes. Then based on the load,
+// an indexer is chosen from the rest of indexer nodes.
 //
-func getWeightedRandomNode(rs *rand.Rand, indexers []*IndexerNode, loads []int64, total int64) *IndexerNode {
+func getWeightedRandomNode(rs *rand.Rand, deleted, indexers []*IndexerNode, loads []int64, total int64) *IndexerNode {
+
+	if len(deleted) > 0 {
+		return getRandomNode(rs, deleted)
+	}
 
 	if total > 0 {
 		n := int64(rs.Int63n(total))
