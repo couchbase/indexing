@@ -5722,7 +5722,7 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 
 	if len(indexers) != 0 {
 		p.randomMoveEmptyCnt++
-		return getWeightedRandomNode(p.rs, indexers, loads, total)
+		return getWeightedRandomNode(p.rs, nil, indexers, loads, total)
 	}
 
 	return nil
@@ -5805,6 +5805,8 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	// Find a set of candidates (indexer node) that has eligible index
 	// From the set of candidates, find those that are under resource constraint.
 	// Compute the loads for every constrained candidate
+	deleted := p.findDeletedFilledNodes(s)
+	logging.Tracef("Planner::deleted: len=%v, %v", len(deleted), deleted)
 	candidates := p.findCandidates(s)
 	logging.Tracef("Planner::candidates: len=%v, %v", len(candidates), candidates)
 	constrained := p.findConstrainedNodes(s, s.constraint, candidates)
@@ -5824,6 +5826,9 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		p.totalIteration++
 
 		// If there is one node that does not satisfy constraint,
+		// and if there is a deleted indexer node, then that node
+		// is the constrained node. This node will be treated as
+		// the source of index movement/swap.
 		if len(constrained) == 1 {
 			if !s.constraint.CanAddNode(s) {
 				// If planner is working on a fixed cluster, then
@@ -5862,7 +5867,9 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		// Select an constrained candidate based on weighted probability
 		// The most constrained candidate has a higher probability to be selected.
 		// This function may not return a source if all indexes are empty indexes.
-		source := getWeightedRandomNode(p.rs, constrained, loads, total)
+		// This function always returns a deleted non-empty node, before
+		// returning non-deleted consrained nodes.
+		source := getWeightedRandomNode(p.rs, deleted, constrained, loads, total)
 
 		// If cannot find a constrained candidate, then try to randomly
 		// pick two candidates and try to swap their indexes.
@@ -5987,6 +5994,27 @@ func (p *RandomPlacement) randomMoveNoConstraint(s *Solution, target int) (uint6
 	}
 
 	return movedIndex, movedData
+}
+
+//
+// Find a set of deleted indexer nodes that are not empty
+//
+func (p *RandomPlacement) findDeletedFilledNodes(s *Solution) []*IndexerNode {
+
+	outNodes := s.getDeleteNodes()
+	result := ([]*IndexerNode)(nil)
+
+	for _, node := range outNodes {
+		if len(node.Indexes) > 0 {
+			result = append(result, node)
+		}
+	}
+
+	if len(result) > 0 {
+		return shuffleNode(p.rs, result)
+	}
+
+	return result
 }
 
 //

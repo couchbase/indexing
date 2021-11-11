@@ -3981,8 +3981,10 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		func() {
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
+
 			flushedTsMap := tk.ss.streamKeyspaceIdLastFlushedTsMap
 			receivedTsMap := tk.ss.streamKeyspaceIdHWTMap
+			receivedTsOSOMap := tk.ss.streamKeyspaceIdHWTOSO
 			rollbackTimeMap = tk.ss.CloneKeyspaceIdRollbackTime()
 
 			// Pre-compute flushedCount for all streams and keyspaceId's
@@ -4009,15 +4011,21 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 
 				for keyspaceId, receivedTs := range keyspaceIdMap {
-					queued := uint64(0)
+					recvd := uint64(0)
+					recvTsOSO := receivedTsOSOMap[stream][keyspaceId]
 					if receivedTs != nil {
-						for _, seqno := range receivedTs.Seqnos {
-							queued += seqno
+						for i, seqno := range receivedTs.Seqnos {
+							if seqno == 0 { // if regular seqno is 0, check for OSO mutation
+								if recvTsOSO != nil &&
+									recvTsOSO.Snapshots[i][0] == 1 {
+									seqno = recvTsOSO.Vbuuids[i] //vbuuids store the count
+								}
+							}
+							recvd += seqno
 						}
 					}
-
 					flushedCount := flushedCountMap[stream][keyspaceId]
-					queuedMap[stream][keyspaceId] = queued - flushedCount
+					queuedMap[stream][keyspaceId] = recvd - flushedCount
 				}
 			}
 
@@ -4035,12 +4043,19 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 						// Get receivedTs for this keyspaceId
 						receivedTs := receivedTsMap[stream][keyspaceId]
+						recvTsOSO := receivedTsOSOMap[stream][keyspaceId]
 
 						for i, seqno := range kvTs {
 							sum += seqno
 							receivedSeqno := uint64(0)
 							if receivedTs != nil {
 								receivedSeqno = receivedTs.Seqnos[i]
+								if receivedSeqno == 0 { // if regular seqno is 0, check for OSO mutation
+									if recvTsOSO != nil &&
+										recvTsOSO.Snapshots[i][0] == 1 {
+										receivedSeqno = recvTsOSO.Vbuuids[i] //vbuuids store the count
+									}
+								}
 							}
 							// By the time we compute index stats, kv timestamp would have
 							// become old.
