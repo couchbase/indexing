@@ -489,13 +489,13 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 		for _, indexSpec := range indexSpecs {
 			if _, found := scopeSet[indexSpec.Bucket+":"+indexSpec.Scope]; !found {
 				scopeSet[indexSpec.Bucket+":"+indexSpec.Scope] = true
-				scopeLimit, err := GetIndexScopeLimit(clusterUrl, indexSpec)
+				scopeLimit, err := GetIndexScopeLimit(clusterUrl, indexSpec.Bucket, indexSpec.Scope)
 				if err != nil {
 					return nil, err
 				}
 
 				if scopeLimit != collections.NUM_INDEXES_NIL {
-					numIndexes := GetNumIndexesPerScope(plan, indexSpec)
+					numIndexes := GetNumIndexesPerScope(plan, indexSpec.Bucket, indexSpec.Scope)
 					// GetNewIndexesPerScope will be called only once per Bucket+Scope
 					newIndexes := GetNewIndexesPerScope(indexSpecs, indexSpec.Bucket, indexSpec.Scope)
 					if numIndexes+newIndexes > scopeLimit {
@@ -533,11 +533,11 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner)
 }
 
-func GetNumIndexesPerScope(plan *Plan, indexSpec *IndexSpec) uint32 {
+func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
 	var numIndexes uint32 = 0
 	for _, indexernode := range plan.Placement {
 		for _, index := range indexernode.Indexes {
-			if index.Bucket == indexSpec.Bucket && index.Scope == indexSpec.Scope {
+			if index.Bucket == Bucket && index.Scope == Scope {
 				numIndexes = numIndexes + 1
 			}
 		}
@@ -559,7 +559,7 @@ func GetNewIndexesPerScope(indexSpecs []*IndexSpec, bucket string, scope string)
 // But in order to get Scope limit only bucket and scope name is required and multiple calls need
 // not be made to fetch bucket list, pool etc. For future use of this function this Implementation
 // removes the dependency on Fetching ClusterInfoCache and uses only one API call.
-func GetIndexScopeLimit(clusterUrl string, indexSpec *IndexSpec) (uint32, error) {
+func GetIndexScopeLimit(clusterUrl, bucket, scope string) (uint32, error) {
 	clusterURL, err := common.ClusterAuthUrl(clusterUrl)
 	if err != nil {
 		return 0, err
@@ -571,7 +571,7 @@ func GetIndexScopeLimit(clusterUrl string, indexSpec *IndexSpec) (uint32, error)
 	cinfo.Lock()
 	defer cinfo.Unlock()
 	cinfo.SetUserAgent("Planner:Executor:GetIndexScopeLimit")
-	return cinfo.GetIndexScopeLimit(indexSpec.Bucket, indexSpec.Scope)
+	return cinfo.GetIndexScopeLimit(bucket, scope)
 }
 
 func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
@@ -611,11 +611,37 @@ func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.Inde
 	return replicaNodes, nil
 }
 
-func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool) (*Solution, error) {
+func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool, enforceLimits bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
+	}
+
+	var bucket, scope string
+	if enforceLimits {
+		for _, indexer := range plan.Placement {
+			for _, index := range indexer.Indexes {
+				if index.DefnId == defnId {
+					bucket = index.Bucket
+					scope = index.Scope
+				}
+			}
+		}
+
+		scopeLimit, err := GetIndexScopeLimit(clusterUrl, bucket, scope)
+		if err != nil {
+			return nil, err
+		}
+
+		if scopeLimit != collections.NUM_INDEXES_NIL {
+			numIndexes := GetNumIndexesPerScope(plan, bucket, scope)
+
+			if numIndexes+uint32(increment) > scopeLimit {
+				errMsg := fmt.Sprintf("%v Limit : %v", common.ErrIndexScopeLimitReached.Error(), scopeLimit)
+				return nil, errors.New(errMsg)
+			}
+		}
 	}
 
 	if override && len(nodes) != 0 {
