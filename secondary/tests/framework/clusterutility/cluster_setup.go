@@ -1,6 +1,7 @@
 package clusterutility
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,8 +29,9 @@ func getWebCredsUrl(serverAddr string) string {
 func getQuotaSetUrl(serverAddr string) string {
 	return prependHttp(serverAddr) + "/pools/default"
 }
+
 func getAddNodeUrl(serverAddr string) string {
-	return prependHttp(serverAddr) + "/controller/addNode"
+	return getHttpsHostname(serverAddr) + "/controller/addNode"
 }
 
 func getPoolsUrl(serverAddr string) string {
@@ -90,6 +92,8 @@ func setQuotaUsingRest(serverAddr, username, password string) ([]byte, error) {
 }
 
 func addNodeFromRest(serverAddr, username, password, hostname, roles string) ([]byte, error) {
+
+	hostname = getHttpsHostname(hostname)
 	log.Printf("Adding node: %s with role: %s to the cluster\n", hostname, roles)
 
 	payload := strings.NewReader(fmt.Sprintf("hostname=%s&user=%s&password=%s&services=%s",
@@ -196,7 +200,19 @@ func makeRequest(username, password, requestType string, payload *strings.Reader
 		req.SetBasicAuth(username, password)
 	}
 
-	res, err := http.DefaultClient.Do(req)
+	var client *http.Client
+
+	if len(url) > 8 && url[0:8] == "https://" {
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+
+		client = &http.Client{Transport: tr}
+	} else {
+		client = http.DefaultClient
+	}
+
+	res, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
@@ -237,7 +253,7 @@ func GetClusterStatus(serverAddr, username, password string) map[string][]string
 func AddNode(serverAddr, username, password, hostname string, role string) (err error) {
 	method := "AddNode" // for logging
 	host := prependHttp(hostname)
-	var res []byte // raw HTTP response
+	var res []byte      // raw HTTP response
 	var response string // string form of res
 	for retries := 0; ; retries++ {
 		res, err = addNodeFromRest(serverAddr, username, password, host, role)
@@ -424,4 +440,43 @@ func prependHttp(url string) string {
 	} else {
 		return "http://" + url
 	}
+}
+
+func prependHttps(url string) string {
+	if len(url) > 8 && url[0:7] == "https://" {
+		return url
+	} else if len(url) > 7 && url[0:7] == "http://" {
+		newUrl := "https://" + url[7:]
+		return newUrl
+	} else {
+		return "https://" + url
+	}
+}
+
+// TODO: Add more ports whenever required
+var securePortMap = map[string]string{
+	"9000": "19000",
+	"9001": "19001",
+	"9002": "19002",
+	"9003": "19003",
+	"8091": "18091",
+	"9102": "19102",
+}
+
+func useSecurePort(hostname string) string {
+	comps := strings.Split(hostname, ":")
+	n := len(comps)
+	if n > 0 {
+		if newPort, ok := securePortMap[comps[n-1]]; ok {
+			comps[n-1] = newPort
+			return strings.Join(comps, ":")
+		}
+	}
+
+	return hostname
+}
+
+func getHttpsHostname(hostname string) string {
+	hostname = prependHttps(hostname)
+	return useSecurePort(hostname)
 }
