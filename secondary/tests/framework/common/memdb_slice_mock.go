@@ -4,10 +4,12 @@ import (
 	"container/list"
 	"encoding/json"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const tmpDirName = ".tmp" // Same as indexer.tmpDirName
@@ -50,32 +52,49 @@ func NewSnapshotInfoContainer(infos []*MemdbSnapshotInfo) *snapshotInfoContainer
 	return sc
 }
 
-func GetMemDBSnapshots(slicePath string) ([]*MemdbSnapshotInfo, error) {
+func GetMemDBSnapshots(slicePath string, retry bool) ([]*MemdbSnapshotInfo, error) {
 	var files []string
 	pattern := "*/manifest.json"
-	all, _ := filepath.Glob(filepath.Join(slicePath, pattern))
-	for _, f := range all {
-		if !strings.Contains(f, tmpDirName) {
-			files = append(files, f)
-		}
-	}
-	sort.Strings(files)
 
 	var infos []*MemdbSnapshotInfo
-	for i := len(files) - 1; i >= 0; i-- {
-		f := files[i]
-		info := &MemdbSnapshotInfo{DataPath: filepath.Dir(f)}
-		fd, err := os.Open(f)
-		if err == nil {
-			defer fd.Close()
-			bs, err := ioutil.ReadAll(fd)
+
+	for i := 0; i < 100; i++ {
+		all, err := filepath.Glob(filepath.Join(slicePath, pattern))
+		if err != nil {
+			log.Printf("Error in filepath.Glob %v\n", err)
+			continue
+		}
+
+		for _, f := range all {
+			if !strings.Contains(f, tmpDirName) {
+				files = append(files, f)
+			}
+		}
+		sort.Strings(files)
+
+		for i := len(files) - 1; i >= 0; i-- {
+			f := files[i]
+			info := &MemdbSnapshotInfo{DataPath: filepath.Dir(f)}
+			fd, err := os.Open(f)
 			if err == nil {
-				err = json.Unmarshal(bs, info)
+				defer fd.Close()
+				bs, err := ioutil.ReadAll(fd)
 				if err == nil {
-					infos = append(infos, info)
+					err = json.Unmarshal(bs, info)
+					if err == nil {
+						infos = append(infos, info)
+					}
 				}
 			}
 		}
+
+		if len(infos) != 0 || !retry {
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
+		log.Printf("GetMemDBSnapshots: retrying %v\n", i+1)
 	}
+
 	return infos, nil
 }
