@@ -289,7 +289,7 @@ func frag() float64 {
 	mm.FreeOSMemory()
 	rss := float64(mm.Size())
 	all := float64(mm.AllocSize())
-	fragPercent := (1.0-all/rss)*100
+	fragPercent := (1.0 - all/rss) * 100
 	fmt.Printf("frag = %.2f%%\n", fragPercent)
 
 	return fragPercent
@@ -305,6 +305,29 @@ func TestConcurrentLoadCloseFragmentationSmall(t *testing.T) {
 
 func TestConcurrentLoadCloseFragmentationEmpty(t *testing.T) {
 	testConcurrentLoadCloseFragmentation(t, 0)
+}
+
+func TestConcurrentCloseSingleNode(t *testing.T) {
+	defer ValidateNoMemLeaks()
+
+	db := NewWithConfig(testConf)
+
+	w := db.NewWriter()
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(65))
+	w.Put(buf)
+
+	s, _ := db.NewSnapshot()
+
+	itr := s.NewIterator()
+	for itr.SeekFirst(); itr.Valid(); itr.Next() {
+		fmt.Println(string(itr.Get()))
+	}
+	itr.Close()
+
+	s.Close()
+
+	db.Close2(2)
 }
 
 func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
@@ -337,12 +360,12 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 	db.StoreToDisk("db.dump", snap, concurr, nil)
 	fmt.Printf("Done Storing to disk\n")
 	snap.Close()
-	if f := frag(); f > initialFrag * 1.5 {
+	if f := frag(); f > initialFrag*1.5 {
 		fmt.Println("WARNING: expected less fragmentation")
 	}
 
 	wg.Add(1)
-	go func () {
+	go func() {
 		defer wg.Done()
 		db.Close2(concurr)
 		fmt.Println("Done Closing")
@@ -357,7 +380,7 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 
 	wg.Wait()
 
-	if f := frag(); f > initialFrag * 3 {
+	if f := frag(); f > initialFrag*3 {
 		fmt.Println("WARNING: expected less fragmentation")
 	}
 }
@@ -939,5 +962,112 @@ func TestSnapshotStats(t *testing.T) {
 
 	if lastGCSn = db.GetLastGCSn(); lastGCSn != uint32(n/snapFreq) {
 		t.Errorf("Wrong lastGCSn. Expected [%d], got [%d]", n/snapFreq, lastGCSn)
+	}
+}
+
+func TestInsertDeleteConcurrent(t *testing.T) {
+	var wgInsert, wgDelete sync.WaitGroup
+	// in case of leaks from any prev test case
+	oldAllocs, oldFrees := mm.GetAllocStats()
+
+	db := NewWithConfig(testConf)
+	//debug.SetGCPercent(-1)
+
+	rand.Seed(time.Now().UnixNano())
+	tmin := 50
+	tmax := 300
+
+	n := (10000000 / runtime.GOMAXPROCS(0)) * runtime.GOMAXPROCS(0)
+	chunk := n / runtime.GOMAXPROCS(0)
+
+	var iwriters, dwriters []*Writer
+
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		iwriters = append(iwriters, db.NewWriter())
+	}
+
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		dwriters = append(dwriters, db.NewWriter())
+	}
+
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		wgInsert.Add(1)
+		go func(db *MemDB, w *Writer, wg *sync.WaitGroup, min_key, max_key int) {
+			defer wg.Done()
+			for val := min_key; val < max_key; val++ {
+				buf := make([]byte, 8)
+				binary.BigEndian.PutUint64(buf, uint64(val))
+				w.Put(buf)
+			}
+			x := rand.Intn(tmax-tmin+1) + tmin
+			time.Sleep(time.Duration(x) * time.Microsecond)
+			//runtime.GC()
+		}(db, iwriters[i], &wgInsert, i*chunk, (i+1)*chunk)
+	}
+
+	var del_count int64 = 0
+
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		wgDelete.Add(1)
+		go func(db *MemDB, w *Writer, wg *sync.WaitGroup, min_key, max_key int) {
+			defer wg.Done()
+			for val := min_key; val < max_key; val++ {
+				buf := make([]byte, 8)
+				binary.BigEndian.PutUint64(buf, uint64(val))
+				if w.Delete(buf) {
+					atomic.AddInt64(&del_count, 1)
+				}
+			}
+			x := rand.Intn(tmax-tmin+1) + tmin + 10
+			time.Sleep(time.Duration(x) * time.Microsecond)
+			//runtime.GC()
+		}(db, dwriters[i], &wgDelete, i*chunk/2, (i+1)*chunk/2)
+	}
+
+	wgInsert.Wait()
+	wgDelete.Wait()
+
+	// Verify Snapshot Scan after deletes
+
+	snap, _ := db.NewSnapshot()
+	// scans items
+	got1 := CountItems(snap)
+	// from snapshot info
+	got2 := (int)(snap.Count())
+	fmt.Println("total items in snapshot:", got1, " items deleted:", del_count)
+	if got1 != got2 {
+		t.Errorf("snapshot count inconsistent, got1: %d got2: %d",
+			got1, got2)
+	}
+
+	// Verify Skiplist Stats
+
+	// snapshot item count should match node count
+	nc := db.store.GetStats().NodeCount
+	if got1 != nc {
+		t.Errorf("snapshot count mismatch with node count, got1: %d nc: %d",
+			got1, nc)
+	}
+
+	na := db.store.GetStats().NodeAllocs
+	// node count should match node allocs - deleted items
+	if na-del_count != int64(nc) {
+		t.Errorf("node count :%d does not match nodeAllocs - deleted items %d-%d",
+			nc, na, del_count)
+	}
+	snap.Close()
+	db.Close()
+
+	fmt.Println(db.DumpStats())
+
+	// Verify Memory Leaks
+
+	a, b := mm.GetAllocStats()
+	a = a - oldAllocs
+	b = b - oldFrees
+	if a-b != 0 {
+		t.Errorf("Found memory leak: allocs  %d, freed %d, delta %d", a, b, a-b)
+	} else {
+		fmt.Printf("allocs: %d frees: %d\n", a, b)
 	}
 }
