@@ -661,7 +661,7 @@ func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionI
 
 	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
 
-	infos, err := tc.GetMemDBSnapshots(slicePath)
+	infos, err := tc.GetMemDBSnapshots(slicePath, true)
 	if err != nil {
 		return err
 	}
@@ -672,6 +672,9 @@ func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionI
 	if len(allSnapshots) == 0 {
 		return errors.New("Latest Snapshot not found")
 	}
+
+	// Allow indexer to persist the checksums.json before overwriting it.
+	time.Sleep(5 * time.Second)
 
 	for _, snapInfo := range allSnapshots {
 		fmt.Println("snapshot datapath = ", snapInfo.DataPath)
@@ -734,7 +737,7 @@ func CorruptMOIIndexLatestSnapshot(indexName, bucketName, dirPath, indexUsing st
 
 	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
 
-	infos, err := tc.GetMemDBSnapshots(slicePath)
+	infos, err := tc.GetMemDBSnapshots(slicePath, true)
 	if err != nil {
 		return err
 	}

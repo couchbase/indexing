@@ -382,7 +382,7 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 	}
 
 	// Step 3: Corrupt all snapshots
-	infos, err := tc.GetMemDBSnapshots(slicePath)
+	infos, err := tc.GetMemDBSnapshots(slicePath, false)
 	FailTestIfError(err, "Error in GetMemDBSnapshots", t)
 
 	snapInfoContainer := tc.NewSnapshotInfoContainer(infos)
