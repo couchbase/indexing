@@ -289,7 +289,7 @@ func frag() float64 {
 	mm.FreeOSMemory()
 	rss := float64(mm.Size())
 	all := float64(mm.AllocSize())
-	fragPercent := (1.0-all/rss)*100
+	fragPercent := (1.0 - all/rss) * 100
 	fmt.Printf("frag = %.2f%%\n", fragPercent)
 
 	return fragPercent
@@ -305,6 +305,29 @@ func TestConcurrentLoadCloseFragmentationSmall(t *testing.T) {
 
 func TestConcurrentLoadCloseFragmentationEmpty(t *testing.T) {
 	testConcurrentLoadCloseFragmentation(t, 0)
+}
+
+func TestConcurrentCloseSingleNode(t *testing.T) {
+	defer ValidateNoMemLeaks()
+
+	db := NewWithConfig(testConf)
+
+	w := db.NewWriter()
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(65))
+	w.Put(buf)
+
+	s, _ := db.NewSnapshot()
+
+	itr := s.NewIterator()
+	for itr.SeekFirst(); itr.Valid(); itr.Next() {
+		fmt.Println(string(itr.Get()))
+	}
+	itr.Close()
+
+	s.Close()
+
+	db.Close2(2)
 }
 
 func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
@@ -337,12 +360,12 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 	db.StoreToDisk("db.dump", snap, concurr, nil)
 	fmt.Printf("Done Storing to disk\n")
 	snap.Close()
-	if f := frag(); f > initialFrag * 1.5 {
+	if f := frag(); f > initialFrag*1.5 {
 		fmt.Println("WARNING: expected less fragmentation")
 	}
 
 	wg.Add(1)
-	go func () {
+	go func() {
 		defer wg.Done()
 		db.Close2(concurr)
 		fmt.Println("Done Closing")
@@ -357,7 +380,7 @@ func testConcurrentLoadCloseFragmentation(t *testing.T, n int) {
 
 	wg.Wait()
 
-	if f := frag(); f > initialFrag * 3 {
+	if f := frag(); f > initialFrag*3 {
 		fmt.Println("WARNING: expected less fragmentation")
 	}
 }
@@ -1034,7 +1057,7 @@ func TestInsertDeleteConcurrent(t *testing.T) {
 
 	na := db.store.GetStats().NodeAllocs
 	// node count should match node allocs - deleted items
-	if na - del_count != int64(nc) {
+	if na-del_count != int64(nc) {
 		t.Errorf("node count :%d does not match nodeAllocs - deleted items %d-%d",
 			nc, na, del_count)
 	}
