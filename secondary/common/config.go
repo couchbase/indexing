@@ -2669,6 +2669,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.settings.use_cinfo_lite": ConfigValue{
+		true,
+		"Use ClusterInfoCacheLite",
+		true,
+		false,
+		false,
+	},
 	"projector.diagnostics_dir": ConfigValue{
 		"./",
 		"Projector diagnostics information directory",

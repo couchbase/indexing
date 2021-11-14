@@ -21,6 +21,8 @@ const (
 	PoolChangeNotification
 	BucketsChangeNotification
 	CollectionManifestChangeNotification
+	PeriodicUpdateNotification
+	ForceUpdateNotification
 )
 
 var (
@@ -202,6 +204,10 @@ func (n Notification) String() string {
 		t = "BucketsChangeNotification"
 	} else if n.Type == CollectionManifestChangeNotification {
 		t = "CollectionManifestChangeNotification"
+	} else if n.Type == PeriodicUpdateNotification {
+		t = "PeriodicUpdateNotification"
+	} else if n.Type == ForceUpdateNotification {
+		t = "ForceUpdateNotification"
 	}
 	return t
 }
