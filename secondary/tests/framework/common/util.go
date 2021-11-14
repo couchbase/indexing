@@ -274,6 +274,10 @@ func GetIndexSlicePath(indexName, bucketName, dirPath string, partnId c.Partitio
 			return nil
 		}
 
+		if finfo.IsDir() && finfo.Name() == ".tmp" {
+			return filepath.SkipDir
+		}
+
 		if len(pth) <= len(dirPath) {
 			return nil
 		}
