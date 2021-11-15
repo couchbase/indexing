@@ -162,8 +162,9 @@ type IndexStats struct {
 
 	indexState stats.Uint64Val
 
-	replicaId    int
-	isArrayIndex bool
+	replicaId        int
+	isArrayIndex     bool
+	useArrItemsCount bool
 
 	partitions map[common.PartitionId]*IndexStats
 
@@ -208,6 +209,7 @@ type IndexStats struct {
 	scanBytesRead             stats.Int64Val
 	getBytes                  stats.Int64Val
 	itemsCount                stats.Int64Val
+	arrItemsCount             stats.Int64Val // used only for array indexes counter maintained at GSI layer
 	numDiskSnapshots          stats.Int64Val // # snapshots still available on disk
 	numCommits                stats.Int64Val // # snapshots ever written to disk
 	numSnapshots              stats.Int64Val // # snapshots ever created, including both disk and memory-only
@@ -449,6 +451,7 @@ func (s *IndexStats) Init() {
 	s.scanBytesRead.Init()
 	s.getBytes.Init()
 	s.itemsCount.Init()
+	s.arrItemsCount.Init()
 	s.avgTsInterval.Init()
 	s.avgTsItemsCount.Init()
 	s.lastNumFlushQueued.Init()
@@ -542,6 +545,7 @@ func (s *IndexStats) Init() {
 
 func (s *IndexStats) SetPlannerFilters() {
 	s.itemsCount.AddFilter(stats.PlannerFilter)
+	s.arrItemsCount.AddFilter(stats.PlannerFilter)
 	s.buildProgress.AddFilter(stats.PlannerFilter)
 	s.residentPercent.AddFilter(stats.PlannerFilter)
 	s.dataSize.AddFilter(stats.PlannerFilter)
@@ -855,7 +859,7 @@ func (s *IndexerStats) Reset() {
 	// Recreate per-index objects
 	for instId, iStats := range old.indexes {
 		indexStats := s.addIndexStats(instId, iStats.bucket, iStats.scope, iStats.collection, iStats.name,
-			iStats.replicaId, iStats.isArrayIndex)
+			iStats.replicaId, iStats.isArrayIndex, iStats.useArrItemsCount)
 
 		// Recreate per-partition subobjects
 		for partnId := range iStats.partitions {
@@ -892,17 +896,18 @@ func (s *IndexerStats) RemoveKeyspaceStats(streamId common.StreamId, keyspaceId 
 // stats map with populated metadata but empty stats values.
 func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
 	bucket string, scope string, collection string, name string,
-	replicaId int, isArrIndex bool) *IndexStats {
+	replicaId int, isArrIndex bool, useArrItemsCount bool) *IndexStats {
 
 	idxStats, ok := s.indexes[instId]
 	if !ok {
 		idxStats = &IndexStats{
-			name:         name,
-			bucket:       bucket,
-			scope:        scope,
-			collection:   collection,
-			replicaId:    replicaId,
-			isArrayIndex: isArrIndex,
+			name:             name,
+			bucket:           bucket,
+			scope:            scope,
+			collection:       collection,
+			replicaId:        replicaId,
+			isArrayIndex:     isArrIndex,
+			useArrItemsCount: useArrItemsCount,
 		}
 		idxStats.Init()
 		s.indexes[instId] = idxStats
@@ -925,7 +930,7 @@ func (s *IndexerStats) AddPartitionStats(indexInst common.IndexInst, partitionId
 
 	if _, ok := s.indexes[instId]; !ok {
 		s.addIndexStats(instId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-			indexInst.ReplicaId, defn.IsArrayIndex)
+			indexInst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount)
 	}
 	s.indexes[instId].addPartition(partitionId)
 }
@@ -1294,9 +1299,18 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	})
 	pendingReqs := reqs - s.numCompletedRequests.Value()
 
-	itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
-		return ss.itemsCount.Value()
-	})
+	// if this is array index created with version 7.1 or above use arrItemsCount as repalcement for
+	// itemsCount
+	var itemsCount int64
+	if s.useArrItemsCount {
+		itemsCount = s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.arrItemsCount.Value()
+		})
+	} else {
+		itemsCount = s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.itemsCount.Value()
+		})
+	}
 
 	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 {
 		return ss.rawDataSize.Value()
@@ -1682,11 +1696,19 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.getBytes, s.partnInt64Stats)
 
-	statMap.AddAggrStatFiltered("items_count",
-		func(ss *IndexStats) int64 {
-			return ss.itemsCount.Value()
-		},
-		&s.itemsCount, s.partnInt64Stats)
+	if s.useArrItemsCount {
+		statMap.AddAggrStatFiltered("items_count",
+			func(ss *IndexStats) int64 {
+				return ss.arrItemsCount.Value()
+			},
+			&s.arrItemsCount, s.partnInt64Stats)
+	} else {
+		statMap.AddAggrStatFiltered("items_count",
+			func(ss *IndexStats) int64 {
+				return ss.itemsCount.Value()
+			},
+			&s.itemsCount, s.partnInt64Stats)
+	}
 
 	statMap.AddAggrStatFiltered("num_items_flushed",
 		func(ss *IndexStats) int64 {
@@ -2058,9 +2080,16 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "raw_data_size", s.bucket, collectionLabels, s.dispName, rawDataSize)
 	st = append(st, []byte(str)...)
 
-	itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.itemsCount.Value() })
-	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "items_count", s.bucket, collectionLabels, s.dispName, itemsCount)
-	st = append(st, []byte(str)...)
+	var itemsCount int64
+	if s.useArrItemsCount {
+		itemsCount = s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.arrItemsCount.Value() })
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "items_count", s.bucket, collectionLabels, s.dispName, itemsCount)
+		st = append(st, []byte(str)...)
+	} else {
+		itemsCount = s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.itemsCount.Value() })
+		str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "items_count", s.bucket, collectionLabels, s.dispName, itemsCount)
+		st = append(st, []byte(str)...)
+	}
 
 	scanDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "total_scan_duration", s.bucket, collectionLabels, s.dispName, scanDuration)

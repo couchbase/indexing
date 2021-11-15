@@ -231,6 +231,7 @@ type IndexDefn struct {
 	Collection         string     `json:"Collection,omitempty"`
 	ScopeId            string     `json:"ScopeId,omitempty"`
 	CollectionId       string     `json:"CollectionId,omitempty"`
+	HasArrItemsCount   bool       `json:"hasArrItemsCount,omitempty"`
 
 	// Sizing info
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -334,6 +335,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		DocKeySize:         idx.DocKeySize,
 		ArrSize:            idx.ArrSize,
 		NumReplica2:        idx.NumReplica2,
+		HasArrItemsCount:   idx.HasArrItemsCount,
 	}
 }
 
