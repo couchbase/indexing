@@ -1501,23 +1501,23 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableCompressDuringBurst": ConfigValue{
-		false,
+		true,
 		"Enable compression of memory resident items during burst eviction also",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableDecompressDuringSwapin": ConfigValue{
-		true,
+		false,
 		"Enable decompression of compressed items during swapin",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.compressBeforeEvictPercent": ConfigValue{
-		0,
+		80,
 		"Percent of compressible items to compress before eviction",
-		0,
+		80,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1648,23 +1648,23 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableCompressDuringBurst": ConfigValue{
-		false,
+		true,
 		"Enable compression of memory resident items during burst eviction also",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableDecompressDuringSwapin": ConfigValue{
-		true,
+		false,
 		"Enable decompression of compressed items during swapin",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.compressBeforeEvictPercent": ConfigValue{
-		0,
+		80,
 		"Percent of compressible items to compress before eviction",
-		0,
+		80,
 		false, // mutable
 		false, // case-insensitive
 	},
