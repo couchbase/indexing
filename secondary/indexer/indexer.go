@@ -7341,8 +7341,9 @@ func (idx *indexer) initFromPersistedState() error {
 			keyspaceId: "",
 		}
 
+		idx.initializeBootstrapStats(bootstrapStats, inst.InstId)
 		//update index maps in scan coordinator
-		err = idx.addInstAtWorker(idx.scanCoordCmdCh, "ScanCoordinator", inst, partnInstMap)
+		err = idx.addInstAtWorker(idx.scanCoordCmdCh, "ScanCoordinator", inst, partnInstMap, bootstrapStats)
 		if err != nil { // continue in case of error
 			continue
 		}
@@ -7381,7 +7382,7 @@ func (idx *indexer) sendInstMapToWorker(wCh MsgChannel, wStr string,
 }
 
 func (idx *indexer) addInstAtWorker(wCh MsgChannel, wStr string,
-	indexInst common.IndexInst, instPartns PartitionInstMap) error {
+	indexInst common.IndexInst, instPartns PartitionInstMap, stats *IndexerStats) error {
 
 	instClone := indexInst
 	instClone.Pc = indexInst.Pc.Clone()
@@ -7391,20 +7392,26 @@ func (idx *indexer) addInstAtWorker(wCh MsgChannel, wStr string,
 		instPartnsClone[k] = v
 	}
 
+	idxStats := stats.indexes[indexInst.InstId]
+	if idxStats != nil {
+		idxStats = idxStats.clone()
+	}
+
 	respCh := make(chan error)
 	idx.internalRecvCh <- &MsgAddIndexInst{
 		workerCh:   wCh,
 		workerStr:  wStr,
 		indexInst:  instClone,
 		instPartns: instPartnsClone,
+		stats:      idxStats,
 		respCh:     respCh,
 	}
 	err := <-respCh
 	return err
 }
 
-// broadcast stats to clients
-func (idx *indexer) updateBootstrapStats(stats *IndexerStats,
+// initialize bootstrap stats
+func (idx *indexer) initializeBootstrapStats(stats *IndexerStats,
 	id common.IndexInstId) {
 
 	idxStats := stats.indexes[id]
@@ -7416,7 +7423,14 @@ func (idx *indexer) updateBootstrapStats(stats *IndexerStats,
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
 	idxStats.progressStatTime.Set(time.Now().UnixNano())
+	stats.indexes[id] = idxStats
+}
 
+// broadcast stats to clients
+func (idx *indexer) updateBootstrapStats(stats *IndexerStats,
+	id common.IndexInstId) {
+
+	idxStats := stats.indexes[id]
 	statsForIndex := make(common.Statistics)
 	statsForIndex[fmt.Sprintf("%v", id)] = idxStats
 	// Marshall stats to byte slice
