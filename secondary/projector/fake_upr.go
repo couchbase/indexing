@@ -1,8 +1,10 @@
 package projector
 
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/couchbase/indexing/secondary/dcp"
+import (
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+)
 
 // FakeBucket fot unit testing.
 type FakeBucket struct {
@@ -91,7 +93,7 @@ func (b *FakeBucket) StartVbStreams(
 
 // EndVbStreams is method receiver for BucketFeeder interface
 func (b *FakeBucket) EndVbStreams(
-	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
+	opaque uint16, ts *protobuf.TsVbuuid) (err error, cleanup bool) {
 
 	return
 }
