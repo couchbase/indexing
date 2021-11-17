@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common/collections"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
@@ -54,6 +55,7 @@ type nodesInfo struct {
 	encryptedPortMap map[string]string
 	node2group       map[NodeId]string
 	clusterURL       string
+	bucketNames      []couchbase.BucketName
 
 	valid         bool
 	errList       []error
@@ -104,6 +106,14 @@ func newNodesInfo(pool *couchbase.Pool) *nodesInfo {
 
 	for i, node := range nodes {
 		newNInfo.node2group[NodeId(i)] = node.ServerGroup
+	}
+
+	if len(pool.BucketNames) != 0 {
+		bucketNames := make([]couchbase.BucketName, len(pool.BucketNames))
+		for i, bn := range pool.BucketNames {
+			bucketNames[i] = bn
+		}
+		newNInfo.bucketNames = bucketNames
 	}
 
 	return newNInfo
@@ -214,6 +224,37 @@ func (ni *nodesInfo) validateNodesAndSvs(connHost string) {
 }
 
 //
+// Collection Info
+//
+
+type collectionInfo struct {
+	bucketName string
+	manifest   *collections.CollectionManifest
+
+	valid         bool
+	errList       []error
+	lastUpdatedTs time.Time
+}
+
+func newCollectionInfo(bucketName string, manifest *collections.CollectionManifest) *collectionInfo {
+	return &collectionInfo{
+		bucketName:    bucketName,
+		manifest:      manifest,
+		valid:         true,
+		lastUpdatedTs: time.Now(),
+	}
+}
+
+func newCollectionInfoWithErr(bucketName string, err error) *collectionInfo {
+	ci := &collectionInfo{
+		bucketName: bucketName,
+	}
+	ci.valid = false
+	ci.errList = append(ci.errList, err)
+	return ci
+}
+
+//
 // Cluster Info Cache Lite
 //
 
@@ -221,11 +262,15 @@ type clusterInfoCacheLite struct {
 	logPrefix string
 	isIPv6    bool
 	nih       nodesInfoHolder
+
+	cihm     map[string]collectionInfoHolder
+	cihmLock sync.RWMutex
 }
 
 func newClusterInfoCacheLite(logPrefix string) *clusterInfoCacheLite {
 
 	c := &clusterInfoCacheLite{logPrefix: logPrefix}
+	c.cihm = make(map[string]collectionInfoHolder)
 	c.nih.Init()
 
 	return c
@@ -248,6 +293,65 @@ func (cicl *clusterInfoCacheLite) String() string {
 	return ""
 }
 
+func (cicl *clusterInfoCacheLite) addCollnInfo(bucketName string,
+	ci *collectionInfo) error {
+	cicl.cihmLock.Lock()
+	defer cicl.cihmLock.Unlock()
+
+	if _, ok := cicl.cihm[bucketName]; ok {
+		return ErrBucketAlreadyExist
+	}
+
+	cih := collectionInfoHolder{}
+	cih.Init()
+	cih.Set(ci)
+	cicl.cihm[bucketName] = cih
+	return nil
+}
+
+func (cicl *clusterInfoCacheLite) deleteCollnInfo(bucketName string) error {
+	cicl.cihmLock.Lock()
+	defer cicl.cihmLock.Unlock()
+
+	if _, ok := cicl.cihm[bucketName]; !ok {
+		return ErrBucketNotFound
+	}
+	delete(cicl.cihm, bucketName)
+	return nil
+}
+
+func (cicl *clusterInfoCacheLite) updateCollnInfo(bucketName string,
+	ci *collectionInfo) error {
+
+	cicl.cihmLock.RLock()
+	defer cicl.cihmLock.RUnlock()
+
+	cih, ok := cicl.cihm[bucketName]
+	if !ok {
+		return ErrBucketNotFound
+	}
+	cih.Set(ci)
+	return nil
+}
+
+func (cicl *clusterInfoCacheLite) getCollnInfo(bucketName string) (*collectionInfo,
+	error) {
+	cicl.cihmLock.RLock()
+	defer cicl.cihmLock.RUnlock()
+
+	cih, ok := cicl.cihm[bucketName]
+	if !ok {
+		ci := newCollectionInfoWithErr(bucketName, ErrBucketNotFound)
+		return ci, ci.errList[0]
+	}
+	ci := cih.Get()
+	if ci == nil {
+		ci := newCollectionInfoWithErr(bucketName, ErrUnInitializedClusterInfo)
+		return ci, ci.errList[0]
+	}
+	return ci, nil
+}
+
 //
 // Cluster Info Cache Lite Manager
 //
@@ -267,6 +371,10 @@ type clusterInfoCacheLiteManager struct {
 
 	poolsStreamingCh chan Notification
 
+	collnManifestCh          chan Notification
+	perBucketCollnManifestCh map[string]chan Notification
+	collnBucketsHash         string
+
 	eventMgr *eventManager
 	eventCtr uint64
 
@@ -280,13 +388,15 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 	error) {
 
 	cicm := &clusterInfoCacheLiteManager{
-		poolName:             poolName,
-		logPrefix:            logPrefix,
-		cicl:                 cicl,
-		timeDiffToForceFetch: 5, // In Minutes
-		poolsStreamingCh:     make(chan Notification, 100),
-		notifierRetrySleep:   2,
-		retryInterval:        uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()),
+		poolName:                 poolName,
+		logPrefix:                logPrefix,
+		cicl:                     cicl,
+		timeDiffToForceFetch:     5, // In Minutes
+		poolsStreamingCh:         make(chan Notification, 100),
+		notifierRetrySleep:       2,
+		retryInterval:            uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()),
+		collnManifestCh:          make(chan Notification, 100),
+		perBucketCollnManifestCh: make(map[string]chan Notification),
 	}
 
 	var err error
@@ -319,6 +429,14 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 
 	go cicm.watchClusterChanges()
 	go cicm.handlePoolsChangeNotifications()
+	for _, bn := range ni.bucketNames {
+		ch := make(chan Notification, 100)
+		cicm.perBucketCollnManifestCh[bn.Name] = ch
+		go cicm.handlePerBucketCollectionManifest(bn.Name, ch)
+		msg := &couchbase.Bucket{Name: bn.Name}
+		ch <- Notification{Type: ForceUpdateNotification, Msg: msg}
+	}
+	go cicm.handleCollectionManifestChanges()
 	go cicm.periodicUpdater()
 
 	logging.Infof("Started New clusterInfoCacheManager")
@@ -396,9 +514,59 @@ func (cicm *clusterInfoCacheLiteManager) nodesInfoSync(eventTimeoutSeconds uint3
 			return nil, err
 		}
 
+		// NodeInfo event is notified only when its valid
+		// If command channel goes empty and it its still invalid
+		// periodic check will restart the processing or after timeout
+		// user can trigger the command again
 		ni = msg.(*nodesInfo)
 	}
 	return ni, nil
+}
+
+func (cicm *clusterInfoCacheLiteManager) collectionInfo(bucketName string) (
+	*collectionInfo, error) {
+	ci, err := cicm.cicl.getCollnInfo(bucketName)
+	if !ci.valid {
+		return ci, err
+	} else {
+		return ci, nil
+	}
+}
+
+func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
+	eventTimeoutSeconds uint32) (*collectionInfo, error) {
+	ci, _ := cicm.cicl.getCollnInfo(bucketName)
+	if !ci.valid {
+		id := fmt.Sprintf("%d", atomic.AddUint64(&cicm.eventCtr, 1))
+		evtType := getClusterInfoEventType(bucketName)
+		evtCount := cicm.eventMgr.count(evtType)
+		ch, err := cicm.eventMgr.register(id, evtType)
+		if err != nil {
+			return nil, err
+		}
+		defer cicm.eventMgr.unregister(id, evtType)
+
+		if evtCount == 0 {
+			msg := Notification{
+				Type: ForceUpdateNotification,
+				Msg:  &couchbase.Bucket{Name: ci.bucketName},
+			}
+			cicm.collnManifestCh <- msg
+		}
+
+		msg, err := readWithTimeout(ch, eventTimeoutSeconds)
+		if err != nil {
+			return nil, err
+		}
+
+		// ci can be invalid when bucket is deleted and we are trying to
+		// fetch the data
+		ci = msg.(*collectionInfo)
+		if !ci.valid {
+			return nil, ci.errList[0]
+		}
+	}
+	return ci, nil
 }
 
 func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
@@ -416,6 +584,22 @@ func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 			}
 			cicm.poolsStreamingCh <- notif
 		}
+
+		cicm.cicl.cihmLock.RLock()
+		for name, cih := range cicm.cicl.cihm {
+			ci := cih.Get()
+			if ci == nil || time.Since(ci.lastUpdatedTs) >
+				5*time.Minute {
+				msg := Notification{
+					Type: PeriodicUpdateNotification,
+					Msg: &couchbase.Bucket{
+						Name: name,
+					},
+				}
+				cicm.collnManifestCh <- msg
+			}
+		}
+		cicm.cicl.cihmLock.RUnlock()
 	}
 }
 
@@ -462,8 +646,137 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 	}
 }
 
+func (cicm *clusterInfoCacheLiteManager) addOrRemoveBuckets(newBucketMap,
+	oldBucketMap map[string]bool, start, cleanup func(bName string)) {
+	logging.Tracef("OldBucketMap %v NewBucketMap %v", oldBucketMap, newBucketMap)
+
+	// cleanup all buckets that are in oldBucketMap and not in newBucketMap
+	for oldName, _ := range oldBucketMap {
+		if _, ok := newBucketMap[oldName]; !ok {
+			cleanup(oldName)
+		}
+	}
+
+	// start all buckets that are in newBucketMap and not in oldBucketMap
+	for newName, _ := range newBucketMap {
+		if _, ok := oldBucketMap[newName]; !ok {
+			start(newName)
+		}
+	}
+}
+
+func (cicm *clusterInfoCacheLiteManager) handleCollectionManifestChanges() {
+
+	notify := func(bName string, ci *collectionInfo) {
+		// If any API is waiting for notification return error
+		evtType := getClusterInfoEventType(bName)
+		cicm.eventMgr.notify(evtType, ci)
+	}
+
+	cleanup := func(bName string) {
+		ch := cicm.perBucketCollnManifestCh[bName]
+		close(ch)
+		delete(cicm.perBucketCollnManifestCh, bName)
+
+		ci := newCollectionInfoWithErr(bName, ErrBucketNotFound)
+		notify(bName, ci)
+		logging.Infof("handleCollectionManifestChanges: stopped observing collection manifest for bucket %v", bName)
+	}
+
+	start := func(bName string) {
+		ch := make(chan Notification, 100)
+		cicm.perBucketCollnManifestCh[bName] = ch
+		go cicm.handlePerBucketCollectionManifest(bName, ch)
+		logging.Infof("handleCollectionManifestChanges: started observing collection manifest for bucket %v", bName)
+	}
+
+	for notif := range cicm.collnManifestCh {
+		if notif.Type == PoolChangeNotification {
+			p := (notif.Msg).(*couchbase.Pool)
+
+			hash, err := p.GetBucketURLVersionHash()
+			if err == nil && hash == cicm.collnBucketsHash {
+				continue
+			} else {
+				cicm.collnBucketsHash = hash
+			}
+
+			newBucketMap := make(map[string]bool, len(p.BucketNames))
+			for _, bn := range p.BucketNames {
+				newBucketMap[bn.Name] = true
+			}
+			oldBucketMap := make(map[string]bool, len(cicm.perBucketCollnManifestCh))
+			for bn, _ := range cicm.perBucketCollnManifestCh {
+				oldBucketMap[bn] = true
+			}
+			cicm.addOrRemoveBuckets(newBucketMap, oldBucketMap, start, cleanup)
+			continue
+		}
+
+		b := (notif.Msg).(*couchbase.Bucket)
+		ch, ok := cicm.perBucketCollnManifestCh[b.Name]
+		if !ok {
+			exists, err := cicm.verifyBucketExist(b.Name)
+			if err == nil && exists {
+				logging.Infof("handleCollectionManifestChanges: started observing collection manifest for bucket %v on getting %v", b.Name, notif)
+				start(b.Name)
+				ch = cicm.perBucketCollnManifestCh[b.Name]
+			} else {
+				logging.Warnf("handleCollectionManifestChanges: ignoring %v as bucket is not found", notif)
+				if notif.Type == ForceUpdateNotification {
+					if err == nil {
+						err = ErrBucketNotFound
+					}
+					ci := newCollectionInfoWithErr(b.Name, err)
+					notify(b.Name, ci)
+				}
+				continue
+			}
+		}
+
+		ch <- notif
+	}
+}
+
+func (cicm *clusterInfoCacheLiteManager) handlePerBucketCollectionManifest(
+	bucketName string, ch chan Notification) {
+
+	for notif := range ch {
+		b := (notif.Msg).(*couchbase.Bucket)
+		newBucket := false
+		logging.Tracef("handlePerBucketCollectionManifest: got %v for bucket", notif, b.Name)
+
+		oci, err := cicm.cicl.getCollnInfo(bucketName)
+		if err == ErrBucketNotFound {
+			newBucket = true
+		}
+		if notif.Type == CollectionManifestChangeNotification && oci.valid &&
+			oci.manifest.UID == b.CollectionManifestUID {
+			continue
+		}
+
+		ci := cicm.FetchCollectionInfo(bucketName)
+		if !ci.valid {
+			logging.Warnf("handlePerBucketCollectionManifest error while fetching collection manifest for bucket: %s", bucketName)
+		}
+
+		if newBucket {
+			cicm.cicl.addCollnInfo(bucketName, ci)
+		} else {
+			cicm.cicl.updateCollnInfo(bucketName, ci)
+		}
+
+		if ci.valid {
+			evtType := getClusterInfoEventType(bucketName)
+			cicm.eventMgr.notify(evtType, ci)
+		}
+	}
+	cicm.cicl.deleteCollnInfo(bucketName)
+}
+
 func (cicm *clusterInfoCacheLiteManager) watchClusterChanges() {
 	selfRestart := func() {
+		logging.Infof("watchClusterChanges: restarting..")
 		r := atomic.LoadUint32(&cicm.notifierRetrySleep)
 		time.Sleep(time.Duration(r) * time.Millisecond)
 		go cicm.watchClusterChanges()
@@ -490,8 +803,16 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges() {
 				switch (notif.Msg).(type) {
 				case *couchbase.Pool:
 					cicm.poolsStreamingCh <- notif
+					cicm.collnManifestCh <- notif
 				default:
 					logging.Errorf("ClusterInfoClientLite (PoolChangeNotification): Invalid message type: %T", notif.Msg)
+				}
+			case CollectionManifestChangeNotification:
+				switch (notif.Msg).(type) {
+				case *couchbase.Bucket:
+					cicm.collnManifestCh <- notif
+				default:
+					logging.Errorf("ClusterInfoClientLite (CollectionManifestChangeNotification): Invalid message type: %T", notif.Msg)
 				}
 			}
 		}
@@ -542,6 +863,70 @@ retry:
 	}
 
 	return ni
+}
+
+func (cicm *clusterInfoCacheLiteManager) FetchCollectionInfo(bucketName string) *collectionInfo {
+	var retryCount uint32 = 0
+	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
+	r := atomic.LoadUint32(&cicm.retryInterval)
+	retryInterval := time.Duration(r) * time.Second
+retry:
+	doRetry, cm, err := cicm.client.GetCollectionManifest(bucketName)
+	if doRetry && retryCount < maxRetries {
+		retryCount++
+		if retryCount%5 == 0 {
+			logging.Infof("FetchingCollectionInfo: retrying %v time for bucket %v", retryCount, bucketName)
+			exists, err1 := cicm.verifyBucketExist(bucketName)
+			if err1 == nil && !exists {
+				// BackOff and wait for BucketDeleteNotification
+				return newCollectionInfoWithErr(bucketName, err)
+			}
+		}
+		time.Sleep(retryInterval)
+		goto retry
+	}
+
+	if err != nil {
+		ci := newCollectionInfoWithErr(bucketName, err)
+		return ci
+	}
+
+	ci := newCollectionInfo(bucketName, cm)
+	return ci
+}
+
+func (cicm *clusterInfoCacheLiteManager) GetBucketNames() ([]couchbase.BucketName,
+	error) {
+	var retryCount uint32 = 0
+	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
+	r := atomic.LoadUint32(&cicm.retryInterval)
+	retryInterval := time.Duration(r) * time.Second
+retry:
+	p, err := cicm.client.GetPoolWithoutRefresh(cicm.poolName)
+	if err != nil {
+		if retryCount < maxRetries {
+			retryCount++
+			time.Sleep(retryInterval)
+			goto retry
+		} else {
+			return nil, err
+		}
+	}
+	return p.BucketNames, nil
+}
+
+func (cicm *clusterInfoCacheLiteManager) verifyBucketExist(bucketName string) (
+	bool, error) {
+	bns, err := cicm.GetBucketNames()
+	if err != nil {
+		return false, err
+	}
+	for _, bn := range bns {
+		if bn.Name == bucketName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 //
@@ -872,6 +1257,15 @@ func (ni *nodesInfo) getServiceAddress(nid NodeId, srvc string,
 	return
 }
 
+func (c *ClusterInfoCacheLiteClient) GetClusterVersion() uint64 {
+	ni, err := c.GetNodesInfo()
+	if err != nil {
+		return 0
+	}
+
+	return GetVersion(ni.version, ni.minorVersion)
+}
+
 func (c *ClusterInfoCacheLiteClient) GetLocalServiceAddress(srvc string,
 	useEncryptedPortMap bool) (srvcAddr string, err error) {
 	ni, err := c.GetNodesInfo()
@@ -1007,4 +1401,55 @@ func (c *ClusterInfoCacheLiteClient) GetAllKVNodes() (
 	}
 
 	return
+}
+
+//
+// API using Collection Info
+//
+
+func (c *ClusterInfoCacheLiteClient) GetCollectionInfo(bucketName string) (
+	*collectionInfo, error) {
+	ci, _ := c.ciclMgr.collectionInfo(bucketName)
+	if ci.valid {
+		return ci, nil
+	}
+
+	logging.Tracef("CollectionInfo is not valid force fetching data")
+	return c.ciclMgr.collectionInfoSync(bucketName, c.eventWaitTimeoutSeconds)
+}
+
+func (c *ClusterInfoCacheLiteClient) GetCollectionID(bucket, scope, collection string) string {
+	ci, err := c.GetCollectionInfo(bucket)
+	if err != nil {
+		return collections.COLLECTION_ID_NIL
+	}
+
+	return ci.manifest.GetCollectionID(scope, collection)
+}
+
+func (c *ClusterInfoCacheLiteClient) GetScopeID(bucket, scope string) string {
+	ci, err := c.GetCollectionInfo(bucket)
+	if err != nil {
+		return collections.SCOPE_ID_NIL
+	}
+
+	return ci.manifest.GetScopeID(scope)
+}
+
+func (c *ClusterInfoCacheLiteClient) GetScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	ci, err := c.GetCollectionInfo(bucket)
+	if err != nil {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL
+	}
+
+	return ci.manifest.GetScopeAndCollectionID(scope, collection)
+}
+
+func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (uint32, error) {
+	ci, err := c.GetCollectionInfo(bucket)
+	if err != nil {
+		return 0, err
+	}
+
+	return ci.manifest.GetIndexScopeLimit(scope), nil
 }

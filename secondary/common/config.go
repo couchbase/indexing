@@ -2683,6 +2683,13 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
+	"indexer.settings.use_cinfo_lite": ConfigValue{
+		true,
+		"Use ClusterInfoCacheLite",
+		true,
+		false,
+		false,
+	},
 	"indexer.settings.moi.debug": ConfigValue{
 		false,
 		"Enable debug mode for moi storage engine",
