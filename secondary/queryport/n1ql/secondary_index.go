@@ -1856,7 +1856,7 @@ func isStaleMetaError(err error) bool {
 }
 
 func n1qlError(client *qclient.GsiClient, err error) errors.Error {
-	switch err.Error() {
+	switch strings.TrimSpace(err.Error()) {
 	case c.ErrScanTimedOut.Error():
 		return errors.NewCbIndexScanTimeoutError(err)
 	case qclient.ErrorIndexNotFound.Error():

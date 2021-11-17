@@ -664,7 +664,16 @@ func (m *MemDB) FreeNodesConcurrent(concurr int) error {
 		if itr.Seek(startItm) {
 			if itr.Valid() {
 				currItrStartItm := itr.GetNode().Item()
-				prevItrStartItm := itrs[len(itrs)-1].GetNode().Item()
+
+				prevItr := itrs[len(itrs)-1]
+				if !prevItr.Valid() {
+					// If a pivot item is the last node, then the iterator will have become invalid
+					// No need to add any more pivots in this case.
+					cleanup()
+					break
+				}
+
+				prevItrStartItm := prevItr.GetNode().Item()
 
 				// Use iterator only if it is at a greater position
 				if m.iterCmp(currItrStartItm, prevItrStartItm) >= 0 {

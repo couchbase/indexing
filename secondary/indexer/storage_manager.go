@@ -715,6 +715,8 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 	for _, w := range waiters {
 		// Clean up expired requests from queue
 		if !w.expired.IsZero() && t.After(w.expired) {
+			snapTs := is.Timestamp()
+			logSnapInfoAtTimeout(snapTs, w.ts, is.IndexInstId(), "updateSnapMapAndNotify", idxStats.lastTsTime.Value())
 			w.Error(common.ErrScanTimedOut)
 			idxStats.numSnapshotWaiters.Add(-1)
 			continue
