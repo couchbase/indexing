@@ -1073,12 +1073,17 @@ func (s *scanCoordinator) handleAddIndexInstance(cmd Message) {
 	req := cmd.(*MsgAddIndexInst)
 	inst := req.GetIndexInst()
 	partnMap := req.GetInstPartnMap()
+	instStats := req.GetIndexInstStats()
 
 	s.indexInstMap[inst.InstId] = inst
 	s.indexPartnMap[inst.InstId] = partnMap
 
 	defnId := inst.Defn.DefnId
 	s.indexDefnMap[defnId] = append(s.indexDefnMap[defnId], inst.InstId)
+
+	stats := s.stats.Get()
+	stats.setIndexStats(inst.InstId, instStats)
+	s.stats.Set(stats)
 
 	s.supvCmdch <- &MsgSuccess{}
 }

@@ -910,6 +910,14 @@ func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
 	return idxStats
 }
 
+// setIndexStats sets an entry to the per-index stats map.
+func (s *IndexerStats) setIndexStats(instId common.IndexInstId,
+	stats *IndexStats) {
+	if stats != nil {
+		s.indexes[instId] = stats
+	}
+}
+
 // AddPartitionStats adds stats to the per-index stats map.
 func (s *IndexerStats) AddPartitionStats(indexInst common.IndexInst, partitionId common.PartitionId) {
 	instId := indexInst.InstId

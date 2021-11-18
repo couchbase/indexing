@@ -811,6 +811,7 @@ type MsgAddIndexInst struct {
 	workerStr  string
 	indexInst  common.IndexInst
 	instPartns PartitionInstMap
+	stats      *IndexStats
 	respCh     chan error
 }
 
@@ -828,6 +829,10 @@ func (m *MsgAddIndexInst) GetWorkerStr() string {
 
 func (m *MsgAddIndexInst) GetIndexInst() common.IndexInst {
 	return m.indexInst
+}
+
+func (m *MsgAddIndexInst) GetIndexInstStats() *IndexStats {
+	return m.stats
 }
 
 func (m *MsgAddIndexInst) GetInstPartnMap() PartitionInstMap {

@@ -2211,13 +2211,20 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	} else {
 		useNodes = nodes
 	}
+	enforceLimits := false
+	if o.GetClusterVersion() >= c.INDEXER_71_VERSION {
+		enforceLimits, err = o.limitsCfg.EnforceLimits()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 
 	// Use the planner to find out where to place the replica.
 	// If planner cannot read from the given list of nodes, it will return error.
 	// In case of input plan has list of nodes to be used, pass the list along
 	// for planner to place the replicas on those specific nodes.
 	var solution *planner.Solution
-	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false)
+	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false, enforceLimits)
 	if err != nil {
 		return nil, nil, err
 	}
