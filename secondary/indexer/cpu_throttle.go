@@ -17,8 +17,8 @@ import (
 	"github.com/couchbase/indexing/secondary/system"
 )
 
-const MAX_THROTTLE_ADJUST_MS float64 = 1000.0 // max msec to adjust throttleDelayMs by at one time
-const MAX_THROTTLE_DELAY_MS int64 = 10000     // max msec to delay an action due to throttling
+const MAX_THROTTLE_ADJUST_MS float64 = 100.0 // max msec to adjust throttleDelayMs by at one time
+const MAX_THROTTLE_DELAY_MS int64 = 100      // max msec to delay an action due to throttling
 // (prevents runaway throttling)
 const NUM_CPU_STATS int = 2 // number of past CPU stats to keep
 
