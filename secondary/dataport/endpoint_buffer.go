@@ -136,7 +136,11 @@ func (b *endpointBuffers) checkSeqOrder(kv *c.KeyVersions, endpoint *RouterEndpo
 	case c.Snapshot:
 		if s, ok := endpoint.seqOrders[key]; ok && s != nil {
 			_, start, end := kv.GetSnapshot()
-			s.ProcessSnapshot(start, end)
+			if snapInfo, correctSnapOrder := s.ProcessSnapshot(start, end); !correctSnapOrder {
+				logging.Fatalf("%v seq order violation for snapshot message for vb = %v, command = %v, "+
+					"orderState = %v, snapStart: %v, snapEnd: %v, mutation = %v", endpoint.logPrefix, key, kv.Commands[0],
+					snapInfo, start, end, kv.GetDebugInfo())
+			}
 		}
 
 	case c.Upsert, c.Deletion, c.UpsertDeletion:

@@ -12,7 +12,7 @@ import "fmt"
 type SeqOrderState interface {
 
 	// Process DCP snapshot event.
-	ProcessSnapshot(sseq, eseq uint64)
+	ProcessSnapshot(sseq, eseq uint64) (string, bool)
 
 	// Proccess any non-snapshot DCP event that has a seqno.
 	ProcessSeqno(seq uint64) bool
@@ -37,11 +37,21 @@ func NewSeqOrderState() *seqOrderState {
 	return &seqOrderState{}
 }
 
-func (s *seqOrderState) ProcessSnapshot(sseq, eseq uint64) {
+func (s *seqOrderState) ProcessSnapshot(sseq, eseq uint64) (string, bool) {
+	// Check snapshot order violations
+	correctSnapOrder := true
+	snapInfo := ""
+	if s.snapStarted && sseq <= s.snapEnd {
+		correctSnapOrder = false
+		snapInfo = s.GetInfo()
+		s.errCount++
+	}
+	// Update snapshot count in book-keeping as the new mutations
+	// will fall in this snapshot range
 	s.snapStart = sseq
 	s.snapEnd = eseq
 	s.snapStarted = true
-	return
+	return snapInfo, correctSnapOrder
 }
 
 func (s *seqOrderState) ProcessSeqno(seq uint64) bool {
