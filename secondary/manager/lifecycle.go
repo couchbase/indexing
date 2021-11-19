@@ -208,6 +208,10 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 		clusterVersion = cinfo.GetClusterVersion()
 	} else {
 		mgr.ciclClient, err = common.NewClusterInfoCacheLiteClient(clusterURL, common.DEFAULT_POOL, config)
+		if err != nil {
+			return nil, err
+		}
+		mgr.ciclClient.SetLogPrefix("LifeCycleMgr")
 		clusterVersion = mgr.ciclClient.GetClusterVersion()
 	}
 
@@ -2994,10 +2998,10 @@ func (m *LifecycleMgr) handleResetIndexOnRollback(content []byte) error {
 // Indexer Config update
 //-----------------------------------------------------------
 
-func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
+func (m *LifecycleMgr) handleConfigUpdate(content []byte) (err error) {
 
 	config := new(common.Config)
-	if err := json.Unmarshal(content, config); err != nil {
+	if err = json.Unmarshal(content, config); err != nil {
 		return err
 	}
 
@@ -3010,9 +3014,22 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
 	useCInfoLite := (*config)["settings.use_cinfo_lite"].Bool()
 	if m.config["settings.use_cinfo_lite"].Bool() != useCInfoLite {
 		if useCInfoLite {
+			// close cinfo
 			m.cinfoClient.Close()
+			m.cinfoClient = nil
+
+			// start cicl
+			m.ciclClient, err = common.NewClusterInfoCacheLiteClient(m.clusterURL, common.DEFAULT_POOL, *config)
+			if err != nil {
+				return err
+			}
+			m.ciclClient.SetLogPrefix("LifeCycleMgr")
 		} else {
-			var err error
+			// close cicl
+			m.ciclClient.Close()
+			m.ciclClient = nil
+
+			// start cinfo
 			m.cinfoClient, err = common.NewClusterInfoClient(m.clusterURL, common.DEFAULT_POOL, *config)
 			if err != nil {
 				return err

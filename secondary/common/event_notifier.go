@@ -13,10 +13,16 @@ const (
 	EVENT_NONE                     EventType = ""
 	EVENT_NODEINFO_UPDATED                   = "NODE_INFO"
 	EVENT_CLUSTERINFO_UPDATED_BASE           = "CLUSTER_INFO"
+	EVENT_BUCKETINFO_UPDATED_BASE            = "BUCKET_INFO"
 )
 
 func getClusterInfoEventType(bucketName string) EventType {
 	f := fmt.Sprintf("%s_%s", EVENT_CLUSTERINFO_UPDATED_BASE, bucketName)
+	return EventType(f)
+}
+
+func getBucketInfoEventType(bucketName string) EventType {
+	f := fmt.Sprintf("%s_%s", EVENT_BUCKETINFO_UPDATED_BASE, bucketName)
 	return EventType(f)
 }
 

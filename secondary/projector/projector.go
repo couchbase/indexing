@@ -105,20 +105,24 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	}
 
 	// Start cluster info client
-	cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
-	c.CrashOnError(err)
-	p.cinfoClient = cic
-	p.cinfoClient.SetUserAgent("projector")
-
-	cicl, err := c.NewClusterInfoCacheLiteClient(p.clusterAddr, "default", config)
-	if err != nil {
-		logging.Infof("Error getting a NewClusterInfoCacheLiteClient : %v", err)
+	if config["projector.settings.use_cinfo_lite"].Bool() {
+		cicl, err := c.NewClusterInfoCacheLiteClient(p.clusterAddr, "default", config)
+		if err != nil {
+			logging.Infof("Error getting a NewClusterInfoCacheLiteClient : %v", err)
+			c.CrashOnError(err)
+		}
+		cicl.SetLogPrefix("NewProjector")
+		cicl.SetRetryIntervalInMgr(4)
+		p.ciclClient = cicl
+	} else {
+		cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
 		c.CrashOnError(err)
-	}
-	p.ciclClient = cicl
+		p.cinfoClient = cic
+		p.cinfoClient.SetUserAgent("projector")
 
-	cinfo := cic.GetClusterInfoCache()
-	cinfo.SetRetryInterval(4 * time.Second)
+		cinfo := cic.GetClusterInfoCache()
+		cinfo.SetRetryInterval(4 * time.Second)
+	}
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval) // Initialize memory manager
@@ -178,6 +182,37 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 
 		p.ResetConfig(newConfig)
 		p.ResetFeedConfig()
+
+		useCInfoLite := newConfig["projector.settings.use_cinfo_lite"].Bool()
+		if oldConfig["projector.settings.use_cinfo_lite"].Bool() != useCInfoLite {
+			if useCInfoLite {
+				// close cinfo
+				p.cinfoClient.Close()
+				p.cinfoClient = nil
+
+				// start cicl
+				cicl, err := c.NewClusterInfoCacheLiteClient(p.clusterAddr, "default", config)
+				if err != nil {
+					logging.Infof("Error getting a NewClusterInfoCacheLiteClient : %v", err)
+					c.CrashOnError(err)
+				}
+				cicl.SetLogPrefix("NewProjector")
+				cicl.SetRetryIntervalInMgr(4)
+				p.ciclClient = cicl
+			} else {
+				// close cicl
+				p.ciclClient.Close()
+				p.ciclClient = nil
+
+				// start cinfo
+				cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
+				c.CrashOnError(err)
+				p.cinfoClient = cic
+				p.cinfoClient.SetUserAgent("projector")
+				cinfo := cic.GetClusterInfoCache()
+				cinfo.SetRetryInterval(4 * time.Second)
+			}
+		}
 
 		diffOld, diffNew := oldConfig.SectionConfig("projector.",
 			false).Diff(newConfig.SectionConfig("projector.", false))

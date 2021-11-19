@@ -1835,6 +1835,23 @@ func (feed *Feed) getLocalKVAddrs(
 }
 
 func (feed *Feed) getLocalVbuckets(
+	pooln, bucketn string, opaque uint16) (vbnos []uint16, err error) {
+	if !feed.projector.config["projector.settings.use_cinfo_lite"].Bool() {
+		vbnos, err = feed.getLocalVbucketsFromCinfo(pooln, bucketn, opaque)
+	} else {
+		vbnos, err = feed.projector.ciclClient.GetLocalVBuckets(bucketn)
+	}
+	if err != nil {
+		fmsg := "%v ##%x vbmap {%v,%v} - err : %v\n"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, pooln, bucketn, err)
+		return nil, err
+	}
+	fmsg := "%v ##%x vbmap {%v,%v} - %v\n"
+	logging.Infof(fmsg, feed.logPrefix, opaque, pooln, bucketn, vbnos)
+	return vbnos, nil
+}
+
+func (feed *Feed) getLocalVbucketsFromCinfo(
 	pooln, bucketn string, opaque uint16) ([]uint16, error) {
 
 	prefix := feed.logPrefix
@@ -1874,8 +1891,6 @@ func (feed *Feed) getLocalVbuckets(
 		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
-	fmsg := "%v ##%x vbmap {%v,%v} - %v\n"
-	logging.Infof(fmsg, prefix, opaque, pooln, bucketn, vbnos)
 	return vbnos, nil
 }
 

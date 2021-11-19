@@ -38,3 +38,20 @@ func (ch *collectionInfoHolder) Get() *collectionInfo {
 	ptr := atomic.LoadPointer(ch.ptr)
 	return (*collectionInfo)(ptr)
 }
+
+type bucketInfoHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (bh *bucketInfoHolder) Init() {
+	bh.ptr = new(unsafe.Pointer)
+}
+
+func (bh *bucketInfoHolder) Set(bucketInfoPtr *bucketInfo) {
+	atomic.StorePointer(bh.ptr, unsafe.Pointer(bucketInfoPtr))
+}
+
+func (bh *bucketInfoHolder) Get() *bucketInfo {
+	bucketInfoPtr := atomic.LoadPointer(bh.ptr)
+	return (*bucketInfo)(bucketInfoPtr)
+}
