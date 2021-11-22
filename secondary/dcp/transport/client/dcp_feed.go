@@ -450,11 +450,7 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
-		if !feed.osoSnapshot {
-			if s, ok := feed.seqOrders[vb]; ok && s != nil {
-				s.ProcessSnapshot(event.SnapstartSeq, event.SnapendSeq)
-			}
-		}
+		feed.checkSnapOrder(event, vb, pkt.Opcode)
 
 	case transport.DCP_FLUSH:
 		event = newDcpEvent(pkt, stream) // special processing ?
@@ -550,6 +546,18 @@ func (feed *DcpFeed) checkSeqOrder(event *DcpEvent, vb uint16, opcode transport.
 				logging.Fatalf("%v seq order violation for vb = %v, seq = %v, opcode = %v, "+
 					"orderState = %v, event = %v", feed.logPrefix, vb, event.Seqno, opcode,
 					s.GetInfo(), event.GetDebugInfo())
+			}
+		}
+	}
+}
+
+func (feed *DcpFeed) checkSnapOrder(event *DcpEvent, vb uint16, opcode transport.CommandCode) {
+	if !feed.osoSnapshot {
+		if s, ok := feed.seqOrders[vb]; ok && s != nil {
+			if snapInfo, correctSnapOrder := s.ProcessSnapshot(event.SnapstartSeq, event.SnapendSeq); !correctSnapOrder {
+				logging.Fatalf("%v ##%x seq order violation for snapshot message for vb = %v, opcode = %v, "+
+					"orderState = %v, event = %v", feed.logPrefix, feed.opaque, vb, opcode,
+					snapInfo, event.GetDebugInfo())
 			}
 		}
 	}
