@@ -86,12 +86,15 @@ type ClusterInfoCache struct {
 // and updated periodically or when things change in the cluster
 // Readers/Consumers must lock cinfo before using it
 type ClusterInfoClient struct {
-	cinfo                              *ClusterInfoCache
-	clusterURL                         string
-	pool                               string
-	servicesNotifierRetryTm            int
-	finch                              chan bool
-	fetchBucketInfoOnURIHashChangeOnly bool
+	cinfo                     *ClusterInfoCache
+	clusterURL                string
+	pool                      string
+	servicesNotifierRetryTm   int
+	finch                     chan bool
+	fetchDataOnHashChangeOnly bool
+	bucketsHash               string
+	serverGroupsHash          string
+	nodeUUID2HashMap          map[string]int
 }
 
 type NodeId int
@@ -1273,10 +1276,11 @@ func GetLocalIpUrl(isIPv6 bool) string {
 
 func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *ClusterInfoClient, err error) {
 	cic := &ClusterInfoClient{
-		clusterURL:                         clusterURL,
-		pool:                               pool,
-		finch:                              make(chan bool),
-		fetchBucketInfoOnURIHashChangeOnly: true,
+		clusterURL:                clusterURL,
+		pool:                      pool,
+		finch:                     make(chan bool),
+		fetchDataOnHashChangeOnly: true,
+		nodeUUID2HashMap:          make(map[string]int),
 	}
 	cic.servicesNotifierRetryTm = 1000 // TODO: read from config
 
@@ -1297,7 +1301,7 @@ func (c *ClusterInfoClient) GetClusterInfoCache() *ClusterInfoCache {
 }
 
 func (c *ClusterInfoClient) WatchRebalanceChanges() {
-	c.fetchBucketInfoOnURIHashChangeOnly = false
+	c.fetchDataOnHashChangeOnly = false
 }
 
 func (c *ClusterInfoClient) SetUserAgent(userAgent string) {
@@ -1306,6 +1310,55 @@ func (c *ClusterInfoClient) SetUserAgent(userAgent string) {
 	defer cinfo.Unlock()
 
 	cinfo.SetUserAgent(userAgent)
+}
+
+func (c *ClusterInfoClient) updateHashValues(p *couchbase.Pool,
+	bucketsHash, serverGroupsHash string) {
+	logging.Tracef("ClusterInfoClient(%v): Old Hash values bucketsHash: %s serverGroupsHash: %s nodeHashMap: %v",
+		c.cinfo.userAgent, c.bucketsHash, c.serverGroupsHash, c.nodeUUID2HashMap)
+	c.bucketsHash = bucketsHash
+	c.serverGroupsHash = serverGroupsHash
+	c.nodeUUID2HashMap = make(map[string]int)
+	for _, n := range p.Nodes {
+		c.nodeUUID2HashMap[n.NodeUUID] = n.NodeHash
+	}
+	logging.Debugf("ClusterInfoClient(%v): New Hash values bucketsHash: %s serverGroupsHash: %s nodeHashMap: %v",
+		c.cinfo.userAgent, c.bucketsHash, c.serverGroupsHash, c.nodeUUID2HashMap)
+}
+
+func (c *ClusterInfoClient) checkPoolsDataHashChanged(p *couchbase.Pool) bool {
+	bucketsHash, err := p.GetBucketURLVersionHash()
+	if err != nil {
+		return true
+	}
+
+	serverGroupsHash, err := p.GetServerGroupsVersionHash()
+	if err != nil {
+		return true
+	}
+
+	defer c.updateHashValues(p, bucketsHash, serverGroupsHash)
+
+	if bucketsHash != c.bucketsHash {
+		return true
+	}
+
+	if serverGroupsHash != c.serverGroupsHash {
+		return true
+	}
+
+	if len(p.Nodes) != len(c.nodeUUID2HashMap) {
+		return true
+	}
+
+	for _, n := range p.Nodes {
+		nh, ok := c.nodeUUID2HashMap[n.NodeUUID]
+		if !ok || n.NodeHash != nh {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (c *ClusterInfoClient) watchClusterChanges() {
@@ -1379,7 +1432,12 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 				// if we want to watch real time changes during rebalance query terse
 				// Bucket endpoint. Other than that we can stop querying buckets URI
 				// if the hash value did not change.
-				if c.fetchBucketInfoOnURIHashChangeOnly {
+				if c.fetchDataOnHashChangeOnly {
+					changed := c.checkPoolsDataHashChanged((notif.Msg).(*couchbase.Pool))
+					if !changed {
+						logging.Infof("ClusterInfoClient(%v): No change in data needed from PoolChangeNotification", c.cinfo.userAgent)
+						continue
+					}
 					if err := c.cinfo.FetchWithLockForPoolChange(); err != nil {
 						logging.Errorf("cic.cinfo.FetchForPoolChangeNotification(): %v\n", err)
 						selfRestart()
