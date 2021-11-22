@@ -2262,7 +2262,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	pStats := mdb.mainstore.GetPreparedStats()
 
 	docidCount = pStats.ItemsCount
-	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
+	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees + pStats.NumRecordCompressed
 	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 	cacheHits += pStats.CacheHits
 	cacheMiss += pStats.CacheMisses
