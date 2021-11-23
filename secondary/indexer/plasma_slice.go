@@ -994,6 +994,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				if err == nil {
 					mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 					addKeySizeStat(mdb.idxStats, len(entry))
+					mdb.idxStats.arrItemsCount.Add(int64(oldKeyCount[i]))
 				}
 			}
 		}
@@ -1012,6 +1013,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				if err == nil {
 					mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
 					subtractKeySizeStat(mdb.idxStats, entrySz)
+					mdb.idxStats.arrItemsCount.Add(0 - int64(newKeyCount[i]))
 				}
 			}
 		}
@@ -1042,6 +1044,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
 				subtractKeySizeStat(mdb.idxStats, keyDelSz)
 				atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
+				mdb.idxStats.arrItemsCount.Add(0 - int64(oldKeyCount[i]))
 			}
 			nmut++
 		}
@@ -1072,6 +1075,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.idxStats.rawDataSize.Add(int64(len(keyToBeAdded)))
 				addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
+				mdb.idxStats.arrItemsCount.Add(int64(newKeyCount[i]))
 			}
 
 			if int64(len(keyToBeAdded)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1319,6 +1323,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 			mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
 			subtractKeySizeStat(mdb.idxStats, keyDelSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
+			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 		}
 	}
 
@@ -1429,6 +1434,18 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		// Check if there are errors that need to be logged to console
 		mdb.logErrorsToConsole()
 	}
+
+	if mdb.idxStats.useArrItemsCount {
+		arrItemsCount := mdb.idxStats.arrItemsCount.Value()
+		if s.info.IndexStats != nil {
+			if arrItemsCount, ok := s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT]; !ok {
+				s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT] = arrItemsCount
+			}
+		} else {
+			s.info.IndexStats = make(map[string]interface{})
+			s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT] = arrItemsCount
+		}
+	}
 	mdb.setCommittedCount()
 
 	return s, nil
@@ -1448,6 +1465,9 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
 		snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
 		snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
+		if mdb.idxStats.useArrItemsCount {
+			snapshotStats[SNAP_STATS_ARR_ITEMS_COUNT] = mdb.idxStats.arrItemsCount.Value()
+		}
 		s.info.IndexStats = snapshotStats
 
 		go func() {
@@ -1929,6 +1949,7 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 		mdb.idxStats.backstoreRawDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE]))
 
 		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
+		mdb.idxStats.arrItemsCount.Set(safeGetInt64(stats[SNAP_STATS_ARR_ITEMS_COUNT]))
 	} else {
 		// Since stats are not available, update keySizeStatsSince to current time
 		// to indicate we start tracking the stat since now.
@@ -2241,7 +2262,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	pStats := mdb.mainstore.GetPreparedStats()
 
 	docidCount = pStats.ItemsCount
-	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
+	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees + pStats.NumRecordCompressed
 	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 	cacheHits += pStats.CacheHits
 	cacheMiss += pStats.CacheMisses
@@ -2671,6 +2692,9 @@ func (s *plasmaSnapshot) StatCountTotal() (uint64, error) {
 }
 
 func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
+	if s.slice.idxStats.useArrItemsCount {
+		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
+	}
 	return uint64(s.MainSnap.Count()), nil
 }
 

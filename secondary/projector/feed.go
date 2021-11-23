@@ -967,7 +967,7 @@ func (feed *Feed) start(
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// start upstream, after filtering out vbuckets.
-		e = feed.bucketFeed(opaque, false, true, ts, feeder)
+		e, _ = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1091,7 +1091,7 @@ func (feed *Feed) restartVbuckets(
 
 		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// (re)start the upstream, after filtering out remote vbuckets.
-		e = feed.bucketFeed(opaque, false, true, ts, feeder)
+		e, _ = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1181,12 +1181,13 @@ func (feed *Feed) shutdownVbuckets(
 			continue
 		}
 		// shutdown upstream
-		e = feed.bucketFeed(opaque, true, false, ts, feeder)
+		cleanup := false
+		e, cleanup = feed.bucketFeed(opaque, true, false, ts, feeder)
 		if e != nil {
 			err = e
-			//FIXME: in case of shutdown we are not cleaning the bucket !
-			//wait for the code to settle-down and remove this.
-			//feed.cleanupKeyspace(keyspaceId, false)
+			if cleanup {
+				feed.cleanupKeyspace(keyspaceId, false)
+			}
 			continue
 		}
 		if !feed.async {
@@ -1290,7 +1291,7 @@ func (feed *Feed) addBuckets(
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// start upstream
-		e = feed.bucketFeed(opaque, false, true, ts, feeder)
+		e, _ = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1710,7 +1711,7 @@ func (feed *Feed) openFeeder(
 // based on vbmap and failover-logs.
 func (feed *Feed) bucketFeed(
 	opaque uint16, stop, start bool,
-	reqTs *protobuf.TsVbuuid, feeder BucketFeeder) error {
+	reqTs *protobuf.TsVbuuid, feeder BucketFeeder) (error, bool) {
 
 	pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
 
@@ -1733,17 +1734,18 @@ func (feed *Feed) bucketFeed(
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
 	_ /*vbuuids*/, err := feed.bucketDetails(pooln, bucketn, opaque, vbnos)
 	if err != nil {
-		return projC.ErrorFeeder
+		return projC.ErrorFeeder, true
 	}
 
 	// stop and start are mutually exclusive
 	if stop {
+		cleanup := false
 		fmsg := "%v ##%x stop-timestamp %v\n"
 		logging.Infof(fmsg, feed.logPrefix, opaque, reqTs.Repr())
-		if err = feeder.EndVbStreams(opaque, reqTs); err != nil {
+		if err, cleanup = feeder.EndVbStreams(opaque, reqTs); err != nil {
 			fmsg := "%v ##%x EndVbStreams(%q): %v"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
-			return projC.ErrorFeeder
+			return projC.ErrorFeeder, cleanup
 		}
 
 	} else if start {
@@ -1752,10 +1754,10 @@ func (feed *Feed) bucketFeed(
 		if err = feeder.StartVbStreams(opaque, reqTs); err != nil {
 			fmsg := "%v ##%x StartVbStreams(%q): %v"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
-			return projC.ErrorFeeder
+			return projC.ErrorFeeder, true /* Always clean-up keyspace if an error is seen during startVbStreams */
 		}
 	}
-	return nil
+	return nil, false
 }
 
 // - return dcp-client failures.

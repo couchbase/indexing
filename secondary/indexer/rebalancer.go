@@ -693,6 +693,20 @@ func (r *Rebalancer) createBatchLOCKED(batchSize int) (toBuildTokens map[string]
 	return toBuildTokens
 }
 
+// SB_xxx constants for types of Smart Batching token selections for informational logging, from
+// best to worst. The first selected TT to require a given stream does not count as a "stream share"
+// because it triggers creation of that stream; these will be tallied by {SB_RR, SB_OTHER}.
+// Subsequent tokens that share a stream some prior token already required will be tallied as stream
+// shares by {SB_RR_SHARED, SB_PARTN_SHARED, SB_COLL_SHARED}. Thus summing all the xxx_SHARED
+// categories gives the true number of times streams were reused within an incremental TT batch.
+const (
+	SB_RR_SHARED    = iota // replica repair sharing a prior stream in this batch
+	SB_RR                  // replica repair not sharing a prior stream
+	SB_PARTN_SHARED        // same partition as a prior index in this batch (implies shared)
+	SB_COLL_SHARED         // same collection as a prior index in this batch (implies shared)
+	SB_OTHER               // not replica repair and not sharing a prior stream
+)
+
 // selectSmartToBuildTokensLOCKED is the core of the "Smart Batching for Rebalance" feature. It
 // returns a map from ttid to token of up to numToSelect tokens still in the r.toBuildTTsByDestId
 // map tree (i.e. TTs that still need to be built) selected to both spread the work around Index
@@ -701,6 +715,8 @@ func (r *Rebalancer) createBatchLOCKED(batchSize int) (toBuildTokens map[string]
 // including those already running, used to compute the maximum builds allowed to run per node.
 // Caller must be holding r.bigMutex write locked.
 func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect int) (selectedTokens map[string]*c.TransferToken) {
+	const _selectSmartToBuildTokensLOCKED = "Rebalancer::selectSmartToBuildTokensLOCKED:"
+
 	selectedTokens = make(map[string]*c.TransferToken)
 
 	var numIndexNodes int // total index nodes remaining if known (Rebalance), else assumes 1 (Move)
@@ -741,6 +757,9 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 		}
 	}
 
+	var ttTot, ttLow, ttHigh int // total TTs selected plus subtotals by low and high node load
+	var ttHist [SB_OTHER + 1]int // [SB_xxx] histogram of TT selection types
+
 	// Low-load nodes are at the front and we fully load them up with builds one by one
 	for node := 0; node < firstHighLoadNode && numToSelect > 0; node++ {
 		nodeUUID := r.nodeLoads[node].nodeUUID
@@ -748,13 +767,18 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 		selectedTTsForNode := make(map[string]*common.TransferToken) // tokens (by ttid) selected for node
 
 		for numToSelect > 0 && goalsForNodes[node] > 0 {
-			ttid, tt := r.selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode,
+			ttid, tt, sb := r.selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode,
 				forbiddenStreamsForNodes[node], newStreamsForNodes[node], maxStreamsPerNode)
 			if tt != nil {
 				numToSelect--
 				goalsForNodes[node]--
 				selectedTokens[ttid] = tt
 				selectedTTsForNode[ttid] = tt
+
+				// TT selection stats for logging
+				ttTot++
+				ttLow++
+				ttHist[sb]++
 
 				newStreamsForNode := newStreamsForNodes[node]
 				if newStreamsForNode == nil {
@@ -782,13 +806,18 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 		// Round robin once over each high-load dest node
 		for node := firstHighLoadNode; node < numNodes && numToSelect > 0 && goalsForNodes[node] > 0; node++ {
 			nodeUUID := r.nodeLoads[node].nodeUUID
-			ttid, tt := r.selectSmartToBuildTokenLOCKED(r.toBuildTTsByDestId[nodeUUID],
+			ttid, tt, sb := r.selectSmartToBuildTokenLOCKED(r.toBuildTTsByDestId[nodeUUID],
 				selectedTTsForNodes[nodeUUID], forbiddenStreamsForNodes[node],
 				newStreamsForNodes[node], maxStreamsPerNode)
 			if tt != nil {
 				numToSelect--
 				goalsForNodes[node]--
 				selectedTokens[ttid] = tt
+
+				// TT selection stats for logging
+				ttTot++
+				ttHigh++
+				ttHist[sb]++
 
 				selectedTTsForNode := selectedTTsForNodes[nodeUUID]
 				if selectedTTsForNode == nil {
@@ -809,6 +838,14 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 		} // round robin once over each high-load dest node
 	} // for next full round robin cycle
 
+	// Log stats of selected tokens
+	ttShares := // stream shares: if N TTs share a stream, this counts as N-1 shares of the stream
+		ttHist[SB_RR_SHARED] + ttHist[SB_PARTN_SHARED] + ttHist[SB_COLL_SHARED]
+	logging.Infof("%v Selected %v tokens (%v stream shares, %v low load, %v high load):"+
+		" RR shared %v, RR %v, Partn shared %v, Coll shared %v, Other %v",
+		_selectSmartToBuildTokensLOCKED, ttTot, ttShares, ttLow, ttHigh, ttHist[SB_RR_SHARED],
+		ttHist[SB_RR], ttHist[SB_PARTN_SHARED], ttHist[SB_COLL_SHARED], ttHist[SB_OTHER])
+
 	return selectedTokens
 }
 
@@ -824,7 +861,8 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 // already has running for that node (as indexer supports only one copy of a stream at a time) nor
 // push the total number of streams for that node above the maximum allowed.
 //
-// Return: ID and ptr to selected token iff any legally selectable token is found, else "", nil
+// Return: ID and ptr to selected token and SB_xxx type iff any legally selectable token is found,
+//   else "", nil, -1
 // Arguments:
 //   toBuildTTsForNode: tokens by [ttid] available to select for the node
 //   selectedTTsForNode: tokens by [ttid] already selected for the node
@@ -833,24 +871,24 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 //   maxStreamsPerNode: limit on number of streams the node is allowed to run concurrently
 // Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken,
-	forbiddenStreamsForNode, newStreamsForNode map[string]struct{}, maxStreamsPerNode int) (ttid string, tt *common.TransferToken) {
+	forbiddenStreamsForNode, newStreamsForNode map[string]struct{}, maxStreamsPerNode int) (ttid string, tt *common.TransferToken, sb int) {
 
 	// 1. Replica repairs (stream-sharing preferred)
-	ttid, tt = r.findReplicaRepairTokenLOCKED(toBuildTTsForNode, selectedTTsForNode)
+	ttid, tt, sb = r.findReplicaRepairTokenLOCKED(toBuildTTsForNode, selectedTTsForNode)
 	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
-		return ttid, tt
+		return ttid, tt, sb
 	}
 
 	// 2. Partitions of same index
 	ttid, tt = r.findSamePartitionLOCKED(toBuildTTsForNode, selectedTTsForNode)
 	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
-		return ttid, tt
+		return ttid, tt, SB_PARTN_SHARED
 	}
 
 	// 3. Indexes on same collection
 	ttid, tt = r.findSameCollectionLOCKED(toBuildTTsForNode, selectedTTsForNode)
 	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
-		return ttid, tt
+		return ttid, tt, SB_COLL_SHARED
 	}
 
 	// 4. Everything else; since no prior selection succeeded, any token selected here will
@@ -860,10 +898,10 @@ func (r *Rebalancer) selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTT
 		break
 	}
 	if tt != nil && tokenOkayToBuild(tt, forbiddenStreamsForNode, newStreamsForNode, maxStreamsPerNode) {
-		return ttid, tt
+		return ttid, tt, SB_OTHER
 	}
 
-	return "", nil
+	return "", nil, -1
 }
 
 // tokenOkayToBuild determines whether starting a build for transfer token tt is okay given the
@@ -1063,14 +1101,18 @@ func (r *Rebalancer) getNodeIndexerStatsLoop() {
 // stats are used to decide whether a node has high or low current load. Failures are worked around
 // by setting fake stats indicating unreachable nodes are highly loaded.
 func (r *Rebalancer) getNodeIndexerStats() {
-	const method = "Rebalancer::getNodeIndexerStats:" // for logging
+	const _getNodeIndexerStats = "Rebalancer::getNodeIndexerStats:"
+
+	// UUIDs of nodes whose stats are available showing low load, available showing high load, and
+	// unavailable thus assumed to be high load
+	var availLow, availHigh, unavailHigh []string
 
 	// Parallel REST call to all index nodes
 	clusterURL := r.config.Load()["clusterAddr"].String()
 	statsMap, errMap, err := common.GetIndexStats(clusterURL, "smartBatching", 30)
 
-	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "") // for r.nodeLoads, including in children
-	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _getNodeIndexerStats, "") // for r.nodeLoads, including in children
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _getNodeIndexerStats, "")
 
 	if err != nil {
 		// Could not get stats for some nodes, so set fake stats for them showing highly loaded.
@@ -1079,10 +1121,12 @@ func (r *Rebalancer) getNodeIndexerStats() {
 		if errMap != nil { // specific nodes failed
 			for nodeUUID := range errMap {
 				r.setNodeUUIDStatsHighLoadLOCKED(nodeUUID)
+				unavailHigh = append(unavailHigh, nodeUUID)
 			}
 		} else { // failure prevented any nodes from being called
 			for _, nodeLoad := range r.nodeLoads {
 				nodeLoad.setStatsHighLoad()
+				unavailHigh = append(unavailHigh, nodeLoad.nodeUUID)
 			}
 		}
 	}
@@ -1091,7 +1135,17 @@ func (r *Rebalancer) getNodeIndexerStats() {
 	for nodeUUID, stats := range statsMap {
 		nodeLoad := r.getOrCreateNodeLoadLOCKED(nodeUUID)
 		nodeLoad.addStats(stats)
+		if nodeLoad.getLoad() == LOAD_LOW {
+			availLow = append(availLow, nodeLoad.nodeUUID)
+		} else { // LOAD_HIGH
+			availHigh = append(availHigh, nodeLoad.nodeUUID)
+		}
 	}
+
+	// Log stats on current node loads
+	logging.Infof("%v Node loads: %v low %v, %v high %v, %v unavailable assumed high %v",
+		_getNodeIndexerStats, len(availLow), availLow, len(availHigh), availHigh,
+		len(unavailHigh), unavailHigh)
 }
 
 // moveTokenToBuildingLOCKED moves a token from the r.toBuildTTsByDestId map tree
@@ -1115,11 +1169,12 @@ func streamKeyFromTT(tt *common.TransferToken) string {
 	return strings.Join([]string{defn.Bucket, defn.Scope, defn.Collection}, ":")
 }
 
-// findReplicaRepairTokenLOCKED searches toBuildTTsForNode for a replica repair token, preferring those that
-// would share a stream with a token in selectedTTsForNode, and returns the (ttid, tt) of one if found.
+// findReplicaRepairTokenLOCKED searches toBuildTTsForNode for a replica repair token, preferring
+// those that would share a stream with a token in selectedTTsForNode, and returns the
+// (ttid, tt, SB_xxx selection type) of one if found.
 // Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) findReplicaRepairTokenLOCKED(
-	toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken) {
+	toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken) (string, *common.TransferToken, int) {
 
 	// Non-stream-sharing replica repair token and ID, if found
 	var rrtt *common.TransferToken
@@ -1129,14 +1184,14 @@ func (r *Rebalancer) findReplicaRepairTokenLOCKED(
 	for ttid, tt := range toBuildTTsForNode {
 		if tt.TransferMode == common.TokenTransferModeCopy { // replica repair
 			if _, member := streamsForNode[streamKeyFromTT(tt)]; member { // will share an existing stream
-				return ttid, tt
+				return ttid, tt, SB_RR_SHARED
 			} else if rrtt == nil { // remember first non-stream-sharing RR token
 				rrttid = ttid
 				rrtt = tt
 			}
 		}
 	}
-	return rrttid, rrtt // == "", nil if no RR token found
+	return rrttid, rrtt, SB_RR // ("", nil, SB_RR) if no RR token found
 }
 
 // findSamePartitionLOCKED looks for a token in toBuildTTsForNode that is another partition of a

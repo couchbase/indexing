@@ -699,12 +699,14 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	emptyList := func() int {
 		entriesToRemove := list.Keys()
 		for _, item := range entriesToRemove {
+			tmpCount := secondaryIndexEntry(item).Count()
 			node := list.Remove(item)
 			oldSz := getNodeItemSize(node)
 			success := mdb.main[workerId].DeleteNode(node)
 			if success {
 				mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
 				subtractKeySizeStat(mdb.idxStats, oldSz)
+				mdb.idxStats.arrItemsCount.Add(0 - int64(tmpCount))
 			}
 		}
 		mdb.isDirty = true
@@ -729,6 +731,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			if success {
 				mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
 				subtractKeySizeStat(mdb.idxStats, oldSz)
+				mdb.idxStats.arrItemsCount.Add(0 - int64(oldKeyCount[i]))
 			}
 			nmut++
 		}
@@ -756,6 +759,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 				addKeySizeStat(mdb.idxStats, len(entry))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+				mdb.idxStats.arrItemsCount.Add(int64(newKeyCount[i]))
 			}
 		}
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -873,12 +877,14 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 
 	// Delete each entry in oldEntriesBytes
 	for _, item := range oldEntriesBytes {
+		tmpCount := secondaryIndexEntry(item).Count()
 		node := list.Remove(item)
 		oldSz := getNodeItemSize(node)
 		success := mdb.main[workerId].DeleteNode(node)
 		if success {
 			mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
 			subtractKeySizeStat(mdb.idxStats, oldSz)
+			mdb.idxStats.arrItemsCount.Add(0 - int64(tmpCount))
 		}
 	}
 
@@ -966,6 +972,18 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		}
 	}
 
+	if mdb.idxStats.useArrItemsCount {
+		arrItemsCount := mdb.idxStats.arrItemsCount.Value()
+		if s.info.IndexStats != nil {
+			if arrItemsCount, ok := s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT]; !ok {
+				s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT] = arrItemsCount
+			}
+		} else {
+			s.info.IndexStats = make(map[string]interface{})
+			s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT] = arrItemsCount
+		}
+	}
+
 	if info.IsCommitted() {
 		logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v PartitionId %v Creating New "+
 			"Snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo)
@@ -993,6 +1011,9 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
 		snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
 		snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
+		if mdb.idxStats.useArrItemsCount {
+			snapshotStats[SNAP_STATS_ARR_ITEMS_COUNT] = mdb.idxStats.arrItemsCount.Value()
+		}
 		s.info.IndexStats = snapshotStats
 
 		go func() {
@@ -1314,6 +1335,7 @@ func (mdb *memdbSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 		mdb.idxStats.backstoreRawDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE]))
 
 		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
+		mdb.idxStats.arrItemsCount.Set(safeGetInt64(stats[SNAP_STATS_ARR_ITEMS_COUNT]))
 	} else {
 		// Since stats are not available, update keySizeStatsSince to current time
 		// to indicate we start tracking the stat since now.
@@ -1891,6 +1913,9 @@ func (s *memdbSnapshot) StatCountTotal() (uint64, error) {
 }
 
 func (s *memdbSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
+	if s.slice.idxStats.useArrItemsCount {
+		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
+	}
 	return uint64(s.info.MainSnap.Count()), nil
 }
 

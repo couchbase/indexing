@@ -11,12 +11,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/pipeline"
 	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/pipeline"
 )
 
 var ErrFinishCallback error = errors.New("Callback done due to error")

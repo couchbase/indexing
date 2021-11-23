@@ -3,11 +3,12 @@
 package projector
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/logging"
+
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
@@ -43,7 +44,7 @@ type BucketFeeder interface {
 	StartVbStreams(opaque uint16, ts *protobuf.TsVbuuid) error
 
 	// EndVbStreams ends an existing vbucket stream from this feed.
-	EndVbStreams(opaque uint16, endTs *protobuf.TsVbuuid) error
+	EndVbStreams(opaque uint16, endTs *protobuf.TsVbuuid) (error, bool)
 
 	// CloseFeed ends all active streams on this feed and free its resources.
 	CloseFeed() (err error)
@@ -130,12 +131,12 @@ func (bdcp *bucketDcp) StartVbStreams(
 
 // EndVbStreams implements Feeder{} interface.
 func (bdcp *bucketDcp) EndVbStreams(
-	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
+	opaque uint16, ts *protobuf.TsVbuuid) (err error, cleanup bool) {
 
 	if bdcp.bucket != nil {
 		if err := bdcp.bucket.Refresh(); err != nil {
 			logging.Errorf("Error during bucket.Refresh() while stopping vbstreams for bucket: %v, err: %v", bdcp.bucket.Name, err)
-			return err
+			return err, true
 		}
 	}
 	vbnos := c.Vbno32to16(ts.GetVbnos())
@@ -144,7 +145,7 @@ func (bdcp *bucketDcp) EndVbStreams(
 			err = e
 		}
 	}
-	return err
+	return err, false
 }
 
 // CloseFeed implements Feeder{} interface.

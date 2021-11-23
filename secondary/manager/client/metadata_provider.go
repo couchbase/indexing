@@ -1927,6 +1927,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	isArrayFlattened := false
 	arrayExprCount := 0
 	skipFlattenExprsTillPos := 0
+	isArrayDistinct := false
 	for pos, exp := range secExprs {
 		// As `secExprs` in flattened array index are exploded,
 		// skip some `secExprs`
@@ -1934,13 +1935,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			continue
 		}
 
-		isArray, _, isFlatten, err := queryutil.IsArrayExpression(exp)
+		isArray, isDistinct, isFlatten, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Fails to create index.  Error in parsing expression %v : %v", exp, err)), false
 		}
 		if isArray == true {
 			isArrayIndex = isArray
 			isArrayFlattened = isFlatten
+			isArrayDistinct = isDistinct
 			arrayExprCount++
 		}
 		if isArray && isFlatten {
@@ -1960,6 +1962,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil,
 			errors.New("Fail to create index with flatten array. This option is available only after all nodes in the cluster are atleast running on server 7.1 version"),
 			false
+	}
+
+	// arr_items_count counter is supported only on MOI and Plasma for ALL array indexes created after
+	// all nodes in cluster are version 7.1 or above.
+	hasArrItemsCount := false
+	if isArrayIndex && c.IndexType(using) != c.ForestDB && isArrayDistinct == false &&
+		version >= c.INDEXER_71_VERSION && clusterVersion >= c.INDEXER_71_VERSION {
+		hasArrItemsCount = true
 	}
 
 	//
@@ -2015,6 +2025,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		ResidentRatio:      residentRatio,
 		Scope:              scope,
 		Collection:         collection,
+		HasArrItemsCount:   hasArrItemsCount,
 	}
 
 	idxDefn.NumReplica2.Initialize(idxDefn.NumReplica)
