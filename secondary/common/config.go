@@ -3022,9 +3022,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.cpu.throttle.target": ConfigValue{
-		float64(0.95),
+		float64(0.98),
 		"Target CPU usage in [0.50, 1.00] if CPU throttling is enabled.",
-		float64(0.95),
+		float64(0.98),
 		false, // mutable
 		false, // case-insensitive
 	},
