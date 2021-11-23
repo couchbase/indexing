@@ -76,12 +76,16 @@ func (this *CpuThrottle) getCpuThrottling() bool {
 }
 
 // SetCpuThrottling sets whether CPU throttling is currently enabled. It also starts throttling if
-// changing from disabled to enabled and stops it if changing from enabled to disabled.
+// changing from disabled to enabled and stops it if changing from enabled to disabled. Throttling
+// is off if cpuTarget == 1.00 even if cpuThrottling was passed in as true.
 func (this *CpuThrottle) SetCpuThrottling(cpuThrottling bool) {
 	this.throttleStateMutex.Lock()
 	defer this.throttleStateMutex.Unlock()
 
 	priorCpuThrottling := this.getCpuThrottling()
+	if this.getCpuTarget() == 1.00 { // throttling is really off if cpuTarget is 1.00
+		cpuThrottling = false
+	}
 	var cpuThrottlingInt32 int32 = 0 // convert cpuThrottling bool to int32
 	if cpuThrottling {
 		cpuThrottlingInt32 = 1
