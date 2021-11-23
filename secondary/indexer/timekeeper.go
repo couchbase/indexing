@@ -2474,6 +2474,24 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
 				tk.ss.streamKeyspaceIdFlushEnabledMap[common.INIT_STREAM][keyspaceId] = false
 
+				var mergeTs *common.TsVbuuid
+				forceSnapshot := true
+				// Read the lastFlushedTimestamp for MAINT_STREAM for merge
+				if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
+					mergeTs = lts
+				} else {
+					mergeTs = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
+				}
+				//if no flush has happened from MAINT_STREAM, it means it is not running.
+				//MAINT_STREAM needs to be started with lastFlushTs of INIT_STREAM
+				if mergeTs == nil {
+					mergeTs = initFlushTs
+				}
+
+				if initFlushTs.Equal(mergeTs) {
+					forceSnapshot = false
+				}
+
 				//change state of all indexes of this keyspaceId to ACTIVE
 				//these indexes get removed later as part of merge message
 				//from indexer
@@ -2481,16 +2499,18 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 				sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
-				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Index Ready To Merge. "+
-					"Index: %v Stream: %v KeyspaceId: %v SessionId: %v LastFlushTS: %v", idx.InstId,
-					streamId, keyspaceId, sessionId, initTsSeq)
+				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Index Ready To Merge using MaintTs "+
+					"Index: %v Stream: %v KeyspaceId: %v SessionId: %v, forceSnap: %v, INIT_STREAM:LastFlushTs: %v, "+
+					"mergeTs: %v", idx.InstId,
+					streamId, keyspaceId, sessionId, forceSnapshot, initTsSeq, mergeTs)
 
 				tk.supvRespch <- &MsgTKMergeStream{
 					mType:      TK_MERGE_STREAM,
 					streamId:   streamId,
 					keyspaceId: keyspaceId,
-					mergeTs:    initTsSeq,
-					sessionId:  sessionId}
+					mergeTs:    mergeTs,
+					sessionId:  sessionId,
+					forceSnap:  forceSnapshot}
 
 				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
 					"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)

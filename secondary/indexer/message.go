@@ -948,6 +948,7 @@ type MsgTKMergeStream struct {
 	mergeList  []common.IndexInst
 	reqCh      StopChannel
 	sessionId  uint64
+	forceSnap  bool
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
@@ -976,6 +977,10 @@ func (m *MsgTKMergeStream) GetRequestCh() StopChannel {
 
 func (m *MsgTKMergeStream) GetSessionId() uint64 {
 	return m.sessionId
+}
+
+func (m *MsgTKMergeStream) GetForceSnap() bool {
+	return m.forceSnap
 }
 
 //TK_ENABLE_FLUSH

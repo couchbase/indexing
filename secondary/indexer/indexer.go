@@ -5867,6 +5867,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	mergeTs := msg.(*MsgTKMergeStream).GetMergeTS()
+	forceSnap := msg.(*MsgTKMergeStream).GetForceSnap()
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
@@ -5893,6 +5894,19 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	}
 
 	idx.updateRStateForPendingReset(indexList)
+
+	// Force a snapshot with last flushTs of MAINT_STREAM
+	// at the time of merge so that indexer can use bucket seqnos
+	// while serving scans
+	if forceSnap {
+		mergeTs.SnapType = common.DISK_SNAP
+		idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			ts:         mergeTs,
+			hasAllSB:   true}
+		<-idx.storageMgrCmdCh
+	}
 
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
