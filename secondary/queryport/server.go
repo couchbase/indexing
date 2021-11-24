@@ -1,6 +1,7 @@
 package queryport
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 
 	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/cbauth"
 
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/transport"
@@ -66,7 +69,7 @@ type ServerStats struct {
 
 // NewServer creates a new queryport daemon.
 func NewServer(
-	laddr string, callb RequestHandler, conb ConnectionHandler,
+	cluster, laddr string, callb RequestHandler, conb ConnectionHandler,
 	config c.Config) (s *Server, err error) {
 
 	s = &Server{
@@ -114,6 +117,7 @@ func (s *Server) Close() (err error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.lis != nil {
 		s.lis.Close() // close listener daemon
 		s.lis = nil
@@ -220,9 +224,16 @@ func (s *Server) listener() {
 
 	for {
 		if conn, err := lis.Accept(); err == nil {
-			s.registerConn(conn)
-			go s.handleConnection(conn)
-
+			err, req := s.doAuth(conn)
+			if err != nil {
+				// On authentication error, just close the connection. Client
+				// will try with a new connection by sending AuthRequest.
+				logging.Errorf("%v Authentication failed for conn %v with error %v", s.logPrefix, conn.RemoteAddr(), err)
+				conn.Close()
+			} else {
+				s.registerConn(conn)
+				go s.handleConnection(conn, req)
+			}
 		} else {
 			e, ok := err.(*net.OpError)
 			if ok && (e.Err == syscall.EMFILE || e.Err == syscall.ENFILE) {
@@ -235,9 +246,81 @@ func (s *Server) listener() {
 	}
 }
 
+func (s *Server) doAuth(conn net.Conn) (error, interface{}) {
+
+	// TODO: Some code deduplication with doReveive can be done.
+	raddr := conn.RemoteAddr()
+
+	// transport buffer for receiving
+	flags := transport.TransportFlag(0).SetProtobuf()
+	rpkt := transport.NewTransportPacket(s.maxPayload, flags)
+	rpkt.SetEncoder(transport.EncodingProtobuf, protobuf.ProtobufEncode)
+	rpkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
+
+	logging.Infof("%v connection %q doAuth() ...", s.logPrefix, raddr)
+
+	reqMsg, err := rpkt.Receive(conn)
+	if err != nil {
+		return err, nil
+	}
+
+	var authErr error
+	var code uint32
+
+	req, ok := reqMsg.(*protobuf.AuthRequest)
+	if !ok {
+		logging.Infof("%v connection %q doAuth() authentication is missing", s.logPrefix, raddr)
+
+		// When cluster is getting upgraded, client may lag behind in
+		// receiving cluster upgrade notification as compared to the server.
+		// In such a case, server will reject request due to AUTH_MISSING and
+		// client should retry with a new connection. Server will close this
+		// connection after responding to the client.
+		//
+		// Client is capable of understanding and handling AUTH_MISSING
+		// response code.
+
+		if c.GetClusterVersion() < c.INDEXER_71_VERSION {
+			logging.Infof("%v connection %q continue without auth", s.logPrefix, raddr)
+			return nil, reqMsg
+		}
+
+		code = transport.AUTH_MISSING
+		authErr = c.ErrAuthMissing
+	} else {
+		// The upgraded server always responds to the AuthRequest.
+
+		_, err = cbauth.Auth(req.GetUser(), req.GetPass())
+		if err != nil {
+			logging.Errorf("%v connection %q doAuth() error %v", s.logPrefix, raddr, err)
+			code = transport.AUTH_FAILURE
+			authErr = errors.New("Unauthenticated access. Authentication failure.")
+		}
+
+		// TODO: RBAC
+
+		code = transport.AUTH_SUCCESS
+	}
+
+	resp := &protobuf.AuthResponse{
+		Code: &code,
+	}
+
+	err = rpkt.Send(conn, resp)
+	if err != nil {
+		return err, nil
+	}
+
+	if authErr == nil {
+		logging.Verbosef("%v connection %q auth successful", s.logPrefix, raddr)
+	}
+
+	return authErr, nil
+}
+
 // handle connection request. connection might be kept open in client's
 // connection pool.
-func (s *Server) handleConnection(conn net.Conn) {
+func (s *Server) handleConnection(conn net.Conn, req interface{}) {
 	atomic.AddInt64(&s.nConnections, 1)
 	defer func() {
 		atomic.AddInt64(&s.nConnections, -1)
@@ -261,7 +344,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	killch := make(chan bool)
 	rcvch := make(chan request, s.streamChanSize)
 
-	go s.doReceive(conn, rcvch, killch)
+	go s.doReceive(conn, rcvch, killch, req)
 	go s.doPing(rcvch, killch)
 
 	var ctx interface{}
@@ -279,7 +362,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 // receive requests from remote, when this function returns
 // the connection is expected to be closed.
-func (s *Server) doReceive(conn net.Conn, rcvch chan<- request, killch chan bool) {
+func (s *Server) doReceive(conn net.Conn, rcvch chan<- request, killch chan bool, req interface{}) {
 	raddr := conn.RemoteAddr()
 
 	// transport buffer for receiving
@@ -297,23 +380,34 @@ loop:
 		// timeoutMs := s.readDeadline * time.Millisecond
 		// conn.SetReadDeadline(time.Now().Add(timeoutMs))
 
-		reqMsg, err := rpkt.Receive(conn)
-		// TODO: handle close-connection and don't print error message.
-		if err != nil {
-			if err == io.EOF {
-				logging.Tracef("%v connection %q exited %v\n", s.logPrefix, raddr, err)
-			} else {
-				logging.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
-			}
+		var reqMsg interface{}
+		var err error
 
-			// With this, connection close or error becomes ClientCancelErr.  But this
-			// will ensure request will terminate if it is waiting for snapshot or
-			// reader context.  This allows connection to be closed on the server side
-			// without being blocked.
-			if currRequest.quitch != nil {
-				close(currRequest.quitch)
+		if req != nil {
+
+			reqMsg = req
+			req = nil
+
+		} else {
+
+			reqMsg, err = rpkt.Receive(conn)
+			// TODO: handle close-connection and don't print error message.
+			if err != nil {
+				if err == io.EOF {
+					logging.Tracef("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+				} else {
+					logging.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+				}
+
+				// With this, connection close or error becomes ClientCancelErr.  But this
+				// will ensure request will terminate if it is waiting for snapshot or
+				// reader context.  This allows connection to be closed on the server side
+				// without being blocked.
+				if currRequest.quitch != nil {
+					close(currRequest.quitch)
+				}
+				break loop
 			}
-			break loop
 		}
 
 		// This message indicates graceful shutdown of a prior request.

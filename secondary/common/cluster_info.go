@@ -751,6 +751,40 @@ func (c *ClusterInfoCache) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	return
 }
 
+//
+// Translate a hostport for one service for a node to the hostport
+// for the other service on the same node.
+//
+// Example:
+// Translate indexer scanport to httpport:
+//     TranslatePort("127.0.0.1:9101", INDEX_SCAN_SERVICE, INDEX_HTTP_SERVICE)
+//     returns "127.0.0.1:9102"
+//
+
+func (c *ClusterInfoCache) TranslatePort(host, src, dest string) (string, error) {
+	for nid, n := range c.nodes {
+		for _, svc := range n.Services {
+			if svc == "index" {
+				srcPort, err := c.GetServiceAddress(NodeId(nid), src, true)
+				if err != nil {
+					return "", err
+				}
+
+				if srcPort == host {
+					destPort, err := c.GetServiceAddress(NodeId(nid), dest, true)
+					if err != nil {
+						return "", err
+					}
+
+					return destPort, nil
+				}
+			}
+		}
+	}
+
+	return "", nil
+}
+
 func (c *ClusterInfoCache) GetFailedIndexerNodes() (nodes []couchbase.Node) {
 	for _, n := range c.failedNodes {
 		for _, s := range n.Services {

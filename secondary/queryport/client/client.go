@@ -1457,7 +1457,7 @@ func (c *GsiClient) updateScanClients() {
 
 			if qc.IsClosed() {
 				logging.Infof("Found a closed scanclient for %v. Initializing a new scan client.", queryport)
-				if qc, err := NewGsiScanClient(queryport, c.config); err == nil {
+				if qc, err := NewGsiScanClient(queryport, c.cluster, c.config); err == nil {
 					clients[queryport] = qc
 				} else {
 					logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
@@ -1471,7 +1471,7 @@ func (c *GsiClient) updateScanClients() {
 		}
 
 		for queryport := range newclients {
-			if qc, err := NewGsiScanClient(queryport, c.config); err == nil {
+			if qc, err := NewGsiScanClient(queryport, c.cluster, c.config); err == nil {
 				clients[queryport] = qc
 			} else {
 				logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
@@ -1747,6 +1747,7 @@ func (c *GsiClient) getBucketHash(bucketn string) (uint64, bool) {
 // create GSI client using cbqBridge and ScanCoordinator
 func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*GsiClient, error) {
 	var err error
+
 	c := &GsiClient{
 		cluster: cluster,
 		config:  config,
@@ -1756,13 +1757,15 @@ func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*
 		return nil, err
 	}
 
+	watchClusterVer(cluster)
+
 	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	if c.bridge, err = newCbqClient(cluster); err != nil {
 		return nil, err
 	}
 	clients := make(map[string]*GsiScanClient)
 	for _, queryport := range c.bridge.GetScanports() {
-		if qc, err := NewGsiScanClient(queryport, config); err == nil {
+		if qc, err := NewGsiScanClient(queryport, c.cluster, config); err == nil {
 			clients[queryport] = qc
 		}
 	}
@@ -1786,11 +1789,14 @@ func makeWithMetaProvider(
 		return nil, err
 	}
 
+	watchClusterVer(cluster)
+
 	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings)
 	if err != nil {
 		return nil, err
 	}
+
 	c.updateScanClients()
 	go c.listenMetaChange(c.killch)
 	go c.logstats(c.killch)
@@ -2008,4 +2014,12 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 
 	helper := common.NewRetryHelper(10, time.Second, 1, fn)
 	return helper.Run()
+}
+
+var watchingClusterVer uint32
+
+func watchClusterVer(cluster string) {
+	if atomic.CompareAndSwapUint32(&watchingClusterVer, 0, 1) {
+		go common.WatchClusterVersionChanges(cluster, int64(common.INDEXER_71_VERSION))
+	}
 }

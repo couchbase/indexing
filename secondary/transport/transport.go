@@ -39,6 +39,14 @@ const (
 	MaxSendBufSize int = pktLenSize + pktFlagSize
 )
 
+const (
+	AUTH_SUCCESS uint32 = iota + 1
+	AUTH_FAILURE
+	AUTH_MISSING
+)
+
+var ErrorAuthFailure = errors.New("transport.authFailure")
+
 type transporter interface { // facilitates unit testing
 	Read(b []byte) (n int, err error)
 	Write(b []byte) (n int, err error)

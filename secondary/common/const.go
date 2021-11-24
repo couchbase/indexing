@@ -58,6 +58,8 @@ var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry th
 var ErrMarshalFailed = errors.New("json.Marshal failed")
 var ErrUnmarshalFailed = errors.New("json.Unmarshal failed")
 
+var ErrAuthMissing = errors.New("Unauthenticated access. Missing authentication information.")
+
 //
 // List of errors leading to failure of index creation
 //
@@ -112,6 +114,7 @@ const INDEXER_50_VERSION = 2
 const INDEXER_55_VERSION = 3
 const INDEXER_65_VERSION = 4
 const INDEXER_70_VERSION = 5
+const INDEXER_71_VERSION = 6 // Used only for backports
 const INDEXER_CUR_VERSION = INDEXER_70_VERSION
 
 const DEFAULT_POOL = "default"

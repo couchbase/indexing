@@ -98,7 +98,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
-	s.serv, err = queryport.NewServer(addr, s.serverCallback, createConnectionContext, queryportCfg)
+	s.serv, err = queryport.NewServer(config["clusterAddr"].String(), addr,
+		s.serverCallback, createConnectionContext, queryportCfg)
 
 	if err != nil {
 		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,

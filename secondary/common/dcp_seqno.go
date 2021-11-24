@@ -1506,11 +1506,11 @@ func UpdateClusterVersion(clustVer int64) {
 // only used to retrieve and update cluster version.
 // Session consistent scans will use this cluster version information
 // to choose between retrieving CollectionSeqnos and BucketSeqnos
-func WatchClusterVersionChanges(clusterAddr string) {
+func WatchClusterVersionChanges(clusterAddr string, termVersion int64) {
 
 	selfRestart := func() {
 		time.Sleep(10 * time.Millisecond)
-		go WatchClusterVersionChanges(clusterAddr)
+		go WatchClusterVersionChanges(clusterAddr, termVersion)
 		return
 	}
 
@@ -1542,8 +1542,8 @@ func WatchClusterVersionChanges(clusterAddr string) {
 	defer res.Body.Close()
 	for {
 
-		if atomic.LoadInt64(&clusterVersion) >= INDEXER_70_VERSION {
-			logging.Infof("WatchClusterVersionChanges: Cluster version is >= INDEXER_70_VERSION")
+		if atomic.LoadInt64(&clusterVersion) >= termVersion {
+			logging.Infof("Terminating WatchClusterVersionChanges: Cluster version is >= %v", termVersion)
 			return
 		}
 
