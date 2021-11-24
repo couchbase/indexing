@@ -17,8 +17,8 @@ import (
 	"github.com/couchbase/indexing/secondary/system"
 )
 
-const MAX_THROTTLE_ADJUST_MS float64 = 100.0 // max msec to adjust throttleDelayMs by at one time
-const MAX_THROTTLE_DELAY_MS int64 = 100      // max msec to delay an action due to throttling
+const MAX_THROTTLE_ADJUST_MS float64 = 5.0 // max msec to adjust throttleDelayMs by at one time
+const MAX_THROTTLE_DELAY_MS int64 = 10     // max msec to delay an action due to throttling
 // (prevents runaway throttling)
 const NUM_CPU_STATS int = 2 // number of past CPU stats to keep
 
@@ -76,12 +76,16 @@ func (this *CpuThrottle) getCpuThrottling() bool {
 }
 
 // SetCpuThrottling sets whether CPU throttling is currently enabled. It also starts throttling if
-// changing from disabled to enabled and stops it if changing from enabled to disabled.
+// changing from disabled to enabled and stops it if changing from enabled to disabled. Throttling
+// is off if cpuTarget == 1.00 even if cpuThrottling was passed in as true.
 func (this *CpuThrottle) SetCpuThrottling(cpuThrottling bool) {
 	this.throttleStateMutex.Lock()
 	defer this.throttleStateMutex.Unlock()
 
 	priorCpuThrottling := this.getCpuThrottling()
+	if this.getCpuTarget() == 1.00 { // throttling is really off if cpuTarget is 1.00
+		cpuThrottling = false
+	}
 	var cpuThrottlingInt32 int32 = 0 // convert cpuThrottling bool to int32
 	if cpuThrottling {
 		cpuThrottlingInt32 = 1

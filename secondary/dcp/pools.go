@@ -85,6 +85,7 @@ type Node struct {
 	Services             []string           `json:"services,omitempty"`
 	NodeUUID             string             `json:"nodeUUID,omitempty"`
 	AddressFamily        string             `json:"addressFamily,omitempty"`
+	NodeHash             int                `json:"nodeHash,omitempty"`
 }
 
 type BucketName struct {
@@ -794,19 +795,27 @@ func (p *Pool) GetServerGroups() (groups ServerGroups, err error) {
 
 }
 
-// GetBucketURLVersionHash will prase the p.BucketURI and extract version hash from it
-// Parses /pools/default/buckets?v=<$ver>&uuid=<$uid> and returns $ver
-func (p *Pool) GetBucketURLVersionHash() (string, error) {
-	b := p.BucketURL["uri"]
-	u, err := url.Parse(b)
+func getVersionHashFromURL(urlStr string) (string, error) {
+	u, err := url.Parse(urlStr)
 	if err != nil {
-		return "", fmt.Errorf("Unable to parse BucketURL: %v in PoolChangeNotification", b)
+		return "", fmt.Errorf("Unable to parse URL: %v", urlStr)
 	}
 	m, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return "", fmt.Errorf("Unable to extract version hash from BucketURL: %v in PoolChangeNotification", b)
+		return "", fmt.Errorf("Unable to extract version hash from URL: %v", urlStr)
 	}
 	return m["v"][0], nil
+}
+
+// GetBucketURLVersionHash will parse the p.BucketURI and extract version hash from it
+// Parses /pools/default/buckets?v=<$ver>&uuid=<$uid> and returns $ver
+func (p *Pool) GetBucketURLVersionHash() (string, error) {
+	b := p.BucketURL["uri"]
+	return getVersionHashFromURL(b)
+}
+
+func (p *Pool) GetServerGroupsVersionHash() (string, error) {
+	return getVersionHashFromURL(p.ServerGroupsUri)
 }
 
 // GetPoolWithBucket gets a pool from pool URI and calls ns_server terseBucket endpoint

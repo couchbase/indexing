@@ -30,10 +30,11 @@ import (
 // AutofailoverManager (defined in cbauth/service/interface.go) which this class registers as the
 // GSI handler for by calling RegisterAutofailoverManager (defined in cbauth/service/revrpc.go).
 type AutofailoverServiceManager struct {
-	cpuThrottle  *CpuThrottle        // CPU throttler
-	ctExpirer    *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off
-	diskFailures unsafe.Pointer      // *uint64 ever-increasing count of disk read/write failures
-	httpAddr     string              // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
+	cpuThrottle       *CpuThrottle        // CPU throttler
+	ctExpirer         *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off
+	diskFailures      unsafe.Pointer      // *uint64 ever-increasing count of disk read/write fails
+	httpAddr          string              // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
+	lastStatusLogTime time.Time           // last time isSafeLogDetails logged index statuses
 }
 
 // NewAutofailoverServiceManager is the constructor for the AutofailoverServiceManager class.
@@ -61,16 +62,27 @@ func (m *AutofailoverServiceManager) getDiskFailures() uint64 {
 }
 
 // getLastKnownIndexTopology sends a loopback HTTP REST call to the local Index service to get the
-// laset known index topology of all Index nodes. For speed this uses getCachedIndexTopology which
-// was custom coded for this purpose. It gets all topology info from local memory cache and does not
-// use ClusterInfoCache which has a mutex that is sometimes held for long periods.
-func (m *AutofailoverServiceManager) getLastKnownIndexTopology() (*manager.IndexStatusResponse, error) {
-	const method = "AutofailoverServiceManager::getLastKnownIndexTopology:" // for logging
+// last known index topology of all Index nodes.
+//
+// cached: true -- For speed this uses getCachedIndexTopology which was custom coded for this
+//   purpose. It gets all topology info from local memory cache and does not use ClusterInfoCache
+//   which triggers a scatter-gather in ns_server and also has a mutex that can be held for long
+//   periods.
+// cached: false -- Does a regular getIndexStatus call, which uses ClusterInfoCache to get current
+//   set of Index nodes and contacts them all to get latest index statuses, only serving out of
+//   cache for nodes that do not respond or when a node replies with HTTP code 304 Not Modified.
+func (m *AutofailoverServiceManager) getLastKnownIndexTopology(cached bool) ([]manager.IndexStatus, error) {
+	const _getLastKnownIndexTopology = "AutofailoverServiceManager::getLastKnownIndexTopology:"
 
-	url := m.httpAddr + "/getCachedIndexTopology"
+	var url string
+	if cached {
+		url = m.httpAddr + "/getCachedIndexTopology"
+	} else {
+		url = m.httpAddr + "/getIndexStatus?getAll=true"
+	}
 	resp, err := getWithAuth(url)
 	if err != nil {
-		logging.Errorf("%v Error getting index topology. url: %v, err: %v", method, url, err)
+		logging.Errorf("%v Error getting index topology. url: %v, err: %v", _getLastKnownIndexTopology, url, err)
 		return nil, err
 	}
 
@@ -79,11 +91,11 @@ func (m *AutofailoverServiceManager) getLastKnownIndexTopology() (*manager.Index
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	if err := json.Unmarshal(bytes, &statusResp); err != nil {
 		logging.Errorf("%v Error unmarshaling index topology. url: %v, err: %v",
-			method, url, err)
+			_getLastKnownIndexTopology, url, err)
 		return nil, err
 	}
 
-	return statusResp, nil
+	return statusResp.Status, nil
 }
 
 // mapifyTopology takes a slice of (non-consolidated) index statuses and creates a map from each
@@ -163,6 +175,42 @@ func (this *cpuThrottleExpirer) runExpiryCountdown() {
 	}
 }
 
+// isSafeLogDetails runs as a goroutine helper for IsSafe to log the cached index statuses that
+// method got and also the (possibly much slower to get) current, retrieved index statuses, which
+// will attempt to retrieve the latest from all the available Index nodes.
+func (m *AutofailoverServiceManager) isSafeLogDetails(indexStatusesCached []manager.IndexStatus) {
+	const _isSafeLogDetails = "AutofailoverServiceManager::isSafeLogDetails:"
+
+	// Only log every 5 minutes as the messages, especially indexStatusesCurrent, can be huge
+	now := time.Now()
+	if now.Sub(m.lastStatusLogTime) < 5*time.Minute {
+		return
+	}
+	m.lastStatusLogTime = now
+
+	var bytes []byte // JSON encoding of index statuses
+
+	bytes, err := json.Marshal(indexStatusesCached)
+	if err != nil {
+		logging.Errorf("%v Error marshaling indexStatusesCached: %v", _isSafeLogDetails, err)
+	} else {
+		logging.Infof("%v Cached index statuses: %v", _isSafeLogDetails, string(bytes))
+	}
+
+	// Do full index status retrieval (not just from local cache)
+	indexStatusesCurrent, err := m.getLastKnownIndexTopology(false)
+	if err != nil {
+		logging.Errorf("%v Error retrieving current index topology: %v", _isSafeLogDetails, err)
+	} else {
+		bytes, err = json.Marshal(indexStatusesCurrent)
+		if err != nil {
+			logging.Errorf("%v Error marshaling indexStatusesCurrent: %v", _isSafeLogDetails, err)
+		} else {
+			logging.Infof("%v Current index statuses: %v", _isSafeLogDetails, string(bytes))
+		}
+	}
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //  service.AutofailoverManager interface implementation
@@ -183,7 +231,7 @@ func (this *cpuThrottleExpirer) runExpiryCountdown() {
 //   DiskFailures -- ever-increasing count of disk read/write failures Index (including Plasma and
 //      MOI) have detected since boot
 func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) {
-	const method = "AutofailoverServiceManager::HealthCheck:" // for logging
+	const _HealthCheck = "AutofailoverServiceManager::HealthCheck:"
 	callTime := time.Now()
 
 	// CPU throttling is only used when Autofailover is enabled
@@ -200,7 +248,7 @@ func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) 
 	dur := doneTime.Sub(callTime)
 	if dur >= 1*time.Second {
 		logging.Warnf("%v Slow call %v. callTime: %v, doneTime: %v, healthInfo: %+v",
-			method, dur, callTime, doneTime, *healthInfo)
+			_HealthCheck, dur, callTime, doneTime, *healthInfo)
 	}
 	return healthInfo, nil
 }
@@ -221,17 +269,15 @@ func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) 
 //     lost by this failover. In the unsafe case, ns_server will pass this to the UI to aid the user
 //     in making a decision whether to manually failover.
 func (m *AutofailoverServiceManager) IsSafe(nodeUUIDs []service.NodeID) (error error) {
-	const method = "AutofailoverServiceManager::IsSafe:" // for logging
-	logging.Infof("%v Called with nodeUUIDs %v", method, nodeUUIDs)
+	const _IsSafe = "AutofailoverServiceManager::IsSafe:"
+	logging.Infof("%v Called with nodeUUIDs %v", _IsSafe, nodeUUIDs)
 
-	statusResp, err := m.getLastKnownIndexTopology()
+	indexStatuses, err := m.getLastKnownIndexTopology(true)
 	if err != nil {
-		error = fmt.Errorf("%v Error retrieving current index topology: %v",
-			method, err.Error())
-		logging.Errorf("%v Returning error: %v", method, error)
+		error = fmt.Errorf("%v Error retrieving current index topology: %v", _IsSafe, err)
+		logging.Errorf("%v Returning error: %v", _IsSafe, error)
 		return error
 	}
-	indexStatuses := statusResp.Status // detailed status of index topology for all nodes
 
 	// Create set of nodes proposed to be failed over
 	failoverNodeUUIDs := make(map[service.NodeID]struct{})
@@ -296,6 +342,7 @@ func (m *AutofailoverServiceManager) IsSafe(nodeUUIDs []service.NodeID) (error e
 	if bld.Len() > 0 { // unsafe; not really an error
 		error = fmt.Errorf(bld.String())
 	}
-	logging.Infof("%v Returning user message: %v", method, error)
+	logging.Infof("%v Returning user message: %v", _IsSafe, error)
+	go m.isSafeLogDetails(indexStatuses) // async log both cached and current index statuses
 	return error
 }
