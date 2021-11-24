@@ -41,6 +41,9 @@ func ProtobufEncodeInBuf(payload interface{}, buf []byte) (data []byte, err erro
 	case *EndStreamRequest:
 		pl.EndStream = val
 
+	case *AuthRequest:
+		pl.AuthRequest = val
+
 	// response
 	case *StatisticsResponse:
 		pl.Statistics = val
@@ -59,6 +62,9 @@ func ProtobufEncodeInBuf(payload interface{}, buf []byte) (data []byte, err erro
 
 	case *HeloResponse:
 		pl.HeloResponse = val
+
+	case *AuthResponse:
+		pl.AuthResponse = val
 
 	default:
 		return nil, ErrorMissingPayload
@@ -97,6 +103,8 @@ func ProtobufDecode(data []byte) (value interface{}, err error) {
 		return val, nil
 	} else if val := pl.GetEndStream(); val != nil {
 		return val, nil
+	} else if val := pl.GetAuthRequest(); val != nil {
+		return val, nil
 		// response
 	} else if val := pl.GetStatistics(); val != nil {
 		return val, nil
@@ -109,6 +117,8 @@ func ProtobufDecode(data []byte) (value interface{}, err error) {
 	} else if val := pl.GetHeloRequest(); val != nil {
 		return val, nil
 	} else if val := pl.GetHeloResponse(); val != nil {
+		return val, nil
+	} else if val := pl.GetAuthResponse(); val != nil {
 		return val, nil
 	}
 	return nil, ErrorMissingPayload

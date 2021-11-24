@@ -58,6 +58,8 @@ var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry th
 var ErrMarshalFailed = errors.New("json.Marshal failed")
 var ErrUnmarshalFailed = errors.New("json.Unmarshal failed")
 
+var ErrAuthMissing = errors.New("Unauthenticated access. Missing authentication information.")
+
 //
 // List of errors leading to failure of index creation
 //

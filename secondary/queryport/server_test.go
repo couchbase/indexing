@@ -370,7 +370,7 @@ func BenchmarkScanAll(b *testing.B) {
 
 func startServer(tb testing.TB, laddr string, callb RequestHandler) *Server {
 	config := c.SystemConfig.SectionConfig("indexer.queryport.", true)
-	s, err := NewServer(laddr, callb, config)
+	s, err := NewServer("", laddr, callb, config)
 	if err != nil {
 		tb.Fatal(err)
 	}

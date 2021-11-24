@@ -33,6 +33,8 @@ message QueryPayload {
     optional StreamEndResponse  streamEnd         = 10;
     optional HeloRequest        heloRequest       = 11;
     optional HeloResponse       heloResponse      = 12;
+    optional AuthRequest        authRequest       = 13;
+    optional AuthResponse       authResponse      = 14;
 }
 
 // Get current server version/capabilities
@@ -188,4 +190,15 @@ message GroupAggr {
     repeated bytes     indexKeyNames = 5;
     optional bool      allowPartialAggr = 6;
     optional bool      onePerPrimaryKey = 7;
+}
+
+// Queryport server authentication
+
+message AuthRequest {
+    required string user = 1;
+    required string pass = 2;
+}
+
+message AuthResponse {
+    required uint32 code = 1;
 }

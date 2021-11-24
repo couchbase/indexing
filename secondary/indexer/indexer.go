@@ -370,7 +370,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 	idx.clusterInfoClient.SetUserAgent("indexer")
 
-	go common.WatchClusterVersionChanges(idx.config["clusterAddr"].String())
+	// WatchClusterVersionChanges is used for queryport server auth enforcement
+	// as well as for choice between bucket/collection seqnos for session
+	// consistent scans.
+	go common.WatchClusterVersionChanges(idx.config["clusterAddr"].String(), int64(common.INDEXER_71_VERSION))
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config,
