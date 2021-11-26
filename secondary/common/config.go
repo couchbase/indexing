@@ -1521,6 +1521,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.enableCompressAfterSwapin": ConfigValue{
+		true,
+		"Compress items that are read from disk into memory",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -1665,6 +1672,13 @@ var SystemConfig = Config{
 		0,
 		"Percent of compressible items to compress before eviction",
 		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableCompressAfterSwapin": ConfigValue{
+		true,
+		"Compress items that are read from disk into memory",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
