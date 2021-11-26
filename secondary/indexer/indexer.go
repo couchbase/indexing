@@ -8505,8 +8505,9 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 		return instIdList, true
 	}
 
-	newList := make([]common.IndexInstId, len(instIdList))
+	newList := make([]common.IndexInstId, 0, len(instIdList))
 	count := 0
+	skipCount := 0
 
 	//validate instance list
 	for _, instId := range instIdList {
@@ -8528,8 +8529,15 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 			if index.State == common.INDEX_STATE_CREATED ||
 				index.State == common.INDEX_STATE_READY ||
 				index.State == common.INDEX_STATE_ERROR {
-				newList[count] = instId
+				newList = append(newList, instId)
 				count++
+			} else if index.State == common.INDEX_STATE_INITIAL ||
+				index.State == common.INDEX_STATE_CATCHUP {
+				logging.Infof("Index build is already in progress for inst %v. State %v.", instId, index.State)
+				skipCount++
+			} else if index.State == common.INDEX_STATE_ACTIVE {
+				logging.Infof("Index build is already finished for inst %v. State %v.", instId, index.State)
+				skipCount++
 			} else {
 				errStr := fmt.Sprintf("Invalid Index State %v for %v In Build Request", index.State, instId)
 				idx.updateError(instId, errStr)
@@ -8539,7 +8547,7 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 	}
 
 	newList = newList[0:count]
-	return newList, len(newList) == len(instIdList)
+	return newList, len(newList) == len(instIdList)-skipCount
 }
 
 func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId) map[string][]common.IndexInstId {

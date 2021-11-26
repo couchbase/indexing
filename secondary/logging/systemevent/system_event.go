@@ -184,7 +184,7 @@ type ddlSystemEvent struct {
 	Module         string             `json:"module"`
 	DefinitionID   common.IndexDefnId `json:"definition_id"`
 	InstanceID     common.IndexInstId `json:"instance_id"`
-	ReplicaID      uint64             `json:"replica_id,omitempty"`
+	ReplicaID      uint64             `json:"replica_id"`
 	PartitionID    uint64             `json:"partition_id,omitempty"`
 	RealInstanceID common.IndexInstId `json:"real_instance_id,omitempty"`
 	IsProxyInst    bool               `json:"is_proxy_instance,omitempty"`
