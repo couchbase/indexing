@@ -1805,24 +1805,29 @@ func (feed *Feed) bucketDetails(
 }
 
 func (feed *Feed) getLocalKVAddrs(
-	pooln, bucketn string, opaque uint16) (string, error) {
+	pooln, bucketn string, opaque uint16) (kvaddr string, err error) {
 
 	prefix := feed.logPrefix
-	// Fetch the clusterInfoCache from clusterInfoClient at projector
-	cinfo := feed.projector.cinfoClient.GetClusterInfoCache()
-	cinfo.RLock()
-	defer cinfo.RUnlock()
+	if feed.projector.config["projector.settings.use_cinfo_lite"].Bool() {
+		kvaddr, err = feed.projector.ciclClient.GetLocalServiceAddress("kv", false)
+	} else {
+		// Fetch the clusterInfoCache from clusterInfoClient at projector
+		cinfo := feed.projector.cinfoClient.GetClusterInfoCache()
+		cinfo.RLock()
+		kvaddr, err = cinfo.GetLocalServiceAddress("kv", false)
+		cinfo.RUnlock()
+	}
 
-	kvaddr, err := cinfo.GetLocalServiceAddress("kv", false)
 	if err != nil {
 		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`, false): %v\n"
 		logging.Errorf(fmsg, prefix, opaque, err)
 
 		// Force fetch cluster info cache incase it was not syncronized properly,
 		// so that next call to this method can succeed
-		cinfo.RUnlock()
-		cinfo.FetchWithLock()
-		cinfo.RLock()
+		if !feed.projector.config["projector.settings.use_cinfo_lite"].Bool() {
+			cinfo := feed.projector.cinfoClient.GetClusterInfoCache()
+			cinfo.FetchWithLock()
+		}
 
 		return "", projC.ErrorClusterInfo
 	}

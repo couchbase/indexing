@@ -30,6 +30,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -408,6 +409,29 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	clusterVersion := o.GetClusterVersion()
+	enforceLimits := false
+	if clusterVersion >= c.INDEXER_71_VERSION {
+		enforceLimits, err = o.limitsCfg.EnforceLimits()
+		if err != nil {
+			return c.IndexDefnId(0), err, false
+		}
+	}
+	if enforceLimits {
+		scopeLimit, err := o.GetIndexScopeLimit(bucket, scope)
+		if err != nil {
+			return c.IndexDefnId(0), err, false
+		}
+
+		if scopeLimit != collections.NUM_INDEXES_NIL {
+			numIndexes := o.GetNumIndexesPerScope(bucket, scope)
+			newIndexes := (idxDefn.NumReplica + 1) * idxDefn.NumPartitions
+			if numIndexes+newIndexes > scopeLimit {
+				errMsg := fmt.Sprintf("%v Limit : %v", c.ErrIndexScopeLimitReached.Error(), scopeLimit)
+				return c.IndexDefnId(0), errors.New(errMsg), false
+			}
+		}
+	}
+
 	if clusterVersion < c.INDEXER_70_VERSION {
 		if collection != c.DEFAULT_COLLECTION || scope != c.DEFAULT_SCOPE {
 			err := errors.New("Fails to create index.  Creation of an index on non-default collection" +
@@ -428,6 +452,35 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	return idxDefn.DefnId, nil, false
+}
+
+func (o *MetadataProvider) GetNumIndexesPerScope(bucket, scope string) uint32 {
+	o.mutex.RLock()
+	defer o.mutex.RUnlock()
+	var numIndexes uint32 = 0
+	for _, metadata := range o.repo.indices {
+		if metadata.Definition.Bucket == bucket && metadata.Definition.Scope == scope {
+			if len(metadata.Instances) != 0 {
+				numIndexes = numIndexes + metadata.Instances[0].NumPartitions*(metadata.Definition.NumReplica+1)
+			}
+		}
+	}
+	return numIndexes
+}
+
+func (o *MetadataProvider) GetIndexScopeLimit(bucket, scope string) (uint32, error) {
+	clusterURL, err := c.ClusterAuthUrl(o.clusterUrl)
+	if err != nil {
+		return 0, err
+	}
+	cinfo, err := c.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		return 0, err
+	}
+	cinfo.Lock()
+	defer cinfo.Unlock()
+	cinfo.SetUserAgent("Client:Metadata_provider:GetIndexScopeLimit")
+	return cinfo.GetIndexScopeLimit(bucket, scope)
 }
 
 //

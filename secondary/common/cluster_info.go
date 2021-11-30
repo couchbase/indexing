@@ -619,7 +619,7 @@ func (c *ClusterInfoCache) FetchBucketInfo(bucketName string) error {
 	return pool.RefreshBucket(bucketName, false)
 }
 
-func (c *ClusterInfoCache) buildEncryptPortMapping() {
+func buildEncryptPortMapping(nodesvs []couchbase.NodeServices) map[string]string {
 	mapping := make(map[string]string)
 
 	//default (hardcode in ns-server)
@@ -634,7 +634,7 @@ func (c *ClusterInfoCache) buildEncryptPortMapping() {
 	mapping["9999"] = "9999"   //gsi http
 
 	// go through service port map for floating ports
-	for _, node := range c.nodesvs {
+	for _, node := range nodesvs {
 		_, ok := node.Services[INDEX_HTTP_SERVICE]
 		_, ok1 := node.Services[INDEX_HTTPS_SERVICE]
 		if ok && ok1 {
@@ -684,11 +684,16 @@ func (c *ClusterInfoCache) buildEncryptPortMapping() {
 		}
 	}
 
-	c.encryptPortMapping = mapping
+	return mapping
 }
 
 func (c *ClusterInfoCache) EncryptPortMapping() map[string]string {
 	return c.encryptPortMapping
+}
+
+func (c *ClusterInfoCache) buildEncryptPortMapping() {
+
+	c.encryptPortMapping = buildEncryptPortMapping(c.nodesvs)
 }
 
 func (c *ClusterInfoCache) FetchServerGroups() error {
@@ -1137,11 +1142,14 @@ func (c *ClusterInfoCache) GetServerVersion(nid NodeId) (int, error) {
 	if int(nid) >= len(c.nodes) {
 		return 0, ErrInvalidNodeId
 	}
+	return getServerVersionFromVersionString(c.nodes[nid].Version)
+}
 
+func getServerVersionFromVersionString(v string) (int, error) {
 	// Couchbase-server version will be of the form
 	// <major>.<minor>.<maint_release>-<build_number>-<community/enterprise>
 	// E.g. 6.5.0-0000-enterprise, 6.0.3-2855-enterprise etc.
-	versionStr := strings.Split(c.nodes[nid].Version, ".")
+	versionStr := strings.Split(v, ".")
 	if len(versionStr) < 3 {
 		return 0, ErrInvalidVersion
 	}

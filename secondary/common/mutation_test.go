@@ -11,7 +11,7 @@ func TestPayloadVbmap(t *testing.T) {
 	p := NewStreamPayload(PayloadVbmap, 3)
 
 	// test mixing payload
-	vb := NewVbKeyVersions("default", 1 /*vbno*/, 10 /*vbuuid*/, 1000)
+	vb := NewVbKeyVersions("default", 1 /*vbno*/, 10 /*vbuuid*/, 1000, 16)
 	if p.AddVbKeyVersions(vb) == nil {
 		t.Fatal("expected an error")
 	}
@@ -51,7 +51,7 @@ func TestPayloadKeyVersions(t *testing.T) {
 	nIndexes := 3
 	for i := 0; i < nVb; i++ { // for N vbuckets
 		vbno, vbuuid := uint16(i), uint64(i*10)
-		vb := NewVbKeyVersions("default", vbno, vbuuid, 1000)
+		vb := NewVbKeyVersions("default", vbno, vbuuid, 1000, 16)
 		for j := 0; j < 10; j++ { // for 10 mutations
 			kv := NewKeyVersions(512 /*seqno*/, []byte("Bourne"), nIndexes, 0)
 			kv.AddUpsert(uuids[0], keys[0], oldkeys[0], nil)

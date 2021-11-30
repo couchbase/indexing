@@ -86,6 +86,7 @@ type Node struct {
 	NodeUUID             string             `json:"nodeUUID,omitempty"`
 	AddressFamily        string             `json:"addressFamily,omitempty"`
 	NodeHash             int                `json:"nodeHash,omitempty"`
+	ServerGroup          string             `json:"serverGroup,omitempty"`
 }
 
 type BucketName struct {

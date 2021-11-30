@@ -2637,10 +2637,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.use_bucket_seqnos": ConfigValue{
-		false,
+		true,
 		"For session consistent scans, use BucketSeqnos " +
 			"to avoid contention while retrieving seqnos",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2668,6 +2668,13 @@ var SystemConfig = Config{
 		"info",
 		false, // mutable
 		false, // case-insensitive
+	},
+	"projector.settings.use_cinfo_lite": ConfigValue{
+		true,
+		"Use ClusterInfoCacheLite",
+		true,
+		false,
+		false,
 	},
 	"projector.diagnostics_dir": ConfigValue{
 		"./",
