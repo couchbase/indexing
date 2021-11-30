@@ -1666,20 +1666,15 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 		// there is no risk of data loss.
 		//
 
-		//NOTE - This constraint validation is temporarily being disabled. With collections,
-		//it is possible for source to have lower seqno than target as INIT_STREAM works at
-		//collection level while MAINT_STREAM works at bucket level.
-		/*
-			if !source.Timestamp().EqualOrGreater(target.Timestamp()) {
-				s.supvCmdch <- &MsgError{
-					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
-						severity: FATAL,
-						category: STORAGE_MGR,
-						cause: fmt.Errorf("Timestamp mismatch between snapshot\n target %v\n source %v\n",
-							target.Timestamp(), source.Timestamp())}}
-				return
-			}
-		*/
+		if !source.Timestamp().EqualOrGreater(target.Timestamp()) {
+			s.supvCmdch <- &MsgError{
+				err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
+					severity: FATAL,
+					category: STORAGE_MGR,
+					cause: fmt.Errorf("Timestamp mismatch between snapshot\n target %v\n source %v\n",
+						target.Timestamp(), source.Timestamp())}}
+			return
+		}
 
 		// source will not have partition snapshot if there is no mutation in bucket.  Skip validation check.
 		// If bucket has at least 1 mutation, then source will have partition snapshot.
