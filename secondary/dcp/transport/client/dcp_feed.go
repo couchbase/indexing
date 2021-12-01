@@ -1093,7 +1093,7 @@ func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_CONTROL,
 		Key:    []byte("enable_out_of_order_snapshots"),
-		Body:   []byte("true"),
+		Body:   []byte("true_with_seqno_advanced"),
 	}
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpOpen.Transmit DCP_CONTROL (enable_out_of_order_snapshots): %v"
