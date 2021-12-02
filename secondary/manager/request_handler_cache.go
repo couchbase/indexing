@@ -112,6 +112,20 @@ func Key2host(hostKey string) string {
 	return hostKey
 }
 
+// cacheLocalIndexMetadataBoot is called only at boot time to add an entry to the local metadata
+// memory cache that was just read from the disk cache. This will be skipped if a newer entry for
+// the given hostKey is already present as that would be from a newer getIndexStatus call. It will
+// overwrite an older entry, which could exist if getIndexStats got that value from another node's
+// cache that was older than the entry just read from this node's local disk cache.
+func (this *requestHandlerCache) cacheLocalIndexMetadataBoot(hostKey string, meta *LocalIndexMetadata) {
+	this.metaMutex.Lock()
+	cached := this.metaCache[hostKey]
+	if cached == nil || cached.Timestamp < meta.Timestamp {
+		this.metaCache[hostKey] = meta
+	}
+	this.metaMutex.Unlock()
+}
+
 // CacheLocalIndexMetadata adds an entry to the local metadata memory cache and stages write-through
 // to disk. hostKey is Host2key(host:httpPort).
 func (this *requestHandlerCache) CacheLocalIndexMetadata(hostKey string, meta *LocalIndexMetadata) {
@@ -122,6 +136,17 @@ func (this *requestHandlerCache) CacheLocalIndexMetadata(hostKey string, meta *L
 
 	// Disk cache (async)
 	this.workCh <- &workChEntry_meta{hostKey, meta}
+}
+
+// cacheStatsBoot is called only at boot time to add an entry to the local IndexStats subset
+// memory cache that was just read from the disk cache. This will be skipped if an entry for the
+// given hostKey is already present as that would be from a newer getIndexStatus call.
+func (this *requestHandlerCache) cacheStatsBoot(hostKey string, stats *common.Statistics) {
+	this.statsMutex.Lock()
+	if this.statsCache[hostKey] == nil {
+		this.statsCache[hostKey] = stats
+	}
+	this.statsMutex.Unlock()
 }
 
 // CacheStats adds an entry to the local IndexStats subset memory cache and stages write-through to
@@ -376,12 +401,12 @@ func (this *requestHandlerCache) runPersistor() {
 // populateMetaMemCacheFromDisk is called at startup to initialze the LocalIndexMetadata memory
 // cache from disk.
 func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
-	const method = "requestHandlerCache::populateMetaMemCacheFromDisk" // for logging
+	const _populateMetaMemCacheFromDisk = "requestHandlerCache::populateMetaMemCacheFromDisk"
 
 	files, err := ioutil.ReadDir(this.metaDir)
 	if err != nil {
 		logging.Errorf("%v Failed to read metadata cache directory %v, error: %v",
-			method, this.metaDir, err)
+			_populateMetaMemCacheFromDisk, this.metaDir, err)
 	} else {
 		for _, file := range files {
 			hostKey := file.Name()
@@ -389,20 +414,19 @@ func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 			content, err := ioutil.ReadFile(filepath)
 			if err != nil {
 				logging.Errorf("%v Failed to read metadata from file %v, error: %v",
-					method, filepath, err)
+					_populateMetaMemCacheFromDisk, filepath, err)
 			}
 
 			localMeta := new(LocalIndexMetadata)
 			if err := json.Unmarshal(content, localMeta); err != nil {
 				logging.Errorf("%v Failed to unmarshal metadata from file %v, error: %v",
-					method, filepath, err)
+					_populateMetaMemCacheFromDisk, filepath, err)
 			}
 
-			// Add to mem cache
-			this.CacheLocalIndexMetadata(hostKey, localMeta)
-			if logging.IsEnabled(logging.Debug) {
-				logging.Debugf("%v Saved metadata to memory cache %v", method, hostKey)
-			}
+			// Add to mem cache if a new getIndexStatus call did not already cache this hostKey
+			this.cacheLocalIndexMetadataBoot(hostKey, localMeta)
+			logging.Debugf("%v Saved metadata to memory cache %v",
+				_populateMetaMemCacheFromDisk, hostKey)
 		}
 	}
 }
@@ -410,12 +434,12 @@ func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 // populateStatsMemCacheFromDisk is called at startup to initialze the stats subset memory
 // cache from disk.
 func (this *requestHandlerCache) populateStatsMemCacheFromDisk() {
-	const method = "requestHandlerCache::populateStatsMemCacheFromDisk" // for logging
+	const _populateStatsMemCacheFromDisk = "requestHandlerCache::populateStatsMemCacheFromDisk"
 
 	files, err := ioutil.ReadDir(this.statsDir)
 	if err != nil {
 		logging.Errorf("%v Failed to read stats cache directory %v, error: %v",
-			method, this.statsDir, err)
+			_populateStatsMemCacheFromDisk, this.statsDir, err)
 	} else {
 		for _, file := range files {
 			hostKey := file.Name()
@@ -423,20 +447,19 @@ func (this *requestHandlerCache) populateStatsMemCacheFromDisk() {
 			content, err := ioutil.ReadFile(filepath)
 			if err != nil {
 				logging.Errorf("%v Failed to read stats from file %v, error: %v",
-					method, filepath, err)
+					_populateStatsMemCacheFromDisk, filepath, err)
 			}
 
 			stats := new(common.Statistics)
 			if err := json.Unmarshal(content, stats); err != nil {
 				logging.Errorf("%v Failed to unmarshal stats from file %v, error: %v",
-					method, filepath, err)
+					_populateStatsMemCacheFromDisk, filepath, err)
 			}
 
-			// Add to mem cache
-			this.CacheStats(hostKey, stats)
-			if logging.IsEnabled(logging.Debug) {
-				logging.Debugf("%v Saved stats to memory cache %v", method, hostKey)
-			}
+			// Add to mem cache if a new getIndexStatus call did not already cache this hostKey
+			this.cacheStatsBoot(hostKey, stats)
+			logging.Debugf("%v Saved stats to memory cache %v",
+				_populateStatsMemCacheFromDisk, hostKey)
 		}
 	}
 }
