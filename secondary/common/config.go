@@ -1501,23 +1501,23 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableCompressDuringBurst": ConfigValue{
-		true,
+		false,
 		"Enable compression of memory resident items during burst eviction also",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableDecompressDuringSwapin": ConfigValue{
-		false,
+		true,
 		"Enable decompression of compressed items during swapin",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.compressBeforeEvictPercent": ConfigValue{
-		80,
+		0,
 		"Percent of compressible items to compress before eviction",
-		80,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1648,23 +1648,23 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableCompressDuringBurst": ConfigValue{
-		true,
+		false,
 		"Enable compression of memory resident items during burst eviction also",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableDecompressDuringSwapin": ConfigValue{
-		false,
+		true,
 		"Enable decompression of compressed items during swapin",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.compressBeforeEvictPercent": ConfigValue{
-		80,
+		0,
 		"Percent of compressible items to compress before eviction",
-		80,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2817,9 +2817,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.build.enableOSO": ConfigValue{
-		false,
+		true,
 		"Use OSO mode for Initial Index Build",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},

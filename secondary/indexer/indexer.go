@@ -1375,11 +1375,16 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_STATS:
 		idx.handleStats(msg)
 
-	case MSG_ERROR,
-		STREAM_READER_ERROR:
+	case MSG_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
 		err := msg.(*MsgError).GetError()
+		common.CrashOnError(err.cause)
+
+	case STREAM_READER_ERROR:
+		//crash for all errors by default
+		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
+		err := msg.(*MsgStreamError).GetError()
 		common.CrashOnError(err.cause)
 
 	case STATS_RESET:
@@ -4584,7 +4589,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
 	if enableOSO &&
-		clusterVer >= common.INDEXER_70_VERSION &&
+		clusterVer >= common.INDEXER_71_VERSION &&
 		buildStream == common.INIT_STREAM {
 		enableOSO = true
 	} else {
@@ -6365,7 +6370,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	enableOSO := idx.config["build.enableOSO"].Bool()
 	if enableOSO &&
 		allowOSO &&
-		clusterVer >= common.INDEXER_70_VERSION &&
+		clusterVer >= common.INDEXER_71_VERSION &&
 		streamId == common.INIT_STREAM {
 		enableOSO = true
 	} else {

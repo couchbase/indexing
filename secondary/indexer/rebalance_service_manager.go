@@ -962,6 +962,16 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 		return nil
 	}
 
+	cleanup := func(path, token string) error {
+		err := c.MetakvDel(path)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete %v from "+
+				"Meta Storage. %v. Err %v", token, rtokens.RT, err)
+			return err
+		}
+		return nil
+	}
+
 	masterAlive := false
 	if rtokens.RT != nil {
 		l.Infof("RebalanceServiceManager::cleanupOrphanTokens Found Token %v", rtokens.RT)
@@ -972,12 +982,10 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 				break
 			}
 		}
-		if !masterAlive {
-			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token %v", rtokens.RT)
-			err := c.MetakvDel(RebalanceTokenPath)
-			if err != nil {
-				l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete RebalanceToken from "+
-					"Meta Storage. %v. Err %v", rtokens.RT, err)
+		if !masterAlive || rtokens.RT.Error != "" {
+			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token %v as masterAlive: %v, err: %v",
+				rtokens.RT, masterAlive, rtokens.RT.Error)
+			if err := cleanup(RebalanceTokenPath, "RebalanceToken"); err != nil {
 				return err
 			}
 		}
@@ -985,7 +993,7 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 
 	masterAlive = false
 	if rtokens.MT != nil {
-		l.Infof("RebalanceServiceManager::cleanupOrphanTokens Found Rebalance Token %v", rtokens.MT)
+		l.Infof("RebalanceServiceManager::cleanupOrphanTokens Found MoveIndexToken %v", rtokens.MT)
 
 		for _, node := range change.KeepNodes {
 			if rtokens.MT.MasterId == string(node.NodeInfo.NodeID) {
@@ -993,12 +1001,10 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 				break
 			}
 		}
-		if !masterAlive {
-			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token %v", rtokens.MT)
-			err := c.MetakvDel(MoveIndexTokenPath)
-			if err != nil {
-				l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete MoveIndex Token from "+
-					"Meta Storage. %v. Err %v", rtokens.MT, err)
+		if !masterAlive || rtokens.MT.Error != "" {
+			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token %v as masterAlive: %v, err: %v",
+				rtokens.MT, masterAlive, rtokens.MT.Error)
+			if err := cleanup(MoveIndexTokenPath, "MoveIndexToken"); err != nil {
 				return err
 			}
 		}
@@ -1312,28 +1318,40 @@ loop:
 }
 
 func (m *RebalanceServiceManager) rebalanceJanitor() {
-	const method = "RebalanceServiceManager::rebalanceJanitor::" // for logging
+	const _rebalanceJanitor = "RebalanceServiceManager::rebalanceJanitor" // for logging
 
 	for {
 		time.Sleep(time.Second * 30)
 
-		l.Infof("%v Running Periodic Cleanup", method)
-		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+		l.Infof("%v Running Periodic Cleanup", _rebalanceJanitor)
+		lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", _rebalanceJanitor, "")
 		if !m.rebalanceRunning {
 			rtokens, err := m.getCurrRebalTokens()
 			if err != nil {
-				l.Errorf("%v Error Fetching Metakv Tokens %v", method, err)
+				l.Errorf("%v Error Fetching Metakv Tokens %v", _rebalanceJanitor, err)
 			}
 
 			if rtokens != nil && len(rtokens.TT) != 0 {
-				l.Infof("%v Found %v tokens. Cleaning up.", method, len(rtokens.TT))
+				l.Infof("%v Found %v tokens. Cleaning up.", _rebalanceJanitor, len(rtokens.TT))
 				err := m.cleanupTransferTokens(rtokens.TT)
 				if err != nil {
-					l.Errorf("%v Error Cleaning Transfer Tokens %v", method, err)
+					l.Errorf("%v Error Cleaning Transfer Tokens %v", _rebalanceJanitor, err)
+				}
+			}
+
+			if rtokens != nil && rtokens.MT != nil {
+				cfg := m.config.Load()
+				nodeID := cfg["nodeuuid"].String()
+				if rtokens.MT.Error != "" && rtokens.MT.MasterId == nodeID { // let janitor in master node clean-up the move token
+					l.Infof("%v Found erroneous MoveIndexToken: %v. Cleaning up.", _rebalanceJanitor, rtokens.MT)
+					err := c.MetakvDel(MoveIndexTokenPath)
+					if err != nil {
+						l.Errorf("%v Unable to delete MoveIndexToken from Meta Storage. %v. Err %v", _rebalanceJanitor, rtokens.RT, err)
+					}
 				}
 			}
 		}
-		c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+		c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", _rebalanceJanitor, "")
 
 	}
 
