@@ -1264,12 +1264,12 @@ func (r *Rebalancer) observeRebalance() {
 // a rebalance and gets called by metakv for each token and each change to a token.
 // This decodes the token and hands it off to processTransferToken.
 func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
-	const method string = "Rebalancer::processTokens:" // for logging
+	const _processTokens string = "Rebalancer::processTokens:" // for logging
 
 	if kve.Path == RebalanceTokenPath || kve.Path == MoveIndexTokenPath {
-		l.Infof("%v RebalanceToken %v %v", method, kve.Path, kve.Value)
+		l.Infof("%v RebalanceToken %v %s", _processTokens, kve.Path, kve.Value)
 		if kve.Value == nil {
-			l.Infof("%v Rebalance Token Deleted. Mark Done.", method)
+			l.Infof("%v Rebalance Token Deleted. Mark Done.", _processTokens)
 			r.cancelMetakv()
 			r.finishRebalance(nil)
 		}
@@ -1277,12 +1277,12 @@ func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 		if kve.Value != nil {
 			ttid, tt, err := r.decodeTransferToken(kve.Path, kve.Value)
 			if err != nil {
-				l.Errorf("%v Unable to decode transfer token. Ignored.", method)
+				l.Errorf("%v Unable to decode transfer token. Ignored.", _processTokens)
 				return nil
 			}
 			r.processTransferToken(ttid, tt)
 		} else {
-			l.Infof("%v Received empty or deleted transfer token %v", method, kve.Path)
+			l.Infof("%v Received empty or deleted transfer token %v", _processTokens, kve.Path)
 		}
 
 		// In a cluster with down-level nodes, we cannot overlap builds/merges with drops/prunes as
