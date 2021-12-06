@@ -127,15 +127,24 @@ func (this *requestHandlerCache) cacheLocalIndexMetadataBoot(hostKey string, met
 }
 
 // CacheLocalIndexMetadata adds an entry to the local metadata memory cache and stages write-through
-// to disk. hostKey is Host2key(host:httpPort).
+// to disk. hostKey is Host2key(host:httpPort). This will be skipped if a newer entry for the given
+// hostKey is already present as that would be from a newer getIndexStatus call.
 func (this *requestHandlerCache) CacheLocalIndexMetadata(hostKey string, meta *LocalIndexMetadata) {
+	isNewer := false // is the meta arg newer than current cache contents?
+
 	// Memory cache (sync)
 	this.metaMutex.Lock()
-	this.metaCache[hostKey] = meta
+	cached := this.metaCache[hostKey]
+	if cached == nil || cached.Timestamp < meta.Timestamp {
+		isNewer = true
+		this.metaCache[hostKey] = meta
+	}
 	this.metaMutex.Unlock()
 
 	// Disk cache (async)
-	this.workCh <- &workChEntry_meta{hostKey, meta}
+	if isNewer {
+		this.workCh <- &workChEntry_meta{hostKey, meta}
+	}
 }
 
 // cacheStatsBoot is called only at boot time to add an entry to the local IndexStats subset

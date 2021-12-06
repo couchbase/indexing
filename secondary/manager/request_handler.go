@@ -753,14 +753,13 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		}
 
 		// Use same un-encrypted port number as key, even if the encryption level changes in between
-		addrForKey, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, false)
+		hostname, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, false)
 		if err != nil {
 			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, false) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
 
-		hostname := addrForKey
 		hostKey := Host2key(hostname) // key to caches
 		keepKeys = append(keepKeys, hostKey)
 		stale := false
@@ -1804,7 +1803,6 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 // getLocalIndexMetadata gets index metadata from the local metadata repo and,
 // iff it is a full set, sets its ETag info.
-
 func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	bucket string, filters map[string]bool, filterType string,
 	useETag bool) (meta *LocalIndexMetadata, timingStr string, err error) {
@@ -1877,6 +1875,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 		topology, err = iter1.Next()
 	}
 
+	// meta.ETag and meta.ETagExpiry will stay 0 from object creation unless set here
 	if fullSet && useETag {
 		m.setETagLocalIndexMetadata(meta)
 	}
