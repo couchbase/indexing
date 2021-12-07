@@ -2637,10 +2637,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.use_bucket_seqnos": ConfigValue{
-		true,
+		false,
 		"For session consistent scans, use BucketSeqnos " +
 			"to avoid contention while retrieving seqnos",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
