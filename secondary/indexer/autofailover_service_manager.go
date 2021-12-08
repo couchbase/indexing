@@ -30,11 +30,16 @@ import (
 // AutofailoverManager (defined in cbauth/service/interface.go) which this class registers as the
 // GSI handler for by calling RegisterAutofailoverManager (defined in cbauth/service/revrpc.go).
 type AutofailoverServiceManager struct {
-	cpuThrottle       *CpuThrottle        // CPU throttler
-	ctExpirer         *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off
-	diskFailures      unsafe.Pointer      // *uint64 ever-increasing count of disk read/write fails
-	httpAddr          string              // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
-	lastStatusLogTime time.Time           // last time isSafeLogDetails logged index statuses
+	cpuThrottle  *CpuThrottle        // CPU throttler
+	ctExpirer    *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off
+	diskFailures unsafe.Pointer      // *uint64 ever-increasing count of disk read/write fails
+	httpAddr     string              // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
+
+	lastHealthCheckMux  sync.Mutex // mutex for lastHealthCheckTime
+	lastHealthCheckTime time.Time  // last time HealthCheck was called
+
+	lastStatusLogMux  sync.Mutex // mutex for lastStatusLogTime
+	lastStatusLogTime time.Time  // last time isSafeLogDetails logged index statuses
 }
 
 // NewAutofailoverServiceManager is the constructor for the AutofailoverServiceManager class.
@@ -181,12 +186,16 @@ func (this *cpuThrottleExpirer) runExpiryCountdown() {
 func (m *AutofailoverServiceManager) isSafeLogDetails(indexStatusesCached []manager.IndexStatus) {
 	const _isSafeLogDetails = "AutofailoverServiceManager::isSafeLogDetails:"
 
-	// Only log every 5 minutes as the messages, especially indexStatusesCurrent, can be huge
-	now := time.Now()
-	if now.Sub(m.lastStatusLogTime) < 5*time.Minute {
+	// Only log if last time was long ago as the messages, esp indexStatusesCurrent, can be huge,
+	// and if an Autofailover attempt is deemed unsafe, ns_server keeps retrying it every 2 seconds
+	callTime := time.Now()
+	m.lastStatusLogMux.Lock()
+	if callTime.Sub(m.lastStatusLogTime) < 30*time.Minute {
+		m.lastStatusLogMux.Unlock()
 		return
 	}
-	m.lastStatusLogTime = now
+	m.lastStatusLogTime = callTime
+	m.lastStatusLogMux.Unlock()
 
 	var bytes []byte // JSON encoding of index statuses
 
@@ -232,7 +241,12 @@ func (m *AutofailoverServiceManager) isSafeLogDetails(indexStatusesCached []mana
 //      MOI) have detected since boot
 func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) {
 	const _HealthCheck = "AutofailoverServiceManager::HealthCheck:"
+
 	callTime := time.Now()
+	m.lastHealthCheckMux.Lock()
+	priorTime := m.lastHealthCheckTime
+	m.lastHealthCheckTime = callTime
+	m.lastHealthCheckMux.Unlock()
 
 	// CPU throttling is only used when Autofailover is enabled
 	m.cpuThrottle.SetCpuThrottling(true)
@@ -242,10 +256,16 @@ func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) 
 		DiskFailures: int(m.getDiskFailures()),
 	}
 
-	// To avoid log flooding, only log slow calls. Thus unfortunately we will never have a log
-	// message from the last call before Autofailover is triggered.
+	// To avoid log flooding, only log slow heartbeats or calls. Heartbeat period is 2 seconds.
+	if !priorTime.IsZero() {
+		dur := callTime.Sub(priorTime) // time since prior call
+		if dur >= 2100*time.Millisecond {
+			logging.Warnf("%v Slow heartbeat %v. priorTime: %v, callTime: %v, healthInfo: %+v",
+				_HealthCheck, dur, priorTime, callTime, *healthInfo)
+		}
+	}
 	doneTime := time.Now()
-	dur := doneTime.Sub(callTime)
+	dur := doneTime.Sub(callTime) // time spent in this call
 	if dur >= 1*time.Second {
 		logging.Warnf("%v Slow call %v. callTime: %v, doneTime: %v, healthInfo: %+v",
 			_HealthCheck, dur, callTime, doneTime, *healthInfo)
