@@ -838,6 +838,11 @@ retry:
 
 func (p *Pool) GetServerGroups() (groups ServerGroups, err error) {
 
+	// ServerGroupsUri is empty in CE
+	if p.ServerGroupsUri == "" {
+		return ServerGroups{}, nil
+	}
+
 	err = p.client.parseURLResponse(p.ServerGroupsUri, &groups)
 	return
 
@@ -863,6 +868,12 @@ func (p *Pool) GetBucketURLVersionHash() (string, error) {
 }
 
 func (p *Pool) GetServerGroupsVersionHash() (string, error) {
+
+	// ServerGroupsUri is empty in CE
+	if p.ServerGroupsUri == "" {
+		return "", nil
+	}
+
 	return getVersionHashFromURL(p.ServerGroupsUri)
 }
 
