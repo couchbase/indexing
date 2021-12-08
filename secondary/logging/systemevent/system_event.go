@@ -47,6 +47,10 @@ const (
 	// Logged when there is an Error in the system and some residue of that
 	// index instance or partition in the system
 	EVENTID_INDEX_PARTITION_ERROR
+	// Logged when index is scheduled for background creation
+	EVENTID_INDEX_SCHED_CREATE
+	// Logged when index background creation of index fails
+	EVENTID_INDEX_SCHED_CREATE_ERROR
 
 	// *****
 	// Note: Add events here. Don't add events above in between the Events.
@@ -71,6 +75,8 @@ var eventIDToDescriptionMap = map[SystemEventID]string{
 	EVENTID_INDEX_PARTITION_DROPPED:      "Index Instance or Partition Dropped",
 	EVENTID_INDEX_PARTITION_MERGED:       "Index Partition Merged",
 	EVENTID_INDEX_PARTITION_ERROR:        "Index Instance or Partition Error State Change",
+	EVENTID_INDEX_SCHED_CREATE:           "Index Scheduled for Creation",
+	EVENTID_INDEX_SCHED_CREATE_ERROR:     "Index Scheduled Creation Error",
 }
 
 // Configuration values for SystemEventLogger

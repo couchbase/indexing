@@ -362,7 +362,7 @@ func (m *schedIndexCreator) processIndex(index *scheduledIndex) {
 				err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
 
 			if !dropToken {
-				err := mc.PostStopScheduleCreateToken(index.token.Definition.DefnId, err.Error(), time.Now().UnixNano())
+				err := mc.PostStopScheduleCreateToken(index.token.Definition.DefnId, err.Error(), time.Now().UnixNano(), index.token.IndexerId)
 				if err != nil {
 					logging.Errorf("schedIndexCreator: error (%v) in posting the stop schedule create token for %v",
 						err, index.token.Definition.DefnId)

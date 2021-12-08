@@ -20,6 +20,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging/systemevent"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -83,9 +84,9 @@ type DeleteCommandTokenList struct {
 }
 
 type DeleteCommandToken struct {
-	Name   string
-	Bucket string
-	DefnId c.IndexDefnId
+	Name     string
+	Bucket   string
+	DefnId   c.IndexDefnId
 	Internal bool
 }
 
@@ -430,7 +431,7 @@ func MarshallCreateCommandTokenList(r *CreateCommandTokenList) ([]byte, error) {
 func PostDeleteCommandToken(defnId c.IndexDefnId, internal bool) error {
 
 	commandToken := &DeleteCommandToken{
-		DefnId: defnId,
+		DefnId:   defnId,
 		Internal: internal,
 	}
 
@@ -1116,7 +1117,21 @@ func PostScheduleCreateToken(idxDefn c.IndexDefn, plan map[string]interface{},
 	}
 
 	path := fmt.Sprintf("%v", idxDefn.DefnId)
-	return c.MetakvBigValueSet(ScheduleCreateTokenPath+path, token)
+
+	err := c.MetakvBigValueSet(ScheduleCreateTokenPath+path, token)
+	if err != nil {
+		return err
+	}
+
+	// At this point, the instances and partitions are not initialised.
+	// Add only one event for this index with a valid index DefnId, but
+	// with InstId, replicaId and partnId as ZERO.
+	event := systemevent.NewDDLSystemEvent("IndexScheduledForCreation", idxDefn.DefnId,
+		c.IndexInstId(0), uint64(0), uint64(0), c.IndexInstId(0), string(indexerId), "")
+
+	systemevent.InfoEvent("Indexer", systemevent.EVENTID_INDEX_SCHED_CREATE, event)
+
+	return nil
 }
 
 func DeleteScheduleCreateToken(defnId c.IndexDefnId) error {
@@ -1222,10 +1237,25 @@ func GetScheduleCreateTokenPathFromDefnId(defnId c.IndexDefnId) string {
 
 func UpdateScheduleCreateToken(token *ScheduleCreateToken) error {
 	path := fmt.Sprintf("%v", token.Definition.DefnId)
-	return c.MetakvBigValueSet(ScheduleCreateTokenPath+path, token)
+
+	err := c.MetakvBigValueSet(ScheduleCreateTokenPath+path, token)
+	if err != nil {
+		return err
+	}
+
+	// Log a system event when ownership of background index creation is transferred
+	// to a new indexer node.
+	idxDefn := token.Definition
+	indexerId := token.IndexerId
+	event := systemevent.NewDDLSystemEvent("UpdateScheduleCreateIndex", idxDefn.DefnId,
+		c.IndexInstId(0), uint64(0), uint64(0), c.IndexInstId(0), string(indexerId), "")
+
+	systemevent.InfoEvent("Indexer", systemevent.EVENTID_INDEX_SCHED_CREATE, event)
+
+	return nil
 }
 
-func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int64) error {
+func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int64, indexerId c.IndexerId) error {
 
 	token := &StopScheduleCreateToken{
 		Reason: reason,
@@ -1234,7 +1264,17 @@ func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int6
 	}
 
 	path := fmt.Sprintf("%v", defnId)
-	return c.MetakvSet(StopScheduleCreateTokenPath+path, token)
+	err := c.MetakvSet(StopScheduleCreateTokenPath+path, token)
+	if err != nil {
+		return err
+	}
+
+	event := systemevent.NewDDLSystemEvent("IndexScheduledCreationError", defnId,
+		c.IndexInstId(0), uint64(0), uint64(0), c.IndexInstId(0), string(indexerId), reason)
+
+	systemevent.ErrorEvent("Indexer", systemevent.EVENTID_INDEX_SCHED_CREATE_ERROR, event)
+
+	return nil
 }
 
 // ListAllStopScheduleCreateTokens retrieves all stop schedule create tokens
