@@ -82,11 +82,12 @@ type LocalIndexMetadata struct {
 	IndexTopologies  []IndexTopology    `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 
-	// Pseudofields that should not be checksummed for ETags
+	// Pseudofields that should not be checksummed for ETags. These are stored in
+	// requestHandlerCache but NOT in MetadataRepo.
 	Timestamp        int64  `json:"timestamp,omitempty"`        // UnixNano meta repo retrieval time; not stored therein
 	ETag             uint64 `json:"eTag,omitempty"`             // checksum (HTTP entity tag); 0 is HTTP_VAL_ETAG_INVALID
 	ETagExpiry       int64  `json:"eTagExpiry,omitempty"`       // ETag expiration UnixNano time
-	AllIndexesActive bool   `json:"allIndexesActive,omitempty"` // all indexes *included in this object* are active
+	AllIndexesActive bool   `json:"allIndexesActive,omitempty"` // all indexes *included in this object* are active as described by the info contained in this object
 }
 
 type ClusterIndexMetadata struct {
@@ -1802,7 +1803,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 }
 
 // getLocalIndexMetadata gets index metadata from the local metadata repo and,
-// iff it is a full set, sets its ETag info.
+// iff it is a full set AND caller specified useETag, sets its ETag info.
 func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	bucket string, filters map[string]bool, filterType string,
 	useETag bool) (meta *LocalIndexMetadata, timingStr string, err error) {
