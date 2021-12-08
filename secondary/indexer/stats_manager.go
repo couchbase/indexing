@@ -589,7 +589,7 @@ func (s *IndexStats) getPartitions() []common.PartitionId {
 func (s *IndexStats) addPartition(id common.PartitionId) {
 
 	if _, ok := s.partitions[id]; !ok {
-		partnStats := &IndexStats{isArrayIndex: s.isArrayIndex}
+		partnStats := &IndexStats{isArrayIndex: s.isArrayIndex, useArrItemsCount: s.useArrItemsCount}
 		partnStats.Init()
 		s.partitions[id] = partnStats
 	}

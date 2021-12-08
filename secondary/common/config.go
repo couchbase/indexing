@@ -2683,6 +2683,13 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
+	"indexer.settings.use_cinfo_lite": ConfigValue{
+		true,
+		"Use ClusterInfoCacheLite",
+		true,
+		false,
+		false,
+	},
 	"indexer.settings.moi.debug": ConfigValue{
 		false,
 		"Enable debug mode for moi storage engine",
@@ -3029,9 +3036,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.cpu.throttle.target": ConfigValue{
-		float64(0.98),
+		float64(1.00),
 		"Target CPU usage in [0.50, 1.00] if CPU throttling is enabled.",
-		float64(0.98),
+		float64(1.00),
 		false, // mutable
 		false, // case-insensitive
 	},

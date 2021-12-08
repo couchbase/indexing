@@ -21,3 +21,37 @@ func (nh *nodesInfoHolder) Get() *nodesInfo {
 	ptr := atomic.LoadPointer(nh.ptr)
 	return (*nodesInfo)(ptr)
 }
+
+type collectionInfoHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (ch *collectionInfoHolder) Init() {
+	ch.ptr = new(unsafe.Pointer)
+}
+
+func (ch *collectionInfoHolder) Set(ptr *collectionInfo) {
+	atomic.StorePointer(ch.ptr, unsafe.Pointer(ptr))
+}
+
+func (ch *collectionInfoHolder) Get() *collectionInfo {
+	ptr := atomic.LoadPointer(ch.ptr)
+	return (*collectionInfo)(ptr)
+}
+
+type bucketInfoHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (bh *bucketInfoHolder) Init() {
+	bh.ptr = new(unsafe.Pointer)
+}
+
+func (bh *bucketInfoHolder) Set(bucketInfoPtr *bucketInfo) {
+	atomic.StorePointer(bh.ptr, unsafe.Pointer(bucketInfoPtr))
+}
+
+func (bh *bucketInfoHolder) Get() *bucketInfo {
+	bucketInfoPtr := atomic.LoadPointer(bh.ptr)
+	return (*bucketInfo)(bucketInfoPtr)
+}

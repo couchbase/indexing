@@ -77,6 +77,8 @@ var ErrBucketUUIDChanged = errors.New("Bucket UUID has changed. Bucket may have 
 var ErrScopeIdChanged = errors.New("ScopeId has changed. Scope may have been dropped and recreated.")
 var ErrCollectionIdChanged = errors.New("CollectionId has changed. Collection may have been dropped and recreated.")
 var ErrIndexScopeLimitReached = errors.New("Limit for number of indexes that can be created per scope has been reached.")
+var ErrBucketAlreadyExist = errors.New("Bucket Already Present")
+var ErrUnInitializedClusterInfo = errors.New("uninitialized clusterInfo")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,

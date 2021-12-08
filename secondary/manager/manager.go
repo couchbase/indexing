@@ -164,7 +164,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	mgr.reqcic.SetUserAgent("IndexRequestHandler")
 
 	// Initialize LifecycleMgr.
-	lifecycleMgr, err := NewLifecycleMgr(mgr.clusterURL)
+	lifecycleMgr, err := NewLifecycleMgr(mgr.clusterURL, config)
 	if err != nil {
 		mgr.Close()
 		return nil, err

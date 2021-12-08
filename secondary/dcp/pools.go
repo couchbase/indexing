@@ -148,6 +148,9 @@ type Bucket struct {
 	VBSMJson  VBucketServerMap `json:"vBucketServerMap"`
 	NodesJSON []Node           `json:"nodes"`
 
+	Rev      int            `json:"rev"`
+	NodesExt []NodeServices `json:"nodesExt"`
+
 	pool        *Pool
 	commonSufix string
 }
@@ -593,15 +596,44 @@ func (b *Bucket) Refresh() error {
 	return nil
 }
 
+func (b *Bucket) Init(hostport string) {
+	connHost, _, _ := net.SplitHostPort(hostport)
+	for i := range b.NodesJSON {
+		b.NodesJSON[i].Hostname = NormalizeHost(connHost, b.NodesJSON[i].Hostname)
+	}
+
+	newcps := make([]*connectionPool, len(b.VBSMJson.ServerList))
+	for i := range newcps {
+		b.VBSMJson.ServerList[i] = NormalizeHost(connHost, b.VBSMJson.ServerList[i])
+		newcps[i] = newConnectionPool(
+			b.VBSMJson.ServerList[i],
+			b.authHandler(), PoolSize, PoolOverflow)
+	}
+
+	for i, ns := range b.NodesExt {
+		h := ns.Hostname
+		if h == "" {
+			h = connHost
+		}
+		p := fmt.Sprintf("%d", ns.Services["mgmt"])
+		hp := net.JoinHostPort(h, p)
+		b.NodesExt[i].Hostname = hp
+	}
+
+	b.replaceConnPools(newcps)
+	atomic.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&b.VBSMJson))
+	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&b.NodesJSON))
+}
+
 func (b *Bucket) init(nb *Bucket) {
 	connHost, _, _ := net.SplitHostPort(b.pool.client.BaseURL.Host)
 	for i := range nb.NodesJSON {
-		nb.NodesJSON[i].Hostname = normalizeHost(connHost, nb.NodesJSON[i].Hostname)
+		nb.NodesJSON[i].Hostname = NormalizeHost(connHost, nb.NodesJSON[i].Hostname)
 	}
 
 	newcps := make([]*connectionPool, len(nb.VBSMJson.ServerList))
 	for i := range newcps {
-		nb.VBSMJson.ServerList[i] = normalizeHost(connHost, nb.VBSMJson.ServerList[i])
+		nb.VBSMJson.ServerList[i] = NormalizeHost(connHost, nb.VBSMJson.ServerList[i])
 		newcps[i] = newConnectionPool(
 			nb.VBSMJson.ServerList[i],
 			b.authHandler(), PoolSize, PoolOverflow)
@@ -648,6 +680,21 @@ func (p *Pool) getCollectionManifest(bucketn string) (retry bool,
 	err = p.client.parseURLResponse("pools/default/buckets/"+bucketn+"/scopes", manifest)
 	if err != nil {
 		// bucket list is out of sync with cluster bucket list
+		if strings.Contains(err.Error(), "HTTP error 404") {
+			retry = true
+			return
+		}
+		return
+	}
+	return
+}
+
+func (c *Client) GetTerseBucket(terseBucketsBase, bucketn string) (retry bool, nb *Bucket, err error) {
+	nb = &Bucket{}
+	err = c.parseURLResponse(terseBucketsBase+bucketn, nb)
+	if err != nil {
+		// bucket list is out of sync with cluster bucket list
+		// bucket might have got deleted.
 		if strings.Contains(err.Error(), "HTTP error 404") {
 			retry = true
 			return
@@ -981,7 +1028,7 @@ func GetBucket(endpoint, poolname, bucketname string) (*Bucket, error) {
 }
 
 // Make hostnames comparable for terse-buckets info and old buckets info
-func normalizeHost(ch, h string) string {
+func NormalizeHost(ch, h string) string {
 	host, port, _ := net.SplitHostPort(h)
 	if host == "$HOST" {
 		host = ch

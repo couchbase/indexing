@@ -40,8 +40,10 @@ import (
 type LifecycleMgr struct {
 	repo        *MetadataRepo
 	cinfoClient *common.ClusterInfoClient
-	notifier    MetadataNotifier // object to call Indexer to perform index DDL
-	clusterURL  string
+	ciclClient  *common.ClusterInfoCacheLiteClient
+
+	notifier   MetadataNotifier // object to call Indexer to perform index DDL
+	clusterURL string
 
 	// Request queues from and to gometa intermediary layer
 	incomings  chan *requestHolder // normal priority DDL requests from clients
@@ -68,6 +70,8 @@ type LifecycleMgr struct {
 	clientStatsMutex    sync.Mutex          // for lastSendClientStats
 	acceptedNames       map[string]*indexNameRequest
 	accIgnoredIds       map[common.IndexDefnId]bool
+
+	config common.Config
 }
 
 type requestHolder struct {
@@ -171,7 +175,7 @@ type updator struct {
 
 // NewLifecycleMgr constructs a new LifecycleMgr object. The Indexer creates a singleton
 // ClustMgrAgent which owns a singleton LifecycleMgr as a child.
-func NewLifecycleMgr(clusterURL string) (*LifecycleMgr, error) {
+func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, error) {
 
 	var err error
 
@@ -190,18 +194,31 @@ func NewLifecycleMgr(clusterURL string) (*LifecycleMgr, error) {
 		clientStatsRefreshInterval: 5000,
 		acceptedNames:              make(map[string]*indexNameRequest),
 		accIgnoredIds:              make(map[common.IndexDefnId]bool),
+		config:                     config,
 	}
 
-	mgr.cinfoClient, err = common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
-	if err != nil {
-		return nil, err
+	var clusterVersion uint64
+	if !config["settings.use_cinfo_lite"].Bool() {
+		mgr.cinfoClient, err = common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, config)
+		if err != nil {
+			return nil, err
+		}
+		mgr.cinfoClient.SetUserAgent("LifecycleMgr")
+		cinfo := mgr.cinfoClient.GetClusterInfoCache()
+		clusterVersion = cinfo.GetClusterVersion()
+	} else {
+		mgr.ciclClient, err = common.NewClusterInfoCacheLiteClient(clusterURL, common.DEFAULT_POOL, config)
+		if err != nil {
+			return nil, err
+		}
+		mgr.ciclClient.SetLogPrefix("LifeCycleMgr")
+		clusterVersion = mgr.ciclClient.GetClusterVersion()
 	}
-	mgr.cinfoClient.SetUserAgent("LifecycleMgr")
 
-	cinfo := mgr.cinfoClient.GetClusterInfoCache()
-	if cinfo.GetClusterVersion() >= common.INDEXER_70_VERSION {
+	if clusterVersion >= common.INDEXER_70_VERSION {
 		atomic.StoreUint32(&mgr.collAwareCluster, 1)
 	}
+
 	mgr.builder = newBuilder(mgr)
 	mgr.janitor = newJanitor(mgr)
 	mgr.updator = newUpdator(mgr)
@@ -2981,10 +2998,10 @@ func (m *LifecycleMgr) handleResetIndexOnRollback(content []byte) error {
 // Indexer Config update
 //-----------------------------------------------------------
 
-func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
+func (m *LifecycleMgr) handleConfigUpdate(content []byte) (err error) {
 
 	config := new(common.Config)
-	if err := json.Unmarshal(content, config); err != nil {
+	if err = json.Unmarshal(content, config); err != nil {
 		return err
 	}
 
@@ -2993,6 +3010,35 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
 	if val, ok := (*config)["client_stats_refresh_interval"]; ok {
 		atomic.StoreUint64(&m.clientStatsRefreshInterval, uint64(val.Float64()))
 	}
+
+	useCInfoLite := (*config)["settings.use_cinfo_lite"].Bool()
+	if m.config["settings.use_cinfo_lite"].Bool() != useCInfoLite {
+		if useCInfoLite {
+			// close cinfo
+			m.cinfoClient.Close()
+			m.cinfoClient = nil
+
+			// start cicl
+			m.ciclClient, err = common.NewClusterInfoCacheLiteClient(m.clusterURL, common.DEFAULT_POOL, *config)
+			if err != nil {
+				return err
+			}
+			m.ciclClient.SetLogPrefix("LifeCycleMgr")
+		} else {
+			// close cicl
+			m.ciclClient.Close()
+			m.ciclClient = nil
+
+			// start cinfo
+			m.cinfoClient, err = common.NewClusterInfoClient(m.clusterURL, common.DEFAULT_POOL, *config)
+			if err != nil {
+				return err
+			}
+			m.cinfoClient.SetUserAgent("LifecycleMgr")
+		}
+	}
+
+	m.config = *config
 
 	return nil
 }
@@ -3953,19 +3999,29 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 func (m *LifecycleMgr) getBucketUUID(bucket string, retry bool) (string, error) {
 	count := 0
 RETRY:
-	cinfo := m.cinfoClient.GetClusterInfoCache()
-
-	cinfo.RLock()
-	uuid := cinfo.GetBucketUUID(bucket)
-	cinfo.RUnlock()
+	var uuid string
+	if !m.config["settings.use_cinfo_lite"].Bool() {
+		cinfo := m.cinfoClient.GetClusterInfoCache()
+		cinfo.RLock()
+		uuid = cinfo.GetBucketUUID(bucket)
+		cinfo.RUnlock()
+	} else {
+		var err error
+		uuid, err = common.GetBucketUUID(m.clusterURL, bucket)
+		if err != nil {
+			uuid = common.BUCKET_UUID_NIL
+		}
+	}
 
 	if uuid == common.BUCKET_UUID_NIL && count < 5 && retry {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 		// Force fetch cluster info client
-		err := m.cinfoClient.FetchWithLock()
-		if err != nil {
-			return common.BUCKET_UUID_NIL, err
+		if !m.config["settings.use_cinfo_lite"].Bool() {
+			err := m.cinfoClient.FetchWithLock()
+			if err != nil {
+				return common.BUCKET_UUID_NIL, err
+			}
 		}
 		goto RETRY
 	}
@@ -3979,20 +4035,27 @@ RETRY:
 func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string, retry bool) (string, error) {
 	count := 0
 RETRY:
-	cinfo := m.cinfoClient.GetClusterInfoCache()
 
-	cinfo.RLock()
-	colldId := cinfo.GetCollectionID(bucket, scope, collection)
-	cinfo.RUnlock()
+	var colldId string
+	if !m.config["settings.use_cinfo_lite"].Bool() {
+		cinfo := m.cinfoClient.GetClusterInfoCache()
+		cinfo.RLock()
+		colldId = cinfo.GetCollectionID(bucket, scope, collection)
+		cinfo.RUnlock()
+	} else {
+		colldId = m.ciclClient.GetCollectionID(bucket, scope, collection)
+	}
 
 	if colldId == collections.COLLECTION_ID_NIL && count < 5 && retry {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 
 		// Force fetch cluster info cache
-		err := m.cinfoClient.FetchWithLock()
-		if err != nil {
-			return collections.COLLECTION_ID_NIL, err
+		if !m.config["settings.use_cinfo_lite"].Bool() {
+			err := m.cinfoClient.FetchWithLock()
+			if err != nil {
+				return collections.COLLECTION_ID_NIL, err
+			}
 		}
 		goto RETRY
 	}
@@ -4005,19 +4068,25 @@ RETRY:
 func (m *LifecycleMgr) getScopeID(bucket, scope string) (string, error) {
 	count := 0
 RETRY:
-	cinfo := m.cinfoClient.GetClusterInfoCache()
-
-	cinfo.RLock()
-	scopeId := cinfo.GetScopeID(bucket, scope)
-	cinfo.RUnlock()
+	var scopeId string
+	if !m.config["settings.use_cinfo_lite"].Bool() {
+		cinfo := m.cinfoClient.GetClusterInfoCache()
+		cinfo.RLock()
+		scopeId = cinfo.GetScopeID(bucket, scope)
+		cinfo.RUnlock()
+	} else {
+		scopeId = m.ciclClient.GetScopeID(bucket, scope)
+	}
 
 	if scopeId == collections.SCOPE_ID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 		// Force fetch cluster info cache
-		err := m.cinfoClient.FetchWithLock()
-		if err != nil {
-			return collections.SCOPE_ID_NIL, err
+		if !m.config["settings.use_cinfo_lite"].Bool() {
+			err := m.cinfoClient.FetchWithLock()
+			if err != nil {
+				return collections.SCOPE_ID_NIL, err
+			}
 		}
 		goto RETRY
 	}
@@ -4032,20 +4101,26 @@ RETRY:
 func (m *LifecycleMgr) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
 	count := 0
 RETRY:
-	cinfo := m.cinfoClient.GetClusterInfoCache()
-
-	cinfo.RLock()
-	scopeId, colldId := cinfo.GetScopeAndCollectionID(bucket, scope, collection)
-	cinfo.RUnlock()
+	var scopeId, colldId string
+	if !m.config["settings.use_cinfo_lite"].Bool() {
+		cinfo := m.cinfoClient.GetClusterInfoCache()
+		cinfo.RLock()
+		scopeId, colldId = cinfo.GetScopeAndCollectionID(bucket, scope, collection)
+		cinfo.RUnlock()
+	} else {
+		scopeId, colldId = m.ciclClient.GetScopeAndCollectionID(bucket, scope, collection)
+	}
 
 	if (scopeId == collections.SCOPE_ID_NIL || colldId == collections.COLLECTION_ID_NIL) && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 
-		// Force fetch cluster info cache on errors
-		err := m.cinfoClient.FetchWithLock()
-		if err != nil {
-			return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+		if !m.config["settings.use_cinfo_lite"].Bool() {
+			// Force fetch cluster info cache on errors
+			err := m.cinfoClient.FetchWithLock()
+			if err != nil {
+				return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+			}
 		}
 		goto RETRY
 	}

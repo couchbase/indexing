@@ -1261,6 +1261,10 @@ func (mdb *memdbSlice) resetStats() {
 
 	mdb.idxStats.itemsCount.Set(0)
 
+	if mdb.idxStats.useArrItemsCount {
+		mdb.idxStats.arrItemsCount.Set(0)
+	}
+
 	resetKeySizeStats(mdb.idxStats)
 	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
 
