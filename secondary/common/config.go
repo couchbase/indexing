@@ -1508,9 +1508,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableDecompressDuringSwapin": ConfigValue{
-		true,
+		false,
 		"Enable decompression of compressed items during swapin",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1662,9 +1662,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableDecompressDuringSwapin": ConfigValue{
-		true,
+		false,
 		"Enable decompression of compressed items during swapin",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
