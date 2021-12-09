@@ -148,7 +148,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
 	runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl, nil)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
 	if err != nil {
 		return nil, nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}
@@ -479,7 +479,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool, useGreedyPlanner bool, enforceLimits bool) (*Solution, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}
@@ -594,7 +594,7 @@ func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
 
 func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.IndexDefnId) ([]string, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
 	}
@@ -613,7 +613,7 @@ func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.Inde
 
 func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool, enforceLimits bool) (*Solution, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
 	}
@@ -682,7 +682,7 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 
 func ExecuteReplicaDrop(clusterUrl string, defnId common.IndexDefnId, nodes []string, numPartition int, decrement int, dropReplicaId int) (*Solution, []int, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
 	}
@@ -707,7 +707,7 @@ func ExecuteReplicaDrop(clusterUrl string, defnId common.IndexDefnId, nodes []st
 
 func ExecuteRetrieve(clusterUrl string, nodes []string, output string) (*Solution, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}

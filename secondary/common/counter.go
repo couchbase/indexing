@@ -36,7 +36,9 @@ func (c *Counter) MergeWith(other Counter) (Counter, bool, error) {
 	}
 
 	if result.HasValue && other.Base != result.Base {
-		return result, changed, fmt.Errorf("Cannot merge counter with different base values")
+		return result, changed, fmt.Errorf(
+			"Cannot merge counters with different base values (%v, %v)",
+			result.Base, other.Base)
 	}
 
 	if !result.HasValue {
@@ -69,27 +71,9 @@ func (c *Counter) Value() (uint32, bool) {
 	return c.Base + c.Incr - c.Decr, true
 }
 
-func (c *Counter) Initialize(base uint32) {
+func (c *Counter) InitializeCounter(base uint32) {
 	c.Base = base
 	c.HasValue = true
-}
-
-func (c *Counter) InitializeAndIncrement(base uint32, increment uint32) {
-
-	if !c.HasValue {
-		c.Initialize(base)
-	}
-
-	c.Increment(increment)
-}
-
-func (c *Counter) InitializeAndDecrement(base uint32, decrement uint32) {
-
-	if !c.HasValue {
-		c.Initialize(base)
-	}
-
-	c.Decrement(decrement)
 }
 
 func (c *Counter) Decrement(decrement uint32) {

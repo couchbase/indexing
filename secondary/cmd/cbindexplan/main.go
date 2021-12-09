@@ -259,7 +259,7 @@ func main() {
 			return
 		}
 
-		plan, err = planner.RetrievePlanFromCluster(gClusterUrl, nil)
+		plan, err = planner.RetrievePlanFromCluster(gClusterUrl, nil, false)
 		if err != nil {
 			logging.Fatalf("Unable to read index layout from cluster %v. err = %s", gClusterUrl, err)
 			return

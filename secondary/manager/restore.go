@@ -87,7 +87,7 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 	m.cleanseBackupMetadata()
 
 	// Fetch the index layout from current cluster
-	current, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil)
+	current, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil, false)
 	if err != nil {
 		return nil, err
 	}

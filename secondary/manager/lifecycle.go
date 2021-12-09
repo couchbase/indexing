@@ -1876,7 +1876,7 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 			}
 
 		} else if !numReplica.IsValid() {
-			numReplica.Initialize(defn.NumReplica)
+			numReplica.InitializeCounter(defn.NumReplica)
 		}
 
 		return numReplica, nil
