@@ -2488,14 +2488,9 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					mergeTs = initFlushTs
 				}
 
-				if initFlushTs.Equal(mergeTs) {
+				if initFlushTs.Equal2(mergeTs, false) {
 					forceSnapshot = false
 				}
-
-				//change state of all indexes of this keyspaceId to ACTIVE
-				//these indexes get removed later as part of merge message
-				//from indexer
-				tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_ACTIVE)
 
 				sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
@@ -2504,19 +2499,41 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					"mergeTs: %v", idx.InstId,
 					streamId, keyspaceId, sessionId, forceSnapshot, initTsSeq, mergeTs)
 
-				tk.supvRespch <- &MsgTKMergeStream{
-					mType:      TK_MERGE_STREAM,
-					streamId:   streamId,
-					keyspaceId: keyspaceId,
-					mergeTs:    mergeTs,
-					sessionId:  sessionId,
-					forceSnap:  forceSnapshot}
+				if forceSnapshot == false {
+					//change state of all indexes of this keyspaceId to ACTIVE
+					//these indexes get removed later as part of merge message
+					//from indexer
+					tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_ACTIVE)
 
-				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
-					"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
-				tk.stopTimer(streamId, keyspaceId)
-				tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
-				return true
+					tk.supvRespch <- &MsgTKMergeStream{
+						mType:      TK_MERGE_STREAM,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						mergeTs:    mergeTs,
+						sessionId:  sessionId}
+
+					logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
+						"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
+					tk.stopTimer(streamId, keyspaceId)
+					tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
+					return true
+				} else {
+					// Init stream is ready to be merged but initFlushTs lags maintFlushTs
+					// Force a snapshot by asking indexer to generate a snapshot with
+					// FORCE_COMMIT and timestamp as MAINT_STREAM flushTs. Once the snapshot
+					// is generated, timekeeper will again hit this method and will execute the
+					// "if" condition above with initFlushTs being the same as maintFlushTs
+					ts := mergeTs.Copy()
+					ts.SnapType = common.FORCE_COMMIT
+					tsElem := &TsListElem{ts: ts}
+
+					logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
+						"KeyspaceId %v Forcing commiting snapshot with mergeTs", streamId, keyspaceId)
+
+					tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
+
+					return false // Index is not ready to merge
+				}
 
 			} else {
 				//check for one index is sufficient as all indexes in a keyspaceId
