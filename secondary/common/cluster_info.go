@@ -698,6 +698,11 @@ func (c *ClusterInfoCache) buildEncryptPortMapping() {
 
 func (c *ClusterInfoCache) FetchServerGroups() error {
 
+	// ServerGroupsUri is empty in CE
+	if c.pool.ServerGroupsUri == "" {
+		return nil
+	}
+
 	groups, err := c.pool.GetServerGroups()
 	if err != nil {
 		return err
