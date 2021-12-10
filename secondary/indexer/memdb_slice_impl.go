@@ -963,6 +963,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			os.RemoveAll(tmpdir)
 			mdb.confLock.RLock()
 			maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
+			mdb.confLock.RUnlock()
 			total := atomic.LoadInt64(&totalMemDBItems)
 			indexCount := mdb.GetCommittedCount()
 			// Compute number of workers to be used for taking backup
