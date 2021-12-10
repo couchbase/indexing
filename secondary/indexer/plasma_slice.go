@@ -330,6 +330,7 @@ func (slice *plasmaSlice) initStores() error {
 		cfg.AutoTuneDiskFullTimeLimit = slice.sysconf["plasma.AutoTuneDiskFullTimeLimit"].Int()
 		cfg.AutoTuneAvailDiskLimit = slice.sysconf["plasma.AutoTuneAvailDiskLimit"].Float64()
 		cfg.Compression = slice.sysconf["plasma.compression"].String()
+		cfg.InMemCompression = slice.sysconf["plasma.inMemoryCompression"].String()
 		cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 		cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
 		cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
