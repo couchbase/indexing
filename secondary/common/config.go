@@ -1508,9 +1508,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableDecompressDuringSwapin": ConfigValue{
-		true,
+		false,
 		"Enable decompression of compressed items during swapin",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1518,6 +1518,13 @@ var SystemConfig = Config{
 		0,
 		"Percent of compressible items to compress before eviction",
 		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.enableCompressAfterSwapin": ConfigValue{
+		true,
+		"Compress items that are read from disk into memory",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1655,9 +1662,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableDecompressDuringSwapin": ConfigValue{
-		true,
+		false,
 		"Enable decompression of compressed items during swapin",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1665,6 +1672,13 @@ var SystemConfig = Config{
 		0,
 		"Percent of compressible items to compress before eviction",
 		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableCompressAfterSwapin": ConfigValue{
+		true,
+		"Compress items that are read from disk into memory",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
