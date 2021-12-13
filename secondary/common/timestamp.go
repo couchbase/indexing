@@ -401,7 +401,7 @@ func (ts *TsVbuuid) Equal2(other *TsVbuuid, compareSnapshot bool) bool {
 }
 
 // Equal returns whether `ts` is equal or greater than `other`
-func (ts *TsVbuuid) EqualOrGreater(other *TsVbuuid) bool {
+func (ts *TsVbuuid) EqualOrGreater(other *TsVbuuid, compareVbuuidForZeroSeqnos bool) bool {
 	if ts != nil && other == nil ||
 		ts == nil && other != nil {
 		return false
@@ -422,8 +422,10 @@ func (ts *TsVbuuid) EqualOrGreater(other *TsVbuuid) bool {
 	}
 
 	for i, vbuuid := range ts.Vbuuids {
-		if other.Vbuuids[i] != vbuuid {
-			return false
+		if other.Seqnos[i] != 0 || compareVbuuidForZeroSeqnos {
+			if other.Vbuuids[i] != vbuuid {
+				return false
+			}
 		}
 	}
 

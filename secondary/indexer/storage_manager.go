@@ -1671,7 +1671,7 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 			// there is no risk of data loss.
 			//
 
-			if !source.Timestamp().EqualOrGreater(target.Timestamp()) {
+			if !source.Timestamp().EqualOrGreater(target.Timestamp(), false) {
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
