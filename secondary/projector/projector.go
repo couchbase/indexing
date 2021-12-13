@@ -55,8 +55,7 @@ type Projector struct {
 	cpuProfFd   *os.File
 	logPrefix   string
 
-	cinfoClient *c.ClusterInfoClient
-	ciclClient  *c.ClusterInfoCacheLiteClient
+	cinfoProvider     common.ClusterInfoProvider
 
 	certFile             string
 	keyFile              string
@@ -105,24 +104,15 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	}
 
 	// Start cluster info client
-	if config["projector.settings.use_cinfo_lite"].Bool() {
-		cicl, err := c.NewClusterInfoCacheLiteClient(p.clusterAddr, "default", config)
-		if err != nil {
-			logging.Infof("Error getting a NewClusterInfoCacheLiteClient : %v", err)
-			c.CrashOnError(err)
-		}
-		cicl.SetLogPrefix("NewProjector")
-		cicl.SetRetryInterval(4)
-		p.ciclClient = cicl
-	} else {
-		cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
+	useClusterInfoLite := config["projector.settings.use_cinfo_lite"].Bool()
+	cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default", config)
+	if err != nil {
+		logging.Infof("Error getting a NewClusterInfoProvider : %v, useClusterInfoLite: %v", err, useClusterInfoLite)
 		c.CrashOnError(err)
-		p.cinfoClient = cic
-		p.cinfoClient.SetUserAgent("projector")
-
-		cinfo := cic.GetClusterInfoCache()
-		cinfo.SetRetryInterval(4)
 	}
+	cip.SetUserAgent("NewProjector")
+	cip.SetRetryInterval(4)
+	p.cinfoProvider = cip
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval) // Initialize memory manager
@@ -183,36 +173,6 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		p.ResetConfig(newConfig)
 		p.ResetFeedConfig()
 
-		useCInfoLite := newConfig["projector.settings.use_cinfo_lite"].Bool()
-		if oldConfig["projector.settings.use_cinfo_lite"].Bool() != useCInfoLite {
-			if useCInfoLite {
-				// close cinfo
-				p.cinfoClient.Close()
-				p.cinfoClient = nil
-
-				// start cicl
-				cicl, err := c.NewClusterInfoCacheLiteClient(p.clusterAddr, "default", config)
-				if err != nil {
-					logging.Infof("Error getting a NewClusterInfoCacheLiteClient : %v", err)
-					c.CrashOnError(err)
-				}
-				cicl.SetLogPrefix("NewProjector")
-				cicl.SetRetryInterval(4)
-				p.ciclClient = cicl
-			} else {
-				// close cicl
-				p.ciclClient.Close()
-				p.ciclClient = nil
-
-				// start cinfo
-				cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
-				c.CrashOnError(err)
-				p.cinfoClient = cic
-				p.cinfoClient.SetUserAgent("projector")
-				cinfo := cic.GetClusterInfoCache()
-				cinfo.SetRetryInterval(4)
-			}
-		}
 
 		diffOld, diffNew := oldConfig.SectionConfig("projector.",
 			false).Diff(newConfig.SectionConfig("projector.", false))
@@ -1140,27 +1100,21 @@ func (p *Projector) getNodeUUID() (string, error) {
 	prefix := p.logPrefix
 	fn := func(r int, err error) error {
 
-		if p.config["projector.settings.use_cinfo_lite"].Bool() {
-			nodeUUID, err = p.ciclClient.GetLocalNodeUUID()
-			if err != nil {
-				fmsg := "%v ciclClient.GetLocalNodeUUID failed with err: %v"
-				logging.Errorf(fmsg, prefix, err)
-				return fmt.Errorf(fmsg, prefix, err)
-			}
-		} else {
-			cinfo := p.cinfoClient.GetClusterInfoCache()
-			cinfo.RLock()
-			nodeUUID = cinfo.GetLocalNodeUUID()
-			cinfo.RUnlock()
+		ninfo, err := p.cinfoProvider.GetNodesInfoProvider()
+		if err != nil {
+			fmsg := "%v cinfoProvider.GetNodesInfoProvider failed with err: %v"
+			logging.Errorf(fmsg, prefix, err)
+			return fmt.Errorf(fmsg, prefix, err)
 		}
+
+		ninfo.RLock()
+		nodeUUID = ninfo.GetLocalNodeUUID()
+		ninfo.RUnlock()
 
 		if nodeUUID == "" {
 			// Force fetch cluster info cache so that
 			// next attempt might succeed
-			if !p.config["projector.settings.use_cinfo_lite"].Bool() {
-				cinfo := p.cinfoClient.GetClusterInfoCache()
-				cinfo.FetchWithLock()
-			}
+			p.cinfoProvider.FetchWithLock()
 
 			fmsg := "%v cinfo.GetLocalNodeUUID(), nodeUUID empty\n"
 			logging.Errorf(fmsg, prefix)
