@@ -919,6 +919,15 @@ func (c *ClusterInfoCache) IsEphemeral(bucket string) (bool, error) {
 	return strings.EqualFold(b.Type, "ephemeral"), nil
 }
 
+func (c *ClusterInfoCache) IsMagmaStorage(bucket string) (bool, error) {
+	b, err := c.pool.GetBucket(bucket)
+	if err != nil {
+		return false, err
+	}
+	defer b.Close()
+	return strings.EqualFold(b.StorageBackend, "magma"), nil
+}
+
 func (c *ClusterInfoCache) GetCurrentNode() NodeId {
 	for i, node := range c.nodes {
 		if node.ThisNode {
@@ -1562,6 +1571,27 @@ func (cic *ClusterInfoClient) IsEphemeral(bucket string) (bool, error) {
 		}
 	}
 	return ephemeral, nil
+}
+
+func (cic *ClusterInfoClient) IsMagmaStorage(bucket string) (bool, error) {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	isMagma, err := cinfo.IsMagmaStorage(bucket)
+	if err != nil {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchWithLock()
+		cinfo.RLock()
+		if err != nil {
+			return false, err
+		} else {
+			return cinfo.IsMagmaStorage(bucket)
+		}
+	}
+	return isMagma, nil
 }
 
 func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {

@@ -4588,9 +4588,20 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	isMagmaStorage, err := idx.clusterInfoClient.IsMagmaStorage(bucket)
+	if err != nil {
+		logging.Errorf("Indexer::sendStreamUpdateForBuildIndex %v %v. Unable to check bucket storage "+
+			"backend err %v", buildStream, keyspaceId, err)
+	} else if isMagmaStorage {
+		logging.Infof("Indexer::sendStreamUpdateForBuildIndex %v %v. OSO not supported for "+
+			"Magma bucket.", buildStream, keyspaceId)
+	}
+
 	if enableOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
-		buildStream == common.INIT_STREAM {
+		buildStream == common.INIT_STREAM &&
+		!isMagmaStorage {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -6367,11 +6378,20 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		allowOSO = true
 	}
 
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	isMagmaStorage, err := idx.clusterInfoClient.IsMagmaStorage(bucket)
+	if err != nil {
+		logging.Errorf("Indexer::startKeyspaceIdStream %v %v. Unable to check bucket storage backend err %v", streamId, keyspaceId, err)
+	} else if isMagmaStorage {
+		logging.Infof("Indexer::startKeyspaceIdStream %v %v. OSO not supported for Magma bucket.", streamId, keyspaceId)
+	}
+
 	enableOSO := idx.config["build.enableOSO"].Bool()
 	if enableOSO &&
 		allowOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
-		streamId == common.INIT_STREAM {
+		streamId == common.INIT_STREAM &&
+		!isMagmaStorage {
 		enableOSO = true
 	} else {
 		enableOSO = false
