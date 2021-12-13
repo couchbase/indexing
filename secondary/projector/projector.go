@@ -112,7 +112,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 			c.CrashOnError(err)
 		}
 		cicl.SetLogPrefix("NewProjector")
-		cicl.SetRetryIntervalInMgr(4)
+		cicl.SetRetryInterval(4)
 		p.ciclClient = cicl
 	} else {
 		cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
@@ -121,7 +121,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		p.cinfoClient.SetUserAgent("projector")
 
 		cinfo := cic.GetClusterInfoCache()
-		cinfo.SetRetryInterval(4 * time.Second)
+		cinfo.SetRetryInterval(4)
 	}
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
@@ -197,7 +197,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 					c.CrashOnError(err)
 				}
 				cicl.SetLogPrefix("NewProjector")
-				cicl.SetRetryIntervalInMgr(4)
+				cicl.SetRetryInterval(4)
 				p.ciclClient = cicl
 			} else {
 				// close cicl
@@ -210,7 +210,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 				p.cinfoClient = cic
 				p.cinfoClient.SetUserAgent("projector")
 				cinfo := cic.GetClusterInfoCache()
-				cinfo.SetRetryInterval(4 * time.Second)
+				cinfo.SetRetryInterval(4)
 			}
 		}
 

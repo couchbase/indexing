@@ -45,7 +45,7 @@ var ErrorThisNodeNotFound = errors.New("error thisNode not found")
 // Nodes Info
 //
 
-type nodesInfo struct {
+type NodesInfo struct {
 	version          uint32
 	minorVersion     uint32
 	nodes            []couchbase.Node
@@ -61,9 +61,11 @@ type nodesInfo struct {
 	valid         bool
 	errList       []error
 	lastUpdatedTs time.Time
+
+	StubRWMutex // Stub to make NodesInfo replaceable with ClusterInfoCache
 }
 
-func newNodesInfo(pool *couchbase.Pool) *nodesInfo {
+func newNodesInfo(pool *couchbase.Pool) *NodesInfo {
 	var nodes []couchbase.Node
 	var failedNodes []couchbase.Node
 	var addNodes []couchbase.Node
@@ -96,7 +98,7 @@ func newNodesInfo(pool *couchbase.Pool) *nodesInfo {
 		version = 0
 	}
 
-	newNInfo := &nodesInfo{
+	newNInfo := &NodesInfo{
 		nodes:        nodes,
 		addNodes:     addNodes,
 		failedNodes:  failedNodes,
@@ -126,14 +128,14 @@ func newNodesInfo(pool *couchbase.Pool) *nodesInfo {
 	return newNInfo
 }
 
-func newNodesInfoWithError(err error) *nodesInfo {
-	ni := &nodesInfo{}
+func newNodesInfoWithError(err error) *NodesInfo {
+	ni := &NodesInfo{}
 	ni.valid = false
 	ni.errList = append(ni.errList, err)
 	return ni
 }
 
-func (ni *nodesInfo) setNodesExt(nodesExt []couchbase.NodeServices) {
+func (ni *NodesInfo) setNodesExt(nodesExt []couchbase.NodeServices) {
 	if nodesExt == nil {
 		return
 	}
@@ -151,11 +153,11 @@ func (ni *nodesInfo) setNodesExt(nodesExt []couchbase.NodeServices) {
 	ni.encryptedPortMap = buildEncryptPortMapping(ni.nodesExt)
 }
 
-func (ni *nodesInfo) setClusterURL(u string) {
+func (ni *NodesInfo) setClusterURL(u string) {
 	ni.clusterURL = u
 }
 
-func (ni *nodesInfo) validateNodesAndSvs(connHost string) {
+func (ni *NodesInfo) validateNodesAndSvs(connHost string) {
 	found := false
 	for _, node := range ni.nodes {
 		if node.ThisNode {
@@ -241,6 +243,8 @@ type collectionInfo struct {
 	valid         bool
 	errList       []error
 	lastUpdatedTs time.Time
+
+	StubRWMutex // Stub to make CollectionInfo replaceable with ClusterInfoCache
 }
 
 func newCollectionInfo(bucketName string, manifest *collections.CollectionManifest) *collectionInfo {
@@ -271,6 +275,8 @@ type bucketInfo struct {
 	valid         bool
 	errList       []error
 	lastUpdatedTs time.Time
+
+	StubRWMutex // Stub to make BucketInfo replaceable with ClusterInfoCache
 }
 
 func newBucketInfo(tb *couchbase.Bucket, connHost string) *bucketInfo {
@@ -320,7 +326,7 @@ func newClusterInfoCacheLite(logPrefix string) *clusterInfoCacheLite {
 	return c
 }
 
-func (cicl *clusterInfoCacheLite) nodesInfo() *nodesInfo {
+func (cicl *clusterInfoCacheLite) nodesInfo() *NodesInfo {
 	if ptr := cicl.nih.Get(); ptr != nil {
 		return ptr
 	} else {
@@ -621,7 +627,7 @@ func (cicm *clusterInfoCacheLiteManager) setNotifierRetrySleep(seconds uint32) {
 	atomic.StoreUint32(&cicm.notifierRetrySleep, seconds)
 }
 
-func (cicm *clusterInfoCacheLiteManager) nodesInfo() (*nodesInfo, error) {
+func (cicm *clusterInfoCacheLiteManager) nodesInfo() (*NodesInfo, error) {
 	ni := cicm.cicl.nodesInfo()
 	if !ni.valid {
 		return ni, ni.errList[0]
@@ -631,7 +637,7 @@ func (cicm *clusterInfoCacheLiteManager) nodesInfo() (*nodesInfo, error) {
 }
 
 func (cicm *clusterInfoCacheLiteManager) nodesInfoSync(eventTimeoutSeconds uint32) (
-	*nodesInfo, error) {
+	*NodesInfo, error) {
 	ni := cicm.cicl.nodesInfo()
 	if !ni.valid {
 		id := fmt.Sprintf("%d", atomic.AddUint64(&cicm.eventCtr, 1))
@@ -659,7 +665,7 @@ func (cicm *clusterInfoCacheLiteManager) nodesInfoSync(eventTimeoutSeconds uint3
 		// If command channel goes empty and it its still invalid
 		// periodic check will restart the processing or after timeout
 		// user can trigger the command again
-		ni = msg.(*nodesInfo)
+		ni = msg.(*NodesInfo)
 	}
 	return ni, nil
 }
@@ -806,7 +812,7 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 		logging.Tracef("handlePoolChangeNotification got notification %v", notif)
 		p := (notif.Msg).(*couchbase.Pool)
 
-		var ni *nodesInfo
+		var ni *NodesInfo
 		fetch := false
 
 		if notif.Type == ForceUpdateNotification ||
@@ -1126,7 +1132,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges() {
 	}
 }
 
-func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo() *nodesInfo {
+func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo() *NodesInfo {
 	var retryCount uint32 = 0
 	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
 	r := atomic.LoadUint32(&cicm.retryInterval)
@@ -1311,7 +1317,7 @@ func (c *ClusterInfoCacheLiteClient) Close() {
 	defer singletonCICLContainer.Unlock()
 
 	singletonCICLContainer.refCount--
-	c.ciclMgr = nil
+	//c.ciclMgr = nil
 	if singletonCICLContainer.refCount == 0 {
 		singletonCICLContainer.ciclMgr.close()
 		singletonCICLContainer.ciclMgr = nil
@@ -1320,9 +1326,40 @@ func (c *ClusterInfoCacheLiteClient) Close() {
 	logging.Infof("ClusterInfoCacheLiteClient:Close[%v] closed clusterInfoCacheLiteClient", c.logPrefix)
 }
 
+func (cicl *ClusterInfoCacheLiteClient) GetNodesInfoProvider() (NodesInfoProvider,
+	error) {
+	ni, err := cicl.GetNodesInfo()
+	if err != nil {
+		return nil, err
+	}
+	return NodesInfoProvider(ni), err
+}
+
+func (cicl *ClusterInfoCacheLiteClient) GetCollectionInfoProvider(bucketName string) (
+	CollectionInfoProvider, error) {
+	ci, err := cicl.GetCollectionInfo(bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return CollectionInfoProvider(ci), nil
+}
+
+func (cicl *ClusterInfoCacheLiteClient) GetBucketInfoProvider(bucketName string) (
+	BucketInfoProvider, error) {
+	bi, err := cicl.GetBucketInfo(bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return BucketInfoProvider(bi), nil
+}
+
 func (c *ClusterInfoCacheLiteClient) SetLogPrefix(logPrefix string) {
 	c.logPrefix = logPrefix
 	logging.Infof("ClusterInfoCacheLiteClient setting logPrefix to %v", logPrefix)
+}
+
+func (c *ClusterInfoCacheLiteClient) SetUserAgent(logPrefix string) {
+	c.SetLogPrefix(logPrefix)
 }
 
 func (c *ClusterInfoCacheLiteClient) SetEventWaitTimeout(seconds uint32) {
@@ -1341,7 +1378,7 @@ func (c *ClusterInfoCacheLiteClient) SetMaxRetriesInMgr(retries uint32) {
 	c.ciclMgr.setMaxRetries(retries)
 }
 
-func (c *ClusterInfoCacheLiteClient) SetRetryIntervalInMgr(seconds uint32) {
+func (c *ClusterInfoCacheLiteClient) SetRetryInterval(seconds uint32) {
 	singletonCICLContainer.Lock()
 	defer singletonCICLContainer.Unlock()
 	c.ciclMgr.setRetryInterval(seconds)
@@ -1353,7 +1390,7 @@ func (c *ClusterInfoCacheLiteClient) SetNotifierRetrySleepInMgr(seconds uint32) 
 	c.ciclMgr.setNotifierRetrySleep(seconds)
 }
 
-func (c *ClusterInfoCacheLiteClient) GetNodesInfo() (*nodesInfo, error) {
+func (c *ClusterInfoCacheLiteClient) GetNodesInfo() (*NodesInfo, error) {
 	ni, _ := c.ciclMgr.nodesInfo()
 	if ni.valid {
 		return ni, nil
@@ -1363,11 +1400,11 @@ func (c *ClusterInfoCacheLiteClient) GetNodesInfo() (*nodesInfo, error) {
 	return c.ciclMgr.nodesInfoSync(c.eventWaitTimeoutSeconds)
 }
 
-func (ni *nodesInfo) GetClusterVersion() uint64 {
+func (ni *NodesInfo) GetClusterVersion() uint64 {
 	return GetVersion(ni.version, ni.minorVersion)
 }
 
-func (ni *nodesInfo) GetNodesByServiceType(srvc string) (nids []NodeId) {
+func (ni *NodesInfo) GetNodesByServiceType(srvc string) (nids []NodeId) {
 
 	for i, svs := range ni.nodesExt {
 		if _, ok := svs.Services[srvc]; ok {
@@ -1378,7 +1415,7 @@ func (ni *nodesInfo) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	return
 }
 
-func (ni *nodesInfo) GetCurrentNode() NodeId {
+func (ni *NodesInfo) GetCurrentNode() NodeId {
 
 	for i, node := range ni.nodes {
 		if node.ThisNode {
@@ -1389,7 +1426,7 @@ func (ni *nodesInfo) GetCurrentNode() NodeId {
 	return NodeId(-1)
 }
 
-func (ni *nodesInfo) GetServiceAddress(nid NodeId, srvc string,
+func (ni *NodesInfo) GetServiceAddress(nid NodeId, srvc string,
 	useEncryptedPortMap bool) (addr string, err error) {
 
 	if int(nid) >= len(ni.nodesExt) {
@@ -1400,12 +1437,12 @@ func (ni *nodesInfo) GetServiceAddress(nid NodeId, srvc string,
 	return ni.getServiceAddress(nid, srvc, useEncryptedPortMap)
 }
 
-func (ni *nodesInfo) GetNodeUUID(nid NodeId) string {
+func (ni *NodesInfo) GetNodeUUID(nid NodeId) string {
 
 	return ni.nodes[nid].NodeUUID
 }
 
-func (ni *nodesInfo) GetNodeIdByUUID(uuid string) (NodeId, bool) {
+func (ni *NodesInfo) GetNodeIdByUUID(uuid string) (NodeId, bool) {
 	for nid, node := range ni.nodes {
 		if node.NodeUUID == uuid {
 			return NodeId(nid), true
@@ -1415,18 +1452,18 @@ func (ni *nodesInfo) GetNodeIdByUUID(uuid string) (NodeId, bool) {
 	return NodeId(-1), false
 }
 
-func (ni *nodesInfo) GetServerGroup(nid NodeId) string {
+func (ni *NodesInfo) GetServerGroup(nid NodeId) string {
 	return ni.node2group[nid]
 }
 
-func (ni *nodesInfo) GetServerVersion(nid NodeId) (int, error) {
+func (ni *NodesInfo) GetServerVersion(nid NodeId) (int, error) {
 	if int(nid) >= len(ni.nodes) {
 		return 0, ErrInvalidNodeId
 	}
 	return getServerVersionFromVersionString(ni.nodes[nid].Version)
 }
 
-func (ni *nodesInfo) GetLocalNodeUUID() string {
+func (ni *NodesInfo) GetLocalNodeUUID() string {
 	for _, node := range ni.nodes {
 		if node.ThisNode {
 			return node.NodeUUID
@@ -1435,7 +1472,7 @@ func (ni *nodesInfo) GetLocalNodeUUID() string {
 	return ""
 }
 
-func (ni *nodesInfo) GetLocalHostname() (string, error) {
+func (ni *NodesInfo) GetLocalHostname() (string, error) {
 
 	cUrl, err := url.Parse(ni.clusterURL)
 	if err != nil {
@@ -1462,7 +1499,7 @@ func (ni *nodesInfo) GetLocalHostname() (string, error) {
 
 }
 
-func (ni *nodesInfo) GetLocalHostAddress() (string, error) {
+func (ni *NodesInfo) GetLocalHostAddress() (string, error) {
 
 	cUrl, err := url.Parse(ni.clusterURL)
 	if err != nil {
@@ -1480,7 +1517,7 @@ func (ni *nodesInfo) GetLocalHostAddress() (string, error) {
 
 }
 
-func (ni *nodesInfo) GetLocalServerGroup() (string, error) {
+func (ni *NodesInfo) GetLocalServerGroup() (string, error) {
 	node := ni.GetCurrentNode()
 	if node == NodeId(-1) {
 		return "", ErrorThisNodeNotFound
@@ -1489,7 +1526,7 @@ func (ni *nodesInfo) GetLocalServerGroup() (string, error) {
 	return ni.GetServerGroup(node), nil
 }
 
-func (ni *nodesInfo) GetLocalServicePort(srvc string, useEncryptedPortMap bool) (string, error) {
+func (ni *NodesInfo) GetLocalServicePort(srvc string, useEncryptedPortMap bool) (string, error) {
 	addr, err := ni.GetLocalServiceAddress(srvc, useEncryptedPortMap)
 	if err != nil {
 		return addr, err
@@ -1503,7 +1540,7 @@ func (ni *nodesInfo) GetLocalServicePort(srvc string, useEncryptedPortMap bool) 
 	return net.JoinHostPort("", p), nil
 }
 
-func (ni *nodesInfo) GetLocalServiceHost(srvc string, useEncryptedPortMap bool) (string, error) {
+func (ni *NodesInfo) GetLocalServiceHost(srvc string, useEncryptedPortMap bool) (string, error) {
 
 	addr, err := ni.GetLocalServiceAddress(srvc, useEncryptedPortMap)
 	if err != nil {
@@ -1518,7 +1555,7 @@ func (ni *nodesInfo) GetLocalServiceHost(srvc string, useEncryptedPortMap bool) 
 	return h, nil
 }
 
-func (ni *nodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
+func (ni *NodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
 	node := ni.GetCurrentNode()
 	if node == NodeId(-1) {
 		return "", ErrorThisNodeNotFound
@@ -1532,7 +1569,7 @@ func (ni *nodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap boo
 	return srvcAddr, nil
 }
 
-func (ni *nodesInfo) IsNodeHealthy(nid NodeId) (bool, error) {
+func (ni *NodesInfo) IsNodeHealthy(nid NodeId) (bool, error) {
 	if int(nid) >= len(ni.nodes) {
 		return false, ErrInvalidNodeId
 	}
@@ -1540,7 +1577,7 @@ func (ni *nodesInfo) IsNodeHealthy(nid NodeId) (bool, error) {
 	return ni.nodes[nid].Status == "healthy", nil
 }
 
-func (ni *nodesInfo) GetNodeStatus(nid NodeId) (string, error) {
+func (ni *NodesInfo) GetNodeStatus(nid NodeId) (string, error) {
 	if int(nid) >= len(ni.nodes) {
 		return "", ErrInvalidNodeId
 	}
@@ -1548,15 +1585,15 @@ func (ni *nodesInfo) GetNodeStatus(nid NodeId) (string, error) {
 	return ni.nodes[nid].Status, nil
 }
 
-func (ni *nodesInfo) Nodes() []couchbase.Node {
+func (ni *NodesInfo) Nodes() []couchbase.Node {
 	return ni.nodes
 }
 
-func (ni *nodesInfo) EncryptPortMapping() map[string]string {
+func (ni *NodesInfo) EncryptPortMapping() map[string]string {
 	return ni.encryptedPortMap
 }
 
-func (ni *nodesInfo) getServiceAddress(nid NodeId, srvc string,
+func (ni *NodesInfo) getServiceAddress(nid NodeId, srvc string,
 	useEncryptedPortMap bool) (addr string, err error) {
 
 	node := ni.nodesExt[nid]
@@ -1751,12 +1788,8 @@ func (c *ClusterInfoCacheLiteClient) GetBucketInfo(bucketName string) (
 	return c.ciclMgr.bucketInfoSync(bucketName)
 }
 
-func (c *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
+func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
-	bi, err := c.GetBucketInfo(bucketName)
-	if err != nil {
-		return nil, err
-	}
 
 	b := bi.bucket
 
@@ -1790,6 +1823,16 @@ func (c *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
 	return
 }
 
+func (c *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
+	vbs []uint16, err error) {
+	bi, err := c.GetBucketInfo(bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return bi.GetLocalVBuckets(bucketName)
+}
+
 //
 // API using Collection Info
 //
@@ -1805,13 +1848,29 @@ func (c *ClusterInfoCacheLiteClient) GetCollectionInfo(bucketName string) (
 	return c.ciclMgr.collectionInfoSync(bucketName, c.eventWaitTimeoutSeconds)
 }
 
+func (ci *collectionInfo) CollectionID(bucket, scope, collection string) string {
+	return ci.manifest.GetCollectionID(scope, collection)
+}
+
+func (ci *collectionInfo) ScopeID(bucket, scope string) string {
+	return ci.manifest.GetScopeID(scope)
+}
+
+func (ci *collectionInfo) ScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	return ci.manifest.GetScopeAndCollectionID(scope, collection)
+}
+
+func (ci *collectionInfo) GetIndexScopeLimit(bucket, scope string) (uint32, error) {
+	return ci.manifest.GetIndexScopeLimit(scope), nil
+}
+
 func (c *ClusterInfoCacheLiteClient) GetCollectionID(bucket, scope, collection string) string {
 	ci, err := c.GetCollectionInfo(bucket)
 	if err != nil {
 		return collections.COLLECTION_ID_NIL
 	}
 
-	return ci.manifest.GetCollectionID(scope, collection)
+	return ci.CollectionID(bucket, scope, collection)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetScopeID(bucket, scope string) string {
@@ -1820,7 +1879,7 @@ func (c *ClusterInfoCacheLiteClient) GetScopeID(bucket, scope string) string {
 		return collections.SCOPE_ID_NIL
 	}
 
-	return ci.manifest.GetScopeID(scope)
+	return ci.ScopeID(bucket, scope)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetScopeAndCollectionID(bucket, scope, collection string) (string, string) {
@@ -1829,7 +1888,7 @@ func (c *ClusterInfoCacheLiteClient) GetScopeAndCollectionID(bucket, scope, coll
 		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL
 	}
 
-	return ci.manifest.GetScopeAndCollectionID(scope, collection)
+	return ci.ScopeAndCollectionID(bucket, scope, collection)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (uint32, error) {
@@ -1838,5 +1897,30 @@ func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (u
 		return 0, err
 	}
 
-	return ci.manifest.GetIndexScopeLimit(scope), nil
+	return ci.GetIndexScopeLimit(bucket, scope)
 }
+
+// TODO: Move this to bucketInfo
+func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucket string) (uuid string,
+	err error) {
+	uuid, err = GetBucketUUID(cicl.clusterURL, bucket)
+	if err != nil {
+		uuid = BUCKET_UUID_NIL
+	}
+	return uuid, err
+}
+
+// Stub function to implement ClusterInfoProvider interface
+func (cicl *ClusterInfoCacheLiteClient) FetchWithLock() error {
+	return nil
+}
+
+//
+// Stub functions to make nodesInfo replaceable with clusterInfoCache
+//
+
+func (ni *NodesInfo) SetUserAgent(userAgent string)     {}
+func (ni *NodesInfo) FetchNodesAndSvsInfo() (err error) { return nil }
+
+func (ni *bucketInfo) FetchBucketInfo(bucketName string) error { return nil }
+func (ni *bucketInfo) FetchWithLock() error                    { return nil }

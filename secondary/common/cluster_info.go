@@ -176,8 +176,8 @@ func (c *ClusterInfoCache) SetMaxRetries(r int) {
 }
 
 // Seconds
-func (c *ClusterInfoCache) SetRetryInterval(i time.Duration) {
-	c.retryInterval = i
+func (c *ClusterInfoCache) SetRetryInterval(seconds uint32) {
+	c.retryInterval = time.Duration(seconds) * time.Second
 }
 
 func (c *ClusterInfoCache) SetRetryBackoffFactor(f int) {
@@ -900,13 +900,31 @@ func (c *ClusterInfoCache) GetCollectionID(bucket, scope, collection string) str
 	return c.pool.GetCollectionID(bucket, scope, collection)
 }
 
+func (c *ClusterInfoCache) CollectionID(bucket, scope, collection string) string {
+	c.RLock()
+	defer c.RUnlock()
+	return c.pool.GetCollectionID(bucket, scope, collection)
+}
+
 // See the comment for clusterInfoCache.GetCollectionID
 func (c *ClusterInfoCache) GetScopeID(bucket, scope string) string {
 	return c.pool.GetScopeID(bucket, scope)
 }
 
+func (c *ClusterInfoCache) ScopeID(bucket, scope string) string {
+	c.RLock()
+	defer c.RUnlock()
+	return c.pool.GetScopeID(bucket, scope)
+}
+
 // See the comment for clusterInfoCache.GetCollectionID
 func (c *ClusterInfoCache) GetScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	return c.pool.GetScopeAndCollectionID(bucket, scope, collection)
+}
+
+func (c *ClusterInfoCache) ScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	c.RLock()
+	defer c.RUnlock()
 	return c.pool.GetScopeAndCollectionID(bucket, scope, collection)
 }
 
@@ -991,6 +1009,33 @@ func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string, useEncrypt
 	}
 
 	addr = net.JoinHostPort(node.Hostname, portStr)
+	return
+}
+
+func (c *ClusterInfoCache) GetLocalVBuckets(bucket string) (vbs []uint16, err error) {
+	nid := c.GetCurrentNode()
+
+	b, berr := c.pool.GetBucket(bucket)
+	if berr != nil {
+		err = berr
+		return
+	}
+	defer b.Close()
+
+	idx, ok := c.findVBServerIndex(b, nid)
+	if !ok {
+		err = errors.New(ErrNodeNotBucketMember.Error() + fmt.Sprintf(": %v", c.nodes[nid].Hostname))
+		return
+	}
+
+	vbmap := b.VBServerMap()
+
+	for vb, idxs := range vbmap.VBucketMap {
+		if idxs[0] == idx {
+			vbs = append(vbs, uint16(vb))
+		}
+	}
+
 	return
 }
 
@@ -1322,6 +1367,20 @@ func (c *ClusterInfoClient) GetClusterInfoCache() *ClusterInfoCache {
 	return c.cinfo
 }
 
+func (c *ClusterInfoClient) GetNodesInfoProvider() (NodesInfoProvider, error) {
+	return NodesInfoProvider(c.cinfo), nil
+}
+
+func (c *ClusterInfoClient) GetCollectionInfoProvider(bucketName string) (
+	CollectionInfoProvider, error) {
+	return CollectionInfoProvider(c.cinfo), nil
+}
+
+func (c *ClusterInfoClient) GetBucketInfoProvider(buckeName string) (
+	BucketInfoProvider, error) {
+	return BucketInfoProvider(c.cinfo), nil
+}
+
 func (c *ClusterInfoClient) WatchRebalanceChanges() {
 	c.fetchDataOnHashChangeOnly = false
 }
@@ -1639,6 +1698,11 @@ func (cic *ClusterInfoClient) ClusterVersion() uint64 {
 
 func (c *ClusterInfoClient) FetchWithLock() error {
 	return c.cinfo.FetchWithLock()
+}
+
+// Seconds
+func (c *ClusterInfoClient) SetRetryInterval(seconds uint32) {
+	c.cinfo.SetRetryInterval(seconds)
 }
 
 func (c *ClusterInfoClient) Close() {
