@@ -41,6 +41,7 @@ type LifecycleMgr struct {
 	repo *MetadataRepo
 
 	cinfoProvider     common.ClusterInfoProvider
+	cinfoProviderLock sync.RWMutex
 
 	notifier   MetadataNotifier // object to call Indexer to perform index DDL
 	clusterURL string
@@ -70,6 +71,8 @@ type LifecycleMgr struct {
 	clientStatsMutex    sync.Mutex          // for lastSendClientStats
 	acceptedNames       map[string]*indexNameRequest
 	accIgnoredIds       map[common.IndexDefnId]bool
+
+	configHolder common.ConfigHolder
 }
 
 type requestHolder struct {
@@ -194,8 +197,12 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 		accIgnoredIds:              make(map[common.IndexDefnId]bool),
 	}
 
+	mgr.configHolder.Store(config)
+
 	useCinfolite := config["settings.use_cinfo_lite"].Bool()
 
+	mgr.cinfoProviderLock.Lock()
+	defer mgr.cinfoProviderLock.Unlock()
 	mgr.cinfoProvider, err = common.NewClusterInfoProvider(useCinfolite,
 		clusterURL, common.DEFAULT_POOL, config)
 	if err != nil {
@@ -3004,6 +3011,22 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) (err error) {
 		atomic.StoreUint64(&m.clientStatsRefreshInterval, uint64(val.Float64()))
 	}
 
+	useCInfoLite := (*config)["settings.use_cinfo_lite"].Bool()
+	oldConfig := m.configHolder.Load()
+	if oldConfig["settings.use_cinfo_lite"].Bool() != useCInfoLite {
+		m.cinfoProviderLock.Lock()
+		defer m.cinfoProviderLock.Unlock()
+
+		oldPtr := m.cinfoProvider
+		m.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite,
+			m.clusterURL, common.DEFAULT_POOL, *config)
+		if err != nil {
+			return err
+		}
+		oldPtr.Close()
+	}
+
+	m.configHolder.Store(*config)
 
 	return nil
 }
@@ -3962,6 +3985,9 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 // It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
 //
 func (m *LifecycleMgr) getBucketUUID(bucket string, retry bool) (string, error) {
+	m.cinfoProviderLock.RLock()
+	defer m.cinfoProviderLock.RUnlock()
+
 	count := 0
 RETRY:
 	uuid, _ := m.cinfoProvider.GetBucketUUID(bucket)
@@ -3984,6 +4010,9 @@ RETRY:
 // It returns COLLECTION_ID_NIL (err == nil) if collection does not exist.
 //
 func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string, retry bool) (string, error) {
+	m.cinfoProviderLock.RLock()
+	defer m.cinfoProviderLock.RUnlock()
+
 	count := 0
 RETRY:
 
@@ -4014,6 +4043,9 @@ RETRY:
 // It returns SCOPE_ID_NIL (err == nil) if scope does not exist.
 //
 func (m *LifecycleMgr) getScopeID(bucket, scope string) (string, error) {
+	m.cinfoProviderLock.RLock()
+	defer m.cinfoProviderLock.RUnlock()
+
 	count := 0
 RETRY:
 	var scopeId string
@@ -4043,6 +4075,9 @@ RETRY:
 // not exist.
 //
 func (m *LifecycleMgr) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
+	m.cinfoProviderLock.RLock()
+	defer m.cinfoProviderLock.RUnlock()
+
 	count := 0
 RETRY:
 	var scopeId, colldId string

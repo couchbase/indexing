@@ -56,6 +56,7 @@ type Projector struct {
 	logPrefix   string
 
 	cinfoProvider     common.ClusterInfoProvider
+	cinfoProviderLock sync.RWMutex
 
 	certFile             string
 	keyFile              string
@@ -173,6 +174,22 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		p.ResetConfig(newConfig)
 		p.ResetFeedConfig()
 
+		useCInfoLite := newConfig["projector.settings.use_cinfo_lite"].Bool()
+		if oldConfig["projector.settings.use_cinfo_lite"].Bool() != useCInfoLite {
+			p.cinfoProviderLock.Lock()
+			defer p.cinfoProviderLock.Unlock()
+
+			oldPtr := p.cinfoProvider
+			cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default", config)
+			if err != nil {
+				logging.Infof("Error getting a NewClusterInfoProvider : %v, useClusterInfoLite: %v", err, useClusterInfoLite)
+				c.CrashOnError(err)
+			}
+			cip.SetUserAgent("NewProjector")
+			cip.SetRetryInterval(4)
+			p.cinfoProvider = cip
+			oldPtr.Close()
+		}
 
 		diffOld, diffNew := oldConfig.SectionConfig("projector.",
 			false).Diff(newConfig.SectionConfig("projector.", false))
@@ -1099,6 +1116,8 @@ func (p *Projector) getNodeUUID() (string, error) {
 	var nodeUUID string
 	prefix := p.logPrefix
 	fn := func(r int, err error) error {
+		p.cinfoProviderLock.RLock()
+		defer p.cinfoProviderLock.RUnlock()
 
 		ninfo, err := p.cinfoProvider.GetNodesInfoProvider()
 		if err != nil {

@@ -1808,6 +1808,9 @@ func (feed *Feed) getLocalKVAddrs(
 	pooln, bucketn string, opaque uint16) (kvaddr string, err error) {
 	prefix := feed.logPrefix
 
+	feed.projector.cinfoProviderLock.RLock()
+	defer feed.projector.cinfoProviderLock.RUnlock()
+
 	ninfo, err := feed.projector.cinfoProvider.GetNodesInfoProvider()
 	if err != nil {
 		fmsg := "%v ##%x GetNodesInfoProvider: %v\n"
@@ -1836,6 +1839,8 @@ func (feed *Feed) getLocalVbuckets(pooln, bucketn string, opaque uint16) ([]uint
 
 	prefix := feed.logPrefix
 
+	feed.projector.cinfoProviderLock.RLock()
+	defer feed.projector.cinfoProviderLock.RUnlock()
 
 	binfo, err := feed.projector.cinfoProvider.GetBucketInfoProvider(bucketn)
 	if err != nil {
