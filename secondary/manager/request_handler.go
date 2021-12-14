@@ -237,6 +237,7 @@ type requestHandlerContext struct {
 	rhc *requestHandlerCache
 
 	schedTokenMon    *schedTokenMonitor
+	stReqFailCount   uint64
 	stReqRecCount    uint64
 	useGreedyPlanner bool
 }
@@ -576,7 +577,9 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 			resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
 			sendWithETag(http.StatusOK, w, resp, eTagResponse)
 		}
+		atomic.StoreUint64(&m.stReqFailCount, 0)
 	} else {
+		atomic.AddUint64(&m.stReqFailCount, 1)
 		logging.Debugf("%v: failed nodes %v", method, failedNodes)
 		sort.Sort(indexStatusSorter(indexStatuses))
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
@@ -691,6 +694,16 @@ func (m *requestHandlerContext) getScheduledIndexes(
 	return schedIndexList
 }
 
+func (m *requestHandlerContext) IndexStatusErrorf(msg string) {
+	failCount := atomic.LoadUint64(&m.stReqFailCount)
+	msgWithCount := fmt.Sprintf("%v Error Count after pass: %v", msg, failCount+1)
+	if (failCount % 40) == 0 {
+		logging.Errorf(msgWithCount)
+	} else {
+		logging.Debugf(msgWithCount)
+	}
+}
+
 // getIndexStatus returns statuses of all indexer nodes. An unresponsive node's status is served
 // from the cache of whichever responsive node has the newest data cached. Only if no responsive
 // node has a cached value will an unresponsive node's status be omitted. (The caches were only
@@ -742,13 +755,15 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		// address here will be with encrypted port if encryption is enabled.
 		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
 		if err != nil {
-			logging.Errorf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
+			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
+			m.IndexStatusErrorf(msg)
 			continue
 		}
 
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
-			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, true) for node id %v. Error = %v", nid, err)
+			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, true) for node id %v. Error = %v", nid, err)
+			m.IndexStatusErrorf(msg)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
@@ -756,7 +771,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		// Use same un-encrypted port number as key, even if the encryption level changes in between
 		hostname, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, false)
 		if err != nil {
-			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, false) for node id %v. Error = %v", nid, err)
+			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, false) for node id %v. Error = %v", nid, err)
+			m.IndexStatusErrorf(msg)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
@@ -774,7 +790,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		localMeta, latest, localMetaIsFromCache, err := m.getLocalIndexMetadataForNode(
 			addr, hostname, cinfo)
 		if localMeta == nil || err != nil {
-			logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
+			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
+			m.IndexStatusErrorf(msg)
 			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
@@ -799,7 +816,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		if stats == nil { // full-bore stats retrieval needed
 			stats, latest, err = m.getStatsForNode(addr, hostname, cinfo)
 			if stats == nil || err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
+				msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
+				m.IndexStatusErrorf(msg)
 				failedNodes = append(failedNodes, mgmtAddr)
 				continue
 			}
