@@ -2163,7 +2163,7 @@ func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r 
 func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 	const method string = "RequestHandler::getIndexPlan" // for logging
 
-	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil)
+	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil, false)
 	if err != nil {
 		return "", fmt.Errorf("%v: Fail to retrieve index information from cluster. err: %v", method, err)
 	}

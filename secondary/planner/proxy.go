@@ -74,13 +74,13 @@ type tokenKey struct {
 ///////////////////////////////////////////////////////
 
 //
-// This function retrieves the index layout plan from a live cluster.
+// This function retrieves the current index layout from a live cluster.
 // This function uses REST API to retrieve index metadata, instead of
 // using metadata provider.  This method should not use metadata provider
 // since this method can be called from metadata provider, so it is to
 // avoid code cyclic dependency.
 //
-func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
+func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool) (*Plan, error) {
 
 	config, err := common.GetSettingsConfig(common.SystemConfig)
 	if err != nil {
@@ -146,7 +146,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		return nil, err
 	}
 
-	err = getIndexNumReplica(plan)
+	err = getIndexNumReplica(plan, isRebalance)
 	if err != nil {
 		return nil, err
 	}
@@ -1488,17 +1488,20 @@ func processDropInstanceToken(indexers []*IndexerNode,
 	return nil
 }
 
-//
-// get index numReplica
-//
-func getIndexNumReplica(plan *Plan) error {
+// getIndexNumReplica computes the number of replicas of every index by merging their NumReplica2
+// counters across all nodes. If isRebalance is true, indexes with counter merge errors are deleted
+// from the plan instead of returning an error so Planner and subsequent Rebalance can proceed.
+func getIndexNumReplica(plan *Plan, isRebalance bool) error {
+	const _getIndexNumReplica = "Planner::getIndexNumReplica:"
+
 	cinfo := cinfoClient.GetClusterInfoCache()
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
 	clusterVersion := cinfo.GetClusterVersion()
 	if clusterVersion < common.INDEXER_65_VERSION {
-		logging.Infof("Planner::Cluster in upgrade.  Skip fetching drop instance token.")
+		logging.Infof("%v Cluster in upgrade. Skip fetching drop instance token.",
+			_getIndexNumReplica)
 		return nil
 	}
 
@@ -1509,13 +1512,14 @@ func getIndexNumReplica(plan *Plan) error {
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	nodeIds := make([]string, 0)
-	errMap := make(map[common.IndexDefnId]error)
+	counterMergeErrMap := make(map[common.IndexDefnId]error)
 	replicaCounterMap := make(map[common.IndexDefnId]map[string]common.Counter)
 	for nid, res := range resp {
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
-			logging.Errorf("Planner::getIndexNumReplica: Error while getting host from nodeId: %v, err: %v", nid, err)
+			logging.Errorf("%v Error while getting host from nodeId: %v, err: %v",
+				_getIndexNumReplica, nid, err)
 			return err
 		}
 
@@ -1533,7 +1537,7 @@ func getIndexNumReplica(plan *Plan) error {
 			} else {
 				newNumReplica, merged, err := numReplica2.MergeWith(numReplica1)
 				if err != nil {
-					errMap[defnId] = err
+					counterMergeErrMap[defnId] = err
 				}
 				if merged {
 					numReplicas[defnId] = newNumReplica
@@ -1542,25 +1546,28 @@ func getIndexNumReplica(plan *Plan) error {
 		}
 	}
 
-	// Process errMap and return errors
-	if len(errMap) > 0 {
-		logging.Errorf("Planner::getIndexNumReplica: Processed nodes in order: %v", nodeIds)
+	// Process counterMergeErrMap and report errors. In Rebalance case remove bad indexes from plan.
+	if len(counterMergeErrMap) > 0 {
+		logging.Errorf("%v Processed nodes in order: %v", _getIndexNumReplica, nodeIds)
 		var err error
 		var defnId common.IndexDefnId
 
-		for defnId, err = range errMap {
+		for defnId, err = range counterMergeErrMap {
 			var errStr string
-			if counterMap, ok := replicaCounterMap[defnId]; !ok {
-				logging.Errorf("Planner::getIndexNumReplica: Error observed when merging replicas for defnId: %v, err: %v", defnId, err)
-				return err
-			} else {
-				for nodeId, counter := range counterMap {
-					errStr += fmt.Sprintf("%v:%+v ", nodeId, counter)
-				}
-				logging.Errorf("Planner::getIndexNumReplica: Error merging numReplica for defnId: %v, counter values: %v, err: %v", defnId, errStr, err)
+			counterMap := replicaCounterMap[defnId] // always exists per the code above
+			for nodeId, counter := range counterMap {
+				errStr += fmt.Sprintf("%v:%+v ", nodeId, counter)
 			}
+			logging.Errorf(
+				"%v Inconsistent number of replicas for defnId %v, counter values: %v, err: %v",
+				_getIndexNumReplica, defnId, errStr, err)
 		}
-		return err
+		if !isRebalance {
+			return err // one arbitrary error from counterMergeErrMap
+		} else {
+			// Rebalance: remove erroring indexes from plan so Planner can proceed
+			rebalanceRemoveFromPlan(counterMergeErrMap, plan)
+		}
 	}
 
 	for _, indexer := range plan.Placement {
@@ -1572,6 +1579,24 @@ func getIndexNumReplica(plan *Plan) error {
 	}
 
 	return nil
+}
+
+// rebalanceRemoveFromPlan is called only in the Rebalance case to remove any indexes whose numbers
+// of replicas are inconsistent across nodes from the current index layout (plan) so Planner can
+// proceed, thus allowing Rebalance to succeed instead of fail. This makes the removed indexes
+// invisible to Planner so the resultant plan may be far from optimal, but this is deemed better
+// than failing Rebalance.
+func rebalanceRemoveFromPlan(counterMergeErrMap map[common.IndexDefnId]error, plan *Plan) {
+	var keepIndexes []*IndexUsage
+	for _, indexer := range plan.Placement {
+		keepIndexes = nil
+		for _, index := range indexer.Indexes {
+			if _, member := counterMergeErrMap[index.DefnId]; !member {
+				keepIndexes = append(keepIndexes, index)
+			}
+		}
+		indexer.Indexes = keepIndexes
+	}
 }
 
 //

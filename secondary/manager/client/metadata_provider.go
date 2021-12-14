@@ -2081,7 +2081,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		HasArrItemsCount:   hasArrItemsCount,
 	}
 
-	idxDefn.NumReplica2.Initialize(idxDefn.NumReplica)
+	idxDefn.NumReplica2.InitializeCounter(idxDefn.NumReplica)
 
 	return idxDefn, nil, false
 }
