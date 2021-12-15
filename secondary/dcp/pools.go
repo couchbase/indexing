@@ -140,6 +140,7 @@ type Bucket struct {
 	UUID                string                 `json:"uuid"`
 	BasicStats          map[string]interface{} `json:"basicStats,omitempty"`
 	Controllers         map[string]interface{} `json:"controllers,omitempty"`
+	StorageBackend      string                 `json:"storageBackend,omitempty"`
 
 	CollectionManifestUID string `json:"collectionsManifestUid,omitempty"`
 

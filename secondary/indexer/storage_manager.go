@@ -1632,122 +1632,127 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 	var source, target IndexSnapshot
 	indexSnapMap := s.indexSnapMap.Get()
 
-	sourceC, ok := indexSnapMap[srcInstId]
-	if !ok {
-		s.supvCmdch <- &MsgSuccess{}
-		return
-	}
-	sourceC.Lock()
-	source = sourceC.snap
-
-	targetC, ok := indexSnapMap[tgtInstId]
-	if !ok {
-		// increment source snapshot refcount
-		target = s.deepCloneIndexSnapshot(source, false, nil)
-
-	} else {
-		targetC.Lock()
-		target = targetC.snap
-		// Make sure that the source timestamp is greater than or equal to the target timestamp.
-		// This comparison will only cover the seqno and vbuuids.
-		//
-		// Note that even if the index instance has 0 mutation or no new mutation, storage
-		// manager will always create a new indexSnapshot with the current timestamp during
-		// snapshot.
-		//
-		// But there is a chance that merge happens before snapshot.  In this case, source
-		// could have a higher snapshot than target:
-		// 1) source is merged to MAINT stream from INIT stream
-		// 2) after (1), there is no flush/snapshot before merge partition happens
-		//
-		// Here, we just have to make sure that the source has a timestamp at least as high
-		// as the target to detect potential data loss.   The merged snapshot will use the
-		// target timestamp.    Since target timestamp cannot be higher than source snapshot,
-		// there is no risk of data loss.
-		//
-
-		if !source.Timestamp().EqualOrGreater(target.Timestamp()) {
-			s.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
-					severity: FATAL,
-					category: STORAGE_MGR,
-					cause: fmt.Errorf("Timestamp mismatch between snapshot\n target %v\n source %v\n",
-						target.Timestamp(), source.Timestamp())}}
-			return
+	validateSnapshots := func() bool {
+		sourceC, ok := indexSnapMap[srcInstId]
+		if !ok {
+			s.supvCmdch <- &MsgSuccess{}
+			return false
 		}
+		sourceC.Lock()
+		defer sourceC.Unlock()
 
-		// source will not have partition snapshot if there is no mutation in bucket.  Skip validation check.
-		// If bucket has at least 1 mutation, then source will have partition snapshot.
-		if len(source.Partitions()) != 0 {
-			// make sure that the source snapshot has all the required partitions
-			count := 0
-			for _, partnId := range partitions {
-				for _, sp := range source.Partitions() {
-					if partnId == sp.PartitionId() {
-						count++
-						break
-					}
-				}
-			}
-			if count != len(partitions) || count != len(source.Partitions()) {
+		source = sourceC.snap
+
+		targetC, ok := indexSnapMap[tgtInstId]
+		if !ok {
+			// increment source snapshot refcount
+			target = s.deepCloneIndexSnapshot(source, false, nil)
+
+		} else {
+			targetC.Lock()
+			defer targetC.Unlock()
+
+			target = targetC.snap
+			// Make sure that the source timestamp is greater than or equal to the target timestamp.
+			// This comparison will only cover the seqno and vbuuids.
+			//
+			// Note that even if the index instance has 0 mutation or no new mutation, storage
+			// manager will always create a new indexSnapshot with the current timestamp during
+			// snapshot.
+			//
+			// But there is a chance that merge happens before snapshot.  In this case, source
+			// could have a higher snapshot than target:
+			// 1) source is merged to MAINT stream from INIT stream
+			// 2) after (1), there is no flush/snapshot before merge partition happens
+			//
+			// Here, we just have to make sure that the source has a timestamp at least as high
+			// as the target to detect potential data loss.   The merged snapshot will use the
+			// target timestamp.    Since target timestamp cannot be higher than source snapshot,
+			// there is no risk of data loss.
+			//
+
+			if !source.Timestamp().EqualOrGreater(target.Timestamp(), false) {
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
 						category: STORAGE_MGR,
-						cause: fmt.Errorf("Source snapshot %v does not have all the required partitions %v",
-							srcInstId, partitions)}}
-				targetC.Unlock()
-				sourceC.Unlock()
-				return
+						cause: fmt.Errorf("Timestamp mismatch between snapshot\n target %v\n source %v\n",
+							target.Timestamp(), source.Timestamp())}}
+				return false
 			}
 
-			// make sure there is no overlapping partition between source and target snapshot
-			for _, sp := range source.Partitions() {
-
-				found := false
-				for _, tp := range target.Partitions() {
-					if tp.PartitionId() == sp.PartitionId() {
-						found = true
-						break
+			// source will not have partition snapshot if there is no mutation in bucket.  Skip validation check.
+			// If bucket has at least 1 mutation, then source will have partition snapshot.
+			if len(source.Partitions()) != 0 {
+				// make sure that the source snapshot has all the required partitions
+				count := 0
+				for _, partnId := range partitions {
+					for _, sp := range source.Partitions() {
+						if partnId == sp.PartitionId() {
+							count++
+							break
+						}
 					}
 				}
-
-				if found {
+				if count != len(partitions) || count != len(source.Partitions()) {
 					s.supvCmdch <- &MsgError{
 						err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 							severity: FATAL,
 							category: STORAGE_MGR,
-							cause: fmt.Errorf("Duplicate partition %v found between source %v and target %v",
-								sp.PartitionId(), srcInstId, tgtInstId)}}
-					targetC.Unlock()
-					sourceC.Unlock()
-					return
+							cause: fmt.Errorf("Source snapshot %v does not have all the required partitions %v",
+								srcInstId, partitions)}}
+					return false
+				}
+
+				// make sure there is no overlapping partition between source and target snapshot
+				for _, sp := range source.Partitions() {
+
+					found := false
+					for _, tp := range target.Partitions() {
+						if tp.PartitionId() == sp.PartitionId() {
+							found = true
+							break
+						}
+					}
+
+					if found {
+						s.supvCmdch <- &MsgError{
+							err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
+								severity: FATAL,
+								category: STORAGE_MGR,
+								cause: fmt.Errorf("Duplicate partition %v found between source %v and target %v",
+									sp.PartitionId(), srcInstId, tgtInstId)}}
+						return false
+					}
+				}
+			} else {
+				logging.Infof("skip validation in merge partitions %v between inst %v and %v", partitions, srcInstId, tgtInstId)
+			}
+
+			// Deep clone a new snapshot by copying internal maps + increment target snapshot refcount.
+			// The target snapshot could be being used (e.g. under scan).  Increment the snapshot refcount
+			// ensure that the snapshot will not get reclaimed.
+			target = s.deepCloneIndexSnapshot(target, false, nil)
+			if len(partitions) != 0 {
+				// Increment source snaphsot refcount (only for copied partitions).  Those snapshots will
+				// be copied over to the target snapshot.  Note that the source snapshot can have different
+				// refcount than the target snapshot, since the source snapshot may not be used for scanning.
+				// But it should be safe to copy from source to target, even if ref count is different.
+				source = s.deepCloneIndexSnapshot(source, true, partitions)
+
+				// move the partition in source snapshot to target snapshot
+				for _, snap := range source.Partitions() {
+					target.Partitions()[snap.PartitionId()] = snap
 				}
 			}
-		} else {
-			logging.Infof("skip validation in merge partitions %v between inst %v and %v", partitions, srcInstId, tgtInstId)
 		}
+		return true
+	}()
 
-		// Deep clone a new snapshot by copying internal maps + increment target snapshot refcount.
-		// The target snapshot could be being used (e.g. under scan).  Increment the snapshot refcount
-		// ensure that the snapshot will not get reclaimed.
-		target = s.deepCloneIndexSnapshot(target, false, nil)
-		if len(partitions) != 0 {
-			// Increment source snaphsot refcount (only for copied partitions).  Those snapshots will
-			// be copied over to the target snapshot.  Note that the source snapshot can have different
-			// refcount than the target snapshot, since the source snapshot may not be used for scanning.
-			// But it should be safe to copy from source to target, even if ref count is different.
-			source = s.deepCloneIndexSnapshot(source, true, partitions)
-
-			// move the partition in source snapshot to target snapshot
-			for _, snap := range source.Partitions() {
-				target.Partitions()[snap.PartitionId()] = snap
-			}
-		}
-		targetC.Unlock()
-
+	if !validateSnapshots {
+		return
 	}
-	sourceC.Unlock()
+
 	// decrement source snapshot refcount
 	// Do not decrement source snapshot refcount.   When the proxy instance is deleted, storage manager will be notified
 	// of the new instance state.   Storage manager will then decrement the ref count at that time.
