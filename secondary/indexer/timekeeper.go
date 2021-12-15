@@ -2338,6 +2338,11 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 					logging.Infof("Timekeeper::checkInitialBuildDone Index: %v Stream: %v KeyspaceId: %v"+
 						" FlushTs %v\n HWT %v", idx.InstId, streamId, keyspaceId, flushTs, hwt)
+
+					enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+					if enableOSO {
+						logging.Infof("\n HWTOSO %v", tk.ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId])
+					}
 				}
 			}
 		}
