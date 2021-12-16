@@ -293,8 +293,10 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 	// start a watcher to the indexer admin
 	watcher, readych := o.startWatcher(indexAdminPort)
 
-	// wait for indexer to connect
-	success, _ := watcher.waitForReady(readych, 1000, nil)
+	// Wait for indexer to connect for a prime number of ms to prevent retry Timers in watcherServer
+	// from all being aligned on harmonics of 1 sec if the network is partitioned. (This used to
+	// foreground wait for 1,000 ms which led to "thundering herd" retries.)
+	success, _ := watcher.waitForReady(readych, 971, nil)
 	if success {
 		// if successfully connected, retrieve indexerId
 		success, _ = watcher.notifyReady(indexAdminPort, 0, nil)
