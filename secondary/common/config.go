@@ -1885,6 +1885,42 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.reader.hole.minPages": ConfigValue{
+		uint64(10),
+		"minimum number of contiguous empty pages needed to be a hole",
+		uint64(10),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.holecleaner.enabled": ConfigValue{
+		true,
+		"Enable hole cleaning activity",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.holecleaner.cpuPercent": ConfigValue{
+		10,
+		"Maximum percentage of cpu used for hole cleaning." +
+			"eg, 10% in 80 core machine can use up to 8 cores",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.holecleaner.interval": ConfigValue{
+		uint64(60),
+		"interval in seconds to check if any hole cleaning activity is needed",
+		uint64(60),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.holecleaner.maxPages": ConfigValue{
+		uint64(128 * 1000),
+		"upper limit on the number of empty pages processed in a single hole cleaning cycle",
+		uint64(128 * 1000),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.enablePageChecksum": ConfigValue{
 		true, // Value set
 		"Checksum every page to enable corruption detection",
