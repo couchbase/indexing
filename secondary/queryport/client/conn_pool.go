@@ -6,9 +6,13 @@ import "net"
 import "time"
 import "sync/atomic"
 
+import "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbase/indexing/secondary/security"
+
+import "github.com/couchbase/cbauth"
+
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import gometrics "github.com/rcrowley/go-metrics"
 
@@ -44,18 +48,27 @@ type connectionPool struct {
 	stopCh           chan bool
 	ewma             gometrics.EWMA
 	kaInterval       time.Duration
+	authHost         string
+	cluster          string
 }
 
 type connection struct {
-	conn net.Conn
-	pkt  *transport.TransportPacket
+	conn          net.Conn
+	pkt           *transport.TransportPacket
+	authenticated bool
+}
+
+type authInfo struct {
+	user string
+	pass string
 }
 
 func newConnectionPool(
 	host string,
 	poolSize, poolOverflow, maxPayload int,
 	timeout, availTimeout time.Duration,
-	minPoolSizeWM int32, relConnBatchSize int32, kaInterval int) *connectionPool {
+	minPoolSizeWM int32, relConnBatchSize int32, kaInterval int,
+	cluster string) *connectionPool {
 
 	cp := &connectionPool{
 		host:             host,
@@ -69,7 +82,13 @@ func newConnectionPool(
 		relConnBatchSize: relConnBatchSize,
 		stopCh:           make(chan bool, 1),
 		kaInterval:       time.Duration(kaInterval) * time.Second,
+		cluster:          cluster,
 	}
+
+	// Ignore the error in initHostportForAuth, if any.
+	// It will be retried again in doAuth.
+	cp.initHostportForAuth()
+
 	cp.mkConn = cp.defaultMkConn
 	cp.ewma = gometrics.NewEWMA5()
 	logging.Infof("%v started poolsize %v overflow %v low WM %v relConn batch size %v ...\n",
@@ -87,6 +106,7 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	flags := transport.TransportFlag(0).SetProtobuf()
 	pkt := transport.NewTransportPacket(cp.maxPayload, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobuf.ProtobufEncode)
@@ -100,7 +120,129 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 		}
 	}
 
-	return &connection{conn, pkt}, nil
+	cn := &connection{
+		conn:          conn,
+		pkt:           pkt,
+		authenticated: false,
+	}
+
+	// Do Auth
+	err = cp.doAuth(cn)
+	if err != nil {
+		return nil, err
+	}
+
+	return cn, nil
+}
+
+func (cp *connectionPool) doAuth(conn *connection) error {
+
+	// Check if auth is supported / configured before doing auth
+	if common.GetClusterVersion() < common.INDEXER_71_VERSION {
+		logging.Verbosef("%v doAuth Auth is not needed for connection (%v,%v)",
+			cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		return nil
+	}
+
+	user, pass, err := cp.getAuthInfo()
+	if err != nil {
+		logging.Errorf("%v doAuth error %v in getAuthInfo for connection (%v,%v)",
+			cp.logPrefix, err, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		return err
+	}
+
+	// Send Auth packet.
+	authReq := &protobuf.AuthRequest{
+		User: &user,
+		Pass: &pass,
+	}
+
+	err = conn.pkt.Send(conn.conn, authReq)
+	if err != nil {
+		logging.Errorf("%v doAuth pkt.Send returns error %v for connection (%v,%v)",
+			cp.logPrefix, err, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		return err
+	}
+
+	// Receive Auth response.
+	var resp interface{}
+	resp, err = conn.pkt.Receive(conn.conn)
+	if err != nil {
+		logging.Errorf("%v doAuth pkt.Receive returns error %v for connection (%v,%v)",
+			cp.logPrefix, err, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		return err
+	}
+
+	authResp, ok := resp.(*protobuf.AuthResponse)
+	if !ok {
+		logging.Errorf("%v doAuth invalid auth response from %v for connection (%v,%v)",
+			cp.logPrefix, cp.host, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		return errors.New("Invalid auth response")
+	}
+
+	if authResp.GetCode() != transport.AUTH_SUCCESS {
+		logging.Errorf("%v doAuth invalid auth credentials for connection (%v,%v)",
+			cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		return transport.ErrorAuthFailure
+	}
+
+	conn.authenticated = true
+	logging.Verbosef("%v doAuth auth successful for connection (%v,%v)",
+		cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+
+	return nil
+}
+
+func (cp *connectionPool) getAuthInfo() (string, string, error) {
+
+	if cp.authHost == "" {
+		err := cp.initHostportForAuth()
+		if err != nil {
+			logging.Errorf("%v doAtuh error in initHostportForAuth: %v", cp.logPrefix, err)
+			return "", "", err
+		}
+	}
+
+	user, pass, err := cbauth.GetHTTPServiceAuth(cp.authHost)
+	if err != nil {
+		logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", cp.logPrefix, err)
+		return "", "", err
+	}
+
+	return user, pass, nil
+}
+
+func (cp *connectionPool) initHostportForAuth() error {
+
+	clusterUrl, err := common.ClusterAuthUrl(cp.cluster)
+	if err != nil {
+		return err
+	}
+
+	cinfo, err := common.NewClusterInfoCache(clusterUrl, common.DEFAULT_POOL)
+	if err != nil {
+		return err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	cinfo.SetUserAgent(cp.logPrefix)
+
+	err = cinfo.FetchNodesAndSvsInfo()
+	if err != nil {
+		return err
+	}
+
+	var authHost string
+	authHost, err = cinfo.TranslatePort(cp.host, common.INDEX_SCAN_SERVICE, common.INDEX_HTTP_SERVICE)
+	if err != nil {
+		cp.authHost = ""
+		return err
+	}
+
+	cp.authHost = authHost
+	return nil
 }
 
 func (cp *connectionPool) Close() (err error) {
@@ -248,7 +390,7 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 		}
 
 	} else {
-		logging.Infof("%v closing unhealthy connection %q\n", cp.logPrefix, laddr)
+		logging.Infof("%v closing unhealthy connection %q authenticated %v\n", cp.logPrefix, laddr, connectn.authenticated)
 		<-cp.createsem
 		connectn.conn.Close()
 	}

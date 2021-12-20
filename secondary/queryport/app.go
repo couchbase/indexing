@@ -9,6 +9,7 @@ import "net"
 func Application(config c.Config) {
 	killch := make(chan bool)
 	s, err := NewServer(
+		"",
 		"localhost:9990",
 		func(req interface{}, ctx interface{},
 			conn net.Conn, quitch <-chan bool) {

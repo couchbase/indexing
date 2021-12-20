@@ -44,7 +44,7 @@ type GsiScanClient struct {
 	closed        uint32
 }
 
-func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, error) {
+func NewGsiScanClient(queryport, cluster string, config common.Config) (*GsiScanClient, error) {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 	c := &GsiScanClient{
 		queryport:          queryport,
@@ -61,7 +61,8 @@ func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, e
 	}
 	c.pool = newConnectionPool(
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
-		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize, config["keepAliveInterval"].Int())
+		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize, config["keepAliveInterval"].Int(),
+		cluster)
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {
@@ -238,6 +239,8 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 		return err1 == nil
 	}
 
+	var authRetryOnce bool
+
 STREAM_RETRY:
 
 	conn, pkt := connectn.conn, connectn.pkt
@@ -258,7 +261,14 @@ STREAM_RETRY:
 	cont := true
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
+		var authRetry bool
+		cont, healthy, err, closeStream, authRetry = c.streamResponse(conn, pkt, callb, requestId, authRetryOnce)
+		if authRetry {
+			healthy, closeStream, authRetryOnce = false, false, true
+			renew()
+			goto STREAM_RETRY
+		}
+
 		if isgone(err) && !partial && retry && renew() {
 			retry, healthy, closeStream = false, true, false
 			goto STREAM_RETRY
@@ -1259,6 +1269,8 @@ func (c *GsiScanClient) doRequestResponse(
 		return err1 == nil
 	}
 
+	var authRetry bool
+
 REQUEST_RESPONSE_RETRY:
 
 	conn, pkt := connectn.conn, connectn.pkt
@@ -1281,6 +1293,36 @@ REQUEST_RESPONSE_RETRY:
 	c.trySetDeadline(conn, c.readDeadline)
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
+	if resp != nil {
+		if rsp, ok := resp.(*protobuf.AuthResponse); ok {
+
+			// When the cluster upgrade completes and the queryport starts supporting
+			// auth. The upgrade is handled as follows:
+			// 1. Once all the nodes in the cluster get upgraded, all new connections
+			//    will require auth. Existing connections will continue to exist.
+			// 2. Server will reject the unauthenticated request, and will close the
+			//    connection. In such cases, client needs to retry with a new connection.
+			// 3. Once the TCP connection is estabished, the first packet sent will
+			//    always be AuthRequest.
+			// 4. The upgraded server will always respond to AuthRequest packet
+			//    with AuthResponse.
+			// 5. If client makes an  unauthenticated request and server returns
+			//    AuthResponse with code AUTH_MISSING, then server has already observed
+			//    the upgraded cluster version. From this point onwards, the client will
+			//    start using auth for all new connections.
+
+			if rsp.GetCode() == transport.AUTH_MISSING && !authRetry {
+				// Do not count this as a "retry"
+				logging.Infof("%v server needs authentication information. Retrying "+
+					"request with auth req(%v)", c.logPrefix, requestId)
+				// TODO: Update cluster version
+				renew()
+				authRetry = true
+				goto REQUEST_RESPONSE_RETRY
+			}
+		}
+	}
+
 	if isgone(err) && retry && renew() {
 		retry = false
 		goto REQUEST_RESPONSE_RETRY
@@ -1323,7 +1365,8 @@ func (c *GsiScanClient) sendRequest(
 func (c *GsiScanClient) streamResponse(
 	conn net.Conn,
 	pkt *transport.TransportPacket,
-	callb ResponseHandler, requestId string) (cont bool, healthy bool, err error, closeStream bool) {
+	callb ResponseHandler, requestId string,
+	authRetryOnce bool) (cont bool, healthy bool, err error, closeStream bool, authRetry bool) {
 
 	var resp interface{}
 	var finish bool
@@ -1352,6 +1395,26 @@ func (c *GsiScanClient) streamResponse(
 		cont, healthy = false, true
 
 	} else {
+		if rsp, ok := resp.(*protobuf.AuthResponse); ok {
+
+			// When the cluster upgrade completes and the queryport starts supporting
+			// auth. See doRequestResponse for more details.
+
+			if rsp.GetCode() == transport.AUTH_MISSING {
+				// Do not count this as a "retry"
+				logging.Infof("%v server needs authentication information. Retrying "+
+					"request with auth req(%v)", c.logPrefix, requestId)
+				// TODO: Update cluster version
+
+				// Perform authRetry only once.
+				if !authRetryOnce {
+					authRetry = true
+				}
+
+				return
+			}
+		}
+
 		streamResp := resp.(*protobuf.ResponseStream)
 		if err = streamResp.Error(); err == nil {
 			cont = callb(streamResp)
