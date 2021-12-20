@@ -1087,7 +1087,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges() {
 	selfRestart := func() {
 		logging.Infof("clusterInfoCacheLiteManager watchClusterChanges: restarting..")
 		r := atomic.LoadUint32(&cicm.notifierRetrySleep)
-		time.Sleep(time.Duration(r) * time.Millisecond)
+		time.Sleep(time.Duration(r) * time.Second)
 		go cicm.watchClusterChanges()
 	}
 
@@ -1140,6 +1140,8 @@ func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo() *NodesInfo {
 retry:
 	p, err := cicm.client.GetPoolWithoutRefresh(cicm.poolName)
 	if err != nil {
+		logging.Errorf("clusterInfoCacheLiteManager::FetchNodesInfo Error while fetching "+
+			"pools info from pool: %v, err: %v", cicm.poolName, err)
 		if retryCount < maxRetries {
 			retryCount++
 			time.Sleep(retryInterval)
@@ -1151,6 +1153,8 @@ retry:
 
 	ps, err := cicm.client.GetPoolServices(cicm.poolName)
 	if err != nil {
+		logging.Errorf("clusterInfoCacheLiteManager::FetchNodesInfo Error while fetching "+
+			"services info from pool: %v, err: %v", cicm.poolName, err)
 		if retryCount < maxRetries {
 			retryCount++
 			time.Sleep(retryInterval)
@@ -1186,6 +1190,8 @@ func (cicm *clusterInfoCacheLiteManager) FetchCollectionInfo(bucketName string) 
 retry:
 	doRetry, cm, err := cicm.client.GetCollectionManifest(bucketName)
 	if doRetry && retryCount < maxRetries {
+		logging.Errorf("clusterInfoCacheLiteManager::FetchingCollectionInfo Error while fetching "+
+			"collection info for bucket: %v, err: %v", bucketName, err)
 		retryCount++
 		if retryCount%5 == 0 {
 			logging.Infof("clusterInfoCacheLiteManager:FetchingCollectionInfo: retrying %v time for bucket %v", retryCount, bucketName)
@@ -1217,6 +1223,8 @@ func (cicm *clusterInfoCacheLiteManager) FetchTerseBucketInfo(bucketName string)
 retry:
 	doRetry, tb, err := cicm.client.GetTerseBucket(terseBucketsBase, bucketName)
 	if doRetry && retryCount < maxRetries {
+		logging.Errorf("clusterInfoCacheLiteManager::FetchTerseBucketInfo Error while fetching "+
+			"bucket info for bucket: %v, err: %v", bucketName, err)
 		retryCount++
 		time.Sleep(2 * time.Second)
 		goto retry
@@ -1240,6 +1248,8 @@ func (cicm *clusterInfoCacheLiteManager) GetBucketNames() ([]couchbase.BucketNam
 retry:
 	p, err := cicm.client.GetPoolWithoutRefresh(cicm.poolName)
 	if err != nil {
+		logging.Errorf("clusterInfoCacheLiteManager::GetBucketNames Error while fetching "+
+			"pool info for pool: %v, err: %v", cicm.poolName, err)
 		if retryCount < maxRetries {
 			retryCount++
 			time.Sleep(retryInterval)
