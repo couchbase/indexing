@@ -646,7 +646,6 @@ func (cicm *clusterInfoCacheLiteManager) nodesInfoSync(eventTimeoutSeconds uint3
 		if err != nil {
 			return nil, err
 		}
-		defer cicm.eventMgr.unregister(id, EVENT_NODEINFO_UPDATED)
 
 		if len(cicm.poolsStreamingCh) == 0 && evtCount == 0 {
 			notif := Notification{
@@ -680,7 +679,7 @@ func (cicm *clusterInfoCacheLiteManager) bucketInfo(bucketName string) (
 	}
 }
 
-func (cicm *clusterInfoCacheLiteManager) bucketInfoSync(bucketName string) (
+func (cicm *clusterInfoCacheLiteManager) bucketInfoSync(bucketName string, eventWaitTimeoutSeconds uint32) (
 	*bucketInfo, error) {
 	bi, err := cicm.cicl.getBucketInfo(bucketName)
 	if err != nil {
@@ -699,8 +698,8 @@ func (cicm *clusterInfoCacheLiteManager) bucketInfoSync(bucketName string) (
 			}
 			cicm.bucketInfoCh <- msg
 		}
-		msg := <-ch
-		err = cicm.eventMgr.unregister(id, evtType)
+
+		msg, err := readWithTimeout(ch, eventWaitTimeoutSeconds)
 		if err != nil {
 			return nil, err
 		}
@@ -734,7 +733,6 @@ func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
 		if err != nil {
 			return nil, err
 		}
-		defer cicm.eventMgr.unregister(id, evtType)
 
 		if evtCount == 0 {
 			msg := Notification{
@@ -1795,7 +1793,7 @@ func (c *ClusterInfoCacheLiteClient) GetBucketInfo(bucketName string) (
 		return bi, err
 	}
 
-	return c.ciclMgr.bucketInfoSync(bucketName)
+	return c.ciclMgr.bucketInfoSync(bucketName, c.eventWaitTimeoutSeconds)
 }
 
 func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (

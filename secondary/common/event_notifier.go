@@ -177,6 +177,8 @@ func (e *eventManager) notify(evtType EventType, obj interface{}) error {
 	for _, notifier := range notifiers {
 		notifier.notifications <- obj
 	}
+	// Clear book-keeping as all notifiers are updated
+	delete(e.notifiers, evtType)
 
 	return nil
 }
