@@ -244,7 +244,8 @@ type IndexStats struct {
 	lastDiskBytes             stats.Int64Val
 	lastRollbackTime          stats.TimeVal
 	progressStatTime          stats.TimeVal
-	residentPercent           stats.Int64Val
+	residentPercent           stats.Int64Val // resident ratio for mainstore
+	combinedResidentPercent   stats.Int64Val // resident ratio for mainstore and backstore
 	cacheHitPercent           stats.Int64Val
 	cacheHits                 stats.Int64Val
 	cacheMisses               stats.Int64Val
@@ -486,6 +487,7 @@ func (s *IndexStats) Init() {
 	s.lastRollbackTime.Init()
 	s.progressStatTime.Init()
 	s.residentPercent.Init()
+	s.combinedResidentPercent.Init()
 	s.cacheHitPercent.Init()
 	s.cacheHits.Init()
 	s.cacheMisses.Init()
@@ -548,6 +550,7 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.arrItemsCount.AddFilter(stats.PlannerFilter)
 	s.buildProgress.AddFilter(stats.PlannerFilter)
 	s.residentPercent.AddFilter(stats.PlannerFilter)
+	s.combinedResidentPercent.AddFilter(stats.PlannerFilter)
 	s.dataSize.AddFilter(stats.PlannerFilter)
 	s.memUsed.AddFilter(stats.PlannerFilter)
 	s.avgDiskBps.AddFilter(stats.PlannerFilter)
@@ -1873,6 +1876,11 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.residentPercent.Value()
 		},
 		&s.residentPercent, s.partnAvgInt64Stats)
+	statMap.AddAggrStatFiltered("combined_resident_percent",
+		func(ss *IndexStats) int64 {
+			return ss.combinedResidentPercent.Value()
+		},
+		&s.combinedResidentPercent, s.partnAvgInt64Stats)
 
 	statMap.AddAggrStatFiltered("cache_hit_percent",
 		func(ss *IndexStats) int64 {
