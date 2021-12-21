@@ -2493,7 +2493,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					mergeTs = initFlushTs
 				}
 
-				if initFlushTs.Equal2(mergeTs, false) {
+				if initFlushTs.EqualOrGreater(mergeTs, false) {
 					forceSnapshot = false
 				}
 
