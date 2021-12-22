@@ -479,7 +479,7 @@ func (ts *TsVbuuid) String() string {
 				v, ts.Vbuuids[v], ts.ManifestUIDs[v], ts.Seqnos[v], start, end))
 		}
 	} else {
-		fmsg = "    {vbno, vbuuid, manifest, seqno, oscount, snapshot-start, snapshot-end}\n"
+		fmsg = "    {vbno, vbuuid, manifest, seqno, osocount, snapshot-start, snapshot-end}\n"
 		buf.WriteString(fmt.Sprintf(fmsg))
 		for _, v := range vbnos {
 			start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]

@@ -2287,9 +2287,13 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	}
 
+	var bsNumRecsMem, bsNumRecsDisk int64
+
 	if !mdb.isPrimary {
 		pStats := mdb.backstore.GetPreparedStats()
 		docidCount = pStats.ItemsCount
+		bsNumRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
+		bsNumRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees + pStats.NumRecordCompressed
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		if pStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
 			backStoreStatsLoggingEnabled = true
@@ -2330,6 +2334,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
+	mdb.idxStats.combinedResidentPercent.Set(common.ComputePercent((numRecsMem + bsNumRecsMem), (numRecsDisk + bsNumRecsDisk)))
 	mdb.idxStats.cacheHits.Set(cacheHits)
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)

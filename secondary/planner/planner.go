@@ -242,19 +242,21 @@ type IndexUsage struct {
 	DataSize    uint64  `json:"dataSize,omitempty"`
 
 	// input: resource consumption (from live cluster)
-	ActualMemUsage        uint64  `json:"actualMemUsage"`
-	ActualMemOverhead     uint64  `json:"actualMemOverhead"`
-	ActualKeySize         uint64  `json:"actualKeySize"`
-	ActualCpuUsage        float64 `json:"actualCpuUsage"`
-	ActualBuildPercent    uint64  `json:"actualBuildPercent"`
-	ActualResidentPercent uint64  `json:"actualResidentPercent"`
-	ActualDataSize        uint64  `json:"actualDataSize"`
-	ActualNumDocs         uint64  `json:"actualNumDocs"`
-	ActualDiskUsage       uint64  `json:"actualDiskUsage"`
-	ActualMemStats        uint64  `json:"actualMemStats"`
-	ActualDrainRate       uint64  `json:"actualDrainRate"`
-	ActualScanRate        uint64  `json:"actualScanRate"`
-	ActualMemMin          uint64  `json:"actualMemMin"`
+	ActualMemUsage     uint64  `json:"actualMemUsage"`
+	ActualMemOverhead  uint64  `json:"actualMemOverhead"`
+	ActualKeySize      uint64  `json:"actualKeySize"`
+	ActualCpuUsage     float64 `json:"actualCpuUsage"`
+	ActualBuildPercent uint64  `json:"actualBuildPercent"`
+	// in planner for plasma we use combined resident percent from mainstore as well as backstore
+	// so the value of stat "combined_resident_percent will be stored in ActualResidentPercent"
+	ActualResidentPercent uint64 `json:"actualResidentPercent"`
+	ActualDataSize        uint64 `json:"actualDataSize"`
+	ActualNumDocs         uint64 `json:"actualNumDocs"`
+	ActualDiskUsage       uint64 `json:"actualDiskUsage"`
+	ActualMemStats        uint64 `json:"actualMemStats"`
+	ActualDrainRate       uint64 `json:"actualDrainRate"`
+	ActualScanRate        uint64 `json:"actualScanRate"`
+	ActualMemMin          uint64 `json:"actualMemMin"`
 
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`

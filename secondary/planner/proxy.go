@@ -534,9 +534,14 @@ func getIndexStats(plan *Plan, config common.Config) error {
 				index.ActualBuildPercent = uint64(buildProgress.(float64))
 			}
 
-			// resident ratio
-			if residentPercent, ok := GetIndexStat(index, "resident_percent", statsMap, true, clusterVersion); ok {
+			// most of the code uses resident ratio of mainstore only and they will continue to use "resident_percent" stat
+			// but for planner we need to use resident ratio combined for mainstore and backstore and hence here we use "combined_resident_percent"
+			if residentPercent, ok := GetIndexStat(index, "combined_resident_percent", statsMap, true, clusterVersion); ok {
 				index.ActualResidentPercent = uint64(residentPercent.(float64))
+			} else { // in mixed mode when combined_resident_percent is not available
+				if residentPercent, ok := GetIndexStat(index, "resident_percent", statsMap, true, clusterVersion); ok {
+					index.ActualResidentPercent = uint64(residentPercent.(float64))
+				}
 			}
 
 			// data_size is the total key size of index, including back index.

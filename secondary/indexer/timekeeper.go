@@ -4038,8 +4038,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				for keyspaceId, flushedTs := range keyspaceIdMap {
 					flushedCount := uint64(0)
 					if flushedTs != nil {
-						for _, seqno := range flushedTs.Seqnos {
-							flushedCount += seqno
+						for i, seqno := range flushedTs.Seqnos {
+							if flushedTs.OSOCount != nil &&
+								flushedTs.OSOCount[i] != 0 {
+								flushedCount += flushedTs.OSOCount[i]
+							} else {
+								flushedCount += seqno
+							}
 						}
 					}
 					flushedCountMap[stream][keyspaceId] = flushedCount
