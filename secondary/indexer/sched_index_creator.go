@@ -110,8 +110,9 @@ type schedIndexCreator struct {
 	stopCleaner     chan bool
 	stopMover       chan bool
 	stopKeyspaceMon chan bool
-	cinfoClient     *common.ClusterInfoClient
-	cinfoLock       sync.Mutex
+
+	cinfoProvider     common.ClusterInfoProvider
+	cinfoProviderLock sync.Mutex
 }
 
 //
@@ -206,9 +207,9 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 
 	mgr.config.Store(config)
 
-	mgr.cinfoLock.Lock()
-	defer mgr.cinfoLock.Unlock()
-	mgr.cinfoClient = mgr.getCinfoNoLock()
+	mgr.cinfoProviderLock.Lock()
+	defer mgr.cinfoProviderLock.Unlock()
+	mgr.cinfoProvider = mgr.getCinfoNoLock()
 
 	go mgr.run()
 	go mgr.stopTokenCleaner()
@@ -251,7 +252,27 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 
 	case CONFIG_SETTINGS_UPDATE:
 		cfgUpdate := cmd.(*MsgConfigUpdate)
-		m.config.Store(cfgUpdate.GetConfig())
+
+		newConfig := cfgUpdate.GetConfig()
+		oldConfig := m.config.Load()
+		newUseCInfoLite := newConfig["settings.use_cinfo_lite"].Bool()
+		oldUseCInfoLite := oldConfig["settings.use_cinfo_lite"].Bool()
+
+		m.config.Store(newConfig)
+
+		if oldUseCInfoLite != newUseCInfoLite {
+			logging.Infof("Updating ClusterInfoProvider in schedIndexCreator")
+
+			m.cinfoProviderLock.Lock()
+			defer m.cinfoProviderLock.Unlock()
+
+			oldProvider := m.cinfoProvider
+			m.cinfoProvider = m.getCinfoNoLock()
+			if oldProvider != nil {
+				oldProvider.Close()
+			}
+		}
+
 		m.settings.handleSettings(cfgUpdate.GetConfig())
 		m.supvCmdch <- &MsgSuccess{}
 
@@ -681,12 +702,12 @@ func (m *schedIndexCreator) orphanTokenMover() {
 
 			skipIter := false
 			func() {
-				m.cinfoLock.Lock()
-				defer m.cinfoLock.Unlock()
+				m.cinfoProviderLock.Lock()
+				defer m.cinfoProviderLock.Unlock()
 
-				if m.cinfoClient == nil {
-					m.cinfoClient = m.getCinfoNoLock()
-					if m.cinfoClient == nil {
+				if m.cinfoProvider == nil {
+					m.cinfoProvider = m.getCinfoNoLock()
+					if m.cinfoProvider == nil {
 						logging.Warnf("schedIndexCreator:orphanTokenMover nil cluster info. Skipping iteration.")
 						skipIter = true
 					}
@@ -697,14 +718,18 @@ func (m *schedIndexCreator) orphanTokenMover() {
 				continue
 			}
 
-			cinfoCache := m.cinfoClient.GetClusterInfoCache()
+			ninfo, e := m.cinfoProvider.GetNodesInfoProvider()
+			if e != nil {
+				logging.Errorf("schedIndexCreator:orphanTokenMover GetNodesInfoProvider returned err: %v", e)
+				continue
+			}
 
 			keepNodes := make(map[string]bool)
 			runIter := func() bool {
-				cinfoCache.RLock()
-				defer cinfoCache.RUnlock()
+				ninfo.RLock()
+				defer ninfo.RUnlock()
 
-				activeNodes := cinfoCache.GetActiveIndexerNodes()
+				activeNodes := ninfo.GetActiveIndexerNodes()
 				if len(activeNodes) <= 0 {
 					return false
 				}
@@ -769,12 +794,12 @@ func (m *schedIndexCreator) keyspaceMonitor() {
 
 			skipIter := false
 			func() {
-				m.cinfoLock.Lock()
-				defer m.cinfoLock.Unlock()
+				m.cinfoProviderLock.Lock()
+				defer m.cinfoProviderLock.Unlock()
 
-				if m.cinfoClient == nil {
-					m.cinfoClient = m.getCinfoNoLock()
-					if m.cinfoClient == nil {
+				if m.cinfoProvider == nil {
+					m.cinfoProvider = m.getCinfoNoLock()
+					if m.cinfoProvider == nil {
 						logging.Warnf("schedIndexCreator:keyspaceMonitor nil cluster info. Skipping iteration.")
 						skipIter = true
 					}
@@ -784,8 +809,6 @@ func (m *schedIndexCreator) keyspaceMonitor() {
 			if skipIter {
 				continue
 			}
-
-			cinfoCache := m.cinfoClient.GetClusterInfoCache()
 
 			buckets := make(map[string]string)
 			scopes := make(map[string]string)
@@ -805,37 +828,45 @@ func (m *schedIndexCreator) keyspaceMonitor() {
 
 				defn := schedToken.Definition
 
+				collnInfo, e := m.cinfoProvider.GetCollectionInfoProvider(defn.Bucket)
+				if e != nil {
+					logging.Errorf("schedIndexCreator:keyspaceMonitor GetCollectionInfoProvider returned err: %v", e)
+					continue
+				}
+
 				scopeKey := fmt.Sprintf("%v:%v", defn.Bucket, defn.Scope)
 				collectionKey := fmt.Sprintf("%v:%v:%v", defn.Bucket, defn.Scope, defn.Collection)
 
 				var bucketUuid, scopeId, collectionId string
 				var ok bool
 				if bucketUuid, ok = buckets[defn.Bucket]; !ok {
-					func() {
-						cinfoCache.RLock()
-						defer cinfoCache.RUnlock()
+					cont := func() bool {
+						collnInfo.RLock()
+						defer collnInfo.RUnlock()
 
-						bucketUuid = cinfoCache.GetBucketUUID(defn.Bucket)
+						bucketUuid, err = m.cinfoProvider.GetBucketUUID(defn.Bucket)
+						if err != nil {
+							logging.Errorf("schedIndexCreator:keyspaceMonitor GetBucketUUID returned err: %v", e)
+							return true
+						}
 						buckets[defn.Bucket] = bucketUuid
+						return false
 					}()
+					if cont {
+						continue
+					}
 				}
 
 				if scopeId, ok = scopes[scopeKey]; !ok {
 					func() {
-						cinfoCache.RLock()
-						defer cinfoCache.RUnlock()
-
-						scopeId = cinfoCache.GetScopeID(defn.Bucket, defn.Scope)
+						scopeId = collnInfo.ScopeID(defn.Bucket, defn.Scope)
 						scopes[scopeKey] = scopeId
 					}()
 				}
 
 				if collectionId, ok = collections[collectionKey]; !ok {
 					func() {
-						cinfoCache.RLock()
-						defer cinfoCache.RUnlock()
-
-						collectionId = cinfoCache.GetCollectionID(defn.Bucket, defn.Scope, defn.Collection)
+						collectionId = collnInfo.CollectionID(defn.Bucket, defn.Scope, defn.Collection)
 						collections[collectionKey] = collectionId
 					}()
 				}
@@ -869,25 +900,27 @@ func (m *schedIndexCreator) cleanupTokens(defnId common.IndexDefnId) {
 	}
 }
 
-func (m *schedIndexCreator) getCinfoNoLock() *common.ClusterInfoClient {
+func (m *schedIndexCreator) getCinfoNoLock() common.ClusterInfoProvider {
 	cfg := m.config.Load()
 	clusterURL := cfg["clusterAddr"].String()
-	cinfoClient, err := common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
+	useCinfolite := cfg["settings.use_cinfo_lite"].Bool()
+
+	cip, err := common.NewClusterInfoProvider(useCinfolite, clusterURL, common.DEFAULT_POOL, cfg)
 	if err != nil {
 		logging.Warnf("schedIndexCreator:getCinfoNoLock error in getting cluster info client %v", err)
 		return nil
 	}
 
-	if cinfoClient == nil {
+	if cip == nil {
 		logging.Warnf("schedIndexCreator:getCinfoNoLock nil cluster info client")
 		return nil
 	}
 
-	if cinfoClient != nil {
-		cinfoClient.SetUserAgent("schedIndexCreator")
+	if cip != nil {
+		cip.SetUserAgent("schedIndexCreator")
 	}
 
-	return cinfoClient
+	return cip
 }
 
 func (m *schedIndexCreator) Close() {

@@ -1730,13 +1730,7 @@ func (c *ClusterInfoCacheLiteClient) GetLocalNodeUUID() (string, error) {
 	return "", fmt.Errorf("no node has ThisNode set")
 }
 
-func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
-	nodes []couchbase.Node, err error) {
-	ni, err := c.GetNodesInfo()
-	if err != nil {
-		return nil, err
-	}
-
+func (ni *NodesInfo) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	for _, n := range ni.nodes {
 		for _, s := range n.Services {
 			if s == "index" {
@@ -1746,6 +1740,16 @@ func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
 	}
 
 	return
+}
+
+func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
+	nodes []couchbase.Node, err error) {
+	ni, err := c.GetNodesInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	return ni.GetActiveIndexerNodes(), nil
 }
 
 func (c *ClusterInfoCacheLiteClient) GetFailedIndexerNodes() (

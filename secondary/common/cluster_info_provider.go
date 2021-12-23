@@ -1,5 +1,7 @@
 package common
 
+import couchbase "github.com/couchbase/indexing/secondary/dcp"
+
 /*
 * ClusterInfoProvider will allow user to get Nodes, Collection and Bucket Info Providers
 * ClusterInfoProvider can also provide few API to avoid redirection to NodesInfoProvider
@@ -69,6 +71,8 @@ type NodesInfoProvider interface {
 	GetLocalHostname() (string, error)
 	GetLocalNodeUUID() string
 	GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error)
+
+	GetActiveIndexerNodes() (nodes []couchbase.Node)
 
 	// Stub functions to make nodesInfo replaceable with clusterInfoCache
 	SetUserAgent(userAgent string)
