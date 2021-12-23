@@ -27,8 +27,8 @@ import (
     data which can have some customization at user level if needed.
 5.  Indices to data like NodeId can become invalid on update. So they must not
     be used across multiple instances. Eg: GetNodeInfo will give us a nodeInfo
-    pointer. nodeInfo.GetNodesByServiceType will give us NodeIds these should be
-    used with another instance of nodeInfo fetched again later.
+    pointer. nodeInfo.GetNodesByServiceType will give us NodeIds these should not
+    be used with another instance of nodeInfo fetched again later.
 */
 
 var singletonCICLContainer struct {
@@ -306,7 +306,6 @@ func newBucketInfoWithErr(bucketName string, err error) *bucketInfo {
 
 type clusterInfoCacheLite struct {
 	logPrefix string
-	isIPv6    bool
 	nih       nodesInfoHolder
 
 	cihm     map[string]collectionInfoHolder
@@ -536,7 +535,6 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		return nil, err
 	}
 
-	cicm.cicl.isIPv6 = cicm.client.Info.IsIPv6
 	cicm.client.SetUserAgent(logPrefix)
 
 	// Try fetching only once in the constructor
@@ -553,7 +551,6 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		cicm.bucketURLMap[k] = v
 	}
 
-	go cicm.watchClusterChanges()
 	go cicm.handlePoolsChangeNotifications()
 	for _, bn := range ni.bucketNames {
 		msg := &couchbase.Bucket{Name: bn.Name}
@@ -571,6 +568,7 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 	}
 	go cicm.handleCollectionManifestChanges()
 	go cicm.handleBucketInfoChanges()
+	go cicm.watchClusterChanges(false)
 	go cicm.periodicUpdater()
 
 	logging.Infof("newClusterInfoCacheLiteManager: started New clusterInfoCacheManager")
@@ -1081,12 +1079,34 @@ func (cicm *clusterInfoCacheLiteManager) handleBucketInfoChangesPerBucket(
 	cicm.cicl.deleteBucketInfo(bucketName)
 }
 
-func (cicm *clusterInfoCacheLiteManager) watchClusterChanges() {
+func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 	selfRestart := func() {
 		logging.Infof("clusterInfoCacheLiteManager watchClusterChanges: restarting..")
 		r := atomic.LoadUint32(&cicm.notifierRetrySleep)
 		time.Sleep(time.Duration(r) * time.Second)
-		go cicm.watchClusterChanges()
+		go cicm.watchClusterChanges(true)
+	}
+
+	if isRestart {
+		bns, err := cicm.GetBucketNames()
+		if err != nil {
+			logging.Errorf("clusterInfoCacheLiteManager watchClusterChanges GetBucketNames failed with error %v", err)
+			selfRestart()
+			return
+		}
+
+		notif := Notification{
+			Type: ForceUpdateNotification,
+			Msg:  &couchbase.Pool{},
+		}
+		cicm.poolsStreamingCh <- notif
+
+		for _, bn := range bns {
+			msg := &couchbase.Bucket{Name: bn.Name}
+			notif = Notification{Type: ForceUpdateNotification, Msg: msg}
+			cicm.collnManifestCh <- notif
+			cicm.bucketInfoCh <- notif
+		}
 	}
 
 	scn, err := NewServicesChangeNotifier(cicm.clusterURL, cicm.poolName)
