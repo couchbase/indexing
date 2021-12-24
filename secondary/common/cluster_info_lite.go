@@ -1851,14 +1851,35 @@ func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	return
 }
 
-func (c *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
+// GetBucketUUID returns UUID if user is able to get bucketInfo from GetBucketInfo
+// For deleted buckets GetBucketInfo will not return bucketInfo and error out
+// User must fetch a new pointer every time to avoid having stale pointer due to
+// atomic updates from the cache manager
+// It returns error to satisfy Interface
+func (bi *bucketInfo) GetBucketUUID() (uuid string, err error) {
+	b := bi.bucket
+	return b.UUID, nil
+}
+
+func (cicl *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
-	bi, err := c.GetBucketInfo(bucketName)
+	bi, err := cicl.GetBucketInfo(bucketName)
 	if err != nil {
 		return nil, err
 	}
 
 	return bi.GetLocalVBuckets(bucketName)
+}
+
+// GetBucketUUID returns error and BUCKET_UUID_NIL for deleted buckets
+func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucketName string) (uuid string,
+	err error) {
+	bi, err := cicl.GetBucketInfo(bucketName)
+	if err != nil {
+		return BUCKET_UUID_NIL, err
+	}
+
+	return bi.GetBucketUUID()
 }
 
 //
@@ -1926,16 +1947,6 @@ func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (u
 	}
 
 	return ci.GetIndexScopeLimit(bucket, scope)
-}
-
-// TODO: Move this to bucketInfo
-func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucket string) (uuid string,
-	err error) {
-	uuid, err = GetBucketUUID(cicl.clusterURL, bucket)
-	if err != nil {
-		uuid = BUCKET_UUID_NIL
-	}
-	return uuid, err
 }
 
 // Stub function to implement ClusterInfoProvider interface
