@@ -725,19 +725,22 @@ func (m *requestHandlerContext) IndexStatusErrorf(msg string) {
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *target, getAll bool, omitScheduled bool) (
 	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
 
-	cinfo := m.mgr.reqcic.GetClusterInfoCache()
-	if cinfo == nil {
+	m.mgr.cinfoProviderLockReqHandler.RLock()
+	defer m.mgr.cinfoProviderLockReqHandler.RUnlock()
+
+	ninfo, err := m.mgr.cinfoProviderReqHandler.GetNodesInfoProvider()
+	if err != nil || ninfo == nil {
 		errMsg := "RequestHandler::getIndexStatus ClusterInfoCache unavailable in IndexManager"
 		logging.Errorf(errMsg)
 		err = errors.New(errMsg)
 		return nil, nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
 
-	cinfo.RLock()
-	defer cinfo.RUnlock()
+	ninfo.RLock()
+	defer ninfo.RUnlock()
 
 	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	nids := ninfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	defns := make(map[common.IndexDefnId]common.IndexDefn) // map from defnId to defn
@@ -761,14 +764,14 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 
 		// mgmtAddr is this node's "cluster" address (host:uiPort), NOT a key for caches
 		// address here will be with encrypted port if encryption is enabled.
-		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
+		mgmtAddr, err := ninfo.GetServiceAddress(nid, "mgmt", true)
 		if err != nil {
 			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
 			m.IndexStatusErrorf(msg)
 			continue
 		}
 
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+		addr, err := ninfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, true) for node id %v. Error = %v", nid, err)
 			m.IndexStatusErrorf(msg)
@@ -777,7 +780,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		}
 
 		// Use same un-encrypted port number as key, even if the encryption level changes in between
-		hostname, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, false)
+		hostname, err := ninfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, false)
 		if err != nil {
 			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error from GetServiceAddress(indexHttp, false) for node id %v. Error = %v", nid, err)
 			m.IndexStatusErrorf(msg)
@@ -796,7 +799,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		// bucket or collection
 		metaAcrossHosts[hostKey] = nil
 		localMeta, latest, localMetaIsFromCache, err := m.getLocalIndexMetadataForNode(
-			addr, hostname, cinfo)
+			addr, hostname, ninfo)
 		if localMeta == nil || err != nil {
 			msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 			m.IndexStatusErrorf(msg)
@@ -822,7 +825,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 			stats = m.rhc.GetStatsFromCache(hostKey)
 		}
 		if stats == nil { // full-bore stats retrieval needed
-			stats, latest, err = m.getStatsForNode(addr, hostname, cinfo)
+			stats, latest, err = m.getStatsForNode(addr, hostname, ninfo)
 			if stats == nil || err != nil {
 				msg := fmt.Sprintf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
 				m.IndexStatusErrorf(msg)
@@ -2605,7 +2608,7 @@ func (s indexStatusSorter) Less(i, j int) bool {
 // based on the cached ETag), else they will be from whatever indexer host has the most
 // recent cached version.
 func (m *requestHandlerContext) getLocalIndexMetadataForNode(
-	addr string, host string, cinfo *common.ClusterInfoCache) (
+	addr string, host string, ninfo common.NodesInfoProvider) (
 	localMeta *LocalIndexMetadata, latest bool, isFromCache bool, err error) {
 
 	meta, isFromCache, err := m.getLocalIndexMetadataFromREST(addr, host)
@@ -2613,11 +2616,11 @@ func (m *requestHandlerContext) getLocalIndexMetadataForNode(
 		return meta, true, isFromCache, nil
 	}
 
-	if cinfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
+	if ninfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
 		var latest *LocalIndexMetadata
-		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		nids := ninfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
-			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+			addr, err1 := ninfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err1 == nil {
 				cached, err1 := m.getCachedLocalIndexMetadataFromREST(addr, host)
 				if cached != nil && err1 == nil {
@@ -2701,18 +2704,18 @@ func (m *requestHandlerContext) getCachedLocalIndexMetadataFromREST(addr string,
 // that host (or from local cache if the source host reported they have not changed
 // based on the cached ETag), else they will be from whatever indexer host has the
 // most recent cached version.
-func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo *common.ClusterInfoCache) (stats *common.Statistics, latest bool, err error) {
+func (m *requestHandlerContext) getStatsForNode(addr string, host string, ninfo common.NodesInfoProvider) (stats *common.Statistics, latest bool, err error) {
 
 	stats, err = m.getStatsFromREST(addr, host)
 	if err == nil {
 		return stats, true, nil
 	}
 
-	if cinfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
+	if ninfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
 		var latest *common.Statistics
-		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		nids := ninfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
-			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+			addr, err1 := ninfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err1 == nil {
 				cached, err1 := m.getCachedStatsFromREST(addr, host)
 				if cached != nil && err1 == nil {
@@ -2864,15 +2867,17 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 	var bucketUUID, scopeId, collectionId string
 	var err error
 
-	cinfo := m.mgr.reqcic.GetClusterInfoCache()
-	if cinfo == nil {
+	m.mgr.cinfoProviderLockReqHandler.RLock()
+	collnInfo, err := m.mgr.cinfoProviderReqHandler.GetCollectionInfoProvider(defn.Bucket)
+	m.mgr.cinfoProviderLockReqHandler.RUnlock()
+	if err != nil || collnInfo == nil {
 		errMsg := "ClusterInfoCache unavailable in IndexManager"
 		logging.Errorf("validateScheduleCreateRequest: %v", errMsg)
 		err = errors.New(errMsg)
 		return "", "", "", err
 	}
 
-	err = cinfo.FetchBucketInfo(defn.Bucket)
+	err = collnInfo.FetchBucketInfo(defn.Bucket)
 	if err != nil {
 		errMsg := "ClusterInfoCache unable to FetchBucketInfo"
 		logging.Errorf("validateScheduleCreateRequest: %v", errMsg)
@@ -2880,7 +2885,7 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 		return "", "", "", err
 	}
 
-	err = cinfo.FetchManifestInfo(defn.Bucket)
+	err = collnInfo.FetchManifestInfo(defn.Bucket)
 	if err != nil {
 		errMsg := "ClusterInfoCache unable to FetchManifestInfo"
 		logging.Errorf("validateScheduleCreateRequest: %v", errMsg)
@@ -2888,12 +2893,12 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 		return "", "", "", err
 	}
 
-	bucketUUID = cinfo.GetBucketUUID(defn.Bucket)
-	if bucketUUID == common.BUCKET_UUID_NIL {
+	bucketUUID, err = m.mgr.cinfoProviderReqHandler.GetBucketUUID(defn.Bucket)
+	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
 		return "", "", "", common.ErrBucketNotFound
 	}
 
-	scopeId, collectionId = cinfo.GetScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
+	scopeId, collectionId = collnInfo.ScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
 	if scopeId == collections.SCOPE_ID_NIL {
 		return "", "", "", common.ErrScopeNotFound
 	}
@@ -2940,10 +2945,11 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 
 func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string, error) {
 
-	var cinfo *common.ClusterInfoCache
-	cinfo = m.mgr.reqcic.GetClusterInfoCache()
+	m.mgr.cinfoProviderLockReqHandler.RLock()
+	defer m.mgr.cinfoProviderLockReqHandler.RUnlock()
 
-	if cinfo == nil {
+	ninfo, err := m.mgr.cinfoProviderReqHandler.GetNodesInfoProvider()
+	if err != nil || ninfo == nil {
 		return false, "", errors.New("ClusterInfoCache unavailable in IndexManager")
 	}
 
@@ -2951,9 +2957,9 @@ func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string,
 		return true, "", nil
 	}
 
-	cinfo.RLock()
-	cVersion := cinfo.GetClusterVersion()
-	cinfo.RUnlock()
+	ninfo.RLock()
+	cVersion := ninfo.GetClusterVersion()
+	ninfo.RUnlock()
 
 	if cVersion < common.INDEXER_70_VERSION {
 		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
@@ -2965,7 +2971,7 @@ func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string,
 		return true, "", nil
 	}
 
-	ver, err := common.GetInternalClusterVersion(cinfo)
+	ver, err := common.GetInternalClusterVersion(ninfo)
 	if err != nil {
 		return false, "", err
 	}
@@ -2982,17 +2988,18 @@ func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string,
 }
 
 func (m *requestHandlerContext) isEphemeral(bucket string) (bool, error) {
-	var cinfo *common.ClusterInfoCache
-	cinfo = m.mgr.reqcic.GetClusterInfoCache()
+	m.mgr.cinfoProviderLockReqHandler.RLock()
+	defer m.mgr.cinfoProviderLockReqHandler.RUnlock()
 
-	if cinfo == nil {
+	binfo, err := m.mgr.cinfoProviderReqHandler.GetBucketInfoProvider(bucket)
+	if err != nil || binfo == nil {
 		return false, errors.New("ClusterInfoCache unavailable in IndexManager")
 	}
 
-	cinfo.RLock()
-	defer cinfo.RUnlock()
+	binfo.RLock()
+	defer binfo.RUnlock()
 
-	return cinfo.IsEphemeral(bucket)
+	return binfo.IsEphemeral(bucket)
 }
 
 func (m *requestHandlerContext) validateStorageMode(defn *common.IndexDefn) error {
@@ -3490,8 +3497,9 @@ type schedTokenMonitor struct {
 	lCloseCh  chan bool
 	processed map[string]common.IndexerId
 
-	cinfo *common.ClusterInfoCache
-	mgr   *IndexManager
+	cinfo     *common.ClusterInfoCache
+	cinfoLock sync.Mutex
+	mgr       *IndexManager
 }
 
 func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
@@ -3507,65 +3515,67 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 		mgr:       mgr,
 	}
 
+	cinfo, err := common.FetchNewClusterInfoCache2(s.mgr.clusterURL, common.DEFAULT_POOL, "request_handler:schedTokenMonitor")
+	if err != nil || cinfo == nil {
+		logging.Errorf("newSchedTokenMonitor: Error fetching cluster info cache %v", err)
+	}
+	if cinfo != nil {
+		err = cinfo.FetchNodesAndSvsInfo()
+		if err != nil {
+			logging.Errorf("newSchedTokenMonitor: Error fetching nodes and svs in cluster info cache %v", err)
+			cinfo = nil
+		}
+	}
+	s.cinfoLock.Lock()
+	defer s.cinfoLock.Unlock()
+	s.cinfo = cinfo
+
 	s.listener.ListenTokens()
 
-	cinfo := s.mgr.reqcic.GetClusterInfoCache()
-	if cinfo == nil {
-		logging.Fatalf("newSchedTokenMonitor: ClusterInfoCache unavailable")
-		return s
-	}
-
-	s.cinfo = cinfo
 	return s
 }
 
-// getNodeAddrLOCKED
-// Caller must be holding s.cinfo's anonymous RWMutex at least read locked.
-func (s *schedTokenMonitor) getNodeAddrLOCKED(token *mc.ScheduleCreateToken) (string, error) {
-
-	if s.cinfo == nil {
-		s.cinfo = s.mgr.reqcic.GetClusterInfoCache()
-		if s.cinfo == nil {
-			return "", fmt.Errorf("ClusterInfoCache unavailable")
-		}
-	}
-
-	nodeUUID := fmt.Sprintf("%v", token.IndexerId)
-	fetched := false
+func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, error) {
+	s.cinfoLock.Lock()
+	defer s.cinfoLock.Unlock()
 
 	var nid common.NodeId
 	var found bool
+	nodeUUID := fmt.Sprintf("%v", token.IndexerId)
 
-	for {
+	if s.cinfo != nil {
 		nid, found = s.cinfo.GetNodeIdByUUID(nodeUUID)
 		if found {
-			break
+			return s.cinfo.GetServiceAddress(nid, "mgmt", true)
 		}
-
-		if fetched {
-			return "", fmt.Errorf("node id for %v not found", nodeUUID)
+	} else {
+		cinfo, err := common.FetchNewClusterInfoCache2(s.mgr.clusterURL, common.DEFAULT_POOL, "request_handler:schedTokenMonitor")
+		if err != nil || cinfo == nil {
+			logging.Errorf("getNodeAddr: Error fetching cluster info cache %v", err)
+			return "", fmt.Errorf("ClusterInfoCache unavailable")
 		}
-
-		var cinfo *common.ClusterInfoCache
-		var err error
-		// Try to fetch the latest cluster info
-		if cinfo, err = common.FetchNewClusterInfoCache(s.mgr.clusterURL, common.DEFAULT_POOL, "request_handler:schedTokenMonitor"); err != nil || cinfo == nil {
-			logging.Errorf("schedTokenMonitor: Error fetching cluster info cache %v", err)
-			return "", err
-		}
-
 		s.cinfo = cinfo
-		fetched = true
 	}
 
-	return s.cinfo.GetServiceAddress(nid, "mgmt", true)
+	err := s.cinfo.FetchNodesAndSvsInfo()
+	if err != nil {
+		s.cinfo = nil
+		return "", fmt.Errorf("ClusterInfoCache unable to fetch nodes and svs info")
+	}
+
+	nid, found = s.cinfo.GetNodeIdByUUID(nodeUUID)
+	if found {
+		return s.cinfo.GetServiceAddress(nid, "mgmt", true)
+	}
+
+	return "", fmt.Errorf("node id for %v not found", nodeUUID)
 }
 
 func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
 
-	mgmtAddr, err := s.getNodeAddrLOCKED(token)
+	mgmtAddr, err := s.getNodeAddr(token)
 	if err != nil {
-		logging.Errorf("schedTokenMonitor::makeIndexStatus: error in getNodeAddrLOCKED: %v", err)
+		logging.Errorf("schedTokenMonitor::makeIndexStatus: error in getNodeAddr: %v", err)
 		return nil
 	}
 
@@ -3739,9 +3749,9 @@ func (s *schedTokenMonitor) markIndexFailed(token *mc.StopScheduleCreateToken) b
 func (s *schedTokenMonitor) updateIndex(token *mc.ScheduleCreateToken) {
 	for _, index := range s.indexes {
 		if index.DefnId == token.Definition.DefnId {
-			mgmtAddr, err := s.getNodeAddrLOCKED(token)
+			mgmtAddr, err := s.getNodeAddr(token)
 			if err != nil {
-				logging.Errorf("schedTokenMonitor::updateIndex: error in getNodeAddrLOCKED: %v",
+				logging.Errorf("schedTokenMonitor::updateIndex: error in getNodeAddr: %v",
 					err)
 				return
 			}

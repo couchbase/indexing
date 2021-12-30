@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -961,7 +962,7 @@ func (cicm *clusterInfoCacheLiteManager) handleCollectionManifestChanges() {
 				start(b.Name)
 				ch = cicm.perBucketCollnManifestCh[b.Name]
 			} else {
-				logging.Warnf("handleCollectionManifestChanges: ignoring %v as bucket is not found", notif)
+				logging.Warnf("handleCollectionManifestChanges: ignoring %v as bucket is not found bucket %v", notif, b.Name)
 				if notif.Type == ForceUpdateNotification {
 					if err == nil {
 						err = ErrBucketNotFound
@@ -1071,7 +1072,7 @@ func (cicm *clusterInfoCacheLiteManager) handleBucketInfoChanges() {
 				start(b.Name)
 				ch = cicm.bucketInfoChPerBucket[b.Name]
 			} else {
-				logging.Warnf("handleBucketInfoChanges: ignoring %v as bucket is not found", notif)
+				logging.Warnf("handleBucketInfoChanges: ignoring %v as bucket is not found bucket %v", notif, b.Name)
 				if notif.Type == ForceUpdateNotification {
 					if err == nil {
 						err = ErrBucketNotFound
@@ -1915,6 +1916,11 @@ func (c *ClusterInfoCacheLiteClient) GetBucketInfo(bucketName string) (
 	return c.ciclMgr.bucketInfoSync(bucketName, c.eventWaitTimeoutSeconds)
 }
 
+func (bi *bucketInfo) IsEphemeral(bucket string) (bool, error) {
+	t := bi.bucket.Type
+	return strings.EqualFold(t, "ephemeral"), nil
+}
+
 func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
 
@@ -1954,10 +1960,9 @@ func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 // For deleted buckets GetBucketInfo will not return bucketInfo and error out
 // User must fetch a new pointer every time to avoid having stale pointer due to
 // atomic updates from the cache manager
-// It returns error to satisfy Interface
-func (bi *bucketInfo) GetBucketUUID() (uuid string, err error) {
+func (bi *bucketInfo) GetBucketUUID(bucket string) (uuid string) {
 	b := bi.bucket
-	return b.UUID, nil
+	return b.UUID
 }
 
 func (bi *bucketInfo) GetVBmap(kvaddrs []string) (map[string][]uint16, error) {
@@ -1978,11 +1983,22 @@ func (cicl *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
 func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucketName string) (uuid string,
 	err error) {
 	bi, err := cicl.GetBucketInfo(bucketName)
-	if err != nil {
+	if err == ErrBucketNotFound {
+		return BUCKET_UUID_NIL, nil
+	} else if err != nil {
 		return BUCKET_UUID_NIL, err
 	}
 
-	return bi.GetBucketUUID()
+	return bi.GetBucketUUID(bucketName), nil
+}
+
+func (cicl *ClusterInfoCacheLiteClient) IsEphemeral(bucketName string) (bool, error) {
+	bi, err := cicl.GetBucketInfo(bucketName)
+	if err != nil {
+		return false, err
+	}
+
+	return bi.IsEphemeral(bucketName)
 }
 
 //
@@ -2066,3 +2082,6 @@ func (ni *NodesInfo) FetchNodesAndSvsInfo() (err error) { return nil }
 
 func (ni *bucketInfo) FetchBucketInfo(bucketName string) error { return nil }
 func (ni *bucketInfo) FetchWithLock() error                    { return nil }
+
+func (ci *collectionInfo) FetchBucketInfo(bucketName string) error   { return nil }
+func (ci *collectionInfo) FetchManifestInfo(bucketName string) error { return nil }

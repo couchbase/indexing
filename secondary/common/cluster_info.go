@@ -1721,6 +1721,14 @@ func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {
 	return uuid, nil
 }
 
+func (c *ClusterInfoClient) GetCollectionID(bucket, scope, collection string) string {
+	cinfo := c.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	return cinfo.pool.GetCollectionID(bucket, scope, collection)
+}
+
 func (cic *ClusterInfoClient) ClusterVersion() uint64 {
 
 	cinfo := cic.GetClusterInfoCache()

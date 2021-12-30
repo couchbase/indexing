@@ -1106,7 +1106,7 @@ loop:
 					continue
 				}
 
-				bucketUUID, _ := bucketInfo.GetBucketUUID()
+				bucketUUID := bucketInfo.GetBucketUUID(bucketn)
 				if bucketUUID != bucket.UUID {
 					logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
 						"due to UUID mismatch, currUUID: %v, uuid in book-keeping: %v ", bucketn, bucketUUID, bucket.UUID)

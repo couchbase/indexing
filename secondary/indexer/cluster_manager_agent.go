@@ -403,7 +403,10 @@ func (c *clustMgrAgent) handleConfigUpdate(cmd Message) {
 
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	config := cfgUpdate.GetConfig()
-	c.mgr.NotifyConfigUpdate(config)
+	err := c.mgr.NotifyConfigUpdate(config)
+	if err != nil {
+		logging.Errorf("clusterMgrAgent: NotifyConfigUpdate(config) returned err %v", err)
+	}
 }
 
 func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
