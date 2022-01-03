@@ -5,6 +5,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/couchbase/indexing/secondary/projector/memmanager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/system"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -87,8 +89,13 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		statsStopCh:          make(chan bool, 1),
 	}
 
+	sysStats, err := initSystemStatsHandler()
+	c.CrashOnError(err)
+
+	updateMaxCpuPercent(sysStats, config)
+
 	// Setup dynamic configuration propagation
-	config, err := c.GetSettingsConfig(config)
+	config, err = c.GetSettingsConfig(config)
 	c.CrashOnError(err)
 
 	pconfig := config.SectionConfig("projector.", true /*trim*/)
@@ -116,7 +123,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	p.cinfoProvider = cip
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
-	memmanager.Init(systemStatsCollectionInterval) // Initialize memory manager
+	memmanager.Init(systemStatsCollectionInterval, sysStats) // Initialize memory manager
 
 	p.stats = NewProjectorStats()
 	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
@@ -1148,4 +1155,36 @@ func (p *Projector) getNodeUUID() (string, error) {
 
 func GetNodeUUID() string {
 	return nodeUUID
+}
+
+func updateMaxCpuPercent(stats *system.SystemStats, config c.Config) {
+	cgroupInfo := stats.GetControlGroupInfo()
+
+	if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
+		maxCpu := cgroupInfo.NumCpuPrc
+		cpuPercent := int(math.Max(400.0, float64(maxCpu)*0.25))
+		config.SetValue("projector.maxCpuPercent", cpuPercent)
+		logging.Infof("Projector::updateMaxCpuPercent: Updating projector max cpu percent to: %v "+
+			"as cores availble for this container are: %v", cpuPercent, maxCpu)
+	} else {
+		logging.Infof("Projector::updateMaxCpuPercent: Sigar CGroupInfo not supported")
+	}
+}
+
+func initSystemStatsHandler() (*system.SystemStats, error) {
+	var stats *system.SystemStats
+	var err error
+	fn := func(r int, err error) error {
+		// open sigar for stats
+		stats, err = system.NewSystemStats()
+		if err != nil {
+			logging.Errorf("initSystemStatsHandler: Fail to start system stat collector. Err=%v", err)
+			return err
+		}
+		return nil
+	}
+
+	rh := common.NewRetryHelper(int(common.SIGAR_INIT_RETRIES), time.Second*3, 1, fn)
+	err = rh.Run()
+	return stats, err
 }

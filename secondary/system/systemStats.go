@@ -2,6 +2,7 @@ package system
 
 //#cgo LDFLAGS: -lsigar
 //#include <sigar.h>
+//#include <sigar_control_group.h>
 import "C"
 
 import (
@@ -142,4 +143,32 @@ func (h *SystemStats) SigarCpuGet() (*SigarCpuT, error) {
 
 		Total: uint64(cpu.total),
 	}, nil
+}
+
+type SigarControlGroupInfo struct {
+	Supported uint8 // "1" if cgroup info is supprted, "0" otherwise
+	Version   uint8 // "1" for cgroup v1, "2" for cgroup v2
+
+	// The number of CPUs available in the cgroup (in % where 100% represents 1 full core)
+	// Derived from (cpu.cfs_quota_us/cpu.cfs_period_us) or COUCHBASE_CPU_COUNT env variable
+	NumCpuPrc uint16
+
+	// Maximum memory available in the group. Derived from memory.max
+	MemoryMax uint64
+
+	// Current memory usage by this cgroup. Derived from memory.usage_in_bytes
+	MemoryCurrent uint64
+}
+
+func (h *SystemStats) GetControlGroupInfo() *SigarControlGroupInfo {
+	var info C.sigar_control_group_info_t
+	C.sigar_get_control_group_info(&info)
+
+	return &SigarControlGroupInfo{
+		Supported:     uint8(info.supported),
+		Version:       uint8(info.version),
+		NumCpuPrc:     uint16(info.num_cpu_prc),
+		MemoryMax:     uint64(info.memory_max),
+		MemoryCurrent: uint64(info.memory_current),
+	}
 }

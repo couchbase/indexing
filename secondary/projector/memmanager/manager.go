@@ -60,19 +60,12 @@ type MemManager struct {
 	stats *system.SystemStats
 }
 
-func Init(statsCollectionInterval int64) error {
+func Init(statsCollectionInterval int64, stats *system.SystemStats) error {
 	memMgr = &MemManager{
 		ms: &runtime.MemStats{},
 	}
 	memMgr.recentSamples = common.NewSample(4)
 	memMgr.olderSamples = common.NewSample(12)
-
-	// open sigar for stats
-	stats, err := system.NewSystemStats()
-	if err != nil {
-		logging.Errorf("Fail to start system stat collector. Err=%v", err)
-		return err
-	}
 	memMgr.stats = stats
 
 	// skip the first one
@@ -132,7 +125,8 @@ func (memMgr *MemManager) monitorMemUsage() {
 				currRSS, currFreeMem = rssBef, freeMemBef
 			}
 
-			throttleLevel := computeThrottleLevel(currRSS, currFreeMem, memMgr.memTotal)
+			memTotal := GetMemTotal()
+			throttleLevel := computeThrottleLevel(currRSS, currFreeMem, memTotal)
 			if throttleLevel > memThrottler.THROTTLE_LEVEL_10 {
 				throttleLevel = memThrottler.THROTTLE_LEVEL_10
 			}
