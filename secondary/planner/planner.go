@@ -5763,6 +5763,7 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 		}
 
 		satisfyConstraint := true
+		enforceConstraintOrig := s.enforceConstraint
 		s.enforceConstraint = true
 		for _, index := range node.Indexes {
 			if s.constraint.CanAddIndex(s, indexer, index) != NoViolation {
@@ -5770,7 +5771,7 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 				break
 			}
 		}
-		s.enforceConstraint = false
+		s.enforceConstraint = enforceConstraintOrig
 
 		if satisfyConstraint {
 			return indexer
@@ -6991,7 +6992,7 @@ func canUseGreedyIndexPlacement(config *RunConfig, indexes []*IndexUsage,
 }
 
 func (p *GreedyPlanner) initializeSolution(command CommandType, solution *Solution) {
-	// Do not enforce constraints (keep solution.enforceConstraints as false) as the
+	// Do not enforce constraints (keep solution.enforceConstraint as false) as the
 	// greedy approach anyways places the indexes on the least loaded nodes.
 	solution.command = command
 	solution.constraint = p.constraint
