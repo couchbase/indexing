@@ -58,6 +58,15 @@ type NodesInfo struct {
 	bucketNames      []couchbase.BucketName
 	bucketURLMap     map[string]string
 
+	// Note: Static port information is populated with information from the
+	// command line. This is only used to get the port information on local
+	// node. This is needed as PoolChangeNotification does not have port
+	// numbers specific to indexer till service manager register with ns_server
+	// but we will need this port information before that registration in the
+	// boot process
+	useStaticPorts bool
+	servicePortMap map[string]string
+
 	valid         bool
 	errList       []error
 	lastUpdatedTs time.Time
@@ -124,6 +133,11 @@ func newNodesInfo(pool *couchbase.Pool) *NodesInfo {
 		bucketURLMap[k] = v
 	}
 	newNInfo.bucketURLMap = bucketURLMap
+
+	if ServiceAddrMap != nil {
+		newNInfo.useStaticPorts = true
+		newNInfo.servicePortMap = ServiceAddrMap
+	}
 
 	return newNInfo
 }
@@ -1583,15 +1597,42 @@ func (ni *NodesInfo) GetLocalServiceHost(srvc string, useEncryptedPortMap bool) 
 	return h, nil
 }
 
-func (ni *NodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
-	node := ni.GetCurrentNode()
-	if node == NodeId(-1) {
-		return "", ErrorThisNodeNotFound
+func (ni *NodesInfo) getStaticServicePort(srvc string) (string, error) {
+	if p, ok := ni.servicePortMap[srvc]; ok {
+		return p, nil
+	} else {
+		return "", errors.New(ErrInvalidService.Error() + fmt.Sprintf(": %v", srvc))
 	}
+}
 
-	srvcAddr, err = ni.GetServiceAddress(node, srvc, useEncryptedPortMap)
-	if err != nil {
-		return "", err
+func (ni *NodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
+	if ni.useStaticPorts {
+		h, err := ni.GetLocalHostname()
+		if err != nil {
+			return "", err
+		}
+
+		p, e := ni.getStaticServicePort(srvc)
+		if e != nil {
+			return "", e
+		}
+		srvcAddr = net.JoinHostPort(h, p)
+		if useEncryptedPortMap {
+			srvcAddr, _, _, err = security.EncryptPortFromAddr(srvcAddr)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else {
+		node := ni.GetCurrentNode()
+		if node == NodeId(-1) {
+			return "", ErrorThisNodeNotFound
+		}
+
+		srvcAddr, err = ni.GetServiceAddress(node, srvc, useEncryptedPortMap)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return srvcAddr, nil
@@ -1672,14 +1713,7 @@ func (c *ClusterInfoCacheLiteClient) GetLocalServiceAddress(srvc string,
 		return "", err
 	}
 
-	var nid NodeId
-	for i, ns := range ni.nodesExt {
-		if ns.ThisNode {
-			nid = NodeId(i)
-		}
-	}
-
-	return ni.getServiceAddress(nid, srvc, useEncryptedPortMap)
+	return ni.GetLocalServiceAddress(srvc, useEncryptedPortMap)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetLocalNodeUUID() (string, error) {
