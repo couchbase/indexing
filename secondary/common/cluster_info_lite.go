@@ -560,7 +560,7 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 	// Try fetching only once in the constructor
 	cicm.maxRetries = 1
 
-	ni := cicm.FetchNodesInfo()
+	ni, _ := cicm.FetchNodesInfo()
 	cicm.cicl.nih.Set(ni)
 
 	// Try Fetching default number of times else where
@@ -864,12 +864,21 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 		}
 
 		if fetch {
-			ni = cicm.FetchNodesInfo()
+			ni, p = cicm.FetchNodesInfo()
 		}
 
 		cicm.cicl.nih.Set(ni)
 		if ni.valid {
 			cicm.eventMgr.notify(EVENT_NODEINFO_UPDATED, ni)
+			// On Periodic update send the Pool to bucket and collection channel to check the bucket names
+			if notif.Type == PeriodicUpdateNotification && p != nil {
+				notif := Notification{
+					Type: PoolChangeNotification,
+					Msg:  p,
+				}
+				cicm.collnManifestCh <- notif
+				cicm.bucketInfoCh <- notif
+			}
 		}
 	}
 }
@@ -923,7 +932,9 @@ func (cicm *clusterInfoCacheLiteManager) handleCollectionManifestChanges() {
 			p := (notif.Msg).(*couchbase.Pool)
 
 			hash, err := p.GetBucketURLVersionHash()
-			if err == nil && hash == cicm.collnBucketsHash {
+			if err != nil {
+				logging.Errorf("handleCollectionManifestChanges: GetBucketURLVersionHash returned error %v", err)
+			} else if hash == cicm.collnBucketsHash {
 				continue
 			} else {
 				cicm.collnBucketsHash = hash
@@ -1031,7 +1042,9 @@ func (cicm *clusterInfoCacheLiteManager) handleBucketInfoChanges() {
 			p := (notif.Msg).(*couchbase.Pool)
 
 			hash, err := p.GetBucketURLVersionHash()
-			if err == nil && hash == cicm.bInfoBucketsHash {
+			if err != nil {
+				logging.Errorf("handleBucketInfoChanges: GetBucketURLVersionHash returned error %v", err)
+			} else if hash == cicm.bInfoBucketsHash {
 				continue
 			} else {
 				cicm.bInfoBucketsHash = hash
@@ -1115,26 +1128,40 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 		go cicm.watchClusterChanges(true)
 	}
 
+	var poolReceived bool
+	var poolNotifOnSelfRestartCh chan Notification
 	if isRestart {
-		bns, err := cicm.GetBucketNames()
-		if err != nil {
-			logging.Errorf("clusterInfoCacheLiteManager watchClusterChanges GetBucketNames failed with error %v", err)
-			selfRestart()
-			return
-		}
+		poolReceived = false
+		poolNotifOnSelfRestartCh = make(chan Notification, 1)
+		// Service Notifier Instance gets deleted on bucket delete and we get a selfRestart
+		// * Try to fetch the Pool, update bucket list and force fetch the data to account
+		// for any missed notifications during wait time before restarting.
+		// * Fetching Pool in a go routine here to avoid blocking further notifications.
+		// * Out of order PoolChangeNotification should be ok as the nodeInfo will be fetched
+		// again on hash change or validation failure. Bucket level go routines for collnInfo
+		// and bucketInfo will get updated eventually with PoolChangeNotifications
+		// * If this errors out, periodic update will fix the bucket name list.
+		// * If we already got a PoolChangeNotification after we fetch the data we can skip this
+		go func() {
+			p, err := cicm.client.GetPoolWithoutRefresh(cicm.poolName)
+			if err != nil {
+				logging.Errorf("clusterInfoCacheLiteManager watchClusterChanges GetPoolWithoutRefresh failed with error %v", err)
+				return
+			}
 
-		notif := Notification{
-			Type: ForceUpdateNotification,
-			Msg:  &couchbase.Pool{},
-		}
-		cicm.poolsStreamingCh <- notif
+			notif := Notification{
+				Type: PoolChangeNotification,
+				Msg:  &p,
+			}
+			poolNotifOnSelfRestartCh <- notif
 
-		for _, bn := range bns {
-			msg := &couchbase.Bucket{Name: bn.Name}
-			notif = Notification{Type: ForceUpdateNotification, Msg: msg}
-			cicm.collnManifestCh <- notif
-			cicm.bucketInfoCh <- notif
-		}
+			for _, bn := range p.BucketNames {
+				msg := &couchbase.Bucket{Name: bn.Name}
+				notif = Notification{Type: ForceUpdateNotification, Msg: msg}
+				cicm.collnManifestCh <- notif
+				cicm.bucketInfoCh <- notif
+			}
+		}()
 	}
 
 	scn, err := NewServicesChangeNotifier(cicm.clusterURL, cicm.poolName)
@@ -1157,6 +1184,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 			case PoolChangeNotification:
 				switch (notif.Msg).(type) {
 				case *couchbase.Pool:
+					poolReceived = true
 					cicm.poolsStreamingCh <- notif
 					cicm.collnManifestCh <- notif
 					cicm.bucketInfoCh <- notif
@@ -1172,13 +1200,26 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 					logging.Errorf("clusterInfoCacheLiteManager (CollectionManifestChangeNotification): Invalid message type: %T", notif.Msg)
 				}
 			}
+		case notif, _ := <-poolNotifOnSelfRestartCh:
+			if !poolReceived {
+				switch (notif.Msg).(type) {
+				case *couchbase.Pool:
+					cicm.poolsStreamingCh <- notif
+					cicm.collnManifestCh <- notif
+					cicm.bucketInfoCh <- notif
+					logging.Infof("clusterInfoCacheLiteManager: watchClusterChanges sent notification on self restart")
+				default:
+					logging.Errorf("clusterInfoCacheLiteManager (Pool Change on Restart): Invalid message type: %T", notif.Msg)
+				}
+			}
+			poolNotifOnSelfRestartCh = nil
 		case <-cicm.closeCh:
 			return
 		}
 	}
 }
 
-func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo() *NodesInfo {
+func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo() (*NodesInfo, *couchbase.Pool) {
 	var retryCount uint32 = 0
 	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
 	r := atomic.LoadUint32(&cicm.retryInterval)
@@ -1193,7 +1234,7 @@ retry:
 			time.Sleep(retryInterval)
 			goto retry
 		} else {
-			return newNodesInfoWithError(err)
+			return newNodesInfoWithError(err), nil
 		}
 	}
 
@@ -1206,7 +1247,7 @@ retry:
 			time.Sleep(retryInterval)
 			goto retry
 		} else {
-			return newNodesInfoWithError(err)
+			return newNodesInfoWithError(err), &p
 		}
 	}
 
@@ -1228,11 +1269,11 @@ retry:
 			time.Sleep(retryInterval)
 			goto retry
 		} else {
-			return ni
+			return ni, &p
 		}
 	}
 
-	return ni
+	return ni, &p
 }
 
 func (cicm *clusterInfoCacheLiteManager) FetchCollectionInfo(bucketName string) *collectionInfo {
