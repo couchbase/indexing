@@ -71,6 +71,8 @@ type NodesInfo struct {
 	errList       []error
 	lastUpdatedTs time.Time
 
+	nodeServicesHash string
+
 	StubRWMutex // Stub to make NodesInfo replaceable with ClusterInfoCache
 }
 
@@ -169,6 +171,10 @@ func (ni *NodesInfo) setNodesExt(nodesExt []couchbase.NodeServices) {
 
 func (ni *NodesInfo) setClusterURL(u string) {
 	ni.clusterURL = u
+}
+
+func (ni *NodesInfo) setNodeServicesHash(hash string) {
+	ni.nodeServicesHash = hash
 }
 
 func (ni *NodesInfo) validateNodesAndSvs(connHost string) {
@@ -823,30 +829,38 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 		p := (notif.Msg).(*couchbase.Pool)
 
 		var ni *NodesInfo
+		var err error
+		nodeServicesHash := ""
 		fetch := false
 
 		if notif.Type == ForceUpdateNotification ||
 			notif.Type == PeriodicUpdateNotification {
 			// Force fetch nodesInfo
 			fetch = true
-
+		} else if nodeServicesHash, err = p.GetNodeServicesVersionHash(); err != nil {
+			logging.Errorf("handlePoolsChangeNotifications: GetNodeServicesVersionHash returned err: %v uri: %s", err, p.NodeServicesUri)
+			fetch = true
 		} else if notif.Type == PoolChangeNotification {
 			// Try to use nodes data from Notification
 			ni = newNodesInfo(p)
 			ni.setClusterURL(cicm.clusterURL)
+			ni.setNodeServicesHash(nodeServicesHash)
 
 			// Try to use nodesExt from old nodesInfo
 			oldNInfo := cicm.cicl.nih.Get()
-			if oldNInfo != nil && oldNInfo.nodesExt != nil {
-				ni.setNodesExt(oldNInfo.nodesExt)
-			}
-
-			// Validate and check if its valid
-			ni.validateNodesAndSvs(cicm.client.BaseURL.Host)
-			if !ni.valid {
-				// fetch if invalid
+			if oldNInfo == nil || oldNInfo.nodesExt == nil {
 				fetch = true
+			} else {
+				ni.setNodesExt(oldNInfo.nodesExt)
+
+				if ni.nodeServicesHash == "" || oldNInfo.nodeServicesHash != ni.nodeServicesHash {
+					fetch = true
+				} else if ni.validateNodesAndSvs(cicm.client.BaseURL.Host); !ni.valid {
+					fetch = true
+				}
 			}
+		} else {
+			logging.Errorf("handlePoolsChangeNotifications: unexpected notification %v", notif)
 		}
 
 		if fetch {
@@ -1196,9 +1210,16 @@ retry:
 		}
 	}
 
+	nodeServicesHash, err := p.GetNodeServicesVersionHash()
+	if err != nil {
+		logging.Errorf("FetchNodesInfo: GetNodeServicesVersionHash returned err: %v uri: %s", err, p.NodeServicesUri)
+		nodeServicesHash = ""
+	}
+
 	ni := newNodesInfo(&p)
 	ni.setNodesExt(ps.NodesExt)
 	ni.setClusterURL(cicm.clusterURL)
+	ni.setNodeServicesHash(nodeServicesHash)
 
 	ni.validateNodesAndSvs(cicm.client.BaseURL.Host)
 	if !ni.valid {
@@ -1538,7 +1559,6 @@ func (ni *NodesInfo) GetLocalHostname() (string, error) {
 	}
 
 	return node.Hostname, nil
-
 }
 
 func (ni *NodesInfo) GetLocalHostAddress() (string, error) {
