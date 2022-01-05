@@ -1233,7 +1233,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 		idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] = true
 
-		if ts.GetSnapType() == common.FORCE_COMMIT {
+		if ts.GetSnapType() == common.FORCE_COMMIT || ts.GetSnapType() == common.FORCE_COMMIT_MERGE {
 			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,

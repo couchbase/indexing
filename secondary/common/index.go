@@ -680,6 +680,7 @@ const (
 	NO_SNAP_OSO
 	INMEM_SNAP_OSO
 	DISK_SNAP_OSO
+	FORCE_COMMIT_MERGE
 )
 
 func (s IndexSnapType) String() string {
@@ -699,6 +700,8 @@ func (s IndexSnapType) String() string {
 		return "INMEM_SNAP_OSO"
 	case DISK_SNAP_OSO:
 		return "DISK_SNAP_OSO"
+	case FORCE_COMMIT_MERGE:
+		return "FORCE_COMMIT_MERGE"
 	default:
 		return "INVALID_SNAP_TYPE"
 	}
