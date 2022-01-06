@@ -33,7 +33,32 @@ type metadataClient struct {
 	cluster  string
 	finch    chan bool
 	mdClient *mclient.MetadataProvider
+
+	// indexers contains index metadata from all indexers. indexers.allIndexes is a slice of all
+	// existing indexes (i.e. excluding those that are merely scheduled; "existing" indexes may be
+	// in any state, not neccesarily active yet).
 	indexers unsafe.Pointer // *indexTopology
+
+	// comboIndexeCache is a ptr to a cached object containing a comboIndexes slice that holds both
+	//   1. Scheduled indexes from schedTokenMonitor.scheduledIndexes (via getIndexesCached)
+	//   2. Existing indexes from indexers.allIndexes
+	// and a metaVersion field saving the corresponding indexers.version corresponding to #2.
+	// It is set to nil when a cache invalidating change occurs. Both the invalidating change and
+	// the nilling of comboIndexCache must be done inside comboIndexCacheMut so they are in sync.
+	// The invalidating changes are when either schedTokenMonitor.scheduledIndexes or
+	// indexers.allIndexes is either changed or replaced (the latter happens when indexers
+	// itself is replaced). All changes to comboIndexCache must also be inside comboIndexCacheMut.
+	// Thus when comboIndexCacheMut is held, nobody else can change any of:
+	//   1. indexers.allIndexes
+	//   2. schedTokenMonitor.scheduledIndexes
+	//   3. comboIndexCache
+	// ensuring that every update to comboIndexCache is synced with the current allIndexes and
+	// scheduledIndexes. Each change to allIndexes or scheduledIndexes also sets comboIndexeCache
+	// = nil, so comboIndexCache never misses an invalidating event and thinks it is valid when
+	// really stale.
+	comboIndexCache    unsafe.Pointer // *comboIndexCacheEntry
+	comboIndexCacheMut sync.Mutex     // protects comboIndexesCache coherence
+
 	// config
 	servicesNotifierRetryTm int
 	logtick                 time.Duration
@@ -52,10 +77,16 @@ type metadataClient struct {
 	refreshCnt     int
 	refreshWaitCnt int
 
-	schedTokenMon *schedTokenMonitor
-	indexList     unsafe.Pointer
-	indexListMut  sync.Mutex
-	schedRefresh  uint32
+	schedTokenMon *schedTokenMonitor // singleton with goroutine to monitor scheduled index tokens
+}
+
+// comboIndexCacheEntry is a data class that caches both the most recent list of scheduled plus
+// existing indexes and the metadata version the existing indexes correspond to, so a pointer to a
+// class instance can be retrieved atomically without requiring a mutex at retrieval time to ensure
+// the indexes and metadata version are in sync.
+type comboIndexCacheEntry struct {
+	comboIndexes []*mclient.IndexMetadata // cached list of scheduled + existing indexes
+	metaVersion  uint64                   // metadataClient.indexers.version for comboIndexes
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -72,22 +103,24 @@ type indexTopology struct {
 	// insts could include pending RState inst if there is no corresponding active instance
 	insts      map[common.IndexInstId]*mclient.InstanceDefn
 	rebalInsts map[common.IndexInstId]*mclient.InstanceDefn
-	defns      map[common.IndexDefnId]*mclient.IndexMetadata
-	allIndexes []*mclient.IndexMetadata
+
+	defns      map[common.IndexDefnId]*mclient.IndexMetadata // existing indexes by defnId
+	allIndexes []*mclient.IndexMetadata                      // existing indexes as a slice
 }
 
 func newMetaBridgeClient(
 	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster:       cluster,
-		finch:         make(chan bool),
-		metaCh:        metaCh,
-		mdNotifyCh:    make(chan bool, 1),
-		stNotifyCh:    make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
-		settings:      settings,
-		schedTokenMon: newSchedTokenMonitor(),
+		cluster:    cluster,
+		finch:      make(chan bool),
+		metaCh:     metaCh,
+		mdNotifyCh: make(chan bool, 1),
+		stNotifyCh: make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
+		settings:   settings,
 	}
+
+	b.schedTokenMon = newSchedTokenMonitor(b)
 
 	b.refreshCond = sync.NewCond(&b.refreshLock)
 	b.refreshCnt = 0
@@ -127,8 +160,12 @@ func (b *metadataClient) Sync() error {
 	return nil
 }
 
-// Refresh implement BridgeAccessor{} interface.
-func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bool, error) {
+// Refresh implement BridgeAccessor{} interface. It updates the metadata in b.indexers
+// and potentially b.indexList. indexesChanged return value alerts secondary_index.go
+// gsiKeyspace.Refresh if there was a change in return value indexes (because the set of scheduled
+// indexes changed) that would not be detected by metaVersion (if existing indexes did not change).
+func (b *metadataClient) Refresh() (indexes []*mclient.IndexMetadata, metaVersion uint64,
+	clusterVersion uint64, indexesChanged bool, err error) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
@@ -159,91 +196,57 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bo
 	}
 
 	if !b.settings.ListSchedIndexes() {
+		// This case is not normally entered as queryport.client.listSchedIndexes default is false
 		return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), false, nil
 	}
 
-	return b.reconcileIndexList(currmeta)
-}
+	//
+	// Return scheduled plus existing indexes
+	//
 
-func (b *metadataClient) reconcileIndexList(currmeta *indexTopology) ([]*mclient.IndexMetadata,
-	uint64, uint64, bool, error) {
-
-	if b.indexList == nil {
-		atomic.StorePointer(&b.indexList, unsafe.Pointer(&currmeta.allIndexes))
+	// Fast path -- if comboIndexes cached slice is still valid
+	comboIndexCache := (*comboIndexCacheEntry)(atomic.LoadPointer(&b.comboIndexCache))
+	if comboIndexCache != nil {
+		return comboIndexCache.comboIndexes, comboIndexCache.metaVersion,
+			b.mdClient.GetClusterVersion(), false, nil
 	}
 
-	// Note:
-	// The list of scheduled indexes needs to be reconciled with the list
-	// of the indexes from currmeta.
-	// But, Refresh() is not the only caller for currmeta update. Any other
-	// caller calling safeupdate can trigger the change in currmeta.allIndexes.
-	// So, Refresh() needs to force reconcile if safeupdate was called any caller.
+	// Slow path -- may need to rebuild comboIndexCache
+	b.comboIndexCacheMut.Lock()
+	defer b.comboIndexCacheMut.Unlock()
 
-	// Use simple double-check locking
-	schedRefresh := atomic.LoadUint32(&b.schedRefresh)
-	newTokens := b.schedTokenMon.newTokensExist()
-	idxList := atomic.LoadPointer(&b.indexList)
-
-	// Fast path
-	// If currmeta hasn't changed && there aren't any changes to sched tokens.
-	if schedRefresh == 0 && newTokens == 0 {
-		return *(*[]*mclient.IndexMetadata)(idxList), currmeta.version, b.mdClient.GetClusterVersion(), false, nil
+	// If another goroutine already rebuilt comboIndexCache, just return the new cached info
+	comboIndexCache = (*comboIndexCacheEntry)(atomic.LoadPointer(&b.comboIndexCache))
+	if comboIndexCache != nil {
+		return comboIndexCache.comboIndexes, comboIndexCache.metaVersion,
+			b.mdClient.GetClusterVersion(), false, nil
 	}
 
-	// Slow path
-	b.indexListMut.Lock()
-	defer b.indexListMut.Unlock()
+	// Must (re)get allIndexes (really b.indexers, its parent) and scheduledIndexes inside
+	// comboIndexCacheMut here for comboIndexesCache coherence
+	currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	metaVersion = currmeta.version
+	schedIndexes := b.schedTokenMon.getIndexesCached()
 
-	for {
-		schedRefresh = atomic.LoadUint32(&b.schedRefresh)
-		newTokens = b.schedTokenMon.newTokensExist()
-		idxList = atomic.LoadPointer(&b.indexList)
-
-		if schedRefresh == 0 && newTokens == 0 {
-			return *(*[]*mclient.IndexMetadata)(idxList), currmeta.version, b.mdClient.GetClusterVersion(), false, nil
-		}
-
-		schedIndexes := b.schedTokenMon.getIndexesCached()
-
-		// At this point, without a doubt, there are some updates either to
-		// currmeta.allIndexes or to scheduled indexes, since the last Refresh().
-		// Following code ignores all the cached information (i.e. current value
-		// of b.indexList) and re-appends all the scheduled tokens (if any), and
-		// caches new value of b.indexList.
-		// Here, a new list of mclient.IndexMetadata pointer will be generated.
-		// With large number of indexes, the new list generation can lead to some
-		// slowness, but this will happen only if there are updates to existing
-		// list of schedule tokens. Having said that, this type of slowness
-		// should be fine as long as currmeta.allIndexes remains untarnished by
-		// the scheduled tokens.
-
-		newSchedIndexes := make([]*mclient.IndexMetadata, 0, len(schedIndexes))
-		for _, idx := range schedIndexes {
-			if _, ok := currmeta.defns[idx.Definition.DefnId]; ok {
-				continue
-			}
-
-			newSchedIndexes = append(newSchedIndexes, idx)
-		}
-
-		newSchedIndexes = append(newSchedIndexes, currmeta.allIndexes...)
-		atomic.StorePointer(&b.indexList, unsafe.Pointer(&newSchedIndexes))
-
-		// If CAS on schedRefresh or setNewTokensProcessed doesn't succeed,
-		// it means that there were more changes since this index reconciliation
-		// has started. To avoid missing updates that have happened asynchronously,
-		// entire recociliation needs to be retried.
-
-		if !atomic.CompareAndSwapUint32(&b.schedRefresh, schedRefresh, 0) {
-			continue
-		}
-
-		if !b.schedTokenMon.setNewTokensProcessed(newTokens) {
-			continue
-		}
-
-		return newSchedIndexes, currmeta.version, b.mdClient.GetClusterVersion(), true, nil
+	// Create new cache entry
+	comboIndexCache = &comboIndexCacheEntry{
+		metaVersion: metaVersion,
 	}
+	comboIndexes := make([]*mclient.IndexMetadata, 0, len(schedIndexes)+len(currmeta.allIndexes))
+
+	// Add previously scheduled indexes that have not yet started being created to comboIndexes
+	for _, schedIdx := range schedIndexes {
+		if _, exists := currmeta.defns[schedIdx.Definition.DefnId]; exists {
+			continue // schedIdx has already started (or finished) creation, so skip it
+		}
+		comboIndexes = append(comboIndexes, schedIdx)
+	}
+
+	comboIndexes = append(comboIndexes, currmeta.allIndexes...)              // add existing indexes
+	comboIndexCache.comboIndexes = comboIndexes                              // save final slice
+	atomic.StorePointer(&b.comboIndexCache, unsafe.Pointer(comboIndexCache)) // update the cache
+
+	return comboIndexes, metaVersion, b.mdClient.GetClusterVersion(), true, nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -561,6 +564,7 @@ func (b *metadataClient) Close() {
 	b.mdClient.Close()
 	close(b.finch)
 	b.schedTokenMon.Close()
+	b.schedTokenMon = nil
 }
 
 //--------------------------------
@@ -1422,15 +1426,6 @@ func (b *metadataClient) printstats() {
 				id, currmeta.loads[id].getStats().getTotalPendingItems()))
 		}
 		logging.Verbosef("client pending item stats {%v}", strings.Join(s, ","))
-
-		/*
-			s = make([]string, 0, 16)
-			for id, _ := range currmeta.insts {
-				s = append(s, fmt.Sprintf(`"%v": %v`,
-					id, currmeta.loads[id].getStats().getRollbackTime()))
-			}
-			logging.Verbosef("client rollback times {%v}", strings.Join(s, ","))
-		*/
 	}
 
 	current := 0
@@ -1769,6 +1764,7 @@ func (b *metadataClient) updateTopology(
 	return newmeta
 }
 
+// safeupdate updates the metadata in b.indexers.
 func (b *metadataClient) safeupdate(
 	adminports map[string]common.IndexerId, force bool) {
 
@@ -1783,8 +1779,6 @@ func (b *metadataClient) safeupdate(
 			return
 		}
 
-		atomic.AddUint32(&b.schedRefresh, 1)
-
 		// if adminport is nil, then safeupdate is not triggered by
 		// topology change.  Get the adminports from currmeta.
 		if currmeta != nil && adminports == nil {
@@ -1794,7 +1788,16 @@ func (b *metadataClient) safeupdate(
 		newmeta = b.updateTopology(adminports, force)
 		if currmeta == nil {
 			// This should happen only during bootstrap
-			atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
+
+			// comboIndexes, b.indexers updates must be inside comboIndexCacheMut to keep them synced
+			func() {
+				b.comboIndexCacheMut.Lock()
+				defer b.comboIndexCacheMut.Unlock()
+
+				atomic.StorePointer(&b.comboIndexCache, nil)
+				atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
+			}()
+
 			logging.Infof("initialized currmeta %v force %v \n", newmeta.version, force)
 			return
 		} else if force {
@@ -1812,7 +1815,14 @@ func (b *metadataClient) safeupdate(
 		logging.Debugf("updateTopology %v \n", newmeta)
 		oldptr := unsafe.Pointer(currmeta)
 		newptr := unsafe.Pointer(newmeta)
+
+		// comboIndexes, b.indexers updates must be inside comboIndexCacheMut to keep them synced
+		b.comboIndexCacheMut.Lock()
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
+		if done {
+			atomic.StorePointer(&b.comboIndexCache, nil)
+		}
+		b.comboIndexCacheMut.Unlock()
 
 		// metaCh should never close
 		if done && b.metaCh != nil {
@@ -2110,26 +2120,30 @@ func getWithAuth(url string) (*http.Response, error) {
 	return security.GetWithAuth(url, params)
 }
 
+// schedTokenMonitor monitors tokens for scheduled but not yet created indexes.
 type schedTokenMonitor struct {
-	indexes   []*mclient.IndexMetadata
-	listener  *mc.CommandListener
-	lock      sync.Mutex
-	lCloseCh  chan bool
-	processed map[string]bool
-	newTokens uint32
-	uCloseCh  chan bool
+	metaClient       *metadataClient          // parent of this object
+	scheduledIndexes []*mclient.IndexMetadata // scheduled indexes implied by unprocessed tokens
+	listener         *mc.CommandListener
+	lock             sync.Mutex
+	lCloseCh         chan bool
+	processed        map[string]bool
+	uCloseCh         chan bool
 }
 
-func newSchedTokenMonitor() *schedTokenMonitor {
+// newSchedTokenMonitor launches the updater goroutine that periodically monitors scheduled index
+// tokens and lists their implied future indexes in schedTokenMonitor.scheduledIndexes.
+func newSchedTokenMonitor(metaClient *metadataClient) *schedTokenMonitor {
 
 	lCloseCh := make(chan bool)
 	listener := mc.NewCommandListener(lCloseCh, false, false, false, false, true, true)
 
 	s := &schedTokenMonitor{
-		indexes:   make([]*mclient.IndexMetadata, 0),
-		listener:  listener,
-		lCloseCh:  lCloseCh,
-		processed: make(map[string]bool),
+		metaClient:       metaClient,
+		scheduledIndexes: make([]*mclient.IndexMetadata, 0),
+		listener:         listener,
+		lCloseCh:         lCloseCh,
+		processed:        make(map[string]bool),
 	}
 
 	s.uCloseCh = make(chan bool)
@@ -2161,10 +2175,11 @@ func (s *schedTokenMonitor) markProcessed(key string) {
 	s.processed[key] = true
 }
 
+// getIndexesFromTokens computes the future indexes implied by scheduled index tokens.
 func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.ScheduleCreateToken,
 	stopTokens map[string]*mc.StopScheduleCreateToken) []*mclient.IndexMetadata {
 
-	indexes := make([]*mclient.IndexMetadata, 0, len(createTokens))
+	indexes := make([]*mclient.IndexMetadata, 0, len(createTokens)) // return value
 
 	for key, token := range createTokens {
 		logging.Debugf("schedTokenMonitor::getIndexesFromTokens new schedule create token %v", key)
@@ -2249,7 +2264,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 func (s *schedTokenMonitor) markIndexFailed(token *mc.StopScheduleCreateToken) bool {
 	// Note that this is an idempotent operation - as long as the value
 	// of the token doesn't change.
-	for _, index := range s.indexes {
+	for _, index := range s.scheduledIndexes {
 		if index.Definition.DefnId == token.DefnId {
 			index.Error = token.Reason
 			index.ScheduleFailed = true
@@ -2261,15 +2276,21 @@ func (s *schedTokenMonitor) markIndexFailed(token *mc.StopScheduleCreateToken) b
 	return false
 }
 
-func (s *schedTokenMonitor) clenseIndexes(indexes []*mclient.IndexMetadata,
+// cleansIndexes removes entries from indexes that were either deleted or whose scheduling was
+// successfully stopped. It returns a new slice with the remaining indexes.
+func (s *schedTokenMonitor) cleanseIndexes(indexes []*mclient.IndexMetadata,
 	stopTokens map[string]*mc.StopScheduleCreateToken, delPaths map[string]bool) []*mclient.IndexMetadata {
+
+	if len(indexes) == 0 || (len(stopTokens) == 0 && len(delPaths) == 0) {
+		return indexes
+	}
 
 	newIndexes := make([]*mclient.IndexMetadata, 0, len(indexes))
 	for _, idx := range indexes {
 		path := mc.GetScheduleCreateTokenPathFromDefnId(idx.Definition.DefnId)
 
 		if _, ok := delPaths[path]; ok {
-			logging.Debugf("schedTokenMonitor::clenseIndexes skip processing index %v as the key is deleted.", path)
+			logging.Debugf("schedTokenMonitor::cleanseIndexes skip processing index %v as the key is deleted.", path)
 			continue
 		}
 
@@ -2288,51 +2309,16 @@ func (s *schedTokenMonitor) clenseIndexes(indexes []*mclient.IndexMetadata,
 	return newIndexes
 }
 
-/*
-func (s *schedTokenMonitor) getIndexes() ([]*mclient.IndexMetadata, bool) {
-	if s.useCache {
-		return s.getIndexesCached()
-	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	createTokens := s.listener.GetNewScheduleCreateTokens()
-	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
-	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
-
-	indexes := s.getIndexesFromTokens(createTokens, stopTokens)
-
-	indexes = append(indexes, s.indexes...)
-	s.indexes = indexes
-	s.indexes = s.clenseIndexes(s.indexes, stopTokens, delPaths)
-
-	forceRefresh := true
-	if len(createTokens) == 0 && len(stopTokens) == 0 && len(delPaths) == 0 {
-		forceRefresh = false
-	} else {
-		atomic.StoreUint32(&s.newTokens, 1)
-	}
-
-	return s.indexes, forceRefresh
-}
-*/
-
-func (s *schedTokenMonitor) newTokensExist() uint32 {
-	return atomic.LoadUint32(&s.newTokens)
-}
-
-func (s *schedTokenMonitor) setNewTokensProcessed(old uint32) bool {
-	return atomic.CompareAndSwapUint32(&s.newTokens, old, 0)
-}
-
+// getIndexesCached returns the most current list of scheduled indexes.
 func (s *schedTokenMonitor) getIndexesCached() []*mclient.IndexMetadata {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	return s.indexes
+	return s.scheduledIndexes
 }
 
+// update sets schedTokenMonitor.indexes to the latest set of scheduled but not yet built indexes
+// implied by scheduled index tokens.
 func (s *schedTokenMonitor) update() {
 	logging.Debugf("schedTokenMonitor updating ...")
 	defer logging.Debugf("schedTokenMonitor done updating ...")
@@ -2342,18 +2328,22 @@ func (s *schedTokenMonitor) update() {
 	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
 
 	if len(createTokens) != 0 || len(stopTokens) != 0 || len(delPaths) != 0 {
-		atomic.AddUint32(&s.newTokens, 1)
+		s.lock.Lock()
+		defer s.lock.Unlock()
+
+		indexes := s.getIndexesFromTokens(createTokens, stopTokens)
+
+		// comboIndexes, s.scheduledIndexes updates must be inside comboIndexCacheMut to stay synced
+		s.metaClient.comboIndexCacheMut.Lock()
+		defer s.metaClient.comboIndexCacheMut.Unlock()
+
+		atomic.StorePointer(&s.metaClient.comboIndexCache, nil)
+		s.scheduledIndexes = append(s.scheduledIndexes, indexes...)
+		s.scheduledIndexes = s.cleanseIndexes(s.scheduledIndexes, stopTokens, delPaths)
 	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	indexes := s.getIndexesFromTokens(createTokens, stopTokens)
-
-	s.indexes = append(s.indexes, indexes...)
-	s.indexes = s.clenseIndexes(s.indexes, stopTokens, delPaths)
 }
 
+// updater periodically updates schedTokenMonitor.indexes.
 func (s *schedTokenMonitor) updater() {
 	s.listener.ListenTokens()
 
@@ -2373,4 +2363,5 @@ func (s *schedTokenMonitor) updater() {
 func (s *schedTokenMonitor) Close() {
 	s.listener.Close()
 	close(s.uCloseCh)
+	s.metaClient = nil
 }

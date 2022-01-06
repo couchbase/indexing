@@ -1550,7 +1550,7 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 				if c.fetchDataOnHashChangeOnly {
 					changed := c.checkPoolsDataHashChanged((notif.Msg).(*couchbase.Pool))
 					if !changed {
-						logging.Infof("ClusterInfoClient(%v): No change in data needed from PoolChangeNotification", c.cinfo.userAgent)
+						logging.Debugf("ClusterInfoClient(%v): No change in data needed from PoolChangeNotification", c.cinfo.userAgent)
 						continue
 					}
 					if err := c.cinfo.FetchWithLockForPoolChange(); err != nil {

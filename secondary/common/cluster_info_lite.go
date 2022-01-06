@@ -27,8 +27,8 @@ import (
     data which can have some customization at user level if needed.
 5.  Indices to data like NodeId can become invalid on update. So they must not
     be used across multiple instances. Eg: GetNodeInfo will give us a nodeInfo
-    pointer. nodeInfo.GetNodesByServiceType will give us NodeIds these should be
-    used with another instance of nodeInfo fetched again later.
+    pointer. nodeInfo.GetNodesByServiceType will give us NodeIds these should not
+    be used with another instance of nodeInfo fetched again later.
 */
 
 var singletonCICLContainer struct {
@@ -57,6 +57,15 @@ type NodesInfo struct {
 	clusterURL       string
 	bucketNames      []couchbase.BucketName
 	bucketURLMap     map[string]string
+
+	// Note: Static port information is populated with information from the
+	// command line. This is only used to get the port information on local
+	// node. This is needed as PoolChangeNotification does not have port
+	// numbers specific to indexer till service manager register with ns_server
+	// but we will need this port information before that registration in the
+	// boot process
+	useStaticPorts bool
+	servicePortMap map[string]string
 
 	valid         bool
 	errList       []error
@@ -124,6 +133,11 @@ func newNodesInfo(pool *couchbase.Pool) *NodesInfo {
 		bucketURLMap[k] = v
 	}
 	newNInfo.bucketURLMap = bucketURLMap
+
+	if ServiceAddrMap != nil {
+		newNInfo.useStaticPorts = true
+		newNInfo.servicePortMap = ServiceAddrMap
+	}
 
 	return newNInfo
 }
@@ -306,7 +320,6 @@ func newBucketInfoWithErr(bucketName string, err error) *bucketInfo {
 
 type clusterInfoCacheLite struct {
 	logPrefix string
-	isIPv6    bool
 	nih       nodesInfoHolder
 
 	cihm     map[string]collectionInfoHolder
@@ -536,7 +549,6 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		return nil, err
 	}
 
-	cicm.cicl.isIPv6 = cicm.client.Info.IsIPv6
 	cicm.client.SetUserAgent(logPrefix)
 
 	// Try fetching only once in the constructor
@@ -553,7 +565,6 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		cicm.bucketURLMap[k] = v
 	}
 
-	go cicm.watchClusterChanges()
 	go cicm.handlePoolsChangeNotifications()
 	for _, bn := range ni.bucketNames {
 		msg := &couchbase.Bucket{Name: bn.Name}
@@ -571,6 +582,7 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 	}
 	go cicm.handleCollectionManifestChanges()
 	go cicm.handleBucketInfoChanges()
+	go cicm.watchClusterChanges(false)
 	go cicm.periodicUpdater()
 
 	logging.Infof("newClusterInfoCacheLiteManager: started New clusterInfoCacheManager")
@@ -1081,12 +1093,34 @@ func (cicm *clusterInfoCacheLiteManager) handleBucketInfoChangesPerBucket(
 	cicm.cicl.deleteBucketInfo(bucketName)
 }
 
-func (cicm *clusterInfoCacheLiteManager) watchClusterChanges() {
+func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 	selfRestart := func() {
 		logging.Infof("clusterInfoCacheLiteManager watchClusterChanges: restarting..")
 		r := atomic.LoadUint32(&cicm.notifierRetrySleep)
 		time.Sleep(time.Duration(r) * time.Second)
-		go cicm.watchClusterChanges()
+		go cicm.watchClusterChanges(true)
+	}
+
+	if isRestart {
+		bns, err := cicm.GetBucketNames()
+		if err != nil {
+			logging.Errorf("clusterInfoCacheLiteManager watchClusterChanges GetBucketNames failed with error %v", err)
+			selfRestart()
+			return
+		}
+
+		notif := Notification{
+			Type: ForceUpdateNotification,
+			Msg:  &couchbase.Pool{},
+		}
+		cicm.poolsStreamingCh <- notif
+
+		for _, bn := range bns {
+			msg := &couchbase.Bucket{Name: bn.Name}
+			notif = Notification{Type: ForceUpdateNotification, Msg: msg}
+			cicm.collnManifestCh <- notif
+			cicm.bucketInfoCh <- notif
+		}
 	}
 
 	scn, err := NewServicesChangeNotifier(cicm.clusterURL, cicm.poolName)
@@ -1563,15 +1597,42 @@ func (ni *NodesInfo) GetLocalServiceHost(srvc string, useEncryptedPortMap bool) 
 	return h, nil
 }
 
-func (ni *NodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
-	node := ni.GetCurrentNode()
-	if node == NodeId(-1) {
-		return "", ErrorThisNodeNotFound
+func (ni *NodesInfo) getStaticServicePort(srvc string) (string, error) {
+	if p, ok := ni.servicePortMap[srvc]; ok {
+		return p, nil
+	} else {
+		return "", errors.New(ErrInvalidService.Error() + fmt.Sprintf(": %v", srvc))
 	}
+}
 
-	srvcAddr, err = ni.GetServiceAddress(node, srvc, useEncryptedPortMap)
-	if err != nil {
-		return "", err
+func (ni *NodesInfo) GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error) {
+	if ni.useStaticPorts {
+		h, err := ni.GetLocalHostname()
+		if err != nil {
+			return "", err
+		}
+
+		p, e := ni.getStaticServicePort(srvc)
+		if e != nil {
+			return "", e
+		}
+		srvcAddr = net.JoinHostPort(h, p)
+		if useEncryptedPortMap {
+			srvcAddr, _, _, err = security.EncryptPortFromAddr(srvcAddr)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else {
+		node := ni.GetCurrentNode()
+		if node == NodeId(-1) {
+			return "", ErrorThisNodeNotFound
+		}
+
+		srvcAddr, err = ni.GetServiceAddress(node, srvc, useEncryptedPortMap)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return srvcAddr, nil
@@ -1652,14 +1713,7 @@ func (c *ClusterInfoCacheLiteClient) GetLocalServiceAddress(srvc string,
 		return "", err
 	}
 
-	var nid NodeId
-	for i, ns := range ni.nodesExt {
-		if ns.ThisNode {
-			nid = NodeId(i)
-		}
-	}
-
-	return ni.getServiceAddress(nid, srvc, useEncryptedPortMap)
+	return ni.GetLocalServiceAddress(srvc, useEncryptedPortMap)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetLocalNodeUUID() (string, error) {
@@ -1676,13 +1730,7 @@ func (c *ClusterInfoCacheLiteClient) GetLocalNodeUUID() (string, error) {
 	return "", fmt.Errorf("no node has ThisNode set")
 }
 
-func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
-	nodes []couchbase.Node, err error) {
-	ni, err := c.GetNodesInfo()
-	if err != nil {
-		return nil, err
-	}
-
+func (ni *NodesInfo) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	for _, n := range ni.nodes {
 		for _, s := range n.Services {
 			if s == "index" {
@@ -1692,6 +1740,16 @@ func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
 	}
 
 	return
+}
+
+func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
+	nodes []couchbase.Node, err error) {
+	ni, err := c.GetNodesInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	return ni.GetActiveIndexerNodes(), nil
 }
 
 func (c *ClusterInfoCacheLiteClient) GetFailedIndexerNodes() (
@@ -1831,14 +1889,35 @@ func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	return
 }
 
-func (c *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
+// GetBucketUUID returns UUID if user is able to get bucketInfo from GetBucketInfo
+// For deleted buckets GetBucketInfo will not return bucketInfo and error out
+// User must fetch a new pointer every time to avoid having stale pointer due to
+// atomic updates from the cache manager
+// It returns error to satisfy Interface
+func (bi *bucketInfo) GetBucketUUID() (uuid string, err error) {
+	b := bi.bucket
+	return b.UUID, nil
+}
+
+func (cicl *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
-	bi, err := c.GetBucketInfo(bucketName)
+	bi, err := cicl.GetBucketInfo(bucketName)
 	if err != nil {
 		return nil, err
 	}
 
 	return bi.GetLocalVBuckets(bucketName)
+}
+
+// GetBucketUUID returns error and BUCKET_UUID_NIL for deleted buckets
+func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucketName string) (uuid string,
+	err error) {
+	bi, err := cicl.GetBucketInfo(bucketName)
+	if err != nil {
+		return BUCKET_UUID_NIL, err
+	}
+
+	return bi.GetBucketUUID()
 }
 
 //
@@ -1906,16 +1985,6 @@ func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (u
 	}
 
 	return ci.GetIndexScopeLimit(bucket, scope)
-}
-
-// TODO: Move this to bucketInfo
-func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucket string) (uuid string,
-	err error) {
-	uuid, err = GetBucketUUID(cicl.clusterURL, bucket)
-	if err != nil {
-		uuid = BUCKET_UUID_NIL
-	}
-	return uuid, err
 }
 
 // Stub function to implement ClusterInfoProvider interface
