@@ -111,6 +111,8 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		common.CrashOnError(err)
 	}
 
+	go PollForDeletedBucketsV2(p.clusterAddr, c.DEFAULT_POOL, config)
+
 	// Start cluster info client
 	useClusterInfoLite := config["projector.settings.use_cinfo_lite"].Bool()
 	cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default", config)

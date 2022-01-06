@@ -37,8 +37,6 @@ func init() {
 	dcp_buckets_seqnos.buckets = make(map[string]*couchbase.Bucket)
 	dcp_buckets_seqnos.errors = make(map[string]error)
 	dcp_buckets_seqnos.readerMap = make(map[string]*vbSeqnosReader)
-
-	go pollForDeletedBuckets()
 }
 
 type vbSeqnosResponse struct {
@@ -411,6 +409,87 @@ func CollectSeqnos(kvfeeds map[string]*kvConn, cid string) (l_seqnos []uint64, e
 	copy(l_seqnos, seqnos)
 
 	return l_seqnos, nil
+}
+func PollForDeletedBucketsV2(clusterUrl string, pool string, config common.Config) {
+
+	// If using cinfo lite is disabled, use old way of polling ns_server
+	if val, ok := config["projector.settings.use_cinfo_lite"]; !ok || val.Bool() == false {
+		logging.Warnf("PollForDeletedBucketsV2: Falling back to pollForDeletedBuckets() as use_cinfo_lite is false or not present")
+		go pollForDeletedBuckets()
+		return
+	}
+
+	retryCount := 0
+loop:
+	cicl, err := common.NewClusterInfoCacheLiteClient(clusterUrl, pool, config)
+	if err != nil {
+		retryCount++
+		logging.Errorf("pollForDeletedBucktesV2: Error while initiliasing cinfo client, err: %v", err)
+		if retryCount < 5 {
+			time.Sleep(100 * time.Millisecond)
+			goto loop
+		} else {
+			logging.Warnf("PollForDeletedBucketsV2: Falling back to pollForDeletedBuckets() due to errors while " +
+				"initialising cinfo lite")
+			go pollForDeletedBuckets() // Fall back to the old way of monitoring buckets
+			return
+		}
+	}
+
+	for {
+		time.Sleep(10 * time.Second)
+		todels := []string{}
+		var bucketn string
+		var bucket *couchbase.Bucket
+
+		func() {
+			dcp_buckets_seqnos.rw.RLock()
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Warnf("PollForDeletedBucketsV2: failover race in bucket: %v", r)
+					todels = append(todels, bucketn)
+				}
+				dcp_buckets_seqnos.rw.RUnlock()
+			}()
+
+			for bucketn, bucket = range dcp_buckets_seqnos.buckets {
+				bucketInfo, err := cicl.GetBucketInfo(bucketn)
+				if err != nil {
+					logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
+						"due to error while retrieving bucket info, err: %v", bucketn, err)
+					todels = append(todels, bucketn)
+					continue
+				}
+
+				bucketUUID, _ := bucketInfo.GetBucketUUID()
+				if bucketUUID != bucket.UUID {
+					logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
+						"due to UUID mismatch, currUUID: %v, uuid in book-keeping: %v ", bucketn, bucketUUID, bucket.UUID)
+					todels = append(todels, bucketn)
+					continue
+				}
+
+				kvaddr := dcp_buckets_seqnos.kvaddr
+				if len(kvaddr) > 0 {
+					if m, err := bucket.GetVBmap([]string{kvaddr}); err != nil {
+						logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
+							"as some vbuckets are not active due to failed KV nodes, kvaddr: %v, err: %v", bucketn, kvaddr, err)
+						// idle detect failures.
+						todels = append(todels, bucketn)
+					} else if len(m) != len(dcp_buckets_seqnos.readerMap[bucketn].kvfeeds) {
+						logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
+							"due to mismatch in number of KV feeds and KV nodes, kvfeeds: %v, kvnodes: %v",
+							bucketn, dcp_buckets_seqnos.readerMap[bucketn].kvfeeds, m)
+						// lazy detect kv-rebalance
+						todels = append(todels, bucketn)
+					}
+				}
+			}
+		}()
+		for _, bucketn := range todels {
+			delDBSbucket(bucketn, false)
+		}
+	}
 }
 
 func pollForDeletedBuckets() {
