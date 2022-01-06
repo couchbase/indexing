@@ -1046,7 +1046,8 @@ func ComputeAvg(lastAvg, lastValue, currValue int64) int64 {
 	return (diff + lastAvg) / 2
 }
 
-// Write to the admin console
+// Console writes a message to the admin console (Logs page of UI). It does not pop up a UI toaster.
+// Console messages will also be written to ns_server's info.log and debug.log but not indexer.log.
 func Console(clusterAddr string, format string, v ...interface{}) error {
 	msg := fmt.Sprintf(format, v...)
 	values := url.Values{"message": {msg}, "logLevel": {"info"}, "component": {"indexing"}}

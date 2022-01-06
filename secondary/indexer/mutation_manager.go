@@ -1373,7 +1373,7 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 //Calculate mutation queue length from memory quota
 func (m *mutationMgr) setMaxMemoryFromQuota() {
 
-	memQuota := m.config["settings.memory_quota"].Uint64()
+	memQuota := m.config.GetIndexerMemoryQuota()
 	fracQueueMem := getMutationQueueMemFrac(m.config)
 
 	maxMem := int64(fracQueueMem * float64(memQuota))
@@ -1384,7 +1384,6 @@ func (m *mutationMgr) setMaxMemoryFromQuota() {
 
 	atomic.StoreInt64(&m.maxMemory, maxMem)
 	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
-
 }
 
 func (m *mutationMgr) handleIndexerPause(cmd Message) {

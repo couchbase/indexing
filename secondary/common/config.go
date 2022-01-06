@@ -2384,11 +2384,27 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.cgroup.memory_quota": ConfigValue{
+		uint64(0),
+		"Linux cgroup override of indexer.settings.memory_quota;" +
+			" 0 if cgroups are not supported",
+		uint64(0),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
 		0,
 		"Maximum percent of CPU that indexer can use. " +
 			"EG, 200% in 4-core (400%) machine would set indexer to " +
 			"use 2 cores. 0 means use all available cores.",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.cgroup.max_cpu_percent": ConfigValue{
+		0,
+		"Linux cgroup override of indexer.settings.max_cpu_percent;" +
+			" 0 if cgroups are not supported",
 		0,
 		false, // mutable
 		false, // case-insensitive
@@ -3381,6 +3397,72 @@ func (config Config) Json() []byte {
 
 	bytes, _ := json.Marshal(kvs)
 	return bytes
+}
+
+// getIndexerConfig gets an Indexer config value of any type from a config map that may or may not
+// have the "indexer." prefix stripped from its keys. Caller provides the key with prefix stripped.
+func (config Config) getIndexerConfig(strippedKey string) ConfigValue {
+	value, exists := config[strippedKey]
+	if !exists {
+		value = config["indexer."+strippedKey]
+	}
+	return value
+}
+
+// getIndexerConfigInt gets an Indexer int config value from a config map that may or may not have
+// the "indexer." prefix stripped from its keys. Caller provides the key with prefix stripped.
+func (config Config) getIndexerConfigInt(strippedKey string) int {
+	return config.getIndexerConfig(strippedKey).Int()
+}
+
+// getIndexerConfigString gets an Indexer string config value from a config map that may or may not
+// have the "indexer." prefix stripped from its keys. Caller provides the key with prefix stripped.
+func (config Config) getIndexerConfigString(strippedKey string) string {
+	return config.getIndexerConfig(strippedKey).String()
+}
+
+// getIndexerConfigUint64 gets an Indexer uint64 config value from a config map that may or may not
+// have the "indexer." prefix stripped from its keys. Caller provides the key with prefix stripped.
+func (config Config) getIndexerConfigUint64(strippedKey string) uint64 {
+	return config.getIndexerConfig(strippedKey).Uint64()
+}
+
+// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes as logical
+// min(indexer.settings.memory_quota, indexer.cgroup.memory_quota).
+// The latter is from sigar memory_max and only included if cgroups are supported.
+func (config Config) GetIndexerMemoryQuota() uint64 {
+	gsiMemQuota := config.getIndexerConfigUint64("settings.memory_quota")
+	cgroupMemQuota := config.getIndexerConfigUint64("cgroup.memory_quota")
+	if cgroupMemQuota > 0 && cgroupMemQuota < gsiMemQuota {
+		gsiMemQuota = cgroupMemQuota
+	}
+	return gsiMemQuota
+}
+
+// GetIndexerNumCpuPrc gets the Indexer's percentage of CPU to use (e.g. 400 means 4 cores). It is
+// the logical minimum min(node, cgroup, GSI) * 100 available CPUs, where:
+//   node  : # CPUs available on the node
+//   cgroup: # CPUs the Indexer cgroup is allocated (if cgroups are supported, else 0);
+//     indexer.cgroup.max_cpu_percent set from sigar num_cpu_prc
+//   GSI   : indexer.settings.max_cpu_percent "Indexer Threads" UI config (if specified, else 0)
+func (config Config) GetIndexerNumCpuPrc() int {
+	const _GetIndexerNumCpuPrc = "Config::GetIndexerNumCpuPrc:"
+
+	numCpuPrc := runtime.NumCPU() * 100 // node-level CPUs as a percent
+	cgroupCpuPrc := config.getIndexerConfigInt("cgroup.max_cpu_percent")
+	if cgroupCpuPrc > 0 && cgroupCpuPrc < numCpuPrc { // sigar gave a value and it is lower
+		numCpuPrc = cgroupCpuPrc
+	}
+	gsiCpuPrc := config.getIndexerConfigInt("settings.max_cpu_percent") // GSI UI override
+	if gsiCpuPrc > numCpuPrc {
+		consoleMsg := fmt.Sprintf("Indexer Threads setting %v exceeds CPU cores"+
+			" available %v. Using %v.", gsiCpuPrc/100, numCpuPrc/100, numCpuPrc/100)
+		Console(config.getIndexerConfigString("clusterAddr"), consoleMsg)
+		logging.Warnf("%v %v", _GetIndexerNumCpuPrc, consoleMsg)
+	} else if gsiCpuPrc > 0 { // GSI overide is set; known at this point that it is not higher
+		numCpuPrc = gsiCpuPrc
+	}
+	return numCpuPrc
 }
 
 // Int assumes config value is an integer and returns the same.

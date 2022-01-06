@@ -158,6 +158,10 @@ type SigarControlGroupInfo struct {
 
 	// Current memory usage by this cgroup. Derived from memory.usage_in_bytes
 	MemoryCurrent uint64
+
+	// UsageUsec gives the total microseconds of CPU used from sigar start across all available
+	// cores, so this can increase at a rate of N times real time if there are N cores in use
+	UsageUsec uint64
 }
 
 func (h *SystemStats) GetControlGroupInfo() *SigarControlGroupInfo {
@@ -170,5 +174,6 @@ func (h *SystemStats) GetControlGroupInfo() *SigarControlGroupInfo {
 		NumCpuPrc:     uint16(info.num_cpu_prc),
 		MemoryMax:     uint64(info.memory_max),
 		MemoryCurrent: uint64(info.memory_current),
+		UsageUsec:     uint64(info.usage_usec),
 	}
 }

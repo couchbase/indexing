@@ -62,8 +62,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
 
-	memQuota := sysconf["settings.memory_quota"].Uint64()
-	logging.Debugf("NewForestDBSlice(): buffer cache size %d", memQuota)
+	memQuota := sysconf.GetIndexerMemoryQuota()
 	config.SetBufferCacheSize(memQuota)
 	logging.Debugf("NewForestDBSlice(): buffer cache size %d", memQuota)
 
