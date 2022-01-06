@@ -291,7 +291,8 @@ func newCollectionInfoWithErr(bucketName string, err error) *collectionInfo {
 //
 
 type bucketInfo struct {
-	bucket *couchbase.Bucket
+	bucket     *couchbase.Bucket
+	clusterURL string
 
 	valid         bool
 	errList       []error
@@ -304,7 +305,7 @@ func newBucketInfo(tb *couchbase.Bucket, connHost string) *bucketInfo {
 	bi := &bucketInfo{
 		bucket: tb,
 	}
-	bi.bucket.Init(connHost)
+	bi.bucket.NormalizeHostnames(connHost)
 
 	bi.valid = true
 	bi.lastUpdatedTs = time.Now()
@@ -319,6 +320,10 @@ func newBucketInfoWithErr(bucketName string, err error) *bucketInfo {
 	bi.valid = false
 	bi.errList = append(bi.errList, err)
 	return bi
+}
+
+func (bi *bucketInfo) setClusterURL(u string) {
+	bi.clusterURL = u
 }
 
 //
@@ -1103,6 +1108,7 @@ func (cicm *clusterInfoCacheLiteManager) handleBucketInfoChangesPerBucket(
 		var bi *bucketInfo
 		if notif.Type == CollectionManifestChangeNotification {
 			bi = newBucketInfo(b, connHost)
+			bi.setClusterURL(cicm.clusterURL)
 		} else {
 			bi, _ = cicm.FetchTerseBucketInfo(bucketName)
 		}
@@ -1331,6 +1337,7 @@ retry:
 	}
 
 	bi := newBucketInfo(tb, connHost)
+	bi.setClusterURL(cicm.clusterURL)
 	return bi, nil
 }
 
@@ -1477,7 +1484,7 @@ func (c *ClusterInfoCacheLiteClient) SetTimeDiffToForceFetchInMgr(minutes uint32
 	c.ciclMgr.setTimeDiffToForceFetch(minutes)
 }
 
-func (c *ClusterInfoCacheLiteClient) SetMaxRetriesInMgr(retries uint32) {
+func (c *ClusterInfoCacheLiteClient) SetMaxRetries(retries uint32) {
 	singletonCICLContainer.Lock()
 	defer singletonCICLContainer.Unlock()
 	c.ciclMgr.setMaxRetries(retries)
@@ -1906,6 +1913,7 @@ func (c *ClusterInfoCacheLiteClient) GetAllKVNodes() (
 // API Using Bucket Info
 //
 
+// GetBucketInfo returns Valid bucketInfo when there is no error and returns nil on error
 func (c *ClusterInfoCacheLiteClient) GetBucketInfo(bucketName string) (
 	*bucketInfo, error) {
 	bi, err := c.ciclMgr.bucketInfo(bucketName)
@@ -1914,6 +1922,95 @@ func (c *ClusterInfoCacheLiteClient) GetBucketInfo(bucketName string) (
 	}
 
 	return c.ciclMgr.bucketInfoSync(bucketName, c.eventWaitTimeoutSeconds)
+}
+
+// User must ensure that bucketInfo object is valid
+func (bi *bucketInfo) GetServiceAddress(nid NodeId, srvc string,
+	useEncryptedPortMap bool) (addr string, err error) {
+
+	ns := bi.bucket.NodesExt[nid]
+
+	port, ok := ns.Services[srvc]
+	if !ok {
+		logging.Errorf("bucketInfo:GetServiceAddress Invalid Service %v for node %v. Nodes %v \n NodeServices %v",
+			srvc, ns, bi.bucket.NodesJSON, bi.bucket.NodesExt)
+		err = errors.New(ErrInvalidService.Error() + fmt.Sprintf(": %v", srvc))
+		return
+	}
+
+	var portStr string
+	if useEncryptedPortMap {
+		portStr = security.EncryptPort(ns.Hostname, fmt.Sprint(port))
+	} else {
+		portStr = fmt.Sprint(port)
+	}
+
+	addr = net.JoinHostPort(ns.Hostname, portStr)
+	return
+}
+
+func (bi *bucketInfo) findVBMapServerListIndex(nid NodeId) (int, error) {
+	b := bi.bucket
+
+	vbmap := b.VBServerMap()
+	serverList := vbmap.ServerList
+	nodesExt := b.NodesExt
+
+	ns := nodesExt[nid]
+	nsHostName, err := ns.GetHostNameWithPort(KV_SERVICE)
+	if err != nil {
+		return -1, err
+	}
+
+	for i, n := range serverList {
+		if n == nsHostName {
+			return i, nil
+		}
+	}
+
+	return -1, ErrNodeNotBucketMember
+}
+
+// Note: bucket string is not used but kept for BucketInfoProvider Interface implementation
+func (bi *bucketInfo) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
+	b := bi.bucket
+
+	idx, err := bi.findVBMapServerListIndex(nid)
+	if err != nil {
+		return nil, err
+	}
+
+	vbmap := b.VBServerMap()
+
+	for vb, idxs := range vbmap.VBucketMap {
+		if idxs[0] == idx {
+			vbs = append(vbs, uint32(vb))
+		}
+	}
+
+	return vbs, nil
+}
+
+func (bi *bucketInfo) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
+	b := bi.bucket
+
+	vbmap := b.VBServerMap()
+	serverList := vbmap.ServerList
+	nodesExt := b.NodesExt
+
+	for _, n := range serverList {
+		for id, ns := range nodesExt {
+			currentHostName, err := ns.GetHostNameWithPort(KV_SERVICE)
+			if err != nil {
+				return nil, err
+			}
+			if n == currentHostName {
+				nids = append(nids, NodeId(id))
+				break
+			}
+		}
+	}
+	return
 }
 
 func (bi *bucketInfo) IsEphemeral(bucket string) (bool, error) {
@@ -1930,14 +2027,20 @@ func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	currentHostName := ""
 	for _, ns := range nodesExt {
 		if ns.ThisNode {
-			currentHostName = ns.Hostname
+			currentHostName, err = ns.GetHostNameWithPort(KV_SERVICE)
+			if err != nil {
+				return nil, err
+			}
+			break
 		}
 	}
 
-	nodes := b.NodesJSON
+	vbmap := b.VBServerMap()
+	serverList := vbmap.ServerList
+
 	idx := -1
-	for i, n := range nodes {
-		if n.Hostname == currentHostName {
+	for i, n := range serverList {
+		if n == currentHostName {
 			idx = i
 		}
 	}
@@ -1946,7 +2049,6 @@ func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 		return
 	}
 
-	vbmap := b.VBServerMap()
 	for vb, idxs := range vbmap.VBucketMap {
 		if idxs[0] == idx {
 			vbs = append(vbs, uint16(vb))
