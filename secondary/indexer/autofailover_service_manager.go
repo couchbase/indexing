@@ -83,7 +83,7 @@ func (m *AutofailoverServiceManager) getLastKnownIndexTopology(cached bool) ([]m
 	if cached {
 		url = m.httpAddr + "/getCachedIndexTopology"
 	} else {
-		url = m.httpAddr + "/getIndexStatus?getAll=true"
+		url = m.httpAddr + "/getIndexStatus?getAll=true&omitScheduled=true"
 	}
 	resp, err := getWithAuth(url)
 	if err != nil {
