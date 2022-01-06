@@ -364,6 +364,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
+	go common.PollForDeletedBucketsV2(clusterAddr, DEFAULT_POOL, idx.config)
+
 	idx.clusterInfoClient, err = common.NewClusterInfoClient(clusterAddr, DEFAULT_POOL, idx.config)
 	if err != nil {
 		common.CrashOnError(err)

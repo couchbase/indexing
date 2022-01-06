@@ -1899,6 +1899,10 @@ func (bi *bucketInfo) GetBucketUUID() (uuid string, err error) {
 	return b.UUID, nil
 }
 
+func (bi *bucketInfo) GetVBmap(kvaddrs []string) (map[string][]uint16, error) {
+	return bi.bucket.GetVBmap(kvaddrs)
+}
+
 func (cicl *ClusterInfoCacheLiteClient) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
 	bi, err := cicl.GetBucketInfo(bucketName)
