@@ -566,7 +566,14 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		getAll = true
 	}
 
-	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, t, getAll)
+	// omitScheduled=true means omit information about scheduled indexes
+	omitScheduled := false
+	val = r.FormValue("omitScheduled")
+	if len(val) != 0 && val == "true" {
+		omitScheduled = true
+	}
+
+	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, t, getAll, omitScheduled)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(indexStatuses))
 		eTagRequest := getETagFromHttpHeader(r)
@@ -678,8 +685,8 @@ func addHost(defnId common.IndexDefnId, hostAddr string, defnToHostMap map[commo
 	defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
 }
 
-// getScheduledIndexes is a helper for getIndexStatus and getCachedIndexTopology that returns
-// statuses for scheduled but not yet created indexes.
+// getScheduledIndexes is a helper for getIndexStatus that returns statuses for scheduled but not
+// yet created indexes.
 func (m *requestHandlerContext) getScheduledIndexes(
 	defns map[common.IndexDefnId]common.IndexDefn) []IndexStatus {
 	schedIndexes := m.schedTokenMon.getIndexes()
@@ -714,7 +721,8 @@ func (m *requestHandlerContext) IndexStatusErrorf(msg string) {
 // getAll true means preserve per-node information about partitioned indexes; false means
 //   consolidate the statuses of all nodes hosting some partitions/replicas of an instance into a
 //   single entry (whose NodeUUID will be set to "").
-func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *target, getAll bool) (
+// omitScheduled true means do not include information about scheduled indexes.
+func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *target, getAll bool, omitScheduled bool) (
 	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
 
 	cinfo := m.mgr.reqcic.GetClusterInfoCache()
@@ -1001,9 +1009,13 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 		indexStatuses = m.consolidateIndexStatus(indexStatuses)
 	}
 
-	// Add statuses of scheduled indexes that are not built yet
-	schedIndexList := m.getScheduledIndexes(defns)
-	indexStatuses = append(indexStatuses, schedIndexList...)
+	if !omitScheduled {
+		// Add statuses of scheduled indexes that are not built yet
+		schedIndexList := m.getScheduledIndexes(defns)
+		indexStatuses = append(indexStatuses, schedIndexList...)
+	} else {
+		fullSet = false
+	}
 
 	// Compute eTagResponse
 	// 1. If got full set of index statuses (the only thing we compute getIndexStatus ETags for):
@@ -1027,9 +1039,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, target *targe
 
 // getCachedIndexTopology is a stripped-down version of getIndexStatus that reads entirely from the
 // local node's memory cache and avoids ClusterInfoCache. It returns only the subset of information
-// needed by Autofailover.
+// needed by Autofailover. It does not include scheduled indexes as these do not exist yet so will
+// not be lost by failing over any subset of nodes. Failover will migrate any scheduled tokens that
+// need new homes to surviving nodes.
 func (m *requestHandlerContext) getCachedIndexTopology(creds cbauth.Creds) (indexStatuses []IndexStatus) {
-	const method string = "requestHandlerContext::getCachedIndexTopology:" // for logging
+	const _getCachedIndexTopology = "requestHandlerContext::getCachedIndexTopology:"
 
 	indexStatuses = make([]IndexStatus, 0)                      // return value
 	permissionCache := common.NewSessionPermissionsCache(creds) // access permissions
@@ -1082,11 +1096,7 @@ func (m *requestHandlerContext) getCachedIndexTopology(creds cbauth.Creds) (inde
 		} // for each defn
 	} // for each hostKey (node)
 
-	// Add statuses of scheduled indexes that are not built yet
-	schedIndexList := m.getScheduledIndexes(defns)
-	indexStatuses = append(indexStatuses, schedIndexList...)
-
-	logging.Infof("%v Returning %v IndexStatuses", method, len(indexStatuses))
+	logging.Infof("%v Returning %v IndexStatuses", _getCachedIndexTopology, len(indexStatuses))
 	return indexStatuses
 }
 
@@ -1328,7 +1338,7 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, target *target) (
 	statements []string, eTagResponse uint64, err error) {
 
-	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, target, false)
+	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, target, false, false)
 	if err != nil {
 		return nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
@@ -3509,7 +3519,9 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 	return s
 }
 
-func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, error) {
+// getNodeAddrLOCKED
+// Caller must be holding s.cinfo's anonymous RWMutex at least read locked.
+func (s *schedTokenMonitor) getNodeAddrLOCKED(token *mc.ScheduleCreateToken) (string, error) {
 
 	if s.cinfo == nil {
 		s.cinfo = s.mgr.reqcic.GetClusterInfoCache()
@@ -3551,9 +3563,9 @@ func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, 
 
 func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
 
-	mgmtAddr, err := s.getNodeAddr(token)
+	mgmtAddr, err := s.getNodeAddrLOCKED(token)
 	if err != nil {
-		logging.Errorf("schedTokenMonitor:makeIndexStatus error in getNodeAddr: %v", err)
+		logging.Errorf("schedTokenMonitor::makeIndexStatus: error in getNodeAddrLOCKED: %v", err)
 		return nil
 	}
 
@@ -3727,9 +3739,10 @@ func (s *schedTokenMonitor) markIndexFailed(token *mc.StopScheduleCreateToken) b
 func (s *schedTokenMonitor) updateIndex(token *mc.ScheduleCreateToken) {
 	for _, index := range s.indexes {
 		if index.DefnId == token.Definition.DefnId {
-			mgmtAddr, err := s.getNodeAddr(token)
+			mgmtAddr, err := s.getNodeAddrLOCKED(token)
 			if err != nil {
-				logging.Errorf("schedTokenMonitor:updateIndex error in getNodeAddr: %v", err)
+				logging.Errorf("schedTokenMonitor::updateIndex: error in getNodeAddrLOCKED: %v",
+					err)
 				return
 			}
 			index.Hosts = []string{mgmtAddr}

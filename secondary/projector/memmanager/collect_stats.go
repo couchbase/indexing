@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -39,19 +40,31 @@ func (mgr *MemManager) runStatsCollection() {
 			}
 			mgr.updateRSS(rss)
 
-			total, err := mgr.stats.TotalMem()
-			if err != nil {
-				logging.Debugf("Fail to get total memory. Err=%v", err)
-				continue
-			}
-			mgr.updateMemTotal(total)
+			cgroupInfo := mgr.stats.GetControlGroupInfo()
 
-			free, err := mgr.stats.ActualFreeMem()
-			if err != nil {
-				logging.Debugf("Fail to get free memory. Err=%v", err)
-				continue
+			var total, free uint64
+			if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
+				total = cgroupInfo.MemoryMax
+				mgr.updateMemTotal(total)
+
+				used := cgroupInfo.MemoryCurrent
+				free = total - used
+				mgr.updateMemFree(free)
+			} else {
+				total, err = mgr.stats.TotalMem()
+				if err != nil {
+					logging.Debugf("Fail to get total memory. Err=%v", err)
+					continue
+				}
+				mgr.updateMemTotal(total)
+
+				free, err = mgr.stats.ActualFreeMem()
+				if err != nil {
+					logging.Debugf("Fail to get free memory. Err=%v", err)
+					continue
+				}
+				mgr.updateMemFree(free)
 			}
-			mgr.updateMemFree(free)
 
 			count++
 			if count > 10 {

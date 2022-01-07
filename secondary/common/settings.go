@@ -18,6 +18,8 @@ import (
 )
 
 const MAX_METAKV_RETRIES = 100
+const SIGAR_INIT_RETRIES = 100
+const SIGAR_CGROUP_SUPPORTED = 1
 
 var maxMetaKVRetries = int32(MAX_METAKV_RETRIES)
 

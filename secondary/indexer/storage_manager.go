@@ -320,7 +320,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	if snapType == common.DISK_SNAP ||
 		snapType == common.DISK_SNAP_OSO {
 		needsCommit = true
-	} else if snapType == common.FORCE_COMMIT {
+	} else if snapType == common.FORCE_COMMIT || snapType == common.FORCE_COMMIT_MERGE {
 		forceCommit = true
 	}
 
