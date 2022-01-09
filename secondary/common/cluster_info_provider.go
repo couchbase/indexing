@@ -32,10 +32,22 @@ type ClusterInfoProvider interface {
 	// Set max retries for ns_server calls
 	SetMaxRetries(retries uint32)
 
-	// TODO: Move to this to bucket Info
+	// Bucket Info Level Information accessors in client
 	GetBucketUUID(bucket string) (uuid string, err error)
 
 	GetCollectionID(bucket, scope, collection string) string
+
+	IsEphemeral(bucket string) (bool, error)
+
+	IsMagmaStorage(bucketName string) (bool, error)
+
+	ValidateBucket(bucketName string, uuids []string) (resp bool)
+
+	// Node Info Level Information accessors in client
+	ClusterVersion() uint64
+
+	// Collection Info Level Information accessors in client
+	ValidateCollectionID(bucket, scope, collection, collnID string, retry bool) bool
 
 	// Stub functions to make clusterInfoClient and clusterInfoCacheLiteClient compatible
 	FetchWithLock() error
