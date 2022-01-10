@@ -1121,7 +1121,8 @@ func (s *storageMgr) initSnapshotWaitersForInst(instId common.IndexInstId) *Snap
 	return waiterContainer
 }
 
-func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
+func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string,
+	snapC *IndexSnapshotContainer) {
 	indexSnapMap := s.indexSnapMap.Get()
 	if _, ok := indexSnapMap[idxInstId]; !ok {
 		indexSnapMap := s.indexSnapMap.Clone()
@@ -1131,7 +1132,17 @@ func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string)
 			ts:     ts, // nil snapshot should have ZERO Crc64 :)
 			epoch:  true,
 		}
-		indexSnapMap[idxInstId] = &IndexSnapshotContainer{snap: snap}
+
+		if snapC == nil {
+			logging.Infof("StorageMgr::updateIndexSnapMapForIndex, New IndexSnapshotContainer is being created "+
+				"for indexInst: %v", idxInstId)
+			snapC = &IndexSnapshotContainer{snap: snap}
+		} else {
+			snapC.Lock()
+			snapC.snap = snap
+			snapC.Unlock()
+		}
+		indexSnapMap[idxInstId] = snapC
 		s.indexSnapMap.Set(indexSnapMap)
 		s.notifySnapshotCreation(snap)
 	}
@@ -1225,7 +1236,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	// Add 0 items index snapshots for newly added indexes
 	for idxInstId, inst := range indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
-			s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
+			s.addNilSnapshot(idxInstId, inst.Defn.Bucket, nil)
 		}
 	}
 
@@ -2099,7 +2110,7 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 	} else {
 		logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Adding Nil Snapshot.",
 			idxInstId)
-		s.addNilSnapshot(idxInstId, bucket)
+		s.addNilSnapshot(idxInstId, bucket, snapC)
 	}
 
 	if needRestart {
