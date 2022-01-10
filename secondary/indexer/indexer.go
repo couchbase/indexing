@@ -364,6 +364,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
+	go common.PollForDeletedBucketsV2(clusterAddr, DEFAULT_POOL, idx.config)
+
 	idx.clusterInfoClient, err = common.NewClusterInfoClient(clusterAddr, DEFAULT_POOL, idx.config)
 	if err != nil {
 		common.CrashOnError(err)
@@ -10048,7 +10050,7 @@ func (idx *indexer) monitorKVNodes() {
 				continue
 			}
 
-			if err := cinfo.FetchWithLockForPoolChange(); err != nil {
+			if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
 				logging.Errorf("Indexer::monitorKVNodes, error observed while Updating cluster info cache, err: %v", err)
 				selfRestart()
 				return
@@ -10068,7 +10070,7 @@ func (idx *indexer) monitorKVNodes() {
 			updateNodeToHostMap()
 
 		case <-ticker.C:
-			if err := cinfo.FetchWithLock(); err != nil {
+			if err := cinfo.FetchNodesAndSvsInfoWithLock(); err != nil {
 				logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache due to timer, err: %v", err)
 				selfRestart()
 				return
