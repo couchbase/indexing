@@ -279,6 +279,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		}()
 	}
 
+	s.muSnap.Lock()
+	defer s.muSnap.Unlock()
+
 	if snapType == common.NO_SNAP || snapType == common.NO_SNAP_OSO {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, keyspaceId, snapType)
@@ -291,9 +294,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 		return
 	}
-
-	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
 
 	//pass copy of maps to worker
 	indexInstMap := s.indexInstMap.Get()
