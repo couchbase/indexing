@@ -9715,7 +9715,7 @@ func (idx *indexer) genNextSessionId(
 	if sid, ok = idx.streamKeyspaceIdSessionId[streamId][keyspaceId]; ok {
 		sid++
 	} else {
-		sid = 1 //start with 1
+		sid = uint64(rand.Int63n(100000) + int64(1)) //start with a random number between 1 and 100000
 	}
 	idx.streamKeyspaceIdSessionId[streamId][keyspaceId] = sid
 	return sid
