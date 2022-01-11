@@ -94,6 +94,8 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	ef := config["projector.routerEndpointFactory"]
 	config["projector.routerEndpointFactory"] = ef
 
+	go common.WatchClusterVersionChanges(p.clusterAddr, int64(common.INDEXER_71_VERSION))
+
 	// Start cluster info client
 	cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
 	c.CrashOnError(err)

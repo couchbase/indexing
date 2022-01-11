@@ -74,7 +74,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 	keyspaceIdFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
 	allowMarkFirstSnap bool, vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId,
-	keyspaceIdEnableOSO KeyspaceIdEnableOSO) (
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO, enableAuth *uint32) (
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
@@ -86,7 +86,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 	stream, err := dataport.NewServer(
 		string(StreamAddrMap[streamId]),
 		common.SystemConfig["maxVbuckets"].Int(),
-		dpconf, streamMutch)
+		dpconf, streamMutch, enableAuth)
 	if err != nil {
 		//return stream init error
 		logging.Fatalf("MutationStreamReader: Error returned from NewServer."+

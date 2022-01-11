@@ -566,6 +566,13 @@ var SystemConfig = Config{
 		false,      // mutable
 		false,      // case-insensitive
 	},
+	"indexer.dataport.enableAuth": ConfigValue{
+		false,
+		"force authentication for dataport server",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// indexer queryport configuration
 	"indexer.queryport.maxPayload": ConfigValue{
 		64 * 1024,

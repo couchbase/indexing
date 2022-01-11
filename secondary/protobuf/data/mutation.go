@@ -8,6 +8,8 @@ func (pl *Payload) Value() interface{} {
 		return pl.Vbmap
 	} else if pl.Vbkeys != nil {
 		return pl.Vbkeys
+	} else if pl.AuthRequest != nil {
+		return pl.AuthRequest
 	}
 	return nil
 }
