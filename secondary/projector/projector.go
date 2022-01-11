@@ -14,6 +14,7 @@ import (
 	"runtime/pprof"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
@@ -71,6 +72,12 @@ type Projector struct {
 	statsCmdCh  chan []interface{}
 	statsStopCh chan bool
 	statsMutex  sync.RWMutex
+
+	// Can be either of system or container's limit. When user
+	// changes projector.maxCpuPercent and it is greater than
+	// this cpuLimit, projector would ignore the settings change
+	// and log an error (on console and in logs)
+	cpuLimit int32
 }
 
 // NewProjector creates a news projector instance and
@@ -92,7 +99,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	sysStats, err := initSystemStatsHandler()
 	c.CrashOnError(err)
 
-	updateMaxCpuPercent(sysStats, config)
+	p.updateMaxCpuPercent(sysStats, config)
 
 	// Setup dynamic configuration propagation
 	config, err = c.GetSettingsConfig(config)
@@ -251,8 +258,17 @@ func (p *Projector) ResetConfig(config c.Config) {
 		logging.SetLogLevel(logging.Level(cv.String()))
 	}
 	if cv, ok := config["projector.maxCpuPercent"]; ok {
-		logging.Infof("Projector CPU set at %v", cv.Int())
-		c.SetNumCPUs(cv.Int())
+		val := cv.Int()
+		cpuLimit := atomic.LoadInt32(&p.cpuLimit)
+		if val > int(cpuLimit) {
+			logging.Warnf("Projector maxCpuPercent (%v) is greater than the available CPU for this system/container (%v). "+
+				"Setting Projector CPU to: %v percent", val, cpuLimit, cpuLimit)
+			common.Console(p.clusterAddr, "Projector maxCpuPercent (%v) is greater than the available CPU for this system/container (%v). "+
+				"Setting Projector CPU to: %v percent", val, cpuLimit, cpuLimit)
+			val = int(cpuLimit)
+		}
+		logging.Infof("Projector CPU set at %v", val)
+		c.SetNumCPUs(val)
 	}
 	if cv, ok := config["projector.gogc"]; ok {
 		gogc := cv.Int()
@@ -1159,17 +1175,25 @@ func GetNodeUUID() string {
 	return nodeUUID
 }
 
-func updateMaxCpuPercent(stats *system.SystemStats, config c.Config) {
+func (p *Projector) updateMaxCpuPercent(stats *system.SystemStats, config c.Config) {
 	cgroupInfo := stats.GetControlGroupInfo()
 
 	if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
-		maxCpu := cgroupInfo.NumCpuPrc
-		cpuPercent := int(math.Max(400.0, float64(maxCpu)*0.25))
+		atomic.StoreInt32(&p.cpuLimit, int32(cgroupInfo.NumCpuPrc))
+		logging.Infof("Projector::updateMaxCPUPercent, setting cpuLimit of the system to: %v "+
+			"(number of cores available to this container * 100)", atomic.LoadInt32(&p.cpuLimit))
+
+		cpuPercent := int(math.Max(400.0, float64(p.cpuLimit)*0.25))
 		config.SetValue("projector.maxCpuPercent", cpuPercent)
-		logging.Infof("Projector::updateMaxCpuPercent: Updating projector max cpu percent to: %v "+
-			"as cores availble for this container are: %v", cpuPercent, maxCpu)
+
+		logging.Infof("Projector::updateMaxCpuPercent: Updating projector maxCpuPercent to: %v "+
+			"as cores availble for this container are: %v", cpuPercent, atomic.LoadInt32(&p.cpuLimit))
 	} else {
 		logging.Infof("Projector::updateMaxCpuPercent: Sigar CGroupInfo not supported")
+
+		atomic.StoreInt32(&p.cpuLimit, int32(runtime.NumCPU()*100))
+		logging.Infof("Projector::updateMaxCPUPercent, setting cpuLimit of the system to: %v "+
+			"(number of cores in the system * 100)", atomic.LoadInt32(&p.cpuLimit))
 	}
 }
 
