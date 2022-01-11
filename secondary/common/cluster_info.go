@@ -778,6 +778,24 @@ func (c *ClusterInfoCache) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	return
 }
 
+func (c *ClusterInfoCache) GetServiceFromPort(addr string) (string, error) {
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+
+	for _, node := range c.nodesvs {
+		for svc, svcPort := range node.Services {
+			if fmt.Sprint(svcPort) == port {
+				return svc, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("Port number %v not found", port)
+}
+
 //
 // Translate a hostport for one service for a node to the hostport
 // for the other service on the same node.

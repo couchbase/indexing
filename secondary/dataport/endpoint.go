@@ -32,6 +32,10 @@ import (
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/transport"
 
+	"github.com/couchbase/cbauth"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+
 	dcpTransport "github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
@@ -69,6 +73,8 @@ type RouterEndpoint struct {
 
 	// Mapping between vbuckets and keyspace
 	keyspaceIdVBMap map[string]map[uint16]bool
+
+	authHost string
 }
 
 type EndpointStats struct {
@@ -189,7 +195,6 @@ func NewRouterEndpoint(
 		keyspaceIdVBMap: make(map[string]map[uint16]bool),
 	}
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
-	endpoint.conn = conn
 
 	endpoint.stats.Init()
 	endpoint.stats.endpCh = endpoint.ch
@@ -200,13 +205,25 @@ func NewRouterEndpoint(
 	endpoint.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	endpoint.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
-	endpoint.bufferTm *= time.Millisecond
-	endpoint.harakiriTm *= time.Millisecond
-	endpoint.syncTm *= time.Millisecond
-
 	endpoint.logPrefix = fmt.Sprintf(
 		"ENDP[<-(%v,%4x)<-%v #%v]",
 		endpoint.raddr, uint16(endpoint.timestamp), cluster, topic)
+
+	// Ignore the error in initHostportForAuth, if any.
+	// It will be retried again in doAuth.
+	endpoint.initHostportForAuth()
+
+	// doAuth
+	if err := endpoint.doAuth(conn); err != nil {
+		logging.Errorf("%v doAuth error %v", endpoint.logPrefix, err)
+		return nil, err
+	}
+
+	endpoint.conn = conn
+
+	endpoint.bufferTm *= time.Millisecond
+	endpoint.harakiriTm *= time.Millisecond
+	endpoint.syncTm *= time.Millisecond
 
 	go endpoint.run(endpoint.ch)
 	logging.Infof("%v started ...\n", endpoint.logPrefix)
@@ -226,6 +243,102 @@ const (
 func (endpoint *RouterEndpoint) Ping() bool {
 
 	return atomic.LoadUint32(&endpoint.done) == 0
+}
+
+func (endpoint *RouterEndpoint) initHostportForAuth() error {
+
+	// TODO: Use cluster info lite
+
+	clusterUrl, err := c.ClusterAuthUrl(endpoint.cluster)
+	if err != nil {
+		return err
+	}
+
+	cinfo, err := c.NewClusterInfoCache(clusterUrl, c.DEFAULT_POOL)
+	if err != nil {
+		return err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	cinfo.SetUserAgent(endpoint.logPrefix)
+
+	err = cinfo.FetchNodesAndSvsInfo()
+	if err != nil {
+		return err
+	}
+
+	service, err := cinfo.GetServiceFromPort(endpoint.raddr)
+	if err != nil {
+		endpoint.authHost = ""
+		return err
+	}
+
+	var authHost string
+	authHost, err = cinfo.TranslatePort(endpoint.raddr, service, c.INDEX_HTTP_SERVICE)
+	if err != nil {
+		endpoint.authHost = ""
+		return err
+	}
+
+	endpoint.authHost = authHost
+	return nil
+}
+
+func (endpoint *RouterEndpoint) getAuthInfo() (string, string, error) {
+
+	if endpoint.authHost == "" {
+		err := endpoint.initHostportForAuth()
+		if err != nil {
+			logging.Errorf("%v doAtuh error in initHostportForAuth: %v", endpoint.logPrefix, err)
+			return "", "", err
+		}
+	}
+
+	user, pass, err := cbauth.GetHTTPServiceAuth(endpoint.authHost)
+	if err != nil {
+		logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", endpoint.logPrefix, err)
+		return "", "", err
+	}
+
+	return user, pass, nil
+}
+
+func (endpoint *RouterEndpoint) doAuth(conn net.Conn) error {
+	// Check if auth is supported / configured before doing auth
+	if c.GetClusterVersion() < c.INDEXER_71_VERSION {
+		logging.Verbosef("%v doAuth Auth is not needed.", endpoint.logPrefix)
+		return nil
+	}
+
+	// Endpoint only sends the authRequest to the server. But it does not
+	// wait for any response from the server. This adheres to the current
+	// communication mechanism between endpoint and dataport server, i.e.
+	// one way streaming communication. If in case the server rejects
+	// the auth request, the endpoint will observe the connection being reset
+	// by the server and indexer will do the required stream clenaup and restart.
+
+	user, pass, err := endpoint.getAuthInfo()
+	if err != nil {
+		logging.Errorf("%v doAuth error %v in getAuthInfo", endpoint.logPrefix, err)
+		return err
+	}
+
+	// Send Auth packet.
+	authReq := &protobuf.AuthRequest{
+		User: &user,
+		Pass: &pass,
+	}
+
+	err = endpoint.pkt.Send(conn, authReq)
+	if err != nil {
+		logging.Errorf("%v doAuth pkt.Send returns error %v", endpoint.logPrefix, err)
+		return err
+	}
+
+	logging.Verbosef("%v doAuth auth sent", endpoint.logPrefix)
+	return nil
 }
 
 // ResetConfig synchronous call.
