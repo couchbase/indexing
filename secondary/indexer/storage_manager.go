@@ -1224,7 +1224,9 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	s.indexSnapMap.Set(indexSnapMap)
 	// Add 0 items index snapshots for newly added indexes
 	for idxInstId, inst := range indexInstMap {
-		s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
+		if inst.State != common.INDEX_STATE_DELETED {
+			s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
+		}
 	}
 
 	//if manager is not enable, store the updated InstMap in

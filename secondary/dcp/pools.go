@@ -103,6 +103,7 @@ type Pool struct {
 	Manifest map[string]*collections.CollectionManifest
 
 	BucketURL       map[string]string `json:"buckets"`
+	NodeServicesUri string            `json:"nodeServicesUri"`
 	ServerGroupsUri string            `json:"serverGroupsUri"`
 	BucketNames     []BucketName      `json:"bucketNames"`
 
@@ -876,6 +877,13 @@ func (p *Pool) GetServerGroupsVersionHash() (string, error) {
 	}
 
 	return getVersionHashFromURL(p.ServerGroupsUri)
+}
+
+func (p *Pool) GetNodeServicesVersionHash() (string, error) {
+	if p.NodeServicesUri == "" {
+		return "", fmt.Errorf("node services uri is empty in pool object")
+	}
+	return getVersionHashFromURL(p.NodeServicesUri)
 }
 
 // GetPoolWithBucket gets a pool from pool URI and calls ns_server terseBucket endpoint
