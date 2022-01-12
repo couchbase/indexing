@@ -124,12 +124,13 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 	useClusterInfoLite := config["projector.settings.use_cinfo_lite"].Bool()
 	cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default", config)
 	if err != nil {
-		logging.Infof("Error getting a NewClusterInfoProvider : %v, useClusterInfoLite: %v", err, useClusterInfoLite)
+		logging.Errorf("Error getting a new ClusterInfoProvider : %v, use_cinfo_lite: %v", err, useClusterInfoLite)
 		c.CrashOnError(err)
 	}
-	cip.SetUserAgent("NewProjector")
+	cip.SetUserAgent("projector")
 	cip.SetRetryInterval(4)
 	p.cinfoProvider = cip
+	logging.Infof("Started new ClusterInfoProvider use_cinfo_lite: %v", useClusterInfoLite)
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval, sysStats) // Initialize memory manager
@@ -190,23 +191,6 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		p.ResetConfig(newConfig)
 		p.ResetFeedConfig()
 
-		useCInfoLite := newConfig["projector.settings.use_cinfo_lite"].Bool()
-		if oldConfig["projector.settings.use_cinfo_lite"].Bool() != useCInfoLite {
-			p.cinfoProviderLock.Lock()
-			defer p.cinfoProviderLock.Unlock()
-
-			oldPtr := p.cinfoProvider
-			cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default", config)
-			if err != nil {
-				logging.Infof("Error getting a NewClusterInfoProvider : %v, useClusterInfoLite: %v", err, useClusterInfoLite)
-				c.CrashOnError(err)
-			}
-			cip.SetUserAgent("NewProjector")
-			cip.SetRetryInterval(4)
-			p.cinfoProvider = cip
-			oldPtr.Close()
-		}
-
 		diffOld, diffNew := oldConfig.SectionConfig("projector.",
 			false).Diff(newConfig.SectionConfig("projector.", false))
 		if len(diffOld) != 0 {
@@ -215,6 +199,28 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 				diffOld.Map(), diffNew.Map())
 			eventID := systemevent.EVENTID_PROJECTOR_SETTINGS_CHANGE
 			systemevent.InfoEvent("Projector", eventID, se)
+		}
+
+		newUseCInfoLite := newConfig["projector.settings.use_cinfo_lite"].Bool()
+		oldUseCInfoLite := oldConfig["projector.settings.use_cinfo_lite"].Bool()
+		if oldUseCInfoLite != newUseCInfoLite {
+			oldPtr := p.cinfoProvider
+			cip, err := c.NewClusterInfoProvider(newUseCInfoLite, p.clusterAddr, "default", config)
+			if err != nil {
+				logging.Errorf("%v Unable to update ClusterInfoProvider in Projector err: %v, use_cinfo_lite: old %v new %v",
+					p.logPrefix, err, oldUseCInfoLite, newUseCInfoLite)
+				c.CrashOnError(err)
+			}
+			cip.SetUserAgent("projector")
+			cip.SetRetryInterval(4)
+
+			p.cinfoProviderLock.Lock()
+			p.cinfoProvider = cip
+			p.cinfoProviderLock.Unlock()
+
+			logging.Infof("%v Updated ClusterInfoProvider in Projector use_cinfo_lite: old %v new %v", p.logPrefix,
+				oldUseCInfoLite, newUseCInfoLite)
+			oldPtr.Close()
 		}
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))
