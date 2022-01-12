@@ -266,7 +266,7 @@ func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) 
 	}
 	doneTime := time.Now()
 	dur := doneTime.Sub(callTime) // time spent in this call
-	if dur >= 1*time.Second {
+	if dur >= 100*time.Millisecond {
 		logging.Warnf("%v Slow call %v. callTime: %v, doneTime: %v, healthInfo: %+v",
 			_HealthCheck, dur, callTime, doneTime, *healthInfo)
 	}
