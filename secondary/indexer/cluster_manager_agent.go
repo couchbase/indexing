@@ -693,9 +693,11 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgen
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
 	replicaId int, partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId,
 	reqCtx *common.MetadataRequestContext) error {
+	const _OnIndexCreate = "clustMgrAgent::OnIndexCreate:"
 
-	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
-		"Received for Create Index %v %v partitions %v", indexDefn, reqCtx, partitions)
+	logging.Infof("%v Notification received for Create Index:"+
+		" instId %v, indexDefn %+v, reqCtx %+v, partitions %v",
+		_OnIndexCreate, instId, indexDefn, reqCtx, partitions)
 
 	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
 
@@ -725,27 +727,27 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 		switch res.GetMsgType() {
 
 		case MSG_SUCCESS:
-			logging.Infof("clustMgrAgent::OnIndexCreate Success "+
-				"for Create Index %v", indexDefn)
+			logging.Infof("%v Success for Create Index: instId %v, indexDefn %+v",
+				_OnIndexCreate, instId, indexDefn)
 			return nil
 
 		case MSG_ERROR:
-			logging.Errorf("clustMgrAgent::OnIndexCreate Error "+
-				"for Create Index %v. Error %v.", indexDefn, res)
 			err := res.(*MsgError).GetError()
+			logging.Errorf("%v Error for Create Index: instId %v, indexDefn %+v. Error: %+v.",
+				_OnIndexCreate, instId, indexDefn, err)
 			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
 
 		default:
-			logging.Fatalf("clustMgrAgent::OnIndexCreate Unknown Response "+
-				"Received for Create Index %v. Response %v", indexDefn, res)
+			logging.Fatalf("%v Unknown response received for Create Index:"+
+				" instId %v, indexDefn %+v. Response: %+v.",
+				_OnIndexCreate, instId, indexDefn, res)
 			common.CrashOnError(errors.New("Unknown Response"))
 
 		}
 
 	} else {
-
-		logging.Fatalf("clustMgrAgent::OnIndexCreate Unexpected Channel Close "+
-			"for Create Index %v", indexDefn)
+		logging.Fatalf("%v Unexpected channel close for Create Index: instId %v, indexDefn %+v",
+			_OnIndexCreate, instId, indexDefn)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
 
