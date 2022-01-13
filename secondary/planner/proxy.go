@@ -141,10 +141,26 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 		return nil, err
 	}
 
-	err = getIndexSettings(plan)
-	if err != nil {
-		return nil, err
-	}
+	// GOMAXPROCS is now set to the logical minimum of
+	//   1. runtime.NumCPU
+	//   2. SigarControlGroupInfo.NumCpuPrc / 100 (only included if cgroups are supported)
+	//   3. indexer.settings.max_cpu_percent / 100 (current Indexer Threads UI setting)
+	// We assume all Index nodes are configured the same w.r.t the above. It is impossible to
+	// configure #3 differently across nodes, but it is possible, though not advised, to configure
+	// #1 and #2 differently. The resulting CpuQuota is correct if Planner is running directly on
+	// an Index node and they are all configured the same, but it will not pick up #3 if it is
+	// running on a non-Index node (e.g. Query not colocated with Index) and the result in this case
+	// may also be based on a different value for #2 than Index nodes use.
+	//
+	// Currently plan.CpuQuota is not actually used other than to be logged in some messages, so we
+	// have not spent time making this more sophisticated. Note also there is only one plan.CpuQuota
+	// value, so if nodes are configured differently it is not clear which one's value to use.
+	//
+	// If CpuQuota constraints are ever re-enabled, we will need to revisit the above questions. We
+	// could implement a means of retrieving GOMAXPROCS from all Index nodes, but we'd also need to
+	// address the issue of them possibly being different, e.g. by enhancing Planner to save
+	// CpuQuota on a per-node basis and related enhancements to how it uses these values.
+	plan.CpuQuota = uint64(runtime.GOMAXPROCS(0))
 
 	err = getIndexNumReplica(plan, isRebalance)
 	if err != nil {
@@ -846,45 +862,6 @@ func getIndexStats(plan *Plan, config common.Config) error {
 }
 
 //
-// This function retrieves the index settings.
-//
-func getIndexSettings(plan *Plan) error {
-
-	cinfo := cinfoClient.GetClusterInfoCache()
-	cinfo.RLock()
-	defer cinfo.RUnlock()
-
-	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
-
-	if len(nids) == 0 {
-		return errors.New("No indexing service available.")
-	}
-
-	resp, err := restHelperNoLock(getLocalSettingsResp, nil, plan.Placement, cinfo, "LocalSettingsResp")
-	if err != nil {
-		return err
-	}
-
-	for _, res := range resp {
-
-		settings := res.settings
-
-		// Find the cpu quota from setting.  If it is set to 0, then find out avail core on the node.
-		quota, ok := settings["indexer.settings.max_cpu_percent"]
-		if !ok || uint64(quota.(float64)) == 0 {
-			plan.CpuQuota = uint64(runtime.NumCPU())
-		} else {
-			plan.CpuQuota = uint64(quota.(float64) / 100)
-		}
-
-		return nil
-	}
-
-	return nil
-}
-
-//
 // This function extract the topology metadata for a bucket, scope and collection.
 //
 func findTopologyByCollection(topologies []mc.IndexTopology, bucket, scope, collection string) *mc.IndexTopology {
@@ -1029,20 +1006,6 @@ func getLocalDropInstanceTokensResp(addr string) (*http.Response, error) {
 	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
 	if err != nil {
 		logging.Errorf("Planner::getLocalDropInstanceTokensResp: Failed to get drop instance tokens from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return resp, nil
-}
-
-//
-// This function gets the marshalled indexer settings for a specific indexer host.
-//
-func getLocalSettingsResp(addr string) (*http.Response, error) {
-
-	resp, err := getWithCbauth(addr + "/settings")
-	if err != nil {
-		logging.Errorf("Planner::getLocalSettingsResp: Failed to get settings from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 

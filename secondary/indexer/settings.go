@@ -22,6 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/system"
 
 	"io/ioutil"
 	"net/http"
@@ -37,7 +38,7 @@ const (
 	compactionDaysSetting  = "indexer.settings.compaction.days_of_week"
 )
 
-// Implements dynamic settings management for indexer
+// settingsManager implements dynamic settings management for indexer.
 type settingsManager struct {
 	supvCmdch       MsgChannel
 	supvMsgch       MsgChannel
@@ -48,8 +49,9 @@ type settingsManager struct {
 	notifyPending   bool
 }
 
+// NewSettingsManager is the settingsManager constructor. Indexer creates a child singleton of this.
 func NewSettingsManager(supvCmdch MsgChannel,
-	supvMsgch MsgChannel, config common.Config) (settingsManager, common.Config, Message) {
+	supvMsgch MsgChannel, config common.Config) (*settingsManager, common.Config, Message) {
 	s := settingsManager{
 		supvCmdch: supvCmdch,
 		supvMsgch: supvMsgch,
@@ -60,7 +62,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	// This method will merge metakv indexer settings onto default settings.
 	config, err := common.GetSettingsConfig(config)
 	if err != nil {
-		return s, nil, &MsgError{
+		return &s, nil, &MsgError{
 			err: Error{
 				category: INDEXER,
 				cause:    err,
@@ -68,7 +70,19 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			}}
 	}
 
-	initGlobalSettings(nil, config)
+	// Set cgroup overrides; these will be 0 if cgroups are not supported
+	sigarMemoryMax, sigarNumCpuPrc := sigarGetMemoryMaxAndNumCpuPrc()
+	const memKey = "indexer.cgroup.memory_quota"
+	const cpuKey = "indexer.cgroup.max_cpu_percent"
+	value := config[memKey]
+	value.Value = sigarMemoryMax
+	config[memKey] = value
+	value = config[cpuKey]
+	value.Value = sigarNumCpuPrc
+	config[cpuKey] = value
+
+	// Initialize the global config settings
+	s.setGlobalSettings(nil, config)
 
 	go func() {
 		fn := func(r int, err error) error {
@@ -89,7 +103,38 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	go s.run()
 
 	indexerConfig := config.SectionConfig("indexer.", true)
-	return s, indexerConfig, &MsgSuccess{}
+	return &s, indexerConfig, &MsgSuccess{}
+}
+
+// sigarGetMemoryMaxAndNumCpuPrc returns memory_max and num_cpu_prc from sigar when cgroups are
+// supported.
+//   memory_max is the memory quota in bytes, not accounting for GSI's exposed user override
+//     indexer.settings.memory_quota.
+//   num_cpu_prc is the number of CPUs to use * 100 either from the cgroup or from ns_server's
+//     COUCHBASE_CPU_COUNT environment variable which overrides it. This value does not account for
+//     GSI's exposed user override indexer.settings.max_cpu_percent.
+// Returns 0, 0 if cgroups are not supported or sigar fails.
+func sigarGetMemoryMaxAndNumCpuPrc() (uint64, int) {
+	const _sigarGetMemoryMaxAndNumCpuPrc = "settings::sigarGetMemoryMaxAndNumCpuPrc:"
+
+	// Start a sigar process
+	systemStats, err := system.NewSystemStats()
+	if err != nil {
+		logging.Infof("%v sigar failed to start: NewSystemStats returned error: %v",
+			_sigarGetMemoryMaxAndNumCpuPrc, err)
+		return 0, 0
+	}
+	defer systemStats.Close()
+
+	// Get cgroup info and check if cgroups are supported
+	cgroupInfo := systemStats.GetControlGroupInfo()
+	if cgroupInfo.Supported != common.SIGAR_CGROUP_SUPPORTED {
+		return 0, 0
+	}
+
+	// Cgroups are supported, so return its mem and CPU values. (CPU value will pick up any user
+	// override from ns_server's COUCHBASE_CPU_COUNT environment variable.)
+	return cgroupInfo.MemoryMax, int(cgroupInfo.NumCpuPrc)
 }
 
 func (s *settingsManager) RegisterRestEndpoints() {
@@ -349,7 +394,7 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 
 	newConfig := s.config.Clone()
 	newConfig.Update(value)
-	initGlobalSettings(s.config, newConfig)
+	s.setGlobalSettings(s.config, newConfig)
 
 	s.config = newConfig
 
@@ -450,11 +495,15 @@ func setBlockPoolSize(o, n common.Config) {
 	}
 }
 
-func initGlobalSettings(oldCfg, newCfg common.Config) {
+// setGlobalSettings is used to both initialize and update global config settings.
+func (s *settingsManager) setGlobalSettings(oldCfg, newCfg common.Config) {
+	const _setGlobalSettings = "settingsManager::setGlobalSettings:"
+
 	setBlockPoolSize(oldCfg, newCfg)
 
-	ncpu := common.SetNumCPUs(newCfg["indexer.settings.max_cpu_percent"].Int())
-	logging.Infof("Setting maxcpus = %d", ncpu)
+	// Set number of CPU cores to use to min(node, cgroup, GSI)
+	ncpu := common.SetNumCPUs(newCfg.GetIndexerNumCpuPrc())
+	logging.Infof("%v Setting maxcpus = %d", _setGlobalSettings, ncpu)
 
 	setLogger(newCfg)
 	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()

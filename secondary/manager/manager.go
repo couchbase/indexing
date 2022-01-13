@@ -826,7 +826,7 @@ func (m *IndexManager) stopMasterService() {
 //Calculate forestdb  buffer cache from memory quota
 func (m *IndexManager) calcBufCacheFromMemQuota(config common.Config) uint64 {
 
-	totalQuota := config["settings.memory_quota"].Uint64()
+	totalQuota := config.GetIndexerMemoryQuota()
 
 	//calculate queue memory
 	fracQueueMem := config["mutation_manager.fdb.fracMutationQueueMem"].Float64()

@@ -158,7 +158,7 @@ type indexer struct {
 	schedIdxCreator *schedIndexCreator //handle to scheduled index creator
 	clustMgrAgent   ClustMgrAgent      //handle to ClustMgrAgent
 	kvSender        KVSender           //handle to KVSender
-	settingsMgr     settingsManager    //handle to settings manager
+	settingsMgr     *settingsManager   //handle to settings manager
 	statsMgr        *statsManager      //handle to statistics manager
 	scanCoord       ScanCoordinator    //handle to ScanCoordinator
 	cpuThrottle     *CpuThrottle       //handle to CPU throttler (for Autofailover)
@@ -167,7 +167,7 @@ type indexer struct {
 	// ns_server only supports registering a single object for RPC calls.
 	masterMgr *MasterServiceManager
 
-	config common.Config
+	config common.Config // map of current indexer config settings with "indexer." prefix stripped
 
 	kvlock       sync.Mutex   //fine-grain lock for KVSender
 	clustMgrLock sync.Mutex   // lock to protect concurrent reads and writes from clustMgrAgentCmdCh
@@ -662,7 +662,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 func (idx *indexer) initFromConfig() {
 
 	// Read memquota setting
-	memQuota := int64(idx.config["settings.memory_quota"].Uint64())
+	memQuota := int64(idx.config.GetIndexerMemoryQuota())
 	idx.stats.memoryQuota.Set(memQuota)
 	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
@@ -1533,17 +1533,20 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 	}
 }
 
+// handleConfigUpdate updates Indexer config settings and propagates them to children / workers.
 func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	cfgUpdate := msg.(*MsgConfigUpdate)
+	oldConfig := idx.config
 	newConfig := cfgUpdate.GetConfig()
+	idx.config = newConfig
 
 	idx.updateStorageMode(newConfig)
 
 	if newConfig["settings.memory_quota"].Uint64() !=
-		idx.config["settings.memory_quota"].Uint64() {
+		oldConfig["settings.memory_quota"].Uint64() {
 
-		memQuota := int64(newConfig["settings.memory_quota"].Uint64())
+		memQuota := int64(idx.config.GetIndexerMemoryQuota())
 		idx.stats.memoryQuota.Set(memQuota)
 		plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 
@@ -1555,7 +1558,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		}
 	}
 	if common.GetStorageMode() == common.MOI {
-		if moiPersisters := newConfig["settings.moi.persistence_threads"].Int(); moiPersisters != idx.config["settings.moi.persistence_threads"].Int() {
+		if moiPersisters := newConfig["settings.moi.persistence_threads"].Int(); moiPersisters != oldConfig["settings.moi.persistence_threads"].Int() {
 			if moiPersisters <= cap(moiWriterSemaphoreCh) {
 				logging.Infof("Indexer: Setting MOI persisters to %v",
 					moiPersisters)
@@ -1569,7 +1572,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	}
 
 	if newConfig["settings.compaction.plasma.manual"].Bool() !=
-		idx.config["settings.compaction.plasma.manual"].Bool() {
+		oldConfig["settings.compaction.plasma.manual"].Bool() {
 		logging.Infof("Indexer::handleConfigUpdate restart indexer due to compaction.plasma.manual")
 		idx.stats.needsRestart.Set(true)
 		os.Exit(0)
@@ -1583,21 +1586,21 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if newConfig["api.enableTestServer"].Bool() && !idx.testServRunning {
 		// Start indexer endpoints for CRUD operations.
 		// Initialize the QE REST server on config change.
-		certFile := idx.config["certFile"].String()
-		keyFile := idx.config["keyFile"].String()
-		NewTestServer(idx.config["clusterAddr"].String(), certFile, keyFile)
+		certFile := newConfig["certFile"].String()
+		keyFile := newConfig["keyFile"].String()
+		NewTestServer(newConfig["clusterAddr"].String(), certFile, keyFile)
 		idx.testServRunning = true
 	}
 
 	if mcdTimeout, ok := newConfig["memcachedTimeout"]; ok {
-		if mcdTimeout.Int() != idx.config["memcachedTimeout"].Int() {
+		if mcdTimeout.Int() != oldConfig["memcachedTimeout"].Int() {
 			common.SetDcpMemcachedTimeout(uint32(mcdTimeout.Int()))
 			logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
 		}
 	}
 
 	if newConfig["settings.max_cpu_percent"].Int() !=
-		idx.config["settings.max_cpu_percent"].Int() {
+		oldConfig["settings.max_cpu_percent"].Int() {
 		value := common.ConfigValue{
 			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
 			Help:          "Minimum number of shard",
@@ -1610,17 +1613,16 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	if workersPerReader, ok := newConfig["vbseqnos.workers_per_reader"]; ok {
 		if newConfig["vbseqnos.workers_per_reader"].Int() !=
-			idx.config["vbseqnos.workers_per_reader"].Int() {
+			oldConfig["vbseqnos.workers_per_reader"].Int() {
 			common.UpdateVbSeqnosWorkersPerReader(int32(workersPerReader.Int()))
 			common.ResetBucketSeqnos()
 		}
 	}
 
-	memdb.Debug(idx.config["settings.moi.debug"].Bool())
+	memdb.Debug(oldConfig["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
 	idx.cpuThrottle.SetCpuTarget(newConfig["cpu.throttle.target"].Float64())
 
-	idx.config = newConfig
 	idx.compactMgrCmdCh <- msg
 	<-idx.compactMgrCmdCh
 	idx.tkCmdCh <- msg
@@ -7069,7 +7071,7 @@ func (idx *indexer) bootstrap2() error {
 		}
 
 		//check if Paused state is required
-		memory_quota := idx.config["settings.memory_quota"].Uint64()
+		memory_quota := idx.config.GetIndexerMemoryQuota()
 		high_mem_mark := idx.config["high_mem_mark"].Float64()
 
 		//free memory after bootstrap before deciding to pause
@@ -9142,7 +9144,7 @@ func (idx *indexer) monitorMemUsage() {
 
 		if common.GetStorageMode() == common.MOI && pause_if_oom {
 
-			memory_quota := idx.config["settings.memory_quota"].Uint64()
+			memory_quota := idx.config.GetIndexerMemoryQuota()
 			high_mem_mark := idx.config["high_mem_mark"].Float64()
 			low_mem_mark := idx.config["low_mem_mark"].Float64()
 			min_oom_mem := idx.config["min_oom_memory"].Uint64()
@@ -9196,7 +9198,6 @@ func (idx *indexer) monitorMemUsage() {
 
 		time.Sleep(time.Second * time.Duration(monitorInterval))
 	}
-
 }
 
 func (idx *indexer) handleIndexerPause(msg Message) {
@@ -9413,7 +9414,7 @@ func (idx *indexer) updateMemstats() {
 func (idx *indexer) needsGCMoi() bool {
 
 	var memUsed uint64
-	memQuota := idx.config["settings.memory_quota"].Uint64()
+	memQuota := idx.config.GetIndexerMemoryQuota()
 
 	if idx.getIndexerState() == common.INDEXER_PAUSED {
 		memUsed, _, _ = idx.memoryUsed(true)
@@ -9439,7 +9440,7 @@ func (idx *indexer) needsGCMoi() bool {
 func (idx *indexer) needsGCFdb() bool {
 
 	var memUsed uint64
-	memQuota := idx.config["settings.memory_quota"].Uint64()
+	memQuota := idx.config.GetIndexerMemoryQuota()
 
 	//ignore till 1GB
 	ignoreThreshold := idx.config["min_oom_memory"].Uint64() * 4

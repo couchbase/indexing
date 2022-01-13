@@ -8,11 +8,13 @@
 package indexer
 
 import (
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/system"
 )
@@ -35,9 +37,19 @@ type CpuThrottle struct {
 	throttleDelayMs    unsafe.Pointer // *int64 ms to delay an action when CPU throttling is enabled
 	throttleStateMutex sync.Mutex     // sync throttling enabled/disabled state changes, incl stopCh
 
-	// Circular buffer of past CPU stats and pointer to next one to (re)use
-	cpuStats    [NUM_CPU_STATS]*system.SigarCpuT
-	cpuStatsIdx int // next index into cpuStats
+	// getCurrentCpuUsageStd's circular buffer of past CPU stats and index of next one to (re)use
+	cpuStatsStd    [NUM_CPU_STATS]*system.SigarCpuT // CPU ticks in categories since sigar start
+	cpuStatsStdIdx int                              // next index into cpuStatsStd
+
+	// getCurrentCpuUsageCgroup's circular buffer of past CPU stats and index of next one to (re)use
+	cpuStatsCgroup    [NUM_CPU_STATS]*cgroupCpuStats // CPU usage stats when cgroup is supported
+	cpuStatsCgroupIdx int                            // next index into cpuStatsCgroup
+}
+
+// cgroupCpuStats holds CPU usage stats in the case where cgroups are supported.
+type cgroupCpuStats struct {
+	usageUsec     uint64 // microsecs of CPU usage over used cores since sigar start
+	timeUnixMicro int64  // approximate Unix epoch microsecond timestamp of usageUsec retrieval
 }
 
 // NewCpuThrottle is the constructor for the CpuThrottle class. It returns an instance with
@@ -158,7 +170,8 @@ func (this *CpuThrottle) runThrottling(stopCh chan struct{}) {
 	logging.Infof("%v Starting. cpuTarget: %v, throttleDelayMs: %v", method,
 		this.getCpuTarget(), this.getThrottleDelayMs())
 
-	// Get a handle to sigar wrappers for CPU stats
+	// Start a sigar process for CPU stats
+	os.Unsetenv("COUCHBASE_CPU_COUNT") // so sigar will return cgroups num_cpu_prc in cgroups case
 	systemStats, err := system.NewSystemStats()
 	if err != nil {
 		logging.Infof("%v Failed to start: NewSystemStats returned error: %v", method, err)
@@ -173,9 +186,10 @@ func (this *CpuThrottle) runThrottling(stopCh chan struct{}) {
 	for {
 		select {
 		case <-stopCh:
-			// Clear out cpuStats so a later restart does not use old garbage
-			for idx := range this.cpuStats {
-				this.cpuStats[idx] = nil
+			// Clear out cpuStatsStd and cpuStatsCgroup so a later restart does not use old garbage
+			for idx := 0; idx < NUM_CPU_STATS; idx++ {
+				this.cpuStatsStd[idx] = nil
+				this.cpuStatsCgroup[idx] = nil
 			}
 			logging.Infof("%v Shutting down.", method)
 			return
@@ -233,21 +247,34 @@ func (this *CpuThrottle) adjustThrottleDelay(systemStats *system.SystemStats) {
 }
 
 // getCurrentCpuUsage gets the latest CPU usage stats from sigar, diffs them with the oldest stats,
-// and returns the result as a value in range [0.0, 1.0] (regardless of number of cores). The fields
-// counted as CPU "in use" are Sys + User + Nice + Irq + SoftIrq. (This is different from the
-// sigar_cpu_perc_calculate function's perc.combined calculation, whose semantics are unclear.)
+// and returns the result as a value in range [0.0, 1.0] regardless of number of cores. If cgroups
+// (Linux control groups) are supported, the stats will be from the newer cgroups implementation in
+// sigar, else they will be from the older tick-based implementation ("Std" for "standard").
 func (this *CpuThrottle) getCurrentCpuUsage(systemStats *system.SystemStats) float64 {
-	const method string = "CpuThrottle::getCurrentCpuUsage:" // for logging
+	cgroupsSupported, cpuUse := this.getCurrentCpuUsageCgroup(systemStats)
+	if !cgroupsSupported {
+		cpuUse = this.getCurrentCpuUsageStd(systemStats)
+	}
+	return cpuUse
+}
+
+// getCurrentCpuUsageStd gets the latest CPU usage stats from sigar when cgroups are not supported,
+// diffs them with the oldest stats, and returns the result as a value in range [0.0, 1.0]
+// regardless of number of cores. The fields counted as CPU "in use" are Sys + User + Nice + Irq +
+// SoftIrq. (This is different from the sigar_cpu_perc_calculate function's perc.combined
+// calculation, whose semantics are unclear.)
+func (this *CpuThrottle) getCurrentCpuUsageStd(systemStats *system.SystemStats) float64 {
+	const _getCurrentCpuUsageStd string = "CpuThrottle::getCurrentCpuUsageStd:"
 
 	// Get new stats and update the circular stats buffer
 	cpuStatsNew, err := systemStats.SigarCpuGet()
 	if err != nil {
-		logging.Infof("%v SigarCpuGet returned error: %v", method, err)
+		logging.Infof("%v SigarCpuGet returned error: %v", _getCurrentCpuUsageStd, err)
 		return 0.0
 	}
-	cpuStatsOld := this.cpuStats[this.cpuStatsIdx] // oldest stats in the circular buffer
-	this.cpuStats[this.cpuStatsIdx] = cpuStatsNew
-	this.cpuStatsIdx = (this.cpuStatsIdx + 1) % NUM_CPU_STATS
+	cpuStatsOld := this.cpuStatsStd[this.cpuStatsStdIdx] // oldest stats in circular buffer
+	this.cpuStatsStd[this.cpuStatsStdIdx] = cpuStatsNew
+	this.cpuStatsStdIdx = (this.cpuStatsStdIdx + 1) % NUM_CPU_STATS
 
 	if cpuStatsOld == nil { // have not wrapped around yet
 		return 0.0
@@ -268,4 +295,47 @@ func (this *CpuThrottle) getCurrentCpuUsage(systemStats *system.SystemStats) flo
 		return 0.0
 	}
 	return float64(cpuUseNew-cpuUseOld) / float64(deltaTime)
+}
+
+// getCurrentCpuUsageCgroup gets the latest CPU usage stats from sigar when cgroups are supported,
+// diffs them with the oldest stats, and returns the result as a value in range [0.0, 1.0]
+// regardless of number of cores. The bool return value is true if cgroups are supported, false
+// otherwise. If false, the float64 result is garbage and the caller should switch to
+// getCurrentCpuUsageStd instead.
+func (this *CpuThrottle) getCurrentCpuUsageCgroup(systemStats *system.SystemStats) (bool, float64) {
+	cgroupInfo := systemStats.GetControlGroupInfo()
+	if cgroupInfo.Supported != common.SIGAR_CGROUP_SUPPORTED {
+		return false, 0.0
+	}
+	timeNewUsec := (time.Now().UnixNano() + 500) / 1000 // rounded to nearest microsecond
+
+	cpuStatsNew := &cgroupCpuStats{
+		usageUsec:     cgroupInfo.UsageUsec,
+		timeUnixMicro: timeNewUsec,
+	}
+	cpuStatsOld := this.cpuStatsCgroup[this.cpuStatsCgroupIdx] // oldest stats in circular buffer
+	this.cpuStatsCgroup[this.cpuStatsCgroupIdx] = cpuStatsNew
+	this.cpuStatsCgroupIdx = (this.cpuStatsCgroupIdx + 1) % NUM_CPU_STATS
+
+	if cpuStatsOld == nil || // have not wrapped around yet
+		cgroupInfo.NumCpuPrc <= 0 { // bad CPU percentage; should not occur
+		return true, 0.0
+	}
+
+	// Calculate current CPU usage
+	maxPotentialUsage := float64(cpuStatsNew.timeUnixMicro-cpuStatsOld.timeUnixMicro) *
+		(float64(cgroupInfo.NumCpuPrc) / 100.0)
+	if maxPotentialUsage <= 0.0 { // could be 0.0 if no time elapsed or < 0.0 if clock changed
+		return true, 0.0
+	}
+
+	actualUsage := float64(cpuStatsNew.usageUsec - cpuStatsOld.usageUsec)
+	cpuUseNew := actualUsage / maxPotentialUsage
+	if cpuUseNew > 1.0 { // can occur due to time rounding/slop and if cgroupInfo.NumCpuPrc changes
+		cpuUseNew = 1.0
+	}
+	if cpuUseNew < 0.0 { // for safety; should not occur
+		cpuUseNew = 0.0
+	}
+	return true, cpuUseNew
 }
