@@ -10,10 +10,10 @@ import (
 )
 
 // ErrorTransportVersion
-var ErrorTransportVersion = errors.New("dataport.transportVersion")
+var ErrorTransportVersion = errors.New("queryport.transportVersion")
 
 // ErrorMissingPayload
-var ErrorMissingPayload = errors.New("dataport.missingPlayload")
+var ErrorMissingPayload = errors.New("queryport.missingPlayload")
 
 // ProtobufEncode encode payload message into protobuf array of bytes. Return
 // `data` can be transported to the other end and decoded back to Payload
