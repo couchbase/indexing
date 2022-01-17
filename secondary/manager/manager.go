@@ -37,14 +37,20 @@ type IndexManager struct {
 	coordinator   *Coordinator
 	eventMgr      *eventManager
 	lifecycleMgr  *LifecycleMgr
-	cinfoClient   *common.ClusterInfoClient
-	reqcic        *common.ClusterInfoClient
 	requestServer RequestServer
 	basepath      string
 	quota         uint64
 	clusterURL    string
 
 	repoName string
+
+	useCInfoLite      bool
+	cinfoProvider     common.ClusterInfoProvider
+	cinfoProviderLock sync.RWMutex
+
+	useCInfoLiteReqHandler      bool
+	cinfoProviderReqHandler     common.ClusterInfoProvider
+	cinfoProviderLockReqHandler sync.RWMutex
 
 	// bucket monitor
 	monitorKillch chan bool
@@ -146,22 +152,32 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 
 	mgr.clusterURL = config["clusterAddr"].String()
 
-	cic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
+	mgr.useCInfoLite = config["settings.use_cinfo_lite"].Bool()
+	mgr.cinfoProviderLock.Lock()
+	defer mgr.cinfoProviderLock.Unlock()
+
+	mgr.cinfoProvider, err = common.NewClusterInfoProvider(mgr.useCInfoLite,
+		mgr.clusterURL, common.DEFAULT_POOL, config)
 	if err != nil {
+		logging.Errorf("NewIndexManagerInternal: NewClusterInfoProvider returned err %v", err)
 		mgr.Close()
 		return nil, err
 	}
-	mgr.cinfoClient = cic
-	mgr.cinfoClient.SetUserAgent("IndexMgr")
+	mgr.cinfoProvider.SetUserAgent("IndexMgr")
 
 	// Another ClusterInfoClient for RequestHandler to avoid waiting due to locks of cinfoClient.
-	reqcic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
+	mgr.useCInfoLiteReqHandler = config["settings.use_cinfo_lite"].Bool()
+	mgr.cinfoProviderLockReqHandler.Lock()
+	defer mgr.cinfoProviderLockReqHandler.Unlock()
+
+	mgr.cinfoProviderReqHandler, err = common.NewClusterInfoProvider(mgr.useCInfoLiteReqHandler,
+		mgr.clusterURL, common.DEFAULT_POOL, config)
 	if err != nil {
+		logging.Errorf("NewIndexManagerInternal: NewClusterInfoProvider for request handler returned err %v", err)
 		mgr.Close()
 		return nil, err
 	}
-	mgr.reqcic = reqcic
-	mgr.reqcic.SetUserAgent("IndexRequestHandler")
+	mgr.cinfoProviderReqHandler.SetUserAgent("IndexRequestHandler")
 
 	// Initialize LifecycleMgr.
 	lifecycleMgr, err := NewLifecycleMgr(mgr.clusterURL, config)
@@ -179,12 +195,19 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	os.Mkdir(mgr.basepath, 0755)
 	mgr.repoName = filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 
-	cinfo := cic.GetClusterInfoCache()
-	cinfo.RLock()
-	defer cinfo.RUnlock()
-
-	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE, true)
+	ninfo, err := mgr.cinfoProvider.GetNodesInfoProvider()
 	if err != nil {
+		logging.Errorf("NewIndexManagerInternal: GetNodesInfoProvider returned err %v", err)
+		mgr.Close()
+		return nil, err
+	}
+
+	ninfo.RLock()
+	defer ninfo.RUnlock()
+
+	adminPort, err := ninfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE, true)
+	if err != nil {
+		logging.Errorf("NewIndexManagerInternal: GetLocalServicePort returned err %v", err)
 		mgr.Close()
 		return nil, err
 	}
@@ -286,12 +309,16 @@ func (m *IndexManager) Close() {
 		m.repo.Close()
 	}
 
-	if m.cinfoClient != nil {
-		m.cinfoClient.Close()
+	if m.cinfoProvider != nil {
+		m.cinfoProviderLock.Lock()
+		m.cinfoProvider.Close()
+		m.cinfoProviderLock.Unlock()
 	}
 
-	if m.reqcic != nil {
-		m.reqcic.Close()
+	if m.cinfoProviderReqHandler != nil {
+		m.cinfoProviderLockReqHandler.Lock()
+		m.cinfoProviderReqHandler.Close()
+		m.cinfoProviderLockReqHandler.Unlock()
 	}
 
 	if m.monitorKillch != nil {
@@ -674,6 +701,7 @@ func (m *IndexManager) UpdateStats(stats common.Statistics) error {
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_BOOTSTRAP_STATS_UPDATE, "", buf)
 }
 
+// NotifyConfigUpdate is called after clusterMgrAgent returns MsgSuccess{} for config update command
 func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 	logging.Debugf("IndexManager.NotifyConfigUpdate(): making request for new config update")
@@ -683,7 +711,69 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 		return e
 	}
 
-	return m.requestServer.MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE, "", buf)
+	e = m.requestServer.MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE, "", buf)
+	if e != nil {
+		logging.Errorf("NotifyConfigUpdate: MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE) returned err %v", e)
+	}
+
+	useCInfoLite := config["settings.use_cinfo_lite"].Bool()
+
+	var wg sync.WaitGroup
+	var err, errReqHandler error
+	if m.useCInfoLite != useCInfoLite {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			oldPtr := m.cinfoProvider
+			var cip common.ClusterInfoProvider
+			cip, err = common.NewClusterInfoProvider(useCInfoLite,
+				m.clusterURL, common.DEFAULT_POOL, config)
+			if err != nil {
+				logging.Errorf("Unable to update ClusterInfoProvider for IndexManager. use_cinfo_lite: %v", useCInfoLite)
+				return
+			}
+
+			m.cinfoProviderLock.Lock()
+			m.cinfoProvider = cip
+			m.useCInfoLite = useCInfoLite
+			m.cinfoProviderLock.Unlock()
+
+			logging.Infof("Updated ClusterInfoProvider for IndexManager. use_cinfo_lite: %v", useCInfoLite)
+			oldPtr.Close()
+		}()
+	}
+
+	if m.useCInfoLiteReqHandler != useCInfoLite {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			oldPtrReqHandler := m.cinfoProviderReqHandler
+			var cipReqHandler common.ClusterInfoProvider
+			cipReqHandler, errReqHandler = common.NewClusterInfoProvider(useCInfoLite,
+				m.clusterURL, common.DEFAULT_POOL, config)
+			if errReqHandler != nil {
+				logging.Errorf("Unable to update ClusterInfoProvider for RequestHandler. use_cinfo_lite: %v", useCInfoLite)
+			}
+
+			m.cinfoProviderLockReqHandler.Lock()
+			m.cinfoProviderReqHandler = cipReqHandler
+			m.useCInfoLiteReqHandler = useCInfoLite
+			m.cinfoProviderLockReqHandler.Unlock()
+
+			logging.Infof("Updated ClusterInfoProvider for RequestHandler. use_cinfo_lite: %v", useCInfoLite)
+			oldPtrReqHandler.Close()
+		}()
+	}
+
+	wg.Wait()
+
+	if err != nil || errReqHandler != nil {
+		return fmt.Errorf("Unable to update ClusterInfoProvider")
+	}
+
+	return nil
 }
 
 func (m *IndexManager) GetTopologyByCollection(bucket, scope, collection string) (*IndexTopology, error) {
@@ -741,25 +831,37 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 		return result, nil
 	}
 
-	cinfo := m.cinfoClient.GetClusterInfoCache()
-	cinfo.RLock()
-	defer cinfo.RUnlock()
+	m.cinfoProviderLock.RLock()
+	defer m.cinfoProviderLock.RUnlock()
+
+	ninfo, err := m.cinfoProvider.GetNodesInfoProvider()
+	if err != nil {
+		return nil, err
+	}
+	ninfo.RLock()
+	version := ninfo.GetClusterVersion()
+	ninfo.RUnlock()
 
 	// iterate through each topologey key
+	errMap := make(map[string]error)
 	for _, key := range globalTop.TopologyKeys {
 
 		bucket, scope, collection := getBucketScopeCollectionFromTopologyKey(key)
 
 		// Get bucket UUID. Bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
-		currentUUID := cinfo.GetBucketUUID(bucket)
+		currentUUID, err := m.cinfoProvider.GetBucketUUID(bucket)
+		if err != nil {
+			errMap[key] = err
+			continue
+		}
 
 		// Get CollectionID. CollectionID is COLLECTION_ID_NIL for non-existing collection
-		collectionID := cinfo.GetCollectionID(bucket, scope, collection)
-
-		version := cinfo.GetClusterVersion()
+		collectionID := m.cinfoProvider.GetCollectionID(bucket, scope, collection)
 
 		topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
-		if err == nil && topology != nil {
+		if err != nil {
+			errMap[key] = err
+		} else if topology != nil {
 
 			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
 			copy(definitions, topology.Definitions)
@@ -786,6 +888,16 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 			}
 		}
 	}
+	if len(errMap) != 0 {
+		keyList := []string{}
+		for key, err := range errMap {
+			logging.Debugf("getKeyspaceForCleanup: key: %v error: %v", key, err)
+			keyList = append(keyList, key)
+		}
+		logging.Errorf("getKeyspaceForCleanup: observed errors while verifying global topology keys: %v", strings.Join(keyList, ", "))
+	}
+
+	// Returning nil always as atleast found invalid keys can be processed
 	return result, nil
 }
 

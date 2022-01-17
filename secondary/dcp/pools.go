@@ -349,6 +349,7 @@ func queryRestAPIOnLocalhost(
 		return err
 	}
 	defer res.Body.Close()
+	defer io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 	if res.StatusCode != 200 {
 		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
 		return fmt.Errorf("HTTP error %v getting %q: %s",
@@ -434,13 +435,15 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 
 	if res.StatusCode != 200 {
 		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
+		io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 		res.Body.Close()
 		return fmt.Errorf("HTTP error %v getting %q: %s",
 			res.Status, u.String(), bod)
 	}
+	defer res.Body.Close()
+	defer io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 
 	reader := bufio.NewReader(res.Body)
-	defer res.Body.Close()
 	for {
 		if cancel != nil {
 			select {

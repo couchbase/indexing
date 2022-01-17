@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -92,15 +92,15 @@ func UnmarshalInternalVersion(data []byte) (InternalVersion, error) {
 	return InternalVersion(iv.Version), nil
 }
 
-func GetInternalClusterVersion(cinfo *ClusterInfoCache) (InternalVersion, error) {
+func GetInternalClusterVersion(ninfo NodesInfoProvider) (InternalVersion, error) {
 
-	cinfo.RLock()
-	defer cinfo.RUnlock()
+	ninfo.RLock()
+	defer ninfo.RUnlock()
 
 	//
 	// Contact only the active indexer nodes. This ensures DDL availability.
 	//
-	indexers := cinfo.GetActiveIndexerNodes()
+	indexers := ninfo.GetActiveIndexerNodes()
 	versions := make([]InternalVersion, len(indexers))
 	errors := make(map[string]error)
 
@@ -110,7 +110,7 @@ func GetInternalClusterVersion(cinfo *ClusterInfoCache) (InternalVersion, error)
 	getInternalNodeVersion := func(i int, node couchbase.Node) {
 		defer wg.Done()
 
-		nid, found := cinfo.GetNodeIdByUUID(node.NodeUUID)
+		nid, found := ninfo.GetNodeIdByUUID(node.NodeUUID)
 		if !found {
 			lck.Lock()
 			defer lck.Unlock()
@@ -121,7 +121,7 @@ func GetInternalClusterVersion(cinfo *ClusterInfoCache) (InternalVersion, error)
 			return
 		}
 
-		addr, err := cinfo.GetServiceAddress(nid, INDEX_HTTP_SERVICE, true)
+		addr, err := ninfo.GetServiceAddress(nid, INDEX_HTTP_SERVICE, true)
 		if err != nil {
 			lck.Lock()
 			defer lck.Unlock()

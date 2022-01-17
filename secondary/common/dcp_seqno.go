@@ -1106,7 +1106,7 @@ loop:
 					continue
 				}
 
-				bucketUUID, _ := bucketInfo.GetBucketUUID()
+				bucketUUID := bucketInfo.GetBucketUUID(bucketn)
 				if bucketUUID != bucket.UUID {
 					logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
 						"due to UUID mismatch, currUUID: %v, uuid in book-keeping: %v ", bucketn, bucketUUID, bucket.UUID)
@@ -1609,17 +1609,18 @@ func WatchClusterVersionChanges(clusterAddr string, termVersion int64) {
 
 	if res.StatusCode != 200 {
 		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
+		io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 		res.Body.Close()
 
 		logging.Errorf("WatchClusterVersionChanges: HTTP error %v getting %q: %s", res.Status, urlStr, bod)
 		selfRestart()
 		return
 	}
+	defer res.Body.Close()
+	defer io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 
 	var p couchbase.Pool
-
 	reader := bufio.NewReader(res.Body)
-	defer res.Body.Close()
 	for {
 
 		if atomic.LoadInt64(&clusterVersion) >= termVersion {

@@ -32,6 +32,8 @@ type ClusterInfoProvider interface {
 	// TODO: Move to this to bucket Info
 	GetBucketUUID(bucket string) (uuid string, err error)
 
+	GetCollectionID(bucket, scope, collection string) string
+
 	// Stub functions to make clusterInfoClient and clusterInfoCacheLiteClient compatible
 	FetchWithLock() error
 }
@@ -67,10 +69,12 @@ type NodesInfoProvider interface {
 	GetServiceAddress(nid NodeId, srvc string, useEncryptedPortMap bool) (addr string, err error)
 
 	GetNodeUUID(nid NodeId) string
+	GetNodeIdByUUID(uuid string) (NodeId, bool)
 
 	GetLocalHostname() (string, error)
 	GetLocalNodeUUID() string
 	GetLocalServiceAddress(srvc string, useEncryptedPortMap bool) (srvcAddr string, err error)
+	GetLocalServicePort(srvc string, useEncryptedPortMap bool) (string, error)
 
 	GetActiveIndexerNodes() (nodes []couchbase.Node)
 
@@ -110,6 +114,8 @@ type CollectionInfoProvider interface {
 	ScopeAndCollectionID(bucket, scope, collection string) (string, string)
 
 	RWLockable // Stub to make ClusterInfoCache replaceable with CollectionInfo
+	FetchBucketInfo(bucketName string) error
+	FetchManifestInfo(bucketName string) error
 }
 
 // NewCollectionInfoProvider is factory to either get CollectionInfo or ClusterInfoCache
@@ -138,8 +144,9 @@ type BucketInfoProvider interface {
 	// GetLocalVBuckets returns vbs in the current kv node
 	GetLocalVBuckets(bucket string) (vbs []uint16, err error)
 
-	// TODO: understand why vbmap check is needed in this API
-	//GetBucketUUID(bucket string) (uuid string, err error)
+	GetBucketUUID(bucket string) (uuid string)
+
+	IsEphemeral(bucket string) (bool, error)
 
 	// Stub
 	FetchBucketInfo(bucketName string) error
