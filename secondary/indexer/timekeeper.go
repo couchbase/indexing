@@ -2385,7 +2385,10 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	//if flushTs is not on snap boundary, merge cannot be done
-	if !initFlushTs.IsSnapAligned() {
+	//except in the case of FORCE_COMMIT_MERGE type TS, which can be
+	//non-snap aligned as it comes from the MAINT_STREAM.
+	if !initFlushTs.IsSnapAligned() &&
+		initFlushTs.GetSnapType() != common.FORCE_COMMIT_MERGE {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 
 		var lenInitTs, lenMaintTs int
