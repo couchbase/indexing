@@ -74,6 +74,12 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 			Vbuuids:    val.Vbuuids,
 			Vbuckets:   c.Vbno16to32(val.Vbuckets),
 		}
+
+	case *protobuf.AuthRequest:
+		pl.AuthRequest = &protobuf.AuthRequest{
+			User: proto.String(*val.User),
+			Pass: proto.String(*val.Pass),
+		}
 	}
 
 	if err == nil {

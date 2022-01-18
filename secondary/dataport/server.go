@@ -58,10 +58,13 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/cbauth"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -147,6 +150,7 @@ type Server struct {
 	maxPayload   int           // maximum payload length from router
 	readDeadline time.Duration // timeout, in millisecond, reading from socket
 	logPrefix    string
+	enableAuth   *uint32
 
 	mu sync.Mutex
 }
@@ -156,7 +160,8 @@ func NewServer(
 	laddr string,
 	maxvbs int,
 	config c.Config,
-	appch chan<- interface{}) (s *Server, err error) {
+	appch chan<- interface{},
+	enableAuth *uint32) (s *Server, err error) {
 
 	genChSize := config["genServerChanSize"].Int()
 	dataChSize := config["dataChanSize"].Int()
@@ -174,6 +179,7 @@ func NewServer(
 		genChSize:    genChSize,
 		maxPayload:   config["maxPayload"].Int(),
 		readDeadline: time.Duration(config["tcpReadDeadline"].Int()),
+		enableAuth:   enableAuth,
 	}
 	s.logPrefix = fmt.Sprintf("DATP[->dataport %q]", laddr)
 
@@ -325,6 +331,8 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 			switch msg.cmd {
 			case serverCmdNewConnection:
 				conn, raddr := msg.args[0].(net.Conn), msg.raddr
+				reqMsg := msg.args[1]
+
 				if _, ok := s.conns[raddr]; ok {
 					logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
 					conn.Close()
@@ -338,7 +346,7 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 					n := len(s.conns)
 					fmsg := "%v new connection %q +%d\n"
 					logging.Infof(fmsg, s.logPrefix, raddr, n)
-					s.startWorker(raddr)
+					s.startWorker(raddr, reqMsg)
 				}
 
 			case serverCmdClose:
@@ -387,7 +395,7 @@ loop:
 					avb := &activeVb{raddr: raddr, keyspaceId: keyspaceId, vbno: uint16(vbno)}
 					hostUuids[avb.id()] = avb
 				}
-				s.startWorker(msg.raddr)
+				s.startWorker(msg.raddr, nil)
 
 			case serverCmdVbKeyVersions:
 				nicetoapp(parseVbs(msg))
@@ -475,7 +483,7 @@ func (s *Server) handleResetConnections() error {
 }
 
 // start a connection worker to read mutation message for a subset of vbuckets.
-func (s *Server) startWorker(raddr string) {
+func (s *Server) startWorker(raddr string, reqMsg interface{}) {
 	nc, ok := s.conns[raddr]
 	if !ok {
 		fmsg := "%v connection %q already gone stale !\n"
@@ -483,7 +491,7 @@ func (s *Server) startWorker(raddr string) {
 		return
 	}
 	logging.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
-	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.datach)
+	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.datach, reqMsg)
 	nc.active = true
 }
 
@@ -635,14 +643,95 @@ func (s *Server) listener() {
 			break //After loop breaks, selfRestart() is called in defer
 
 		} else {
-			msg := serverMessage{
-				cmd:   serverCmdNewConnection,
-				raddr: conn.RemoteAddr().String(),
-				args:  []interface{}{conn},
-			}
-			s.reqch <- []interface{}{msg}
+			go s.handleConnection(conn)
 		}
 	}
+}
+
+func (s *Server) handleConnection(conn net.Conn) {
+
+	raddr := conn.RemoteAddr().String()
+
+	reqMsg, err := s.doAuth(conn)
+	if err != nil {
+		logging.Errorf("%v %q error in authentication %v", s.logPrefix, raddr, err)
+		conn.Close()
+		return
+	}
+
+	msg := serverMessage{
+		cmd:   serverCmdNewConnection,
+		raddr: raddr,
+	}
+
+	args := make([]interface{}, 2)
+	args[0] = conn
+	args[1] = reqMsg
+
+	msg.args = args
+	s.reqch <- []interface{}{msg}
+}
+
+func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
+
+	raddr := conn.RemoteAddr()
+
+	rpkt := newTransportPkt(s.maxPayload)
+	logging.Infof("%v connection %q doAuth() ...", s.logPrefix, raddr)
+
+	// Set read deadline for auth to 10 Seconds.
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		logging.Warnf("%v doAuth %q error %v in SetReadDeadline", s.logPrefix, raddr, err)
+	}
+
+	reqMsg, err := rpkt.Receive(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	req, ok := reqMsg.(*protobuf.AuthRequest)
+	if !ok {
+		logging.Infof("%v connection %q doAuth() authentication is missing", s.logPrefix, raddr)
+
+		if c.GetClusterVersion() < c.INDEXER_71_VERSION {
+			logging.Infof("%v connection %q continue without auth", s.logPrefix, raddr)
+			return reqMsg, nil
+		}
+
+		// When cluster is getting upgraded, client may lag behind in
+		// receiving cluster upgrade notification as compared to the server.
+		// In such a case, server will close the connection.
+		//
+		// Client can choose to either (1) handle this closed connection
+		// intelligently or (2) take more disruptive code path where indexer has
+		// to trigger the stream restart.
+		//
+		// To avoid disruptive stream restart, user can enable server auth only
+		// when the "enableAuth" setting is enabled.
+
+		if atomic.LoadUint32(s.enableAuth) == 0 {
+			logging.Infof("%v connection %q continue without auth, as auth is disabled", s.logPrefix, raddr)
+			return reqMsg, nil
+		}
+
+		return nil, c.ErrAuthMissing
+
+	} else {
+		// The upgraded server always accepts the auth request.
+		_, err = cbauth.Auth(req.GetUser(), req.GetPass())
+		if err != nil {
+			logging.Errorf("%v connection %q doAuth() error %v", s.logPrefix, raddr, err)
+			return nil, errors.New("Unauthenticated access. Authentication failure.")
+		}
+
+		logging.Infof("%v connection %q auth successful", s.logPrefix, raddr)
+
+		// TODO: RBAC
+
+		return nil, nil
+	}
+
+	return nil, nil
 }
 
 // per connection go-routine to read []*VbKeyVersions.
@@ -650,7 +739,8 @@ func doReceive(
 	prefix string,
 	nc *netConn,
 	maxPayload int, readDeadline time.Duration,
-	datach chan<- []interface{}) {
+	datach chan<- []interface{},
+	reqMsg interface{}) {
 
 	conn, worker := nc.conn, nc.worker
 
@@ -672,13 +762,24 @@ loop:
 		timeoutMs := readDeadline * time.Millisecond
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 		msg.cmd, msg.err, msg.args = 0, nil, nil
-		if payload, err := pkt.Receive(conn); err != nil {
-			msg.cmd, msg.err = serverCmdError, err
-			datach <- []interface{}{msg}
-			logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, err)
-			break loop
 
-		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
+		var payload interface{}
+		var err error
+
+		if reqMsg != nil {
+			payload = reqMsg
+			reqMsg = nil
+		} else {
+			payload, err = pkt.Receive(conn)
+			if err != nil {
+				msg.cmd, msg.err = serverCmdError, err
+				datach <- []interface{}{msg}
+				logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, err)
+				break loop
+			}
+		}
+
+		if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
 			msg.cmd, msg.args = serverCmdVbmap, []interface{}{vbmap}
 			datach <- []interface{}{msg}
 			fmsg := "%v worker %q exit: `serverCmdVbmap`\n"

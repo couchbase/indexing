@@ -224,16 +224,7 @@ func (s *Server) listener() {
 
 	for {
 		if conn, err := lis.Accept(); err == nil {
-			err, req := s.doAuth(conn)
-			if err != nil {
-				// On authentication error, just close the connection. Client
-				// will try with a new connection by sending AuthRequest.
-				logging.Errorf("%v Authentication failed for conn %v with error %v", s.logPrefix, conn.RemoteAddr(), err)
-				conn.Close()
-			} else {
-				s.registerConn(conn)
-				go s.handleConnection(conn, req)
-			}
+			go s.handleConnection(conn)
 		} else {
 			e, ok := err.(*net.OpError)
 			if ok && (e.Err == syscall.EMFILE || e.Err == syscall.ENFILE) {
@@ -246,7 +237,7 @@ func (s *Server) listener() {
 	}
 }
 
-func (s *Server) doAuth(conn net.Conn) (error, interface{}) {
+func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 
 	// TODO: Some code deduplication with doReveive can be done.
 	raddr := conn.RemoteAddr()
@@ -259,9 +250,19 @@ func (s *Server) doAuth(conn net.Conn) (error, interface{}) {
 
 	logging.Infof("%v connection %q doAuth() ...", s.logPrefix, raddr)
 
+	// Set read deadline for auth to 10 Seconds.
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		logging.Warnf("%v doAuth %q error %v in SetReadDeadline", s.logPrefix, raddr, err)
+	}
+
 	reqMsg, err := rpkt.Receive(conn)
 	if err != nil {
-		return err, nil
+		return nil, err
+	}
+
+	// Reset read deadline
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		logging.Warnf("%v doAuth %q error %v in SetReadDeadline during reset", s.logPrefix, raddr, err)
 	}
 
 	var authErr error
@@ -282,7 +283,7 @@ func (s *Server) doAuth(conn net.Conn) (error, interface{}) {
 
 		if c.GetClusterVersion() < c.INDEXER_71_VERSION {
 			logging.Infof("%v connection %q continue without auth", s.logPrefix, raddr)
-			return nil, reqMsg
+			return reqMsg, nil
 		}
 
 		code = transport.AUTH_MISSING
@@ -308,19 +309,31 @@ func (s *Server) doAuth(conn net.Conn) (error, interface{}) {
 
 	err = rpkt.Send(conn, resp)
 	if err != nil {
-		return err, nil
+		return nil, err
 	}
 
 	if authErr == nil {
 		logging.Verbosef("%v connection %q auth successful", s.logPrefix, raddr)
 	}
 
-	return authErr, nil
+	return nil, authErr
 }
 
 // handle connection request. connection might be kept open in client's
 // connection pool.
-func (s *Server) handleConnection(conn net.Conn, req interface{}) {
+func (s *Server) handleConnection(conn net.Conn) {
+
+	err, req := s.doAuth(conn)
+	if err != nil {
+		// On authentication error, just close the connection. Client
+		// will try with a new connection by sending AuthRequest.
+		logging.Errorf("%v Authentication failed for conn %v with error %v", s.logPrefix, conn.RemoteAddr(), err)
+		conn.Close()
+		return
+	}
+
+	s.registerConn(conn)
+
 	atomic.AddInt64(&s.nConnections, 1)
 	defer func() {
 		atomic.AddInt64(&s.nConnections, -1)

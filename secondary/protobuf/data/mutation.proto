@@ -39,6 +39,7 @@ message Payload {
     // -- Following fields are mutually exclusive --
     repeated VbKeyVersions   vbkeys  = 2;
     optional VbConnectionMap vbmap   = 3;
+    optional AuthRequest authRequest = 4;
 }
 
 
@@ -91,4 +92,11 @@ message KeyVersions {
     repeated bytes  oldkeys   = 6; // key-versions from old copy of the document
     repeated bytes  partnkeys = 7; // partition key for each key-version
     optional int64  prjMovingAvg = 8; // Moving avg. latency of mutation processing in projector
+}
+
+// Dataport server authentication
+
+message AuthRequest {
+    required string user = 1;
+    required string pass = 2;
 }

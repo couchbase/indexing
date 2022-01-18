@@ -80,6 +80,7 @@ type mutationMgr struct {
 	vbMap         *VbMapHolder
 	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all keyspaceIds
 	cpuThrottle   *CpuThrottle     // for Autofailover CPU throttling
+	enableAuth    *uint32
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -121,6 +122,9 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		numVbsPerNode:  make(map[string]int64),
 		cpuThrottle:    cpuThrottle,
 	}
+
+	m.setEnableAuth()
+
 	m.vbMap.Init()
 	m.indexInstMap.Init()
 	m.indexPartnMap.Init()
@@ -504,7 +508,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, keyspaceIdQueueMap, keyspaceIdFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, keyspaceIdSessionId, keyspaceIdEnableOSO)
+		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, keyspaceIdSessionId, keyspaceIdEnableOSO,
+		m.enableAuth)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -1366,6 +1371,7 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 	m.config = cfgUpdate.GetConfig()
 
 	m.setMaxMemoryFromQuota()
+	m.setEnableAuth()
 
 	m.supvCmdch <- &MsgSuccess{}
 }
@@ -1447,6 +1453,30 @@ func (m *mutationMgr) handleSecurityChange(cmd Message) {
 	}
 
 	m.supvCmdch <- msg
+}
+
+func (m *mutationMgr) setEnableAuth() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	enableAuth := uint32(0)
+
+	if m.enableAuth == nil {
+		m.enableAuth = &enableAuth
+	}
+
+	enableAuthVal, ok := m.config["dataport.enableAuth"]
+	if ok {
+		if enableAuthVal.Bool() {
+			atomic.StoreUint32(m.enableAuth, 1)
+		} else {
+			atomic.StoreUint32(m.enableAuth, 0)
+		}
+
+		logging.Infof("mutationMgr::setEnableAuth: enableAuth set to %v", atomic.LoadUint32(m.enableAuth))
+	} else {
+		logging.Warnf("mutationMgr::setEnableAuth: missing indexer.dataport.enableAuth in config")
+	}
 }
 
 func CopyKeyspaceIdQueueMap(inMap KeyspaceIdQueueMap) KeyspaceIdQueueMap {
