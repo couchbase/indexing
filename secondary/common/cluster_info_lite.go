@@ -42,6 +42,26 @@ var ErrorEventWaitTimeout = errors.New("error event wait timeout")
 var ErrorUnintializedNodesInfo = errors.New("error uninitialized nodesInfo")
 var ErrorThisNodeNotFound = errors.New("error thisNode not found")
 
+func SetCICLMgrTimeDiffToForceFetch(minutes uint32) {
+	singletonCICLContainer.Lock()
+	defer singletonCICLContainer.Unlock()
+	if mgr := singletonCICLContainer.ciclMgr; mgr != nil {
+		mgr.setTimeDiffToForceFetch(minutes)
+	} else {
+		logging.Warnf("SetCICLMgrTimeDiffToForceFetch: Singleton Manager in ClusterInfoCacheLite is not set")
+	}
+}
+
+func SetCICLMgrSleepTimeOnNotifierRestart(milliSeconds uint32) {
+	singletonCICLContainer.Lock()
+	defer singletonCICLContainer.Unlock()
+	if mgr := singletonCICLContainer.ciclMgr; mgr != nil {
+		mgr.setNotifierRetrySleep(milliSeconds)
+	} else {
+		logging.Warnf("SetCICLMgrSleepTimeOnNotifierRestart: Singleton Manager in ClusterInfoCacheLite is not set")
+	}
+}
+
 //
 // Nodes Info
 //
@@ -574,16 +594,16 @@ type clusterInfoCacheLiteManager struct {
 }
 
 func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
-	poolName, logPrefix string) (*clusterInfoCacheLiteManager,
+	poolName, logPrefix string, config Config) (*clusterInfoCacheLiteManager,
 	error) {
 
 	cicm := &clusterInfoCacheLiteManager{
 		poolName:                 poolName,
 		logPrefix:                logPrefix,
 		cicl:                     cicl,
-		timeDiffToForceFetch:     5, // In Minutes
+		timeDiffToForceFetch:     config["force_after"].Uint32(), // In Minutes
 		poolsStreamingCh:         make(chan Notification, 100),
-		notifierRetrySleep:       2,
+		notifierRetrySleep:       config["notifier_restart_sleep"].Uint32(), // In Milliseconds
 		retryInterval:            uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()),
 		collnManifestCh:          make(chan Notification, 100),
 		perBucketCollnManifestCh: make(map[string]chan Notification),
@@ -690,19 +710,23 @@ func (cicm *clusterInfoCacheLiteManager) close() {
 }
 
 func (cicm *clusterInfoCacheLiteManager) setTimeDiffToForceFetch(minutes uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting time difference interval in manager to force fetch to %d minutes", minutes)
 	atomic.StoreUint32(&cicm.timeDiffToForceFetch, minutes)
 }
 
 func (cicm *clusterInfoCacheLiteManager) setMaxRetries(maxRetries uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting max retries in manager to %d", maxRetries)
 	atomic.StoreUint32(&cicm.maxRetries, maxRetries)
 }
 
 func (cicm *clusterInfoCacheLiteManager) setRetryInterval(seconds uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting retry interval in manager to %d seconds", seconds)
 	atomic.StoreUint32(&cicm.retryInterval, seconds)
 }
 
-func (cicm *clusterInfoCacheLiteManager) setNotifierRetrySleep(seconds uint32) {
-	atomic.StoreUint32(&cicm.notifierRetrySleep, seconds)
+func (cicm *clusterInfoCacheLiteManager) setNotifierRetrySleep(milliSeconds uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting sleep interval upon notifier restart in manager to %d milliSeconds", milliSeconds)
+	atomic.StoreUint32(&cicm.notifierRetrySleep, milliSeconds)
 }
 
 func (cicm *clusterInfoCacheLiteManager) nodesInfo() (*NodesInfo, error) {
@@ -838,8 +862,9 @@ func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
 func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 	cicm.ticker = time.NewTicker(time.Duration(1) * time.Minute)
 	for range cicm.ticker.C {
-		ni := cicm.cicl.nih.Get()
 		t := atomic.LoadUint32(&cicm.timeDiffToForceFetch)
+
+		ni := cicm.cicl.nih.Get()
 		if ni != nil &&
 			time.Since(ni.lastUpdatedTs) >
 				time.Duration(t)*time.Minute &&
@@ -855,7 +880,7 @@ func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 		for name, cih := range cicm.cicl.cihm {
 			ci := cih.Get()
 			if ci == nil || time.Since(ci.lastUpdatedTs) >
-				5*time.Minute {
+				time.Duration(t)*time.Minute {
 				msg := Notification{
 					Type: PeriodicUpdateNotification,
 					Msg: &couchbase.Bucket{
@@ -871,7 +896,7 @@ func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 		for name, bih := range cicm.cicl.bihm {
 			bi := bih.Get()
 			if bi == nil || time.Since(bi.lastUpdatedTs) >
-				5*time.Minute {
+				time.Duration(t)*time.Minute {
 				msg := Notification{
 					Type: PeriodicUpdateNotification,
 					Msg:  &couchbase.Bucket{Name: name},
@@ -1197,7 +1222,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 	selfRestart := func() {
 		logging.Infof("clusterInfoCacheLiteManager watchClusterChanges: restarting..")
 		r := atomic.LoadUint32(&cicm.notifierRetrySleep)
-		time.Sleep(time.Duration(r) * time.Second)
+		time.Sleep(time.Duration(r) * time.Millisecond)
 		go cicm.watchClusterChanges(true)
 	}
 
@@ -1468,12 +1493,13 @@ type ClusterInfoCacheLiteClient struct {
 	eventWaitTimeoutSeconds uint32
 }
 
-func NewClusterInfoCacheLiteClient(clusterURL, poolName string,
+func NewClusterInfoCacheLiteClient(clusterURL, poolName, userAgent string,
 	config Config) (ciclClient *ClusterInfoCacheLiteClient, err error) {
 
 	ciclClient = &ClusterInfoCacheLiteClient{
 		clusterURL: clusterURL,
 		poolName:   poolName,
+		logPrefix:  userAgent,
 	}
 
 	t := uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()) * CLUSTER_INFO_DEFAULT_RETRIES
@@ -1486,7 +1512,7 @@ func NewClusterInfoCacheLiteClient(clusterURL, poolName string,
 		cicl := newClusterInfoCacheLite("SingletonCICL")
 
 		ciclMgr, err := newClusterInfoCacheLiteManager(cicl, clusterURL,
-			poolName, "SingletonCICLMgr")
+			poolName, "SingletonCICLMgr", config)
 		if err != nil {
 			return nil, err
 		}
@@ -1497,7 +1523,7 @@ func NewClusterInfoCacheLiteClient(clusterURL, poolName string,
 	ciclClient.ciclMgr = singletonCICLContainer.ciclMgr
 	singletonCICLContainer.refCount++
 
-	logging.Infof("NewClusterInfoCacheLiteClient started new cicl client")
+	logging.Infof("NewClusterInfoCacheLiteClient started new cicl client for %v", userAgent)
 	return ciclClient, err
 }
 
@@ -1555,12 +1581,6 @@ func (c *ClusterInfoCacheLiteClient) SetEventWaitTimeout(seconds uint32) {
 	c.eventWaitTimeoutSeconds = seconds
 }
 
-func (c *ClusterInfoCacheLiteClient) SetTimeDiffToForceFetchInMgr(minutes uint32) {
-	singletonCICLContainer.Lock()
-	defer singletonCICLContainer.Unlock()
-	c.ciclMgr.setTimeDiffToForceFetch(minutes)
-}
-
 func (c *ClusterInfoCacheLiteClient) SetMaxRetries(retries uint32) {
 	singletonCICLContainer.Lock()
 	defer singletonCICLContainer.Unlock()
@@ -1571,12 +1591,6 @@ func (c *ClusterInfoCacheLiteClient) SetRetryInterval(seconds uint32) {
 	singletonCICLContainer.Lock()
 	defer singletonCICLContainer.Unlock()
 	c.ciclMgr.setRetryInterval(seconds)
-}
-
-func (c *ClusterInfoCacheLiteClient) SetNotifierRetrySleepInMgr(seconds uint32) {
-	singletonCICLContainer.Lock()
-	defer singletonCICLContainer.Unlock()
-	c.ciclMgr.setNotifierRetrySleep(seconds)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetNodesInfo() (*NodesInfo, error) {

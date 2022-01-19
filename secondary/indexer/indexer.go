@@ -365,12 +365,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
-	useCInfoLite := idx.config["settings.use_cinfo_lite"].Bool()
-	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr, DEFAULT_POOL, idx.config)
+	useCInfoLite := idx.config["use_cinfo_lite"].Bool()
+	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr,
+		DEFAULT_POOL, "indexer", idx.config)
 	if err != nil {
+		logging.Errorf("Indexer::NewIndexer Unable to get new ClusterInfoProvider err: %v use_cinfo_lite: %v", err, useCInfoLite)
 		common.CrashOnError(err)
 	}
-	idx.cinfoProvider.SetUserAgent("indexer")
 
 	go common.PollForDeletedBucketsV2(clusterAddr, DEFAULT_POOL, idx.config)
 
@@ -424,7 +425,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// Start compaction manager
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
+		logging.Fatalf("Indexer::NewIndexer NewCompactionManager Init Error %+v", res)
 		return nil, res
 	}
 
@@ -433,7 +434,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// indexer components.   During storage upgrade, indexer may need to restart so it
 	// can boostrap with the bootstrap storage mode.
 	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
-	logging.Infof("bootstrap storage mode %v", idx.bootstrapStorageMode)
+	logging.Infof("Indexer::NewIndexer bootstrap storage mode %v", idx.bootstrapStorageMode)
 	if idx.enableManager {
 		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootstrapStorageMode)
 		if res.GetMsgType() != MSG_SUCCESS {
@@ -1653,19 +1654,18 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.storageMgrCmdCh
 	idx.updateSliceWithConfig(newConfig)
 
-	newUseCInfoLite := newConfig["settings.use_cinfo_lite"].Bool()
-	oldUseCInfoLite := oldConfig["settings.use_cinfo_lite"].Bool()
+	newUseCInfoLite := newConfig["use_cinfo_lite"].Bool()
+	oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
 	if oldUseCInfoLite != newUseCInfoLite {
-		logging.Infof("Updating ClusterInfoProvider in Indexer")
+		logging.Infof("Indexer::handleConfigUpdate: Updating ClusterInfoProvider in Indexer")
 
 		cip, err := common.NewClusterInfoProvider(newUseCInfoLite,
-			newConfig["clusterAddr"].String(), DEFAULT_POOL, newConfig)
+			newConfig["clusterAddr"].String(), DEFAULT_POOL, "indexer", newConfig)
 		if err != nil {
-			logging.Errorf("Unable to update ClusterInfoProvider in Indexer err: %v, use_cinfo_lite: old %v new %v",
+			logging.Errorf("Indexer::handleConfigUpdate Unable to update ClusterInfoProvider in Indexer err: %v, use_cinfo_lite: old %v new %v",
 				err, oldUseCInfoLite, newUseCInfoLite)
 			common.CrashOnError(err)
 		}
-		cip.SetUserAgent("indexer")
 
 		oldPtr := idx.cinfoProvider
 
@@ -1673,7 +1673,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		idx.cinfoProvider = cip
 		idx.cinfoProviderLock.Unlock()
 
-		logging.Infof("Updated ClusterInfoProvider in Indexer use_cinfo_lite: old %v new %v",
+		logging.Infof("Indexer::handleConfigUpdate Updated ClusterInfoProvider in Indexer use_cinfo_lite: old %v new %v",
 			oldUseCInfoLite, newUseCInfoLite)
 
 		oldPtr.Close()
@@ -1745,15 +1745,18 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	var ephemeral bool
+	var ephemeral, valid bool
 	var err error
 
-	idx.cinfoProviderLock.RLock()
-	valid := idx.cinfoProvider.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID})
-	if valid {
-		ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
-	}
-	idx.cinfoProviderLock.RUnlock()
+	func() {
+		idx.cinfoProviderLock.RLock()
+		defer idx.cinfoProviderLock.RUnlock()
+
+		valid = idx.cinfoProvider.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID})
+		if valid {
+			ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+		}
+	}()
 
 	if !valid {
 		logging.Errorf("Indexer::handleCreateIndex Bucket %v Not Found")

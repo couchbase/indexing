@@ -152,32 +152,32 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 
 	mgr.clusterURL = config["clusterAddr"].String()
 
-	mgr.useCInfoLite = config["settings.use_cinfo_lite"].Bool()
+	mgr.useCInfoLite = config["use_cinfo_lite"].Bool()
 	mgr.cinfoProviderLock.Lock()
 	defer mgr.cinfoProviderLock.Unlock()
 
 	mgr.cinfoProvider, err = common.NewClusterInfoProvider(mgr.useCInfoLite,
-		mgr.clusterURL, common.DEFAULT_POOL, config)
+		mgr.clusterURL, common.DEFAULT_POOL, "IndexMgr", config)
 	if err != nil {
-		logging.Errorf("NewIndexManagerInternal: NewClusterInfoProvider returned err %v", err)
+		logging.Errorf("NewIndexManagerInternal: Unable to get new ClusterInfoProvider for IndexMgr err: %v use_cinfo_lite: %v",
+			err, mgr.useCInfoLite)
 		mgr.Close()
 		return nil, err
 	}
-	mgr.cinfoProvider.SetUserAgent("IndexMgr")
 
 	// Another ClusterInfoClient for RequestHandler to avoid waiting due to locks of cinfoClient.
-	mgr.useCInfoLiteReqHandler = config["settings.use_cinfo_lite"].Bool()
+	mgr.useCInfoLiteReqHandler = config["use_cinfo_lite"].Bool()
 	mgr.cinfoProviderLockReqHandler.Lock()
 	defer mgr.cinfoProviderLockReqHandler.Unlock()
 
 	mgr.cinfoProviderReqHandler, err = common.NewClusterInfoProvider(mgr.useCInfoLiteReqHandler,
-		mgr.clusterURL, common.DEFAULT_POOL, config)
+		mgr.clusterURL, common.DEFAULT_POOL, "RequestHandler", config)
 	if err != nil {
-		logging.Errorf("NewIndexManagerInternal: NewClusterInfoProvider for request handler returned err %v", err)
+		logging.Errorf("NewIndexManagerInternal: Unable to get new ClusterInfoProvider for RequestHandler err: %v use_cinfo_lite: %v",
+			err, mgr.useCInfoLiteReqHandler)
 		mgr.Close()
 		return nil, err
 	}
-	mgr.cinfoProviderReqHandler.SetUserAgent("IndexRequestHandler")
 
 	// Initialize LifecycleMgr.
 	lifecycleMgr, err := NewLifecycleMgr(mgr.clusterURL, config)
@@ -713,10 +713,10 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 	e = m.requestServer.MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE, "", buf)
 	if e != nil {
-		logging.Errorf("NotifyConfigUpdate: MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE) returned err %v", e)
+		logging.Errorf("IndexManager.NotifyConfigUpdate(): MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE) returned err %v", e)
 	}
 
-	useCInfoLite := config["settings.use_cinfo_lite"].Bool()
+	useCInfoLite := config["use_cinfo_lite"].Bool()
 
 	var wg sync.WaitGroup
 	var err, errReqHandler error
@@ -725,13 +725,16 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 		go func() {
 			defer wg.Done()
 
+			logging.Infof("IndexManager.NotifyConfigUpdate(): Updating ClusterInfoProvider in IndexManager")
+
 			oldPtr := m.cinfoProvider
 			var cip common.ClusterInfoProvider
 			cip, err = common.NewClusterInfoProvider(useCInfoLite,
-				m.clusterURL, common.DEFAULT_POOL, config)
+				m.clusterURL, common.DEFAULT_POOL, "IndexMgr", config)
 			if err != nil {
-				logging.Errorf("Unable to update ClusterInfoProvider for IndexManager. use_cinfo_lite: %v", useCInfoLite)
-				return
+				logging.Errorf("IndexManager.NotifyConfigUpdate(): Unable to update ClusterInfoProvider in IndexMgr err: %v, use_cinfo_lite: old %v new %v",
+					err, m.useCInfoLite, useCInfoLite)
+				common.CrashOnError(err)
 			}
 
 			m.cinfoProviderLock.Lock()
@@ -739,7 +742,8 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 			m.useCInfoLite = useCInfoLite
 			m.cinfoProviderLock.Unlock()
 
-			logging.Infof("Updated ClusterInfoProvider for IndexManager. use_cinfo_lite: %v", useCInfoLite)
+			logging.Infof("IndexManager.NotifyConfigUpdate(): Updated ClusterInfoProvider in IndexMgr use_cinfo_lite: old %v new %v",
+				m.useCInfoLite, useCInfoLite)
 			oldPtr.Close()
 		}()
 	}
@@ -749,12 +753,16 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 		go func() {
 			defer wg.Done()
 
+			logging.Infof("IndexManager.NotifyConfigUpdate(): Updating ClusterInfoProvider in RequestHandler")
+
 			oldPtrReqHandler := m.cinfoProviderReqHandler
 			var cipReqHandler common.ClusterInfoProvider
 			cipReqHandler, errReqHandler = common.NewClusterInfoProvider(useCInfoLite,
-				m.clusterURL, common.DEFAULT_POOL, config)
+				m.clusterURL, common.DEFAULT_POOL, "RequestHandler", config)
 			if errReqHandler != nil {
-				logging.Errorf("Unable to update ClusterInfoProvider for RequestHandler. use_cinfo_lite: %v", useCInfoLite)
+				logging.Errorf("IndexManager.NotifyConfigUpdate(): Unable to update ClusterInfoProvider in RequestHandler err: %v, use_cinfo_lite: old %v new %v",
+					err, m.useCInfoLiteReqHandler, useCInfoLite)
+				common.CrashOnError(err)
 			}
 
 			m.cinfoProviderLockReqHandler.Lock()
@@ -762,7 +770,8 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 			m.useCInfoLiteReqHandler = useCInfoLite
 			m.cinfoProviderLockReqHandler.Unlock()
 
-			logging.Infof("Updated ClusterInfoProvider for RequestHandler. use_cinfo_lite: %v", useCInfoLite)
+			logging.Infof("IndexManager.NotifyConfigUpdate(): Updated ClusterInfoProvider in RequestHandler use_cinfo_lite: old %v new %v",
+				m.useCInfoLiteReqHandler, useCInfoLite)
 			oldPtrReqHandler.Close()
 		}()
 	}

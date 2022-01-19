@@ -199,17 +199,20 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 
 	mgr.configHolder.Store(config)
 
-	useCinfolite := config["settings.use_cinfo_lite"].Bool()
+	useCinfolite := config["use_cinfo_lite"].Bool()
 
-	mgr.cinfoProviderLock.Lock()
-	defer mgr.cinfoProviderLock.Unlock()
-	mgr.cinfoProvider, err = common.NewClusterInfoProvider(useCinfolite,
-		clusterURL, common.DEFAULT_POOL, config)
+	cip, err := common.NewClusterInfoProvider(useCinfolite,
+		clusterURL, common.DEFAULT_POOL, "LifecycleMgr", config)
 	if err != nil {
+		logging.Errorf("NewLifecycleMgr Unable to get new ClusterInfoProvider in LifeCycleMgr err: %v use_cinfo_lite: %v",
+			err, useCinfolite)
 		return nil, err
 	}
 
-	mgr.cinfoProvider.SetUserAgent("LifecycleMgr")
+	mgr.cinfoProviderLock.Lock()
+	mgr.cinfoProvider = cip
+	mgr.cinfoProviderLock.Unlock()
+
 	ninfo, err := mgr.cinfoProvider.GetNodesInfoProvider()
 	if err != nil {
 		return nil, err
@@ -3011,18 +3014,29 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) (err error) {
 		atomic.StoreUint64(&m.clientStatsRefreshInterval, uint64(val.Float64()))
 	}
 
-	useCInfoLite := (*config)["settings.use_cinfo_lite"].Bool()
 	oldConfig := m.configHolder.Load()
-	if oldConfig["settings.use_cinfo_lite"].Bool() != useCInfoLite {
-		m.cinfoProviderLock.Lock()
-		defer m.cinfoProviderLock.Unlock()
+
+	newUseCInfoLite := (*config)["use_cinfo_lite"].Bool()
+	oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
+	if oldUseCInfoLite != newUseCInfoLite {
+		logging.Infof("LifecycleMgr.handleConfigUpdate() Updating ClusterInfoProvider in LifecycleMgr")
 
 		oldPtr := m.cinfoProvider
-		m.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite,
-			m.clusterURL, common.DEFAULT_POOL, *config)
+		cip, err := common.NewClusterInfoProvider(newUseCInfoLite,
+			m.clusterURL, common.DEFAULT_POOL, "LifecycleMgr", *config)
 		if err != nil {
-			return err
+			logging.Errorf("LifecycleMgr.handleConfigUpdate() Unable to update ClusterInfoProvider in LifecycleMgr err: %v, use_cinfo_lite: old %v new %v",
+				err, oldUseCInfoLite, newUseCInfoLite)
+			common.CrashOnError(err)
 		}
+
+		m.cinfoProviderLock.Lock()
+		m.cinfoProvider = cip
+		m.cinfoProviderLock.Unlock()
+
+		logging.Infof("LifecycleMgr.handleConfigUpdate() Updated ClusterInfoProvider in LifecycleMgr use_cinfo_lite: old %v new %v",
+			oldUseCInfoLite, newUseCInfoLite)
+
 		oldPtr.Close()
 	}
 
