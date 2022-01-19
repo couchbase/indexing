@@ -1252,7 +1252,7 @@ func (r *Rebalancer) observeRebalance() {
 
 	<-r.waitForTokenPublish
 
-	err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, r.processTokens, r.metakvCancel)
+	err := metakv.RunObserveChildren(RebalanceMetakvDir, r.processTokens, r.metakvCancel)
 	if err != nil {
 		l.Infof("Rebalancer::observeRebalance Exiting On Metakv Error %v", err)
 		r.finishRebalance(err)
