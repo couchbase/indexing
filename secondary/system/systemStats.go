@@ -8,6 +8,8 @@ import "C"
 import (
 	"errors"
 	"fmt"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type SystemStats struct {
@@ -40,72 +42,84 @@ func (h *SystemStats) Close() {
 	C.sigar_close(h.handle)
 }
 
-//
-// Get CPU percentage
-//
+// ProcessCpuPercent gets the percent CPU this Go runtime has consumed recently. This is in range
+// [0,GOMAXPROCS]*100%, so a value of 123.4 means it is consuming 1.234 CPU cores. This behavior
+// was confirmed by empirical experiments running different numbers of CPU-bound spinners in Indexer
+// and externally (not part of Couchbase). E.g. in an otherwise idle cluster if each of three
+// Indexers runs two CPU spinners in a dev environment with all on the same laptop, each one reports
+// ~200% CPU usage even though there is at least 600% CPU being consumed on the entire machine. At
+// the same time Projector reports ~0% CPU usage. Neither of these is affected by the number of
+// external spinners that are also consuming CPU.
 func (h *SystemStats) ProcessCpuPercent() (C.sigar_pid_t, float64, error) {
-
 	// Sigar returns a ratio of (system_time + user_time) / elapsed time
 	var cpu C.sigar_proc_cpu_t
 	if err := C.sigar_proc_cpu_get(h.handle, h.pid, &cpu); err != C.SIGAR_OK {
 		return C.sigar_pid_t(0), float64(0), errors.New(fmt.Sprintf("Fail to get CPU.  Err=%v", C.sigar_strerror(h.handle, err)))
 	}
-
+	// Despite its name, cpu.percent is not a percent. It is in range [0, GOMAXPROCS] so needs * 100
+	// to convert it to a percent. It is a double in sigar (C++ equivalent of Go float64).
 	return h.pid, float64(cpu.percent) * 100, nil
 }
 
-//
-// Get RSS
-//
+// ProcessRSS gets the size in bytes of the memory-resident portion of this Go runtime.
 func (h *SystemStats) ProcessRSS() (C.sigar_pid_t, uint64, error) {
-
 	var mem C.sigar_proc_mem_t
 	if err := C.sigar_proc_mem_get(h.handle, h.pid, &mem); err != C.SIGAR_OK {
 		return C.sigar_pid_t(0), uint64(0), errors.New(fmt.Sprintf("Fail to get RSS.  Err=%v", C.sigar_strerror(h.handle, err)))
 	}
-
 	return h.pid, uint64(mem.resident), nil
 }
 
-//
-// Get Free memory
-//
+// FreeMem gets the current free memory in bytes, which is the free memory within the cgroup
+// if cgroups are supported, else bare node's free memory EXCLUDING inactive OS kernel pages.
+// (Sister method SystemStats.ActualFreeMem includes inactive OS kernel pages in bare node case.)
 func (h *SystemStats) FreeMem() (uint64, error) {
+	// Get cgroup info and return free memory from it if cgroups are supported
+	cgroupInfo := h.GetControlGroupInfo()
+	if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
+		return (cgroupInfo.MemoryMax - cgroupInfo.MemoryCurrent), nil
+	}
 
+	// Cgroups not supported; return the node-level free memory EXCLUDING inactive OS kernel pages
 	var mem C.sigar_mem_t
 	if err := C.sigar_mem_get(h.handle, &mem); err != C.SIGAR_OK {
 		return uint64(0), errors.New(fmt.Sprintf("Fail to get free memory.  Err=%v", C.sigar_strerror(h.handle, err)))
 	}
-
 	return uint64(mem.free), nil
 }
 
-//
-// Get Actual Free memory
-// FreeMem() does not account for kernel buffer cache
-// Hence, using sigar_mem_t::actual_free which accounts for kernel
-// buffer cache when computing free memory
-//
+// ActualFreeMem gets the current free memory in bytes, which is the free memory within the cgroup
+// if cgroups are supported, else bare node's free memory INCLUDING inactive OS kernel pages.
+// (Sister method SystemStats.FreeMem excludes inactive OS kernel pages in bare node case.)
 func (h *SystemStats) ActualFreeMem() (uint64, error) {
+	// Get cgroup info and return free memory from it if cgroups are supported
+	cgroupInfo := h.GetControlGroupInfo()
+	if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
+		return (cgroupInfo.MemoryMax - cgroupInfo.MemoryCurrent), nil
+	}
 
+	// Cgroups not supported; return the node-level free memory INCLUDING inactive OS kernel pages
 	var mem C.sigar_mem_t
 	if err := C.sigar_mem_get(h.handle, &mem); err != C.SIGAR_OK {
 		return uint64(0), errors.New(fmt.Sprintf("Fail to get free memory.  Err=%v", C.sigar_strerror(h.handle, err)))
 	}
-
 	return uint64(mem.actual_free), nil
 }
 
-//
-// Get Total memory
-//
+// TotalMem gets the total memory in bytes available to this Go runtime, which is the cgroup limit
+// if cgroups are supported, else the bare node's total memory.
 func (h *SystemStats) TotalMem() (uint64, error) {
+	// Get cgroup info and return memory limit from it if cgroups are supported
+	cgroupInfo := h.GetControlGroupInfo()
+	if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
+		return cgroupInfo.MemoryMax, nil
+	}
 
+	// Cgroups not supported; return the node-level memory limit
 	var mem C.sigar_mem_t
 	if err := C.sigar_mem_get(h.handle, &mem); err != C.SIGAR_OK {
 		return uint64(0), errors.New(fmt.Sprintf("Fail to get total memory.  Err=%v", C.sigar_strerror(h.handle, err)))
 	}
-
 	return uint64(mem.total), nil
 }
 
@@ -145,6 +159,8 @@ func (h *SystemStats) SigarCpuGet() (*SigarCpuT, error) {
 	}, nil
 }
 
+// SigarControlGroupInfo holds just the subset of C.sigar_control_group_info_t GSI uses. There are
+// many more fields available at time of writing.
 type SigarControlGroupInfo struct {
 	Supported uint8 // "1" if cgroup info is supprted, "0" otherwise
 	Version   uint8 // "1" for cgroup v1, "2" for cgroup v2
@@ -164,6 +180,8 @@ type SigarControlGroupInfo struct {
 	UsageUsec uint64
 }
 
+// GetControlGroupInfo returns the fields of C.sigar_control_group_info_t GSI uses. These reflect
+// Linux control group settings, which are used by Kubernetes to set pod memory and CPU limits.
 func (h *SystemStats) GetControlGroupInfo() *SigarControlGroupInfo {
 	var info C.sigar_control_group_info_t
 	C.sigar_get_control_group_info(&info)

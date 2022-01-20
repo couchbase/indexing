@@ -40,7 +40,7 @@ import (
 //		"indexer.dataport.tcpReadDeadline": 300 * 1000
 
 // formula to compute the default CPU allocation for projector.
-var projector_maxCpuPercent = int(math.Max(400.0, float64(runtime.NumCPU())*100.0*0.25))
+var projector_maxCpuPercent = int(math.Max(400.0, float64(runtime.GOMAXPROCS(0))*100.0*0.25))
 var Plasma_minNumShard = uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25))
 
 // Threadsafe config holder object

@@ -52,12 +52,26 @@ type settingsManager struct {
 // NewSettingsManager is the settingsManager constructor. Indexer creates a child singleton of this.
 func NewSettingsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (*settingsManager, common.Config, Message) {
+
 	s := settingsManager{
 		supvCmdch: supvCmdch,
 		supvMsgch: supvMsgch,
 		config:    config,
 		cancelCh:  make(chan struct{}),
 	}
+
+	// Set cgroup overrides; these will be 0 if cgroups are not supported. Must be set before
+	// calling GetSettingsConfig else that can result in an async callback based on the (now stale)
+	// version of config that was passed to it when called, wiping out these new config settings.
+	sigarMemoryMax, sigarNumCpuPrc := sigarGetMemoryMaxAndNumCpuPrc()
+	const memKey = "indexer.cgroup.memory_quota"
+	const cpuKey = "indexer.cgroup.max_cpu_percent"
+	value := config[memKey]
+	value.Value = sigarMemoryMax
+	config[memKey] = value
+	value = config[cpuKey]
+	value.Value = sigarNumCpuPrc
+	config[cpuKey] = value
 
 	// This method will merge metakv indexer settings onto default settings.
 	config, err := common.GetSettingsConfig(config)
@@ -69,17 +83,6 @@ func NewSettingsManager(supvCmdch MsgChannel,
 				severity: FATAL,
 			}}
 	}
-
-	// Set cgroup overrides; these will be 0 if cgroups are not supported
-	sigarMemoryMax, sigarNumCpuPrc := sigarGetMemoryMaxAndNumCpuPrc()
-	const memKey = "indexer.cgroup.memory_quota"
-	const cpuKey = "indexer.cgroup.max_cpu_percent"
-	value := config[memKey]
-	value.Value = sigarMemoryMax
-	config[memKey] = value
-	value = config[cpuKey]
-	value.Value = sigarNumCpuPrc
-	config[cpuKey] = value
 
 	// Initialize the global config settings
 	s.setGlobalSettings(nil, config)
@@ -503,7 +506,11 @@ func (s *settingsManager) setGlobalSettings(oldCfg, newCfg common.Config) {
 
 	// Set number of CPU cores to use to min(node, cgroup, GSI)
 	ncpu := common.SetNumCPUs(newCfg.GetIndexerNumCpuPrc())
-	logging.Infof("%v Setting maxcpus = %d", _setGlobalSettings, ncpu)
+	memoryQuota := float64(newCfg.GetIndexerMemoryQuota())
+	logging.Infof(
+		"%v Indexer # CPU cores: %v, memory quota: %.0f bytes (%.3f KB, %.3f MB, %.3f GB)",
+		_setGlobalSettings, ncpu, memoryQuota, memoryQuota/1024, memoryQuota/(1024*1024),
+		memoryQuota/(1024*1024*1024))
 
 	setLogger(newCfg)
 	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()
