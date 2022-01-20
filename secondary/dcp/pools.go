@@ -171,6 +171,17 @@ type NodeServices struct {
 	ThisNode bool           `json:"thisNode"`
 }
 
+func (ns *NodeServices) GetHostNameWithPort(svc string) (string, error) {
+	port, ok := ns.Services[svc]
+	if !ok {
+		return "", fmt.Errorf("port for %v not found in host %v", svc, ns.Hostname)
+	}
+
+	portStr := fmt.Sprintf("%d", port)
+	hp := net.JoinHostPort(ns.Hostname, portStr)
+	return hp, nil
+}
+
 type ServerGroups struct {
 	Groups []ServerGroup `json:"groups"`
 }
@@ -601,18 +612,15 @@ func (b *Bucket) Refresh() error {
 	return nil
 }
 
-func (b *Bucket) Init(hostport string) {
+func (b *Bucket) NormalizeHostnames(hostport string) {
 	connHost, _, _ := net.SplitHostPort(hostport)
+
 	for i := range b.NodesJSON {
 		b.NodesJSON[i].Hostname = NormalizeHost(connHost, b.NodesJSON[i].Hostname)
 	}
 
-	newcps := make([]*connectionPool, len(b.VBSMJson.ServerList))
-	for i := range newcps {
+	for i := range b.VBSMJson.ServerList {
 		b.VBSMJson.ServerList[i] = NormalizeHost(connHost, b.VBSMJson.ServerList[i])
-		newcps[i] = newConnectionPool(
-			b.VBSMJson.ServerList[i],
-			b.authHandler(), PoolSize, PoolOverflow)
 	}
 
 	for i, ns := range b.NodesExt {
@@ -620,12 +628,9 @@ func (b *Bucket) Init(hostport string) {
 		if h == "" {
 			h = connHost
 		}
-		p := fmt.Sprintf("%d", ns.Services["mgmt"])
-		hp := net.JoinHostPort(h, p)
-		b.NodesExt[i].Hostname = hp
+		b.NodesExt[i].Hostname = h
 	}
 
-	b.replaceConnPools(newcps)
 	atomic.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&b.VBSMJson))
 	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&b.NodesJSON))
 }

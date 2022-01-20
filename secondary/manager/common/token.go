@@ -1562,7 +1562,7 @@ func (m *CommandListener) ListenTokens() {
 			if r > 0 {
 				logging.Errorf("CommandListener: metakv notifier failed (%v)..Restarting %v", err, r)
 			}
-			err = metakv.RunObserveChildrenV2(CommandMetakvDir, metaKVCallback, m.cancelCh)
+			err = metakv.RunObserveChildren(CommandMetakvDir, metaKVCallback, m.cancelCh)
 			return err
 		}
 

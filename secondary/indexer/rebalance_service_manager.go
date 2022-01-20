@@ -2325,7 +2325,7 @@ func (m *RebalanceServiceManager) listenMoveIndex() {
 
 	cancel := make(chan struct{})
 	for {
-		err := metakv.RunObserveChildrenV2(RebalanceMetakvDir, m.processMoveIndex, cancel)
+		err := metakv.RunObserveChildren(RebalanceMetakvDir, m.processMoveIndex, cancel)
 		if err != nil {
 			l.Infof("RebalanceServiceManager::listenMoveIndex metakv err %v. Retrying...", err)
 			time.Sleep(2 * time.Second)

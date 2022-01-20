@@ -65,7 +65,7 @@ func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 			if r > 0 {
 				logging.Errorf("metakv notifier failed (%v)..Retrying %v", err, r)
 			}
-			err = metakv.RunObserveChildrenV2(IndexingSettingsMetaDir, metaKvCb, cancelCh)
+			err = metakv.RunObserveChildren(IndexingSettingsMetaDir, metaKvCb, cancelCh)
 			return err
 		}
 		rh := NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)

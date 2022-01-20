@@ -89,7 +89,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			if r > 0 {
 				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting %v", err, r)
 			}
-			err = metakv.RunObserveChildrenV2("/", s.metaKVCallback, s.cancelCh)
+			err = metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
 			return err
 		}
 		rh := common.NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)

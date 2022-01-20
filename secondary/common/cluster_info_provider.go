@@ -29,6 +29,9 @@ type ClusterInfoProvider interface {
 	// Set time between retries of calls to ns_server
 	SetRetryInterval(seconds uint32)
 
+	// Set max retries for ns_server calls
+	SetMaxRetries(retries uint32)
+
 	// TODO: Move to this to bucket Info
 	GetBucketUUID(bucket string) (uuid string, err error)
 
@@ -147,6 +150,12 @@ type BucketInfoProvider interface {
 	GetBucketUUID(bucket string) (uuid string)
 
 	IsEphemeral(bucket string) (bool, error)
+
+	GetServiceAddress(nid NodeId, srvc string, useEncryptedPortMap bool) (addr string, err error)
+
+	GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error)
+
+	GetNodesByBucket(bucket string) (nids []NodeId, err error)
 
 	// Stub
 	FetchBucketInfo(bucketName string) error

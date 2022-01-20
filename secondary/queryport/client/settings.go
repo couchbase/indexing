@@ -77,7 +77,7 @@ func NewClientSettings(needRefresh bool) *ClientSettings {
 				if r > 0 {
 					logging.Errorf("ClientSettings: metakv notifier failed (%v)..Restarting %v", err, r)
 				}
-				err = metakv.RunObserveChildrenV2(common.IndexingSettingsMetaDir, s.metaKVCallback, s.cancelCh)
+				err = metakv.RunObserveChildren(common.IndexingSettingsMetaDir, s.metaKVCallback, s.cancelCh)
 				return err
 			}
 			rh := common.NewRetryHelper(200, time.Second, 2, fn)

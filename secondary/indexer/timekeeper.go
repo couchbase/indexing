@@ -2385,7 +2385,10 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	//if flushTs is not on snap boundary, merge cannot be done
-	if !initFlushTs.IsSnapAligned() {
+	//except in the case of FORCE_COMMIT_MERGE type TS, which can be
+	//non-snap aligned as it comes from the MAINT_STREAM.
+	if !initFlushTs.IsSnapAligned() &&
+		initFlushTs.GetSnapType() != common.FORCE_COMMIT_MERGE {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 
 		var lenInitTs, lenMaintTs int
@@ -3178,6 +3181,12 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		return
 	}
 
+	//skip snapshot alignment for FORCE_COMMIT_MERGE as no flush
+	//is required for this type, only a snapshot gets created
+	if flushTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
+		return
+	}
+
 	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 		return
 	}
@@ -3218,6 +3227,12 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 	tsElem *TsListElem) {
 
 	flushTs := tsElem.ts
+
+	//skip the check for FORCE_COMMIT_MERGE as the TS may not be always monotonic
+	//if it belongs to MAINT_STREAM.
+	if flushTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
+		return
+	}
 
 	// Seqno should be monotonically increasing when it comes to mutation queue.
 	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
