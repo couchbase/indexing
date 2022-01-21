@@ -567,9 +567,9 @@ var SystemConfig = Config{
 		false,      // case-insensitive
 	},
 	"indexer.dataport.enableAuth": ConfigValue{
-		false,
+		true,
 		"force authentication for dataport server",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},

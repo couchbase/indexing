@@ -260,7 +260,8 @@ func (client *Client) InitialTopicRequest(
 	async bool,
 	opaque2 uint64,
 	collectionAware bool,
-	enableOSO bool) (*protobuf.TopicResponse, error) {
+	enableOSO bool,
+	needsAuth bool) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
 	for _, instance := range instances {
@@ -268,7 +269,7 @@ func (client *Client) InitialTopicRequest(
 	}
 
 	req := protobuf.NewMutationTopicRequest(topic, endpointType,
-		instances, async, opaque2, collectionAware, enableOSO)
+		instances, async, opaque2, collectionAware, enableOSO, needsAuth)
 	for bucketn := range buckets {
 		ts, err := client.InitialRestartTimestamp(pooln, bucketn)
 		if err != nil {
@@ -330,10 +331,12 @@ func (client *Client) MutationTopicRequest(
 	opaque2 uint64,
 	keyspaceIds []string,
 	collectionAware bool,
-	enableOSO bool) (*protobuf.TopicResponse, error) {
+	enableOSO bool,
+	needsAuth bool) (*protobuf.TopicResponse, error) {
 
 	req := protobuf.NewMutationTopicRequest(topic,
-		endpointType, instances, async, opaque2, collectionAware, enableOSO)
+		endpointType, instances, async, opaque2, collectionAware,
+		enableOSO, needsAuth)
 	req.ReqTimestamps = reqTimestamps
 	req.KeyspaceIds = keyspaceIds
 
@@ -390,9 +393,9 @@ func (client *Client) MutationTopicRequest(
 func (client *Client) RestartVbuckets(
 	topic string, opaque2 uint64,
 	restartTimestamps []*protobuf.TsVbuuid,
-	keyspaceIds []string) (*protobuf.TopicResponse, error) {
+	keyspaceIds []string, needsAuth bool) (*protobuf.TopicResponse, error) {
 
-	req := protobuf.NewRestartVbucketsRequest(topic, opaque2)
+	req := protobuf.NewRestartVbucketsRequest(topic, opaque2, needsAuth)
 	for _, restartTs := range restartTimestamps {
 		req.Append(restartTs)
 	}
@@ -498,9 +501,9 @@ func (client *Client) ShutdownVbuckets(
 func (client *Client) AddBuckets(
 	topic string, reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance,
-	keyspaceIds []string) (*protobuf.TopicResponse, error) {
+	keyspaceIds []string, needsAuth bool) (*protobuf.TopicResponse, error) {
 
-	req := protobuf.NewAddBucketsRequest(topic, instances)
+	req := protobuf.NewAddBucketsRequest(topic, instances, needsAuth)
 	req.ReqTimestamps = reqTimestamps
 	req.KeyspaceIds = keyspaceIds
 	res := &protobuf.TopicResponse{}
@@ -559,9 +562,9 @@ func (client *Client) DelBuckets(topic string,
 func (client *Client) AddInstances(
 	topic string,
 	instances []*protobuf.Instance,
-	keyspaceId string) (*protobuf.TimestampResponse, error) {
+	keyspaceId string, needsAuth bool) (*protobuf.TimestampResponse, error) {
 
-	req := protobuf.NewAddInstancesRequest(topic, instances)
+	req := protobuf.NewAddInstancesRequest(topic, instances, needsAuth)
 	req.KeyspaceId = proto.String(keyspaceId)
 	res := &protobuf.TimestampResponse{}
 	err := client.withRetry(
@@ -615,9 +618,9 @@ func (client *Client) DelInstances(topic string,
 // - return http errors for transport related failures.
 // - return ErrorTopicMissing if feed is not started.
 func (client *Client) RepairEndpoints(
-	topic string, endpoints []string) error {
+	topic string, endpoints []string, needsAuth bool) error {
 
-	req := protobuf.NewRepairEndpointsRequest(topic, endpoints)
+	req := protobuf.NewRepairEndpointsRequest(topic, endpoints, needsAuth)
 	res := &protobuf.Error{}
 	err := client.withRetry(
 		func() error {

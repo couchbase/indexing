@@ -243,7 +243,7 @@ func (resp *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.Failove
 func NewMutationTopicRequest(
 	topic, endpointType string, instances []*Instance,
 	async bool, opaque2 uint64, collectionAware bool,
-	enableOSO bool) *MutationTopicRequest {
+	enableOSO bool, needsAuth bool) *MutationTopicRequest {
 
 	return &MutationTopicRequest{
 		Topic:           proto.String(topic),
@@ -255,6 +255,7 @@ func NewMutationTopicRequest(
 		Opaque2:         proto.Uint64(opaque2),
 		CollectionAware: proto.Bool(collectionAware),
 		OsoSnapshot:     proto.Bool(enableOSO),
+		NeedsAuth:       proto.Bool(needsAuth),
 	}
 }
 
@@ -474,10 +475,13 @@ func (tsResp *TimestampResponse) AddKeyspaceId(keyspaceId string) {
 // NewRestartVbucketsRequest creates a RestartVbucketsRequest
 // for topic, later a list of {pool,bucket,timestamp} need to
 // be added before posting the request.
-func NewRestartVbucketsRequest(topic string, opaque2 uint64) *RestartVbucketsRequest {
+func NewRestartVbucketsRequest(topic string, opaque2 uint64,
+	needsAuth bool) *RestartVbucketsRequest {
+
 	return &RestartVbucketsRequest{
-		Topic:   proto.String(topic),
-		Opaque2: proto.Uint64(opaque2),
+		Topic:     proto.String(topic),
+		Opaque2:   proto.Uint64(opaque2),
+		NeedsAuth: proto.Bool(needsAuth),
 	}
 }
 
@@ -635,13 +639,14 @@ func (req *ShutdownVbucketsRequest) GetKeyspaceIdMap() (map[string]string, error
 // NewAddBucketsRequest creates an AddBucketsRequest
 // for topic to add one or more new instances/engines to a topic.
 func NewAddBucketsRequest(
-	topic string, instances []*Instance) *AddBucketsRequest {
+	topic string, instances []*Instance, needsAuth bool) *AddBucketsRequest {
 
 	return &AddBucketsRequest{
 		Topic:         proto.String(topic),
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
 		Version:       FeedVersion_cheshireCat.Enum(),
+		NeedsAuth:     proto.Bool(needsAuth),
 	}
 }
 
@@ -782,12 +787,13 @@ func (req *DelBucketsRequest) GetKeyspaceIdMap() (map[string]string, error) {
 // NewAddInstancesRequest creates an AddInstancesRequest
 // for topic to add one or more new instances/engines to a topic.
 func NewAddInstancesRequest(
-	topic string, instances []*Instance) *AddInstancesRequest {
+	topic string, instances []*Instance, needsAuth bool) *AddInstancesRequest {
 
 	return &AddInstancesRequest{
 		Topic:     proto.String(topic),
 		Instances: instances,
 		Version:   FeedVersion_cheshireCat.Enum(),
+		NeedsAuth: proto.Bool(needsAuth),
 	}
 }
 
@@ -903,12 +909,13 @@ func (req *DelInstancesRequest) Decode(data []byte) (err error) {
 
 // NewRepairEndpoints creates a RepairEndpointsRequest
 // for a topic's one or more endpoints.
-func NewRepairEndpointsRequest(
-	topic string, endpoints []string) *RepairEndpointsRequest {
+func NewRepairEndpointsRequest(topic string, endpoints []string,
+	needsAuth bool) *RepairEndpointsRequest {
 
 	return &RepairEndpointsRequest{
 		Topic:     proto.String(topic),
 		Endpoints: endpoints,
+		NeedsAuth: proto.Bool(needsAuth),
 	}
 }
 
