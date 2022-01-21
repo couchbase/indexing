@@ -62,6 +62,7 @@ message MutationTopicRequest {
     repeated string      keyspaceIds     = 8;
     optional bool        collectionAware = 9;
     optional bool        osoSnapshot     = 10;
+    optional bool        needsAuth       = 11;
 }
 
 // Response back for
@@ -93,6 +94,7 @@ message RestartVbucketsRequest {
     repeated TsVbuuid restartTimestamps  = 2; // per bucket timestamps
     optional uint64   opaque2            = 3;
     repeated string   keyspaceIds        = 4;
+    optional bool     needsAuth          = 5;
 }
 
 // ShutdownVbucketsRequest will shutdown a subset of vbuckets
@@ -115,6 +117,7 @@ message AddBucketsRequest {
     optional FeedVersion version       = 4 [default=sherlock];
     optional uint64      opaque2       = 5;
     repeated string      keyspaceIds   = 6;
+    optional bool        needsAuth     = 7;
 }
 
 // DelBucketsRequest will shutdown vbucket-streams
@@ -133,6 +136,7 @@ message AddInstancesRequest {
     repeated Instance    instances  = 2; // instances to be added to this topic
     optional FeedVersion version    = 3 [default=sherlock];
     optional string      keyspaceId = 4;
+    optional bool        needsAuth  = 5;
 }
 
 // DelInstancesRequest to delete index-instances from a topic.
@@ -148,6 +152,7 @@ message DelInstancesRequest {
 message RepairEndpointsRequest {
     required string topic     = 1; // must be an already started topic.
     repeated string endpoints = 2;
+    optional bool   needsAuth = 3;
 }
 
 // Requested by coordinator to should down a mutation topic and all KV

@@ -74,7 +74,8 @@ type RouterEndpoint struct {
 	// Mapping between vbuckets and keyspace
 	keyspaceIdVBMap map[string]map[uint16]bool
 
-	authHost string
+	authHost  string
+	needsAuth bool
 }
 
 type EndpointStats struct {
@@ -171,12 +172,7 @@ func (stats *EndpointStats) String() string {
 // routine and return its reference.
 func NewRouterEndpoint(
 	cluster, topic, raddr string, maxvbs int,
-	config c.Config) (*RouterEndpoint, error) {
-
-	conn, err := security.MakeConn(raddr)
-	if err != nil {
-		return nil, err
-	}
+	config c.Config, needsAuth bool) (*RouterEndpoint, error) {
 
 	endpoint := &RouterEndpoint{
 		topic:           topic,
@@ -193,6 +189,7 @@ func NewRouterEndpoint(
 		stats:           &EndpointStats{},
 		seqOrders:       make(map[string]dcpTransport.SeqOrderState),
 		keyspaceIdVBMap: make(map[string]map[uint16]bool),
+		needsAuth:       needsAuth,
 	}
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 
@@ -211,7 +208,14 @@ func NewRouterEndpoint(
 
 	// Ignore the error in initHostportForAuth, if any.
 	// It will be retried again in doAuth.
-	endpoint.initHostportForAuth()
+	if err := endpoint.initHostportForAuth(); err != nil {
+		logging.Warnf("%v error in initHostportForAuth %v", endpoint.logPrefix, err)
+	}
+
+	conn, err := security.MakeConn(raddr)
+	if err != nil {
+		return nil, err
+	}
 
 	// doAuth
 	if err := endpoint.doAuth(conn); err != nil {
@@ -307,8 +311,8 @@ func (endpoint *RouterEndpoint) getAuthInfo() (string, string, error) {
 
 func (endpoint *RouterEndpoint) doAuth(conn net.Conn) error {
 	// Check if auth is supported / configured before doing auth
-	if c.GetClusterVersion() < c.INDEXER_71_VERSION {
-		logging.Verbosef("%v doAuth Auth is not needed.", endpoint.logPrefix)
+	if !endpoint.needsAuth {
+		logging.Infof("%v doAuth Auth is not needed needsAuth=%v", endpoint.logPrefix, endpoint.needsAuth)
 		return nil
 	}
 

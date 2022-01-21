@@ -954,7 +954,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 	if res, err := ap.MutationTopicRequest(topic, endpointType,
 		[]*protobuf.TsVbuuid{reqTimestamps}, instances, async,
-		sessionId, []string{keyspaceId}, collectionAware, enableOSO); err != nil {
+		sessionId, []string{keyspaceId}, collectionAware, enableOSO, true); err != nil {
 		logging.Errorf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
 			topic, keyspaceId, err)
 
@@ -1010,7 +1010,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	}
 
 	if res, err := ap.RestartVbuckets(topic, sessionId,
-		[]*protobuf.TsVbuuid{restartTs}, []string{keyspaceId}); err != nil {
+		[]*protobuf.TsVbuuid{restartTs}, []string{keyspaceId}, true); err != nil {
 		logging.Errorf("KVSender::sendRestartVbuckets Unexpected Error During "+
 			"Restart Vbuckets Request for Projector %v Topic %v %v %v . Err %v.", ap,
 			topic, keyspaceId, restartTs.GetBucket(), err)
@@ -1036,7 +1036,7 @@ func sendAddInstancesRequest(ap *projClient.Client,
 	logging.Infof("KVSender::sendAddInstancesRequest Projector %v Topic %v KeyspaceId %v"+
 		" \nInstances %v", ap, topic, keyspaceId, formatInstances(instances))
 
-	if res, err := ap.AddInstances(topic, instances, keyspaceId); err != nil {
+	if res, err := ap.AddInstances(topic, instances, keyspaceId, true); err != nil {
 		logging.Errorf("KVSender::sendAddInstancesRequest Unexpected Error During "+
 			"Add Instances Request Projector %v Topic %v KeyspaceId %v IndexInst %v. Err %v", ap,
 			topic, keyspaceId, formatInstances(instances), err)

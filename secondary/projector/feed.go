@@ -910,8 +910,10 @@ func (feed *Feed) start(
 
 	feed.collectionsAware = req.GetCollectionAware()
 
+	needsAuth := req.GetNeedsAuth()
+
 	// update engines and endpoints
-	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap, needsAuth); err != nil { // :SideEffect:
 		return err
 	}
 	for _, ts := range req.GetReqTimestamps() {
@@ -1027,9 +1029,11 @@ func (feed *Feed) restartVbuckets(
 		return err
 	}
 
+	needsAuth := req.GetNeedsAuth()
+
 	// FIXME: restart-vbuckets implies a repair Endpoint.
 	raddrs := feed.endpointRaddrs()
-	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, raddrs)
+	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, raddrs, needsAuth)
 	if err := feed.repairEndpoints(rpReq, opaque); err != nil {
 		return err
 	}
@@ -1235,8 +1239,10 @@ func (feed *Feed) addBuckets(
 		return err
 	}
 
+	needsAuth := req.GetNeedsAuth()
+
 	// update engines and endpoints
-	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap, needsAuth); err != nil { // :SideEffect:
 		return err
 	}
 
@@ -1366,7 +1372,9 @@ func (feed *Feed) addInstances(
 	}
 	errResp := &protobuf.TimestampResponse{Topic: proto.String(feed.topic)}
 
-	buckets, err := feed.processSubscribers(opaque, req, keyspaceIdMap) // :SideEffect:
+	needsAuth := req.GetNeedsAuth()
+
+	buckets, err := feed.processSubscribers(opaque, req, keyspaceIdMap, needsAuth) // :SideEffect:
 	if err != nil {
 		return errResp, err
 	}
@@ -1457,6 +1465,8 @@ func (feed *Feed) delInstances(
 func (feed *Feed) repairEndpoints(
 	req *protobuf.RepairEndpointsRequest, opaque uint16) (err error) {
 
+	needsAuth := req.GetNeedsAuth()
+
 	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
 		logging.Infof("%v ##%x trying to repair %q\n", prefix, opaque, raddr)
@@ -1469,7 +1479,7 @@ func (feed *Feed) repairEndpoints(
 			topic, typ := feed.topic, feed.endpointType
 			config := feed.config.SectionConfig("dataport.", true /*trim*/)
 			config.Set("syncTimeout", feed.config["syncTimeout"])
-			endpoint, e = feed.epFactory(topic, typ, raddr, config)
+			endpoint, e = feed.epFactory(topic, typ, raddr, config, needsAuth)
 			if e != nil {
 				fmsg := "%v ##%x endpoint-factory %q: %v\n"
 				logging.Errorf(fmsg, prefix, opaque, raddr1, e)
@@ -1910,14 +1920,15 @@ func (feed *Feed) startDataPath(
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) processSubscribers(opaque uint16, req Subscriber, keyspaceIdMap map[string]string) (map[string]bool, error) {
+func (feed *Feed) processSubscribers(opaque uint16, req Subscriber,
+	keyspaceIdMap map[string]string, needsAuth bool) (map[string]bool, error) {
 	evaluators, routers, err := feed.subscribers(opaque, req)
 	if err != nil {
 		return nil, err
 	}
 
 	// start fresh set of all endpoints from routers.
-	if err = feed.startEndpoints(opaque, routers); err != nil {
+	if err = feed.startEndpoints(opaque, routers, needsAuth); err != nil {
 		return nil, err
 	}
 	// update feed engines.
@@ -1946,7 +1957,7 @@ func (feed *Feed) processSubscribers(opaque uint16, req Subscriber, keyspaceIdMa
 // if an endpoint is already present and active it is
 // reused.
 func (feed *Feed) startEndpoints(
-	opaque uint16, routers map[uint64]c.Router) (err error) {
+	opaque uint16, routers map[uint64]c.Router, needsAuth bool) (err error) {
 
 	prefix := feed.logPrefix
 	for _, router := range routers {
@@ -1960,7 +1971,7 @@ func (feed *Feed) startEndpoints(
 				topic, typ := feed.topic, feed.endpointType
 				config := feed.config.SectionConfig("dataport.", true /*trim*/)
 				config.Set("syncTimeout", feed.config["syncTimeout"])
-				endpoint, e = feed.epFactory(topic, typ, raddr, config)
+				endpoint, e = feed.epFactory(topic, typ, raddr, config, needsAuth)
 				if e != nil {
 					fmsg := "%v ##%x endpoint-factory %q: %v\n"
 					logging.Errorf(fmsg, prefix, opaque, raddr1, e)

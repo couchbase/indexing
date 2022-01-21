@@ -45,7 +45,7 @@ type Router interface {
 // RouterEndpointFactory will create a new endpoint instance for
 // {topic, remote-address}
 type RouterEndpointFactory func(
-	topic, endpointType, raddr string, econfig Config) (RouterEndpoint, error)
+	topic, endpointType, raddr string, econfig Config, needsAuth bool) (RouterEndpoint, error)
 
 // RouterEndpoint abstracts downstream for feed.
 type RouterEndpoint interface {

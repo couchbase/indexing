@@ -132,8 +132,6 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 
 	go PollForDeletedBucketsV2(p.clusterAddr, c.DEFAULT_POOL, config)
 
-	go common.WatchClusterVersionChanges(p.clusterAddr, int64(common.INDEXER_71_VERSION))
-
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval, sysStats) // Initialize memory manager
 
