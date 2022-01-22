@@ -441,6 +441,18 @@ func (bi *bucketInfo) setClusterURL(u string) {
 }
 
 //
+// PoolInfo
+//
+
+type PoolInfo struct {
+	pool *couchbase.Pool
+}
+
+func newPoolInfo(p *couchbase.Pool) *PoolInfo {
+	return &PoolInfo{pool: p}
+}
+
+//
 // Cluster Info Cache Lite
 //
 
@@ -453,6 +465,8 @@ type clusterInfoCacheLite struct {
 
 	bihm     map[string]bucketInfoHolder
 	bihmLock sync.RWMutex
+
+	pih poolInfoHolder
 }
 
 func newClusterInfoCacheLite(logPrefix string) *clusterInfoCacheLite {
@@ -461,6 +475,7 @@ func newClusterInfoCacheLite(logPrefix string) *clusterInfoCacheLite {
 	c.cihm = make(map[string]collectionInfoHolder)
 	c.bihm = make(map[string]bucketInfoHolder)
 	c.nih.Init()
+	c.pih.Init()
 
 	return c
 }
@@ -613,6 +628,14 @@ func (cicl *clusterInfoCacheLite) getBucketInfo(bucketName string) (*bucketInfo,
 	return bi, nil
 }
 
+func (cicl *clusterInfoCacheLite) setPoolInfo(pi *PoolInfo) {
+	cicl.pih.Set(pi)
+}
+
+func (cicl *clusterInfoCacheLite) getPoolInfo() *PoolInfo {
+	return cicl.pih.Get()
+}
+
 //
 // Cluster Info Cache Lite Manager
 //
@@ -694,12 +717,14 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 	// With 2 Sec retry interval by default try for 120 Sec and then give up
 	cicm.maxRetries = 60
 
-	ni, _ := cicm.FetchNodesInfo(nil)
+	ni, p := cicm.FetchNodesInfo(nil)
 	if ni == nil {
 		// At least one successful pool call is needed
 		return nil, ErrUnInitializedClusterInfo
 	}
 	cicm.cicl.setNodesInfo(ni)
+	pi := newPoolInfo(p)
+	cicm.cicl.setPoolInfo(pi)
 
 	// Try Fetching default number of times else where
 	cicm.maxRetries = CLUSTER_INFO_DEFAULT_RETRIES
@@ -1110,18 +1135,15 @@ func (cicm *clusterInfoCacheLiteManager) handleCollectionManifestChanges() {
 		b := (notif.Msg).(*couchbase.Bucket)
 		ch, ok := cicm.perBucketCollnManifestCh[b.Name]
 		if !ok {
-			exists, err := cicm.verifyBucketExist(b.Name)
-			if err == nil && exists {
+			exists := cicm.verifyBucketExist(b.Name)
+			if exists {
 				logging.Infof("handleCollectionManifestChanges: started observing collection manifest for bucket %v on getting %v", b.Name, notif)
 				start(b.Name)
 				ch = cicm.perBucketCollnManifestCh[b.Name]
 			} else {
 				logging.Warnf("handleCollectionManifestChanges: ignoring %v as bucket is not found bucket %v", notif, b.Name)
 				if notif.Type == ForceUpdateNotification {
-					if err == nil {
-						err = ErrBucketNotFound
-					}
-					ci := newCollectionInfoWithErr(b.Name, err)
+					ci := newCollectionInfoWithErr(b.Name, ErrBucketNotFound)
 					notify(b.Name, ci)
 				}
 				continue
@@ -1220,18 +1242,15 @@ func (cicm *clusterInfoCacheLiteManager) handleBucketInfoChanges() {
 		b := (notif.Msg).(*couchbase.Bucket)
 		ch, ok := cicm.bucketInfoChPerBucket[b.Name]
 		if !ok {
-			exists, err := cicm.verifyBucketExist(b.Name)
-			if err == nil && exists {
+			exists := cicm.verifyBucketExist(b.Name)
+			if exists {
 				logging.Infof("handleBucketInfoChanges: started observing collection manifest for bucket %v on getting %v", b.Name, notif)
 				start(b.Name)
 				ch = cicm.bucketInfoChPerBucket[b.Name]
 			} else {
 				logging.Warnf("handleBucketInfoChanges: ignoring %v as bucket is not found bucket %v", notif, b.Name)
 				if notif.Type == ForceUpdateNotification {
-					if err == nil {
-						err = ErrBucketNotFound
-					}
-					bi := newBucketInfoWithErr(b.Name, err)
+					bi := newBucketInfoWithErr(b.Name, ErrBucketNotFound)
 					notify(b.Name, bi)
 				}
 				continue
@@ -1341,6 +1360,11 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 				switch (notif.Msg).(type) {
 				case *couchbase.Pool:
 					poolReceived = true
+
+					p := (notif.Msg).(*couchbase.Pool)
+					pi := newPoolInfo(p)
+					cicm.cicl.setPoolInfo(pi)
+
 					cicm.poolsStreamingCh <- notif
 					cicm.collnManifestCh <- notif
 					cicm.bucketInfoCh <- notif
@@ -1360,6 +1384,10 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 			if !poolReceived {
 				switch (notif.Msg).(type) {
 				case *couchbase.Pool:
+					p := (notif.Msg).(*couchbase.Pool)
+					pi := newPoolInfo(p)
+					cicm.cicl.setPoolInfo(pi)
+
 					cicm.poolsStreamingCh <- notif
 					cicm.collnManifestCh <- notif
 					cicm.bucketInfoCh <- notif
@@ -1456,8 +1484,8 @@ retry:
 		retryCount++
 		if retryCount%5 == 0 {
 			logging.Infof("clusterInfoCacheLiteManager:FetchingCollectionInfo: retrying %v time for bucket %v", retryCount, bucketName)
-			exists, err1 := cicm.verifyBucketExist(bucketName)
-			if err1 == nil && !exists {
+			exists := cicm.verifyBucketExist(bucketName)
+			if !exists {
 				// BackOff and wait for BucketDeleteNotification
 				return newCollectionInfoWithErr(bucketName, err)
 			}
@@ -1501,40 +1529,19 @@ retry:
 	return bi, nil
 }
 
-func (cicm *clusterInfoCacheLiteManager) GetBucketNames() ([]couchbase.BucketName,
-	error) {
-	var retryCount uint32 = 0
-	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
-	r := atomic.LoadUint32(&cicm.retryInterval)
-	retryInterval := time.Duration(r) * time.Second
-retry:
-	p, err := cicm.client.GetPoolWithoutRefresh(cicm.poolName)
-	if err != nil {
-		logging.Errorf("clusterInfoCacheLiteManager::GetBucketNames Error while fetching "+
-			"pool info for pool: %v, err: %v", cicm.poolName, err)
-		if retryCount < maxRetries {
-			retryCount++
-			time.Sleep(retryInterval)
-			goto retry
-		} else {
-			return nil, err
-		}
-	}
-	return p.BucketNames, nil
+func (cicm *clusterInfoCacheLiteManager) GetBucketNames() []couchbase.BucketName {
+	p := cicm.cicl.getPoolInfo()
+	return p.pool.BucketNames
 }
 
-func (cicm *clusterInfoCacheLiteManager) verifyBucketExist(bucketName string) (
-	bool, error) {
-	bns, err := cicm.GetBucketNames()
-	if err != nil {
-		return false, err
-	}
+func (cicm *clusterInfoCacheLiteManager) verifyBucketExist(bucketName string) bool {
+	bns := cicm.GetBucketNames()
 	for _, bn := range bns {
 		if bn.Name == bucketName {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 //
