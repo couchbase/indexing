@@ -70,14 +70,14 @@ const (
 type ViolationCode string
 
 const (
-	NoViolation          ViolationCode = "NoViolation"
-	MemoryViolation                    = "MemoryViolation"
-	CpuViolation                       = "CpuViolation"
-	ReplicaViolation                   = "ReplicaViolation"
-	EquivIndexViolation                = "EquivIndexViolation"
-	ServerGroupViolation               = "ServerGroupViolation"
-	DeleteNodeViolation                = "DeleteNodeViolation"
-	ExcludeNodeViolation               = "ExcludeNodeViolation"
+	NoViolation     ViolationCode = "NoViolation"
+	MemoryViolation               = "MemoryViolation"
+	// CpuViolation               = "CpuViolation"
+	ReplicaViolation     = "ReplicaViolation"
+	EquivIndexViolation  = "EquivIndexViolation"
+	ServerGroupViolation = "ServerGroupViolation"
+	DeleteNodeViolation  = "DeleteNodeViolation"
+	ExcludeNodeViolation = "ExcludeNodeViolation"
 )
 
 const (
@@ -164,6 +164,8 @@ type ServerGroupMap map[common.IndexDefnId]map[common.PartitionId]map[int]string
 type ReplicaMap map[common.IndexDefnId]map[common.PartitionId]map[int]*IndexUsage
 type UsedReplicaIdMap map[common.IndexDefnId]map[int]bool
 
+// Indexer Node is a description of one index node used by Planner to track which indexes are
+// planned to reside on this node.
 type IndexerNode struct {
 	// input: node identification
 	NodeId      string `json:"nodeId"`
@@ -210,6 +212,8 @@ type IndexerNode struct {
 	UsageRatio float64 `json:"usageRatio"`
 }
 
+// IndexUsage is a description of one instance of an index used by Planner to keep track of which
+// indexes are planned to be on which nodes.
 type IndexUsage struct {
 	// input: index identification
 	DefnId     common.IndexDefnId `json:"defnId"`
@@ -464,10 +468,26 @@ type UsageBasedCostMethod struct {
 //////////////////////////////////////////////////////////////
 
 type RandomPlacement struct {
-	rs              *rand.Rand
-	indexes         map[*IndexUsage]bool
-	eligibles       []*IndexUsage
-	optionals       []*IndexUsage
+	// rs is a random number generator.
+	rs *rand.Rand
+
+	// indexes is all existing and potentially to be recreated (i.e. missing replicas) indexes,
+	// mapped to whether they are "eligible" indexes (i.e. can be moved or placed by the plan). Each
+	// key will also have an entry in either the eligibles or optionals slice fields.
+	// ATTENTION: indexes is often passed into a constraint checking method argument called
+	//   "eligibles" which can lead to confusion between it and this struct's eligibles field.
+	indexes map[*IndexUsage]bool
+
+	// eligibles is all existing indexes that can be moved by the plan. This is all existing indexes
+	// in the Rebalance case but only the new index in the Create Index case. These indexes are also
+	// included in the indexes map field.
+	eligibles []*IndexUsage
+
+	// optionals is the missing replicas (of whole indexes or partitions) the plan will try to
+	// recreate and place. It may not recreate them if it has trouble finding a valid plan. These
+	// indexes are also included in the indexes map field.
+	optionals []*IndexUsage
+
 	allowSwap       bool
 	swapDeletedOnly bool
 
@@ -1291,7 +1311,6 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	}
 
 	cloned := s.clone()
-	cloned.evaluateNodes()
 
 	// Make sure we only repair when it is rebalancing
 	if s.command == CommandRebalance || s.command == CommandSwap || s.command == CommandRepair {
@@ -1305,6 +1324,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	p.suppressEqivIndexIfNecessary(cloned)
 	cloned.generateReplicaMap()
 
+	cloned.evaluateNodes() // must be after all the adjustments and before Validate
 	if s.command != CommandPlan {
 		// Validate only for rebalancing
 		err := p.Validate(cloned)
@@ -1725,7 +1745,7 @@ func (s *Solution) addNewNode(nodeId string) {
 //
 // Move a single index from one node to another
 //
-func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *IndexerNode, meetConstriant bool) {
+func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *IndexerNode, meetConstraint bool) {
 
 	sourceIndex := s.findIndexOffset(source, idx)
 	if sourceIndex == -1 {
@@ -1733,7 +1753,7 @@ func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *Index
 	}
 
 	// add to new node
-	s.addIndex(target, idx, meetConstriant)
+	s.addIndex(target, idx, meetConstraint)
 
 	// remove from old node
 	s.removeIndex(source, sourceIndex)
@@ -2661,7 +2681,6 @@ func (s *Solution) findNumAvailLiveNode() int {
 // Evaluate if each indexer meets constraint
 //
 func (s *Solution) evaluateNodes() {
-
 	for _, indexer := range s.Placement {
 		indexer.Evaluate(s)
 	}
@@ -2913,7 +2932,6 @@ func (s *Solution) FindIndexerWithReplica(name, bucket, scope, collection string
 // place the lost replicas.
 //
 func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica int) []*IndexerNode {
-
 	// TODO: Make this function aware of equivalent indexes.
 
 	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -4512,7 +4530,6 @@ func (o *IndexerNode) UnsetExclude() {
 // Does indexer satisfy constraint?
 //
 func (o *IndexerNode) SatisfyNodeConstraint() bool {
-
 	return o.meetConstraint
 }
 
@@ -4602,7 +4619,6 @@ func (o *IndexerNode) EvaluateNodeStats(s *Solution) {
 // Evaluate indexer stats and constraints when node has changed
 //
 func (o *IndexerNode) Evaluate(s *Solution) {
-
 	o.EvaluateNodeConstraint(s, false, nil, nil)
 	o.EvaluateNodeStats(s)
 }
@@ -5415,7 +5431,6 @@ func (p *RandomPlacement) Print() {
 // Get index for placement
 //
 func (p *RandomPlacement) GetEligibleIndexes() map[*IndexUsage]bool {
-
 	return p.indexes
 }
 
@@ -5435,7 +5450,6 @@ func (p *RandomPlacement) IsEligibleIndex(index *IndexUsage) bool {
 // Add optional index for placement
 //
 func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
-
 	p.optionals = append(p.optionals, indexes...)
 	for _, index := range indexes {
 		p.indexes[index] = true
@@ -5447,11 +5461,10 @@ func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
 // Add index for placement
 //
 func (p *RandomPlacement) AddRequiredIndexes(indexes []*IndexUsage) {
-
+	p.eligibles = append(p.eligibles, indexes...)
 	for _, index := range indexes {
 		p.indexes[index] = true
 		index.eligible = true
-		p.eligibles = append(p.eligibles, index)
 	}
 }
 
@@ -5595,7 +5608,7 @@ func (p *RandomPlacement) Move(s *Solution) (bool, bool, bool) {
 		return done, done, done
 	}
 
-	success, final, force := p.randomMoveByLoad(s, true)
+	success, final, force := p.randomMoveByLoad(s)
 	if success {
 		s.removeEmptyDeletedNode()
 	}
@@ -5784,11 +5797,11 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 //
 // Try random swap
 //
-func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool, prob float64) bool {
+func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, prob float64) bool {
 
 	n := p.rs.Float64()
 	if n < prob && s.cost.ComputeResourceVariation() < 0.05 {
-		return p.randomSwap(s, sources, targets, checkConstraint)
+		return p.randomSwap(s, sources, targets)
 	}
 
 	return false
@@ -5797,7 +5810,7 @@ func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, tar
 //
 // Randomly select a single index to move to a different node
 //
-func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (bool, bool, bool) {
+func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 
 	numOfIndexers := len(s.Placement)
 	if numOfIndexers == 1 {
@@ -5839,18 +5852,18 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 
 				if s.hasNewNodes() && s.hasDeletedNodes() {
 					// Try moving to new nodes first
-					success, force := p.exhaustiveMove(s, constrained, s.Placement, checkConstraint, true)
+					success, force := p.exhaustiveMove(s, constrained, s.Placement, true)
 					if success {
 						return true, false, force
 					}
 				}
 
-				success, force := p.exhaustiveMove(s, constrained, s.Placement, checkConstraint, false)
+				success, force := p.exhaustiveMove(s, constrained, s.Placement, false)
 				if success {
 					return true, false, force
 				}
 
-				if p.exhaustiveSwap(s, constrained, candidates, checkConstraint) {
+				if p.exhaustiveSwap(s, constrained, candidates) {
 					return true, false, false
 				}
 
@@ -5861,7 +5874,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 			} else {
 				// If planner can grow the cluster, then just try to randomly swap.
 				// If cannot swap, then logic fall through to move index.
-				if p.randomSwap(s, constrained, candidates, checkConstraint) {
+				if p.randomSwap(s, constrained, candidates) {
 					return true, false, false
 				}
 			}
@@ -5879,7 +5892,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		if source == nil {
 
 			prob := float64(i) / float64(retryCount)
-			if p.tryRandomSwap(s, candidates, candidates, checkConstraint, prob) {
+			if p.tryRandomSwap(s, candidates, candidates, prob) {
 				return true, false, false
 			}
 
@@ -5904,7 +5917,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		} else {
 			// Select an uncongested indexer which is different from source.
 			// The most uncongested indexer has a higher probability to be selected.
-			target = p.getRandomUncongestedNodeExcluding(s, source, index, checkConstraint)
+			target = p.getRandomUncongestedNodeExcluding(s, source, index)
 		}
 
 		if target == nil {
@@ -5930,14 +5943,14 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 
 		// See if the index can be moved while obeying resource constraint.
 		violation := s.constraint.CanAddIndex(s, target, index)
-		if !checkConstraint || violation == NoViolation {
+		if violation == NoViolation {
 			force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, index, p.GetEligibleIndexes(), true)
-			s.moveIndex(source, index, target, checkConstraint)
+			s.moveIndex(source, index, target, true)
 			p.randomMoveDur += time.Now().Sub(now).Nanoseconds()
 			p.randomMoveCnt++
 
-			logging.Tracef("Planner::move1: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
-				source.NodeId, index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, target.NodeId, checkConstraint, force)
+			logging.Tracef("Planner::randomMoveByLoad: source %v index '%v' (%v,%v,%v) target %v force %v",
+				source.NodeId, index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, target.NodeId, force)
 			return true, false, force
 
 		} else {
@@ -5953,7 +5966,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	}
 
 	// Give it one more try to swap constrained node
-	return p.randomSwap(s, constrained, candidates, checkConstraint), false, false
+	return p.randomSwap(s, constrained, candidates), false, false
 }
 
 //
@@ -6053,7 +6066,7 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 //
 // This function get a random uncongested node.
 //
-func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude *IndexerNode, index *IndexUsage, checkConstraint bool) *IndexerNode {
+func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude *IndexerNode, index *IndexUsage) *IndexerNode {
 
 	if s.hasDeletedNodes() && s.hasNewNodes() {
 
@@ -6069,7 +6082,7 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 			}
 		}
 
-		target := p.getRandomFittedNode(s, indexers, index, checkConstraint)
+		target := p.getRandomFittedNode(s, indexers, index)
 		if target != nil {
 			return target
 		}
@@ -6086,13 +6099,13 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 		}
 	}
 
-	return p.getRandomFittedNode(s, indexers, index, checkConstraint)
+	return p.getRandomFittedNode(s, indexers, index)
 }
 
 //
 // This function get a random node that can fit the index.
 //
-func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNode, index *IndexUsage, checkConstraint bool) *IndexerNode {
+func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNode, index *IndexUsage) *IndexerNode {
 
 	indexers = shuffleNode(p.rs, indexers)
 
@@ -6101,7 +6114,7 @@ func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNo
 
 	for i, indexer := range indexers {
 		violation := s.constraint.CanAddIndex(s, indexer, index)
-		if !checkConstraint || violation == NoViolation {
+		if violation == NoViolation {
 			if usage := s.computeMeanUsageRatio() - s.computeUsageRatio(indexer); usage > 0 {
 				loads[i] = int64(usage * 100)
 			}
@@ -6128,9 +6141,8 @@ func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNo
 	return nil
 }
 
-//
-// Find a random index
-//
+// getRandomEligibleIndex finds a random eligible index from a node. Chooses from those that do not
+// satisfy HA contraints. If there are none of those, it chooses from all eligibles on the node.
 func (p *RandomPlacement) getRandomEligibleIndex(s *Solution, constraint ConstraintMethod, rs *rand.Rand, node *IndexerNode) *IndexUsage {
 
 	var candidates []*IndexUsage
@@ -6227,7 +6239,7 @@ func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) error
 //
 // Randomly select two index and swap them.
 //
-func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool) bool {
+func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode) bool {
 
 	if !p.allowSwap {
 		return false
@@ -6289,12 +6301,12 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		sourceViolation := s.constraint.CanSwapIndex(s, target, sourceIndex, targetIndex)
 		targetViolation := s.constraint.CanSwapIndex(s, source, targetIndex, sourceIndex)
 
-		if !checkConstraint || (sourceViolation == NoViolation && targetViolation == NoViolation) {
-			logging.Tracef("Planner::swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v) checkConstraint %v",
+		if sourceViolation == NoViolation && targetViolation == NoViolation {
+			logging.Tracef("Planner::swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v)",
 				source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection,
-				target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection, checkConstraint)
-			s.moveIndex(source, sourceIndex, target, checkConstraint)
-			s.moveIndex(target, targetIndex, source, checkConstraint)
+				target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection)
+			s.moveIndex(source, sourceIndex, target, true)
+			s.moveIndex(target, targetIndex, source, true)
 			return true
 
 		} else {
@@ -6315,7 +6327,7 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 //
 // From the list of source indexes, iterate through the list of indexer to find a smaller index that it can swap with.
 //
-func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool) bool {
+func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode) bool {
 
 	if !p.allowSwap {
 		return false
@@ -6377,12 +6389,12 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 							targetIndex, formatMemoryStr(targetIndex.GetMemMin(s.UseLiveData())), targetIndex.GetCpuUsage(s.UseLiveData()),
 							source.NodeId, target.NodeId)
 
-						if !checkConstraint || (targetViolation == NoViolation && sourceViolation == NoViolation) {
-							logging.Tracef("Planner::exhaustive swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v) checkConstraint %v",
+						if targetViolation == NoViolation && sourceViolation == NoViolation {
+							logging.Tracef("Planner::exhaustive swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v)",
 								source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection,
-								target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection, checkConstraint)
-							s.moveIndex(source, sourceIndex, target, checkConstraint)
-							s.moveIndex(target, targetIndex, source, checkConstraint)
+								target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection)
+							s.moveIndex(source, sourceIndex, target, true)
+							s.moveIndex(target, targetIndex, source, true)
 							return true
 
 						} else {
@@ -6400,7 +6412,7 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 //
 // From the list of source indexes, iterate through the list of indexer that it can move to.
 //
-func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool, newNodeOnly bool) (bool, bool) {
+func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, targets []*IndexerNode, newNodeOnly bool) (bool, bool) {
 
 	now := time.Now()
 	defer func() {
@@ -6425,8 +6437,8 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true)
 					s.moveIndex(source, sourceIndex, target, false)
 
-					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
-						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, checkConstraint, force)
+					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v,%v,%v) target %v force %v",
+						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, force)
 					return true, force
 				}
 				continue
@@ -6447,12 +6459,12 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 
 				// See if the index can be moved while obeying resource constraint.
 				violation := s.constraint.CanAddIndex(s, target, sourceIndex)
-				if !checkConstraint || violation == NoViolation {
+				if violation == NoViolation {
 					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true)
-					s.moveIndex(source, sourceIndex, target, checkConstraint)
+					s.moveIndex(source, sourceIndex, target, true)
 
-					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
-						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, checkConstraint, force)
+					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v,%v,%v) target %v force %v",
+						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, force)
 					return true, force
 
 				} else {
