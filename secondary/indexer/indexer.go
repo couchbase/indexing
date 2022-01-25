@@ -3344,6 +3344,7 @@ func (idx *indexer) handleResetStream(msg Message) {
 	streamId := msg.(*MsgStreamUpdate).GetStreamId()
 	sessionId := msg.(*MsgStreamUpdate).GetSessionId()
 	ignoreOSOException := msg.(*MsgStreamUpdate).IgnoreOSOException()
+	reqCh := msg.(*MsgStreamUpdate).GetStopChannel()
 
 	exception := idx.streamKeyspaceIdOSOException[streamId][keyspaceId]
 
@@ -3380,7 +3381,7 @@ func (idx *indexer) handleResetStream(msg Message) {
 			}
 
 			idx.streamKeyspaceIdOSOException[streamId][keyspaceId] = true
-			idx.initRecoveryForOSO(streamId, keyspaceId, sessionId)
+			idx.initRecoveryForOSO(streamId, keyspaceId, sessionId, reqCh)
 		}
 	}
 }
@@ -3874,7 +3875,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 			//request was in progress. If a recovery is already in progress, this call to
 			//initiate recovery will get skipped.
 			if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
-				idx.initRecoveryForOSO(streamId, keyspaceId, sessionId)
+				idx.initRecoveryForOSO(streamId, keyspaceId, sessionId, nil)
 			}
 		}
 	}
@@ -4136,12 +4137,12 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	//request was in progress. If a recovery is already in progress, this call to
 	//initiate recovery will get skipped.
 	if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
-		idx.initRecoveryForOSO(streamId, keyspaceId, sessionId)
+		idx.initRecoveryForOSO(streamId, keyspaceId, sessionId, nil)
 	}
 }
 
 func (idx *indexer) initRecoveryForOSO(streamId common.StreamId,
-	keyspaceId string, sessionId uint64) {
+	keyspaceId string, sessionId uint64, requestCh StopChannel) {
 
 	logging.Infof("Indexer::initRecoveryForOSO StreamId %v KeyspaceId %v SessionId %v. "+
 		"Initiate Recovery.", streamId, keyspaceId, sessionId)
@@ -4154,7 +4155,8 @@ func (idx *indexer) initRecoveryForOSO(streamId common.StreamId,
 		streamId:   streamId,
 		keyspaceId: keyspaceId,
 		sessionId:  sessionId,
-		restartTs:  restartTs})
+		restartTs:  restartTs,
+		requestCh:  requestCh})
 
 }
 
@@ -4810,6 +4812,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 								streamId:   buildStream,
 								keyspaceId: keyspaceId,
 								sessionId:  sessionId,
+								stopCh:     stopCh,
 							}
 						} else {
 							idx.internalRecvCh <- &MsgRecovery{
@@ -6626,6 +6629,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 							streamId:   streamId,
 							keyspaceId: keyspaceId,
 							sessionId:  sessionId,
+							stopCh:     stopCh,
 						}
 
 					} else {
@@ -6675,6 +6679,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 								streamId:   streamId,
 								keyspaceId: keyspaceId,
 								sessionId:  sessionId,
+								stopCh:     stopCh,
 							}
 						} else {
 							idx.internalRecvCh <- &MsgRecovery{
