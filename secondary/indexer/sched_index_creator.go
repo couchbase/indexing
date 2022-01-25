@@ -265,7 +265,6 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 		if oldUseCInfoLite != newUseCInfoLite {
 			logging.Infof("schedIndexCreator:handleSupervisorCommands Updating ClusterInfoProvider in schedIndexCreator")
 
-			oldProvider := m.cinfoProvider
 			cip := m.getCinfoNoLock()
 			if cip == nil {
 				logging.Warnf("schedIndexCreator:handleSupervisorCommands Unable to update ClusterInfoProvider in schedIndexCreator use_cinfo_lite: old %v new %v",
@@ -277,6 +276,7 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 			// cinfoProvider is used nil check if done and if nil its fetched
 			// again at that point
 			m.cinfoProviderLock.Lock()
+			oldProvider := m.cinfoProvider
 			m.cinfoProvider = cip
 			m.cinfoProviderLock.Unlock()
 
@@ -735,7 +735,9 @@ func (m *schedIndexCreator) orphanTokenMover() {
 				continue
 			}
 
+			m.cinfoProviderLock.Lock()
 			ninfo, e := m.cinfoProvider.GetNodesInfoProvider()
+			m.cinfoProviderLock.Unlock()
 			if e != nil {
 				logging.Errorf("schedIndexCreator:orphanTokenMover GetNodesInfoProvider returned err: %v", e)
 				continue
@@ -845,7 +847,9 @@ func (m *schedIndexCreator) keyspaceMonitor() {
 
 				defn := schedToken.Definition
 
+				m.cinfoProviderLock.Lock()
 				collnInfo, e := m.cinfoProvider.GetCollectionInfoProvider(defn.Bucket)
+				m.cinfoProviderLock.Unlock()
 				if e != nil {
 					logging.Errorf("schedIndexCreator:keyspaceMonitor GetCollectionInfoProvider returned err: %v", e)
 					continue
@@ -858,10 +862,9 @@ func (m *schedIndexCreator) keyspaceMonitor() {
 				var ok bool
 				if bucketUuid, ok = buckets[defn.Bucket]; !ok {
 					cont := func() bool {
-						collnInfo.RLock()
-						defer collnInfo.RUnlock()
-
+						m.cinfoProviderLock.Lock()
 						bucketUuid, err = m.cinfoProvider.GetBucketUUID(defn.Bucket)
+						m.cinfoProviderLock.Unlock()
 						if err != nil {
 							logging.Errorf("schedIndexCreator:keyspaceMonitor GetBucketUUID returned err: %v", e)
 							return true

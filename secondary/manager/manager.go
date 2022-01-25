@@ -309,17 +309,17 @@ func (m *IndexManager) Close() {
 		m.repo.Close()
 	}
 
+	m.cinfoProviderLock.Lock()
 	if m.cinfoProvider != nil {
-		m.cinfoProviderLock.Lock()
 		m.cinfoProvider.Close()
-		m.cinfoProviderLock.Unlock()
 	}
+	m.cinfoProviderLock.Unlock()
 
+	m.cinfoProviderLockReqHandler.Lock()
 	if m.cinfoProviderReqHandler != nil {
-		m.cinfoProviderLockReqHandler.Lock()
 		m.cinfoProviderReqHandler.Close()
-		m.cinfoProviderLockReqHandler.Unlock()
 	}
+	m.cinfoProviderLockReqHandler.Unlock()
 
 	if m.monitorKillch != nil {
 		close(m.monitorKillch)
@@ -727,7 +727,6 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 			logging.Infof("IndexManager.NotifyConfigUpdate(): Updating ClusterInfoProvider in IndexManager")
 
-			oldPtr := m.cinfoProvider
 			var cip common.ClusterInfoProvider
 			cip, err = common.NewClusterInfoProvider(useCInfoLite,
 				m.clusterURL, common.DEFAULT_POOL, "IndexMgr", config)
@@ -738,6 +737,7 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 			}
 
 			m.cinfoProviderLock.Lock()
+			oldPtr := m.cinfoProvider
 			m.cinfoProvider = cip
 			m.useCInfoLite = useCInfoLite
 			m.cinfoProviderLock.Unlock()
@@ -755,7 +755,6 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 			logging.Infof("IndexManager.NotifyConfigUpdate(): Updating ClusterInfoProvider in RequestHandler")
 
-			oldPtrReqHandler := m.cinfoProviderReqHandler
 			var cipReqHandler common.ClusterInfoProvider
 			cipReqHandler, errReqHandler = common.NewClusterInfoProvider(useCInfoLite,
 				m.clusterURL, common.DEFAULT_POOL, "RequestHandler", config)
@@ -766,6 +765,7 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 			}
 
 			m.cinfoProviderLockReqHandler.Lock()
+			oldPtrReqHandler := m.cinfoProviderReqHandler
 			m.cinfoProviderReqHandler = cipReqHandler
 			m.useCInfoLiteReqHandler = useCInfoLite
 			m.cinfoProviderLockReqHandler.Unlock()

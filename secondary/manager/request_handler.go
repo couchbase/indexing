@@ -2893,7 +2893,9 @@ func (m *requestHandlerContext) validateScheduleCreateRequest(req *client.Schedu
 		return "", "", "", err
 	}
 
+	m.mgr.cinfoProviderLockReqHandler.RLock()
 	bucketUUID, err = m.mgr.cinfoProviderReqHandler.GetBucketUUID(defn.Bucket)
+	m.mgr.cinfoProviderLockReqHandler.RUnlock()
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
 		return "", "", "", common.ErrBucketNotFound
 	}
