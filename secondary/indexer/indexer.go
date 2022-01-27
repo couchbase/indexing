@@ -199,7 +199,8 @@ type indexer struct {
 
 	enableSecurityChange chan bool
 
-	clusterInfoClient *common.ClusterInfoClient
+	cinfoProvider     common.ClusterInfoProvider
+	cinfoProviderLock sync.RWMutex
 
 	testServRunning bool
 
@@ -364,13 +365,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
-	go common.PollForDeletedBucketsV2(clusterAddr, DEFAULT_POOL, idx.config)
-
-	idx.clusterInfoClient, err = common.NewClusterInfoClient(clusterAddr, DEFAULT_POOL, idx.config)
+	useCInfoLite := idx.config["use_cinfo_lite"].Bool()
+	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr,
+		DEFAULT_POOL, "indexer", idx.config)
 	if err != nil {
+		logging.Errorf("Indexer::NewIndexer Unable to get new ClusterInfoProvider err: %v use_cinfo_lite: %v", err, useCInfoLite)
 		common.CrashOnError(err)
 	}
-	idx.clusterInfoClient.SetUserAgent("indexer")
+
+	go common.PollForDeletedBucketsV2(clusterAddr, DEFAULT_POOL, idx.config)
 
 	// WatchClusterVersionChanges is used for queryport server auth enforcement
 	// as well as for choice between bucket/collection seqnos for session
@@ -393,7 +396,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Timekeeper
-	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config, idx.clusterInfoClient)
+	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config, idx.cinfoProvider, &idx.cinfoProviderLock)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Timekeeper Init Error %+v", res)
 		return nil, res
@@ -422,7 +425,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// Start compaction manager
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
+		logging.Fatalf("Indexer::NewIndexer NewCompactionManager Init Error %+v", res)
 		return nil, res
 	}
 
@@ -431,7 +434,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// indexer components.   During storage upgrade, indexer may need to restart so it
 	// can boostrap with the bootstrap storage mode.
 	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
-	logging.Infof("bootstrap storage mode %v", idx.bootstrapStorageMode)
+	logging.Infof("Indexer::NewIndexer bootstrap storage mode %v", idx.bootstrapStorageMode)
 	if idx.enableManager {
 		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootstrapStorageMode)
 		if res.GetMsgType() != MSG_SUCCESS {
@@ -1650,6 +1653,31 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	idx.storageMgrCmdCh <- msg
 	<-idx.storageMgrCmdCh
 	idx.updateSliceWithConfig(newConfig)
+
+	newUseCInfoLite := newConfig["use_cinfo_lite"].Bool()
+	oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
+	if oldUseCInfoLite != newUseCInfoLite {
+		logging.Infof("Indexer::handleConfigUpdate: Updating ClusterInfoProvider in Indexer")
+
+		cip, err := common.NewClusterInfoProvider(newUseCInfoLite,
+			newConfig["clusterAddr"].String(), DEFAULT_POOL, "indexer", newConfig)
+		if err != nil {
+			logging.Errorf("Indexer::handleConfigUpdate Unable to update ClusterInfoProvider in Indexer err: %v, use_cinfo_lite: old %v new %v",
+				err, oldUseCInfoLite, newUseCInfoLite)
+			common.CrashOnError(err)
+		}
+
+		oldPtr := idx.cinfoProvider
+
+		idx.cinfoProviderLock.Lock()
+		idx.cinfoProvider = cip
+		idx.cinfoProviderLock.Unlock()
+
+		logging.Infof("Indexer::handleConfigUpdate Updated ClusterInfoProvider in Indexer use_cinfo_lite: old %v new %v",
+			oldUseCInfoLite, newUseCInfoLite)
+
+		oldPtr.Close()
+	}
 }
 
 // handleAdminMsgs handles admin (DDL) messages (internalAdminRecvCh).
@@ -1717,7 +1745,20 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	if !idx.clusterInfoClient.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
+	var ephemeral, valid bool
+	var err error
+
+	func() {
+		idx.cinfoProviderLock.RLock()
+		defer idx.cinfoProviderLock.RUnlock()
+
+		valid = idx.cinfoProvider.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID})
+		if valid {
+			ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+		}
+	}()
+
+	if !valid {
 		logging.Errorf("Indexer::handleCreateIndex Bucket %v Not Found")
 
 		if clientCh != nil {
@@ -1731,7 +1772,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	ephemeral, err := idx.clusterInfoClient.IsEphemeral(indexInst.Defn.Bucket)
 	if err != nil {
 		errStr := fmt.Sprintf("Cannot Query Bucket Type of %v", indexInst.Defn.Bucket)
 		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
@@ -1890,7 +1930,7 @@ func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
 		return true, "", nil
 	}
 
-	cVersion := idx.clusterInfoClient.ClusterVersion()
+	cVersion := idx.cinfoProvider.ClusterVersion()
 	if cVersion < common.INDEXER_70_VERSION {
 		retMsg := fmt.Sprintf("Bucket %v is Ephemeral. Standard GSI index on Ephemeral buckets"+
 			" is supported only on fully upgraded cluster.", bucket)
@@ -1901,12 +1941,12 @@ func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
 		return true, "", nil
 	}
 
-	cinfo := idx.clusterInfoClient.GetClusterInfoCache()
-	if cinfo == nil {
+	ninfo, err := idx.cinfoProvider.GetNodesInfoProvider()
+	if ninfo == nil || err != nil {
 		return false, "", fmt.Errorf("Cluster info cache is nil.")
 	}
 
-	ver, err := common.GetInternalClusterVersion(cinfo)
+	ver, err := common.GetInternalClusterVersion(ninfo)
 	if err != nil {
 		return false, "", err
 	}
@@ -2993,7 +3033,10 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
 
-		clusterVer := idx.clusterInfoClient.ClusterVersion()
+		idx.cinfoProviderLock.RLock()
+		clusterVer := idx.cinfoProvider.ClusterVersion()
+		idx.cinfoProviderLock.RUnlock()
+
 		reqcid := idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, collectionId, clusterVer)
 
 		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVbuckets)
@@ -4254,7 +4297,9 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 		keyspaceId, scopeId, collectionId)
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
-	bucketUUID, _ := idx.clusterInfoClient.GetBucketUUID(bucket)
+	idx.cinfoProviderLock.RLock()
+	bucketUUID, _ := idx.cinfoProvider.GetBucketUUID(bucket)
+	idx.cinfoProviderLock.RUnlock()
 
 	//get the collection name from index inst map(this may already be gone from manifest)
 	var collection, scope string
@@ -4596,7 +4641,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
-	isMagmaStorage, err := idx.clusterInfoClient.IsMagmaStorage(bucket)
+	isMagmaStorage, err := idx.cinfoProvider.IsMagmaStorage(bucket)
 	if err != nil {
 		logging.Errorf("Indexer::sendStreamUpdateForBuildIndex %v %v. Unable to check bucket storage "+
 			"backend err %v", buildStream, keyspaceId, err)
@@ -5034,8 +5079,17 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		if slice, err := NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats,
-			idx.clusterInfoClient, !bootstrapPhase); err == nil {
+		var slice Slice
+		idx.cinfoProviderLock.RLock()
+		ephemeral, err := idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+		idx.cinfoProviderLock.RUnlock()
+		if err != nil {
+			logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
+		} else {
+			slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase)
+		}
+
+		if err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
@@ -6360,7 +6414,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
-	clusterVer := idx.clusterInfoClient.ClusterVersion()
+	idx.cinfoProviderLock.RLock()
+	clusterVer := idx.cinfoProvider.ClusterVersion()
+	idx.cinfoProviderLock.RUnlock()
 	if !inRepair {
 		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
 	}
@@ -6372,7 +6428,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	}
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
-	isMagmaStorage, err := idx.clusterInfoClient.IsMagmaStorage(bucket)
+	idx.cinfoProviderLock.RLock()
+	isMagmaStorage, err := idx.cinfoProvider.IsMagmaStorage(bucket)
+	idx.cinfoProviderLock.RUnlock()
 	if err != nil {
 		logging.Errorf("Indexer::startKeyspaceIdStream %v %v. Unable to check bucket storage backend err %v", streamId, keyspaceId, err)
 	} else if isMagmaStorage {
@@ -6501,7 +6559,10 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 					b, s, c := SplitKeyspaceId(keyspaceIdTemp)
 
 					if _, ok := invalidKeyspaceIdMap[keyspaceIdTemp]; !ok {
-						if !idx.clusterInfoClient.ValidateCollectionID(b, s, c, collectionId, false) {
+						idx.cinfoProviderLock.RLock()
+						valid := idx.cinfoProvider.ValidateCollectionID(b, s, c, collectionId, false)
+						idx.cinfoProviderLock.RUnlock()
+						if !valid {
 							invalidKeyspaceIdMap[keyspaceIdTemp] = true
 							idx.internalRecvCh <- &MsgIndexerDropCollection{
 								streamId:     streamId,
@@ -7796,7 +7857,10 @@ func (idx *indexer) validateIndexInstMap() {
 	keyspaceMap := make(map[string]bool)
 	keyspaceValid := make(map[string]bool)
 
-	clusterVer := idx.clusterInfoClient.ClusterVersion()
+	idx.cinfoProviderLock.RLock()
+	defer idx.cinfoProviderLock.RUnlock()
+
+	clusterVer := idx.cinfoProvider.ClusterVersion()
 
 	for instId, index := range idx.indexInstMap {
 
@@ -7860,7 +7924,7 @@ func (idx *indexer) validateIndexInstMap() {
 		if _, ok := bucketUUIDMap[bucketUUID]; !ok {
 
 			bucket := index.Defn.Bucket
-			bucketUUIDValid := idx.clusterInfoClient.ValidateBucket(bucket, []string{index.Defn.BucketUUID})
+			bucketUUIDValid := idx.cinfoProvider.ValidateBucket(bucket, []string{index.Defn.BucketUUID})
 			bucketUUIDMap[bucketUUID] = bucketUUIDValid
 
 			if _, ok := bucketValid[bucket]; ok {
@@ -7876,7 +7940,7 @@ func (idx *indexer) validateIndexInstMap() {
 				index.Defn.Scope, index.Defn.Collection}, ":")
 			if _, ok := keyspaceMap[keyspace]; !ok {
 
-				cidValid := idx.clusterInfoClient.ValidateCollectionID(index.Defn.Bucket,
+				cidValid := idx.cinfoProvider.ValidateCollectionID(index.Defn.Bucket,
 					index.Defn.Scope, index.Defn.Collection, index.Defn.CollectionId, true)
 
 				if _, ok := keyspaceValid[keyspace]; ok {
@@ -8611,7 +8675,9 @@ func (idx *indexer) checkBucketExists(bucket string,
 	newList := make([]common.IndexInstId, len(instIdList))
 	count := 0
 
-	currUUID, err := idx.clusterInfoClient.GetBucketUUID(bucket)
+	idx.cinfoProviderLock.RLock()
+	currUUID, err := idx.cinfoProvider.GetBucketUUID(bucket)
+	idx.cinfoProviderLock.RUnlock()
 	if err != nil {
 		logging.Fatalf("Indexer::checkBucketExists Error Fetching Bucket Info: %v for bucket: %v, currUUID: %v", err, bucket, currUUID)
 	}
@@ -8670,7 +8736,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats, cic *common.ClusterInfoClient, isNew bool) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats, ephemeral, isNew bool) (slice Slice, err error) {
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
 	os.Mkdir(storage_dir, 0755)
@@ -8678,12 +8744,6 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		common.CrashOnError(e)
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
-
-	ephemeral, err := cic.IsEphemeral(indInst.Defn.Bucket)
-	if err != nil {
-		logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
-		return nil, err
-	}
 
 	partitionId := partnInst.Defn.GetPartitionId()
 	numPartitions := indInst.Pc.GetNumPartitions()
@@ -10104,8 +10164,11 @@ func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string
 
 	//if the stream is using a cid, validate collection.
 	//otherwise only validate the bucket
+	idx.cinfoProviderLock.RLock()
+	defer idx.cinfoProviderLock.RUnlock()
+
 	if collectionId == "" {
-		if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDs) {
+		if !idx.cinfoProvider.ValidateBucket(bucket, bucketUUIDs) {
 			return false
 		}
 	} else {
@@ -10115,7 +10178,7 @@ func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string
 			collection = common.DEFAULT_COLLECTION
 		}
 
-		if !idx.clusterInfoClient.ValidateCollectionID(bucket,
+		if !idx.cinfoProvider.ValidateCollectionID(bucket,
 			scope, collection, collectionId, true) {
 			return false
 		}

@@ -413,7 +413,7 @@ func CollectSeqnos(kvfeeds map[string]*kvConn, cid string) (l_seqnos []uint64, e
 func PollForDeletedBucketsV2(clusterUrl string, pool string, config common.Config) {
 
 	// If using cinfo lite is disabled, use old way of polling ns_server
-	if val, ok := config["projector.settings.use_cinfo_lite"]; !ok || val.Bool() == false {
+	if val, ok := config["projector.use_cinfo_lite"]; !ok || val.Bool() == false {
 		logging.Warnf("PollForDeletedBucketsV2: Falling back to pollForDeletedBuckets() as use_cinfo_lite is false or not present")
 		go pollForDeletedBuckets()
 		return
@@ -421,10 +421,11 @@ func PollForDeletedBucketsV2(clusterUrl string, pool string, config common.Confi
 
 	retryCount := 0
 loop:
-	cicl, err := common.NewClusterInfoCacheLiteClient(clusterUrl, pool, config)
+	cicl, err := common.NewClusterInfoCacheLiteClient(clusterUrl, pool, "DeletedBucketsPoll",
+		config.SectionConfig("projector.cinfo_lite.", true))
 	if err != nil {
 		retryCount++
-		logging.Errorf("pollForDeletedBucktesV2: Error while initiliasing cinfo client, err: %v", err)
+		logging.Errorf("PollForDeletedBucktesV2: Error while initiliasing cinfo client, err: %v", err)
 		if retryCount < 5 {
 			time.Sleep(100 * time.Millisecond)
 			goto loop

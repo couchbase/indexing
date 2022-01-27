@@ -207,9 +207,11 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 
 	mgr.config.Store(config)
 
+	cip := mgr.getCinfoNoLock()
+
 	mgr.cinfoProviderLock.Lock()
-	defer mgr.cinfoProviderLock.Unlock()
-	mgr.cinfoProvider = mgr.getCinfoNoLock()
+	mgr.cinfoProvider = cip
+	mgr.cinfoProviderLock.Unlock()
 
 	go mgr.run()
 	go mgr.stopTokenCleaner()
@@ -255,19 +257,34 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 
 		newConfig := cfgUpdate.GetConfig()
 		oldConfig := m.config.Load()
-		newUseCInfoLite := newConfig["settings.use_cinfo_lite"].Bool()
-		oldUseCInfoLite := oldConfig["settings.use_cinfo_lite"].Bool()
+		newUseCInfoLite := newConfig["use_cinfo_lite"].Bool()
+		oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
 
 		m.config.Store(newConfig)
 
 		if oldUseCInfoLite != newUseCInfoLite {
-			logging.Infof("Updating ClusterInfoProvider in schedIndexCreator")
-
-			m.cinfoProviderLock.Lock()
-			defer m.cinfoProviderLock.Unlock()
+			logging.Infof("schedIndexCreator:handleSupervisorCommands Updating ClusterInfoProvider in schedIndexCreator")
 
 			oldProvider := m.cinfoProvider
-			m.cinfoProvider = m.getCinfoNoLock()
+			cip := m.getCinfoNoLock()
+			if cip == nil {
+				logging.Warnf("schedIndexCreator:handleSupervisorCommands Unable to update ClusterInfoProvider in schedIndexCreator use_cinfo_lite: old %v new %v",
+					oldUseCInfoLite, newUseCInfoLite)
+				// Not crashing here due to below
+			}
+
+			// Setting cinfoProvider to nil as in schedIndexCreator whenever
+			// cinfoProvider is used nil check if done and if nil its fetched
+			// again at that point
+			m.cinfoProviderLock.Lock()
+			m.cinfoProvider = cip
+			m.cinfoProviderLock.Unlock()
+
+			if cip != nil {
+				logging.Infof("schedIndexCreator:handleSupervisorCommands Updated ClusterInfoProvider in schedIndexCreator use_cinfo_lite: old %v new %v",
+					oldUseCInfoLite, newUseCInfoLite)
+			}
+
 			if oldProvider != nil {
 				oldProvider.Close()
 			}
@@ -903,21 +920,19 @@ func (m *schedIndexCreator) cleanupTokens(defnId common.IndexDefnId) {
 func (m *schedIndexCreator) getCinfoNoLock() common.ClusterInfoProvider {
 	cfg := m.config.Load()
 	clusterURL := cfg["clusterAddr"].String()
-	useCinfolite := cfg["settings.use_cinfo_lite"].Bool()
+	useCinfolite := cfg["use_cinfo_lite"].Bool()
 
-	cip, err := common.NewClusterInfoProvider(useCinfolite, clusterURL, common.DEFAULT_POOL, cfg)
+	cip, err := common.NewClusterInfoProvider(useCinfolite, clusterURL,
+		common.DEFAULT_POOL, "schedIndexCreator", cfg)
 	if err != nil {
-		logging.Warnf("schedIndexCreator:getCinfoNoLock error in getting cluster info client %v", err)
+		logging.Warnf("schedIndexCreator:getCinfoNoLock Unable to get new ClusterInfoProvider err: %v use_cinfo_lite: %v",
+			err, useCinfolite)
 		return nil
 	}
 
 	if cip == nil {
 		logging.Warnf("schedIndexCreator:getCinfoNoLock nil cluster info client")
 		return nil
-	}
-
-	if cip != nil {
-		cip.SetUserAgent("schedIndexCreator")
 	}
 
 	return cip

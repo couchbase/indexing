@@ -32,20 +32,32 @@ type ClusterInfoProvider interface {
 	// Set max retries for ns_server calls
 	SetMaxRetries(retries uint32)
 
-	// TODO: Move to this to bucket Info
+	// Bucket Info Level Information accessors in client
 	GetBucketUUID(bucket string) (uuid string, err error)
 
 	GetCollectionID(bucket, scope, collection string) string
+
+	IsEphemeral(bucket string) (bool, error)
+
+	IsMagmaStorage(bucketName string) (bool, error)
+
+	ValidateBucket(bucketName string, uuids []string) (resp bool)
+
+	// Node Info Level Information accessors in client
+	ClusterVersion() uint64
+
+	// Collection Info Level Information accessors in client
+	ValidateCollectionID(bucket, scope, collection, collnID string, retry bool) bool
 
 	// Stub functions to make clusterInfoClient and clusterInfoCacheLiteClient compatible
 	FetchWithLock() error
 }
 
 // NewClusterInfoProvider is factory to get ClusterInfoClient or ClusterInfoCacheLiteClient
-func NewClusterInfoProvider(lite bool, clusterUrl string, pool string, cfg Config) (
+func NewClusterInfoProvider(lite bool, clusterUrl string, pool, userAgent string, cfg Config) (
 	ClusterInfoProvider, error) {
 	if lite {
-		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, cfg)
+		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, userAgent, cfg.SectionConfig("cinfo_lite.", true))
 		if err != nil {
 			return nil, err
 		}
@@ -55,6 +67,7 @@ func NewClusterInfoProvider(lite bool, clusterUrl string, pool string, cfg Confi
 		if err != nil {
 			return nil, err
 		}
+		ci.SetUserAgent(userAgent)
 		return ClusterInfoProvider(ci), nil
 	}
 }
@@ -89,10 +102,11 @@ type NodesInfoProvider interface {
 }
 
 // NewNodesInfoProvider is factory to either get NodesInfo or ClusterInfoCache
-func NewNodesInfoProvider(lite bool, clusterUrl string, pool string) (
+func NewNodesInfoProvider(lite bool, clusterUrl string, pool, userAgent string, config Config) (
 	NodesInfoProvider, error) {
 	if lite {
-		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, nil)
+		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, userAgent,
+			config.SectionConfig("cinfo_lite", true))
 		if err != nil {
 			return nil, err
 		}
@@ -106,6 +120,7 @@ func NewNodesInfoProvider(lite bool, clusterUrl string, pool string) (
 		if err != nil {
 			return nil, err
 		}
+		ci.SetUserAgent(userAgent)
 		return NodesInfoProvider(ci), nil
 	}
 }
@@ -122,10 +137,11 @@ type CollectionInfoProvider interface {
 }
 
 // NewCollectionInfoProvider is factory to either get CollectionInfo or ClusterInfoCache
-func NewCollectionInfoProvider(lite bool, clusterUrl, pool, bucketName string) (
+func NewCollectionInfoProvider(lite bool, clusterUrl, pool, bucketName, userAgent string, config Config) (
 	CollectionInfoProvider, error) {
 	if lite {
-		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, nil)
+		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, userAgent,
+			config.SectionConfig("cinfo_lite", true))
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +155,7 @@ func NewCollectionInfoProvider(lite bool, clusterUrl, pool, bucketName string) (
 		if err != nil {
 			return nil, err
 		}
+		ci.SetUserAgent(userAgent)
 		return CollectionInfoProvider(ci), nil
 	}
 }
@@ -165,10 +182,11 @@ type BucketInfoProvider interface {
 }
 
 // NewBucketInfoProvider is factory to either get BucketInfo or ClusterInfoCache
-func NewBucketInfoProvider(lite bool, clusterUrl, pool, bucketName string) (
+func NewBucketInfoProvider(lite bool, clusterUrl, pool, bucketName, userAgent string, config Config) (
 	BucketInfoProvider, error) {
 	if lite {
-		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, nil)
+		cicl, err := NewClusterInfoCacheLiteClient(clusterUrl, pool, userAgent,
+			config.SectionConfig("cinfo_lite", true))
 		if err != nil {
 			return nil, err
 		}
@@ -182,6 +200,7 @@ func NewBucketInfoProvider(lite bool, clusterUrl, pool, bucketName string) (
 		if err != nil {
 			return nil, err
 		}
+		ci.SetUserAgent(userAgent)
 		return BucketInfoProvider(ci), nil
 	}
 }

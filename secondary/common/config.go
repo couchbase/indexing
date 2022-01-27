@@ -2749,13 +2749,6 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"projector.settings.use_cinfo_lite": ConfigValue{
-		true,
-		"Use ClusterInfoCacheLite",
-		true,
-		false,
-		false,
-	},
 	"projector.diagnostics_dir": ConfigValue{
 		"./",
 		"Projector diagnostics information directory",
@@ -2763,7 +2756,42 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
-	"indexer.settings.use_cinfo_lite": ConfigValue{
+	"projector.use_cinfo_lite": ConfigValue{
+		true,
+		"Use ClusterInfoCacheLite",
+		true,
+		false,
+		false,
+	},
+	"projector.cinfo_lite.force_after": ConfigValue{
+		5, // Minutes
+		"Minutes after last update time to do a force fetch",
+		5,
+		false, // mutable
+		false, // not case-sensitive
+	},
+	"projector.cinfo_lite.notifier_restart_sleep": ConfigValue{
+		1000, // Milliseconds
+		"Time to sleep before restarting notifier upon restart",
+		1000,
+		false, // mutable
+		false, // not case-sensitive
+	},
+	"indexer.cinfo_lite.notifier_restart_sleep": ConfigValue{
+		1000, // Milliseconds
+		"Time to sleep before restarting notifier upon restart",
+		1000,
+		false, // mutable
+		false, // not case-sensitive
+	},
+	"indexer.cinfo_lite.force_after": ConfigValue{
+		5, // Minutes
+		"Minutes after last update time to do a force fetch",
+		5,
+		false, // mutable
+		false, // not case-sensitive
+	},
+	"indexer.use_cinfo_lite": ConfigValue{
 		true,
 		"Use ClusterInfoCacheLite",
 		true,
@@ -3472,6 +3500,10 @@ func (config Config) GetIndexerNumCpuPrc() int {
 	return numCpuPrc
 }
 
+func (config Config) String() string {
+	return string(config.Json())
+}
+
 // Int assumes config value is an integer and returns the same.
 func (cv ConfigValue) Int() int {
 	if val, ok := cv.Value.(int); ok {
@@ -3497,6 +3529,11 @@ func (cv ConfigValue) Float64() float64 {
 // Uint64 assumes config value is 64-bit integer and returns the same.
 func (cv ConfigValue) Uint64() uint64 {
 	return cv.Value.(uint64)
+}
+
+// Uint32 assumes config value is 32-bit unsigned integer and returns the same.
+func (cv ConfigValue) Uint32() uint32 {
+	return uint32(cv.Int())
 }
 
 // String assumes config value is a string and returns the same.

@@ -51,8 +51,10 @@ type timekeeper struct {
 
 	lock sync.RWMutex //lock to protect this structure
 
-	indexerState      common.IndexerState
-	clusterInfoClient *common.ClusterInfoClient
+	indexerState common.IndexerState
+
+	cinfoProvider     common.ClusterInfoProvider
+	cinfoProviderLock *sync.RWMutex
 }
 
 type InitialBuildInfo struct {
@@ -79,7 +81,7 @@ const KV_RETRY_INTERVAL = 5000
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Config,
-	c *common.ClusterInfoClient) (Timekeeper, Message) {
+	cip common.ClusterInfoProvider, cipLock *sync.RWMutex) (Timekeeper, Message) {
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
@@ -89,7 +91,8 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 		config:            config,
 		indexBuildInfo:    make(map[common.IndexInstId]*InitialBuildInfo),
 		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
-		clusterInfoClient: c,
+		cinfoProvider:     cip,
+		cinfoProviderLock: cipLock,
 	}
 
 	tk.indexInstMap.Init()
@@ -4629,6 +4632,9 @@ func (tk *timekeeper) handlePoolChange(cmd Message) {
 func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
 	bucketUUIDs []string) bool {
 
+	tk.cinfoProviderLock.RLock()
+	defer tk.cinfoProviderLock.RUnlock()
+
 	collectionId := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
 	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
@@ -4636,7 +4642,7 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 	//if the stream is using a cid, validate collection.
 	//otherwise only validate the bucket
 	if collectionId == "" {
-		if !tk.clusterInfoClient.ValidateBucket(bucket, bucketUUIDs) {
+		if !tk.cinfoProvider.ValidateBucket(bucket, bucketUUIDs) {
 			return false
 		}
 	} else {
@@ -4646,7 +4652,7 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 			collection = common.DEFAULT_COLLECTION
 		}
 
-		if !tk.clusterInfoClient.ValidateCollectionID(bucket, scope,
+		if !tk.cinfoProvider.ValidateCollectionID(bucket, scope,
 			collection, collectionId, true) {
 			return false
 		}

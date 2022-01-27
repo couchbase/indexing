@@ -118,21 +118,21 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 		common.CrashOnError(err)
 	}
 
-	go PollForDeletedBucketsV2(p.clusterAddr, c.DEFAULT_POOL, config)
-
-	go common.WatchClusterVersionChanges(p.clusterAddr, int64(common.INDEXER_71_VERSION))
-
 	// Start cluster info client
-	useClusterInfoLite := config["projector.settings.use_cinfo_lite"].Bool()
-	cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default", config)
+	useClusterInfoLite := config["projector.use_cinfo_lite"].Bool()
+	cip, err := c.NewClusterInfoProvider(useClusterInfoLite, p.clusterAddr, "default",
+		"projector", config.SectionConfig("projector.", true))
 	if err != nil {
-		logging.Errorf("Error getting a new ClusterInfoProvider : %v, use_cinfo_lite: %v", err, useClusterInfoLite)
+		logging.Errorf("Unable to get new ClusterInfoProvider err: %v, use_cinfo_lite: %v", err, useClusterInfoLite)
 		c.CrashOnError(err)
 	}
-	cip.SetUserAgent("projector")
 	cip.SetRetryInterval(4)
 	p.cinfoProvider = cip
 	logging.Infof("Started new ClusterInfoProvider use_cinfo_lite: %v", useClusterInfoLite)
+
+	go PollForDeletedBucketsV2(p.clusterAddr, c.DEFAULT_POOL, config)
+
+	go common.WatchClusterVersionChanges(p.clusterAddr, int64(common.INDEXER_71_VERSION))
 
 	systemStatsCollectionInterval := int64(config["projector.systemStatsCollectionInterval"].Int())
 	memmanager.Init(systemStatsCollectionInterval, sysStats) // Initialize memory manager
@@ -203,26 +203,30 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 			systemevent.InfoEvent("Projector", eventID, se)
 		}
 
-		newUseCInfoLite := newConfig["projector.settings.use_cinfo_lite"].Bool()
-		oldUseCInfoLite := oldConfig["projector.settings.use_cinfo_lite"].Bool()
-		if oldUseCInfoLite != newUseCInfoLite {
-			oldPtr := p.cinfoProvider
-			cip, err := c.NewClusterInfoProvider(newUseCInfoLite, p.clusterAddr, "default", config)
-			if err != nil {
-				logging.Errorf("%v Unable to update ClusterInfoProvider in Projector err: %v, use_cinfo_lite: old %v new %v",
-					p.logPrefix, err, oldUseCInfoLite, newUseCInfoLite)
-				c.CrashOnError(err)
+		if ucl, ok := newConfig["projector.use_cinfo_lite"]; ok {
+			newUseCInfoLite := ucl.Bool()
+			oldUseCInfoLite := oldConfig["projector.use_cinfo_lite"].Bool()
+			if oldUseCInfoLite != newUseCInfoLite {
+				logging.Infof("Updating ClusterInfoProvider in projector")
+
+				oldPtr := p.cinfoProvider
+				cip, err := c.NewClusterInfoProvider(newUseCInfoLite, p.clusterAddr, "default",
+					"projector", p.config.SectionConfig("projector.", true))
+				if err != nil {
+					logging.Errorf("%v Unable to update ClusterInfoProvider in Projector err: %v, use_cinfo_lite: old %v new %v",
+						p.logPrefix, err, oldUseCInfoLite, newUseCInfoLite)
+					c.CrashOnError(err)
+				}
+				cip.SetRetryInterval(4)
+
+				p.cinfoProviderLock.Lock()
+				p.cinfoProvider = cip
+				p.cinfoProviderLock.Unlock()
+
+				logging.Infof("%v Updated ClusterInfoProvider in Projector use_cinfo_lite: old %v new %v", p.logPrefix,
+					oldUseCInfoLite, newUseCInfoLite)
+				oldPtr.Close()
 			}
-			cip.SetUserAgent("projector")
-			cip.SetRetryInterval(4)
-
-			p.cinfoProviderLock.Lock()
-			p.cinfoProvider = cip
-			p.cinfoProviderLock.Unlock()
-
-			logging.Infof("%v Updated ClusterInfoProvider in Projector use_cinfo_lite: old %v new %v", p.logPrefix,
-				oldUseCInfoLite, newUseCInfoLite)
-			oldPtr.Close()
 		}
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))
@@ -377,6 +381,15 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.memcachedTimeout"]; ok {
 		mc.SetDcpMemcachedTimeout(uint32(cv.Int()))
 		logging.Infof("%v memcachedTimeout set to %v\n", p.logPrefix, uint32(cv.Int()))
+	}
+
+	// CInfo Lite
+	if fa, ok := config["projector.cinfo_lite.force_after"]; ok {
+		common.SetCICLMgrTimeDiffToForceFetch(fa.Uint32())
+	}
+
+	if nrs, ok := config["projector.cinfo_lite.notifier_restart_sleep"]; ok {
+		common.SetCICLMgrSleepTimeOnNotifierRestart(nrs.Uint32())
 	}
 
 	logging.Infof("%v\n", c.LogRuntime())

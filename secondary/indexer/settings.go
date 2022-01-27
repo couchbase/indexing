@@ -513,6 +513,24 @@ func (s *settingsManager) setGlobalSettings(oldCfg, newCfg common.Config) {
 		gEncodeCompatMode = newEncodeCompatMode
 		logging.Infof("Set EncodeCompatMode %v", gEncodeCompatMode)
 	}
+
+	var oldT uint32
+	if oldCfg != nil {
+		oldT = oldCfg["indexer.cinfo_lite.force_after"].Uint32()
+	}
+	newT := newCfg["indexer.cinfo_lite.force_after"].Uint32()
+	if oldT != newT {
+		common.SetCICLMgrTimeDiffToForceFetch(newT)
+	}
+
+	var oldNotifierSleep uint32
+	if oldCfg != nil {
+		oldNotifierSleep = oldCfg["indexer.cinfo_lite.notifier_restart_sleep"].Uint32()
+	}
+	newNotifierSleep := newCfg["indexer.cinfo_lite.notifier_restart_sleep"].Uint32()
+	if oldNotifierSleep != newNotifierSleep {
+		common.SetCICLMgrSleepTimeOnNotifierRestart(newNotifierSleep)
+	}
 }
 
 func validateSettings(value []byte, current common.Config, internal bool) error {

@@ -42,6 +42,26 @@ var ErrorEventWaitTimeout = errors.New("error event wait timeout")
 var ErrorUnintializedNodesInfo = errors.New("error uninitialized nodesInfo")
 var ErrorThisNodeNotFound = errors.New("error thisNode not found")
 
+func SetCICLMgrTimeDiffToForceFetch(minutes uint32) {
+	singletonCICLContainer.Lock()
+	defer singletonCICLContainer.Unlock()
+	if mgr := singletonCICLContainer.ciclMgr; mgr != nil {
+		mgr.setTimeDiffToForceFetch(minutes)
+	} else {
+		logging.Warnf("SetCICLMgrTimeDiffToForceFetch: Singleton Manager in ClusterInfoCacheLite is not set")
+	}
+}
+
+func SetCICLMgrSleepTimeOnNotifierRestart(milliSeconds uint32) {
+	singletonCICLContainer.Lock()
+	defer singletonCICLContainer.Unlock()
+	if mgr := singletonCICLContainer.ciclMgr; mgr != nil {
+		mgr.setNotifierRetrySleep(milliSeconds)
+	} else {
+		logging.Warnf("SetCICLMgrSleepTimeOnNotifierRestart: Singleton Manager in ClusterInfoCacheLite is not set")
+	}
+}
+
 //
 // Nodes Info
 //
@@ -77,7 +97,7 @@ type NodesInfo struct {
 	StubRWMutex // Stub to make NodesInfo replaceable with ClusterInfoCache
 }
 
-func newNodesInfo(pool *couchbase.Pool) *NodesInfo {
+func newNodesInfo(pool *couchbase.Pool, clusterURL, nodeSvsHash string) *NodesInfo {
 	var nodes []couchbase.Node
 	var failedNodes []couchbase.Node
 	var addNodes []couchbase.Node
@@ -111,12 +131,14 @@ func newNodesInfo(pool *couchbase.Pool) *NodesInfo {
 	}
 
 	newNInfo := &NodesInfo{
-		nodes:        nodes,
-		addNodes:     addNodes,
-		failedNodes:  failedNodes,
-		version:      version,
-		minorVersion: minorVersion,
-		node2group:   make(map[NodeId]string),
+		nodes:            nodes,
+		addNodes:         addNodes,
+		failedNodes:      failedNodes,
+		version:          version,
+		minorVersion:     minorVersion,
+		clusterURL:       clusterURL,
+		nodeServicesHash: nodeSvsHash,
+		node2group:       make(map[NodeId]string),
 	}
 
 	for i, node := range nodes {
@@ -152,8 +174,50 @@ func newNodesInfoWithError(err error) *NodesInfo {
 	return ni
 }
 
+func (ni *NodesInfo) setNodesInfoWithError(err error) *NodesInfo {
+	ni.valid = false
+	ni.errList = append(ni.errList, err)
+	return ni
+}
+
+// Clone will do shallow copy and hence will have new copy of mutable valid and
+// errList fields and hence the *NodesInfo returned can be used to replace the
+// value of nih in cicl atomically
+func (ni *NodesInfo) clone() *NodesInfo {
+
+	newNInfo := &NodesInfo{
+		version:          ni.version,
+		minorVersion:     ni.minorVersion,
+		clusterURL:       ni.clusterURL,
+		nodeServicesHash: ni.nodeServicesHash,
+	}
+
+	newNInfo.nodes = append(newNInfo.nodes, ni.nodes...)
+	newNInfo.addNodes = append(newNInfo.addNodes, ni.addNodes...)
+	newNInfo.failedNodes = append(newNInfo.failedNodes, ni.failedNodes...)
+	newNInfo.bucketNames = append(newNInfo.bucketNames, ni.bucketNames...)
+
+	newNInfo.node2group = make(map[NodeId]string)
+	for i, node := range ni.nodes {
+		newNInfo.node2group[NodeId(i)] = node.ServerGroup
+	}
+
+	newNInfo.bucketURLMap = make(map[string]string)
+	for k, v := range ni.bucketURLMap {
+		newNInfo.bucketURLMap[k] = v
+	}
+
+	if ServiceAddrMap != nil {
+		newNInfo.useStaticPorts = true
+		newNInfo.servicePortMap = ServiceAddrMap
+	}
+
+	return newNInfo
+}
+
 func (ni *NodesInfo) setNodesExt(nodesExt []couchbase.NodeServices) {
 	if nodesExt == nil {
+		logging.Warnf("setNodesExt: nodesExt is nil")
 		return
 	}
 	for _, ns := range nodesExt {
@@ -168,14 +232,6 @@ func (ni *NodesInfo) setNodesExt(nodesExt []couchbase.NodeServices) {
 		ni.nodesExt = append(ni.nodesExt, nns)
 	}
 	ni.encryptedPortMap = buildEncryptPortMapping(ni.nodesExt)
-}
-
-func (ni *NodesInfo) setClusterURL(u string) {
-	ni.clusterURL = u
-}
-
-func (ni *NodesInfo) setNodeServicesHash(hash string) {
-	ni.nodeServicesHash = hash
 }
 
 func (ni *NodesInfo) validateNodesAndSvs(connHost string) {
@@ -351,6 +407,9 @@ func newClusterInfoCacheLite(logPrefix string) *clusterInfoCacheLite {
 	return c
 }
 
+// nodesInfo used by manager during API calls if this is nil the API cannot use
+// the data. This should not be nil as constructor of manager will ensure atleast
+// one pool is fetched before it returns a manager object
 func (cicl *clusterInfoCacheLite) nodesInfo() *NodesInfo {
 	if ptr := cicl.nih.Get(); ptr != nil {
 		return ptr
@@ -359,7 +418,17 @@ func (cicl *clusterInfoCacheLite) nodesInfo() *NodesInfo {
 	}
 }
 
-// TODO : Check log redaction
+// getNodesInfo is used by manager while handling the notifications
+func (cicl *clusterInfoCacheLite) getNodesInfo() *NodesInfo {
+	return cicl.nih.Get()
+}
+
+// setNodesInfo is used by manager while handling the notifications
+func (cicl *clusterInfoCacheLite) setNodesInfo(ni *NodesInfo) {
+	cicl.nih.Set(ni)
+}
+
+// TODO : Check log redaction and add other objects for printing.
 func (cicl *clusterInfoCacheLite) String() string {
 	ni := cicl.nih.Get()
 	if ni != nil {
@@ -525,16 +594,16 @@ type clusterInfoCacheLiteManager struct {
 }
 
 func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
-	poolName, logPrefix string) (*clusterInfoCacheLiteManager,
+	poolName, logPrefix string, config Config) (*clusterInfoCacheLiteManager,
 	error) {
 
 	cicm := &clusterInfoCacheLiteManager{
 		poolName:                 poolName,
 		logPrefix:                logPrefix,
 		cicl:                     cicl,
-		timeDiffToForceFetch:     5, // In Minutes
+		timeDiffToForceFetch:     config["force_after"].Uint32(), // In Minutes
 		poolsStreamingCh:         make(chan Notification, 100),
-		notifierRetrySleep:       2,
+		notifierRetrySleep:       config["notifier_restart_sleep"].Uint32(), // In Milliseconds
 		retryInterval:            uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()),
 		collnManifestCh:          make(chan Notification, 100),
 		perBucketCollnManifestCh: make(map[string]chan Notification),
@@ -563,11 +632,16 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 
 	cicm.client.SetUserAgent(logPrefix)
 
-	// Try fetching only once in the constructor
-	cicm.maxRetries = 1
+	// Try fetching few times in the constructor
+	// With 2 Sec retry interval by default try for 120 Sec and then give up
+	cicm.maxRetries = 60
 
-	ni, _ := cicm.FetchNodesInfo()
-	cicm.cicl.nih.Set(ni)
+	ni, _ := cicm.FetchNodesInfo(nil)
+	if ni == nil {
+		// At least one successful pool call is needed
+		return nil, ErrUnInitializedClusterInfo
+	}
+	cicm.cicl.setNodesInfo(ni)
 
 	// Try Fetching default number of times else where
 	cicm.maxRetries = CLUSTER_INFO_DEFAULT_RETRIES
@@ -636,19 +710,23 @@ func (cicm *clusterInfoCacheLiteManager) close() {
 }
 
 func (cicm *clusterInfoCacheLiteManager) setTimeDiffToForceFetch(minutes uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting time difference interval in manager to force fetch to %d minutes", minutes)
 	atomic.StoreUint32(&cicm.timeDiffToForceFetch, minutes)
 }
 
 func (cicm *clusterInfoCacheLiteManager) setMaxRetries(maxRetries uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting max retries in manager to %d", maxRetries)
 	atomic.StoreUint32(&cicm.maxRetries, maxRetries)
 }
 
 func (cicm *clusterInfoCacheLiteManager) setRetryInterval(seconds uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting retry interval in manager to %d seconds", seconds)
 	atomic.StoreUint32(&cicm.retryInterval, seconds)
 }
 
-func (cicm *clusterInfoCacheLiteManager) setNotifierRetrySleep(seconds uint32) {
-	atomic.StoreUint32(&cicm.notifierRetrySleep, seconds)
+func (cicm *clusterInfoCacheLiteManager) setNotifierRetrySleep(milliSeconds uint32) {
+	logging.Infof("clusterInfoCacheLiteManager: Setting sleep interval upon notifier restart in manager to %d milliSeconds", milliSeconds)
+	atomic.StoreUint32(&cicm.notifierRetrySleep, milliSeconds)
 }
 
 func (cicm *clusterInfoCacheLiteManager) nodesInfo() (*NodesInfo, error) {
@@ -784,8 +862,9 @@ func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
 func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 	cicm.ticker = time.NewTicker(time.Duration(1) * time.Minute)
 	for range cicm.ticker.C {
-		ni := cicm.cicl.nih.Get()
 		t := atomic.LoadUint32(&cicm.timeDiffToForceFetch)
+
+		ni := cicm.cicl.nih.Get()
 		if ni != nil &&
 			time.Since(ni.lastUpdatedTs) >
 				time.Duration(t)*time.Minute &&
@@ -801,7 +880,7 @@ func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 		for name, cih := range cicm.cicl.cihm {
 			ci := cih.Get()
 			if ci == nil || time.Since(ci.lastUpdatedTs) >
-				5*time.Minute {
+				time.Duration(t)*time.Minute {
 				msg := Notification{
 					Type: PeriodicUpdateNotification,
 					Msg: &couchbase.Bucket{
@@ -817,7 +896,7 @@ func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 		for name, bih := range cicm.cicl.bihm {
 			bi := bih.Get()
 			if bi == nil || time.Since(bi.lastUpdatedTs) >
-				5*time.Minute {
+				time.Duration(t)*time.Minute {
 				msg := Notification{
 					Type: PeriodicUpdateNotification,
 					Msg:  &couchbase.Bucket{Name: name},
@@ -834,7 +913,7 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 		logging.Tracef("handlePoolChangeNotification got notification %v", notif)
 		p := (notif.Msg).(*couchbase.Pool)
 
-		var ni *NodesInfo
+		var ni, nni *NodesInfo
 		var err error
 		nodeServicesHash := ""
 		fetch := false
@@ -843,26 +922,33 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 			notif.Type == PeriodicUpdateNotification {
 			// Force fetch nodesInfo
 			fetch = true
+			// Use old NodesInfo when there is error while fetching
+			ni = cicm.cicl.getNodesInfo()
 		} else if nodeServicesHash, err = p.GetNodeServicesVersionHash(); err != nil {
 			logging.Errorf("handlePoolsChangeNotifications: GetNodeServicesVersionHash returned err: %v uri: %s", err, p.NodeServicesUri)
 			fetch = true
+			ni = cicm.cicl.getNodesInfo()
 		} else if notif.Type == PoolChangeNotification {
 			// Try to use nodes data from Notification
-			ni = newNodesInfo(p)
-			ni.setClusterURL(cicm.clusterURL)
-			ni.setNodeServicesHash(nodeServicesHash)
+			ni = newNodesInfo(p, cicm.clusterURL, nodeServicesHash)
 
-			// Try to use nodesExt from old nodesInfo
-			oldNInfo := cicm.cicl.nih.Get()
-			if oldNInfo == nil || oldNInfo.nodesExt == nil {
+			oni := cicm.cicl.getNodesInfo()
+			if oni == nil || oni.nodesExt == nil {
+				// No proper old data so force fetch
 				fetch = true
 			} else {
-				ni.setNodesExt(oldNInfo.nodesExt)
+				// Try to use nodesExt from old nodesInfo
+				ni.setNodesExt(oni.nodesExt)
 
-				if ni.nodeServicesHash == "" || oldNInfo.nodeServicesHash != ni.nodeServicesHash {
+				if ni.nodeServicesHash == "" || oni.nodeServicesHash != ni.nodeServicesHash {
+					// Hash value changed so no need to validate too nodeSvs changed so force fetch
 					fetch = true
 				} else if ni.validateNodesAndSvs(cicm.client.BaseURL.Host); !ni.valid {
+					// Validation failure so force fetch
 					fetch = true
+				} else {
+					// Set the new nodesInfo to the validated ni
+					nni = ni
 				}
 			}
 		} else {
@@ -870,12 +956,17 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 		}
 
 		if fetch {
-			ni, p = cicm.FetchNodesInfo()
+			// pass ni i.e. the old or the one the PoolChangeNotification data
+			// Fetch will use this data on error else we will get new data. ni cannot be nil as we
+			// are starting with atleast one pool object in managers constructor
+			nni, p = cicm.FetchNodesInfo(ni)
 		}
 
-		cicm.cicl.nih.Set(ni)
+		// update cache
+		cicm.cicl.setNodesInfo(nni)
 		if ni.valid {
-			cicm.eventMgr.notify(EVENT_NODEINFO_UPDATED, ni)
+			// notify uses who saw invalid data and are waiting for update
+			cicm.eventMgr.notify(EVENT_NODEINFO_UPDATED, nni)
 			// On Periodic update send the Pool to bucket and collection channel to check the bucket names
 			if notif.Type == PeriodicUpdateNotification && p != nil {
 				notif := Notification{
@@ -1131,7 +1222,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 	selfRestart := func() {
 		logging.Infof("clusterInfoCacheLiteManager watchClusterChanges: restarting..")
 		r := atomic.LoadUint32(&cicm.notifierRetrySleep)
-		time.Sleep(time.Duration(r) * time.Second)
+		time.Sleep(time.Duration(r) * time.Millisecond)
 		go cicm.watchClusterChanges(true)
 	}
 
@@ -1226,7 +1317,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 	}
 }
 
-func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo() (*NodesInfo, *couchbase.Pool) {
+func (cicm *clusterInfoCacheLiteManager) FetchNodesInfo(oldNInfo *NodesInfo) (*NodesInfo, *couchbase.Pool) {
 	var retryCount uint32 = 0
 	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
 	r := atomic.LoadUint32(&cicm.retryInterval)
@@ -1241,8 +1332,22 @@ retry:
 			time.Sleep(retryInterval)
 			goto retry
 		} else {
-			return newNodesInfoWithError(err), nil
+			if oldNInfo == nil {
+				// Initially in the constructor oldNInfo is nil else we will have atleast
+				// a pool object
+				return nil, nil
+			} else {
+				ni := oldNInfo.clone()
+				ni.setNodesExt(oldNInfo.nodesExt)
+				return ni.setNodesInfoWithError(err), nil
+			}
 		}
+	}
+
+	nodeServicesHash, err := p.GetNodeServicesVersionHash()
+	if err != nil {
+		logging.Errorf("FetchNodesInfo: GetNodeServicesVersionHash returned err: %v uri: %s", err, p.NodeServicesUri)
+		nodeServicesHash = ""
 	}
 
 	ps, err := cicm.client.GetPoolServices(cicm.poolName)
@@ -1254,20 +1359,17 @@ retry:
 			time.Sleep(retryInterval)
 			goto retry
 		} else {
-			return newNodesInfoWithError(err), &p
+			n := newNodesInfo(&p, cicm.clusterURL, nodeServicesHash)
+			// NodesExt should not be used on error but setting this for using later
+			if oldNInfo != nil {
+				n.setNodesExt(oldNInfo.nodesExt)
+			}
+			return n.setNodesInfoWithError(err), &p
 		}
 	}
 
-	nodeServicesHash, err := p.GetNodeServicesVersionHash()
-	if err != nil {
-		logging.Errorf("FetchNodesInfo: GetNodeServicesVersionHash returned err: %v uri: %s", err, p.NodeServicesUri)
-		nodeServicesHash = ""
-	}
-
-	ni := newNodesInfo(&p)
+	ni := newNodesInfo(&p, cicm.clusterURL, nodeServicesHash)
 	ni.setNodesExt(ps.NodesExt)
-	ni.setClusterURL(cicm.clusterURL)
-	ni.setNodeServicesHash(nodeServicesHash)
 
 	ni.validateNodesAndSvs(cicm.client.BaseURL.Host)
 	if !ni.valid {
@@ -1391,12 +1493,13 @@ type ClusterInfoCacheLiteClient struct {
 	eventWaitTimeoutSeconds uint32
 }
 
-func NewClusterInfoCacheLiteClient(clusterURL, poolName string,
+func NewClusterInfoCacheLiteClient(clusterURL, poolName, userAgent string,
 	config Config) (ciclClient *ClusterInfoCacheLiteClient, err error) {
 
 	ciclClient = &ClusterInfoCacheLiteClient{
 		clusterURL: clusterURL,
 		poolName:   poolName,
+		logPrefix:  userAgent,
 	}
 
 	t := uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()) * CLUSTER_INFO_DEFAULT_RETRIES
@@ -1409,7 +1512,7 @@ func NewClusterInfoCacheLiteClient(clusterURL, poolName string,
 		cicl := newClusterInfoCacheLite("SingletonCICL")
 
 		ciclMgr, err := newClusterInfoCacheLiteManager(cicl, clusterURL,
-			poolName, "SingletonCICLMgr")
+			poolName, "SingletonCICLMgr", config)
 		if err != nil {
 			return nil, err
 		}
@@ -1420,7 +1523,7 @@ func NewClusterInfoCacheLiteClient(clusterURL, poolName string,
 	ciclClient.ciclMgr = singletonCICLContainer.ciclMgr
 	singletonCICLContainer.refCount++
 
-	logging.Infof("NewClusterInfoCacheLiteClient started new cicl client")
+	logging.Infof("NewClusterInfoCacheLiteClient started new cicl client for %v", userAgent)
 	return ciclClient, err
 }
 
@@ -1478,12 +1581,6 @@ func (c *ClusterInfoCacheLiteClient) SetEventWaitTimeout(seconds uint32) {
 	c.eventWaitTimeoutSeconds = seconds
 }
 
-func (c *ClusterInfoCacheLiteClient) SetTimeDiffToForceFetchInMgr(minutes uint32) {
-	singletonCICLContainer.Lock()
-	defer singletonCICLContainer.Unlock()
-	c.ciclMgr.setTimeDiffToForceFetch(minutes)
-}
-
 func (c *ClusterInfoCacheLiteClient) SetMaxRetries(retries uint32) {
 	singletonCICLContainer.Lock()
 	defer singletonCICLContainer.Unlock()
@@ -1494,12 +1591,6 @@ func (c *ClusterInfoCacheLiteClient) SetRetryInterval(seconds uint32) {
 	singletonCICLContainer.Lock()
 	defer singletonCICLContainer.Unlock()
 	c.ciclMgr.setRetryInterval(seconds)
-}
-
-func (c *ClusterInfoCacheLiteClient) SetNotifierRetrySleepInMgr(seconds uint32) {
-	singletonCICLContainer.Lock()
-	defer singletonCICLContainer.Unlock()
-	c.ciclMgr.setNotifierRetrySleep(seconds)
 }
 
 func (c *ClusterInfoCacheLiteClient) GetNodesInfo() (*NodesInfo, error) {
@@ -1767,11 +1858,7 @@ func (ni *NodesInfo) getServiceAddress(nid NodeId, srvc string,
 }
 
 func (c *ClusterInfoCacheLiteClient) GetClusterVersion() uint64 {
-	ni, err := c.GetNodesInfo()
-	if err != nil {
-		return 0
-	}
-
+	ni, _ := c.ciclMgr.nodesInfo()
 	return GetVersion(ni.version, ni.minorVersion)
 }
 
@@ -1909,6 +1996,11 @@ func (c *ClusterInfoCacheLiteClient) GetAllKVNodes() (
 	return
 }
 
+func (c *ClusterInfoCacheLiteClient) ClusterVersion() uint64 {
+	ni, _ := c.ciclMgr.nodesInfo()
+	return ni.GetClusterVersion()
+}
+
 //
 // API Using Bucket Info
 //
@@ -2018,6 +2110,11 @@ func (bi *bucketInfo) IsEphemeral(bucket string) (bool, error) {
 	return strings.EqualFold(t, "ephemeral"), nil
 }
 
+func (bi *bucketInfo) IsMagmaStorage(bucket string) (bool, error) {
+	backend := bi.bucket.StorageBackend
+	return strings.EqualFold(backend, "magma"), nil
+}
+
 func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
 
@@ -2103,6 +2200,53 @@ func (cicl *ClusterInfoCacheLiteClient) IsEphemeral(bucketName string) (bool, er
 	return bi.IsEphemeral(bucketName)
 }
 
+func (cicl *ClusterInfoCacheLiteClient) ValidateBucket(bucketName string, uuids []string) (resp bool) {
+	validateBucket := func() bool {
+		bi, err := cicl.GetBucketInfo(bucketName)
+		if err != nil {
+			logging.Errorf("ValidateBucket: Unable to GetBucketInfo due to err %v", err)
+			return false
+		}
+
+		if nids, err := bi.GetNodesByBucket(bucketName); err == nil && len(nids) != 0 {
+			// verify UUID
+			currentUUID := bi.GetBucketUUID(bucketName)
+			for _, uuid := range uuids {
+				if uuid != currentUUID {
+					return false
+				}
+			}
+			return true
+		} else {
+			logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+			return false
+		}
+	}
+
+	resp = validateBucket()
+	if resp == false {
+		return validateBucket()
+	}
+	return resp
+}
+
+func (cicl *ClusterInfoCacheLiteClient) IsMagmaStorage(bucketName string) (bool, error) {
+	isMagma := func() (bool, error) {
+		bi, err := cicl.GetBucketInfo(bucketName)
+		if err != nil {
+			return false, err
+		}
+
+		return bi.IsMagmaStorage(bucketName)
+	}
+
+	resp, err := isMagma()
+	if err != nil {
+		resp, err = isMagma()
+	}
+	return resp, err
+}
+
 //
 // API using Collection Info
 //
@@ -2168,6 +2312,28 @@ func (c *ClusterInfoCacheLiteClient) GetIndexScopeLimit(bucket, scope string) (u
 	}
 
 	return ci.GetIndexScopeLimit(bucket, scope)
+}
+
+func (c *ClusterInfoCacheLiteClient) ValidateCollectionID(bucket, scope,
+	collection, collnID string, retry bool) bool {
+	validateKeyspace := func() bool {
+		ci, err := c.GetCollectionInfo(bucket)
+		if err != nil {
+			return false
+		}
+
+		cid := ci.CollectionID(bucket, scope, collection)
+		if cid != collnID {
+			return false
+		}
+		return true
+	}
+
+	resp := validateKeyspace()
+	if resp == false && retry == true {
+		return validateKeyspace()
+	}
+	return resp
 }
 
 // Stub function to implement ClusterInfoProvider interface
