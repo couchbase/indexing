@@ -62,7 +62,7 @@ var scanReqLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000
 
 func init() {
 	uptime = time.Now()
-	num_cpu_core = runtime.NumCPU()
+	num_cpu_core = runtime.GOMAXPROCS(0)
 }
 
 // KeyspaceStats tracks statistics of all indexes in a given keyspace in a stream.

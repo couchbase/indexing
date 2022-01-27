@@ -1257,7 +1257,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	manifestdir := dir
 	datadir := filepath.Join(dir, "data")
 	os.MkdirAll(datadir, 0755)
-	shards := runtime.NumCPU()
+	shards := runtime.GOMAXPROCS(0)
 
 	writers := make([]FileWriter, shards)
 	files := make([]string, shards)

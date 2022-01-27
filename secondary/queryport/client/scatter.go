@@ -106,7 +106,7 @@ type RequestBroker struct {
 	defn           *common.IndexDefn
 	limit          int64
 	offset         int64
-	sorted         bool  // return rows in sorted order?
+	sorted         bool // return rows in sorted order?
 	pushdownLimit  int64
 	pushdownOffset int64
 	pushdownSorted bool
@@ -114,7 +114,7 @@ type RequestBroker struct {
 	grpAggr        *GroupAggr
 	projections    *IndexProjection
 	indexOrder     *IndexKeyOrder // ordering of index key parts
-	projDesc       []bool  // which returned fields (in projection order) are indexed descending
+	projDesc       []bool         // which returned fields (in projection order) are indexed descending
 	distinct       bool
 
 	// Additional key positions (not in projection list) added due to
@@ -2069,7 +2069,7 @@ func queueSize(size int, partition int, sorted bool, settings *ClientSettings) i
 
 	//FIXME
 	/*
-		numCpu := runtime.NumCPU()
+		numCpu := runtime.GOMAXPROCS(0)
 
 		if numCpu >= partition || !sorted {
 			return queueSize

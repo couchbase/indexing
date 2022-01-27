@@ -166,10 +166,10 @@ func main() {
 // NewEndpointFactory to create endpoint instances based on config.
 func NewEndpointFactory(cluster string, nvbs int) c.RouterEndpointFactory {
 
-	return func(topic, endpointType, addr string, config c.Config) (c.RouterEndpoint, error) {
+	return func(topic, endpointType, addr string, config c.Config, needsAuth bool) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(cluster, topic, addr, nvbs, config)
+			return dataport.NewRouterEndpoint(cluster, topic, addr, nvbs, config, needsAuth)
 		default:
 			logging.Fatalf("Unknown endpoint type\n")
 		}

@@ -12,10 +12,11 @@ import (
 // Global Variable
 //////////////////////////////////////////////////////////////
 
-var cpuPercent uint64
-var rss uint64
-var memTotal uint64
-var memFree uint64
+// memTotal, memFree account for cgroups if they are supported. See systemStats.go.
+var cpuPercent uint64 // (holds a float64) [0,GOMAXPROCS]*100% percent CPU this Go runtime is using
+var rss uint64        // size in bytes of the memory-resident portion of this Go runtime
+var memTotal uint64   // total memory in bytes available to this Go runtime
+var memFree uint64    // free mem in bytes (EXCLUDING inactive OS kernel pages in bare node case)
 
 //////////////////////////////////////////////////////////////
 // Concrete Type/Struct

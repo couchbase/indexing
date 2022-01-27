@@ -307,7 +307,7 @@ func updateMOIWriters(to int) {
 }
 
 func init() {
-	moiWritersAllowed = runtime.NumCPU() * 4
+	moiWritersAllowed = runtime.GOMAXPROCS(0) * 4
 	moiWriterSemaphoreCh = make(chan bool, moiWritersAllowed)
 }
 
