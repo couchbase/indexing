@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 //////////////////////////////////////////////////////////////
@@ -520,7 +521,9 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 		for _, indexer := range plan.Placement {
 			found := false
 			for _, node := range nodes {
-				if indexer.NodeId == node {
+				encryptedNodeAddr, _ := security.EncryptPortInAddr(node)
+				if indexer.NodeId == node ||
+					indexer.NodeId == encryptedNodeAddr {
 					found = true
 					break
 				}
@@ -657,7 +660,9 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 		for _, indexer := range plan.Placement {
 			found := false
 			for _, node := range nodes {
-				if indexer.NodeId == node {
+				encryptedNodeAddr, _ := security.EncryptPortInAddr(node)
+				if indexer.NodeId == node ||
+					indexer.NodeId == encryptedNodeAddr {
 					found = true
 					break
 				}

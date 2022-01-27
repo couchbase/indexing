@@ -1371,33 +1371,24 @@ func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.Indexer
 		}
 	} else {
 		names := make(map[string]*watcher)
-		namesWithEncryption := make(map[string]*watcher)
 
 		o.mutex.Lock()
 		for _, watcher := range o.watchers {
 			if watcher.serviceMap.ExcludeNode != "in" &&
 				watcher.serviceMap.ExcludeNode != "inout" {
-
-				nodeAddr := watcher.getNodeAddr()
-				names[strings.ToLower(nodeAddr)] = watcher
-
-				if security.EncryptionEnabled() {
-					encryptedNodeAddr, _, _, _ := security.EncryptPortFromAddr(nodeAddr)
-					namesWithEncryption[strings.ToLower(encryptedNodeAddr)] = watcher
+				nodeAddr := strings.ToLower(watcher.getNodeAddr())
+				encryptedNodeAddr, _ := security.EncryptPortInAddr(nodeAddr)
+				if !security.EncryptionEnabled() {
+					names[nodeAddr] = watcher
+				} else if security.DisableNonSSLPort() {
+					names[encryptedNodeAddr] = watcher
+				} else {
+					names[nodeAddr] = watcher
+					names[encryptedNodeAddr] = watcher
 				}
 			}
 		}
 
-		// We have built name2watcher maps with normalPorts and encryptedPorts when NonSSLPorts
-		// are disabled query must use only SSLPorts. If encryption is enabled and NonSSL
-		// ports are not disabled query can specify either
-		if security.DisableNonSSLPort() {
-			names = namesWithEncryption
-		} else if security.EncryptionEnabled() {
-			for nodeAddr, nodeWatcher := range namesWithEncryption {
-				names[nodeAddr] = nodeWatcher
-			}
-		}
 		o.mutex.Unlock()
 
 		for _, node := range idxDefn.Nodes {
@@ -1458,28 +1449,25 @@ func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.Indexer
 
 func (o *MetadataProvider) validateNodes(nodes []string) (bool, error) {
 	availableNodes := make(map[string]bool)
-	encryptedNodes := make(map[string]bool)
 
 	watchers := o.getAllAvailWatchers()
-
 	for _, watcher := range watchers {
-		availableNodes[strings.ToLower(watcher.getNodeAddr())] = true
-	}
-
-	if security.EncryptionEnabled() {
-		for nodeAddr := range availableNodes {
-			encryptedNodeAddr, _, _, _ := security.EncryptPortFromAddr(nodeAddr)
-			encryptedNodes[strings.ToLower(encryptedNodeAddr)] = true
-		}
-	}
-
-	// We have made a map for available node with and without encrypted ports. If NonSSLPorts are disabled we should only
-	// use the encrypted ports. If Encryption is enabled and NonSSLPorts are not disable we are use eiter of them.
-	if security.DisableNonSSLPort() {
-		availableNodes = encryptedNodes
-	} else {
-		for nodeAddr := range encryptedNodes {
+		nodeAddr := strings.ToLower(watcher.getNodeAddr())
+		if !security.EncryptionEnabled() {
 			availableNodes[nodeAddr] = true
+		} else if security.DisableNonSSLPort() {
+			encryptedNodeAddr, err := security.EncryptPortInAddr(nodeAddr)
+			if err != nil {
+				return false, err
+			}
+			availableNodes[encryptedNodeAddr] = true
+		} else {
+			availableNodes[nodeAddr] = true
+			encryptedNodeAddr, err := security.EncryptPortInAddr(nodeAddr)
+			if err != nil {
+				return false, err
+			}
+			availableNodes[encryptedNodeAddr] = true
 		}
 	}
 
@@ -2257,8 +2245,12 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 			for _, currNode := range currNodes {
 				found := false
 				for _, useNode := range useNodes {
-					if strings.ToLower(currNode) == strings.ToLower(useNode) {
+					un := strings.ToLower(useNode)
+					eun, _ := security.EncryptPortInAddr(useNode)
+					cn := strings.ToLower(currNode)
+					if un == cn || eun == cn {
 						found = true
+						break
 					}
 				}
 				if !found {
@@ -4241,8 +4233,21 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 	defer o.mutex.Unlock()
 
 	for _, watcher := range o.watchers {
-		if strings.ToLower(watcher.getNodeAddr()) == strings.ToLower(nodeAddr) {
-			return watcher
+		watcherNodeAddr := strings.ToLower(watcher.getNodeAddr())
+		encryptedwatcherNodeAddr, _ := security.EncryptPortInAddr(watcherNodeAddr)
+		if !security.EncryptionEnabled() {
+			if watcherNodeAddr == strings.ToLower(nodeAddr) {
+				return watcher
+			}
+		} else if security.DisableNonSSLPort() {
+			if encryptedwatcherNodeAddr == strings.ToLower(nodeAddr) {
+				return watcher
+			}
+		} else {
+			if watcherNodeAddr == strings.ToLower(nodeAddr) ||
+				encryptedwatcherNodeAddr == strings.ToLower(nodeAddr) {
+				return watcher
+			}
 		}
 	}
 
