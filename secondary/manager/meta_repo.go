@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	gometaC "github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
@@ -146,9 +147,11 @@ func NewLocalMetadataRepo(msgAddr string,
 	quota uint64,
 	sleepDur uint64,
 	threshold uint8,
-	minFileSize uint64) (*MetadataRepo, RequestServer, error) {
+	minFileSize uint64,
+	authFn gometaC.ServerAuthFunction) (*MetadataRepo, RequestServer, error) {
 
-	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName, quota, sleepDur, threshold, minFileSize)
+	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName,
+		quota, sleepDur, threshold, minFileSize, authFn)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -772,10 +775,12 @@ func newLocalRepoRef(msgAddr string,
 	quota uint64,
 	sleepDur uint64,
 	threshold uint8,
-	minFileSize uint64) (*LocalRepoRef, error) {
+	minFileSize uint64,
+	authFn gometaC.ServerAuthFunction) (*LocalRepoRef, error) {
 
 	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
-	server, err := gometa.RunEmbeddedServerWithCustomHandler2(msgAddr, nil, reqHandler, repoName, quota, sleepDur, threshold, minFileSize)
+	server, err := gometa.RunEmbeddedServerWithCustomHandler3(msgAddr, nil,
+		reqHandler, repoName, quota, sleepDur, threshold, minFileSize, authFn)
 	if err != nil {
 		return nil, err
 	}

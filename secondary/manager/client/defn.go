@@ -59,6 +59,9 @@ const (
 	OPCODE_DELETE_COLLECTION                        = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
 	OPCODE_CLIENT_STATS                             = OPCODE_DELETE_COLLECTION + 1
 	OPCODE_INVALID_COLLECTION                       = OPCODE_CLIENT_STATS + 1
+	OPCODE_BOOTSTRAP_STATS_UPDATE                   = OPCODE_INVALID_COLLECTION + 1
+	OPCODE_AUTH_REQUEST                             = OPCODE_BOOTSTRAP_STATS_UPDATE + 1
+	OPCODE_AUTH_RESPONSE                            = OPCODE_AUTH_REQUEST + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -127,7 +130,14 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_CLIENT_STATS"
 	case OPCODE_INVALID_COLLECTION:
 		return "OPCODE_INVALID_COLLECTION"
+	case OPCODE_BOOTSTRAP_STATS_UPDATE:
+		return "OPCODE_BOOTSTRAP_STATS_UPDATE"
+	case OPCODE_AUTH_REQUEST:
+		return "OPCODE_AUTH_REQUEST"
+	case OPCODE_AUTH_RESPONSE:
+		return "OPCODE_AUTH_RESPONSE"
 	}
+
 	return fmt.Sprintf("%v", op)
 }
 
@@ -589,4 +599,39 @@ type ScheduleCreateRequest struct {
 	Definition c.IndexDefn            `json:"defn,omitempty"`
 	Plan       map[string]interface{} `json:"plan,omitempty"`
 	IndexerId  c.IndexerId            `json:"indexerId,omitempty"`
+}
+
+type AuthRequest struct {
+	User string `json:"user,omitempty"`
+	Pass string `json:"pass,omitempty"`
+}
+
+type AuthResponse struct {
+	Code uint32 `json:"code,omitempty"`
+}
+
+func MarshallAuthRequest(authRequest *AuthRequest) ([]byte, error) {
+	return json.Marshal(authRequest)
+}
+
+func UnmarshallAuthRequest(content []byte) (*AuthRequest, error) {
+	authRequest := new(AuthRequest)
+	if err := json.Unmarshal(content, authRequest); err != nil {
+		return nil, err
+	}
+
+	return authRequest, nil
+}
+
+func MarshallAuthResponse(authResponse *AuthResponse) ([]byte, error) {
+	return json.Marshal(authResponse)
+}
+
+func UnmarshallAuthResponse(content []byte) (*AuthResponse, error) {
+	authResponse := new(AuthResponse)
+	if err := json.Unmarshal(content, authResponse); err != nil {
+		return nil, err
+	}
+
+	return authResponse, nil
 }

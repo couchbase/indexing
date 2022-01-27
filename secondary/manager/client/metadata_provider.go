@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/cbauth"
+
 	"github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
@@ -35,6 +37,7 @@ import (
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/transport"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 )
@@ -135,6 +138,9 @@ type watcher struct {
 	isClosed     bool
 	serviceMap   *ServiceMap
 	lastSeenTxid common.Txnid
+	authHost     string
+	aParams      *authParams
+	clusterUrl   string
 
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
@@ -184,6 +190,11 @@ type IndexerStatus struct {
 }
 
 type watcherCallback func(string, c.IndexerId, c.IndexerId)
+
+type authParams struct {
+	user string
+	pass string
+}
 
 var REQUEST_CHANNEL_COUNT = 1000
 
@@ -3923,7 +3934,7 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 	readych := make(chan bool)
 
 	// TODO: call Close() to cleanup the state upon retry by the MetadataProvider server
-	go protocol.RunWatcherServerWithRequest(
+	go protocol.RunWatcherServerWithRequest2(
 		s.leaderAddr,
 		s,
 		s,
@@ -3931,7 +3942,9 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 		s.killch,
 		readych,
 		s.alivech,
-		s.pingch)
+		s.pingch,
+		s.ClientAuth,
+	)
 
 	return s, readych
 }
@@ -5360,8 +5373,146 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.isClosed = false
 	s.lastSeenTxid = common.Txnid(0)
 	s.storeStats = (o.statsNotifyCh != nil)
+	s.clusterUrl = o.clusterUrl
+	s.setAuthHost()
+	s.setAuthParams()
 
 	return s
+}
+
+// Need to get HTTP port for leader address. Cannot use getHttpAddr as the
+// service map may not be available.
+func (w *watcher) setAuthHost() error {
+	if len(w.authHost) != 0 {
+		return nil
+	}
+
+	clusterUrl, err := c.ClusterAuthUrl(w.clusterUrl)
+	if err != nil {
+		logging.Errorf("watcher:setAuthHost error in ClusterAuthUrl %v for %v", err, w.leaderAddr)
+		return err
+	}
+
+	cinfo, err := c.NewClusterInfoCache(clusterUrl, c.DEFAULT_POOL)
+	if err != nil {
+		logging.Errorf("watcher:setAuthHost error in NewClusterInfoCache %v for %v", err, w.leaderAddr)
+		return err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	cinfo.SetUserAgent(fmt.Sprintf("watcher:%v", w.leaderAddr))
+
+	err = cinfo.FetchNodesAndSvsInfo()
+	if err != nil {
+		logging.Errorf("watcher:setAuthHost error in FetchNodesAndSvsInfo %v for %v", err, w.leaderAddr)
+		return err
+	}
+
+	var authHost string
+	authHost, err = cinfo.TranslatePort(w.leaderAddr, c.INDEX_ADMIN_SERVICE, c.INDEX_HTTP_SERVICE)
+	if err != nil {
+		logging.Errorf("watcher:setAuthHost error in TranslatePort %v for %v", err, w.leaderAddr)
+		return err
+	}
+
+	w.authHost = authHost
+	return nil
+}
+
+func (w *watcher) setAuthParams() error {
+
+	if w.aParams == nil || len(w.aParams.user) == 0 || len(w.aParams.pass) == 0 {
+		user, pass, err := cbauth.GetHTTPServiceAuth(w.authHost)
+		if err != nil {
+			logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
+			return err
+		}
+
+		w.aParams = &authParams{
+			user: user,
+			pass: pass,
+		}
+	}
+
+	return nil
+}
+
+func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
+
+	raddr := pipe.GetAddr()
+
+	clusterVer := c.GetClusterVersion()
+	if clusterVer < c.INDEXER_71_VERSION {
+		logging.Infof("watcher:ClientAuth skipping auth because of cluster "+
+			"version %v for %v", clusterVer, raddr)
+		return nil
+	}
+
+	if err := w.setAuthHost(); err != nil {
+		return err
+	}
+
+	if err := w.setAuthParams(); err != nil {
+		return err
+	}
+
+	authReq := &AuthRequest{
+		User: w.aParams.user,
+		Pass: w.aParams.pass,
+	}
+
+	var err error
+
+	var content []byte
+	if content, err = MarshallAuthRequest(authReq); err != nil {
+		logging.Errorf("watcher:ClientAuth MarshallAuthRequest error %v for %v", err, raddr)
+		return err
+	}
+
+	uuid, err := c.NewUUID()
+	if err != nil {
+		logging.Errorf("watcher:ClientAuth NewUUID error %v for %v", err, raddr)
+		return err
+	}
+	id := uuid.Uint64()
+
+	request := w.factory.CreateRequest(id, uint32(OPCODE_AUTH_REQUEST), "auth request", content)
+	pipe.Send(request)
+
+	// Receive the response.
+	reqch := pipe.ReceiveChannel()
+	req, ok := <-reqch
+	if !ok {
+		return common.NewError(common.SERVER_ERROR, "watcher:ClientAuth: channel closed. Terminate")
+	}
+
+	if req.Name() != "Response" {
+		return common.NewError(common.PROTOCOL_ERROR,
+			"watcher:ClientAuth: Expect message Response, Receive message "+req.Name())
+	}
+
+	resp := req.(protocol.ResponseMsg)
+	if errStr := resp.GetError(); len(errStr) != 0 {
+		logging.Errorf("watcher:ClientAuth Response error %v for %v", errStr, raddr)
+		return fmt.Errorf("%v", errStr)
+	}
+
+	var authResp *AuthResponse
+	if authResp, err = UnmarshallAuthResponse(resp.GetContent()); err != nil {
+		logging.Errorf("watcher:ClientAuth UnmarshallAuthResponse error %v for %v", err, raddr)
+		return err
+	}
+
+	if authResp.Code != transport.AUTH_SUCCESS {
+		logging.Errorf("watcher:ClientAuth auth failure with code %v for %v", authResp.Code, raddr)
+		return fmt.Errorf("Adminport Authentication Failure")
+	}
+
+	logging.Infof("watcher:ClientAuth successful for %v", raddr)
+
+	return nil
 }
 
 func (w *watcher) waitForReady(readych chan bool, timeout int, killch chan bool) (done bool, killed bool) {
