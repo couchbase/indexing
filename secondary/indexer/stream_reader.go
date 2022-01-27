@@ -479,6 +479,7 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 		hasOSO := false
 		enableOSO := false
 		sessionId := uint64(0)
+		hwtOSO = nil
 		for i := 0; i < nWrkr; i++ {
 
 			r.streamWorkers[i].lock.Lock()
