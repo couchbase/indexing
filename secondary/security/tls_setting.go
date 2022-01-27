@@ -458,6 +458,17 @@ func EncryptPortFromAddr(addr string) (string, string, string, error) {
 	return net.JoinHostPort(host, port), host, port, nil
 }
 
+func EncryptPortInAddr(addr string) (string, error) {
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, err
+	}
+
+	port = EncryptPort(host, port)
+	return net.JoinHostPort(host, port), nil
+}
+
 func EncryptPort(host string, port string) string {
 
 	if EncryptionRequired(host, port) {

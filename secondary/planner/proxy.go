@@ -1781,8 +1781,12 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 
 			found := false
 			for _, host := range hosts {
-				if strings.ToLower(host) == strings.ToLower(nodeId) {
+				h := strings.ToLower(host)
+				eh, _ := security.EncryptPortInAddr(h)
+				n := strings.ToLower(nodeId)
+				if n == h || n == eh {
 					found = true
+					break
 				}
 			}
 
