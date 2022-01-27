@@ -209,7 +209,6 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 			if oldUseCInfoLite != newUseCInfoLite {
 				logging.Infof("Updating ClusterInfoProvider in projector")
 
-				oldPtr := p.cinfoProvider
 				cip, err := c.NewClusterInfoProvider(newUseCInfoLite, p.clusterAddr, "default",
 					"projector", p.config.SectionConfig("projector.", true))
 				if err != nil {
@@ -220,6 +219,7 @@ func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string)
 				cip.SetRetryInterval(4)
 
 				p.cinfoProviderLock.Lock()
+				oldPtr := p.cinfoProvider
 				p.cinfoProvider = cip
 				p.cinfoProviderLock.Unlock()
 

@@ -3021,7 +3021,6 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) (err error) {
 	if oldUseCInfoLite != newUseCInfoLite {
 		logging.Infof("LifecycleMgr.handleConfigUpdate() Updating ClusterInfoProvider in LifecycleMgr")
 
-		oldPtr := m.cinfoProvider
 		cip, err := common.NewClusterInfoProvider(newUseCInfoLite,
 			m.clusterURL, common.DEFAULT_POOL, "LifecycleMgr", *config)
 		if err != nil {
@@ -3031,6 +3030,7 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) (err error) {
 		}
 
 		m.cinfoProviderLock.Lock()
+		oldPtr := m.cinfoProvider
 		m.cinfoProvider = cip
 		m.cinfoProviderLock.Unlock()
 

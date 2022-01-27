@@ -1667,9 +1667,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 			common.CrashOnError(err)
 		}
 
-		oldPtr := idx.cinfoProvider
-
 		idx.cinfoProviderLock.Lock()
+		oldPtr := idx.cinfoProvider
 		idx.cinfoProvider = cip
 		idx.cinfoProviderLock.Unlock()
 
@@ -1929,6 +1928,9 @@ func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
 	if common.GetStorageMode() == common.MOI {
 		return true, "", nil
 	}
+
+	idx.cinfoProviderLock.RLock()
+	defer idx.cinfoProviderLock.RUnlock()
 
 	cVersion := idx.cinfoProvider.ClusterVersion()
 	if cVersion < common.INDEXER_70_VERSION {
@@ -4641,7 +4643,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	idx.cinfoProviderLock.RLock()
 	isMagmaStorage, err := idx.cinfoProvider.IsMagmaStorage(bucket)
+	idx.cinfoProviderLock.RUnlock()
 	if err != nil {
 		logging.Errorf("Indexer::sendStreamUpdateForBuildIndex %v %v. Unable to check bucket storage "+
 			"backend err %v", buildStream, keyspaceId, err)
