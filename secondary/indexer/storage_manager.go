@@ -2046,10 +2046,6 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, idxInst common.IndexInst,
 	partnMap PartitionInstMap, streamId common.StreamId, keyspaceId string) {
 
-	partitionIDs, _ := idxInst.Pc.GetAllPartitionIds()
-	logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Partitions %v",
-		idxInstId, partitionIDs)
-
 	needRestart := false
 	//if keyspace and stream have been provided
 	if keyspaceId != "" && streamId != common.ALL_STREAMS {
@@ -2062,6 +2058,10 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 			return
 		}
 	}
+
+	partitionIDs, _ := idxInst.Pc.GetAllPartitionIds()
+	logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Partitions %v",
+		idxInstId, partitionIDs)
 
 	indexSnapMap := s.indexSnapMap.Clone()
 	snapC := indexSnapMap[idxInstId]
