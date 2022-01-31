@@ -1,18 +1,23 @@
 // Tool receives raw events from dcp-client.
 package main
 
-import "flag"
-import "fmt"
-import "os"
-import "strings"
-import "time"
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/dcp"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
+
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 var options struct {
 	buckets    []string // buckets to connect with
@@ -112,15 +117,17 @@ func startBucket(cluster, bucketn string, kvaddrs []string) int {
 		"genChanSize":    10000,
 		"dataChanSize":   10000,
 		"numConnections": 4,
+		"activeVbOnly":   true,
 	}
 	dcpFeed, err := b.StartDcpFeedOver(
 		couchbase.NewDcpFeedName("rawupr"),
-		uint32(0), options.kvaddrs, 0xABCD, dcpConfig)
+		uint32(0), uint32(0x0), options.kvaddrs, 0xABCD, dcpConfig)
 	mf(err, "- upr")
 
 	vbnos := listOfVbnos(options.maxVbno)
 
-	flogs, err := b.GetFailoverLogs(0xABCD, vbnos, dcpConfig)
+	uuid := common.GetUUID(fmt.Sprintf("BucketFailoverLog-%v", bucketn), 0)
+	flogs, err := b.GetFailoverLogs(0xABCD, vbnos, uuid, dcpConfig)
 	mf(err, "- dcp failoverlogs")
 
 	if options.printflogs {
@@ -144,8 +151,8 @@ func startDcp(dcpFeed *couchbase.DcpFeed, flogs couchbase.FailoverLog) {
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1] // map[uint16][][2]uint64
 		opaque, flags, vbuuid := uint16(vbno), uint32(0), x[0]
-		err := dcpFeed.DcpRequestStream(
-			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
+		err := dcpFeed.DcpRequestStream(vbno, opaque, flags, vbuuid,
+			start, end, snapStart, snapEnd, "", "", nil)
 		mf(err, fmt.Sprintf("stream-req for %v failed", vbno))
 	}
 }
@@ -176,6 +183,9 @@ loop:
 			if e.Opcode == mcd.DCP_MUTATION {
 				logging.Tracef("DcpMutation KEY -- %v\n", string(e.Key))
 				logging.Tracef("     %v\n", string(e.Value))
+				logging.Tracef("     SeqNo: %v\n", e.Seqno)
+			} else {
+				logging.Tracef("%v SeqNo:%v", e, e.Seqno)
 			}
 			if _, ok := counts[bucket]; !ok {
 				counts[bucket] = make(map[mcd.CommandCode]int)
