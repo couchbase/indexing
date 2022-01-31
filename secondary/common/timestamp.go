@@ -466,9 +466,9 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 func (ts *TsVbuuid) String() string {
 	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
-	fmsg := "bucket: %v, scopeId: %v, collectionId: %v, vbuckets: %v Crc64: %v snapType %v -\n"
+	fmsg := "bucket: %v, scopeId: %v, collectionId: %v, vbuckets: %v Crc64: %v snapType %v OpenOSOSnap %v -\n"
 	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, ts.ScopeId, ts.CollectionId,
-		len(vbnos), ts.Crc64, ts.SnapType))
+		len(vbnos), ts.Crc64, ts.SnapType, ts.OpenOSOSnap))
 
 	if ts.OSOCount == nil {
 		fmsg = "    {vbno, vbuuid, manifest, seqno, snapshot-start, snapshot-end}\n"

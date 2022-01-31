@@ -2272,14 +2272,23 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 			if buildInfo.buildTs == nil {
 				initBuildDone = false
-			} else if buildInfo.buildTs.IsZeroTs() { //if buildTs is zero, initial build is done
+			} else if buildInfo.buildTs.IsZeroTs() && flushTs.IsSnapAligned() && (!enableOSO || !flushTs.HasOpenOSOSnap()) {
+				 // if buildTs is zero, initial build is considered as done under following cases
+				 // flushTs is nil (isSnapAligned and hasOpenOSOSnap would handled nil flushTs correctly)
+				 // flushTs is non-nil but is snapAligned in non-OSO mode
+				 // flushTs is non-nil, is snapAligned and does not have OpenOSOSnapShot for OSO mode
+				 //
+				 // Also note that we can not remove the check for buildTs.isZeroTs as there are cases where flushTs can be nil,
+				 // and given that, a non-zero buildTs with nil flushTs is considered as initialBuildDone = false (as covered by next condition).
+				 // even if last else condition ts.GreaterThanEqual would take care of zero buildTs we will not reach there if flushTs is nil and we do not have
+				 // special handling of buildInfo.buildTs.IsZeroTs() conditon here.
 				initBuildDone = true
-			} else if flushTs == nil {
+			} else if flushTs == nil { // in case of non-zero buildTs we can not have nil flushTs to complete the initialBuild.
 				initBuildDone = false
-			} else if enableOSO && (flushTs.HasOpenOSOSnap() || !flushTs.IsSnapAligned()) {
+			} else if !flushTs.IsSnapAligned() { // non-Zero buildTs, non-nil flushTs, flushTs must be snap aligned.
+				initBuildDone = false
+			} else if enableOSO && flushTs.HasOpenOSOSnap() {
 				//build is not complete till all OSO Snap Ends have been received
-				initBuildDone = false
-			} else if !enableOSO && !flushTs.IsSnapAligned() {
 				initBuildDone = false
 			} else {
 				//check if the flushTS is greater than buildTS
