@@ -323,7 +323,7 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 // connection pool.
 func (s *Server) handleConnection(conn net.Conn) {
 
-	err, req := s.doAuth(conn)
+	req, err := s.doAuth(conn)
 	if err != nil {
 		// On authentication error, just close the connection. Client
 		// will try with a new connection by sending AuthRequest.
