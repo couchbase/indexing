@@ -405,6 +405,7 @@ func (slice *plasmaSlice) initStores() error {
 		mCfg.DecompressDuringSwapin = slice.sysconf["plasma.mainIndex.enableDecompressDuringSwapin"].Bool()
 		mCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
 		mCfg.CompressAfterSwapin = slice.sysconf["plasma.mainIndex.enableCompressAfterSwapin"].Bool()
+		mCfg.CompressMemoryThreshold = slice.sysconf["plasma.mainIndex.compressMemoryThresholdPercent"].Int()
 
 		//
 		// 4. Set back-specific config values only in the bCfg object
@@ -435,6 +436,7 @@ func (slice *plasmaSlice) initStores() error {
 		bCfg.DecompressDuringSwapin = slice.sysconf["plasma.backIndex.enableDecompressDuringSwapin"].Bool()
 		bCfg.CompressBeforeEvictPercent = slice.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
 		bCfg.CompressAfterSwapin = slice.sysconf["plasma.backIndex.enableCompressAfterSwapin"].Bool()
+		bCfg.CompressMemoryThreshold = slice.sysconf["plasma.backIndex.compressMemoryThresholdPercent"].Int()
 
 		return mCfg, bCfg
 	}()
@@ -2466,6 +2468,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.DecompressDuringSwapin = mdb.sysconf["plasma.mainIndex.enableDecompressDuringSwapin"].Bool()
 	mdb.mainstore.CompressBeforeEvictPercent = mdb.sysconf["plasma.mainIndex.compressBeforeEvictPercent"].Int()
 	mdb.mainstore.CompressAfterSwapin = mdb.sysconf["plasma.mainIndex.enableCompressAfterSwapin"].Bool()
+	mdb.mainstore.CompressMemoryThreshold = mdb.sysconf["plasma.mainIndex.compressMemoryThresholdPercent"].Int()
 
 	mdb.mainstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 	mdb.mainstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
@@ -2537,6 +2540,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.DecompressDuringSwapin = mdb.sysconf["plasma.backIndex.enableDecompressDuringSwapin"].Bool()
 		mdb.backstore.CompressBeforeEvictPercent = mdb.sysconf["plasma.backIndex.compressBeforeEvictPercent"].Int()
 		mdb.backstore.CompressAfterSwapin = mdb.sysconf["plasma.backIndex.enableCompressAfterSwapin"].Bool()
+		mdb.backstore.CompressMemoryThreshold = mdb.sysconf["plasma.backIndex.compressMemoryThresholdPercent"].Int()
 
 		mdb.backstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 		mdb.backstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()

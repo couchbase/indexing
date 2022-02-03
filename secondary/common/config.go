@@ -1542,6 +1542,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.compressMemoryThresholdPercent": ConfigValue{
+		95,
+		"Percent of quota that memory usage should be greater than to compress after swapin",
+		95,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -1693,6 +1700,13 @@ var SystemConfig = Config{
 		true,
 		"Compress items that are read from disk into memory",
 		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.compressMemoryThresholdPercent": ConfigValue{
+		95,
+		"Percent of quota that memory usage should be greater than to compress after swapin",
+		95,
 		false, // mutable
 		false, // case-insensitive
 	},
