@@ -496,6 +496,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	go idx.monitorKVNodes()
 
+	// enable inMemoryCompression feature on 7.1 cluster upgrade
+	go idx.enablePlasmaInMemCompression()
+
 	//start the main indexer loop
 	idx.run()
 
@@ -10251,4 +10254,117 @@ func (idx *indexer) restartMaintStreamForCatchup(bucket string, restartTs *commo
 	idx.setStreamKeyspaceIdState(streamId, bucket, STREAM_ACTIVE)
 	maintSessionId := idx.genNextSessionId(streamId, bucket)
 	idx.startKeyspaceIdStream(streamId, bucket, restartTs, nil, nil, false, false, maintSessionId)
+}
+
+// If user enables the feature before upgrade to 7.1 we will not override it.
+// But if user disables the feature before upgrade to 7.1 we will still enable it.
+// By default feature is disabled, so not handling the case of override in case of disabling a already disabled feature.
+func (idx *indexer) enablePlasmaInMemCompression() {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("Indexer::enablePlasmaInMemCompression crashed: %v\n", r)
+			go idx.enablePlasmaInMemCompression()
+		}
+	}()
+
+	selfRestart := func() {
+		time.Sleep(5000 * time.Millisecond)
+		go idx.enablePlasmaInMemCompression()
+	}
+
+	checkInMemCompressionEnabled := func() bool {
+		inMemCompressionMainIdx := idx.config["plasma.mainIndex.enableInMemoryCompression"].Bool()
+		inMemCompressionBackIdx := idx.config["plasma.backIndex.enableInMemoryCompression"].Bool()
+		// even if one of the entry is enabled, someone has already enabled/disabled the featuer and hence
+		// we dont need to set the feature enable flag
+		logging.Debugf("Indexer::enablePlasmaInMemCompression setting value for mainStore:%v, backStore:%v for indexer.",
+			inMemCompressionMainIdx, inMemCompressionBackIdx)
+		if inMemCompressionMainIdx || inMemCompressionBackIdx {
+			return true
+		}
+		return false
+	}
+
+	// send settings request to local http url
+	postRequestFn := func() error {
+		url := "/settings"
+		addr :=  getLocalHttpAddr(idx.config)
+		logging.Debugf("Indexer::enablePlasmaInMemCompression addr : %v .", addr)
+
+		enablePlasmaInMemCompresison := struct {
+			Settings1 bool `json:"indexer.plasma.mainIndex.enableInMemoryCompression"`
+			Settings2 bool `json:"indexer.plasma.backIndex.enableInMemoryCompression"`
+		}{true, true}
+
+		body, err := json.Marshal(enablePlasmaInMemCompresison)
+		if err != nil {
+			logging.Errorf("Indexer::enablePlasmaInMemCompression error in marshalling settings request, err: %v", err)
+			return err
+		}
+
+		bodybuf := bytes.NewBuffer(body)
+
+		resp, err := postWithAuth(addr+url, "application/json", bodybuf)
+		if err != nil {
+			logging.Errorf("Indexer::enablePlasmaInMemCompression error in posting http request for settings change on %v, err: %v",
+				addr+url, err)
+			return err
+		}
+		ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil
+	}
+
+	indexerId := common.IndexerId(idx.id)
+	enabled := checkInMemCompressionEnabled()
+	if enabled {
+		logging.Debugf("Indexer::enablePlasmaInMemCompression setting is already enabled for indexer %v.", indexerId)
+		return
+	}
+
+	time.Sleep(time.Second * 60) // wait 60 seconds on indexer restart to get everything up
+
+	for { // check every 10 secs for cluster version upgrade
+		clusterVersion := common.GetClusterVersion()
+		if clusterVersion >= common.INDEXER_71_VERSION {
+			break
+		}
+		time.Sleep(time.Second * 10)
+	}
+
+	// re check if feature is already enabled while we were looping
+	enabled = checkInMemCompressionEnabled()
+	if enabled {
+		logging.Debugf("Indexer::enablePlasmaInMemCompression setting already enabled for indexer %v.", indexerId)
+		return
+	}
+
+	// get the metakv value
+	exists, err := mc.EnablePlasmaInMemoryCompressionTokenExist()
+	if err != nil {
+		logging.Errorf("Indexer::enablePlasmaInMemCompression error in getting feature value from metakv for indexer %v, err: %v ",
+			indexerId, err)
+		selfRestart()
+		return
+	}
+	if exists {
+		logging.Debugf("Indexer::enablePlasmaInMemCompression feature is already enabled for indexer %v", indexerId)
+		return
+	}
+	logging.Infof("Indexer::enablePlasmaInMemCompression trying to enable feature for indexer %v", indexerId)
+
+	err = postRequestFn()
+	if err != nil {
+		selfRestart()
+		return
+	}
+	// update metakv that we are done
+	if err := mc.PostEnablePlasmaInMemoryCompressionToken(); err != nil {
+		logging.Errorf("Indexer::enablePlasmaInMemCompression error in setting feature value in metakv for indexer %v, err: %v",
+			indexerId, err)
+		selfRestart()
+		return
+	}
+	logging.Infof("Indexer::enablePlasmaInMemCompression done enabling feature for indexer %v", indexerId)
 }

@@ -179,7 +179,7 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	mgr.rebalanceRunning = rebalanceRunning
 	mgr.rebalanceToken = rebalanceToken
-	mgr.localhttp = mgr.getLocalHttpAddr()
+	mgr.localhttp = getLocalHttpAddr(mgr.config.Load())
 
 	if rebalanceToken != nil {
 		mgr.cleanupPending = true
@@ -3131,14 +3131,11 @@ func (m *RebalanceServiceManager) validateAuth(w http.ResponseWriter, r *http.Re
 	return creds, valid
 }
 
-func (m *RebalanceServiceManager) getLocalHttpAddr() string {
-
-	cfg := m.config.Load()
+func getLocalHttpAddr(cfg c.Config) string {
 	addr := cfg["clusterAddr"].String()
 	host, _, _ := net.SplitHostPort(addr)
 	port := cfg["httpPort"].String()
 	return net.JoinHostPort(host, port)
-
 }
 
 func getWithAuth(url string) (*http.Response, error) {

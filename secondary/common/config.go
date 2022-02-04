@@ -1508,9 +1508,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.enableInMemoryCompression": ConfigValue{
-		true,
+		false,
 		"Enable compression of memory resident items",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1669,9 +1669,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.enableInMemoryCompression": ConfigValue{
-		true,
+		false,
 		"Enable compression of memory resident items",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},

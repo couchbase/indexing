@@ -24,9 +24,10 @@ const SIGAR_CGROUP_SUPPORTED = 1
 var maxMetaKVRetries = int32(MAX_METAKV_RETRIES)
 
 const (
-	IndexingMetaDir          = "/indexing/"
-	IndexingSettingsMetaDir  = IndexingMetaDir + "settings/"
-	IndexingSettingsMetaPath = IndexingSettingsMetaDir + "config"
+	IndexingMetaDir                  = "/indexing/"
+	IndexingSettingsMetaDir          = IndexingMetaDir + "settings/"
+	IndexingSettingsMetaPath         = IndexingSettingsMetaDir + "config"
+	IndexingSettingsFeaturesMetaPath = IndexingSettingsMetaPath + "/features/"
 )
 
 func GetSettingsConfig(cfg Config) (Config, error) {
