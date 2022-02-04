@@ -11,7 +11,9 @@ package manager
 import (
 	//"fmt"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,9 +23,14 @@ import (
 
 	gometaC "github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
+	"github.com/couchbase/gometa/message"
+	"github.com/couchbase/gometa/protocol"
+
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/transport"
 )
 
 ///////////////////////////////////////////////////////
@@ -41,6 +48,7 @@ type IndexManager struct {
 	basepath      string
 	quota         uint64
 	clusterURL    string
+	factory       *message.ConcreteMsgFactory
 
 	repoName string
 
@@ -135,6 +143,8 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	mgr = new(IndexManager)
 	mgr.isClosed = false
 
+	mgr.factory = message.NewConcreteMsgFactory()
+
 	if storageMode == common.StorageMode(common.FORESTDB) {
 		mgr.quota = mgr.calcBufCacheFromMemQuota(config)
 	} else {
@@ -217,8 +227,9 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	minFileSize := config["metadata.compaction.minFileSize"].Int()
 	logging.Infof("Starting metadadta repo: quota %v sleep duration %v threshold %v min file size %v",
 		mgr.quota, sleepDur, threshold, minFileSize)
-	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, mgr.repoName, mgr.quota,
-		uint64(sleepDur), uint8(threshold), uint64(minFileSize))
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort,
+		mgr.eventMgr, mgr.lifecycleMgr, mgr.repoName, mgr.quota,
+		uint64(sleepDur), uint8(threshold), uint64(minFileSize), mgr.ServerAuth)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -235,6 +246,113 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	go mgr.monitorKeyspace(mgr.monitorKillch)
 
 	return mgr, nil
+}
+
+func (mgr *IndexManager) ServerAuth(conn net.Conn) (*gometaC.PeerPipe, gometaC.Packet, error) {
+
+	raddr := conn.RemoteAddr().String()
+	laddr := conn.LocalAddr().String()
+
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		logging.Warnf("IndexManager:ServerAuth error %v in SetReadDeadline for %v:%v", laddr, raddr, err)
+	}
+
+	pipe := gometaC.NewPeerPipe(conn)
+
+	reqch := pipe.ReceiveChannel()
+	req, ok := <-reqch
+	if !ok {
+		return nil, nil, gometaC.NewError(gometaC.SERVER_ERROR, "SyncProxy.listen(): channel closed. Terminate")
+	}
+
+	// Reset read deadline
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		logging.Warnf("IndexManager:ServerAuth error %v in SetReadDeadline for %v:%v during reset", laddr, raddr, err)
+	}
+
+	send := func(code uint32, errStr string) {
+		authResp := &client.AuthResponse{
+			Code: code,
+		}
+
+		var content []byte
+		var err error
+
+		if content, err = client.MarshallAuthResponse(authResp); err != nil {
+			logging.Errorf("IndexManager:ServerAuth error in MarshallAuthResponse %v for "+
+				"connection %v:%v", err, laddr, raddr)
+			return
+		}
+
+		// Put dummy request id as the msg type may not be RequestMsg.
+		// Client should not care for these dummy values.
+		uuid, err := common.NewUUID()
+		if err != nil {
+			logging.Errorf("IndexManager:ServerAuth error in NewUUID %v for "+
+				"connection %v:%v", err, laddr, raddr)
+			return
+		}
+
+		id := uuid.Uint64()
+
+		// Put dummy fid as follower info is not yet received.
+		resp := mgr.factory.CreateResponse("1", id, errStr, content)
+
+		pipe.Send(resp)
+		return
+	}
+
+	clusterVer := common.GetClusterVersion()
+	if req.Name() != "Request" {
+		if clusterVer < common.INDEXER_71_VERSION {
+			logging.Infof("IndexManager:ServerAuth allowing connection %v:%v "+
+				"without auth due to cluster version %v.", laddr, raddr, clusterVer)
+			return pipe, req, nil
+		}
+
+		send(transport.AUTH_MISSING, common.ErrAuthMissing.Error())
+
+		return nil, nil, gometaC.NewError(gometaC.PROTOCOL_ERROR,
+			"IndexManager:ServerAuth: Expect message Request, Receive message "+req.Name())
+	}
+
+	request := req.(protocol.RequestMsg)
+	if gometaC.OpCode(request.GetOpCode()) != client.OPCODE_AUTH_REQUEST {
+		if clusterVer < common.INDEXER_71_VERSION {
+			logging.Infof("IndexManager:ServerAuth allowing connection %v:%v "+
+				"without auth due to cluster version %v.", laddr, raddr, clusterVer)
+			return pipe, req, nil
+		}
+
+		send(transport.AUTH_MISSING, common.ErrAuthMissing.Error())
+
+		return nil, nil, gometaC.NewError(gometaC.PROTOCOL_ERROR,
+			"IndexManager:ServerAuth: Expect message Request OpCode"+fmt.Sprintf("%v", client.OPCODE_AUTH_REQUEST)+
+				" Receive message "+req.Name()+" OpCode "+fmt.Sprintf("%v", request.GetOpCode()))
+	}
+
+	var authReq *client.AuthRequest
+	var err error
+	if authReq, err = client.UnmarshallAuthRequest(request.GetContent()); err != nil {
+		logging.Errorf("IndexManager:ServerAuth error in UnmarshalAuthRequest %v for connection %v:%v",
+			err, laddr, raddr)
+		return nil, nil, err
+	}
+
+	_, err = cbauth.Auth(authReq.User, authReq.Pass)
+	if err != nil {
+		logging.Errorf("IndexManager:ServerAuth error %v for connection %v:%v", err, laddr, raddr)
+
+		authErr := errors.New("Unauthenticated access. Authentication failure.")
+		send(transport.AUTH_FAILURE, authErr.Error())
+
+		return nil, nil, authErr
+	}
+
+	logging.Infof("IndexManager:ServerAuth auth successful for connection %v:%v", laddr, raddr)
+	send(transport.AUTH_SUCCESS, "")
+
+	return pipe, nil, nil
 }
 
 func (mgr *IndexManager) RegisterRestEndpoints(mux *http.ServeMux, config common.Config) {
