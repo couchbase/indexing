@@ -535,9 +535,7 @@ func (feed *DcpFeed) handlePacket(
 	if event != nil {
 		feed.outch <- event
 	}
-	if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
-		return "exit"
-	}
+	feed.sendBufferAck(sendAck, uint32(bytes))
 	return "ok"
 }
 
@@ -1197,9 +1195,8 @@ func (feed *DcpFeed) handleStreamRequest(
 }
 
 // Send buffer ack
-func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
+func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 	prefix := feed.logPrefix
-	var err error
 	if sendAck {
 		totalBytes := feed.toAckBytes + bytes
 		if totalBytes > feed.maxAckBytes || time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod {
@@ -1215,9 +1212,8 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
 				feed.conn.SetMcdConnectionWriteDeadline()
 				defer feed.conn.ResetMcdConnectionWriteDeadline()
 
-				if e := feed.conn.Transmit(bufferAck); e != nil {
+				if err := feed.conn.Transmit(bufferAck); err != nil {
 					logging.Errorf("%v buffer-ack Transmit(): %v, lastAckTime: %v", prefix, err, feed.lastAckTime.UnixNano())
-					err = e
 				} else {
 					// Reset the counters only on a successful BufferAck
 					feed.toAckBytes = 0
@@ -1234,7 +1230,6 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
 			feed.stats.ToAckBytes.Set(uint64(feed.toAckBytes))
 		}
 	}
-	return err
 }
 
 func composeOpaque(vbno, opaqueMSB uint16) uint32 {
