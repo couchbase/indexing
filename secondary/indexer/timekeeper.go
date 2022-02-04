@@ -1712,7 +1712,7 @@ func (tk *timekeeper) handleOSOSnapshotMarker(cmd Message) {
 
 	defer meta.Free()
 
-	logging.Infof("TK OSOSnapshot %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
+	logging.Tracef("TK OSOSnapshot %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
 		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType)
 
 	tk.lock.Lock()
