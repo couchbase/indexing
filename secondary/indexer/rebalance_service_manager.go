@@ -1179,23 +1179,14 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 
 func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 
-	req := manager.IndexRequest{Index: indexDefn}
-	body, err := json.Marshal(&req)
-	if err != nil {
-		l.Errorf("RebalanceServiceManager::cleanupIndex Error marshal drop index %v", err)
-		return err
-	}
-
-	bodybuf := bytes.NewBuffer(body)
-
 	localaddr := m.localhttp
 
 	url := "/dropIndex"
-	resp, err := postWithAuth(localaddr+url, "application/json", bodybuf)
+	resp, err := postWithHandleEOF(indexDefn, localaddr, url, "RebalanceServiceManager::cleanupIndex")
 	if err != nil {
-		l.Errorf("RebalanceServiceManager::cleanupIndex Error drop index on %v %v", localaddr+url, err)
 		return err
 	}
+
 	defer resp.Body.Close()
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	response := new(manager.IndexResponse)

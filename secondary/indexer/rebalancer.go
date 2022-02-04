@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -280,20 +279,13 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 
 func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) error {
 	const method string = "Rebalancer::makeDropIndexRequest:" // for logging
-	req := manager.IndexRequest{Index: *defn}
-	body, err := json.Marshal(&req)
-	if err != nil {
-		l.Errorf("%v error in marshal drop index defnId %v err %v", method, defn.DefnId, err)
-		return err
-	}
-
-	bodybuf := bytes.NewBuffer(body)
-
 	url := "/dropIndex"
+	bodybuf, _, err := getReqBody(defn, url, method)
+
 	resp, err := postWithAuth(host+url, "application/json", bodybuf)
 	if err != nil {
 		l.Errorf("%v error in drop index on host %v, defnId %v, err %v", method, host, defn.DefnId, err)
-		if err == io.EOF {
+		if strings.HasSuffix(err.Error(), ": EOF") {
 			// should not rety in case of rebalance done or cancel
 			select {
 			case <-r.cancel:
@@ -301,7 +293,7 @@ func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) e
 			case <-r.done:
 				return err
 			default:
-				bodybuf := bytes.NewBuffer(body)
+				bodybuf, _, err := getReqBody(defn, url, method)
 				resp, err = postWithAuth(host+url, "application/json", bodybuf)
 				if err != nil {
 					l.Errorf("%v error in drop index on host %v, defnId %v, err %v", method, host, defn.DefnId, err)
@@ -1584,21 +1576,9 @@ loop:
 				break
 			}
 
-			req := manager.IndexRequest{Index: *defn}
-			body, err := json.Marshal(&req)
-			if err != nil {
-				l.Errorf("%v Error marshal drop index %v", method, err)
-				r.setTransferTokenError(ttid, tt, err.Error())
-				return
-			}
-
-			bodybuf := bytes.NewBuffer(body)
-
 			url := "/dropIndex"
-			resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
+			resp, err := postWithHandleEOF(defn, r.localaddr, url, method)
 			if err != nil {
-				// Error from HTTP layer, not from index processing code
-				l.Errorf("%v Error drop index on %v %v", method, r.localaddr+url, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return
 			}
@@ -1699,68 +1679,11 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		indexDefn.InstId = tt.InstId
 		indexDefn.RealInstId = tt.RealInstId
 
-		getReqBody := func() (*bytes.Buffer, bool) {
-
-			ir := manager.IndexRequest{Index: indexDefn}
-			body, err := json.Marshal(&ir)
-			if err != nil {
-				l.Errorf("%v Error marshal clone index %v", method, err)
-				r.setTransferTokenError(ttid, tt, err.Error())
-				return nil, true
-			}
-
-			bodybuf := bytes.NewBuffer(body)
-			return bodybuf, false
-		}
-
-		bodybuf, isErr := getReqBody()
-		if isErr {
-			return true
-		}
-
-		var resp *http.Response
-		var err error
 		url := "/createIndexRebalance"
-		resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
+		resp, err := postWithHandleEOF(indexDefn, r.localaddr, url, method)
 		if err != nil {
-			// Error from HTTP layer, not from index processing code
-			l.Errorf("%v Error register clone index on %v %v", method, r.localaddr+url, err)
-			// If the error is io.EOF, then it is possible that server side
-			// may have closed the connection while client is about the send the request.
-			// Though this is extremely unlikely, this is observed for multiple users
-			// in golang community. See: https://github.com/golang/go/issues/19943,
-			// https://groups.google.com/g/golang-nuts/c/A46pBUjdgeM/m/jrn35_IxAgAJ for
-			// more details
-			//
-			// In such a case, instead of failing the rebalance with io.EOF error, retry
-			// the POST request. Two scenarios exist here:
-			// (a) Server has received the request and closed the connection (Very unlikely)
-			//     In this case, the request will be processed by server but client will see
-			//     EOF error. Retry will fail rebalance that index definition already exists.
-			// (b) Server has not received this request. Then retry will work and rebalance
-			//     will not fail.
-			//
-			// Instead of failing rebalance with io.EOF error, we retry the request and reduce
-			// probability of failure
-			if strings.HasSuffix(err.Error(), ": EOF") {
-				bodybuf, isErr := getReqBody()
-				if isErr {
-					return true
-				}
-				resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
-				if err != nil {
-					l.Errorf("%v Error register clone index during retry on %v %v",
-						method, r.localaddr+url, err)
-					r.setTransferTokenError(ttid, tt, err.Error())
-					return true
-				} else {
-					l.Infof("%v Successful POST of createIndexRebalance during retry on %v, defnId: %v, instId: %v",
-						method, r.localaddr+url, indexDefn.DefnId, indexDefn.InstId)
-				}
-			} else {
-				r.setTransferTokenError(ttid, tt, err.Error())
-				return true
-			}
+			r.setTransferTokenError(ttid, tt, err.Error())
+			return true
 		}
 
 		response := new(manager.IndexResponse)
@@ -1938,50 +1861,12 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 
 	response := new(manager.IndexResponse)
 	url := "/buildIndexRebalance"
-
-	getReqBody := func() (*bytes.Buffer, error) {
-		ir := manager.IndexRequest{IndexIds: idList}
-		body, err := json.Marshal(&ir)
-		if err != nil {
-			l.Errorf("%v Error marshalling index inst list: %v, err: %v", method, idList, err)
-			return nil, err
-		}
-		bodybuf := bytes.NewBuffer(body)
-		return bodybuf, nil
-	}
-
-	var bodybuf *bytes.Buffer
-	var resp *http.Response
-	var err error
 	var errStr string
 
-	bodybuf, err = getReqBody()
+	resp, err := postWithHandleEOF(idList, r.localaddr, url, method)
 	if err != nil {
 		errStr = err.Error()
 		goto cleanup
-	}
-
-	resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
-	if err != nil {
-		// Error from HTTP layer, not from index processing code
-		l.Errorf("%v Error register clone index on %v %v", method, r.localaddr+url, err)
-		if strings.HasSuffix(err.Error(), ": EOF") {
-			// Retry build again before failing rebalance
-			bodybuf, err = getReqBody()
-			resp, err = postWithAuth(r.localaddr+url, "application/json", bodybuf)
-			if err != nil {
-				l.Errorf("%v Error register clone index during retry on %v %v",
-					method, r.localaddr+url, err)
-				errStr = err.Error()
-				goto cleanup
-			} else {
-				l.Infof("%v Successful POST of buildIndexRebalance during retry on %v, instIdList: %v",
-					method, r.localaddr+url, idList)
-			}
-		} else {
-			errStr = err.Error()
-			goto cleanup
-		}
 	}
 
 	if err := convertResponse(resp, response); err != nil {
@@ -2679,4 +2564,78 @@ func convertResponse(r *http.Response, resp interface{}) error {
 	}
 
 	return nil
+}
+
+func getReqBody(data interface{}, url, logPrefix string) (*bytes.Buffer, *manager.IndexRequest, error) {
+	req := manager.IndexRequest{}
+	switch data.(type) {
+	case common.IndexDefn:
+		req.Index = (data).(common.IndexDefn)
+	case *common.IndexDefn:
+		req.Index = *(data).(*common.IndexDefn)
+	case client.IndexIdList:
+		req.IndexIds = (data).(client.IndexIdList)
+	default:
+		return nil, &req, fmt.Errorf("Invalid data type: %T", data)
+	}
+
+	body, err := json.Marshal(&req)
+	if err != nil {
+		logging.Errorf("%v Error while marshaling req for url: %v, req: %v, err: %v", logPrefix, url, req, err)
+		return nil, &req, err
+	}
+	bodybuf := bytes.NewBuffer(body)
+	return bodybuf, &req, nil
+}
+
+func postWithHandleEOF(data interface{}, host, url, logPrefix string) (*http.Response, error) {
+
+	bodybuf, req, err := getReqBody(data, url, logPrefix)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := postWithAuth(host+url, "application/json", bodybuf)
+	if err != nil {
+		// Error from HTTP layer, not from index processing code
+		l.Errorf("%v Error during %v, req: %v, err: %v, retrying", logPrefix, host+url, req, err)
+		// If the error is io.EOF, then it is possible that server side
+		// may have closed the connection while client is about the send the request.
+		// Though this is extremely unlikely, this is observed for multiple users
+		// in golang community. See: https://github.com/golang/go/issues/19943,
+		// https://groups.google.com/g/golang-nuts/c/A46pBUjdgeM/m/jrn35_IxAgAJ for
+		// more details
+		//
+		// In such a case, instead of failing the rebalance with io.EOF error, retry
+		// the POST request. Two scenarios exist here:
+		// (a) Server has received the request and closed the connection (Very unlikely)
+		//     In this case, the request will be processed by server but client will see
+		//     EOF error. Retry will fail rebalance that index definition already exists.
+		// (b) Server has not received this request. Then retry will work and rebalance
+		//     will not fail.
+		//
+		// Instead of failing rebalance with io.EOF error, we retry the request and reduce
+		// probability of failure
+
+		if strings.HasSuffix(err.Error(), ": EOF") {
+			// Retry build again before failing rebalance
+			bodybuf, req, err = getReqBody(data, url, logPrefix)
+			if err != nil {
+				return nil, err
+			}
+
+			resp, err = postWithAuth(host+url, "application/json", bodybuf)
+			if err != nil {
+				l.Errorf("%v Error during retry on %v, req: %v, err: %v",
+					logPrefix, host+url, req, err)
+				return nil, err
+			} else {
+				l.Infof("%v Successful POST of %v during retry, req: %v",
+					logPrefix, host+url, req)
+				return resp, nil
+			}
+		} else {
+			return nil, err
+		}
+	}
+	return resp, nil
 }
