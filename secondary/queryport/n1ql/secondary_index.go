@@ -200,6 +200,11 @@ func (gsi *gsiKeyspace) SetConnectionSecurityConfig(conf *datastore.ConnectionSe
 	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
 }
 
+// A global API that is independent of keyspace
+func SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
+	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
+}
+
 // KeyspaceId implements datastore.Indexer{} interface.
 // Id of the keyspace to which this indexer belongs
 func (gsi *gsiKeyspace) KeyspaceId() string {
