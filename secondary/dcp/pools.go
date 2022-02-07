@@ -444,15 +444,14 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 		return err
 	}
 
+	// Not reading to EOF before close as streaming API does not end with EOF in all cases
+	defer res.Body.Close()
+
 	if res.StatusCode != 200 {
 		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
-		io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
-		res.Body.Close()
 		return fmt.Errorf("HTTP error %v getting %q: %s",
 			res.Status, u.String(), bod)
 	}
-	defer res.Body.Close()
-	defer io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 
 	reader := bufio.NewReader(res.Body)
 	for {

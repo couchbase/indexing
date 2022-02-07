@@ -1609,19 +1609,20 @@ func WatchClusterVersionChanges(clusterAddr string, termVersion int64) {
 	}
 
 	if res.StatusCode != 200 {
+		// Not reading to EOF before close as streaming API does not end with EOF in all cases
 		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
-		io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 		res.Body.Close()
 
 		logging.Errorf("WatchClusterVersionChanges: HTTP error %v getting %q: %s", res.Status, urlStr, bod)
 		selfRestart()
 		return
 	}
-	defer res.Body.Close()
-	defer io.Copy(ioutil.Discard, res.Body) // reads rest of Body, if any, so TCP conn can be reused
 
 	var p couchbase.Pool
+
 	reader := bufio.NewReader(res.Body)
+	// Not reading to EOF before close as streaming API does not end with EOF in all cases
+	defer res.Body.Close()
 	for {
 
 		if atomic.LoadInt64(&clusterVersion) >= termVersion {
