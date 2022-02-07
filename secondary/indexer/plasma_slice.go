@@ -2270,6 +2270,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	var sts StorageStatistics
 
 	var internalData []string
+	internalDataMap := make(map[string]interface{})
 
 	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount int64
 	var msCompressionRatio, bsCompressionRatio float64
@@ -2292,6 +2293,17 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	if pStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
 		mainStoreStatsLoggingEnabled = true
 		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
+
+		statsMap := make(map[string]interface{})
+		err := json.Unmarshal([]byte(pStats.Serialize()), &statsMap)
+		if err == nil {
+			internalDataMap["MainStore"] = statsMap
+		} else {
+			logging.Errorf("plasmaSlice::Statistics unable to unmarshal mainstore stats for"+
+				" IndexInstId %v, PartitionId %v, IndexDefnId %v SliceId %v err: %v",
+				mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id, err)
+			internalDataMap["MainStore"] = fmt.Sprintf("%v", pStats)
+		}
 	}
 
 	var bsNumRecsMem, bsNumRecsDisk int64
@@ -2309,6 +2321,17 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 			} else {
 				internalData = append(internalData, fmt.Sprintf("{\n\"BackStore\":\n%s", pStats))
 			}
+
+			statsMap := make(map[string]interface{})
+			err := json.Unmarshal([]byte(pStats.Serialize()), &statsMap)
+			if err == nil {
+				internalDataMap["BackStore"] = statsMap
+			} else {
+				logging.Errorf("plasmaSlice::Statistics unable to unmarshal backstore stats for"+
+					" IndexInstId %v, PartitionId %v, IndexDefnId %v SliceId %v err: %v",
+					mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id, err)
+				internalDataMap["BackStore"] = fmt.Sprintf("%v", pStats)
+			}
 		}
 		sts.InsertBytes += pStats.BytesWritten
 		sts.GetBytes += pStats.LSSBlkReadBytes
@@ -2321,6 +2344,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	}
 
 	sts.InternalData = internalData
+	sts.InternalDataMap = internalDataMap
 	if mdb.hasPersistence {
 		sts.DiskSize = mdb.mainstore.LSSDiskSize()
 		sts.DataSizeOnDisk = mdb.mainstore.LSSDataSize()
@@ -2378,6 +2402,18 @@ func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error)
 		avg_page_size)
 
 	sts.InternalData = []string{internalData}
+
+	internalDataMap := make(map[string]interface{})
+	internalDataMap["num_pages"] = pstats.NumPages
+	internalDataMap["items_count"] = pstats.ItemsCount
+	internalDataMap["resident_ratio"] = pstats.ResidentRatio
+	internalDataMap["inserts"] = pstats.Inserts
+	internalDataMap["deletes"] = pstats.Deletes
+	internalDataMap["avg_item_size"] = avg_item_size
+	internalDataMap["avg_page_size"] = avg_page_size
+
+	sts.InternalDataMap = make(map[string]interface{})
+	sts.InternalDataMap["MainStore"] = internalDataMap
 	return sts, nil
 }
 

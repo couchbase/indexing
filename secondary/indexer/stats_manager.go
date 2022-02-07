@@ -2587,14 +2587,12 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 	var storageStats string
 	if writeStorageStats { //log storage stats every 15mins
 		storageMode := common.GetStorageMode()
-		if storageMode == common.MOI {
+		if storageMode == common.MOI || storageMode == common.PLASMA {
 			if l.enableStatsLog {
 				l.writeIndexStorageStat(nil)
 			} else {
 				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
 			}
-		} else if storageMode == common.PLASMA {
-			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
 		} else if logging.IsEnabled(logging.Timing) {
 			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
 		}
