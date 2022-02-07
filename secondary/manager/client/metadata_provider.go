@@ -958,14 +958,18 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 	if err != nil {
 		return err
 	}
+	cinfo.SetMaxRetries(5) // avoid flooding query.log with retry messages if bucket was dropped
 
 	checkValidKeyspace := func() (bool, error) {
 		//
-		// Keyspace validation happens before posting shedule create token.
+		// Keyspace validation happens before posting schedule create token.
 		// Here, the purpose of keyspace validation is only to check for
-		// changes in keyspace if any. So, no need to retry.
+		// continued keyspace existence. If it no longer exists, waitForScheduledIndex
+		// can terminate.
 		//
-		err = cinfo.FetchForBucket(idxDefn.Bucket, false, false, true, true)
+
+		// Fetch bucket info in the ClusterInfoCache
+		err := cinfo.FetchForBucket(idxDefn.Bucket, true, true, false, false)
 		if err != nil {
 			return false, err
 		}
