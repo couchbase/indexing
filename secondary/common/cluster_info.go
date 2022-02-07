@@ -234,17 +234,16 @@ func (c *ClusterInfoCache) FetchNodeSvsData() (err error) {
 	return nil
 }
 
-func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, getServerGroups bool, getTerseBucketInfo bool,
-	getBucketManifest bool) error {
+// FetchForBucket loads a ClusterInfoCache with bucket-specific info.
+func (c *ClusterInfoCache) FetchForBucket(bucketName string, getTerseBucketInfo bool,
+	getBucketManifest bool, getServerGroups bool, getNodeSvs bool) error {
 
-	fn := func(r int, err error) error {
-		if r > 0 {
+	fn := func(retryNum int, errPrior error) error {
+		if errPrior != nil {
 			logging.Infof("%vError occurred during cluster info update (%v) .. Retrying(%d)",
-				c.logPrefix, err, r)
+				c.logPrefix, errPrior, retryNum)
 		}
 
-		vretry := 0
-	retry:
 		cl, err := couchbase.Connect(c.url)
 		if err != nil {
 			return err
@@ -256,42 +255,30 @@ func (c *ClusterInfoCache) FetchForBucket(bucketName string, getNodeSvs bool, ge
 			return err
 		}
 
-		if getNodeSvs {
-			if err = c.FetchNodeSvsData(); err != nil {
-				return err
-			}
-		}
-
 		if getTerseBucketInfo {
-			if err := c.pool.RefreshBucket(bucketName, true); err != nil {
+			if err = c.pool.RefreshBucket(bucketName, true); err != nil {
 				return err
 			}
 		}
 
 		if getBucketManifest {
-			if err := c.pool.RefreshManifest(bucketName, true); err != nil {
+			if err = c.pool.RefreshManifest(bucketName, true); err != nil {
 				return err
 			}
 		}
 
 		if getServerGroups {
-			if err := c.FetchServerGroups(); err != nil {
+			if err = c.FetchServerGroups(); err != nil {
 				return err
 			}
 		}
 
 		if getNodeSvs {
+			if err = c.FetchNodeSvsData(); err != nil {
+				return err
+			}
 			if !c.validateCache(c.client.Info.IsIPv6) {
-				if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
-					vretry++
-					logging.Infof("%vValidation Failed for cluster info.. Retrying(%d)",
-						c.logPrefix, vretry)
-					goto retry
-				} else {
-					logging.Infof("%vValidation Failed for cluster info.. %v",
-						c.logPrefix, c)
-					return ErrValidationFailed
-				}
+				return ErrValidationFailed
 			}
 		}
 
