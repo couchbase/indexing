@@ -8,34 +8,42 @@
 
 package n1ql
 
-import "fmt"
-import "os"
-import "sync"
-import "time"
-import "path"
-import "strings"
-import "encoding/gob"
-import "strconv"
-import "io/ioutil"
-import "sync/atomic"
-import "net/url"
-import "runtime/debug"
+import (
+	"encoding/gob"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
-import l "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
+	l "github.com/couchbase/indexing/secondary/logging"
 
-import "github.com/couchbase/indexing/secondary/security"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
-import "github.com/couchbase/query/datastore"
-import "github.com/couchbase/query/errors"
-import "github.com/couchbase/query/expression"
-import "github.com/couchbase/query/expression/parser"
-import "github.com/couchbase/query/timestamp"
-import "github.com/couchbase/query/value"
-import qlog "github.com/couchbase/query/logging"
-import json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/collatejson"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/security"
+
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/errors"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
+	"github.com/couchbase/query/timestamp"
+	"github.com/couchbase/query/value"
+
+	qlog "github.com/couchbase/query/logging"
+
+	json "github.com/couchbase/indexing/secondary/common/json"
+)
 
 const DONEREQUEST = 1
 const BACKFILLPREFIX = "scan-results"
@@ -2548,3 +2556,30 @@ func getDefaultTmpDir() string {
 //-------------------------------------
 // IndexConfig Implementation End
 //-------------------------------------
+
+//-------------------------------------
+// Internal Version Handler
+//-------------------------------------
+
+type InternalVersionHandler struct {
+}
+
+func NewInternalVersionHandler() *InternalVersionHandler {
+	return &InternalVersionHandler{}
+}
+
+func (ivh *InternalVersionHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	l.Debugf("InternalVersionHandler: ServeHTTP ... ")
+
+	data, err := common.GetMarshalledInternalVersion()
+	if err != nil {
+		l.Debugf("InternalVersionHandler: ServeHTTP error %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	l.Debugf("InternalVersionHandler: ServeHTTP data %s", data)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}

@@ -50,7 +50,7 @@ import (
 
 type InternalVersion string
 
-const localVersion = "7.0.2"
+const localVersion = "7.0.4"
 
 const MIN_VER_STD_GSI_EPHEMERAL = "7.0.2"
 
