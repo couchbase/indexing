@@ -12,6 +12,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -2595,3 +2596,30 @@ func getDefaultTmpDir() string {
 //-------------------------------------
 // IndexConfig Implementation End
 //-------------------------------------
+
+//-------------------------------------
+// Internal Version Handler
+//-------------------------------------
+
+type InternalVersionHandler struct {
+}
+
+func NewInternalVersionHandler() *InternalVersionHandler {
+	return &InternalVersionHandler{}
+}
+
+func (ivh *InternalVersionHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	l.Debugf("InternalVersionHandler: ServeHTTP ... ")
+
+	data, err := common.GetMarshalledInternalVersion()
+	if err != nil {
+		l.Debugf("InternalVersionHandler: ServeHTTP error %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	l.Debugf("InternalVersionHandler: ServeHTTP data %s", data)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
