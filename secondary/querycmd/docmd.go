@@ -103,7 +103,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:8091", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
-	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config|batch_process|batch_build")
+	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|alter|list|config|batch_process|batch_build")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	// options for create-index
 	fset.StringVar(&cmdOptions.WhereStr, "where", "", "where clause for create index")
@@ -264,6 +264,9 @@ func HandleCommand(
 	}
 
 	indexes, _, _, _, err := client.Refresh()
+	if err != nil {
+		return err
+	}
 
 	dataEncFmt := client.GetDataEncodingFormat()
 
@@ -418,12 +421,10 @@ func HandleCommand(
 			return fmt.Errorf("Index %v/%v/%v/%v unknown", cmd.Bucket, scope, collection, cmd.IndexName)
 		}
 
+		fmt.Fprintf(w, "Moving Index for: %v %v\n", index.Definition.DefnId, cmd.With)
+		err = client.MoveIndex(uint64(index.Definition.DefnId), cmd.WithPlan)
 		if err == nil {
-			fmt.Fprintf(w, "Moving Index for: %v %v\n", index.Definition.DefnId, cmd.With)
-			err = client.MoveIndex(uint64(index.Definition.DefnId), cmd.WithPlan)
-			if err == nil {
-				fmt.Fprintf(w, "Move Index has started. Check Indexes UI for progress and Logs UI for any error\n")
-			}
+			fmt.Fprintf(w, "Move Index has started. Check Indexes UI for progress and Logs UI for any error\n")
 		}
 
 	case "drop":
@@ -438,6 +439,32 @@ func HandleCommand(
 		} else {
 			err = fmt.Errorf("index %v/%v/%v/%v drop failed", bucket, scope, collection, iname)
 			break
+		}
+
+	case "alter":
+		index, ok := GetIndex(client, cmd.Bucket, scope, collection, cmd.IndexName)
+		if !ok {
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", cmd.Bucket, scope, collection, cmd.IndexName)
+		}
+
+		var ErrorActionMissing = "GSI AlterIndex() action key missing in WITH clause"
+		var ErrorUnsupportedAction = "GSI AlterIndex() Unsupported action value"
+
+		action, ok := cmd.WithPlan["action"]
+		if !ok {
+			return fmt.Errorf(ErrorActionMissing)
+		}
+
+		action, ok = action.(string)
+		if !ok {
+			return fmt.Errorf(ErrorUnsupportedAction)
+		}
+
+		fmt.Fprintf(w, "Alter Index for: %v %v\n", index.Definition.DefnId, cmd.With)
+		err = client.AlterReplicaCount(action.(string), uint64(index.Definition.DefnId), cmd.WithPlan)
+
+		if err == nil {
+			fmt.Fprintf(w, "Alter Index has started. Check Indexes UI for progress and Logs UI for any error\n")
 		}
 
 	case "scan":
@@ -900,12 +927,16 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "move":
-		have = []string{"type", "server", "auth", "index", "bucket"}
+		have = []string{"type", "server", "auth", "index", "bucket", "with"}
 		dont = []string{"h", "indexes", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "drop":
 		have = []string{"type", "server", "auth", "index", "bucket"}
 		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+
+	case "alter":
+		have = []string{"type", "server", "auth", "index", "bucket", "with"}
+		dont = []string{"h", "indexes", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "scan":
 		have = []string{"type", "server", "auth", "index", "bucket"}

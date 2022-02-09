@@ -44,7 +44,13 @@ func usage(fset *flag.FlagSet) {
     Index And 1 Replica:
     cbindex -auth user:pass -type move -index 'def_airportname' -bucket default -with '{"nodes":["10.17.6.32:8091","10.17.6.33:8091"]}'
     (Move Index supports moving only 1 index (and its replicas) at a time)
-    `)
+
+- Alter
+	Single Index:
+	cbindex -auth user:pass -type alter -bucket default -index index1 -with '{"action":"replica_count","num_replica":2}'
+	cbindex -auth user:pass -type alter -bucket default -index index1 -with '{"action":"drop_replica","replicaId":1}'
+	(Alter Index supports changing only 1 index (and its replicas) at a time)
+	`)
 }
 
 func main() {
