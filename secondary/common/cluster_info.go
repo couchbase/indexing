@@ -826,6 +826,42 @@ func (c *ClusterInfoCache) GetActiveKVNodes() (nodes []couchbase.Node) {
 	return
 }
 
+func (c *ClusterInfoCache) GetFailedKVNodes() (nodes []couchbase.Node) {
+	for _, n := range c.failedNodes {
+		for _, s := range n.Services {
+			if s == "kv" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (c *ClusterInfoCache) GetActiveQueryNodes() (nodes []couchbase.Node) {
+	for _, n := range c.nodes {
+		for _, s := range n.Services {
+			if s == "n1ql" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (c *ClusterInfoCache) GetFailedQueryNodes() (nodes []couchbase.Node) {
+	for _, n := range c.failedNodes {
+		for _, s := range n.Services {
+			if s == "n1ql" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
 func (c *ClusterInfoCache) GetAllKVNodes() (nodes []couchbase.Node) {
 	for _, n := range c.nodes {
 		for _, s := range n.Services {

@@ -225,6 +225,25 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	return mgr, nil
 }
 
+func (mgr *IndexManager) enforceAuth(laddr, raddr string) bool {
+
+	clusterVer := common.GetClusterVersion()
+	intVer := common.GetInternalVersion()
+
+	if clusterVer >= common.INDEXER_71_VERSION {
+		return true
+	}
+
+	if intVer.Equals(common.MIN_VER_SRV_AUTH) || intVer.GreaterThan(common.MIN_VER_SRV_AUTH) {
+		return true
+	}
+
+	logging.Infof("IndexManager:ServerAuth allowing connection %v:%v without auth %v:%v.",
+		laddr, raddr, clusterVer, intVer)
+
+	return false
+}
+
 func (mgr *IndexManager) ServerAuth(conn net.Conn) (*gometaC.PeerPipe, gometaC.Packet, error) {
 
 	raddr := conn.RemoteAddr().String()
@@ -279,11 +298,8 @@ func (mgr *IndexManager) ServerAuth(conn net.Conn) (*gometaC.PeerPipe, gometaC.P
 		return
 	}
 
-	clusterVer := common.GetClusterVersion()
 	if req.Name() != "Request" {
-		if clusterVer < common.INDEXER_71_VERSION {
-			logging.Infof("IndexManager:ServerAuth allowing connection %v:%v "+
-				"without auth due to cluster version %v.", laddr, raddr, clusterVer)
+		if !mgr.enforceAuth(laddr, raddr) {
 			return pipe, req, nil
 		}
 
@@ -295,9 +311,7 @@ func (mgr *IndexManager) ServerAuth(conn net.Conn) (*gometaC.PeerPipe, gometaC.P
 
 	request := req.(protocol.RequestMsg)
 	if gometaC.OpCode(request.GetOpCode()) != client.OPCODE_AUTH_REQUEST {
-		if clusterVer < common.INDEXER_71_VERSION {
-			logging.Infof("IndexManager:ServerAuth allowing connection %v:%v "+
-				"without auth due to cluster version %v.", laddr, raddr, clusterVer)
+		if !mgr.enforceAuth(laddr, raddr) {
 			return pipe, req, nil
 		}
 

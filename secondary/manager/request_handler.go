@@ -3136,7 +3136,7 @@ func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string,
 	}
 	cinfo.RUnlock()
 
-	ver, err := common.GetInternalClusterVersion(cinfo)
+	ver, err := common.GetInternalIndexerVersion(cinfo, false)
 	if err != nil {
 		return false, "", err
 	}

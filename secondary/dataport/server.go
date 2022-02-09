@@ -672,9 +672,42 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.reqch <- []interface{}{msg}
 }
 
+func (s *Server) enforceAuth(raddr string) bool {
+	// When cluster is getting upgraded, client may lag behind in
+	// receiving cluster upgrade notification as compared to the server.
+	// In such a case, server will close the connection.
+	//
+	// Client can choose to either (1) handle this closed connection
+	// intelligently or (2) take more disruptive code path where indexer has
+	// to trigger the stream restart.
+	//
+	// To avoid disruptive stream restart, user can enable server auth only
+	// when the "enableAuth" setting is enabled.
+
+	clustVer := c.GetClusterVersion()
+	intVer := c.GetInternalVersion()
+
+	if clustVer >= c.INDEXER_71_VERSION {
+		return true
+	}
+
+	if intVer.Equals(c.MIN_VER_SRV_AUTH) || intVer.GreaterThan(c.MIN_VER_SRV_AUTH) {
+		return true
+	}
+
+	if atomic.LoadUint32(s.enableAuth) != 0 {
+		return true
+	}
+
+	logging.Infof("%v connection %q continue without auth %v:%v:%v", s.logPrefix, raddr,
+		clustVer, intVer, atomic.LoadUint32(s.enableAuth))
+
+	return true
+}
+
 func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 
-	raddr := conn.RemoteAddr()
+	raddr := conn.RemoteAddr().String()
 
 	rpkt := newTransportPkt(s.maxPayload)
 	logging.Infof("%v connection %q doAuth() ...", s.logPrefix, raddr)
@@ -693,24 +726,7 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 	if !ok {
 		logging.Infof("%v connection %q doAuth() authentication is missing", s.logPrefix, raddr)
 
-		if c.GetClusterVersion() < c.INDEXER_71_VERSION {
-			logging.Infof("%v connection %q continue without auth", s.logPrefix, raddr)
-			return reqMsg, nil
-		}
-
-		// When cluster is getting upgraded, client may lag behind in
-		// receiving cluster upgrade notification as compared to the server.
-		// In such a case, server will close the connection.
-		//
-		// Client can choose to either (1) handle this closed connection
-		// intelligently or (2) take more disruptive code path where indexer has
-		// to trigger the stream restart.
-		//
-		// To avoid disruptive stream restart, user can enable server auth only
-		// when the "enableAuth" setting is enabled.
-
-		if atomic.LoadUint32(s.enableAuth) == 0 {
-			logging.Infof("%v connection %q continue without auth, as auth is disabled", s.logPrefix, raddr)
+		if !s.enforceAuth(raddr) {
 			return reqMsg, nil
 		}
 

@@ -909,6 +909,28 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handle internal version request.
+func (p *Projector) handleInternalVersion(w http.ResponseWriter, r *http.Request) {
+	valid := validateAuth(w, r)
+	if !valid {
+		return
+	}
+
+	logging.Verbosef("%s Request %q\n", p.logPrefix, r.URL.Path)
+
+	data, err := c.GetMarshalledInternalVersion()
+	if err != nil {
+		logging.Debugf("Projector:handleInternalVersion error %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	logging.Debugf("Projector:handleInternalVersion data %s", data)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
 //----------------
 // local functions
 //----------------
