@@ -534,10 +534,6 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 		instId: idxInstId,
 		ts:     tsVbuuid,
 		partns: partnSnaps,
-
-		// For debugging
-		snapId:       idxStats.numSnapshots.Value(),
-		creationTime: uint64(time.Now().UnixNano()),
 	}
 
 	if isSnapCreated {
@@ -680,7 +676,7 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 		func() {
 			s.muSnap.Lock()
 			defer s.muSnap.Unlock()
-			snapC, updated = s.initSnapshotContainerForInst(is.IndexInstId(), is, "updateSnapMapAndNotify")
+			snapC, updated = s.initSnapshotContainerForInst(is.IndexInstId(), is)
 		}()
 	}
 	if snapC == nil {
@@ -1075,8 +1071,7 @@ func (sm *storageMgr) validateRestartTsVbuuid(keyspaceId string,
 }
 
 // The caller of this method should acquire muSnap Lock
-func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId, is IndexSnapshot,
-	caller string) (*IndexSnapshotContainer, bool) {
+func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId, is IndexSnapshot) (*IndexSnapshotContainer, bool) {
 	indexInstMap := s.indexInstMap.Get()
 	if inst, ok := indexInstMap[instId]; !ok || inst.State == common.INDEX_STATE_DELETED {
 		return nil, false
@@ -1087,27 +1082,18 @@ func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId, is 
 		}
 		var snap IndexSnapshot
 		bucket := inst.Defn.Bucket
-		creationTime := uint64(time.Now().UnixNano())
-		stats := s.stats.Get()
-		idxStats := stats.indexes[instId]
 		if is == nil {
 			ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
 			snap = &indexSnapshot{
 				instId: instId,
 				ts:     ts, // nil snapshot should have ZERO Crc64 :)
 				epoch:  true,
-
-				// For debugging MB-50006
-				snapId:       idxStats.numSnapshots.Value(),
-				creationTime: creationTime,
 			}
 		} else {
 			snap = is
 		}
 		indexSnapMap = s.indexSnapMap.Clone()
-		logging.Infof("StorageMgr::updateIndexSnapMapForIndex, New IndexSnapshotContainer is being created "+
-			"for indexInst: %v, creation time: %v, caller: %v", instId, creationTime, caller)
-		sc := &IndexSnapshotContainer{snap: snap, creationTime: creationTime}
+		sc := &IndexSnapshotContainer{snap: snap}
 		indexSnapMap[instId] = sc
 		s.indexSnapMap.Set(indexSnapMap)
 		return sc, true
@@ -1135,27 +1121,17 @@ func (s *storageMgr) initSnapshotWaitersForInst(instId common.IndexInstId) *Snap
 	return waiterContainer
 }
 
-func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string, caller string) {
+func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
 	indexSnapMap := s.indexSnapMap.Get()
 	if _, ok := indexSnapMap[idxInstId]; !ok {
 		indexSnapMap := s.indexSnapMap.Clone()
 		ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
-		stats := s.stats.Get()
-		idxStats := stats.indexes[idxInstId]
-		creationTime := uint64(time.Now().UnixNano())
 		snap := &indexSnapshot{
 			instId: idxInstId,
 			ts:     ts, // nil snapshot should have ZERO Crc64 :)
 			epoch:  true,
-
-			// For debugging MB-50006
-			snapId:       idxStats.numSnapshots.Value(),
-			creationTime: creationTime,
 		}
-
-		logging.Infof("StorageMgr::updateIndexSnapMapForIndex, New IndexSnapshotContainer is being created "+
-			"for indexInst: %v, creation time: %v, caller: %v", idxInstId, creationTime, caller)
-		indexSnapMap[idxInstId] = &IndexSnapshotContainer{snap: snap, creationTime: creationTime}
+		indexSnapMap[idxInstId] = &IndexSnapshotContainer{snap: snap}
 		s.indexSnapMap.Set(indexSnapMap)
 		s.notifySnapshotCreation(snap)
 	}
@@ -1249,7 +1225,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	// Add 0 items index snapshots for newly added indexes
 	for idxInstId, inst := range indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
-			s.addNilSnapshot(idxInstId, inst.Defn.Bucket, "handleUpdateIndexInstMap")
+			s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
 		}
 	}
 
@@ -1343,7 +1319,7 @@ func (s *storageMgr) listenSnapshotReqs(index int) {
 				func() {
 					s.muSnap.Lock()
 					defer s.muSnap.Unlock()
-					snapC, _ = s.initSnapshotContainerForInst(req.GetIndexId(), nil, "listenSnapshotReqs")
+					snapC, _ = s.initSnapshotContainerForInst(req.GetIndexId(), nil)
 				}()
 				if snapC == nil {
 					req.respch <- common.ErrIndexNotFound
@@ -1698,10 +1674,6 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 			//
 
 			if !source.Timestamp().EqualOrGreater(target.Timestamp(), false) {
-				logging.Fatalf("StorageMgr::handleIndexMergeSnapshot, Source InstId: %v, sourceC: %+v, Target InstId: %v, targetC: %+v", srcInstId, sourceC, tgtInstId, targetC)
-				logging.Fatalf("StorageMgr::handleIndexMergeSnapshot Source InstId: %v, SnapId: %v, creationTime: %v, Target InstId: %v snapId: %v, creationTime: %v",
-					source.IndexInstId(), source.SnapId(), source.CreationTime(), target.IndexInstId(), target.SnapId(), target.CreationTime())
-
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
@@ -1856,17 +1828,11 @@ func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
 func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, doPrune bool, keepPartnIds []common.PartitionId) IndexSnapshot {
 
 	snap := is.(*indexSnapshot)
-	stats := s.stats.Get()
-	idxStats := stats.indexes[snap.instId]
 
 	clone := &indexSnapshot{
 		instId: snap.instId,
 		ts:     snap.ts.Copy(),
 		partns: make(map[common.PartitionId]PartitionSnapshot),
-
-		// For debugging MB-50006
-		snapId:       idxStats.numSnapshots.Value(),
-		creationTime: uint64(time.Now().UnixNano()),
 	}
 
 	// For each partition snapshot...
@@ -2110,25 +2076,17 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 			break
 		}
 	}
-	creationTime := uint64(time.Now().UnixNano())
-	stats := s.stats.Get()
-	idxStats := stats.indexes[idxInstId]
+
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	if len(partnSnapMap) != 0 {
 		is := &indexSnapshot{
 			instId: idxInstId,
 			ts:     tsVbuuid,
 			partns: partnSnapMap,
-
-			// For debugging MB-50006
-			snapId:       idxStats.numSnapshots.Value(),
-			creationTime: creationTime,
 		}
 		indexSnapMap = s.indexSnapMap.Clone()
 		if snapC == nil {
-			logging.Infof("StorageMgr::updateIndexSnapMapForIndex, New IndexSnapshotContainer is being created "+
-				"for indexInst: %v, creation time: %v, caller: %v", idxInstId, creationTime, "updateIndexSnapMapForIndex")
-			snapC = &IndexSnapshotContainer{snap: is, creationTime: creationTime}
+			snapC = &IndexSnapshotContainer{snap: is}
 		} else {
 			snapC.Lock()
 			snapC.snap = is
@@ -2141,7 +2099,7 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 	} else {
 		logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Adding Nil Snapshot.",
 			idxInstId)
-		s.addNilSnapshot(idxInstId, bucket, "updateIndexSnapMapForIndex")
+		s.addNilSnapshot(idxInstId, bucket)
 	}
 
 	if needRestart {
