@@ -464,6 +464,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		common.CrashOnError(err)
 	}
 
+	// Start internal version monitor only after starting http server.
+	go common.MonitorInternalVersion(int64(common.INDEXER_71_VERSION), common.MIN_VER_SRV_AUTH,
+		idx.config["clusterAddr"].String())
+
 	// indexer is now ready to take security change
 	close(idx.enableSecurityChange)
 
@@ -1951,7 +1955,7 @@ func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
 		return false, "", fmt.Errorf("Cluster info cache is nil.")
 	}
 
-	ver, err := common.GetInternalClusterVersion(ninfo)
+	ver, err := common.GetInternalIndexerVersion(ninfo, false)
 	if err != nil {
 		return false, "", err
 	}
