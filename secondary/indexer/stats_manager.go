@@ -2906,6 +2906,9 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 	res := <-replych
 
 	for _, sts := range res {
+		if sts.IsLoggingDisabled() {
+			continue
+		}
 		key1 := ""
 		scope := sts.Scope
 		collection := sts.Collection

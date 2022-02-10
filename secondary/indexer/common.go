@@ -165,6 +165,10 @@ func (s *IndexStorageStats) GetInternalDataMap() map[string]interface{} {
 	return s.Stats.InternalDataMap
 }
 
+func (s *IndexStorageStats) IsLoggingDisabled() bool {
+	return s.Stats.LoggingDisabled
+}
+
 type VbStatus uint64
 
 const (

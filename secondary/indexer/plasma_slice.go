@@ -2345,6 +2345,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 
 	sts.InternalData = internalData
 	sts.InternalDataMap = internalDataMap
+	sts.LoggingDisabled = (mainStoreStatsLoggingEnabled == false) && (backStoreStatsLoggingEnabled == false)
 	if mdb.hasPersistence {
 		sts.DiskSize = mdb.mainstore.LSSDiskSize()
 		sts.DataSizeOnDisk = mdb.mainstore.LSSDataSize()

@@ -1546,6 +1546,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 			var nslices int64
 			var needUpgrade = false
 			var hasStats = false
+			var loggingDisabled = true
 
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
@@ -1583,6 +1584,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 				if sts.InternalDataMap != nil && len(sts.InternalDataMap) != 0 {
 					internalDataMap[fmt.Sprintf("slice_%d", i)] = sts.InternalDataMap
 				}
+				// Even if one slice has stats, loggingDisabled will be set to false
+				loggingDisabled = loggingDisabled && sts.LoggingDisabled
 				needUpgrade = needUpgrade || sts.NeedUpgrade
 
 				hasStats = true
@@ -1609,6 +1612,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 						NeedUpgrade:       needUpgrade,
 						InternalData:      internalData,
 						InternalDataMap:   internalDataMap,
+						LoggingDisabled:   loggingDisabled,
 					},
 				}
 
