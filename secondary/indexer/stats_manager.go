@@ -82,6 +82,7 @@ type KeyspaceStats struct {
 	flushLatDist       stats.Histogram
 	snapLatDist        stats.Histogram
 	lastSnapDone       stats.Int64Val
+	numForceInMemSnap  stats.Int64Val
 }
 
 // KeyspaceStats.Init initializes a per-keyspace stats object.
@@ -97,6 +98,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.flushLatDist.InitLatency(latencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.snapLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.lastSnapDone.Init()
+	s.numForceInMemSnap.Init()
 }
 
 func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
@@ -109,6 +111,8 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("avg_dcp_snap_size", &s.avgDcpSnapSize)
 	statMap.AddStatValueFiltered("flush_latency_dist", &s.flushLatDist)
 	statMap.AddStatValueFiltered("snapshot_latency_dist", &s.snapLatDist)
+	statMap.AddStatValueFiltered("last_snapshot_done", &s.lastSnapDone)
+	statMap.AddStatValueFiltered("num_force_inmem_snap", &s.numForceInMemSnap)
 
 	bucket := GetBucketFromKeyspaceId(s.keyspaceId)
 	if st := common.BucketSeqsTiming(bucket); st != nil {
@@ -2906,6 +2910,9 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 	res := <-replych
 
 	for _, sts := range res {
+		if sts.IsLoggingDisabled() {
+			continue
+		}
 		key1 := ""
 		scope := sts.Scope
 		collection := sts.Collection

@@ -40,6 +40,8 @@ type StorageStatistics struct {
 
 	InternalData    []string
 	InternalDataMap map[string]interface{}
+
+	LoggingDisabled bool
 }
 
 type IndexWriter interface {

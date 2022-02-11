@@ -2273,15 +2273,15 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 			if buildInfo.buildTs == nil {
 				initBuildDone = false
 			} else if buildInfo.buildTs.IsZeroTs() && flushTs.IsSnapAligned() && (!enableOSO || !flushTs.HasOpenOSOSnap()) {
-				 // if buildTs is zero, initial build is considered as done under following cases
-				 // flushTs is nil (isSnapAligned and hasOpenOSOSnap would handled nil flushTs correctly)
-				 // flushTs is non-nil but is snapAligned in non-OSO mode
-				 // flushTs is non-nil, is snapAligned and does not have OpenOSOSnapShot for OSO mode
-				 //
-				 // Also note that we can not remove the check for buildTs.isZeroTs as there are cases where flushTs can be nil,
-				 // and given that, a non-zero buildTs with nil flushTs is considered as initialBuildDone = false (as covered by next condition).
-				 // even if last else condition ts.GreaterThanEqual would take care of zero buildTs we will not reach there if flushTs is nil and we do not have
-				 // special handling of buildInfo.buildTs.IsZeroTs() conditon here.
+				// if buildTs is zero, initial build is considered as done under following cases
+				// flushTs is nil (isSnapAligned and hasOpenOSOSnap would handled nil flushTs correctly)
+				// flushTs is non-nil but is snapAligned in non-OSO mode
+				// flushTs is non-nil, is snapAligned and does not have OpenOSOSnapShot for OSO mode
+				//
+				// Also note that we can not remove the check for buildTs.isZeroTs as there are cases where flushTs can be nil,
+				// and given that, a non-zero buildTs with nil flushTs is considered as initialBuildDone = false (as covered by next condition).
+				// even if last else condition ts.GreaterThanEqual would take care of zero buildTs we will not reach there if flushTs is nil and we do not have
+				// special handling of buildInfo.buildTs.IsZeroTs() conditon here.
 				initBuildDone = true
 			} else if flushTs == nil { // in case of non-zero buildTs we can not have nil flushTs to complete the initialBuild.
 				initBuildDone = false
@@ -2955,10 +2955,38 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	if flushTs.GetSnapType() != common.FORCE_COMMIT && flushTs.GetSnapType() != common.FORCE_COMMIT_MERGE {
 		var noChange bool
 		changeVec, noChange, countVec = tk.ss.computeTsChangeVec(streamId, keyspaceId, tsElem)
+
+		// If the lastFlushedTs is NO_SNAP and the current flushTs is INMEM_SNAP, force
+		// a flush even if there is no change in timestamp. In some corner cases, it is
+		// possible that the lastFlushedTs is completely snapshot aligned but due to
+		// fastFlushMode, the snap can be NO_SNAP. In such a case, the following INMEM_SNAP
+		// timestamps should not be skipped due to noChange. This is to make sure that
+		// storage manager will have an upto date INMEM_SNAP - which can be used to serve
+		// queries or handle partition merges.
 		if noChange {
-			return
+			lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
+			if lastFlushedTs != nil && lastFlushedTs.GetSnapType() == common.NO_SNAP {
+				tk.setSnapshotType(streamId, keyspaceId, flushTs)
+
+				if flushTs.GetSnapType() == common.NO_SNAP {
+					return
+				} else {
+					keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
+					if keyspaceStats != nil {
+						keyspaceStats.numForceInMemSnap.Add(1)
+						if keyspaceStats.numForceInMemSnap.Value()%1000 == 1 {
+							logging.Infof("Timekeeper::sendNewStabilityTs: forcing an INMEM_SNAP even though "+
+								"there is no change in flushTs timestamp. streamId: %v, keyspaceId: %v, flushTs: %v",
+								streamId, keyspaceId, flushTs)
+						}
+					}
+				}
+			} else {
+				return
+			}
+		} else {
+			tk.setSnapshotType(streamId, keyspaceId, flushTs)
 		}
-		tk.setSnapshotType(streamId, keyspaceId, flushTs)
 	}
 
 	tk.setNeedsCommit(streamId, keyspaceId, flushTs)

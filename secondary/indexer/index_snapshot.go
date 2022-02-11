@@ -27,9 +27,6 @@ type IndexSnapshot interface {
 	Timestamp() *common.TsVbuuid
 	IsEpoch() bool
 	Partitions() map[common.PartitionId]PartitionSnapshot
-
-	SnapId() int64
-	CreationTime() uint64
 }
 
 type PartitionSnapshot interface {
@@ -47,10 +44,6 @@ type indexSnapshot struct {
 	ts     *common.TsVbuuid
 	epoch  bool
 	partns map[common.PartitionId]PartitionSnapshot
-
-	// For debugging, not supposed to go to production
-	snapId       int64
-	creationTime uint64
 }
 
 func (is *indexSnapshot) IndexInstId() common.IndexInstId {
@@ -67,14 +60,6 @@ func (is *indexSnapshot) Timestamp() *common.TsVbuuid {
 
 func (is *indexSnapshot) Partitions() map[common.PartitionId]PartitionSnapshot {
 	return is.partns
-}
-
-func (is *indexSnapshot) SnapId() int64 {
-	return is.snapId
-}
-
-func (is *indexSnapshot) CreationTime() uint64 {
-	return is.creationTime
 }
 
 type partitionSnapshot struct {

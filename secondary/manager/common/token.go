@@ -55,6 +55,9 @@ const ScheduleCreateTokenPath = CommandMetakvDir + ScheduleCreateTokenTag
 const StopScheduleCreateTokenTag = "stopSchedule/"
 const StopScheduleCreateTokenPath = CommandMetakvDir + StopScheduleCreateTokenTag
 
+const PlasmaInMemoryCompressionTokenTag = "PlasmaInMemoryCompression"
+const PlasmaInMemoryCompressionFeaturePath = c.IndexingSettingsFeaturesMetaPath + PlasmaInMemoryCompressionTokenTag
+
 //////////////////////////////////////////////////////////////
 // Concrete Type
 //
@@ -166,6 +169,10 @@ type CommandListener struct {
 	mutex           sync.Mutex
 	cancelCh        chan struct{}
 	donech          chan bool
+}
+
+type PlasmaInMemoryCompresisonToken struct {
+	enabled   bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -1754,4 +1761,25 @@ func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []
 	}
 
 	m.AddNewStopScheduleCreateToken(path, token)
+}
+
+//
+// Generate a token to metakv for enabling PlasmaInMemoryCompression feature
+//
+func PostEnablePlasmaInMemoryCompressionToken() error {
+
+	commandToken := &PlasmaInMemoryCompresisonToken{
+		enabled:   true,
+	}
+
+	return c.MetakvSet(PlasmaInMemoryCompressionFeaturePath, commandToken)
+}
+
+//
+// Check PlasmaInMemoryCompression feature is enabled in metakv
+//
+func EnablePlasmaInMemoryCompressionTokenExist() (bool, error) {
+
+	commandToken := &PlasmaInMemoryCompresisonToken{}
+	return c.MetakvGet(PlasmaInMemoryCompressionFeaturePath, commandToken)
 }

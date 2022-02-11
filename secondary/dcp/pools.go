@@ -250,8 +250,8 @@ func (b *Bucket) getConnPool(i int) *connectionPool {
 
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Errorf("bucket(%v) getConnPool crashed: %v\n", b.Name, r)
-			logging.Errorf("%s", logging.StackTrace())
+			logging.Errorf("Bucket::getConnPool: crashed for bucket %v: %v\n%v",
+				b.Name, r, logging.StackTrace())
 		}
 	}()
 
@@ -270,8 +270,8 @@ func (b *Bucket) getMasterNode(i int) string {
 
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Errorf("bucket(%v) getMasterNode crashed: %v\n", b.Name, r)
-			logging.Errorf("%s", logging.StackTrace())
+			logging.Errorf("Bucket::getMasterNode: crashed for bucket %v: %v\n%v",
+				b.Name, r, logging.StackTrace())
 		}
 	}()
 
@@ -371,7 +371,7 @@ func queryRestAPIOnLocalhost(
 	responseBody := ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 	d := json.NewDecoder(responseBody)
 	if err = d.Decode(&out); err != nil {
-		logging.Errorf("queryRestAPI: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bodyBytes), err)
+		logging.Errorf("pools::queryRestAPIOnLocalhost: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bodyBytes), err)
 		return err
 	}
 	return nil
@@ -385,7 +385,7 @@ func (c *Client) RunObservePool(pool string, callb func(interface{}) error, canc
 		var pool Pool
 		var err error
 		if err = json.Unmarshal(bs, &pool); err != nil {
-			logging.Errorf("RunObservePool: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+			logging.Errorf("Client::RunObservePool: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
 		}
 		return &pool, err
 	}
@@ -401,7 +401,7 @@ func (c *Client) RunObserveNodeServices(pool string, callb func(interface{}) err
 		var ps PoolServices
 		var err error
 		if err = json.Unmarshal(bs, &ps); err != nil {
-			logging.Errorf("RunObserveNodeServices: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+			logging.Errorf("Client::RunObserveNodeServices: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
 		}
 		return &ps, err
 	}
@@ -416,7 +416,7 @@ func (c *Client) RunObserveCollectionManifestChanges(pool, bucket string, callb 
 		var b Bucket
 		var err error
 		if err = json.Unmarshal(bs, &b); err != nil {
-			logging.Errorf("RunObserveCollectionManifestChanges: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+			logging.Errorf("Client::RunObserveCollectionManifestChanges: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
 		}
 		return &b, err
 	}
@@ -734,14 +734,19 @@ func (c *Client) GetCollectionManifest(bucketn string) (retry bool,
 }
 
 func (c *Client) GetIndexScopeLimit(bucketn, scope string) (uint32, error) {
+	var err error
+	var manifest *collections.CollectionManifest
 	retryCount := 0
-loop:
-	retry, manifest, err := c.GetCollectionManifest(bucketn)
-	if retry && retryCount <= 5 {
-		retryCount++
-		logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for GetIndexScopeLimit..", bucketn)
-		time.Sleep(500 * time.Millisecond)
-		goto loop
+	for retry := true; retry && retryCount <= 5; retryCount++ {
+		// retry true implies a potentially transient non-nil error err
+		retry, manifest, err = c.GetCollectionManifest(bucketn)
+		if retry {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	if retryCount > 0 {
+		logging.Warnf("Client::GetIndexScopeLimit: Retried %v times due to out of sync for"+
+			" bucket %s. Final err: %v", retryCount, bucketn, err)
 	}
 	if err != nil {
 		return 0, err
@@ -749,22 +754,25 @@ loop:
 	return manifest.GetIndexScopeLimit(scope), nil
 }
 
-// refreshBucket only calls terseBucket endpoint to fetch the bucket info.
+// RefreshBucket only calls terseBucket endpoint to fetch the bucket info.
 func (p *Pool) RefreshBucket(bucketn string, resetBucketMap bool) error {
 	if resetBucketMap {
 		p.BucketMap = make(map[string]Bucket)
 	}
+
+	var err error
+	var nb *Bucket
 	retryCount := 0
-loop:
-	retry, nb, err := p.getTerseBucket(bucketn)
-	if retry {
-		retryCount++
-		if retryCount > 5 {
-			return err
+	for retry := true; retry && retryCount <= 5; retryCount++ {
+		// retry true implies a potentially transient non-nil error err
+		retry, nb, err = p.getTerseBucket(bucketn)
+		if retry {
+			time.Sleep(5 * time.Millisecond)
 		}
-		logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying to getTerseBucket. retry count %v", bucketn, retryCount)
-		time.Sleep(5 * time.Millisecond)
-		goto loop
+	}
+	if retryCount > 0 {
+		logging.Warnf("Pool::RefreshBucket: Retried %v times due to out of sync for"+
+			" bucket %s. Final err: %v", retryCount, bucketn, err)
 	}
 	if err != nil {
 		return err
@@ -779,10 +787,11 @@ loop:
 // Refresh calls pools/default/buckets to get data and list of buckets
 // calls terseBucket and scopes endpoint for bucket info and manifest.
 func (p *Pool) Refresh() (err error) {
+	const _Refresh = "Pool::Refresh:"
 	p.BucketMap = make(map[string]Bucket)
 	p.Manifest = make(map[string]*collections.CollectionManifest)
 
-	// Compute the minimum version among all the nodes
+	// Compute the minimum version among all the nodes. Manifest only exists in versions >= 7.
 	version := p.getVersion()
 
 loop:
@@ -792,9 +801,10 @@ loop:
 		return err
 	}
 	for _, b := range buckets {
+		// retry true implies a potentially transient non-nil error err
 		retry, nb, err := p.getTerseBucket(b.Name)
 		if retry {
-			logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for getTerseBucket..", b.Name)
+			logging.Warnf("%v Out of sync for bucket %s. Retrying getTerseBucket", _Refresh, b.Name)
 			time.Sleep(5 * time.Millisecond)
 			goto loop
 		}
@@ -806,9 +816,10 @@ loop:
 		p.BucketMap[b.Name] = b
 
 		if version >= 7 {
+			// retry true implies a potentially transient non-nil error err
 			retry, manifest, err := p.getCollectionManifest(b.Name)
 			if retry {
-				logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for getBucketManifest..", b.Name)
+				logging.Warnf("%v Out of sync for bucket %s. Retrying getCollectionManifest", _Refresh, b.Name)
 				time.Sleep(5 * time.Millisecond)
 				goto loop
 			}
@@ -823,20 +834,26 @@ loop:
 }
 
 func (p *Pool) RefreshManifest(bucket string, resetManifestMap bool) error {
-	retryCount := 0
 	if resetManifestMap {
 		p.Manifest = make(map[string]*collections.CollectionManifest)
 	}
-	// Compute the minimum version among all the nodes
+
+	// Compute the minimum version among all the nodes. Manifest only exists in versions >= 7.
 	version := p.getVersion()
-retry:
 	if version >= 7 {
-		retry, manifest, err := p.getCollectionManifest(bucket)
-		if retry && retryCount <= 5 {
-			retryCount++
-			logging.Warnf("cluster_info: Retrying to getBucketManifest for bucket %s", bucket)
-			time.Sleep(1 * time.Millisecond)
-			goto retry
+		var err error
+		var manifest *collections.CollectionManifest
+		retryCount := 0
+		for retry := true; retry && retryCount <= 5; retryCount++ {
+			// retry true implies a potentially transient non-nil error err
+			retry, manifest, err = p.getCollectionManifest(bucket)
+			if retry {
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+		if retryCount > 0 {
+			logging.Warnf("Pool::RefreshManifest: Retried %v times due to out of sync for"+
+				" bucket %s. Final err: %v", retryCount, bucket, err)
 		}
 		if err != nil {
 			return err
@@ -993,7 +1010,7 @@ func (b *Bucket) Close() {
 
 func bucketFinalizer(b *Bucket) {
 	if b.connPools != nil {
-		logging.Warnf("Warning: Finalizing a bucket with active connections.")
+		logging.Warnf("pools::bucketFinalizer: Finalizing a bucket with active connections.")
 	}
 }
 

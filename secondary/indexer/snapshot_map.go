@@ -14,9 +14,6 @@ type IndexSnapshotContainer struct {
 	sync.Mutex
 	snap    IndexSnapshot
 	deleted bool
-
-	// TODO: Added for debugging MB-50006. Not supposed to go to production
-	creationTime uint64
 }
 
 type IndexSnapMapHolder struct {
