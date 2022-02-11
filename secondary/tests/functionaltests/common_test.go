@@ -103,6 +103,10 @@ func TestMain(m *testing.M) {
 	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
+	//Set queryport log level to Warn to reduce logging
+	err = secondaryindex.ChangeIndexerSettings("queryport.client.log_level", "Warn", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
 	//Enable QE Rest server
 	err = secondaryindex.ChangeIndexerSettings("indexer.api.enableTestServer", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
