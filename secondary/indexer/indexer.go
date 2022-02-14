@@ -6035,8 +6035,9 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//enable flush for this keyspaceId in MAINT_STREAM
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
 	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
-		streamId:   common.MAINT_STREAM,
-		keyspaceId: bucket}
+		streamId:          common.MAINT_STREAM,
+		keyspaceId:        bucket,
+		resetPendingMerge: true}
 	<-idx.tkCmdCh
 
 	//for cbq bridge, return response after merge is done and

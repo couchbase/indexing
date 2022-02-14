@@ -931,9 +931,11 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 	t := cmd.(*MsgTKToggleFlush).GetMsgType()
 	streamId := cmd.(*MsgTKToggleFlush).GetStreamId()
 	keyspaceId := cmd.(*MsgTKToggleFlush).GetKeyspaceId()
+	resetPendingMerge := cmd.(*MsgTKToggleFlush).GetResetPendingMerge()
 
 	logging.Infof("Timekeeper::handleFlushStateChange Received Flush State Change "+
-		"for KeyspaceId: %v StreamId: %v Type: %v", keyspaceId, streamId, t)
+		"for KeyspaceId: %v StreamId: %v Type: %v ResetPendingMerge: %v", keyspaceId,
+		streamId, t, resetPendingMerge)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -963,6 +965,10 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 			keyspaceIdFlushEnabledMap[keyspaceId] = true
 			//if there are any pending TS, send that
 			tk.processPendingTS(streamId, keyspaceId)
+		}
+
+		if resetPendingMerge {
+			tk.ss.streamKeyspaceIdPendingMerge[streamId][keyspaceId] = ""
 		}
 
 	case TK_DISABLE_FLUSH:
@@ -2442,6 +2448,15 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
+	//if a merge in already pending for MAINT_STREAM, this merge needs to wait
+	//this can happen if multiple collections are trying to merge to the same bucket
+
+	if kspId, ok := tk.ss.streamKeyspaceIdPendingMerge[common.MAINT_STREAM][bucket]; ok && kspId != "" {
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge Merge pending for MAINT_STREAM %v "+
+			"with keyspaceId %v. Continue both streams for keyspaceId %v.", bucket, kspId, keyspaceId)
+		return false
+	}
+
 	//If any repair is going on, merge cannot happen
 	if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[common.MAINT_STREAM][bucket]; ok && stopCh != nil {
 
@@ -2484,6 +2499,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				if mStatus == STREAM_ACTIVE {
 					if flushEnabled, ok := tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket]; ok && flushEnabled {
 						tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+						tk.ss.streamKeyspaceIdPendingMerge[common.MAINT_STREAM][bucket] = keyspaceId
 					}
 				}
 
