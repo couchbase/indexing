@@ -5918,9 +5918,26 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 
+	enableMaintStreamFlush := func(keyspaceId string) {
+		bucket := GetBucketFromKeyspaceId(keyspaceId)
+		state := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
+
+		if state == STREAM_ACTIVE {
+			//enable flush for this keyspaceId in MAINT_STREAM
+			idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
+				streamId:          common.MAINT_STREAM,
+				keyspaceId:        bucket,
+				resetPendingMerge: true}
+			<-idx.tkCmdCh
+		}
+	}
+
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
 		logging.Infof("Indexer::handleMergeStream StreamId %v KeyspaceId %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
+		//Timekeeper disables MAINT_STREAM flush before sending the MsgTKMergeStream.
+		//It needs to be enabled if this message is being skipped.
+		enableMaintStreamFlush(keyspaceId)
 		return
 	}
 
@@ -5932,6 +5949,9 @@ func (idx *indexer) handleMergeStream(msg Message) {
 		state == STREAM_RECOVERY {
 		logging.Infof("Indexer::handleMergeStream Skip MergeStream %v %v %v",
 			streamId, keyspaceId, state)
+		//Timekeeper disables MAINT_STREAM flush before sending the MsgTKMergeStream.
+		//It needs to be enabled if this message is being skipped.
+		enableMaintStreamFlush(keyspaceId)
 		return
 	}
 
