@@ -2397,10 +2397,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	//if flushTs is not on snap boundary, merge cannot be done
-	//except in the case of FORCE_COMMIT_MERGE type TS, which can be
-	//non-snap aligned as it comes from the MAINT_STREAM.
-	if !initFlushTs.IsSnapAligned() &&
-		initFlushTs.GetSnapType() != common.FORCE_COMMIT_MERGE {
+	if !initFlushTs.IsSnapAligned() {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 
 		var lenInitTs, lenMaintTs int
@@ -2519,41 +2516,29 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					"mergeTs: %v", idx.InstId,
 					streamId, keyspaceId, sessionId, forceSnapshot, initTsSeq, mergeTs)
 
-				if forceSnapshot == false {
-					//change state of all indexes of this keyspaceId to ACTIVE
-					//these indexes get removed later as part of merge message
-					//from indexer
-					tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_ACTIVE)
-
-					tk.supvRespch <- &MsgTKMergeStream{
-						mType:      TK_MERGE_STREAM,
-						streamId:   streamId,
-						keyspaceId: keyspaceId,
-						mergeTs:    mergeTs,
-						sessionId:  sessionId}
-
-					logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
-						"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
-					tk.stopTimer(streamId, keyspaceId)
-					tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
-					return true
-				} else {
-					// Init stream is ready to be merged but initFlushTs lags maintFlushTs
-					// Force a snapshot by asking indexer to generate a snapshot with
-					// FORCE_COMMIT_MERGE and timestamp as MAINT_STREAM flushTs. Once the snapshot
-					// is generated, timekeeper will again hit this method and will execute the
-					// "if" condition above with initFlushTs being the same as maintFlushTs
+				//create a copy of mergeTs(to avoid overwriting snapType of original ts)
+				if forceSnapshot {
 					ts := mergeTs.Copy()
 					ts.SnapType = common.FORCE_COMMIT_MERGE
-					tsElem := &TsListElem{ts: ts}
-
-					logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
-						"KeyspaceId %v Forcing commiting snapshot with mergeTs", streamId, keyspaceId)
-
-					tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
-
-					return false // Index is not ready to merge
+					mergeTs = ts
 				}
+
+				tk.supvRespch <- &MsgTKMergeStream{
+					mType:      TK_MERGE_STREAM,
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
+					mergeTs:    mergeTs,
+					sessionId:  sessionId}
+
+				//change state of all indexes of this keyspaceId to ACTIVE
+				//these indexes get removed later as part of merge message
+				//from indexer
+				tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_ACTIVE)
+				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
+					"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
+				tk.stopTimer(streamId, keyspaceId)
+				tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
+				return true
 
 			} else {
 				//check for one index is sufficient as all indexes in a keyspaceId
@@ -2638,20 +2623,6 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 		if initTsSeq.GreaterThanEqual(minMergeTsSeq) {
 			tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = true
 		} else {
-			// If the snapshot is FORCE_COMMIT_MERGE, and initFlushTs >= maintFlushTs,
-			// then go ahead and merge as we might be coming here due to forced snapshot
-			// on INIT_STREAM after initial build is done
-			if initFlushTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
-				if initFlushTs.EqualOrGreater(maintFlushTs, false) &&
-					initFlushTs.CompareVbuuids(maintFlushTs) {
-					return true, nil
-				} else if forceLog || logging.IsEnabled(logging.Verbose) {
-					logging.Infof("Timekeeper::checkFlushTsValidForMerge: FORCE_COMMIT_MERGE snapshot for "+
-						"StreamId: %v KeyspaceId: %v, vbuuids do not match or initFlushTs lags maintFlushTs "+
-						"flushedPastMinmergeTs=%v, maintFlushTs %v, initFlushTs %v",
-						streamId, keyspaceId, flushedPastMinMergeTs, maintFlushTs, initFlushTs)
-				}
-			}
 
 			cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 			if cid != "" {
@@ -2952,7 +2923,7 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 
 	var changeVec []bool
 	var countVec []uint64
-	if flushTs.GetSnapType() != common.FORCE_COMMIT && flushTs.GetSnapType() != common.FORCE_COMMIT_MERGE {
+	if flushTs.GetSnapType() != common.FORCE_COMMIT {
 		var noChange bool
 		changeVec, noChange, countVec = tk.ss.computeTsChangeVec(streamId, keyspaceId, tsElem)
 
@@ -3221,12 +3192,6 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		return
 	}
 
-	//skip snapshot alignment for FORCE_COMMIT_MERGE as no flush
-	//is required for this type, only a snapshot gets created
-	if flushTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
-		return
-	}
-
 	if tk.hasInitStateIndexNoCatchup(streamId, keyspaceId) {
 		return
 	}
@@ -3267,12 +3232,6 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 	tsElem *TsListElem) {
 
 	flushTs := tsElem.ts
-
-	//skip the check for FORCE_COMMIT_MERGE as the TS may not be always monotonic
-	//if it belongs to MAINT_STREAM.
-	if flushTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
-		return
-	}
 
 	// Seqno should be monotonically increasing when it comes to mutation queue.
 	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
@@ -4612,7 +4571,7 @@ func (tk *timekeeper) setNeedsCommit(streamId common.StreamId,
 
 	case common.INMEM_SNAP, common.NO_SNAP:
 		tk.ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = true
-	case common.DISK_SNAP, common.FORCE_COMMIT, common.FORCE_COMMIT_MERGE:
+	case common.DISK_SNAP, common.FORCE_COMMIT:
 		tk.ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = false
 	}
 

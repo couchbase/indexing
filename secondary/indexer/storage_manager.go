@@ -242,8 +242,6 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	s.supvCmdch <- &MsgSuccess{}
-
 	logging.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	msgFlushDone := cmd.(*MsgMutMgrFlushDone)
@@ -257,6 +255,12 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
+
+	//if snapType is FORCE_COMMIT_MERGE, sync response
+	//will be sent after snasphot creation
+	if snapType != common.FORCE_COMMIT_MERGE {
+		s.supvCmdch <- &MsgSuccess{}
+	}
 
 	streamKeyspaceIdInstList := s.streamKeyspaceIdInstList.Get()
 	instIdList := streamKeyspaceIdInstList[streamId][keyspaceId]
@@ -302,16 +306,24 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid_copy := tsVbuuid.Copy()
 	stats := s.stats.Get()
 
-	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats, flushWasAborted, hasAllSB)
+	var respch MsgChannel
+	if snapType == common.FORCE_COMMIT_MERGE {
+		//response is sent on supvCmdch in case of FORCE_COMMIT_MERGE
+		respch = s.supvCmdch
+	} else {
+		respch = s.supvRespch
+	}
 
+	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
+		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
+		flushWasAborted, hasAllSB, respch)
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	instIdList []common.IndexInstId, instsPerWorker [][]common.IndexInstId,
-	stats *IndexerStats, flushWasAborted bool, hasAllSB bool) {
+	stats *IndexerStats, flushWasAborted bool, hasAllSB bool, respch MsgChannel) {
 
 	startTime := time.Now().UnixNano()
 	var needsCommit bool
@@ -351,7 +363,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 
 	s.lastFlushDone = end
 
-	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
+	respch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId:   streamId,
 		keyspaceId: keyspaceId,
 		ts:         tsVbuuid,
