@@ -454,30 +454,64 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 	}
 
 	reader := bufio.NewReader(res.Body)
-	for {
+
+	errCh := make(chan error)
+	cancelOrSend := func(err error) {
 		if cancel != nil {
 			select {
 			case <-cancel:
-				break
-			default:
+				logging.Infof("Client:runObserveStreamingEndpoint closing streaming endpoint %v", path)
+				return
+			case errCh <- err:
+				return
+			}
+		} else {
+			errCh <- err
+		}
+	}
+
+	go func() {
+		for {
+			bs, err := reader.ReadBytes('\n')
+			if err != nil {
+				cancelOrSend(err)
+				return
+			}
+
+			if len(bs) == 1 && bs[0] == '\n' {
+				continue
+			}
+
+			object, err := decoder(bs)
+			if err != nil {
+				cancelOrSend(err)
+				return
+			}
+
+			err = callb(object)
+			if err != nil {
+				cancelOrSend(err)
+				return
 			}
 		}
 
-		bs, err := reader.ReadBytes('\n')
-		if err != nil {
-			return err
-		}
-		if len(bs) == 1 && bs[0] == '\n' {
-			continue
-		}
+	}()
 
-		object, err := decoder(bs)
-		if err != nil {
-			return err
+	if cancel != nil {
+		select {
+		case <-cancel:
+			logging.Infof("Client:runObserveStreamingEndpoint closing streaming endpoint for %v", path)
+			return nil
+		case err := <-errCh:
+			if err != nil {
+				logging.Warnf("Client:runObserveStreamingEndpoint streaming endpoint for %v returned err %v", path, err)
+				return err
+			}
 		}
-
-		err = callb(object)
+	} else {
+		err := <-errCh
 		if err != nil {
+			logging.Warnf("Client:runObserveStreamingEndpoint streaming endpoint for %v returned err %v", path, err)
 			return err
 		}
 	}
