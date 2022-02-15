@@ -1611,6 +1611,12 @@ func (cicl *ClusterInfoCacheLiteClient) GetNodesInfoProvider() (NodesInfoProvide
 func (cicl *ClusterInfoCacheLiteClient) GetCollectionInfoProvider(bucketName string) (
 	CollectionInfoProvider, error) {
 	ci, err := cicl.GetCollectionInfo(bucketName)
+
+	if err == ErrBucketNotFound {
+		ci := newCollectionInfoWithErr(bucketName, err)
+		return CollectionInfoProvider(ci), nil
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -2321,18 +2327,30 @@ func (c *ClusterInfoCacheLiteClient) GetCollectionInfo(bucketName string) (
 }
 
 func (ci *collectionInfo) CollectionID(bucket, scope, collection string) string {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.COLLECTION_ID_NIL
+	}
 	return ci.manifest.GetCollectionID(scope, collection)
 }
 
 func (ci *collectionInfo) ScopeID(bucket, scope string) string {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.SCOPE_ID_NIL
+	}
 	return ci.manifest.GetScopeID(scope)
 }
 
 func (ci *collectionInfo) ScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL
+	}
 	return ci.manifest.GetScopeAndCollectionID(scope, collection)
 }
 
 func (ci *collectionInfo) GetIndexScopeLimit(bucket, scope string) (uint32, error) {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.NUM_INDEXES_NIL, nil
+	}
 	return ci.manifest.GetIndexScopeLimit(scope), nil
 }
 
