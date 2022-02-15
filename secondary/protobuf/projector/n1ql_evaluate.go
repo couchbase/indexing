@@ -148,9 +148,9 @@ func N1QLTransform(
 		if encodeBuf != nil {
 			out, newBuf, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
 			if err != nil {
-				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v) skip document"
-				arg1 := logging.TagUD(docid)
-				logging.Errorf(fmsg, arg1, err)
+				fmsg := "N1QLTransform[%v<-%v] CollateJSONEncode: index field for docid: %s (err: %v), instId: %v skip document"
+				arg := logging.TagUD(docid)
+				logging.Errorf(fmsg, stats.KeyspaceId, stats.Topic, arg, err, stats.InstId)
 				return nil, newBuf, nil
 			}
 			return out, newBuf, err // return as collated JSON array
