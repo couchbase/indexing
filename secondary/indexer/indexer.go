@@ -6044,7 +6044,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//Send FORCE_COMMIT_MERGE message to storage manager to create snapshot.
 	//This snapshot allows stale=false scans to proceed.
-	if mergeTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
+	if mergeTs != nil && mergeTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
 		idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
 			streamId:   streamId,
 			keyspaceId: keyspaceId,
