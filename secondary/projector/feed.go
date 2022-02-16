@@ -1947,6 +1947,18 @@ func (feed *Feed) processSubscribers(opaque uint16, req Subscriber,
 			m = make(map[uint64]*Engine)
 		}
 		engine := NewEngine(uuid, evaluator, routers[uuid])
+		// For each engine, add logPrefix and instId in the stats
+		evalStats := engine.GetEvaluatorStats()
+		switch (evalStats).(type) {
+		case *protobuf.IndexEvaluatorStats:
+			sts := evalStats.(*protobuf.IndexEvaluatorStats)
+			sts.InstId = c.IndexInstId(uuid) // uuid is same as index instId
+			sts.Topic = feed.topic
+			sts.KeyspaceId = keyspaceId
+		default:
+			logging.Errorf("%v ##%x Invalid evaluator stats type: %T for index inst: %v",
+				feed.logPrefix, feed.opaque, evalStats, uuid)
+		}
 		m[uuid] = engine
 		feed.engines[keyspaceId] = m // :SideEffect:
 	}

@@ -2662,6 +2662,7 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
 	mux.HandleFunc("/stats/storage", s.handleStorageStatsReq)
 	mux.HandleFunc("/stats/reset", s.handleStatsResetReq)
+	mux.HandleFunc("/stats/cinfolite", common.HandleCICLStats)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
 	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
 }

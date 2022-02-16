@@ -130,6 +130,7 @@ type CollectionInfoProvider interface {
 	CollectionID(bucket, scope, collection string) string
 	ScopeID(bucket, scope string) string
 	ScopeAndCollectionID(bucket, scope, collection string) (string, string)
+	GetIndexScopeLimit(bucket, scope string) (uint32, error)
 
 	RWLockable // Stub to make ClusterInfoCache replaceable with CollectionInfo
 	FetchBucketInfo(bucketName string) error

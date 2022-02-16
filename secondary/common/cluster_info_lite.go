@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -41,6 +43,7 @@ var singletonCICLContainer struct {
 var ErrorEventWaitTimeout = errors.New("error event wait timeout")
 var ErrorUnintializedNodesInfo = errors.New("error uninitialized nodesInfo")
 var ErrorThisNodeNotFound = errors.New("error thisNode not found")
+var ErrorSingletonCICLMgrNotFound = errors.New("singleton manager not found")
 
 func SetCICLMgrTimeDiffToForceFetch(minutes uint32) {
 	singletonCICLContainer.Lock()
@@ -59,6 +62,61 @@ func SetCICLMgrSleepTimeOnNotifierRestart(milliSeconds uint32) {
 		mgr.setNotifierRetrySleep(milliSeconds)
 	} else {
 		logging.Warnf("SetCICLMgrSleepTimeOnNotifierRestart: Singleton Manager in ClusterInfoCacheLite is not set")
+	}
+}
+
+func GetCICLStats() (Statistics, error) {
+	singletonCICLContainer.Lock()
+	defer singletonCICLContainer.Unlock()
+
+	s := make(map[string]interface{})
+	mgr := singletonCICLContainer.ciclMgr
+	if mgr == nil {
+		s["ref_count"] = 0
+		s["status"] = ErrorSingletonCICLMgrNotFound.Error()
+		return NewStatistics(s)
+	}
+
+	s["ref_count"] = singletonCICLContainer.refCount
+	s["status"] = "singleton manager running"
+	// TODO: Add more stats later as needed
+	return NewStatistics(s)
+}
+
+func HandleCICLStats(w http.ResponseWriter, r *http.Request) {
+	_, valid, err := IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(AUDIT_UNAUTHORIZED, r, "StatsManager::handleCICLStats", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(HTTP_STATUS_UNAUTHORIZED)
+		return
+	}
+
+	if r.Method == "GET" {
+		stats, err := GetCICLStats()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			errStr := fmt.Sprintf("error while retrieving stats: %v", err)
+			w.Write([]byte(errStr))
+		}
+
+		data, err := stats.Encode()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			errStr := fmt.Sprintf("error while marshaling stats: %v", err)
+			w.Write([]byte(errStr))
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Unsupported method"))
 	}
 }
 
@@ -1553,6 +1611,12 @@ func (cicl *ClusterInfoCacheLiteClient) GetNodesInfoProvider() (NodesInfoProvide
 func (cicl *ClusterInfoCacheLiteClient) GetCollectionInfoProvider(bucketName string) (
 	CollectionInfoProvider, error) {
 	ci, err := cicl.GetCollectionInfo(bucketName)
+
+	if err == ErrBucketNotFound {
+		ci := newCollectionInfoWithErr(bucketName, err)
+		return CollectionInfoProvider(ci), nil
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -2263,18 +2327,30 @@ func (c *ClusterInfoCacheLiteClient) GetCollectionInfo(bucketName string) (
 }
 
 func (ci *collectionInfo) CollectionID(bucket, scope, collection string) string {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.COLLECTION_ID_NIL
+	}
 	return ci.manifest.GetCollectionID(scope, collection)
 }
 
 func (ci *collectionInfo) ScopeID(bucket, scope string) string {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.SCOPE_ID_NIL
+	}
 	return ci.manifest.GetScopeID(scope)
 }
 
 func (ci *collectionInfo) ScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL
+	}
 	return ci.manifest.GetScopeAndCollectionID(scope, collection)
 }
 
 func (ci *collectionInfo) GetIndexScopeLimit(bucket, scope string) (uint32, error) {
+	if len(ci.errList) > 0 && ci.errList[0] == ErrBucketNotFound {
+		return collections.NUM_INDEXES_NIL, nil
+	}
 	return ci.manifest.GetIndexScopeLimit(scope), nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/stats"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -621,6 +622,10 @@ type IndexEvaluatorStats struct {
 
 	// Total number of mutations skipped since this stat object was initialized.
 	ErrSkipAll stats.Int64Val
+
+	InstId     common.IndexInstId
+	Topic      string
+	KeyspaceId string
 }
 
 func (ie *IndexEvaluatorStats) Init() {

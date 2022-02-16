@@ -981,9 +981,10 @@ func (m *MsgTKMergeStream) GetSessionId() uint64 {
 //TK_ENABLE_FLUSH
 //TK_DISABLE_FLUSH
 type MsgTKToggleFlush struct {
-	mType      MsgType
-	streamId   common.StreamId
-	keyspaceId string
+	mType             MsgType
+	streamId          common.StreamId
+	keyspaceId        string
+	resetPendingMerge bool
 }
 
 func (m *MsgTKToggleFlush) GetMsgType() MsgType {
@@ -996,6 +997,10 @@ func (m *MsgTKToggleFlush) GetStreamId() common.StreamId {
 
 func (m *MsgTKToggleFlush) GetKeyspaceId() string {
 	return m.keyspaceId
+}
+
+func (m *MsgTKToggleFlush) GetResetPendingMerge() bool {
+	return m.resetPendingMerge
 }
 
 //CBQ_CREATE_INDEX_DDL

@@ -1,12 +1,15 @@
 package projector
 
-import "os"
-import "time"
+import (
+	"os"
+	"time"
 
-import apcommon "github.com/couchbase/indexing/secondary/adminport/common"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/couchbase/indexing/secondary/logging"
+	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/indexing/secondary/logging"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+)
 
 // list of requests handled by this adminport
 var reqVbmap = &protobuf.VbmapRequest{}
@@ -39,6 +42,7 @@ func (p *Projector) mainAdminPort(reqch chan apcommon.Request) {
 	p.admind.Register(reqShutdownFeed)
 	p.admind.Register(reqStats)
 	p.admind.RegisterHTTPHandler("/stats", p.handleStats)
+	p.admind.RegisterHTTPHandler("/stats/cinfolite", c.HandleCICLStats)
 	p.admind.RegisterHTTPHandler("/settings", p.handleSettings)
 
 	// debug pprof hanlders.

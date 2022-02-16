@@ -59,7 +59,8 @@ type StreamState struct {
 	streamKeyspaceIdCollectionId    map[common.StreamId]KeyspaceIdCollectionId
 	streamKeyspaceIdPastMinMergeTs  map[common.StreamId]KeyspaceIdPastMinMergeTs
 
-	streamKeyspaceIdAsyncMap map[common.StreamId]KeyspaceIdStreamAsyncMap
+	streamKeyspaceIdAsyncMap     map[common.StreamId]KeyspaceIdStreamAsyncMap
+	streamKeyspaceIdPendingMerge map[common.StreamId]KeyspaceIdPendingMerge
 
 	streamKeyspaceIdKVRollbackTsMap map[common.StreamId]KeyspaceIdKVRollbackTsMap
 	streamKeyspaceIdKVActiveTsMap   map[common.StreamId]KeyspaceIdKVActiveTsMap
@@ -128,6 +129,7 @@ type KeyspaceIdCollectionId map[string]string
 type KeyspaceIdPastMinMergeTs map[string]bool
 
 type KeyspaceIdStreamAsyncMap map[string]bool
+type KeyspaceIdPendingMerge map[string]string //map[bucket][pending_merge_keyspaceId]
 type KeyspaceIdStreamLastBeginTime map[string]uint64
 type KeyspaceIdStreamLastRepairTimeMap map[string]Timestamp
 type KeyspaceIdKVRollbackTsMap map[string]*common.TsVbuuid
@@ -194,6 +196,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdNeedsLastRollbackReset: make(map[common.StreamId]KeyspaceIdNeedsLastRollbackReset),
 		keyspaceIdRollbackTime:                 make(map[string]int64),
 		streamKeyspaceIdAsyncMap:               make(map[common.StreamId]KeyspaceIdStreamAsyncMap),
+		streamKeyspaceIdPendingMerge:           make(map[common.StreamId]KeyspaceIdPendingMerge),
 		streamKeyspaceIdLastBeginTime:          make(map[common.StreamId]KeyspaceIdStreamLastBeginTime),
 		streamKeyspaceIdLastRepairTimeMap:      make(map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap),
 		streamKeyspaceIdKVRollbackTsMap:        make(map[common.StreamId]KeyspaceIdKVRollbackTsMap),
@@ -317,6 +320,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdStreamAsyncMap := make(KeyspaceIdStreamAsyncMap)
 	ss.streamKeyspaceIdAsyncMap[streamId] = keyspaceIdStreamAsyncMap
 
+	keyspaceIdPendingMerge := make(KeyspaceIdPendingMerge)
+	ss.streamKeyspaceIdPendingMerge[streamId] = keyspaceIdPendingMerge
+
 	keyspaceIdStreamLastBeginTime := make(KeyspaceIdStreamLastBeginTime)
 	ss.streamKeyspaceIdLastBeginTime[streamId] = keyspaceIdStreamLastBeginTime
 
@@ -389,6 +395,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdNeedsLastRollbackReset[streamId][keyspaceId] = true
 	ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdPendingMerge[streamId][keyspaceId] = ""
 	ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
 	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
@@ -449,6 +456,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdPastMinMergeTs[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdAsyncMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdPendingMerge[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastBeginTime[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastRepairTimeMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdKVRollbackTsMap[streamId], keyspaceId)
@@ -514,6 +522,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdLastMutationVbuuid, streamId)
 	delete(ss.streamKeyspaceIdNeedsLastRollbackReset, streamId)
 	delete(ss.streamKeyspaceIdAsyncMap, streamId)
+	delete(ss.streamKeyspaceIdPendingMerge, streamId)
 	delete(ss.streamKeyspaceIdLastBeginTime, streamId)
 	delete(ss.streamKeyspaceIdLastRepairTimeMap, streamId)
 	delete(ss.streamKeyspaceIdKVRollbackTsMap, streamId)
