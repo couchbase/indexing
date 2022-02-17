@@ -40,8 +40,7 @@ import (
 	"github.com/golang/snappy"
 )
 
-var uptime time.Time
-var num_cpu_core int
+var uptime time.Time // time this package was loaded; used as indexer boot time
 
 const APPROX_METRIC_SIZE = 100
 const APPROX_METRIC_COUNT = 25
@@ -62,7 +61,6 @@ var scanReqLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000
 
 func init() {
 	uptime = time.Now()
-	num_cpu_core = runtime.GOMAXPROCS(0)
 }
 
 // KeyspaceStats tracks statistics of all indexes in a given keyspace in a stream.
@@ -803,8 +801,8 @@ func (s *IndexerStats) Init() {
 	s.SetIndexStatusFilters()
 	s.SetSummaryFilters()
 
-	// Set values of invarients on Init.
-	s.numCPU.Set(int64(num_cpu_core))
+	// Set values of invariants on Init. GOMAXPROCS was already adjusted by settingsManager.
+	s.numCPU.Set(int64(runtime.GOMAXPROCS(0)))
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
