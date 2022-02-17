@@ -48,6 +48,8 @@ type serviceNotifierInstance struct {
 	waiters     map[int]chan Notification
 
 	buckets map[string]bool
+
+	closeCh chan bool
 }
 
 func (instance *serviceNotifierInstance) getNotifyCallback(t NotificationType) func(interface{}) error {
@@ -139,7 +141,7 @@ func (instance *serviceNotifierInstance) bucketsChangeCallback(bucketNames []cou
 
 func (instance *serviceNotifierInstance) RunPoolObserver() {
 	poolCallback := instance.getNotifyCallback(PoolChangeNotification)
-	err := instance.client.RunObservePool(instance.pool, poolCallback, nil)
+	err := instance.client.RunObservePool(instance.pool, poolCallback, instance.closeCh)
 	if err != nil {
 		logging.Warnf("serviceChangeNotifier: Connection terminated for pool notifier instance of %s, %s (%v)", instance.DebugStr(), instance.pool, err)
 	}
@@ -148,7 +150,7 @@ func (instance *serviceNotifierInstance) RunPoolObserver() {
 
 func (instance *serviceNotifierInstance) RunServicesObserver() {
 	servicesCallback := instance.getNotifyCallback(ServiceChangeNotification)
-	err := instance.client.RunObserveNodeServices(instance.pool, servicesCallback, nil)
+	err := instance.client.RunObserveNodeServices(instance.pool, servicesCallback, instance.closeCh)
 	if err != nil {
 		logging.Warnf("serviceChangeNotifier: Connection terminated for services notifier instance of %s, %s (%v)", instance.DebugStr(), instance.pool, err)
 	}
@@ -157,7 +159,7 @@ func (instance *serviceNotifierInstance) RunServicesObserver() {
 
 func (instance *serviceNotifierInstance) RunObserveCollectionManifestChanges(bucket string) {
 	collectionChangeCallback := instance.getNotifyCallback(CollectionManifestChangeNotification)
-	err := instance.client.RunObserveCollectionManifestChanges(instance.pool, bucket, collectionChangeCallback, nil)
+	err := instance.client.RunObserveCollectionManifestChanges(instance.pool, bucket, collectionChangeCallback, instance.closeCh)
 	if err != nil {
 		logging.Warnf("serviceChangeNotifier: Connection terminated for collection manifest notifier instance of %s, %s, bucket: %s, (%v)", instance.DebugStr(), instance.pool, bucket, err)
 	}
@@ -179,6 +181,7 @@ func (instance *serviceNotifierInstance) cleanup() {
 		close(w)
 	}
 	delete(singletonServicesContainer.notifiers, instance.id)
+	close(instance.closeCh)
 }
 
 func (instance *serviceNotifierInstance) DebugStr() string {
@@ -242,6 +245,7 @@ func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier
 			valid:      true,
 			waiters:    make(map[int]chan Notification),
 			buckets:    make(map[string]bool),
+			closeCh:    make(chan bool),
 		}
 		logging.Infof("serviceChangeNotifier: Creating new notifier instance for %s, %s", instance.DebugStr(), pool)
 

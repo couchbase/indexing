@@ -237,10 +237,36 @@ func (s *Server) listener() {
 	}
 }
 
+func (s *Server) enforceAuth(raddr string) bool {
+	// When cluster is getting upgraded, client may lag behind in
+	// receiving cluster upgrade notification as compared to the server.
+	// In such a case, server will reject request due to AUTH_MISSING and
+	// client should retry with a new connection. Server will close this
+	// connection after responding to the client.
+	//
+	// Client is capable of understanding and handling AUTH_MISSING
+	// response code.
+
+	clustVer := c.GetClusterVersion()
+	intVer := c.GetInternalVersion()
+
+	if clustVer >= c.INDEXER_71_VERSION {
+		return true
+	}
+
+	if intVer.Equals(c.MIN_VER_SRV_AUTH) || intVer.GreaterThan(c.MIN_VER_SRV_AUTH) {
+		return true
+	}
+
+	logging.Infof("%v connection %q continue without auth %v:%v", s.logPrefix, raddr, clustVer, intVer)
+
+	return false
+}
+
 func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 
 	// TODO: Some code deduplication with doReveive can be done.
-	raddr := conn.RemoteAddr()
+	raddr := conn.RemoteAddr().String()
 
 	// transport buffer for receiving
 	flags := transport.TransportFlag(0).SetProtobuf()
@@ -272,18 +298,8 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 	if !ok {
 		logging.Infof("%v connection %q doAuth() authentication is missing", s.logPrefix, raddr)
 
-		// When cluster is getting upgraded, client may lag behind in
-		// receiving cluster upgrade notification as compared to the server.
-		// In such a case, server will reject request due to AUTH_MISSING and
-		// client should retry with a new connection. Server will close this
-		// connection after responding to the client.
-		//
-		// Client is capable of understanding and handling AUTH_MISSING
-		// response code.
-
-		if c.GetClusterVersion() < c.INDEXER_71_VERSION {
-			logging.Infof("%v connection %q continue without auth", s.logPrefix, raddr)
-			return reqMsg, nil
+		if !s.enforceAuth(raddr) {
+			return req, nil
 		}
 
 		code = transport.AUTH_MISSING

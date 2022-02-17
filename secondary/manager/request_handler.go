@@ -2973,7 +2973,7 @@ func (m *requestHandlerContext) isAllowedEphemeral(bucket string) (bool, string,
 		return true, "", nil
 	}
 
-	ver, err := common.GetInternalClusterVersion(ninfo)
+	ver, err := common.GetInternalIndexerVersion(ninfo, false)
 	if err != nil {
 		return false, "", err
 	}

@@ -1962,6 +1962,66 @@ func (ni *NodesInfo) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	return
 }
 
+func (ni *NodesInfo) GetFailedIndexerNodes() (nodes []couchbase.Node) {
+	for _, n := range ni.failedNodes {
+		for _, s := range n.Services {
+			if s == "index" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (ni *NodesInfo) GetActiveKVNodes() (nodes []couchbase.Node) {
+	for _, n := range ni.nodes {
+		for _, s := range n.Services {
+			if s == "kv" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (ni *NodesInfo) GetFailedKVNodes() (nodes []couchbase.Node) {
+	for _, n := range ni.failedNodes {
+		for _, s := range n.Services {
+			if s == "kv" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (ni *NodesInfo) GetActiveQueryNodes() (nodes []couchbase.Node) {
+	for _, n := range ni.nodes {
+		for _, s := range n.Services {
+			if s == "n1ql" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (ni *NodesInfo) GetFailedQueryNodes() (nodes []couchbase.Node) {
+	for _, n := range ni.failedNodes {
+		for _, s := range n.Services {
+			if s == "n1ql" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
 func (c *ClusterInfoCacheLiteClient) GetActiveIndexerNodes() (
 	nodes []couchbase.Node, err error) {
 	ni, err := c.GetNodesInfo()

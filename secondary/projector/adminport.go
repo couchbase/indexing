@@ -44,6 +44,7 @@ func (p *Projector) mainAdminPort(reqch chan apcommon.Request) {
 	p.admind.RegisterHTTPHandler("/stats", p.handleStats)
 	p.admind.RegisterHTTPHandler("/stats/cinfolite", c.HandleCICLStats)
 	p.admind.RegisterHTTPHandler("/settings", p.handleSettings)
+	p.admind.RegisterHTTPHandler("/getInternalVersion", p.handleInternalVersion)
 
 	// debug pprof hanlders.
 	p.admind.RegisterHTTPHandler("/debug/pprof", c.PProfHandler)

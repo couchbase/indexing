@@ -93,6 +93,13 @@ type NodesInfoProvider interface {
 	GetLocalServicePort(srvc string, useEncryptedPortMap bool) (string, error)
 
 	GetActiveIndexerNodes() (nodes []couchbase.Node)
+	GetFailedIndexerNodes() (nodes []couchbase.Node)
+
+	GetActiveKVNodes() (nodes []couchbase.Node)
+	GetFailedKVNodes() (nodes []couchbase.Node)
+
+	GetActiveQueryNodes() (nodes []couchbase.Node)
+	GetFailedQueryNodes() (nodes []couchbase.Node)
 
 	// Stub functions to make nodesInfo replaceable with clusterInfoCache
 	SetUserAgent(userAgent string)
