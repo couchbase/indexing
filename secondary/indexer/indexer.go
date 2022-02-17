@@ -5981,6 +5981,19 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
+	//Send FORCE_COMMIT_MERGE message to storage manager to create snapshot.
+	//This snapshot allows stale=false scans to proceed.
+	if mergeTs != nil && mergeTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
+		logging.Infof("Indexer::handleMergeInitStream Forcing snapshot commit for keyspaceId: %v "+
+			"Stream: %v SessionId: %v", keyspaceId, streamId, sessionId)
+
+		idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			ts:         mergeTs}
+		<-idx.storageMgrCmdCh
+	}
+
 	logging.Infof("Indexer::handleMergeInitStream keyspaceId: %v Stream: %v SessionId: %v",
 		keyspaceId, streamId, sessionId)
 
@@ -6045,16 +6058,6 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 	idx.distributeKeyspaceStatsMapsToWorkers()
-
-	//Send FORCE_COMMIT_MERGE message to storage manager to create snapshot.
-	//This snapshot allows stale=false scans to proceed.
-	if mergeTs != nil && mergeTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
-		idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-			streamId:   streamId,
-			keyspaceId: keyspaceId,
-			ts:         mergeTs}
-		<-idx.storageMgrCmdCh
-	}
 
 	//enable flush for this keyspaceId in MAINT_STREAM
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
