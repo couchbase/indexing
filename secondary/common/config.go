@@ -1404,6 +1404,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.EnableContainerSupport": ConfigValue{
+		false,
+		"Use sigar for getting memory stats",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.maxNumPageDeltas": ConfigValue{
 		200,
 		"Maximum number of page deltas",
