@@ -207,6 +207,7 @@ func TestCreateIndexesBeforeRebalance(t *testing.T) {
 //   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestIndexNodeRebalanceIn(t *testing.T) {
 	addTwoNodesAndRebalance("TestIndexNodeRebalanceIn", t)
+	waitForRebalanceCleanup()
 }
 
 // addTwoNodesAndRebalance is the delegate of two tests that perform the same actions at different points
@@ -318,6 +319,7 @@ func TestIndexNodeRebalanceOut(t *testing.T) {
 	}
 
 	printClusterConfig(method, "exit")
+	waitForRebalanceCleanup()
 }
 
 // TestFailoverAndRebalance fails over node [2: index] from the cluster and rebalances.
@@ -344,6 +346,7 @@ func TestFailoverAndRebalance(t *testing.T) {
 	}
 
 	printClusterConfig(method, "exit")
+	waitForRebalanceCleanup()
 }
 
 // TestSwapRebalance adds node [1: index] to the cluster (without rebalancing), then rebalances out
@@ -372,6 +375,7 @@ func TestSwapRebalance(t *testing.T) {
 	}
 
 	printClusterConfig(method, "exit")
+	waitForRebalanceCleanup()
 }
 
 // TestRebalanceReplicaRepair adds nodes [2: index] and [3: index], then rebalances. The actions performed are
@@ -381,6 +385,7 @@ func TestSwapRebalance(t *testing.T) {
 // (Same as TestIndexNodeRebalanceIn.)
 func TestRebalanceReplicaRepair(t *testing.T) {
 	addTwoNodesAndRebalance("TestRebalanceReplicaRepair", t)
+	waitForRebalanceCleanup()
 }
 
 // TestRebalanceResetCluster restores indexer.settings.rebalance.redistribute_indexes = false
@@ -407,8 +412,15 @@ func TestRebalanceResetCluster(t *testing.T) {
 		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
 	}
 	printClusterConfig(method, "exit")
+	waitForRebalanceCleanup()
 }
 
-// NOTE: Make sure that the last test in this file resets the cluster configuration
-// by calling setupCluster so that it doesn't break any other tests that run after
-// the tests in this file
+func waitForRebalanceCleanup() {
+	// This time is to prevent the next test to go ahead and create
+	// indexes while rebalance cleanup is in progress (Rebalance cleanup
+	// can take upto 1 seconds on source or destination nodes after the
+	// master decides that rebalance is done. This is because,
+	// waitForIndexBuild sleeps for upto 1 second before it can read the
+	// closure of r.done channel)
+	time.Sleep(2 * time.Second)
+}
