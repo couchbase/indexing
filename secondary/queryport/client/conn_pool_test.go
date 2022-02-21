@@ -63,7 +63,8 @@ func TestConnPoolBasicSanity(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 3, 6, 1024*1024, readDeadline, writeDeadline, 3, 1, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 3, 6, 1024*1024, readDeadline, writeDeadline, 3, 1, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	seenClients := map[*connection]bool{}
@@ -106,7 +107,8 @@ func TestConnRelease(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 500, 10, 1024*1024, readDeadline, writeDeadline, 40, 10, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 500, 10, 1024*1024, readDeadline, writeDeadline, 40, 10, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	seenClients := map[*connection]bool{}
@@ -179,7 +181,8 @@ func TestLongevity(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 500, 10, 1024*1024, readDeadline, writeDeadline, 40, 10, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 500, 10, 1024*1024, readDeadline, writeDeadline, 40, 10, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	// Get 240 Connections.
@@ -302,7 +305,8 @@ func TestSustainedHighConns(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 500, 10, 1024*1024, readDeadline, writeDeadline, 40, 10, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 500, 10, 1024*1024, readDeadline, writeDeadline, 40, 10, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	ch := make(chan *connection, 1000)
@@ -345,7 +349,8 @@ func TestLowWM(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 20, 5, 1024*1024, readDeadline, writeDeadline, 10, 2, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 20, 5, 1024*1024, readDeadline, writeDeadline, 10, 2, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	seenClients := map[*connection]bool{}
@@ -400,7 +405,8 @@ func TestTotalConns(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 120, 5, 1024*1024, readDeadline, writeDeadline, 10, 10, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 120, 5, 1024*1024, readDeadline, writeDeadline, 10, 10, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	seenClients := map[*connection]bool{}
@@ -484,7 +490,8 @@ func TestUpdateTickRate(t *testing.T) {
 	go ts.initServer(host, tsStopCh)
 	time.Sleep(1 * time.Second)
 
-	cp := newConnectionPool(host, 40, 5, 1024*1024, readDeadline, writeDeadline, 2, 2, 1, "")
+	var needsAuth uint32
+	cp := newConnectionPool(host, 40, 5, 1024*1024, readDeadline, writeDeadline, 2, 2, 1, "", &needsAuth)
 	cp.mkConn = testMkConn
 
 	seenClients := map[*connection]bool{}

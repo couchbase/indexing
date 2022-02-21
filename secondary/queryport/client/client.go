@@ -396,6 +396,7 @@ type GsiClient struct {
 	scanResponse int64
 	dataEncFmt   uint32
 	qcLock       sync.Mutex
+	needsAuth    *uint32
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -1457,7 +1458,7 @@ func (c *GsiClient) updateScanClients() {
 
 			if qc.IsClosed() {
 				logging.Infof("Found a closed scanclient for %v. Initializing a new scan client.", queryport)
-				if qc, err := NewGsiScanClient(queryport, c.cluster, c.config); err == nil {
+				if qc, err := NewGsiScanClient(queryport, c.cluster, c.config, c.needsAuth); err == nil {
 					clients[queryport] = qc
 				} else {
 					logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
@@ -1471,7 +1472,7 @@ func (c *GsiClient) updateScanClients() {
 		}
 
 		for queryport := range newclients {
-			if qc, err := NewGsiScanClient(queryport, c.cluster, c.config); err == nil {
+			if qc, err := NewGsiScanClient(queryport, c.cluster, c.config, c.needsAuth); err == nil {
 				clients[queryport] = qc
 			} else {
 				logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
@@ -1748,9 +1749,12 @@ func (c *GsiClient) getBucketHash(bucketn string) (uint64, bool) {
 func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*GsiClient, error) {
 	var err error
 
+	var needsAuth uint32
+
 	c := &GsiClient{
-		cluster: cluster,
-		config:  config,
+		cluster:   cluster,
+		config:    config,
+		needsAuth: &needsAuth,
 	}
 
 	if err := c.initSecurityContext(encryptLocalHost); err != nil {
@@ -1765,7 +1769,7 @@ func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*
 	}
 	clients := make(map[string]*GsiScanClient)
 	for _, queryport := range c.bridge.GetScanports() {
-		if qc, err := NewGsiScanClient(queryport, c.cluster, config); err == nil {
+		if qc, err := NewGsiScanClient(queryport, c.cluster, config, c.needsAuth); err == nil {
 			clients[queryport] = qc
 		}
 	}
@@ -1776,6 +1780,8 @@ func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*
 func makeWithMetaProvider(
 	cluster string, config common.Config, needRefresh bool, encryptLocalHost bool) (c *GsiClient, err error) {
 
+	var needsAuth uint32
+
 	c = &GsiClient{
 		cluster:      cluster,
 		config:       config,
@@ -1783,6 +1789,7 @@ func makeWithMetaProvider(
 		metaCh:       make(chan bool, 1),
 		settings:     NewClientSettings(needRefresh),
 		killch:       make(chan bool, 1),
+		needsAuth:    &needsAuth,
 	}
 
 	if err := c.initSecurityContext(encryptLocalHost); err != nil {

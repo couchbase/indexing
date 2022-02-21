@@ -42,9 +42,10 @@ type GsiScanClient struct {
 
 	serverVersion uint32
 	closed        uint32
+	needsAuth     *uint32
 }
 
-func NewGsiScanClient(queryport, cluster string, config common.Config) (*GsiScanClient, error) {
+func NewGsiScanClient(queryport, cluster string, config common.Config, needsAuth *uint32) (*GsiScanClient, error) {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 	c := &GsiScanClient{
 		queryport:          queryport,
@@ -58,11 +59,12 @@ func NewGsiScanClient(queryport, cluster string, config common.Config) (*GsiScan
 		logPrefix:          fmt.Sprintf("[GsiScanClient:%q]", queryport),
 		minPoolSizeWM:      int32(config["settings.minPoolSizeWM"].Int()),
 		relConnBatchSize:   int32(config["settings.relConnBatchSize"].Int()),
+		needsAuth:          needsAuth,
 	}
 	c.pool = newConnectionPool(
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
 		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize, config["keepAliveInterval"].Int(),
-		cluster)
+		cluster, needsAuth)
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {
@@ -1311,11 +1313,12 @@ REQUEST_RESPONSE_RETRY:
 			//    the upgraded cluster version. From this point onwards, the client will
 			//    start using auth for all new connections.
 
+			atomic.StoreUint32(c.needsAuth, uint32(1))
+
 			if rsp.GetCode() == transport.AUTH_MISSING && !authRetry {
 				// Do not count this as a "retry"
 				logging.Infof("%v server needs authentication information. Retrying "+
 					"request with auth req(%v)", c.logPrefix, requestId)
-				// TODO: Update cluster version
 				renew()
 				authRetry = true
 				goto REQUEST_RESPONSE_RETRY
@@ -1399,6 +1402,8 @@ func (c *GsiScanClient) streamResponse(
 
 			// When the cluster upgrade completes and the queryport starts supporting
 			// auth. See doRequestResponse for more details.
+
+			atomic.StoreUint32(c.needsAuth, uint32(1))
 
 			if rsp.GetCode() == transport.AUTH_MISSING {
 				// Do not count this as a "retry"
