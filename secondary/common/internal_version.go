@@ -136,7 +136,6 @@ type internalVersionMonitor struct {
 	tickerStopCh chan bool
 	notifCh      chan bool
 	notifStopCh  chan bool
-	cinfoProv    ClusterInfoProvider
 }
 
 //------------------------------------------------------------
@@ -208,8 +207,7 @@ func newInternalVersionMonitor(
 	ninfo NodesInfoProvider,
 	termVer int64,
 	termIntVer InternalVersion,
-	clusterAddr string,
-	cinfoProv ClusterInfoProvider) *internalVersionMonitor {
+	clusterAddr string) *internalVersionMonitor {
 
 	mon := &internalVersionMonitor{
 		ninfo:        ninfo,
@@ -219,7 +217,6 @@ func newInternalVersionMonitor(
 		tickerStopCh: make(chan bool),
 		notifCh:      make(chan bool),
 		notifStopCh:  make(chan bool),
-		cinfoProv:    cinfoProv,
 	}
 
 	mon.cache = newInternalVersionCache()
@@ -716,8 +713,6 @@ func (mon *internalVersionMonitor) close() {
 		}
 	}()
 
-	mon.cinfoProv.Close()
-
 	close(mon.notifStopCh)
 	close(mon.tickerStopCh)
 }
@@ -782,19 +777,15 @@ func MonitorInternalVersion(
 	termIntVer InternalVersion,
 	clusterAddr string) {
 
-	cinfoProv, err := NewClusterInfoProvider(false, clusterAddr, DEFAULT_POOL, "MonitorInternalVersion", nil)
+	cinfo, err := FetchNewClusterInfoCache(clusterAddr, DEFAULT_POOL, "MonitorInternalVersion")
 	if err != nil {
 		logging.Fatalf("MonitorInternalVersion: error %v in GetNodesInfoProvider", err)
 		return
 	}
 
-	ninfo, err1 := cinfoProv.GetNodesInfoProvider()
-	if err1 != nil {
-		logging.Fatalf("MonitorInternalVersion: error %v in GetNodesInfoProvider", err1)
-		return
-	}
+	ninfo := NodesInfoProvider(cinfo)
 
-	mon := newInternalVersionMonitor(ninfo, termVer, termIntVer, clusterAddr, cinfoProv)
+	mon := newInternalVersionMonitor(ninfo, termVer, termIntVer, clusterAddr)
 
 	go mon.monitor()
 }

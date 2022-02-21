@@ -777,7 +777,7 @@ func (c *Client) GetIndexScopeLimit(bucketn, scope string) (uint32, error) {
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
-	if retryCount > 0 {
+	if retryCount > 1 {
 		logging.Warnf("Client::GetIndexScopeLimit: Retried %v times due to out of sync for"+
 			" bucket %s. Final err: %v", retryCount, bucketn, err)
 	}
@@ -803,7 +803,7 @@ func (p *Pool) RefreshBucket(bucketn string, resetBucketMap bool) error {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	if retryCount > 0 {
+	if retryCount > 1 {
 		logging.Warnf("Pool::RefreshBucket: Retried %v times due to out of sync for"+
 			" bucket %s. Final err: %v", retryCount, bucketn, err)
 	}
@@ -884,7 +884,7 @@ func (p *Pool) RefreshManifest(bucket string, resetManifestMap bool) error {
 				time.Sleep(1 * time.Millisecond)
 			}
 		}
-		if retryCount > 0 {
+		if retryCount > 1 {
 			logging.Warnf("Pool::RefreshManifest: Retried %v times due to out of sync for"+
 				" bucket %s. Final err: %v", retryCount, bucket, err)
 		}
