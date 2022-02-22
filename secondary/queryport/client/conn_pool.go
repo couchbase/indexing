@@ -50,6 +50,7 @@ type connectionPool struct {
 	kaInterval       time.Duration
 	authHost         string
 	cluster          string
+	needsAuth        *uint32
 }
 
 type connection struct {
@@ -68,7 +69,7 @@ func newConnectionPool(
 	poolSize, poolOverflow, maxPayload int,
 	timeout, availTimeout time.Duration,
 	minPoolSizeWM int32, relConnBatchSize int32, kaInterval int,
-	cluster string) *connectionPool {
+	cluster string, needsAuth *uint32) *connectionPool {
 
 	cp := &connectionPool{
 		host:             host,
@@ -83,6 +84,7 @@ func newConnectionPool(
 		stopCh:           make(chan bool, 1),
 		kaInterval:       time.Duration(kaInterval) * time.Second,
 		cluster:          cluster,
+		needsAuth:        needsAuth,
 	}
 
 	// Ignore the error in initHostportForAuth, if any.
@@ -138,9 +140,12 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 func (cp *connectionPool) doAuth(conn *connection) error {
 
 	// Check if auth is supported / configured before doing auth
-	if common.GetClusterVersion() < common.INDEXER_71_VERSION {
-		logging.Verbosef("%v doAuth Auth is not needed for connection (%v,%v)",
-			cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+	clustVer := common.GetClusterVersion()
+	needsAuth := atomic.LoadUint32(cp.needsAuth)
+
+	if clustVer < common.INDEXER_71_VERSION && needsAuth == 0 {
+		logging.Verbosef("%v doAuth Auth is not needed for connection (%v,%v) clustVer %v, needsAuth %v ",
+			cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr(), clustVer, needsAuth)
 		return nil
 	}
 
