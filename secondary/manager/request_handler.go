@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
@@ -178,6 +179,12 @@ type IndexStatus struct {
 	LastScanTime string `json:"lastScanTime,omitempty"`
 }
 
+// NodeUUIDsResponse is used to return a list of Index Service NodeUUIDs from the
+// /getCachedIndexerNodeUUIDs REST API.
+type NodeUUIDsResponse struct {
+	NodeUUIDs []service.NodeID `json:"nodeUUIDs,omitempty"`
+}
+
 type indexStatusSorter []IndexStatus
 
 //
@@ -281,6 +288,8 @@ func RegisterRequestHandler(mgr *IndexManager, mux *http.ServeMux, config common
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
 		mux.HandleFunc( // stripped-down version of getIndexStatus
 			"/getCachedIndexTopology", handlerContext.handleCachedIndexTopologyRequest)
+		mux.HandleFunc( // minimalist version of getCachedIndexTopology
+			"/getCachedIndexerNodeUUIDs", handlerContext.handleCachedIndexerNodeUUIDsRequest)
 		mux.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
 		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
@@ -600,15 +609,31 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 // ClusterInfoCache. It returns only the subset of information needed by Autofailover.
 func (m *requestHandlerContext) handleCachedIndexTopologyRequest(
 	w http.ResponseWriter, r *http.Request) {
-	const method string = "RequestHandler::handleCachedIndexTopologyRequest" // for logging
+	const _handleCachedIndexTopologyRequest string = "requestHandlerContext::handleCachedIndexTopologyRequest"
 
-	creds, ok := doAuth(r, w, method)
+	creds, ok := doAuth(r, w, _handleCachedIndexTopologyRequest)
 	if !ok {
 		return
 	}
 
 	indexStatuses := m.getCachedIndexTopology(creds)
 	resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
+	send(http.StatusOK, w, resp)
+}
+
+// handleCachedIndexerNodeUUIDsRequest handles "/getCachedIndexerNodeUUIDs" which is a minimalist
+// version of handleCachedIndexTopologyRequest that only returns the NodeUUIDs of Index nodes from
+// the cache.
+func (m *requestHandlerContext) handleCachedIndexerNodeUUIDsRequest(
+	w http.ResponseWriter, r *http.Request) {
+	const _handleCachedIndexerNodeUUIDsRequest string = "requestHandlerContext::handleCachedIndexerNodeUUIDsRequest"
+
+	_, ok := doAuth(r, w, _handleCachedIndexerNodeUUIDsRequest)
+	if !ok {
+		return
+	}
+
+	resp := &NodeUUIDsResponse{NodeUUIDs: m.getCachedIndexerNodeUUIDs()}
 	send(http.StatusOK, w, resp)
 }
 
@@ -1053,7 +1078,7 @@ func (m *requestHandlerContext) getCachedIndexTopology(creds cbauth.Creds) (inde
 	defns := make(map[common.IndexDefnId]common.IndexDefn)      // map from defnId to defn
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 
-	metaAcrossHosts := m.rhc.GetAllCachedLocalIndexMetadata()
+	metaAcrossHosts, _ := m.rhc.GetAllCachedLocalIndexMetadata()
 	for hostKey, localMeta := range metaAcrossHosts {
 		topoMap := buildTopologyMapPerCollection(localMeta.IndexTopologies)
 
@@ -1101,6 +1126,36 @@ func (m *requestHandlerContext) getCachedIndexTopology(creds cbauth.Creds) (inde
 
 	logging.Infof("%v Returning %v IndexStatuses", _getCachedIndexTopology, len(indexStatuses))
 	return indexStatuses
+}
+
+// getCachedIndexerNodeUUIDs is a minimalist version of getCachedIndexTopology that returns only the
+// NodeUUIDs of Index Service nodes from the cache. It is called at boot, so it waits for up to 60
+// seconds for the memory cache to be populated if it has not been.
+func (m *requestHandlerContext) getCachedIndexerNodeUUIDs() (nodeUUIDs []service.NodeID) {
+	const _getCachedIndexerNodeUUIDs = "requestHandlerContext::getCachedIndexerNodeUUIDs:"
+
+	// Get the cache entry, waiting if necessary for it to become fully populated
+	var metaAcrossHosts map[string]*LocalIndexMetadata // metaCache entry for all Index nodes
+	metaCacheReady := false                            // is metaCache done loading fm disk at boot?
+	const RETRIES = 60
+	for retry := 0; !metaCacheReady && retry <= RETRIES; retry++ {
+		metaAcrossHosts, metaCacheReady = m.rhc.GetAllCachedLocalIndexMetadata()
+		if !metaCacheReady && retry < RETRIES {
+			time.Sleep(time.Second)
+		}
+	}
+	if !metaCacheReady {
+		logging.Warnf("%v metaCache was not done loading from disk after %v seconds;"+
+			" some NodeUUIDs may be missing from result", _getCachedIndexerNodeUUIDs, RETRIES)
+	}
+
+	// Populate the return value
+	for _, localMeta := range metaAcrossHosts {
+		nodeUUIDs = append(nodeUUIDs, service.NodeID(localMeta.NodeUUID))
+	}
+	logging.Infof("%v Returning %v NodeUUIDs: %v", _getCachedIndexerNodeUUIDs,
+		len(nodeUUIDs), nodeUUIDs)
+	return nodeUUIDs
 }
 
 // getStateStr is a helper for getIndexStatus that returns the IndexStatus.Status string for the

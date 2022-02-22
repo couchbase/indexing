@@ -358,7 +358,7 @@ func (r *Rebalancer) initRebalAsync() {
 			default:
 				allWarmedup, _ := checkAllIndexersWarmedup(cfg["clusterAddr"].String())
 				if allWarmedup {
-					globalTopology, err := getGlobalTopology(r.localaddr)
+					globalTopology, err := GetGlobalTopology(r.localaddr)
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Error Fetching Topology %v", err)
 						go r.finishRebalance(err)

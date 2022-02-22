@@ -32,14 +32,16 @@ const TEMP_FILE_SUFFIX string = ".tmp" // suffix for temporary filename to be at
 type requestHandlerCache struct {
 
 	// Index metadata memory cache
-	metaCache map[string]*LocalIndexMetadata // IndexMetadata mem cache
-	metaDir   string                         // metaCache persistence directory
-	metaMutex sync.RWMutex                   // metaCache mutex
+	metaCache      map[string]*LocalIndexMetadata // IndexMetadata mem cache
+	metaCacheReady bool                           // is metaCache loaded from disk at boot yet?
+	metaDir        string                         // metaCache persistence directory
+	metaMutex      sync.RWMutex                   // metaCache, metaCacheReady mutex
 
 	// IndexStats subset memory cache
-	statsCache map[string]*common.Statistics // IndexStats subset mem cache
-	statsDir   string                        // statsCache persistence directory
-	statsMutex sync.RWMutex                  // statsCache mutex
+	statsCache      map[string]*common.Statistics // IndexStats subset mem cache
+	statsCacheReady bool                          // is statsCache loaded from disk at boot yet?
+	statsDir        string                        // statsCache persistence directory
+	statsMutex      sync.RWMutex                  // statsCache, statsCacheReady mutex
 
 	// Channels for async caching to disk (runPersistor)
 	workCh chan interface{} // incoming work for runPersistor (workChEntry_xxx types)
@@ -170,17 +172,21 @@ func (this *requestHandlerCache) CacheStats(hostKey string, stats *common.Statis
 	this.workCh <- &workChEntry_stats{hostKey, stats}
 }
 
-// GetAllCachedLocalIndexMetadata returns a clone of the metaCache map.
-func (this *requestHandlerCache) GetAllCachedLocalIndexMetadata() map[string]*LocalIndexMetadata {
-	clone := make(map[string]*LocalIndexMetadata) // return value
+// GetAllCachedLocalIndexMetadata returns a clone of the metaCache map and a boolean indicating
+// whether the metaCache had fully finished loading from disk at boot, as one caller needs to be
+// sure of that while another does not care.
+func (this *requestHandlerCache) GetAllCachedLocalIndexMetadata() (
+	clone map[string]*LocalIndexMetadata, metaCacheReady bool) {
+	clone = make(map[string]*LocalIndexMetadata)
 
 	this.metaMutex.RLock()
 	for key, value := range this.metaCache {
 		clone[key] = value
 	}
+	metaCacheReady = this.metaCacheReady
 	this.metaMutex.RUnlock()
 
-	return clone
+	return clone, metaCacheReady
 }
 
 // GetLocalIndexMetadataFromCache looks up the cached LocalIndexMetadata for the given hostname from
@@ -438,6 +444,11 @@ func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 				_populateMetaMemCacheFromDisk, hostKey)
 		}
 	}
+
+	// Mark cache as ready even if something failed. It will get populated by next getIndexStatus.
+	this.metaMutex.Lock()
+	this.metaCacheReady = true
+	this.metaMutex.Unlock()
 }
 
 // populateStatsMemCacheFromDisk is called at startup to initialze the stats subset memory
@@ -471,6 +482,11 @@ func (this *requestHandlerCache) populateStatsMemCacheFromDisk() {
 				_populateStatsMemCacheFromDisk, hostKey)
 		}
 	}
+
+	// Mark cache as ready even if something failed. It will get populated by next getIndexStatus.
+	this.statsMutex.Lock()
+	this.statsCacheReady = true
+	this.statsMutex.Unlock()
 }
 
 // Shutdown shuts down this requestHandlerCache object, which means terminating the goroutine that
