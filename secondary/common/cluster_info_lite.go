@@ -551,6 +551,10 @@ func (cicl *clusterInfoCacheLite) updateCollnInfo(bucketName string,
 	return nil
 }
 
+// getCollnInfo will retun *collectionInfo it can be valid or not
+// error returned is related to the availability of data in cache and is used by
+// CICL Manager. When data is not available in cache an invalid *collectionInfo is
+// returned with errList[0] set to error
 func (cicl *clusterInfoCacheLite) getCollnInfo(bucketName string) (*collectionInfo,
 	error) {
 	cicl.cihmLock.RLock()
@@ -610,6 +614,10 @@ func (cicl *clusterInfoCacheLite) updateBucketInfo(bucketName string,
 	return nil
 }
 
+// getBucketInfo returns bi it can be valid or invalid. error is used by CICL
+// manager to check if bucket exists in cache or not. error here does not indicate
+// validity of bucketInfo returned its error related to availability of bi in cache.
+// Invalid bi is returned with error set if the data is not available in cache.
 func (cicl *clusterInfoCacheLite) getBucketInfo(bucketName string) (*bucketInfo,
 	error) {
 	cicl.bihmLock.RLock()
@@ -854,91 +862,91 @@ func (cicm *clusterInfoCacheLiteManager) nodesInfoSync(eventTimeoutSeconds uint3
 	return ni, nil
 }
 
-func (cicm *clusterInfoCacheLiteManager) bucketInfo(bucketName string) (
-	*bucketInfo, error) {
-	bi, err := cicm.cicl.getBucketInfo(bucketName)
-	if err != nil {
-		return bi, err
-	} else {
-		return bi, nil
-	}
+// bucketInfo will return *bucketInfo object it can be valid or not
+func (cicm *clusterInfoCacheLiteManager) bucketInfo(bucketName string) *bucketInfo {
+	bi, _ := cicm.cicl.getBucketInfo(bucketName)
+	return bi
 }
 
+// bucketInfoSync will return (valid *bucketInfo, nil) when valid and (nil, err) when not valid
 func (cicm *clusterInfoCacheLiteManager) bucketInfoSync(bucketName string, eventWaitTimeoutSeconds uint32) (
 	*bucketInfo, error) {
-	bi, err := cicm.cicl.getBucketInfo(bucketName)
-	if err != nil {
-		id := fmt.Sprintf("%d", atomic.AddUint64(&cicm.eventCtr, 1))
-		evtType := getBucketInfoEventType(bucketName)
-		evtCount := cicm.eventMgr.count(evtType)
-
-		ch, err := cicm.eventMgr.register(id, evtType)
-		if err != nil {
-			return nil, err
-		}
-		if evtCount == 0 {
-			msg := Notification{
-				Type: ForceUpdateNotification,
-				Msg:  &couchbase.Bucket{Name: bucketName},
-			}
-			cicm.bucketInfoCh <- msg
-		}
-
-		msg, err := readWithTimeout(ch, eventWaitTimeoutSeconds)
-		if err != nil {
-			return nil, err
-		}
-
-		bi = msg.(*bucketInfo)
-		if !bi.valid {
-			return nil, bi.errList[0]
-		}
+	bi, _ := cicm.cicl.getBucketInfo(bucketName)
+	if bi.valid {
+		return bi, nil
 	}
+
+	id := fmt.Sprintf("%d", atomic.AddUint64(&cicm.eventCtr, 1))
+	evtType := getBucketInfoEventType(bucketName)
+	evtCount := cicm.eventMgr.count(evtType)
+
+	ch, err := cicm.eventMgr.register(id, evtType)
+	if err != nil {
+		return nil, err
+	}
+	if evtCount == 0 {
+		msg := Notification{
+			Type: ForceUpdateNotification,
+			Msg:  &couchbase.Bucket{Name: bucketName},
+		}
+		cicm.bucketInfoCh <- msg
+	}
+
+	msg, err := readWithTimeout(ch, eventWaitTimeoutSeconds)
+	if err != nil {
+		return nil, err
+	}
+
+	bi = msg.(*bucketInfo)
+	if !bi.valid {
+		return nil, bi.errList[0]
+	}
+
 	return bi, nil
 }
 
-func (cicm *clusterInfoCacheLiteManager) collectionInfo(bucketName string) (
-	*collectionInfo, error) {
-	ci, err := cicm.cicl.getCollnInfo(bucketName)
-	if !ci.valid {
-		return ci, err
-	} else {
-		return ci, nil
-	}
+// collectionInfo returns *collectionInfo it can be valid or invalid
+func (cicm *clusterInfoCacheLiteManager) collectionInfo(bucketName string) *collectionInfo {
+	ci, _ := cicm.cicl.getCollnInfo(bucketName)
+	return ci
 }
 
+// collectionInfoSync will return (*collectionInfo, nil) when valid and (nil, err) if not valid
 func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
 	eventTimeoutSeconds uint32) (*collectionInfo, error) {
 	ci, _ := cicm.cicl.getCollnInfo(bucketName)
-	if !ci.valid {
-		id := fmt.Sprintf("%d", atomic.AddUint64(&cicm.eventCtr, 1))
-		evtType := getClusterInfoEventType(bucketName)
-		evtCount := cicm.eventMgr.count(evtType)
-		ch, err := cicm.eventMgr.register(id, evtType)
-		if err != nil {
-			return nil, err
-		}
-
-		if evtCount == 0 {
-			msg := Notification{
-				Type: ForceUpdateNotification,
-				Msg:  &couchbase.Bucket{Name: ci.bucketName},
-			}
-			cicm.collnManifestCh <- msg
-		}
-
-		msg, err := readWithTimeout(ch, eventTimeoutSeconds)
-		if err != nil {
-			return nil, err
-		}
-
-		// ci can be invalid when bucket is deleted and we are trying to
-		// fetch the data
-		ci = msg.(*collectionInfo)
-		if !ci.valid {
-			return nil, ci.errList[0]
-		}
+	if ci.valid {
+		return ci, nil
 	}
+
+	id := fmt.Sprintf("%d", atomic.AddUint64(&cicm.eventCtr, 1))
+	evtType := getClusterInfoEventType(bucketName)
+	evtCount := cicm.eventMgr.count(evtType)
+	ch, err := cicm.eventMgr.register(id, evtType)
+	if err != nil {
+		return nil, err
+	}
+
+	if evtCount == 0 {
+		msg := Notification{
+			Type: ForceUpdateNotification,
+			Msg:  &couchbase.Bucket{Name: ci.bucketName},
+		}
+		cicm.collnManifestCh <- msg
+	}
+
+	msg, err := readWithTimeout(ch, eventTimeoutSeconds)
+	if err != nil {
+		return nil, err
+	}
+
+	// ci can be invalid when bucket is deleted and we are trying to
+	// fetch the data
+	ci = msg.(*collectionInfo)
+	if !ci.valid {
+		return nil, ci.errList[0]
+	}
+
 	return ci, nil
 }
 
@@ -2141,9 +2149,9 @@ func (c *ClusterInfoCacheLiteClient) ClusterVersion() uint64 {
 // GetBucketInfo returns Valid bucketInfo when there is no error and returns nil on error
 func (c *ClusterInfoCacheLiteClient) GetBucketInfo(bucketName string) (
 	*bucketInfo, error) {
-	bi, err := c.ciclMgr.bucketInfo(bucketName)
-	if err == nil {
-		return bi, err
+	bi := c.ciclMgr.bucketInfo(bucketName)
+	if bi.valid {
+		return bi, nil
 	}
 
 	return c.ciclMgr.bucketInfoSync(bucketName, c.eventWaitTimeoutSeconds)
@@ -2386,7 +2394,7 @@ func (cicl *ClusterInfoCacheLiteClient) IsMagmaStorage(bucketName string) (bool,
 
 func (c *ClusterInfoCacheLiteClient) GetCollectionInfo(bucketName string) (
 	*collectionInfo, error) {
-	ci, _ := c.ciclMgr.collectionInfo(bucketName)
+	ci := c.ciclMgr.collectionInfo(bucketName)
 	if ci.valid {
 		return ci, nil
 	}
