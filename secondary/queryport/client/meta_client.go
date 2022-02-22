@@ -1159,7 +1159,8 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 				continue
 			}
 
-			loadList := make([]float64, len(replicas))
+			leastLoadPos := 0
+			loadList := make(sort.Float64Slice, len(replicas))
 			for i, instId := range replicas {
 				if load, ok := currmeta.loads[common.IndexInstId(instId)]; ok {
 					if n, ok := load.getLoad(common.PartitionId(partnId)); ok {
@@ -1170,26 +1171,27 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 				} else {
 					loadList[i] = math.MaxFloat64
 				}
+
+				if loadList.Less(i, leastLoadPos) {
+					leastLoadPos = i
+				}
 			}
 
 			// compute replica with least load.
-			sort.Float64s(loadList)
-			leastLoad := loadList[0]
+			leastLoad := loadList[leastLoadPos]
 
 			//
 			// Filter inst based on load
 			//
 			for i, instId := range replicas {
-				if load, ok := currmeta.loads[common.IndexInstId(instId)]; ok {
-					if n, ok := load.getLoad(common.PartitionId(partnId)); ok {
-						eqivLoad := n * b.equivalenceFactor
-						if eqivLoad > leastLoad {
-							logging.Verbosef("remove inst %v partition %v from scan due to slow response time (least %v load %v)",
-								instId, partnId, leastLoad, eqivLoad)
-							delete(rollbackTimes[i], common.PartitionId(partnId))
-						}
-					}
+				curLoad := loadList[i]
+				eqivLoad := curLoad * b.equivalenceFactor
+				if curLoad != math.MaxFloat64 && eqivLoad > leastLoad {
+					logging.Verbosef("remove inst %v partition %v from scan due to slow response time (least %v load %v)",
+						instId, partnId, leastLoad, eqivLoad)
+					delete(rollbackTimes[i], common.PartitionId(partnId))
 				}
+
 			}
 		}
 	}
