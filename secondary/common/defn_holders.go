@@ -55,3 +55,20 @@ func (bh *bucketInfoHolder) Get() *bucketInfo {
 	bucketInfoPtr := atomic.LoadPointer(bh.ptr)
 	return (*bucketInfo)(bucketInfoPtr)
 }
+
+type poolInfoHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (nh *poolInfoHolder) Init() {
+	nh.ptr = new(unsafe.Pointer)
+}
+
+func (nh *poolInfoHolder) Set(nodes *PoolInfo) {
+	atomic.StorePointer(nh.ptr, unsafe.Pointer(nodes))
+}
+
+func (nh *poolInfoHolder) Get() *PoolInfo {
+	ptr := atomic.LoadPointer(nh.ptr)
+	return (*PoolInfo)(ptr)
+}

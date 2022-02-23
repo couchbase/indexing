@@ -620,7 +620,7 @@ func (mon *internalVersionMonitor) waitForChange(res *http.Response) error {
 
 		err = json.Unmarshal(bs, &p)
 		if err != nil {
-			logging.Errorf("internalVersionMonitor:waitForChange Error while unmarshalling pools, err: %v", err)
+			logging.Errorf("internalVersionMonitor:waitForChange Error while unmarshalling pools, bs: %s, err: %v", bs, err)
 			return err
 		}
 
@@ -699,6 +699,7 @@ func (mon *internalVersionMonitor) notifier() {
 			err := mon.waitForChange(res)
 			if err != nil {
 				selfRestart()
+				return
 			}
 
 			mon.notifCh <- true

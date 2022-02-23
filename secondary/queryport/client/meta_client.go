@@ -912,8 +912,13 @@ func (b *loadStats) getPendingItem(partitionId common.PartitionId) int64 {
 // value to avoid returning garbage (e.g. a sum of math.MaxInt64s is negative).
 func (b *loadStats) getTotalPendingItems() int64 {
 
+	if val, ok := b.pending[0]; ok && val != math.MaxInt64 {
+		return val
+	}
+
 	var total int64
-	for _, pending := range b.pending {
+	for i := 1; i < b.numPartitions+1; i++ {
+		pending, _ := b.pending[common.PartitionId(i)]
 		if pending == math.MaxInt64 {
 			return math.MaxInt64
 		}
