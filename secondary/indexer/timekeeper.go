@@ -1649,7 +1649,7 @@ func (tk *timekeeper) handleDcpSystemEvent(cmd Message) {
 
 	defer meta.Free()
 
-	logging.Infof("TK SystemEvent %v %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
+	logging.Verbosef("TK SystemEvent %v %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
 		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType, manifestuid)
 
 	tk.lock.Lock()
