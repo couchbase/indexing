@@ -110,6 +110,10 @@ type DropInstanceCommandToken struct {
 	Defn      c.IndexDefn
 }
 
+func (tok *DropInstanceCommandToken) String() string {
+	return fmt.Sprintf("DefnID:%v InstID:%v Replica:%v", tok.DefnId, tok.InstId, tok.ReplicaId)
+}
+
 type IndexerVersionToken struct {
 	Version uint64
 }
@@ -172,7 +176,7 @@ type CommandListener struct {
 }
 
 type PlasmaInMemoryCompresisonToken struct {
-	enabled   bool
+	enabled bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -1769,7 +1773,7 @@ func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []
 func PostEnablePlasmaInMemoryCompressionToken() error {
 
 	commandToken := &PlasmaInMemoryCompresisonToken{
-		enabled:   true,
+		enabled: true,
 	}
 
 	return c.MetakvSet(PlasmaInMemoryCompressionFeaturePath, commandToken)
