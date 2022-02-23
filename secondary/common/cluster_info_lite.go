@@ -1507,15 +1507,17 @@ func (cicm *clusterInfoCacheLiteManager) FetchTerseBucketInfo(bucketName string)
 	*bucketInfo, error) {
 	terseBucketsBase := cicm.bucketURLMap["terseBucketsBase"]
 	connHost := cicm.client.BaseURL.Host
-	retryCount := 0
-	maxRetries := 10
+	var retryCount uint32 = 0
+	maxRetries := atomic.LoadUint32(&cicm.maxRetries)
+	r := atomic.LoadUint32(&cicm.retryInterval)
+	retryInterval := time.Duration(r) * time.Second
 retry:
 	doRetry, tb, err := cicm.client.GetTerseBucket(terseBucketsBase, bucketName)
 	if doRetry && retryCount < maxRetries {
 		logging.Errorf("clusterInfoCacheLiteManager::FetchTerseBucketInfo Error while fetching "+
 			"bucket info for bucket: %v, err: %v", bucketName, err)
 		retryCount++
-		time.Sleep(2 * time.Second)
+		time.Sleep(retryInterval)
 		goto retry
 	}
 
