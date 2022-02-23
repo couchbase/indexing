@@ -683,13 +683,13 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		logPrefix:                logPrefix,
 		cicl:                     cicl,
 		timeDiffToForceFetch:     config["force_after"].Uint32(), // In Minutes
-		poolsStreamingCh:         make(chan Notification, 100),
+		poolsStreamingCh:         make(chan Notification, 1000),
 		notifierRetrySleep:       config["notifier_restart_sleep"].Uint32(), // In Milliseconds
 		retryInterval:            uint32(CLUSTER_INFO_DEFAULT_RETRY_INTERVAL.Seconds()),
-		collnManifestCh:          make(chan Notification, 100),
+		collnManifestCh:          make(chan Notification, 10000),
 		perBucketCollnManifestCh: make(map[string]chan Notification),
 
-		bucketInfoCh:          make(chan Notification, 100),
+		bucketInfoCh:          make(chan Notification, 10000),
 		bucketInfoChPerBucket: make(map[string]chan Notification),
 
 		closeCh: make(chan bool),
