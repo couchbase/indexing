@@ -57,7 +57,7 @@ type RebalanceServiceManager struct {
 	statsMgr    *statsManager // indexer's singleton, so rebalance can get local stats directly
 
 	rebalanceCtx *rebalanceContext
-	nodeInfo     *service.NodeInfo
+	nodeInfo     *service.NodeInfo // info about the local node
 
 	config        c.ConfigHolder
 	supvCmdch     MsgChannel //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
@@ -98,7 +98,7 @@ type waiters map[waiter]struct{}
 type state struct {
 	rev uint64 // revision number of the state; incremented with each material change
 
-	servers []service.NodeID // cluster nodes; assigned but not appended, so no need for deep copy
+	servers []service.NodeID // Index Service NodeUUIDs for GetCurrentTopology response
 
 	// isBalanced tells whether GSI considers itself balanced. It is also sent to ns_server as part of
 	// GetCurrentTopology response, which uses it as one input to tell UI whether to enable the Rebalance button.
@@ -214,18 +214,26 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
-// updateNodeList updates RebalanceServiceManager.state.servers node list on start or restart.
+// updateNodeList initializes RebalanceServiceManager.state.servers node list on start or restart.
 func (m *RebalanceServiceManager) updateNodeList() {
+	const _updateNodeList = "RebalanceServiceManager::updateNodeList:"
 
-	topology, err := getGlobalTopology(m.localhttp)
-	if err != nil {
-		l.Errorf("RebalanceServiceManager::updateNodeList Error Fetching Topology %v", err)
-		return
+	// This needs retries because the cbauth database for REST authorization might still be booting
+	var err error
+	var nodeList []service.NodeID
+	done := false
+	const RETRIES = 60
+	for retry := 0; !done && retry <= RETRIES; retry++ {
+		nodeList, err = m.getCachedIndexerNodeUUIDs()
+		if err == nil {
+			done = true
+		} else if retry < RETRIES {
+			time.Sleep(time.Second)
+		}
 	}
-
-	nodeList := make([]service.NodeID, 0)
-	for _, meta := range topology.Metadata {
-		nodeList = append(nodeList, service.NodeID(meta.NodeUUID))
+	if err != nil {
+		l.Errorf("%v getCachedIndexerNodeUUIDs returned err: %v", _updateNodeList, err)
+		return
 	}
 
 	//update only if not yet updated by PrepareTopologyChange
@@ -234,7 +242,7 @@ func (m *RebalanceServiceManager) updateNodeList() {
 			s.servers = nodeList
 		}
 	})
-	l.Infof("RebalanceServiceManager::updateNodeList Updated Node List %v", nodeList)
+	l.Infof("%v Initialized with %v NodeUUIDs: %v", _updateNodeList, len(nodeList), nodeList)
 }
 
 //run starts the rebalance manager loop which listens to messages
@@ -326,8 +334,7 @@ func (m *RebalanceServiceManager) GetTaskList(rev service.Revision,
 	}
 
 	taskList := stateToTaskList(currState)
-	l.Infof("RebalanceServiceManager::GetTaskList returns %v", taskList)
-
+	l.Infof("RebalanceServiceManager::GetTaskList returns %+v", taskList)
 	return taskList, nil
 }
 
@@ -378,9 +385,7 @@ func (m *RebalanceServiceManager) GetCurrentTopology(rev service.Revision,
 	}
 
 	topology := m.stateToTopology(currState)
-
-	l.Infof("RebalanceServiceManager::GetCurrentTopology returns %v", topology)
-
+	l.Infof("RebalanceServiceManager::GetCurrentTopology returns %+v", topology)
 	return topology, nil
 }
 
@@ -1901,6 +1906,9 @@ func (m *RebalanceServiceManager) cancelFailedRebalanceTask() error {
 	return nil
 }
 
+// stateToTopology formats the state into a Topology as needed in GetCurrentTopology response. If
+// there are no indexer NodeUUIDs in the state's servers field, this always includes the NodeUUID of
+// the current node.
 func (m *RebalanceServiceManager) stateToTopology(s state) *service.Topology {
 	topology := &service.Topology{}
 
@@ -2281,13 +2289,15 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 	}
 }
 
-func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
-
+// GetGlobalTopology does a scatter-gather to all available Index Service nodes to get their full
+// index topologies. addr is the local node's Index Service HTTP address, e.g. "127.0.0.1:9102".
+func GetGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
+	const _GetGlobalTopology = "RebalanceServiceManager::GetGlobalTopology:"
 	url := "/getIndexMetadata"
 
 	resp, err := getWithAuth(addr + url)
 	if err != nil {
-		l.Errorf("RebalanceServiceManager::getGlobalTopology Error gathering global topology %v %v", addr+url, err)
+		l.Errorf("%v %v returned err: %v", _GetGlobalTopology, addr+url, err)
 		return nil, err
 	}
 
@@ -2295,13 +2305,54 @@ func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	defer resp.Body.Close()
 	if err := json.Unmarshal(bytes, &topology); err != nil {
-		l.Errorf("RebalanceServiceManager::getGlobalTopology Error unmarshal global topology %v %v %s",
+		l.Errorf("%v Unmarshaling response from %v returned err: %v %s", _GetGlobalTopology,
 			addr+url, err, l.TagUD(string(bytes)))
 		return nil, err
 	}
 
 	return &topology.Result, nil
+}
 
+// getCachedIndexerNodeUUIDs is called at boot to get the persistently cached NodeUUIDs of all Index
+// Service nodes to respond to ns_server GetCurrentTopology RPC API requests. This cannot use a
+// ClusterInfoCache-based scatter-gather because this and potentially other indexer nodes that are
+// not fully up yet would not be included. Rare: if the cache is stale, a Rebalance will fix things.
+func (m *RebalanceServiceManager) getCachedIndexerNodeUUIDs() (
+	nodeUUIDs []service.NodeID, err error) {
+	const _getCachedIndexerNodeUUIDs = "RebalanceServiceManager::getCachedIndexerNodeUUIDs:"
+
+	addr := m.localhttp
+	url := "/getCachedIndexerNodeUUIDs"
+
+	resp, err := getWithAuth(addr + url)
+	if err != nil {
+		l.Errorf("%v %v returned err: %v", _getCachedIndexerNodeUUIDs, addr+url, err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	nodeUUIDsResponse := new(manager.NodeUUIDsResponse)
+	if err = json.Unmarshal(bytes, &nodeUUIDsResponse); err != nil {
+		l.Errorf("%v Unmarshaling response from %v returned err: %v %s", _getCachedIndexerNodeUUIDs,
+			url, err, l.TagUD(string(bytes)))
+		return nil, err
+	}
+
+	// Ensure we always include our own NodeUUID if it was missing from cache (extreme edge case)
+	nodeUUIDs = nodeUUIDsResponse.NodeUUIDs
+	foundLocalNodeUUID := false
+	for _, nodeUUID := range nodeUUIDs {
+		if nodeUUID == m.nodeInfo.NodeID {
+			foundLocalNodeUUID = true
+			break
+		}
+	}
+	if !foundLocalNodeUUID {
+		nodeUUIDs = append(nodeUUIDs, m.nodeInfo.NodeID)
+	}
+
+	l.Infof("%v Returning %v NodeUUIDs: %v", _getCachedIndexerNodeUUIDs, len(nodeUUIDs), nodeUUIDs)
+	return nodeUUIDs, nil
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -2470,7 +2521,7 @@ func (m *RebalanceServiceManager) handleMoveIndex(w http.ResponseWriter, r *http
 			return
 		}
 
-		topology, err := getGlobalTopology(m.localhttp)
+		topology, err := GetGlobalTopology(m.localhttp)
 		if err != nil {
 			send(http.StatusInternalServerError, w, err.Error())
 			return
@@ -2759,7 +2810,7 @@ func (m *RebalanceServiceManager) generateTransferTokenForMoveIndex(req *manager
 	reqNodes []string) (map[string]*c.TransferToken, error) {
 	const method = "RebalanceServiceManager::generateTransferTokenForMoveIndex" // for logging
 
-	topology, err := getGlobalTopology(m.localhttp)
+	topology, err := GetGlobalTopology(m.localhttp)
 	if err != nil {
 		return nil, err
 	}

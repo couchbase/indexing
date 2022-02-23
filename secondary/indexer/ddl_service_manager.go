@@ -222,7 +222,7 @@ func (m *DDLServiceMgr) cleanupTokens() {
 	const method = "DDLServiceMgr::cleanupTokens:" // for logging
 
 	// Use latest metadata provider.
-	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, method)
+	provider, _, failedNodes, err := newMetadataProvider(m.clusterAddr, nil, m.settings, method)
 	if err != nil {
 		logging.Errorf("%v newMetadataProvider returned error: %v. Skipping cleanup.",
 			method, err)
@@ -233,6 +233,11 @@ func (m *DDLServiceMgr) cleanupTokens() {
 		return
 	}
 	defer provider.Close()
+
+	if failedNodes {
+		logging.Errorf("%v cluster has failed nodes. Skipping cleanup.", method)
+		return
+	}
 
 	// Clean up old tokens
 	m.cleanupCreateCommand(provider)
@@ -316,7 +321,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 
 	// nodes can be empty but it cannot be nil.
 	nodes := getNodesInfo(change, isCancel)
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, method)
+	provider, httpAddrMap, _, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, method)
 	if err != nil {
 		logging.Errorf("%v Failed to initialize metadata provider.  Error=%v.", method, err)
 		return
@@ -716,7 +721,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 	// able to start.  But once the metadata provider is able to fetch metadata for all the nodes, the
 	// metadata will be cached locally even if there is network partitioning afterwards.
 	//
-	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:handleCreateCommand")
+	provider, _, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:handleCreateCommand")
 	if err != nil {
 		logging.Errorf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
 		return
@@ -1777,22 +1782,33 @@ func (m *DDLServiceMgr) startCommandListner() {
 //////////////////////////////////////////////////////////////
 
 func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, settings *ddlSettings,
-	logPrefix string) (*client.MetadataProvider, map[string]string, error) {
+	logPrefix string) (*client.MetadataProvider, map[string]string, bool, error) {
 
 	// initialize ClusterInfoCache
 	url, err := common.ClusterAuthUrl(clusterAddr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	cinfo.SetUserAgent(fmt.Sprintf("newMetadataProvider:%v", logPrefix))
 
 	if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
+	}
+
+	hasFailedNodes := false
+	failedNodes := cinfo.GetFailedIndexerNodes()
+	if len(failedNodes) >= 1 {
+		hasFailedNodes = true
+		nodeIds := []string{}
+		for _, n := range(failedNodes) {
+			nodeIds = append(nodeIds, n.NodeUUID)
+		}
+		logging.Infof("%v found failed nodes %v", logPrefix, nodeIds)
 	}
 
 	adminAddrMap := make(map[string]string)
@@ -1824,7 +1840,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 
 					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 					if err != nil {
-						return nil, nil, err
+						return nil, nil, hasFailedNodes, err
 					}
 
 					adminAddrMap[localMeta.NodeUUID] = adminAddr
@@ -1834,7 +1850,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		}
 
 		if len(nodes) != 0 {
-			return nil, nil, errors.New(
+			return nil, nil, hasFailedNodes, errors.New(
 				fmt.Sprintf("%v: Failed to initialize metadata provider.  Unknown host=%v", logPrefix, nodes))
 		}
 	} else {
@@ -1850,7 +1866,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		for _, nid := range nids {
 			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, hasFailedNodes, err
 			}
 			nodeUUID := cinfo.GetNodeUUID(nid)
 			adminAddrMap[nodeUUID] = adminAddr
@@ -1860,7 +1876,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 	// initialize a new MetadataProvider
 	ustr, err := common.NewUUID()
 	if err != nil {
-		return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  Internal Error = %v", logPrefix, err))
+		return nil, nil, hasFailedNodes, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  Internal Error = %v", logPrefix, err))
 	}
 	providerId := ustr.Str()
 
@@ -1869,7 +1885,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		if provider != nil {
 			provider.Close()
 		}
-		return nil, nil, err
+		return nil, nil, hasFailedNodes, err
 	}
 
 	// Watch Metadata
@@ -1890,7 +1906,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		for range ticker.C {
 			retry = retry - 1
 			if provider.AllWatchersAlive() {
-				return provider, httpAddrMap, nil
+				return provider, httpAddrMap, hasFailedNodes, nil
 			}
 
 			if retry == 0 {
@@ -1901,13 +1917,13 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 				}
 
 				provider.Close()
-				return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
+				return nil, nil, hasFailedNodes, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
 					"%v within 30 seconds.", logPrefix, common.ErrIndexerConnection.Error()))
 			}
 		}
 	}
 
-	return provider, httpAddrMap, nil
+	return provider, httpAddrMap, hasFailedNodes, nil
 }
 
 //////////////////////////////////////////////////////////////
