@@ -6,6 +6,8 @@ import (
 	"io"
 	"reflect"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/iowrap"
 )
 
 var itemHeaderSize = unsafe.Sizeof(Item{})
@@ -71,13 +73,13 @@ func (m *MemDB) DecodeItem(ver int, buf []byte, r io.Reader) (*Item, uint32, err
 	var checksum uint32
 
 	if ver == 0 {
-		if _, err := io.ReadFull(r, buf[0:2]); err != nil {
+		if _, err := iowrap.Io_ReadFull(r, buf[0:2]); err != nil {
 			return nil, checksum, err
 		}
 		l = int(binary.BigEndian.Uint16(buf[0:2]))
 		checksum = crc32.ChecksumIEEE(buf[0:2])
 	} else {
-		if _, err := io.ReadFull(r, buf[0:4]); err != nil {
+		if _, err := iowrap.Io_ReadFull(r, buf[0:4]); err != nil {
 			return nil, checksum, err
 		}
 		l = int(binary.BigEndian.Uint32(buf[0:4]))
@@ -87,7 +89,7 @@ func (m *MemDB) DecodeItem(ver int, buf []byte, r io.Reader) (*Item, uint32, err
 	if l > 0 {
 		itm := m.allocItem(l, m.useMemoryMgmt)
 		data := itm.Bytes()
-		_, err := io.ReadFull(r, data)
+		_, err := iowrap.Io_ReadFull(r, data)
 		if err == nil {
 			checksum = checksum ^ crc32.ChecksumIEEE(data)
 		}

@@ -11,11 +11,13 @@ package manager
 import (
 	"bytes"
 	json "encoding/json"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/gometa/common"
 	"net"
 	"os"
 	"strings"
+
+	"github.com/couchbase/gometa/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 type env struct {
@@ -125,13 +127,14 @@ func (e *env) findMatchingPeerUDPAddr(tcpAddr string) string {
 
 func (e *env) initWithConfig(path string) error {
 
-	file, err := os.Open(path)
+	file, err := iowrap.Os_Open(path)
 	if err != nil {
 		return err
 	}
+	defer iowrap.File_Close(file)
 
 	buffer := new(bytes.Buffer)
-	_, err = buffer.ReadFrom(file)
+	_, err = iowrap.Buffer_ReadFrom(buffer, file)
 	if err != nil {
 		return err
 	}

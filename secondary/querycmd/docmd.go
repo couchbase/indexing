@@ -18,15 +18,14 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth"
+	c "github.com/couchbase/indexing/secondary/common"
 	json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/security"
 
-	c "github.com/couchbase/indexing/secondary/common"
-
-	mclient "github.com/couchbase/indexing/secondary/manager/client"
-
-	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
 )
@@ -341,7 +340,7 @@ func HandleCommand(
 			logging.Errorf(fmsg)
 			return nil, err
 		}
-		fd, err := os.Open(cmd.BatchProcessFile)
+		fd, err := iowrap.Os_Open(cmd.BatchProcessFile)
 		if err != nil {
 			logging.Errorf("Unable to open commands file %q, err: %v\n", cmd.BatchProcessFile, err)
 			return nil, err

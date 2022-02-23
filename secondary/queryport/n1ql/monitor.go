@@ -13,13 +13,13 @@
 package n1ql
 
 import (
-	"io/ioutil"
 	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/iowrap"
 	l "github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -91,7 +91,7 @@ func (m *monitor) backfillMonitor(period time.Duration) {
 		<-tick.C
 
 		n1ql_backfill_temp_dir := getTmpSpaceDir()
-		files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
+		files, err := iowrap.Ioutil_ReadDir(n1ql_backfill_temp_dir)
 		if err != nil {
 			l.Warnf("monitor::backfillMonitor failed to read dir %v,"+
 				" err: %v", n1ql_backfill_temp_dir, err)

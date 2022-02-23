@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -1734,7 +1734,7 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 	}
 
 	if stmts := CreateIndexDDL(solution); len(stmts) > 0 {
-		if err := ioutil.WriteFile(ddl, ([]byte)(stmts), os.ModePerm); err != nil {
+		if err := iowrap.Ioutil_WriteFile(ddl, ([]byte)(stmts), os.ModePerm); err != nil {
 			return errors.New(fmt.Sprintf("Unable to write DDL statements into %v. err = %s", ddl, err))
 		}
 	}
@@ -2254,7 +2254,7 @@ func savePlan(output string, solution *Solution, constraint ConstraintMethod) er
 		return errors.New(fmt.Sprintf("Unable to save plan into %v. err = %s", output, err))
 	}
 
-	err = ioutil.WriteFile(output, data, os.ModePerm)
+	err = iowrap.Ioutil_WriteFile(output, data, os.ModePerm)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Unable to save plan into %v. err = %s", output, err))
 	}
@@ -2268,7 +2268,7 @@ func ReadPlan(planFile string) (*Plan, error) {
 
 		plan := &Plan{}
 
-		buf, err := ioutil.ReadFile(planFile)
+		buf, err := iowrap.Ioutil_ReadFile(planFile)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Unable to read plan from %v. err = %s", planFile, err))
 		}
@@ -2293,7 +2293,7 @@ func ReadIndexSpecs(specFile string) ([]*IndexSpec, error) {
 
 		var specs []*IndexSpec
 
-		buf, err := ioutil.ReadFile(specFile)
+		buf, err := iowrap.Ioutil_ReadFile(specFile)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Unable to read index spec from %v. err = %s", specFile, err))
 		}

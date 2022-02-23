@@ -9,13 +9,12 @@ package manager
 
 import (
 	"encoding/json"
-	"io/ioutil"
-	"os"
 	"path"
 	"strings"
 	"sync"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -78,8 +77,8 @@ func NewRequestHandlerCache(cacheDir string) *requestHandlerCache {
 	// Create the disk cache directories (if not already there)
 	this.metaDir = path.Join(cacheDir, "meta")
 	this.statsDir = path.Join(cacheDir, "stats")
-	os.MkdirAll(this.metaDir, 0755)
-	os.MkdirAll(this.statsDir, 0755)
+	iowrap.Os_MkdirAll(this.metaDir, 0755)
+	iowrap.Os_MkdirAll(this.statsDir, 0755)
 
 	// Launch the disk cache async persistor
 	this.workCh = make(chan interface{}, 1024)
@@ -242,7 +241,7 @@ func (this *requestHandlerCache) saveLocalIndexMetadataToDisk(metaToCache *workC
 		return err
 	}
 
-	err = os.Rename(temp, filepath)
+	err = iowrap.Os_Rename(temp, filepath)
 	if err != nil {
 		logging.Errorf("%v Failed to rename metadata to file %v, error: %v",
 			method, filepath, err)
@@ -277,7 +276,7 @@ func (this *requestHandlerCache) saveStatsToDisk(statsToCache *workChEntry_stats
 		return err
 	}
 
-	err = os.Rename(temp, filepath)
+	err = iowrap.Os_Rename(temp, filepath)
 	if err != nil {
 		logging.Errorf("%v Failed to rename stats to file %v, error: %v",
 			method, filepath, err)
@@ -327,8 +326,8 @@ func (this *requestHandlerCache) DeleteObsoleteCacheEntries(keepKeys []string) {
 	this.statsMutex.Unlock()
 
 	// Disk metadata and stats caches (async). Add <entry>.tmp for each original keepKeys <entry>
-	// because temp file is renamed via os.Rename which is async and may still be pending, so we
-	// must avoid deleting the *.tmp cache file of a kept key.
+	// because temp file is renamed via iowrap.Os_Rename which is async and may still be pending, so
+	// we must avoid deleting the *.tmp cache file of a kept key.
 	numKeys := len(keepKeys)
 	for key := 0; key < numKeys; key++ {
 		keepKeys = append(keepKeys, keepKeys[key]+TEMP_FILE_SUFFIX)
@@ -343,7 +342,7 @@ func (this *requestHandlerCache) deleteObsoleteDiskCacheFiles(dirPath string, ke
 	const method = "requestHandlerCache::deleteObsoleteDiskCacheFiles:" // for logging
 
 	// Disk files that exist
-	files, err := ioutil.ReadDir(dirPath)
+	files, err := iowrap.Ioutil_ReadDir(dirPath)
 	if err != nil {
 		logging.Errorf("%v Failed to read directory %v, error: %v", method, dirPath, err)
 		return
@@ -362,7 +361,7 @@ func (this *requestHandlerCache) deleteObsoleteDiskCacheFiles(dirPath string, ke
 
 		if !found {
 			filepath := path.Join(dirPath, filename)
-			if err := os.RemoveAll(filepath); err != nil { // os.RemoveAll is atomic but *async*
+			if err := iowrap.Os_RemoveAll(filepath); err != nil { // atomic but *async*
 				logging.Errorf("%v Failed to remove file %v, error: %v",
 					method, filepath, err)
 			} else if logging.IsEnabled(logging.Debug) {
@@ -418,7 +417,7 @@ func (this *requestHandlerCache) runPersistor() {
 func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 	const _populateMetaMemCacheFromDisk = "requestHandlerCache::populateMetaMemCacheFromDisk"
 
-	files, err := ioutil.ReadDir(this.metaDir)
+	files, err := iowrap.Ioutil_ReadDir(this.metaDir)
 	if err != nil {
 		logging.Errorf("%v Failed to read metadata cache directory %v, error: %v",
 			_populateMetaMemCacheFromDisk, this.metaDir, err)
@@ -426,7 +425,7 @@ func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 		for _, file := range files {
 			hostKey := file.Name()
 			filepath := path.Join(this.metaDir, hostKey)
-			content, err := ioutil.ReadFile(filepath)
+			content, err := iowrap.Ioutil_ReadFile(filepath)
 			if err != nil {
 				logging.Errorf("%v Failed to read metadata from file %v, error: %v",
 					_populateMetaMemCacheFromDisk, filepath, err)
@@ -456,7 +455,7 @@ func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 func (this *requestHandlerCache) populateStatsMemCacheFromDisk() {
 	const _populateStatsMemCacheFromDisk = "requestHandlerCache::populateStatsMemCacheFromDisk"
 
-	files, err := ioutil.ReadDir(this.statsDir)
+	files, err := iowrap.Ioutil_ReadDir(this.statsDir)
 	if err != nil {
 		logging.Errorf("%v Failed to read stats cache directory %v, error: %v",
 			_populateStatsMemCacheFromDisk, this.statsDir, err)
@@ -464,7 +463,7 @@ func (this *requestHandlerCache) populateStatsMemCacheFromDisk() {
 		for _, file := range files {
 			hostKey := file.Name()
 			filepath := path.Join(this.statsDir, hostKey)
-			content, err := ioutil.ReadFile(filepath)
+			content, err := iowrap.Ioutil_ReadFile(filepath)
 			if err != nil {
 				logging.Errorf("%v Failed to read stats from file %v, error: %v",
 					_populateStatsMemCacheFromDisk, filepath, err)

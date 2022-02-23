@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
@@ -854,7 +854,7 @@ func (s *Snapshot) Encode(buf []byte, w io.Writer) error {
 }
 
 func (s *Snapshot) Decode(buf []byte, r io.Reader) error {
-	if _, err := io.ReadFull(r, buf[0:4]); err != nil {
+	if _, err := iowrap.Io_ReadFull(r, buf[0:4]); err != nil {
 		return err
 	}
 	s.sn = binary.BigEndian.Uint32(buf[0:4])
@@ -1203,7 +1203,7 @@ func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
 		m.deltaFiles = make([]string, m.numWriters())
 
 		deltadir := filepath.Join(dir, "delta")
-		os.MkdirAll(deltadir, 0755)
+		iowrap.Os_MkdirAll(deltadir, 0755)
 		for id := 0; id < m.numWriters(); id++ {
 			file := fmt.Sprintf("shard-%d", id)
 			deltafile := filepath.Join(deltadir, file)
@@ -1256,7 +1256,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 
 	manifestdir := dir
 	datadir := filepath.Join(dir, "data")
-	os.MkdirAll(datadir, 0755)
+	iowrap.Os_MkdirAll(datadir, 0755)
 	shards := runtime.GOMAXPROCS(0)
 
 	writers := make([]FileWriter, shards)
@@ -1407,7 +1407,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	var version int
 
 	// Read file version
-	if bs, err := ioutil.ReadFile(filepath.Join(manifestdir, "nitro.json")); err == nil {
+	if bs, err := iowrap.Ioutil_ReadFile(filepath.Join(manifestdir, "nitro.json")); err == nil {
 		mMap := make(map[string]int)
 		if err = json.Unmarshal(bs, &mMap); err != nil {
 			return nil, err
@@ -1417,13 +1417,13 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		return nil, err
 	}
 
-	if bs, err := ioutil.ReadFile(filepath.Join(datadir, "files.json")); err != nil {
+	if bs, err := iowrap.Ioutil_ReadFile(filepath.Join(datadir, "files.json")); err != nil {
 		return nil, err
 	} else {
 		json.Unmarshal(bs, &files)
 	}
 
-	if bs, err := ioutil.ReadFile(filepath.Join(datadir, "checksums.json")); err == nil {
+	if bs, err := iowrap.Ioutil_ReadFile(filepath.Join(datadir, "checksums.json")); err == nil {
 		json.Unmarshal(bs, &checksums)
 	} else {
 		checksums = make([]uint32, len(files))
@@ -1522,7 +1522,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		wchan := make(chan int)
 		deltadir := filepath.Join(dir, "delta")
 		var files []string
-		if bs, err := ioutil.ReadFile(filepath.Join(deltadir, "files.json")); err == nil {
+		if bs, err := iowrap.Ioutil_ReadFile(filepath.Join(deltadir, "files.json")); err == nil {
 			json.Unmarshal(bs, &files)
 		}
 
@@ -1530,7 +1530,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		errors := make([]error, len(files))
 		writers := make([]*Writer, concurr)
 		deltaChecksums := make([]uint32, len(files))
-		if bs, err := ioutil.ReadFile(filepath.Join(deltadir, "checksums.json")); err == nil {
+		if bs, err := iowrap.Ioutil_ReadFile(filepath.Join(deltadir, "checksums.json")); err == nil {
 			json.Unmarshal(bs, &deltaChecksums)
 		}
 

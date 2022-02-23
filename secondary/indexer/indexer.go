@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -7690,7 +7691,7 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 
 	storageDir := idx.config["storage_dir"].String()
 	corruptDataDir := filepath.Join(storageDir, CORRUPT_DATA_SUBDIR)
-	if err := os.MkdirAll(corruptDataDir, 0755); err != nil {
+	if err := iowrap.Os_MkdirAll(corruptDataDir, 0755); err != nil {
 		logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:MkdirAll %v",
 			indexInst.InstId, partnId, err, corruptDataDir)
 		needsDataCleanup = true
@@ -8906,8 +8907,8 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats, ephemeral, isNew bool) (slice Slice, err error) {
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
-	os.Mkdir(storage_dir, 0755)
-	if _, e := os.Stat(storage_dir); e != nil {
+	iowrap.Os_Mkdir(storage_dir, 0755)
+	if _, e := iowrap.Os_Stat(storage_dir); e != nil {
 		common.CrashOnError(e)
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
@@ -8937,7 +8938,7 @@ func DestroySlice(mode common.StorageMode, storageDir string, path string) error
 
 	switch mode {
 	case common.MOI, common.FORESTDB, common.NOT_SET:
-		return os.RemoveAll(path)
+		return iowrap.Os_RemoveAll(path)
 	case common.PLASMA:
 		return DestroyPlasmaSlice(storageDir, path)
 	}
@@ -9026,7 +9027,7 @@ func moveIndexFile(indexInst *common.IndexInst, partnId common.PartitionId, slic
 	destIndexPath := strTime + "_" + indexPath
 	destPath := filepath.Join(targetDir, destIndexPath)
 
-	if err := os.Rename(srcPath, destPath); err != nil {
+	if err := iowrap.Os_Rename(srcPath, destPath); err != nil {
 		logging.Errorf("Indexer::moveIndexFile %v %v error %v while taking backup:Rename(%v, %v)",
 			indexInst.InstId, partnId, err, srcPath, destPath)
 		return err
@@ -9070,7 +9071,7 @@ func deleteOldBackups(targetDir string, sourceDir string, srcPath string) error 
 	indexPaths := strings.Split(srcPath, string(filepath.Separator))
 	indexPaths = strip(sourceDir, indexPaths)
 
-	files, err := ioutil.ReadDir(targetDir)
+	files, err := iowrap.Ioutil_ReadDir(targetDir)
 	if err != nil {
 		logging.Errorf("Indexer::deleteOldBackups encounter error %v while taking backup:ReadDir %v",
 			err, targetDir)
@@ -9081,7 +9082,7 @@ func deleteOldBackups(targetDir string, sourceDir string, srcPath string) error 
 		if strings.HasSuffix(f.Name(), indexPaths[0]) {
 			fpath := join(f.Name(), indexPaths, 1)
 			logging.Infof("Indexer::deleteOldBackups deleting path %v", fpath)
-			if err = os.RemoveAll(fpath); err != nil {
+			if err = iowrap.Os_RemoveAll(fpath); err != nil {
 				logging.Errorf("Indexer::deleteOldBackups error %v while removing old backup %v",
 					err, fpath)
 				return err
@@ -9195,7 +9196,7 @@ func startCPUProfile(filename string) *os.File {
 		logging.Errorf(fmsg, filename)
 		return nil
 	}
-	fd, err := os.Create(filename)
+	fd, err := iowrap.Os_Create(filename)
 	if err != nil {
 		logging.Errorf("Indexer:: unable to create %q: %v\n", filename, err)
 	}
@@ -9209,13 +9210,13 @@ func dumpMemProfile(filename string) bool {
 		logging.Errorf(fmsg, filename)
 		return false
 	}
-	fd, err := os.Create(filename)
+	fd, err := iowrap.Os_Create(filename)
 	if err != nil {
 		logging.Errorf("Indexer:: unable to create %q: %v\n", filename, err)
 		return false
 	}
 	pprof.WriteHeapProfile(fd)
-	defer fd.Close()
+	defer iowrap.File_Close(fd)
 	return true
 }
 

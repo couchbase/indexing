@@ -11,7 +11,6 @@ package security
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	cbtls "github.com/couchbase/goutils/tls"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -222,7 +222,7 @@ func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig,
 	newSetting.disableNonSSLPort = encryptConfig.DisableNonSSLPorts
 
 	if certFile != "" {
-		certInBytes, err := ioutil.ReadFile(certFile)
+		certInBytes, err := iowrap.Ioutil_ReadFile(certFile)
 		if err != nil {
 			logging.Errorf("Fail to load SSL certificate"+
 				" from File: %v, err; %v", certFile, err)
@@ -231,7 +231,7 @@ func SetTLSConfigAndCACert(tlsConfig *cbauth.TLSConfig,
 	}
 
 	if caFile != "" {
-		caCertInBytes, err := ioutil.ReadFile(caFile)
+		caCertInBytes, err := iowrap.Ioutil_ReadFile(caFile)
 		if err != nil {
 			logging.Errorf("Fail to load SSL certificate"+
 				" from File: %v, err; %v", caFile, err)
@@ -423,7 +423,7 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 	}
 
 	if len(caFile) > 0 {
-		caInBytes, err := ioutil.ReadFile(caFile)
+		caInBytes, err := iowrap.Ioutil_ReadFile(caFile)
 		if err != nil {
 			err1 := fmt.Errorf("Fail to load SSL certificates from cfile: %v", err)
 			if p.logger != nil {
@@ -452,7 +452,7 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 			return err
 		}
 
-		certInBytes, err := ioutil.ReadFile(certFile)
+		certInBytes, err := iowrap.Ioutil_ReadFile(certFile)
 		if err != nil {
 			err1 := fmt.Errorf("Fail to due load SSL certificate from file: %v", err)
 			if p.logger != nil {

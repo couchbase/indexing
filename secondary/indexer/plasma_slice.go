@@ -27,6 +27,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
@@ -258,10 +259,10 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 
 func createSliceDir(storageDir string, path string, isNew bool) error {
 
-	_, err := os.Stat(path)
+	_, err := iowrap.Os_Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			os.Mkdir(path, 0777)
+			iowrap.Os_Mkdir(path, 0777)
 			return nil
 		}
 	} else if isNew {
@@ -278,7 +279,7 @@ func destroyPlasmaSlice(storageDir string, path string) error {
 	}
 
 	// remove directory created in newPlasmaSlice()
-	return os.RemoveAll(path)
+	return iowrap.Os_RemoveAll(path)
 }
 
 func listPlasmaSlices() ([]string, error) {

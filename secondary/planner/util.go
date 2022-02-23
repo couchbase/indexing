@@ -13,12 +13,12 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -564,7 +564,7 @@ func numIndexWithNoUsageInfo(indexer *IndexerNode) int {
 }
 
 func startCPUProfile(filename string) {
-	fd, err := os.Create(filename)
+	fd, err := iowrap.Os_Create(filename)
 	if err != nil {
 		logging.Errorf("Planner:: unable to create %q: %v\n", filename, err)
 		return

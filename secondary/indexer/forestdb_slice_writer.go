@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/natsort"
 )
@@ -43,9 +43,9 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats) (*fdbSlice, error) {
 
-	info, err := os.Stat(path)
+	info, err := iowrap.Os_Stat(path)
 	if err != nil || err == nil && info.IsDir() {
-		os.Mkdir(path, 0777)
+		iowrap.Os_Mkdir(path, 0777)
 	}
 
 	filepath := newFdbFile(path, false)
@@ -88,7 +88,7 @@ retry:
 	if fdb.dbfile, err = forestdb.Open(filepath, config); err != nil {
 		if err == forestdb.FDB_RESULT_NO_DB_HEADERS {
 			logging.Warnf("NewForestDBSlice(): Open failed with no_db_header error...Resetting the forestdb file")
-			os.Remove(filepath)
+			iowrap.Os_Remove(filepath)
 			goto retry
 		} else if err == forestdb.FDB_CORRUPTION_ERR {
 			logging.Errorf("NewForestDBSlice(): Open failed error %v", forestdb.FDB_CORRUPTION_ERR)
@@ -1463,7 +1463,7 @@ snaploop:
 
 	newpath := newFdbFile(fdb.path, true)
 	// Remove any existing files leftover due to a crash during last compaction attempt
-	os.Remove(newpath)
+	iowrap.Os_Remove(newpath)
 	err = fdb.compactFd.CompactUpto(newpath, snapMarker)
 	if err != nil {
 		return err
@@ -1663,7 +1663,7 @@ func tryDeleteFdbSlice(fdb *fdbSlice) {
 	}
 
 	//cleanup the disk directory
-	if err := os.RemoveAll(fdb.path); err != nil {
+	if err := iowrap.Os_RemoveAll(fdb.path); err != nil {
 		logging.Errorf("ForestDBSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
 	}
