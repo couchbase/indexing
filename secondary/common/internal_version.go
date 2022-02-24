@@ -602,10 +602,9 @@ func (mon *internalVersionMonitor) monitor() {
 	}
 }
 
-func (mon *internalVersionMonitor) waitForChange(res *http.Response) error {
+func (mon *internalVersionMonitor) waitForChange(res *http.Response, reader *bufio.Reader) error {
 
 	var p couchbase.Pool
-	reader := bufio.NewReader(res.Body)
 
 	for {
 		bs, err := reader.ReadBytes('\n')
@@ -687,6 +686,7 @@ func (mon *internalVersionMonitor) notifier() {
 	defer res.Body.Close()
 
 	logging.Infof("internalVersionMonitor:notifier starting ...")
+	reader := bufio.NewReader(res.Body)
 
 	for {
 		select {
@@ -696,7 +696,7 @@ func (mon *internalVersionMonitor) notifier() {
 			return
 
 		default:
-			err := mon.waitForChange(res)
+			err := mon.waitForChange(res, reader)
 			if err != nil {
 				selfRestart()
 				return
