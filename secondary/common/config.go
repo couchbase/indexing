@@ -1405,9 +1405,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.EnableContainerSupport": ConfigValue{
-		false,
+		true,
 		"Use sigar for getting memory stats",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
