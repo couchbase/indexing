@@ -528,9 +528,17 @@ func (ivc *internalVersionChecker) getVerFailNodes(nodes *nodeList) []InternalVe
 
 func (mon *internalVersionMonitor) getVersion() InternalVersion {
 
-	err := mon.ninfo.FetchNodesAndSvsInfo()
+	var err error
+	func() {
+		mon.ninfo.Lock()
+		defer mon.ninfo.Unlock()
+
+		err = mon.ninfo.FetchNodesAndSvsInfo()
+		if err != nil {
+			logging.Errorf("internalVersionMonitor:monitor unexpected error in FetchNodesAndSvsInfo %v", err)
+		}
+	}()
 	if err != nil {
-		logging.Errorf("internalVersionMonitor:monitor unexpected error in FetchNodesAndSvsInfo %v", err)
 		return GetInternalVersion()
 	}
 
