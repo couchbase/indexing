@@ -1150,8 +1150,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 		}
 
 		resetStream := func() {
-			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v."+
-				" Resetting Stream.", w.streamId, meta.keyspaceId)
+			logging.Infof("OSOM Resetting Stream %v %v", w.streamId, meta.keyspaceId)
 			w.keyspaceIdOSOException[meta.keyspaceId] = true
 			w.reader.supvRespch <- &MsgStreamUpdate{
 				mType:      RESET_STREAM,
@@ -1163,9 +1162,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 
 		enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
 		if !enableOSO {
-			logging.Errorf("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
-				"Received OSO Marker for Vbucket %v (vbuuid %v seqno %v opaque %v "+
-				"eventType %v). OSO is disabled.", w.streamId, meta.keyspaceId,
+			logging.Errorf("OSOM Got OSO Marker but OSO is disabled. %v %v vb %v (%v %v %v %v).", w.streamId, meta.keyspaceId,
 				meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType)
 			resetStream()
 			return
@@ -1174,9 +1171,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 		if eventType == common.OSOSnapshotStart {
 			//if filter already has a snapshot
 			if filter.Snapshots[meta.vbucket][1] != 0 {
-				logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
-					"Received OSO Start For Vbucket %v (vbuuid %v seqno %v opaque %v "+
-					"eventType %v) after DCP snapshot %v-%v Seqno %v", w.streamId,
+				logging.Infof("OSOM Got OSO Start %v %v vb %v (%v %v %v %v). After DCP snapshot %v-%v Seqno %v", w.streamId,
 					meta.keyspaceId, meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque,
 					eventType, filter.Snapshots[meta.vbucket][0],
 					filter.Snapshots[meta.vbucket][1], filter.Seqnos[meta.vbucket])
@@ -1184,21 +1179,17 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 				return
 			}
 
-			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
-				"Received OSO Start For Vbucket %v (vbuuid %v seqno %v opaque %v "+
-				"eventType %v). Seqno %v. Count %v. OSO Start %v. OSO End %v.", w.streamId,
-				meta.keyspaceId, meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType,
+			logging.Infof("OSOM Got OSO Start %v %v vb %v (%v %v %v %v) OSOFilter(Seq:%v Count:%v Start:%v End:%v)",
+				w.streamId, meta.keyspaceId, meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType,
 				filterOSO.Seqnos[meta.vbucket], filterOSO.Vbuuids[meta.vbucket],
 				filterOSO.Snapshots[meta.vbucket][0], filterOSO.Snapshots[meta.vbucket][1])
 
 			if filterOSO.Snapshots[meta.vbucket][0] == 1 &&
 				filterOSO.Snapshots[meta.vbucket][1] == 0 {
-				logging.Errorf("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
-					"Received OSO Start For Vbucket %v without previous OSO End. Seqno %v. "+
-					"Count %v. OSO Start %v. OSO End %v.", w.streamId,
-					meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
-					filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
-					filterOSO.Snapshots[meta.vbucket][1])
+				logging.Errorf("OSOM Got OSO Start %v %v vb %v without previous OSO End. "+
+					"OSOFilter(Seq:%v Count:%v Start:%v End:%v)", w.streamId, meta.keyspaceId, meta.vbucket,
+					filterOSO.Seqnos[meta.vbucket], filterOSO.Vbuuids[meta.vbucket],
+					filterOSO.Snapshots[meta.vbucket][0], filterOSO.Snapshots[meta.vbucket][1])
 				resetStream()
 				return
 
@@ -1216,19 +1207,16 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 				w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
 			}
 		} else if eventType == common.OSOSnapshotEnd {
-			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
-				"Received OSO End For Vbucket %v (vbuuid %v seqno %v opaque %v "+
-				"eventType %v). Seqno %v. Count %v. OSO Start %v. OSO End %v.", w.streamId,
-				meta.keyspaceId, meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType,
-				filterOSO.Seqnos[meta.vbucket], filterOSO.Vbuuids[meta.vbucket],
-				filterOSO.Snapshots[meta.vbucket][0], filterOSO.Snapshots[meta.vbucket][1])
+			logging.Infof("OSOM Got OSO End %v %v vb %v (%v %v %v %v) OSOFilter(Seq:%v Count:%v Start:%v End:%v)",
+				w.streamId, meta.keyspaceId, meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType,
+				filterOSO.Seqnos[meta.vbucket], filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
+				filterOSO.Snapshots[meta.vbucket][1])
 			filterOSO.Snapshots[meta.vbucket][1] = 1 //snapshot[1] stores OSO End
 			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
 			w.keyspaceIdSyncDue[meta.keyspaceId] = true
 		}
 	} else {
-		logging.Infof("MutationStreamReader::updateOSOMarkerInFilter Missing"+
-			"keyspaceId %v in Filter for Stream %v meta %+v", meta.keyspaceId, w.streamId, meta)
+		logging.Infof("OSOM Missing keyspaceId %v in Filter for Stream %v meta %+v", meta.keyspaceId, w.streamId, meta)
 	}
 
 }
