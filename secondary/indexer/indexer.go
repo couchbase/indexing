@@ -4304,7 +4304,7 @@ func (idx *indexer) handleDcpSystemEvent(cmd Message) {
 func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	keyspaceId, scopeId, collectionId string) {
 
-	logging.Infof("Indexer::processCollectionDrop %v %v %v %v", streamId,
+	logging.Verbosef("Indexer::processCollectionDrop %v %v %v %v", streamId,
 		keyspaceId, scopeId, collectionId)
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
@@ -4329,8 +4329,8 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	}
 
 	if collection == "" {
-		logging.Infof("Indexer::processCollectionDrop No Index Found for Stream %v Collection Id %v.",
-			streamId, collectionId)
+		logging.Infof("Indexer::processCollectionDrop No Index Found for %v %v %v.",
+			streamId, keyspaceId, collectionId)
 		return
 	}
 
@@ -4339,14 +4339,14 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::processCollectionDrop Empty IndexList %v %v. Nothing to do.",
-			streamId, collection)
+		logging.Infof("Indexer::processCollectionDrop Empty IndexList %v %v %v %v.",
+			streamId, keyspaceId, collectionId, collection)
 		return
 	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
-	logging.Infof("Indexer::processCollectionDrop Updated Index State to DELETED %v",
-		instIdList)
+	logging.Infof("Indexer::processCollectionDrop Updated Index State to DELETED %v %v %v %v %v",
+		streamId, keyspaceId, collectionId, collection, instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	updatedInstances := idx.getInsts(instIdList)
@@ -4359,8 +4359,8 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	if !idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] {
 		idx.cleanupIndexDataForCollectionDrop(streamId, keyspaceId, instIdList)
 	} else {
-		logging.Infof("Indexer::processCollectionDrop %v %v Add to pending list %v", streamId,
-			keyspaceId, instIdList)
+		logging.Infof("Indexer::processCollectionDrop Flush in Progress Adding instances to pending list %v %v %v %v",
+			streamId, keyspaceId, collectionId, collection)
 		currList := idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId]
 		currList = append(currList, instIdList...)
 		idx.streamKeyspaceIdPendCollectionDrop[streamId][keyspaceId] = currList

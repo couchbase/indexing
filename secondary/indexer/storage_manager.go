@@ -284,7 +284,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	}
 
 	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
 
 	if snapType == common.NO_SNAP || snapType == common.NO_SNAP_OSO {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
@@ -296,6 +295,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		go s.flushDone(streamId, keyspaceId, indexInstMap, indexPartnMap,
 			instIdList, tsVbuuid, flushWasAborted, hasAllSB)
 
+		s.muSnap.Unlock()
 		return
 	}
 
@@ -306,17 +306,19 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid_copy := tsVbuuid.Copy()
 	stats := s.stats.Get()
 
-	var respch MsgChannel
+	s.muSnap.Unlock()
+
 	if snapType == common.FORCE_COMMIT_MERGE {
 		//response is sent on supvCmdch in case of FORCE_COMMIT_MERGE
-		respch = s.supvCmdch
+		s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
+			numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
+			flushWasAborted, hasAllSB, s.supvCmdch)
 	} else {
-		respch = s.supvRespch
+		go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
+			numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
+			flushWasAborted, hasAllSB, s.supvRespch)
 	}
 
-	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
-		flushWasAborted, hasAllSB, respch)
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,

@@ -4229,6 +4229,26 @@ func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string
 // corrupted.
 //////////////////////////////////////////////////////////////
 
+func extractDefnIDs(entries map[string]*mc.DeleteCommandToken) []common.IndexDefnId {
+	defnIDList := make([]common.IndexDefnId, len(entries))
+	i := 0
+	for _, token := range entries {
+		defnIDList[i] = token.DefnId
+		i++
+	}
+	return defnIDList
+}
+
+func extractDefnIdInstIdReplicaString(entries map[string]*mc.DropInstanceCommandToken) []string {
+	dataStrList := make([]string, len(entries))
+	i := 0
+	for _, token := range entries {
+		dataStrList[i] = token.String()
+		i++
+	}
+	return dataStrList
+}
+
 //
 // 1) This is important that this function does not mutate the repository directly.
 // 2) Any call to mutate the repository must be async request.
@@ -4248,9 +4268,11 @@ func (m *janitor) cleanup() {
 	entries := m.commandListener.GetNewDeleteTokens()
 	retryList := make(map[string]*mc.DeleteCommandToken)
 
-	for entry, command := range entries {
+	if len(entries) != 0 {
+		logging.Infof("janitor: Processing delete tokens for %v{%v}", mc.DeleteDDLCommandTokenPath, extractDefnIDs(entries))
+	}
 
-		logging.Infof("janitor: Processing delete token %v", entry)
+	for entry, command := range entries {
 
 		if err := m.deleteScheduleTokens(command.DefnId); err != nil {
 			logging.Errorf("janitor: Failed to delete scheduled tokens upon cleanup for %v.  Internal Error = %v.", entry, err)
@@ -4307,9 +4329,12 @@ func (m *janitor) cleanup() {
 	entries2 := m.commandListener.GetNewDropInstanceTokens()
 	retryList2 := make(map[string]*mc.DropInstanceCommandToken)
 
-	for entry, command := range entries2 {
+	if len(entries2) != 0 {
+		logging.Infof("janitor: Processing drop instance token %v{%v}", mc.DropInstanceDDLCommandTokenPath,
+			extractDefnIdInstIdReplicaString(entries2))
+	}
 
-		logging.Infof("janitor: Processing drop instance token %v", entry)
+	for entry, command := range entries2 {
 
 		defn, err := m.manager.repo.GetIndexDefnById(command.DefnId)
 		if err != nil {
