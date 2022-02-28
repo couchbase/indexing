@@ -8033,18 +8033,57 @@ func (idx *indexer) validateIndexInstMap() {
 
 }
 
+// Given an index instance as input, getConfProxies returns a list of
+// index instances, which share same real instance id with input instance.
+// Because they share same instance ids, these instances can potentially
+// *conflict* depending on the state and partition Ids. This function
+// ignores the instances which do not have a valid recovery state as
+// those instances won't be recovered, and conflict shouldn't matter.
+func (idx *indexer) getConflictProxies(inst *common.IndexInst) []*common.IndexInst {
+	if inst == nil || inst.RealInstId == common.IndexInstId(0) {
+		return nil
+	}
+
+	insts := make([]*common.IndexInst, 0)
+
+	for _, index := range idx.indexInstMap {
+		// Skip the input instance (self).
+		if index.InstId == inst.InstId {
+			continue
+		}
+
+		if index.RealInstId == common.IndexInstId(0) {
+			continue
+		}
+
+		if index.RealInstId != inst.RealInstId {
+			continue
+		}
+
+		// Ignore the invalid recovery states as the
+		// conflicting instance won't affect them.
+		if !isValidRecoveryState(index.State) {
+			continue
+		}
+
+		insts = append(insts, &index)
+	}
+
+	return insts
+}
+
 //force cleanup of index data should only be used when storage manager has not yet
 //been initialized
 func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
 
 	if inst.RState != common.REBAL_MERGED {
-
+		conflictInsts := idx.getConflictProxies(inst)
 		partnDefnList := inst.Pc.GetAllPartitions()
 		for _, partnDefn := range partnDefnList {
-
-			//if RState is REBAL_PENDING_DELETE(i.e. tombstone) and partition is a valid partition
-			//for RealInstId, skip the cleanup (see MB-42108 for details)
 			if inst.IsProxy() && inst.RState == common.REBAL_PENDING_DELETE {
+				// For RState is REBAL_PENDING_DELETE(i.e. tombstone) skip the cleanup if
+				// (1) partition is a valid partition for RealInstId see MB-42108 for details OR
+				// (2) partition is a valid partition for another instance with same RealInstId.
 				if realInst, ok := idx.indexInstMap[inst.RealInstId]; ok {
 					if exists := realInst.Pc.CheckPartitionExists(partnDefn.GetPartitionId()); exists {
 						partitionIDs, _ := realInst.Pc.GetAllPartitionIds()
@@ -8053,6 +8092,22 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 							inst.RealInstId, partitionIDs)
 						continue
 					}
+				}
+
+				skipCleanup := false
+				for _, cinst := range conflictInsts {
+					if exists := cinst.Pc.CheckPartitionExists(partnDefn.GetPartitionId()); exists {
+						partitionIDs, _ := cinst.Pc.GetAllPartitionIds()
+						logging.Infof("Skip cleanup for proxy InstId %v Partition %v. Conflicting partition"+
+							" found for InstId %v Partitions %v", inst.InstId, partnDefn.GetPartitionId(),
+							cinst.InstId, partitionIDs)
+						skipCleanup = true
+						break
+					}
+				}
+
+				if skipCleanup {
+					continue
 				}
 			}
 
@@ -8067,8 +8122,8 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 			}
 		}
 	}
-	return nil
 
+	return nil
 }
 
 //force cleanup of index partition data should only be used when storage manager has not yet
