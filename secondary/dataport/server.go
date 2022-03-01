@@ -687,22 +687,19 @@ func (s *Server) enforceAuth(raddr string) bool {
 	clustVer := c.GetClusterVersion()
 	intVer := c.GetInternalVersion()
 
-	if clustVer >= c.INDEXER_71_VERSION {
-		return true
-	}
-
-	if intVer.Equals(c.MIN_VER_SRV_AUTH) || intVer.GreaterThan(c.MIN_VER_SRV_AUTH) {
-		return true
-	}
-
 	if atomic.LoadUint32(s.enableAuth) != 0 {
-		return true
+
+		if clustVer >= c.INDEXER_71_VERSION {
+			return true
+		}
+		if intVer.Equals(c.MIN_VER_SRV_AUTH) || intVer.GreaterThan(c.MIN_VER_SRV_AUTH) {
+			return true
+		}
 	}
 
 	logging.Infof("%v connection %q continue without auth %v:%v:%v", s.logPrefix, raddr,
-		clustVer, intVer, atomic.LoadUint32(s.enableAuth))
-
-	return true
+	clustVer, intVer, atomic.LoadUint32(s.enableAuth))
+	return false
 }
 
 func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
