@@ -55,6 +55,26 @@ func (h *Histogram) Add(val int64) {
 	atomic.AddInt64(&h.vals[i], 1)
 }
 
+func (h *Histogram) Merge(src Histogram) {
+	if len(h.vals) != len(src.vals) {
+		return
+	}
+
+	if len(h.buckets) != len(src.buckets) {
+		return
+	}
+
+	for i, bucket := range src.buckets {
+		if h.buckets[i] != bucket {
+			return
+		}
+	}
+
+	for i, val := range src.vals {
+		h.vals[i] += val
+	}
+}
+
 func (h *Histogram) findBucket(val int64) int {
 	for i := 1; i < len(h.buckets); i++ {
 		start := h.buckets[i-1]
