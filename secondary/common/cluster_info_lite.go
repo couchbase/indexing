@@ -40,6 +40,19 @@ var singletonCICLContainer struct {
 	refCount int // RefCount of ciclMgr to close it when it is 0
 }
 
+var majorVersionCICL uint32
+
+const MAJOR_VERSION_7 = 7
+
+func SetMajorVersionCICL(ver uint32) {
+	logging.Infof("SetMajorVersionCICL: Setting cluster version to %v", ver)
+	atomic.StoreUint32(&majorVersionCICL, ver)
+}
+
+func GetMajorVersionCICL() uint32 {
+	return atomic.LoadUint32(&majorVersionCICL)
+}
+
 var ErrorEventWaitTimeout = errors.New("error event wait timeout")
 var ErrorUnintializedNodesInfo = errors.New("error uninitialized nodesInfo")
 var ErrorThisNodeNotFound = errors.New("error thisNode not found")
@@ -731,6 +744,8 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		return nil, ErrUnInitializedClusterInfo
 	}
 	cicm.cicl.setNodesInfo(ni)
+	SetMajorVersionCICL(ni.version)
+
 	pi := newPoolInfo(p)
 	cicm.cicl.setPoolInfo(pi)
 
@@ -747,10 +762,12 @@ func newClusterInfoCacheLiteManager(cicl *clusterInfoCacheLite, clusterURL,
 		msg := &couchbase.Bucket{Name: bn.Name}
 		notif := Notification{Type: ForceUpdateNotification, Msg: msg}
 
-		ch := make(chan Notification, 100)
-		cicm.perBucketCollnManifestCh[bn.Name] = ch
-		go cicm.handlePerBucketCollectionManifest(bn.Name, ch)
-		ch <- notif
+		if ni.version >= MAJOR_VERSION_7 {
+			ch := make(chan Notification, 100)
+			cicm.perBucketCollnManifestCh[bn.Name] = ch
+			go cicm.handlePerBucketCollectionManifest(bn.Name, ch)
+			ch <- notif
+		}
 
 		ch1 := make(chan Notification, 100)
 		cicm.bucketInfoChPerBucket[bn.Name] = ch1
@@ -777,6 +794,12 @@ func readWithTimeout(ch <-chan interface{}, timeout uint32) (interface{}, error)
 		return msg, nil
 	case <-time.After(time.Duration(timeout) * time.Second):
 		return nil, ErrorEventWaitTimeout
+	}
+}
+
+func (cicm *clusterInfoCacheLiteManager) sendToCollnManifestCh(msg Notification) {
+	if GetMajorVersionCICL() >= MAJOR_VERSION_7 {
+		cicm.collnManifestCh <- msg
 	}
 }
 
@@ -914,6 +937,10 @@ func (cicm *clusterInfoCacheLiteManager) collectionInfo(bucketName string) *coll
 // collectionInfoSync will return (*collectionInfo, nil) when valid and (nil, err) if not valid
 func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
 	eventTimeoutSeconds uint32) (*collectionInfo, error) {
+	if GetMajorVersionCICL() < MAJOR_VERSION_7 {
+		return nil, ErrBucketNotFound
+	}
+
 	ci, _ := cicm.cicl.getCollnInfo(bucketName)
 	if ci.valid {
 		return ci, nil
@@ -932,6 +959,7 @@ func (cicm *clusterInfoCacheLiteManager) collectionInfoSync(bucketName string,
 			Type: ForceUpdateNotification,
 			Msg:  &couchbase.Bucket{Name: ci.bucketName},
 		}
+		// Version check for 7.0 is added above in this function
 		cicm.collnManifestCh <- msg
 	}
 
@@ -978,7 +1006,7 @@ func (cicm *clusterInfoCacheLiteManager) periodicUpdater() {
 						Name: name,
 					},
 				}
-				cicm.collnManifestCh <- msg
+				cicm.sendToCollnManifestCh(msg)
 			}
 		}
 		cicm.cicl.cihmLock.RUnlock()
@@ -1064,7 +1092,7 @@ func (cicm *clusterInfoCacheLiteManager) handlePoolsChangeNotifications() {
 					Type: PoolChangeNotification,
 					Msg:  p,
 				}
-				cicm.collnManifestCh <- notif
+				cicm.sendToCollnManifestCh(notif)
 				cicm.bucketInfoCh <- notif
 			}
 		}
@@ -1115,6 +1143,8 @@ func (cicm *clusterInfoCacheLiteManager) handleCollectionManifestChanges() {
 		logging.Infof("handleCollectionManifestChanges: started observing collection manifest for bucket %v", bName)
 	}
 
+	// sendToCollnManifestCh() sends to collnManifestCh only when the cluster
+	// major version is >= 7 so need not check for version explicitly here
 	for notif := range cicm.collnManifestCh {
 		if notif.Type == PoolChangeNotification {
 			p := (notif.Msg).(*couchbase.Pool)
@@ -1341,7 +1371,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 			for _, bn := range p.BucketNames {
 				msg := &couchbase.Bucket{Name: bn.Name}
 				notif = Notification{Type: ForceUpdateNotification, Msg: msg}
-				cicm.collnManifestCh <- notif
+				cicm.sendToCollnManifestCh(notif)
 				cicm.bucketInfoCh <- notif
 			}
 		}()
@@ -1372,9 +1402,13 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 					p := (notif.Msg).(*couchbase.Pool)
 					pi := newPoolInfo(p)
 					cicm.cicl.setPoolInfo(pi)
+					newMajorVer := p.GetVersion()
+					if newMajorVer > GetMajorVersionCICL() {
+						SetMajorVersionCICL(newMajorVer)
+					}
 
 					cicm.poolsStreamingCh <- notif
-					cicm.collnManifestCh <- notif
+					cicm.sendToCollnManifestCh(notif)
 					cicm.bucketInfoCh <- notif
 				default:
 					logging.Errorf("clusterInfoCacheLiteManager (PoolChangeNotification): Invalid message type: %T", notif.Msg)
@@ -1382,7 +1416,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 			case CollectionManifestChangeNotification:
 				switch (notif.Msg).(type) {
 				case *couchbase.Bucket:
-					cicm.collnManifestCh <- notif
+					cicm.sendToCollnManifestCh(notif)
 					cicm.bucketInfoCh <- notif
 				default:
 					logging.Errorf("clusterInfoCacheLiteManager (CollectionManifestChangeNotification): Invalid message type: %T", notif.Msg)
@@ -1395,9 +1429,13 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 					p := (notif.Msg).(*couchbase.Pool)
 					pi := newPoolInfo(p)
 					cicm.cicl.setPoolInfo(pi)
+					newMajorVer := p.GetVersion()
+					if newMajorVer > GetMajorVersionCICL() {
+						SetMajorVersionCICL(newMajorVer)
+					}
 
 					cicm.poolsStreamingCh <- notif
-					cicm.collnManifestCh <- notif
+					cicm.sendToCollnManifestCh(notif)
 					cicm.bucketInfoCh <- notif
 					logging.Infof("clusterInfoCacheLiteManager: watchClusterChanges sent notification on self restart")
 				default:
@@ -1628,12 +1666,6 @@ func (cicl *ClusterInfoCacheLiteClient) GetNodesInfoProvider() (NodesInfoProvide
 func (cicl *ClusterInfoCacheLiteClient) GetCollectionInfoProvider(bucketName string) (
 	CollectionInfoProvider, error) {
 	ci, err := cicl.GetCollectionInfo(bucketName)
-
-	if err == ErrBucketNotFound {
-		ci := newCollectionInfoWithErr(bucketName, err)
-		return CollectionInfoProvider(ci), nil
-	}
-
 	if err != nil {
 		return nil, err
 	}
@@ -2400,7 +2432,13 @@ func (c *ClusterInfoCacheLiteClient) GetCollectionInfo(bucketName string) (
 	}
 
 	logging.Tracef("ClusterInfoCacheLiteClient:GetCollectionInfo[%v] CollectionInfo is not valid force fetching data", c.logPrefix)
-	return c.ciclMgr.collectionInfoSync(bucketName, c.eventWaitTimeoutSeconds)
+
+	ci, err := c.ciclMgr.collectionInfoSync(bucketName, c.eventWaitTimeoutSeconds)
+	if err == ErrBucketNotFound {
+		ci = newCollectionInfoWithErr(bucketName, err)
+		return ci, nil
+	}
+	return ci, err
 }
 
 func (ci *collectionInfo) CollectionID(bucket, scope, collection string) string {
