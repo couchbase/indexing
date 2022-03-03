@@ -686,7 +686,7 @@ func (b *Bucket) init(nb *Bucket) {
 	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
 }
 
-func (p *Pool) getVersion() uint32 {
+func (p *Pool) GetVersion() uint32 {
 	// Compute the minimum version among all the nodes
 	version := (uint32)(math.MaxUint32)
 	for _, n := range p.Nodes {
@@ -825,7 +825,7 @@ func (p *Pool) Refresh() (err error) {
 	p.Manifest = make(map[string]*collections.CollectionManifest)
 
 	// Compute the minimum version among all the nodes. Manifest only exists in versions >= 7.
-	version := p.getVersion()
+	version := p.GetVersion()
 
 loop:
 	buckets := []Bucket{}
@@ -872,7 +872,7 @@ func (p *Pool) RefreshManifest(bucket string, resetManifestMap bool) error {
 	}
 
 	// Compute the minimum version among all the nodes. Manifest only exists in versions >= 7.
-	version := p.getVersion()
+	version := p.GetVersion()
 	if version >= 7 {
 		var err error
 		var manifest *collections.CollectionManifest
