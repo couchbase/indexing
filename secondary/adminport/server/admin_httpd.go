@@ -26,21 +26,25 @@
 
 package server
 
-import "fmt"
-import "expvar"
-import "encoding/json"
-import "io"
-import "net"
-import "net/http"
-import "reflect"
-import "sync"
-import "time"
+import (
+	"encoding/json"
+	"expvar"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"reflect"
+	"sync"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/audit"
-import "github.com/couchbase/indexing/secondary/security"
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+	"github.com/couchbase/indexing/secondary/audit"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+)
 
 // httpServer is a concrete type implementing adminport Server
 // interface.
@@ -50,7 +54,7 @@ type httpServer struct {
 	mux      *http.ServeMux
 	srv      *http.Server // http server
 	messages map[string]apcommon.MessageMarshaller
-	conns    []net.Conn
+	conns    map[string]net.Conn
 	reqch    chan<- apcommon.Request // request channel back to application
 
 	// config params
@@ -74,7 +78,7 @@ type httpServer struct {
 func NewHTTPServer(config c.Config, reqch chan<- apcommon.Request) (apcommon.Server, error) {
 	s := &httpServer{
 		messages:      make(map[string]apcommon.MessageMarshaller),
-		conns:         make([]net.Conn, 0),
+		conns:         make(map[string]net.Conn),
 		reqch:         reqch,
 		statsInBytes:  0.0,
 		statsOutBytes: 0.0,
@@ -367,7 +371,10 @@ func (s *httpServer) connState(conn net.Conn, state http.ConnState) {
 	defer s.mu.Unlock()
 
 	if s.lis != nil && state == http.StateNew {
-		s.conns = append(s.conns, conn)
+		s.conns[raddr.String()] = conn
+	}
+	if state == http.StateClosed {
+		delete(s.conns, raddr.String())
 	}
 }
 
