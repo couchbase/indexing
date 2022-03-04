@@ -1549,14 +1549,13 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	cfgUpdate := msg.(*MsgConfigUpdate)
 	oldConfig := idx.config
 	newConfig := cfgUpdate.GetConfig()
-	idx.config = newConfig
 
 	idx.updateStorageMode(newConfig)
 
 	if newConfig["settings.memory_quota"].Uint64() !=
 		oldConfig["settings.memory_quota"].Uint64() {
 
-		memQuota := int64(idx.config.GetIndexerMemoryQuota())
+		memQuota := int64(newConfig.GetIndexerMemoryQuota())
 		idx.stats.memoryQuota.Set(memQuota)
 		plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 
@@ -1567,6 +1566,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 			os.Exit(0)
 		}
 	}
+
 	if common.GetStorageMode() == common.MOI {
 		if moiPersisters := newConfig["settings.moi.persistence_threads"].Int(); moiPersisters != oldConfig["settings.moi.persistence_threads"].Int() {
 			if moiPersisters <= cap(moiWriterSemaphoreCh) {
@@ -1629,9 +1629,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		}
 	}
 
-	memdb.Debug(oldConfig["settings.moi.debug"].Bool())
+	memdb.Debug(newConfig["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
 	idx.cpuThrottle.SetCpuTarget(newConfig["cpu.throttle.target"].Float64())
+
+	idx.config = newConfig
 
 	idx.compactMgrCmdCh <- msg
 	<-idx.compactMgrCmdCh
