@@ -1919,7 +1919,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 	// to every node in the list.
 	if nodes != nil {
 		// Discover indexer service from ClusterInfoCache
-		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
 
 			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
@@ -1962,7 +1962,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		// 2) This method will exclude inactive_new node in the cluster.
 		// 3) This may include unhealthy node since unhealthiness is not a cluster membership state (need verification).  If it
 		//    metadata provider cannot reach the unhealthy node, the metadata provider may not start (expected behavior).
-		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 
 		for _, nid := range nids {
 			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)

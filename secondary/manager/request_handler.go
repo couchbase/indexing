@@ -693,7 +693,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 	defer cinfo.RUnlock()
 
 	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	defns := make(map[common.IndexDefnId]common.IndexDefn)
@@ -1292,7 +1293,7 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 	permissionsCache := common.NewSessionPermissionsCache(creds)
 
 	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 
 	clusterMeta := &ClusterIndexMetadata{Metadata: make([]LocalIndexMetadata, len(nids))}
 
@@ -2493,7 +2494,8 @@ func (m *requestHandlerContext) getLocalIndexMetadataForNode(addr string, host s
 
 	if cinfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
 		var latest *LocalIndexMetadata
-		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
 			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err1 == nil {
@@ -2728,7 +2730,7 @@ func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo 
 
 	if cinfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
 		var latest *common.Statistics
-		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 		for _, nid := range nids {
 			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
 			if err1 == nil {
@@ -3310,7 +3312,7 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 	}
 
 	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 
 	clusterMeta := &ClusterIndexMetadata{Metadata: make([]LocalIndexMetadata, len(nids))}
 

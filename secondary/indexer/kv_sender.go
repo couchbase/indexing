@@ -1380,7 +1380,7 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	nodes := cinfo.GetNodesByServiceType("projector")
+	nodes := cinfo.GetNodeIdsByServiceType("projector")
 
 	var addrList []string
 	for _, nid := range nodes {

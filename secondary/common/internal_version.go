@@ -293,19 +293,20 @@ func (ivc *internalVersionChecker) getNodes() *nodeList {
 		switch svc {
 
 		case "index":
-			populate(ivc.cinfo.GetActiveIndexerNodes(), nodes.idxs)
+
+			populate(ivc.cinfo.GetNodesByServiceType(INDEX_HTTP_SERVICE), nodes.idxs)
 			if ivc.checkFailedNodes {
 				populate(ivc.cinfo.GetFailedIndexerNodes(), nodes.fidxs)
 			}
 
 		case "kv":
-			populate(ivc.cinfo.GetActiveKVNodes(), nodes.kvs)
+			populate(ivc.cinfo.GetNodesByServiceType(KV_SERVICE), nodes.kvs)
 			if ivc.checkFailedNodes {
 				populate(ivc.cinfo.GetFailedKVNodes(), nodes.fkvs)
 			}
 
 		case "n1ql":
-			populate(ivc.cinfo.GetActiveQueryNodes(), nodes.n1qls)
+			populate(ivc.cinfo.GetNodesByServiceType(CBQ_SERVICE), nodes.n1qls)
 			if ivc.checkFailedNodes {
 				populate(ivc.cinfo.GetFailedQueryNodes(), nodes.fn1qls)
 			}

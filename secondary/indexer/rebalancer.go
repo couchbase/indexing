@@ -1973,7 +1973,7 @@ func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
 		return false, nil
 	}
 
-	nids := cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+	nids := cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 	url := "/stats?async=true"
 
 	allWarmedup := true

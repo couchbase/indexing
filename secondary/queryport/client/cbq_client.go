@@ -65,9 +65,9 @@ func newCbqClient(cluster string) (*cbqClient, error) {
 	if err = cinfo.Fetch(); err != nil {
 		return nil, err
 	}
-	nodes := cinfo.GetNodesByServiceType("indexAdmin")
+	nodes := cinfo.GetNodeIdsByServiceType("indexAdmin")
 	if l := len(nodes); l < 1 {
-		err := fmt.Errorf("cinfo.GetNodesByServiceType() returns %d nodes", l)
+		err := fmt.Errorf("cinfo.GetNodeIdsByServiceType() returns %d nodes", l)
 		return nil, err
 	}
 	adminport, err := cinfo.GetServiceAddress(nodes[0], "indexAdmin", true)

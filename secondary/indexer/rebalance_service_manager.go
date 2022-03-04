@@ -1494,11 +1494,10 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 			continue
 		}
 
-		nids = m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+		nids = m.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 
 		allKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
 		if len(nids) != allKnownNodes {
-
 			if isSingleNodeRebal(change) {
 				l.Infof("ServiceMgr::registerGlobalRebalanceToken ClusterInfo Node List doesn't "+
 					"match Known Nodes in Rebalance Request. Skip Rebalance. cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
@@ -2873,7 +2872,7 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 		return "", err
 	}
 
-	nids := m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+	nids := m.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 	url := "/nodeuuid"
 
 	for _, nid := range nids {

@@ -1959,7 +1959,7 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, int, error) {
 	iAdminports := make([]string, 0)
 	unhealthyNodes := 0
-	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
+	for _, node := range cinfo.GetNodeIdsByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
 		if err != nil {
 			return nil, 0, 0, 0, 0, err
