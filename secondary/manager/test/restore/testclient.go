@@ -45,7 +45,7 @@ func main() {
 		return
 	}
 
-	nodes := cinfo.GetNodesByServiceType("indexHttp")
+	nodes := cinfo.GetNodeIdsByServiceType("indexHttp")
 	if len(nodes) == 0 {
 		log.Printf("There is no couchbase server running with indexer service")
 		return

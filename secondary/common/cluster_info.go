@@ -743,7 +743,7 @@ func (c *ClusterInfoCache) Nodes() []couchbase.Node {
 	return c.nodes
 }
 
-func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
+func (c *ClusterInfoCache) GetNodeIdsByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
@@ -753,6 +753,28 @@ func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	return
 }
 
+func (c *ClusterInfoCache) GetNodesByIds(nids []NodeId) (nodes []couchbase.Node) {
+	for _, nid := range nids {
+		nodes = append(nodes, c.nodes[nid])
+	}
+	return
+}
+
+// The functions output comes from querying the /pools/default/nodeServices endpoint
+// thus it returns list of node where input service is active.
+
+func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nodes []couchbase.Node) {
+	nids := c.GetNodeIdsByServiceType(srvc)
+	return c.GetNodesByIds(nids)
+}
+
+// The output of this function comes from querying the /pools/default endpoint
+// Thus the function returns list of nodes where "cluster membership of node is active".
+// Which is essentially a confirmation of fact that a service is configured on a node and
+// does not always mean that service is active on a node.
+// If a list of nodes with active services is needed then one needs to query /pools/default/nodeServices endpoint
+// which is done by GetNodesByServiceType and GetNodeIdsByServiceType functions.
+// (Use of endpoints and their meaning based on MB-51274)
 func (c *ClusterInfoCache) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	for _, n := range c.nodes {
 		for _, s := range n.Services {
@@ -841,6 +863,13 @@ func (c *ClusterInfoCache) GetNewIndexerNodes() (nodes []couchbase.Node) {
 	return
 }
 
+// The output of this function comes from querying the /pools/default endpoint
+// Thus the function returns list of nodes where "cluster membership of node is active".
+// Which is essentially a confirmation of fact that a service is configured on a node and
+// does not always mean that service is active on a node.
+// If a list of nodes with active services is needed then one needs to query /pools/default/nodeServices endpoint
+// which is done by GetNodesByServiceType and GetNodeIdsByServiceType functions.
+// (Use of endpoints and their meaning based on MB-51274)
 func (c *ClusterInfoCache) GetActiveKVNodes() (nodes []couchbase.Node) {
 	for _, n := range c.nodes {
 		for _, s := range n.Services {
@@ -865,6 +894,13 @@ func (c *ClusterInfoCache) GetFailedKVNodes() (nodes []couchbase.Node) {
 	return
 }
 
+// The output of this function comes from querying the /pools/default endpoint
+// Thus the function returns list of nodes where "cluster membership of node is active".
+// Which is essentially a confirmation of fact that a service is configured on a node and
+// does not always mean that service is active on a node.
+// If a list of nodes with active services is needed then one needs to query /pools/default/nodeServices endpoint
+// which is done by GetNodesByServiceType and GetNodeIdsByServiceType functions.
+// (Use of endpoints and their meaning based on MB-51274)
 func (c *ClusterInfoCache) GetActiveQueryNodes() (nodes []couchbase.Node) {
 	for _, n := range c.nodes {
 		for _, s := range n.Services {

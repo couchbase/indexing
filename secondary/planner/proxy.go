@@ -445,7 +445,7 @@ func getIndexStats(plan *Plan, config common.Config) error {
 	clusterVersion := cinfo.GetClusterVersion()
 
 	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 
 	if len(nids) == 0 {
 		return errors.New("No indexing service available.")
@@ -1713,7 +1713,7 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 	// 5) This may include unhealthy node since unhealthiness is not a cluster membership state (need verification).  This
 	//    function can fail if it cannot reach the unhealthy node.
 	//
-	nodes := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	nodes := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
 
 	if len(nodes) == 0 {
 		return nil, errors.New("No indexing service available.")

@@ -79,7 +79,9 @@ type NodesInfoProvider interface {
 
 	// NodeIds are indices into nodesExt or nodeSvs slice so should not be used
 	// across instances of NodesInfoProvider
-	GetNodesByServiceType(srvc string) (nids []NodeId)
+	GetNodeIdsByServiceType(srvc string) (nids []NodeId)
+
+	GetNodesByServiceType(srvc string) (nodes []couchbase.Node)
 
 	// Hold the lock if needed and get NodeIds and pass here to get service address.
 	GetServiceAddress(nid NodeId, srvc string, useEncryptedPortMap bool) (addr string, err error)

@@ -4368,7 +4368,7 @@ func (o *MetadataProvider) checkClusterHealth() (bool, error) {
 	newNodes := len(cinfo.GetNewIndexerNodes())       // new indexer node
 	unhealthyNodes := 0                               // active, unhealthy indexer node with known ports
 
-	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
+	for _, node := range cinfo.GetNodeIdsByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
 		if err != nil {
 			return false, err

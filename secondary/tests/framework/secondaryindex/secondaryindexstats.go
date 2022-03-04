@@ -37,7 +37,7 @@ func GetIndexerNodesHttpAddresses(hostaddress string) ([]string, error) {
 		return nil, err
 	}
 
-	node_ids := cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+	node_ids := cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 	indexNodes := []string{}
 	for _, node_id := range node_ids {
 		addr, _ := cinfo.GetServiceAddress(node_id, c.INDEX_HTTP_SERVICE, true)
