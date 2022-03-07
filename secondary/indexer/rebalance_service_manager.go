@@ -1468,7 +1468,7 @@ func (m *RebalanceServiceManager) registerGlobalRebalanceToken(rebalToken *Rebal
 	valid := false
 	const maxRetry = 10
 	for i := 0; i <= maxRetry; i++ {
-		nids = m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+		nids = m.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 		if len(nids) != numKnownNodes { // invalid case
 			if isSingleNodeRebal(change) {
 				l.Infof("%v ClusterInfo Node List doesn't match Known Nodes in Rebalance"+
@@ -2947,7 +2947,7 @@ func (m *RebalanceServiceManager) getNodeIdFromDest(dest string) (string, error)
 		return "", err
 	}
 
-	nids := m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+	nids := m.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 	url := "/nodeuuid"
 
 	for _, nid := range nids {

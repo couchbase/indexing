@@ -1407,7 +1407,7 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 	ninfo.RLock()
 	defer ninfo.RUnlock()
 
-	nodes := ninfo.GetNodesByServiceType("projector")
+	nodes := ninfo.GetNodeIdsByServiceType("projector")
 
 	var addrList []string
 	for _, nid := range nodes {

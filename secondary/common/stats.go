@@ -257,10 +257,10 @@ func GetIndexStats(clusterURL string, filter string, httpTimeoutSecs uint32) (st
 	}
 
 	timeStart = timeFinish
-	nids := cinfo.GetNodesByServiceType(INDEX_HTTP_SERVICE)
+	nids := cinfo.GetNodeIdsByServiceType(INDEX_HTTP_SERVICE)
 	timeFinish = time.Now()
 	if dur := timeFinish.Sub(timeStart); dur >= STATS_LOG_DUR {
-		logging.Warnf("%v Slow: GetNodesByServiceType %v", method, dur)
+		logging.Warnf("%v Slow: GetNodeIdsByServiceType %v", method, dur)
 	}
 
 	timeStart = timeFinish
