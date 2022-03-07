@@ -68,11 +68,14 @@ func Init(statsCollectionInterval int64, stats *system.SystemStats) error {
 	memMgr.olderSamples = common.NewSample(12)
 	memMgr.stats = stats
 
-	// skip the first one
+	// Quickly initialise the values instead of waiting for runStatsCollection
+	// go-routine to update for values after 5 seconds. Errors are ignored
+	// as they can be transient
 	memMgr.ProcessCpuPercent()
 	memMgr.ProcessRSS()
-	memMgr.ProcessFreeMem()
-	memMgr.ProcessTotalMem()
+	total, free, _, _ := memMgr.stats.GetTotalAndFreeMem(true)
+	memMgr.updateMemTotal(total)
+	memMgr.updateMemFree(free)
 
 	SetStatsCollectionInterval(statsCollectionInterval)
 	SetUsedMemThreshold(defaultUsedMemThreshold)

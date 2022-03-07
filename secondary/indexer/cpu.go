@@ -1,11 +1,12 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/system"
 	"math"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/system"
 )
 
 //////////////////////////////////////////////////////////////
@@ -48,8 +49,7 @@ func StartCpuCollector() error {
 	// skip the first one
 	collector.stats.ProcessCpuPercent()
 	collector.stats.ProcessRSS()
-	collector.stats.FreeMem()
-	collector.stats.TotalMem()
+	collector.stats.GetTotalAndFreeMem(false)
 
 	// start stats collection
 	go collector.runCollectStats()
@@ -84,26 +84,26 @@ func (c *cpuCollector) runCollectStats() {
 		}
 		updateRSS(rss)
 
-		total, err := c.stats.TotalMem()
+		total, free, cGroupValues, err := c.stats.GetTotalAndFreeMem(false)
 		if err != nil {
-			logging.Debugf("Fail to get total memory. Err=%v", err)
+			logging.Debugf("Fail to get total and free memory. Err=%v", err)
 			continue
 		}
 		updateMemTotal(total)
-
-		free, err := c.stats.FreeMem()
-		if err != nil {
-			logging.Debugf("Fail to get free memory. Err=%v", err)
-			continue
-		}
 		updateMemFree(free)
 
 		count++
 		if count > 10 {
 			logging.Debugf("cpuCollector: cpu percent %v for pid %v", cpu, pid)
 			logging.Debugf("cpuCollector: RSS %v for pid %v", rss, pid)
-			logging.Debugf("cpuCollector: memory total %v", total)
-			logging.Debugf("cpuCollector: memory free %vv", free)
+
+			if cGroupValues {
+				logging.Debugf("cpuCollector[cGroup]: memory total %v", total)
+				logging.Debugf("cpuCollector[cGroup]: memory free %v", free)
+			} else {
+				logging.Debugf("cpuCollector[system]: memory total %v", total)
+				logging.Debugf("cpuCollector[system]: memory free %v", free)
+			}
 			count = 0
 		}
 	}
