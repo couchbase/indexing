@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -40,38 +39,26 @@ func (mgr *MemManager) runStatsCollection() {
 			}
 			mgr.updateRSS(rss)
 
-			cgroupInfo := mgr.stats.GetControlGroupInfo()
-
-			var total, free uint64
-			if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
-				total = cgroupInfo.MemoryMax
-				mgr.updateMemTotal(total)
-
-				used := cgroupInfo.MemoryCurrent
-				free = total - used
-				mgr.updateMemFree(free)
-			} else {
-				total, err = mgr.stats.TotalMem()
-				if err != nil {
-					logging.Debugf("Fail to get total memory. Err=%v", err)
-					continue
-				}
-				mgr.updateMemTotal(total)
-
-				free, err = mgr.stats.ActualFreeMem()
-				if err != nil {
-					logging.Debugf("Fail to get free memory. Err=%v", err)
-					continue
-				}
-				mgr.updateMemFree(free)
+			total, free, cgroupValues, err := mgr.stats.GetTotalAndFreeMem(true)
+			if err != nil {
+				logging.Debugf("Fail to get total and free mem. Err=%v", err)
+				continue
 			}
+
+			mgr.updateMemTotal(total)
+			mgr.updateMemFree(free)
 
 			count++
 			if count > 10 {
 				logging.Debugf("cpuCollector: cpu percent %v for pid %v", cpu, pid)
 				logging.Debugf("cpuCollector: RSS %v for pid %v", rss, pid)
-				logging.Debugf("cpuCollector: memory total %v", total)
-				logging.Debugf("cpuCollector: memory free %vv", free)
+				if cgroupValues {
+					logging.Debugf("cpuCollector[cGroup]: memory total %v", total)
+					logging.Debugf("cpuCollector[cGroup]: memory free %v", free)
+				} else {
+					logging.Debugf("cpuCollector[system]: memory total %v", total)
+					logging.Debugf("cpuCollector[system]: memory free %v", free)
+				}
 				count = 0
 			}
 			lastCollectionTime = time.Now()
@@ -142,8 +129,19 @@ func (mgr *MemManager) ProcessRSS() error {
 	return nil
 }
 
+func (mgr *MemManager) ProcessTotalAndFreeMem() error {
+	total, free, _, err := mgr.stats.GetTotalAndFreeMem(true)
+	if err != nil {
+		logging.Debugf("Fail to get RSS. Err=%v", err)
+		return err
+	}
+	mgr.updateMemTotal(total)
+	mgr.updateMemFree(free)
+	return nil
+}
+
 func (mgr *MemManager) ProcessFreeMem() error {
-	free, err := mgr.stats.ActualFreeMem()
+	free, err := mgr.stats.SystemActualFreeMem()
 	if err != nil {
 		logging.Debugf("Fail to get free memory. Err=%v", err)
 		return err
@@ -153,11 +151,12 @@ func (mgr *MemManager) ProcessFreeMem() error {
 }
 
 func (mgr *MemManager) ProcessTotalMem() error {
-	total, err := mgr.stats.TotalMem()
+	total, free, _, err := memMgr.stats.GetTotalAndFreeMem(true)
 	if err != nil {
-		logging.Debugf("Fail to get free memory. Err=%v", err)
+		logging.Debugf("Fail to get total and free memory. Err=%v", err)
 		return err
 	}
-	mgr.updateMemTotal(total)
+	memMgr.updateMemTotal(total)
+	memMgr.updateMemFree(free)
 	return nil
 }
