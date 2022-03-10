@@ -1570,6 +1570,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.enableCompressFullMarshal": ConfigValue{
+		true,
+		"Compress page after full marshal",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -1735,6 +1742,13 @@ var SystemConfig = Config{
 		95,
 		"Percent of quota that memory usage should be greater than to compress after swapin",
 		95,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableCompressFullMarshal": ConfigValue{
+		true,
+		"Compress page after full marshal",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
