@@ -1805,7 +1805,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 	if len(failedNodes) >= 1 {
 		hasFailedNodes = true
 		nodeIds := []string{}
-		for _, n := range(failedNodes) {
+		for _, n := range failedNodes {
 			nodeIds = append(nodeIds, n.NodeUUID)
 		}
 		logging.Infof("%v found failed nodes %v", logPrefix, nodeIds)
@@ -2233,6 +2233,7 @@ func verifySchedTransfer(transferMap map[string][]*mc.ScheduleCreateToken) error
 				logging.Warnf("verifySchedTransfer: Nil token is observed for %v."+
 					" Index may have got dropped.", t.Definition.DefnId)
 				defns = append(defns, fmt.Sprintf("%v", t.Definition.DefnId))
+				continue
 			}
 
 			if nodeUUID != string(token.IndexerId) {
