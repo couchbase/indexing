@@ -496,6 +496,7 @@ type MsgStreamUpdate struct {
 	async        bool
 	sessionId    uint64
 	collectionId string
+	mergeTs      *common.TsVbuuid
 
 	allowMarkFirstSnap bool
 	keyspaceInRecovery bool
@@ -575,6 +576,10 @@ func (m *MsgStreamUpdate) EnableOSO() bool {
 
 func (m *MsgStreamUpdate) IgnoreOSOException() bool {
 	return m.ignoreOSOException
+}
+
+func (m *MsgStreamUpdate) GetMergeTs() *common.TsVbuuid {
+	return m.mergeTs
 }
 
 func (m *MsgStreamUpdate) String() string {

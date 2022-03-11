@@ -321,6 +321,11 @@ func (ts *TsVbuuid) GetCrc64() uint64 {
 
 // Copy will return a clone of this timestamp.
 func (ts *TsVbuuid) Copy() *TsVbuuid {
+
+	if ts == nil {
+		return nil
+	}
+
 	newTs := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
 	copy(newTs.Seqnos, ts.Seqnos)
 	copy(newTs.Vbuuids, ts.Vbuuids)
