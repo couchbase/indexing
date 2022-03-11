@@ -299,7 +299,7 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 		logging.Infof("%v connection %q doAuth() authentication is missing", s.logPrefix, raddr)
 
 		if !s.enforceAuth(raddr) {
-			return req, nil
+			return reqMsg, nil
 		}
 
 		code = transport.AUTH_MISSING
