@@ -393,6 +393,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	keyspaceInRecovery := cmd.(*MsgStreamUpdate).KeyspaceInRecovery()
+	mergeTs := cmd.(*MsgStreamUpdate).GetMergeTs()
 
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
@@ -413,11 +414,22 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 					"stream %v keyspaceId %v state %v waitForRecovery %v", idx.InstId, streamId,
 					idx.Defn.KeyspaceId(streamId), idx.State, keyspaceInRecovery)
 
-				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
+				buildInfo := &InitialBuildInfo{
 					indexInst:       idx,
 					buildTs:         buildTs,
 					waitForRecovery: keyspaceInRecovery,
 				}
+
+				//For INIT_STREAM in recovery, if there are Catchup state indexes, set the
+				//minMergeTs from MAINT_STREAM. If MAINT_STREAM is not in recovery, it may not
+				//send RecoveryDone message with the minMergeTs.
+				if (streamId == common.INIT_STREAM && idx.State == common.INDEX_STATE_CATCHUP) &&
+					keyspaceInRecovery && mergeTs != nil {
+					buildInfo.buildDoneAckReceived = true
+					buildInfo.minMergeTs = mergeTs.Copy()
+				}
+
+				tk.indexBuildInfo[idx.InstId] = buildInfo
 			}
 		}
 	}

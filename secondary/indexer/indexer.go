@@ -58,6 +58,7 @@ type KeyspaceIdObserveFlushDoneMap map[string]MsgChannel
 type KeyspaceIdCurrRequest map[string]*currRequest
 type KeyspaceIdRollbackTs map[string]*common.TsVbuuid
 type KeyspaceIdRetryTs map[string]*common.TsVbuuid
+type KeyspaceIdMinMergeTs map[string]*common.TsVbuuid
 
 //mem stats
 var (
@@ -109,6 +110,7 @@ type indexer struct {
 	streamKeyspaceIdSessionId    map[common.StreamId]map[string]uint64
 	streamKeyspaceIdCollectionId map[common.StreamId]map[string]string
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
+	streamKeyspaceIdMinMergeTs   map[common.StreamId]KeyspaceIdMinMergeTs
 
 	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
 	streamKeyspaceIdPendStart     map[common.StreamId]map[string]bool
@@ -289,6 +291,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdCurrRequest:      make(map[common.StreamId]KeyspaceIdCurrRequest),
 		streamKeyspaceIdRollbackTs:       make(map[common.StreamId]KeyspaceIdRollbackTs),
 		streamKeyspaceIdRetryTs:          make(map[common.StreamId]KeyspaceIdRetryTs),
+		streamKeyspaceIdMinMergeTs:       make(map[common.StreamId]KeyspaceIdMinMergeTs),
 		streamKeyspaceIdRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
 		streamKeyspaceIdRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		streamKeyspaceIdSessionId:        make(map[common.StreamId]map[string]uint64),
@@ -3798,6 +3801,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
+	mergeTs := msg.(*MsgRecovery).GetRestartTs()
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
 		logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v SessionId %v. "+
@@ -3847,15 +3851,21 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 				idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
 				idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 			}
+		} else {
+			//store the mergeTs for use in recovery of INIT_STREAM
+			idx.setMinMergeTsForCatchup(streamId, keyspaceId, mergeTs)
 		}
 	} else {
 		//change status to Active
 		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_ACTIVE)
 
-		//for MAINT_STREAM, check if there is any pendingBuildDone for an
-		//INIT_STREAM of the same bucket
 		if streamId == common.MAINT_STREAM {
+			//for MAINT_STREAM, check if there is any pendingBuildDone for an
+			//INIT_STREAM of the same bucket
 			idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+
+			//store the mergeTs for use in recovery of INIT_STREAM
+			idx.setMinMergeTsForCatchup(streamId, keyspaceId, mergeTs)
 		} else {
 			//for INIT_STREAM, if MAINT_STREAM is not running
 			//i. all indexes dropped
@@ -3942,10 +3952,24 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
+	mergeTs := msg.(*MsgTKInitBuildDone).GetMergeTs()
+
+	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
 	//skip processing initial build done ack for inactive or recovery streams.
 	//the streams would be restarted and then build done would get recomputed.
 	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
+
+	//if INIT_STREAM has started recovery, set the minMergeTs from the successful
+	//AddInstance. minMergeTs is still valid as CATCHUP state indexes were
+	//added to MAINT_STREAM. If INIT_STREAM is active, minMergeTs needs to be
+	//set here as well for use in case of recovery of INIT_STREAM.
+	if state == STREAM_ACTIVE ||
+		state == STREAM_PREPARE_RECOVERY ||
+		state == STREAM_RECOVERY {
+		idx.setMinMergeTsForCatchup(streamId, keyspaceId, mergeTs)
+	}
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY ||
@@ -3966,7 +3990,6 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
 		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
 
-		mergeTs := msg.(*MsgTKInitBuildDone).GetMergeTs()
 		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
 		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, false, false, sid)
 	}
@@ -3976,9 +3999,6 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
-
-	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v",
-		streamId, keyspaceId, sessionId)
 
 	switch streamId {
 
@@ -4011,6 +4031,10 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 	switch streamId {
 
 	case common.INIT_STREAM:
+
+		//reset the minMergeTs. It will be updated by RecoveryDone message
+		//after recovery of MAINT_STREAM finishes.
+		idx.setMinMergeTsForCatchup(streamId, keyspaceId, nil)
 
 		//notify failure to timekeeper
 		idx.tkCmdCh <- msg
@@ -5648,6 +5672,14 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 		}
 	}
 
+	//Set the minMergeTs as nil. It will be set by TK_INIT_BUILD_DONE_ACK.
+	//The index state change from INITIAL->CATCHUP is done by this function.
+	//If any minMergeTs gets set due to prior recovery of MAINT_STREAM, it
+	//needs to be reset here. Any minMergeTs set after this point is valid as
+	//the index is guaranteed to be picked up by recovery of MAINT_STREAM or
+	//AddInstance as part of this function.
+	idx.setMinMergeTsForCatchup(streamId, keyspaceId, nil)
+
 	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
 		streamId:   streamId,
 		keyspaceId: keyspaceId}
@@ -6286,6 +6318,28 @@ func (idx *indexer) checkCatchupPendingForStream(streamId common.StreamId,
 	return false
 }
 
+//checkStreamKeyspaceIdInCatchupPhase returns true if the input streamId/keyspaceId
+//is in Catchup phase i.e. index in INDEX_STATE_CATCHUP
+func (idx *indexer) checkStreamKeyspaceIdInCatchupPhase(streamId common.StreamId,
+	keyspaceId string) bool {
+
+	//catch is only possible for INIT_STREAM
+	if streamId != common.INIT_STREAM {
+		return false
+	}
+
+	//check if any index of the given keyspaceId is in the Stream
+	for _, index := range idx.indexInstMap {
+
+		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == streamId &&
+			index.State == common.INDEX_STATE_CATCHUP {
+			return true
+		}
+	}
+
+	return false
+}
+
 // stopKeyspaceIdStream removes the request to receive DCP records of given keyspaceId
 // from a given streamId. Used during recovery so does not call cleanupStreamKeyspaceIdState.
 func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId string, resetKeyspaceStats bool) {
@@ -6539,6 +6593,12 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		collectionId:       cid,
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO}
+
+	//For recovery of INIT_STREAM, send the stored mergeTs to timekeeper.
+	//If indexes are in Catchup state, it will be used for merging to MAINT_STREAM.
+	if streamId == common.INIT_STREAM {
+		cmd.mergeTs = idx.getMinMergeTsForCatchup(streamId, keyspaceId)
+	}
 
 	// Create the corresponding KeyspaceStats object before starting the stream
 	idx.stats.AddKeyspaceStats(streamId, keyspaceId)
@@ -9861,6 +9921,44 @@ func (idx *indexer) setRollbackTs(streamId common.StreamId, keyspaceId string,
 	}
 }
 
+func (idx *indexer) setMinMergeTsForCatchup(streamId common.StreamId, keyspaceId string,
+	mergeTs *common.TsVbuuid) {
+
+	setMergeTs := func(streamId common.StreamId, keyspaceId string, mergeTs *common.TsVbuuid) {
+		logging.Infof("Indexer::setMinMergeTsForCatchup %v %v set minMergeTs", streamId, keyspaceId)
+		if _, ok := idx.streamKeyspaceIdMinMergeTs[streamId]; ok {
+			idx.streamKeyspaceIdMinMergeTs[streamId][keyspaceId] = mergeTs.Copy()
+		} else {
+			keyspaceIdMinMergeTs := make(KeyspaceIdMinMergeTs)
+			keyspaceIdMinMergeTs[keyspaceId] = mergeTs.Copy()
+			idx.streamKeyspaceIdMinMergeTs[streamId] = keyspaceIdMinMergeTs
+		}
+	}
+
+	if streamId == common.INIT_STREAM {
+		setMergeTs(streamId, keyspaceId, mergeTs)
+
+	} else if streamId == common.MAINT_STREAM {
+		//consider all keyspaceIds in INIT_STREAM for this bucket
+		for kspId, _ := range idx.streamKeyspaceIdMinMergeTs[common.INIT_STREAM] {
+			if GetBucketFromKeyspaceId(kspId) == keyspaceId &&
+				idx.checkStreamKeyspaceIdInCatchupPhase(common.INIT_STREAM, kspId) {
+				setMergeTs(common.INIT_STREAM, kspId, mergeTs)
+			}
+		}
+	}
+
+}
+
+func (idx *indexer) getMinMergeTsForCatchup(streamId common.StreamId,
+	keyspaceId string) *common.TsVbuuid {
+
+	if _, ok := idx.streamKeyspaceIdMinMergeTs[streamId]; ok {
+		return idx.streamKeyspaceIdMinMergeTs[streamId][keyspaceId]
+	}
+	return nil
+}
+
 func (idx *indexer) initBuildTsLock(streamId common.StreamId, keyspaceId string) {
 	if _, ok := idx.buildTsLock[streamId]; !ok {
 		idx.buildTsLock[streamId] = make(map[string]*sync.Mutex)
@@ -10046,6 +10144,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdMinMergeTs[streamId], keyspaceId)
 }
 
 func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
