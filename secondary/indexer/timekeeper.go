@@ -711,13 +711,13 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 	switch state {
 
 	case STREAM_ACTIVE, STREAM_RECOVERY:
-
 		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, false) {
 			break
 		}
 
 		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate InitPrepRecovery",
 			streamId, keyspaceId, sessionId)
+		tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 			streamId:   streamId,
 			keyspaceId: keyspaceId,
@@ -1932,6 +1932,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
@@ -2019,6 +2020,15 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 		return
 	}
 
+	// Clear the streamKeyspaceIdBlockMergeForRecovery map as recovery is done
+	// It is possible that recovery was initiated with sessionId: s1 but this flag
+	// got set in sessionId: s2. As s1 is already in progress, indexer can ignore
+	// the request after timekeeper set's this flag. Hence, clear the flag
+	// irrespective of which session set's it
+	if _, ok := tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId]; ok {
+		tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = false
+	}
+
 	//if there are no indexes for this keyspace and stream, ignore
 	if c, ok := tk.ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId]; !ok || c <= 0 {
 		logging.Warnf("Timekeeper::handleRecoveryDone Ignore RecoveryDone for StreamId %v "+
@@ -2048,6 +2058,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
@@ -2395,6 +2406,12 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	}
 
 	if streamId != common.INIT_STREAM {
+		return false
+	}
+
+	if blockMerge, ok := tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId]; ok && blockMerge {
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge found BlockMergePostResume = true, "+
+			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v", keyspaceId)
 		return false
 	}
 
@@ -3592,6 +3609,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 				"Sending Init Prepare.", streamId, keyspaceId, sessionId)
 
 			// Initiate recovery.   It will reset keyspaceId book keeping upon prepare recovery.
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{
 				mType:      INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
@@ -3817,6 +3835,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 						"%v %v %v. Fail to merge rollbackTs in timekeeper. Send InitPrepRecovery "+
 						"right away. RollbackTs %v", streamId, keyspaceId, sessionId, rollbackTs)
 
+					tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 					tk.supvRespch <- &MsgRecovery{
 						mType:      INDEXER_INIT_PREP_RECOVERY,
 						streamId:   streamId,
@@ -3836,6 +3855,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 					"%v %v %v. RollbackTs is empty.  Send InitPrepRecovery right away.",
 					streamId, keyspaceId, sessionId)
 
+				tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 				tk.supvRespch <- &MsgRecovery{
 					mType:      INDEXER_INIT_PREP_RECOVERY,
 					streamId:   streamId,
@@ -3876,6 +3896,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				"Stream %v KeyspaceId %v SessionId %v. Attempting Rollback.",
 				streamId, keyspaceId, sessionId)
 
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{
 				mType:      INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
@@ -4512,6 +4533,7 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 				tk.ss.streamKeyspaceIdFlushEnabledMap[s][b] = false
 				sessionId := tk.ss.getSessionId(s, b)
 				if !tk.resetStreamIfOSOEnabled(s, b, sessionId, false) {
+					tk.ss.streamKeyspaceIdBlockMergeForRecovery[s][b] = true
 					tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 						streamId:   s,
 						keyspaceId: b,
@@ -4707,6 +4729,7 @@ func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
 			streamId, keyspaceId, sessionId, ignoreException)
 
 		tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] = true
+		tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 
 		tk.supvRespch <- &MsgStreamUpdate{
 			mType:              RESET_STREAM,
