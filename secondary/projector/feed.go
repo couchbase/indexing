@@ -1893,6 +1893,16 @@ func (feed *Feed) getLocalVbuckets(pooln, bucketn string, opaque uint16) ([]uint
 	fmsg := "%v ##%x vbmap {%v,%v} - %v\n"
 	logging.Infof(fmsg, feed.logPrefix, opaque, pooln, bucketn, vbnos)
 
+	// vbnos is nil if KV does not own any vbuckets for this Bucket.
+	// it can be when MCD crashes and all the vbuckets data for ephemeral
+	// bucket is lost and active vBuckets will not be restored automatically
+	// on recovery
+	// return empty array & not nil as output of this function is passed to
+	// SelectByVBuckets and it will select everything when vbnos is nil.
+	if len(vbnos) == 0 {
+		vbnos = make([]uint16, 0)
+	}
+
 	return vbnos, nil
 }
 
