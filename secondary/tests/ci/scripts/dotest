@@ -181,8 +181,9 @@ if [[ "$MODE" == *"$phase"* ]]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma/zstd
       GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
+      # unit test logs will be in the Server Log logs-<timestamp>.tar.gz at logs-unit-test.log
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
   fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
@@ -193,6 +194,8 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
+
+  collect_logs
 fi
 
 export phase=functional
