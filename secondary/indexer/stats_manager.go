@@ -2645,6 +2645,8 @@ type statsManager struct {
 	exitPersister            uint64
 	statsUpdaterStopCh       chan bool
 
+	loggerReqCh MsgChannel
+
 	stReqRecCount uint64
 }
 
@@ -2657,6 +2659,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 		lastStatTime:             time.Unix(0, 0),
 		statsLogDumpInterval:     config["settings.statsLogDumpInterval"].Uint64(),
 		statsPersistenceInterval: config["statsPersistenceInterval"].Uint64(),
+		loggerReqCh:              make(MsgChannel),
 	}
 
 	s.config.Store(config)
@@ -3348,6 +3351,9 @@ loop:
 					stats := req.GetStats()
 					s.updateStatsFromPersistence(stats)
 					s.supvCmdch <- &MsgSuccess{}
+				case STATS_LOG_AT_EXIT:
+					s.loggerReqCh <- cmd
+					s.supvCmdch <- &MsgSuccess{}
 				}
 			} else {
 				break loop
@@ -3463,10 +3469,12 @@ func (s *statsManager) runStatsDumpLogger() {
 	writeStorageStats := 0
 	essential := true
 
+	var lastLogTime time.Time
 	enableStatsLog, sLogger := s.tryEnableStatsLog()
 	logger := newStatLogger(s, enableStatsLog, sLogger)
+	ticker := time.NewTicker(time.Duration(1) * time.Second)
 
-	for {
+	dumpStats := func() {
 		stats := s.stats.Get()
 		if stats != nil {
 			if logging.IsEnabled(logging.Verbose) {
@@ -3480,8 +3488,21 @@ func (s *statsManager) runStatsDumpLogger() {
 				writeStorageStats++
 			}
 		}
+	}
 
-		time.Sleep(time.Second * time.Duration(atomic.LoadUint64(&s.statsLogDumpInterval)))
+	for {
+		select {
+		case <-ticker.C:
+			if time.Since(lastLogTime) > time.Second*time.Duration(atomic.LoadUint64(&s.statsLogDumpInterval)) {
+				lastLogTime = time.Now()
+				dumpStats()
+			}
+		case cmd := <-s.loggerReqCh:
+			respCh := cmd.(*MsgStatsPersister).GetResponseChannel()
+			logging.Infof("StatsMgr::runStatsDumpLogger - Dumping all the stats as requested by indexer")
+			dumpStats()
+			respCh <- true
+		}
 	}
 }
 

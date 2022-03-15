@@ -1412,12 +1412,22 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case MSG_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
+		respCh := make(chan bool)
+		idx.statsMgrCmdCh <- &MsgStatsPersister{
+			mType:  STATS_LOG_AT_EXIT,
+			respCh: respCh}
+		<-respCh // Wait for response
 		err := msg.(*MsgError).GetError()
 		common.CrashOnError(err.cause)
 
 	case STREAM_READER_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
+		respCh := make(chan bool)
+		idx.statsMgrCmdCh <- &MsgStatsPersister{
+			mType:  STATS_LOG_AT_EXIT,
+			respCh: respCh}
+		<-respCh // Wait for response
 		err := msg.(*MsgStreamError).GetError()
 		common.CrashOnError(err.cause)
 
@@ -1725,6 +1735,11 @@ func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 
 		logging.Fatalf("Indexer::handleAdminMsgs Fatal Error On Admin Channel %+v", msg)
 		err := msg.(*MsgError).GetError()
+		respCh := make(chan bool)
+		idx.statsMgrCmdCh <- &MsgStatsPersister{
+			mType:  STATS_LOG_AT_EXIT,
+			respCh: respCh}
+		<-respCh // Wait for response
 		common.CrashOnError(err.cause)
 
 	default:
