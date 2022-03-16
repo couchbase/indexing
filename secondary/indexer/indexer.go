@@ -3961,8 +3961,8 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	//ii. all indexes get reset due to rollback to 0
 	//it needs to be started here
 	if idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v",
-			streamId, keyspaceId, sessionId)
+		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v."+
+			" Starting MAINT_STREAM.", streamId, keyspaceId, sessionId)
 		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
 		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
 

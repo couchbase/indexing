@@ -92,6 +92,9 @@ type StreamState struct {
 
 	//last time of KV seqnum fetch for stream merge check
 	streamKeyspaceIdLastKVSeqFetch map[common.StreamId]KeyspaceIdLastKVSeqFetch
+
+	//used to ensure INIT_STREAM is not merged before TK initiated recovey completes
+	streamKeyspaceIdBlockMergeForRecovery map[common.StreamId]KeyspaceIdBlockMergeForRecovery
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -143,6 +146,7 @@ type KeyspaceIdVBMap map[string]map[Vbucket]string
 
 type KeyspaceIdHWTOSO map[string]*common.TsVbuuid
 type KeyspaceIdLastKVSeqFetch map[string]time.Time
+type KeyspaceIdBlockMergeForRecovery map[string]bool
 
 type TsListElem struct {
 	ts       *common.TsVbuuid
@@ -212,6 +216,7 @@ func InitStreamState(config common.Config) *StreamState {
 		keyspaceIdPendBuildDebugLogTime:        make(map[string]uint64),
 		keyspaceIdFlushCheckDebugLogTime:       make(map[string]uint64),
 		streamKeyspaceIdLastKVSeqFetch:         make(map[common.StreamId]KeyspaceIdLastKVSeqFetch),
+		streamKeyspaceIdBlockMergeForRecovery:		make(map[common.StreamId]KeyspaceIdBlockMergeForRecovery),
 	}
 
 	return ss
@@ -353,6 +358,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdLastKVSeqFetch := make(KeyspaceIdLastKVSeqFetch)
 	ss.streamKeyspaceIdLastKVSeqFetch[streamId] = keyspaceIdLastKVSeqFetch
 
+	KeyspaceIdBlockMergeForRecovery := make(KeyspaceIdBlockMergeForRecovery)
+	ss.streamKeyspaceIdBlockMergeForRecovery[streamId] = KeyspaceIdBlockMergeForRecovery
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -406,6 +414,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Time{}
+	ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = false
 
 	if streamId == common.INIT_STREAM {
 		ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
@@ -478,6 +487,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	}
 	delete(ss.streamKeyspaceIdFlushDone[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdForceRecovery[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdBlockMergeForRecovery[streamId], keyspaceId)
 
 	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {
 		bs[keyspaceId] = STREAM_INACTIVE
@@ -533,6 +543,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdEnableOSO, streamId)
 	delete(ss.streamKeyspaceIdHWTOSO, streamId)
 	delete(ss.streamKeyspaceIdLastKVSeqFetch, streamId)
+	delete(ss.streamKeyspaceIdBlockMergeForRecovery, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 

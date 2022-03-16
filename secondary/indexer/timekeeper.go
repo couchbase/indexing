@@ -711,13 +711,13 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 	switch state {
 
 	case STREAM_ACTIVE, STREAM_RECOVERY:
-
 		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, false) {
 			break
 		}
 
 		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate InitPrepRecovery",
 			streamId, keyspaceId, sessionId)
+		tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 			streamId:   streamId,
 			keyspaceId: keyspaceId,
@@ -1932,6 +1932,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
@@ -2019,6 +2020,15 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 		return
 	}
 
+	// Clear the streamKeyspaceIdBlockMergeForRecovery map as recovery is done
+	// It is possible that recovery was initiated with sessionId: s1 but this flag
+	// got set in sessionId: s2. As s1 is already in progress, indexer can ignore
+	// the request after timekeeper set's this flag. Hence, clear the flag
+	// irrespective of which session set's it
+	if _, ok := tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId]; ok {
+		tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = false
+	}
+
 	//if there are no indexes for this keyspace and stream, ignore
 	if c, ok := tk.ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId]; !ok || c <= 0 {
 		logging.Warnf("Timekeeper::handleRecoveryDone Ignore RecoveryDone for StreamId %v "+
@@ -2048,6 +2058,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
@@ -2377,25 +2388,44 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 //latest KV seq nums is to fetch those.
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	keyspaceId string, initFlushTs *common.TsVbuuid, fetchKVSeq bool) bool {
+	const _checkInitStreamReadyToMerge = "Timekeeper::checkInitStreamReadyToMerge:"
 
 	logging.LazyTrace(func() string {
-		return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge Stream %v KeyspaceId %v len(buildInfo) %v "+
-			"FlushTs %v", streamId, keyspaceId, len(tk.indexBuildInfo), initFlushTs)
+		return fmt.Sprintf("%v Stream %v KeyspaceId %v len(buildInfo) %v FlushTs %v",
+			_checkInitStreamReadyToMerge, streamId, keyspaceId, len(tk.indexBuildInfo), initFlushTs)
 	})
 
+	//log more debug information every 5 min in case INIT_STREAM is waiting for long time to merge
+	//but doesn't have pending mutations or other things are preventing merge
+	forceLog := false
+	now := uint64(time.Now().UnixNano())
+	sinceLastLog := now - tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId]
+	if sinceLastLog > uint64(300*time.Second) {
+		forceLog = true
+		tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
+	}
+
 	if streamId != common.INIT_STREAM {
+		return false
+	}
+
+	if blockMerge, ok := tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId]; ok && blockMerge {
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge found BlockMergePostResume = true, "+
+			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v", keyspaceId)
 		return false
 	}
 
 	enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
 	if enableOSO && initFlushTs.HasOpenOSOSnap() {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM has open OSO Snapshot."+
-			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
+		logging.Infof("%v INIT_STREAM has open OSO Snapshot."+
+			" INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.",
+			_checkInitStreamReadyToMerge, keyspaceId)
 
 		logging.LazyVerbose(func() string {
 			hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
-			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+			return fmt.Sprintf("%v FlushTs %v\n HWT %v", _checkInitStreamReadyToMerge,
+				initFlushTs, hwt)
 		})
 		return false
 	}
@@ -2416,23 +2446,12 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			lenMaintTs = tsListMaint.Len()
 		}
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
-			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
-			"MAINT PendTsCount %v.", keyspaceId, lenInitTs, lenMaintTs)
+		logging.Infof("%v FlushTs Not Snapshot Aligned. Continue both streams for"+
+			" keyspaceId %v. INIT PendTsCount %v. MAINT PendTsCount %v.",
+			_checkInitStreamReadyToMerge, keyspaceId, lenInitTs, lenMaintTs)
 
-		forceLog := false
-		now := uint64(time.Now().UnixNano())
-		sinceLastLog := now - tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId]
-
-		//log more debug information if INIT_STREAM is waiting for long time to merge
-		//but doesn't have pending mutations
-		if lenInitTs == 0 && sinceLastLog > uint64(300*time.Second) {
-			forceLog = true
-			tk.ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = now
-		}
-
-		if forceLog || logging.IsEnabled(logging.Verbose) {
-			logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+		if lenInitTs == 0 && (forceLog || logging.IsEnabled(logging.Verbose)) {
+			logging.Infof("%v FlushTs %v\n HWT %v", _checkInitStreamReadyToMerge, initFlushTs, hwt)
 		}
 		return false
 	}
@@ -2442,8 +2461,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	if mStatus == STREAM_PREPARE_RECOVERY ||
 		mStatus == STREAM_PREPARE_DONE ||
 		mStatus == STREAM_RECOVERY {
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM in %v. "+
-			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.",
+		logging.Infof("%v MAINT_STREAM in %v. INIT_STREAM cannot be merged."+
+			" Continue both streams for keyspaceId %v.", _checkInitStreamReadyToMerge,
 			tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket], keyspaceId)
 		return false
 	}
@@ -2452,30 +2471,31 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//this can happen if multiple collections are trying to merge to the same bucket
 
 	if kspId, ok := tk.ss.streamKeyspaceIdPendingMerge[common.MAINT_STREAM][bucket]; ok && kspId != "" {
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge Merge pending for MAINT_STREAM %v "+
-			"with keyspaceId %v. Continue both streams for keyspaceId %v.", bucket, kspId, keyspaceId)
+		logging.Infof("%v Merge pending for MAINT_STREAM %v with keyspaceId %v."+
+			" Continue both streams for keyspaceId %v.", _checkInitStreamReadyToMerge,
+			bucket, kspId, keyspaceId)
 		return false
 	}
 
 	//If any repair is going on, merge cannot happen
 	if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[common.MAINT_STREAM][bucket]; ok && stopCh != nil {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM In Repair."+
-			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
+		logging.Infof("%v MAINT_STREAM In Repair. INIT_STREAM cannot be merged. "+
+			" Continue both streams for keyspaceId %v.", _checkInitStreamReadyToMerge, keyspaceId)
 		return false
 	}
 
 	if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[common.INIT_STREAM][keyspaceId]; ok && stopCh != nil {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM In Repair."+
-			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
+		logging.Infof("%v INIT_STREAM In Repair. INIT_STREAM cannot be merged."+
+			" Continue both streams for keyspaceId %v.", _checkInitStreamReadyToMerge, keyspaceId)
 		return false
 	}
 
 	if ts, ok := tk.ss.streamKeyspaceIdOpenTsMap[common.INIT_STREAM][keyspaceId]; !ok || ts == nil {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM MTR In Progress."+
-			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
+		logging.Infof("%v INIT_STREAM MTR In Progress. INIT_STREAM cannot be merged."+
+			" Continue both streams for keyspaceId %v.", _checkInitStreamReadyToMerge, keyspaceId)
 		return false
 	}
 
@@ -2491,82 +2511,80 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 			readyToMerge, initTsSeq := tk.checkFlushTsValidForMerge(streamId, keyspaceId,
 				initFlushTs, buildInfo.minMergeTs, fetchKVSeq)
-
-			if readyToMerge {
-
-				//disable flush for MAINT_STREAM for this keyspace, so it doesn't
-				//move ahead till merge is complete
-				if mStatus == STREAM_ACTIVE {
-					if flushEnabled, ok := tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket]; ok && flushEnabled {
-						tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
-						tk.ss.streamKeyspaceIdPendingMerge[common.MAINT_STREAM][bucket] = keyspaceId
-					}
-				}
-
-				//if keyspace in INIT_STREAM is going to merge, disable flush. No need to waste
-				//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
-				tk.ss.streamKeyspaceIdFlushEnabledMap[common.INIT_STREAM][keyspaceId] = false
-
-				var mergeTs *common.TsVbuuid
-				forceSnapshot := true
-				// Read the lastFlushedTimestamp for MAINT_STREAM for merge
-				if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
-					mergeTs = lts
-				} else {
-					mergeTs = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
-				}
-				//if no flush has happened from MAINT_STREAM, it means it is not running.
-				//MAINT_STREAM needs to be started with lastFlushTs of INIT_STREAM
-				if mergeTs == nil {
-					mergeTs = initFlushTs
-				}
-
-				if initFlushTs.EqualOrGreater(mergeTs, false) {
-					forceSnapshot = false
-				}
-
-				sessionId := tk.ss.getSessionId(streamId, keyspaceId)
-
-				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Index Ready To Merge using MaintTs "+
-					"Index: %v Stream: %v KeyspaceId: %v SessionId: %v, forceSnap: %v, INIT_STREAM:LastFlushTs: %v, "+
-					"mergeTs: %v", idx.InstId,
-					streamId, keyspaceId, sessionId, forceSnapshot, initTsSeq, mergeTs)
-
-				//create a copy of mergeTs(to avoid overwriting snapType of original ts)
-				if forceSnapshot {
-					ts := mergeTs.Copy()
-					ts.SnapType = common.FORCE_COMMIT_MERGE
-					mergeTs = ts
-				}
-
-				tk.supvRespch <- &MsgTKMergeStream{
-					mType:      TK_MERGE_STREAM,
-					streamId:   streamId,
-					keyspaceId: keyspaceId,
-					mergeTs:    mergeTs,
-					sessionId:  sessionId}
-
-				//change state of all indexes of this keyspaceId to ACTIVE
-				//these indexes get removed later as part of merge message
-				//from indexer
-				tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_ACTIVE)
-				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
-					"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
-				tk.stopTimer(streamId, keyspaceId)
-				tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
-				return true
-
-			} else {
-				//check for one index is sufficient as all indexes in a keyspaceId
-				//move together
-				logging.Debugf("Timekeeper::checkInitStreamReadyToMerge checkFlushTsValidForMerge returned readyToMerge=false, %v, %v, initTsSeq %v, initFlushTs %v, buildinfo.MinMergeTs %v fetchKVSeq %v",
-					streamId, keyspaceId, initTsSeq, initFlushTs, buildInfo.minMergeTs, fetchKVSeq)
+			if !readyToMerge {
+				// checkFlushTsValidForMerge already has logging for all these cases
 				return false
 			}
+
+			//disable flush for MAINT_STREAM for this keyspace, so it doesn't
+			//move ahead till merge is complete
+			if mStatus == STREAM_ACTIVE {
+				if flushEnabled, ok := tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket]; ok && flushEnabled {
+					tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+					tk.ss.streamKeyspaceIdPendingMerge[common.MAINT_STREAM][bucket] = keyspaceId
+				}
+			}
+
+			//if keyspace in INIT_STREAM is going to merge, disable flush. No need to waste
+			//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
+			tk.ss.streamKeyspaceIdFlushEnabledMap[common.INIT_STREAM][keyspaceId] = false
+
+			var mergeTs *common.TsVbuuid
+			forceSnapshot := true
+			// Read the lastFlushedTimestamp for MAINT_STREAM for merge
+			if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
+				mergeTs = lts
+			} else {
+				mergeTs = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
+			}
+			//if no flush has happened from MAINT_STREAM, it means it is not running.
+			//MAINT_STREAM needs to be started with lastFlushTs of INIT_STREAM
+			if mergeTs == nil {
+				mergeTs = initFlushTs
+			}
+
+			if initFlushTs.EqualOrGreater(mergeTs, false) {
+				forceSnapshot = false
+			}
+
+			sessionId := tk.ss.getSessionId(streamId, keyspaceId)
+
+			logging.Infof("%v Index Ready To Merge using MaintTs Index: %v Stream: %v"+
+				" KeyspaceId: %v SessionId: %v, forceSnap: %v, INIT_STREAM:LastFlushTs: %v,"+
+				" mergeTs: %v", _checkInitStreamReadyToMerge, idx.InstId,
+				streamId, keyspaceId, sessionId, forceSnapshot, initTsSeq, mergeTs)
+
+			//create a copy of mergeTs(to avoid overwriting snapType of original ts)
+			if forceSnapshot {
+				ts := mergeTs.Copy()
+				ts.SnapType = common.FORCE_COMMIT_MERGE
+				mergeTs = ts
+			}
+
+			tk.supvRespch <- &MsgTKMergeStream{
+				mType:      TK_MERGE_STREAM,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				mergeTs:    mergeTs,
+				sessionId:  sessionId}
+
+			//change state of all indexes of this keyspaceId to ACTIVE
+			//these indexes get removed later as part of merge message
+			//from indexer
+			tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_ACTIVE)
+			logging.Infof("%v Stream %v KeyspaceId %v State Changed to INACTIVE",
+				_checkInitStreamReadyToMerge, streamId, keyspaceId)
+			tk.stopTimer(streamId, keyspaceId)
+			tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
+			return true
 		}
 	}
-	logging.Debugf("Timekeeper::checkInitStreamReadyToMerge index does not belong to flushed keyspace, %v, %v, initFlushTs %v, fetchKVSeq %v",
-		streamId, keyspaceId, initFlushTs, fetchKVSeq)
+	if forceLog || logging.IsEnabled(logging.Verbose) {
+		// This case can also be hit if a buildInfo.minMergeTs == nil
+		logging.Infof("%v Final return. Index may not belong to flushed keyspace."+
+			" %v, %v, initFlushTs %v, fetchKVSeq %v", _checkInitStreamReadyToMerge,
+			streamId, keyspaceId, initFlushTs, fetchKVSeq)
+	}
 	return false
 }
 
@@ -3591,6 +3609,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 				"Sending Init Prepare.", streamId, keyspaceId, sessionId)
 
 			// Initiate recovery.   It will reset keyspaceId book keeping upon prepare recovery.
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{
 				mType:      INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
@@ -3816,6 +3835,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 						"%v %v %v. Fail to merge rollbackTs in timekeeper. Send InitPrepRecovery "+
 						"right away. RollbackTs %v", streamId, keyspaceId, sessionId, rollbackTs)
 
+					tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 					tk.supvRespch <- &MsgRecovery{
 						mType:      INDEXER_INIT_PREP_RECOVERY,
 						streamId:   streamId,
@@ -3835,6 +3855,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 					"%v %v %v. RollbackTs is empty.  Send InitPrepRecovery right away.",
 					streamId, keyspaceId, sessionId)
 
+				tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 				tk.supvRespch <- &MsgRecovery{
 					mType:      INDEXER_INIT_PREP_RECOVERY,
 					streamId:   streamId,
@@ -3875,6 +3896,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				"Stream %v KeyspaceId %v SessionId %v. Attempting Rollback.",
 				streamId, keyspaceId, sessionId)
 
+			tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 			tk.supvRespch <- &MsgRecovery{
 				mType:      INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
@@ -4511,6 +4533,7 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 				tk.ss.streamKeyspaceIdFlushEnabledMap[s][b] = false
 				sessionId := tk.ss.getSessionId(s, b)
 				if !tk.resetStreamIfOSOEnabled(s, b, sessionId, false) {
+					tk.ss.streamKeyspaceIdBlockMergeForRecovery[s][b] = true
 					tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 						streamId:   s,
 						keyspaceId: b,
@@ -4706,6 +4729,7 @@ func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
 			streamId, keyspaceId, sessionId, ignoreException)
 
 		tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] = true
+		tk.ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = true
 
 		tk.supvRespch <- &MsgStreamUpdate{
 			mType:              RESET_STREAM,

@@ -1942,20 +1942,21 @@ cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 // forward in child destTokenToMergeOrReadyLOCKED. Its primary purpose is thus to update the TT
 // states; it does not produce a sync point at the end of the builds.
 func (r *Rebalancer) waitForIndexBuild(buildTokens map[string]*common.TransferToken) {
-	const method string = "Rebalancer::waitForIndexBuild:" // for logging
+	const _waitForIndexBuild string = "Rebalancer::waitForIndexBuild:"
 
 	buildStartTime := time.Now()
 	cfg := r.config.Load()
 	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
 
+	lastLogTime := time.Now() // last time we logged generic loop msg; init to now to delay 1st msg
 loop:
 	for {
 		select {
 		case <-r.cancel:
-			l.Infof("%v Cancel Received", method)
+			l.Infof("%v Cancel Received", _waitForIndexBuild)
 			break loop
 		case <-r.done:
-			l.Infof("%v Done Received", method)
+			l.Infof("%v Done Received", _waitForIndexBuild)
 			break loop
 
 		default:
@@ -1963,24 +1964,24 @@ loop:
 
 			indexerState := allStats.indexerStateHolder.GetValue().(string)
 			if indexerState == "Paused" {
-				l.Errorf("%v Paused state detected for %v", method, r.localaddr)
-				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+				l.Errorf("%v Paused state detected for %v", _waitForIndexBuild, r.localaddr)
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", _waitForIndexBuild, "")
 				for ttid, tt := range r.acceptedTokens {
-					l.Errorf("%v Token State Changed to Error %v %v", method, ttid, tt)
+					l.Errorf("%v Token State Changed to Error %v %v", _waitForIndexBuild, ttid, tt)
 					r.setTransferTokenError(ttid, tt, "Indexer In Paused State")
 				}
-				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", _waitForIndexBuild, "")
 				break
 			}
 
 			localMeta, err := getLocalMeta(r.localaddr)
 			if err != nil {
-				l.Errorf("%v Error Fetching Local Meta %v %v", method, r.localaddr, err)
+				l.Errorf("%v Error Fetching Local Meta %v %v", _waitForIndexBuild, r.localaddr, err)
 				break
 			}
 
 			allTokensReady := true
-			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuild, "")
 			for ttid, tt := range buildTokens {
 				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 					continue
@@ -1994,11 +1995,11 @@ loop:
 				indexState, err := getIndexStatusFromMeta(tt, localMeta)
 				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
 					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
-						" Skipping. indexState %v, err %v, tt %v.", method, indexState, err, tt)
+						" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuild, indexState, err, tt)
 					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
 					setTransferTokenInMetakv(ttid, tt)
 				} else if err != "" {
-					l.Errorf("%v Error Fetching Index Status %v %v", method, r.localaddr, err)
+					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuild, r.localaddr, err)
 					break
 				}
 
@@ -2007,10 +2008,13 @@ loop:
 				defnKey := getStatsDefnKey(tt)
 				defnStats := allStats.indexes[defnKey] // stats for current defn
 				if defnStats == nil {
-					l.Infof("%v Missing defnStats for instId %v. Retrying...", method, defnKey)
+					l.Infof("%v Missing defnStats for instId %v. Retrying...", _waitForIndexBuild, defnKey)
 					break
 				}
 
+				// Processing rate calculation and check is to ensure the destination index is not
+				// far behind in mutation processing when we redirect traffic from the old source.
+				// Indexes become active when they merge to MAINT_STREAM but may still be behind.
 				numDocsPending := defnStats.numDocsPending.GetValue().(int64)
 				numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
 				numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
@@ -2029,19 +2033,24 @@ loop:
 					remainingBuildTime = 0
 				}
 
-				l.Infof("%v Index: %v:%v:%v:%v State: %v"+
-					" Pending: %v EstTime: %v Partitions: %v Destination: %v",
-					method, defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
-					tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
-
+				now := time.Now()
+				if now.Sub(lastLogTime) > 30*time.Second {
+					lastLogTime = now
+					l.Infof("%v Index: %v:%v:%v:%v State: %v"+
+						" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
+						" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuild,
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
+						numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
+						tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+				}
 				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 					r.destTokenToMergeOrReadyLOCKED(ttid, tt)
 				}
 			}
-			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuild, "")
 
 			if allTokensReady {
-				l.Infof("%v Batch Done", method)
+				l.Infof("%v Batch Done", _waitForIndexBuild)
 				break loop
 			}
 		} // select
