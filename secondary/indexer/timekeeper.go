@@ -2998,26 +2998,6 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 						}
 					}
 				}
-			} else if lastFlushedTs != nil && streamId == common.MAINT_STREAM &&
-				flushTs.GetSnapType() == common.NO_SNAP && flushTs.IsSnapAligned() &&
-				(lastFlushedTs.GetSnapType() == common.DISK_SNAP ||
-					lastFlushedTs.GetSnapType() == common.FORCE_COMMIT ||
-					lastFlushedTs.GetSnapType() == common.FORCE_COMMIT_MERGE) {
-
-				// After indexer recovers, it is possible for some instances to have incorrect
-				// vbuuid's. This can happen if indexer restarts in the middle of disk
-				// snapshot generation after vbuuid's change. In that case, there will be
-				// a mismatch in vbuuid's between the timestamp of an instance at storage manager
-				// and timekeeper. If timekeeper were to pick the old vbuuid's, KV would ask indexer
-				// to restart streams using latest vbuuid's. However, if timekeeper picks latest
-				// vbuuid's, then some instances in storage manger will be left with older vbuuid's.
-				// To address those cases, timekeeper will force a INMEM_SNAP generation so that
-				// all the instances belonging to the keyspaceId will have same vbuuid's
-
-				logging.Infof("Timekeeper::sendNewStabilityTs: forcing an INMEM_SNAP as the lastFlushedTs "+
-					"has snapType: %v, streamId: %v, keyspaceId: %v, flushTs: %v, lastFlushedTs: %v",
-					lastFlushedTs.GetSnapType(), streamId, keyspaceId, flushTs, lastFlushedTs)
-				flushTs.SetSnapType(common.INMEM_SNAP)
 			} else {
 				return
 			}
