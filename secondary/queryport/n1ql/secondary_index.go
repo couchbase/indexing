@@ -47,6 +47,7 @@ import (
 
 const DONEREQUEST = 1
 const BACKFILLPREFIX = "scan-results"
+const BACKFILLTICK = 5
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -125,9 +126,8 @@ type gsiKeyspace struct {
 	version        uint64
 	clusterVersion uint64
 
-	logstatsStopCh    chan bool
-	backfillMonStopCh chan bool
-	closed            uint32
+	prevTotalScans int64 // used in monitoring
+	closed         uint32
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -154,15 +154,13 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 	l.SetLogLevel(l.Info)
 
 	gsi := &gsiKeyspace{
-		clusterURL:        clusterURL,
-		namespace:         namespace,
-		bucket:            bucket,
-		scope:             scope,
-		keyspace:          keyspace,
-		indexes:           make(map[uint64]datastore.Index), // defnID -> index
-		primaryIndexes:    make(map[uint64]datastore.PrimaryIndex),
-		logstatsStopCh:    make(chan bool),
-		backfillMonStopCh: make(chan bool),
+		clusterURL:     clusterURL,
+		namespace:      namespace,
+		bucket:         bucket,
+		scope:          scope,
+		keyspace:       keyspace,
+		indexes:        make(map[uint64]datastore.Index), // defnID -> index
+		primaryIndexes: make(map[uint64]datastore.PrimaryIndex),
 	}
 
 	tm := time.Now().UnixNano()
@@ -188,8 +186,9 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 	l.Infof("%v started ...", gsi.logPrefix)
 
 	logtick := time.Duration(qconf["logtick"].Int()) * time.Millisecond
-	go gsi.logstats(logtick)
-	go gsi.backfillMonitor(5 * time.Second)
+
+	MonitorIndexer(gsi, BACKFILLTICK*time.Second, logtick)
+
 	return gsi, nil
 }
 
@@ -799,9 +798,9 @@ func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 //     OR
 // (2) New incoming queries are expected to use this gsiKeyspace object.
 func (gsi *gsiKeyspace) Close() {
+	l.Infof("gsiKeyspace::Close Closing %v", getKeyForIndexer(gsi))
 	if atomic.CompareAndSwapUint32(&gsi.closed, 0, 1) {
-		close(gsi.backfillMonStopCh)
-		close(gsi.logstatsStopCh)
+		UnmonitorIndexer(gsi)
 	}
 }
 
@@ -2099,70 +2098,6 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte,
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
 	broker.IncrementSendCount()
 	return true, retBuf
-}
-
-func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
-	tick := time.NewTicker(logtick)
-	defer func() {
-		tick.Stop()
-	}()
-
-	sofar := int64(0)
-	for {
-		select {
-		case <-gsi.logstatsStopCh:
-			return
-
-		case <-tick.C:
-			scandur := atomic.LoadInt64(&gsi.scandur)
-			blockeddur := atomic.LoadInt64(&gsi.blockeddur)
-			throttledur := atomic.LoadInt64(&gsi.throttledur)
-			primedur := atomic.LoadInt64(&gsi.primedur)
-			totalscans := atomic.LoadInt64(&gsi.totalscans)
-			totalbackfills := atomic.LoadInt64(&gsi.totalbackfills)
-			if totalscans > sofar {
-				fmsg := `%v logstats %q {` +
-					`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
-					`"gsi_throttle_duration":%v,` +
-					`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
-					`"gsi_total_temp_files":%v}`
-				l.Infof(
-					fmsg, gsi.logPrefix, gsi.bucket, totalscans, scandur,
-					throttledur, primedur, blockeddur, totalbackfills)
-			}
-			sofar = totalscans
-		}
-	}
-}
-
-func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
-	tick := time.NewTicker(period)
-	defer func() {
-		tick.Stop()
-	}()
-
-	for {
-		select {
-		case <-gsi.backfillMonStopCh:
-			return
-
-		case <-tick.C:
-			n1ql_backfill_temp_dir := gsi.getTmpSpaceDir()
-			files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
-			if err != nil {
-				return
-			}
-
-			size := int64(0)
-			for _, file := range files {
-				fname := path.Join(n1ql_backfill_temp_dir, file.Name())
-				if strings.Contains(fname, BACKFILLPREFIX) {
-					size += int64(file.Size())
-				}
-			}
-			atomic.StoreInt64(&gsi.backfillSize, size)
-		}
-	}
 }
 
 func n1qlspanstogsi(spans datastore.Spans2) qclient.Scans {
