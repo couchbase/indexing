@@ -1702,7 +1702,7 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 			// there is no risk of data loss.
 			//
 
-			if !source.Timestamp().EqualOrGreater(target.Timestamp(), false) {
+			/*if !source.Timestamp().EqualOrGreater(target.Timestamp(), false) {
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
@@ -1710,7 +1710,7 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 						cause: fmt.Errorf("Timestamp mismatch between snapshot\n target %v\n source %v\n",
 							target.Timestamp(), source.Timestamp())}}
 				return false
-			}
+			}*/
 
 			// source will not have partition snapshot if there is no mutation in bucket.  Skip validation check.
 			// If bucket has at least 1 mutation, then source will have partition snapshot.

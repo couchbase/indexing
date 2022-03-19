@@ -2541,7 +2541,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
 			tk.ss.streamKeyspaceIdFlushEnabledMap[common.INIT_STREAM][keyspaceId] = false
 
-			var mergeTs *common.TsVbuuid
+			/*var mergeTs *common.TsVbuuid
 			forceSnapshot := true
 			// Read the lastFlushedTimestamp for MAINT_STREAM for merge
 			if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
@@ -2559,25 +2559,24 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				forceSnapshot = false
 			}
 
-			sessionId := tk.ss.getSessionId(streamId, keyspaceId)
-
-			logging.Infof("%v Index Ready To Merge using MaintTs Index: %v Stream: %v"+
-				" KeyspaceId: %v SessionId: %v, forceSnap: %v, INIT_STREAM:LastFlushTs: %v,"+
-				" mergeTs: %v", _checkInitStreamReadyToMerge, idx.InstId,
-				streamId, keyspaceId, sessionId, forceSnapshot, initTsSeq, mergeTs)
-
 			//create a copy of mergeTs(to avoid overwriting snapType of original ts)
 			if forceSnapshot {
 				ts := mergeTs.Copy()
 				ts.SnapType = common.FORCE_COMMIT_MERGE
 				mergeTs = ts
-			}
+			}*/
+
+			sessionId := tk.ss.getSessionId(streamId, keyspaceId)
+
+			logging.Infof("%v Index Ready To Merge using MaintTs Index: %v Stream: %v"+
+				" KeyspaceId: %v SessionId: %v, INIT_STREAM:LastFlushTs: %v", _checkInitStreamReadyToMerge, idx.InstId,
+				streamId, keyspaceId, sessionId, initTsSeq)
 
 			tk.supvRespch <- &MsgTKMergeStream{
 				mType:      TK_MERGE_STREAM,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
-				mergeTs:    mergeTs,
+				mergeTs:    initFlushTs,
 				sessionId:  sessionId}
 
 			//change state of all indexes of this keyspaceId to ACTIVE

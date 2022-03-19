@@ -6015,7 +6015,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
-	//Send FORCE_COMMIT_MERGE message to storage manager to create snapshot.
+	/*//Send FORCE_COMMIT_MERGE message to storage manager to create snapshot.
 	//This snapshot allows stale=false scans to proceed.
 	if mergeTs != nil && mergeTs.GetSnapType() == common.FORCE_COMMIT_MERGE {
 		logging.Infof("Indexer::handleMergeInitStream Forcing snapshot commit for keyspaceId: %v "+
@@ -6026,7 +6026,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 			keyspaceId: keyspaceId,
 			ts:         mergeTs}
 		<-idx.storageMgrCmdCh
-	}
+	}*/
 
 	logging.Infof("Indexer::handleMergeInitStream keyspaceId: %v Stream: %v SessionId: %v",
 		keyspaceId, streamId, sessionId)
