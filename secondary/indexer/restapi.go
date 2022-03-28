@@ -1,20 +1,26 @@
 package indexer
 
-import json "github.com/couchbase/indexing/secondary/common/json"
-import "io/ioutil"
-import "net/http"
-import "strings"
-import "strconv"
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strconv"
+	"strings"
 
-import "github.com/couchbase/indexing/secondary/audit"
-import c "github.com/couchbase/indexing/secondary/common"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
-import log "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/query/parser/n1ql"
-import "github.com/couchbase/query/expression"
-import "github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/audit"
+	json "github.com/couchbase/indexing/secondary/common/json"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+
+	"github.com/couchbase/cbauth"
+	log "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/parser/n1ql"
+)
 
 type testServer struct {
 	cluster string
@@ -412,7 +418,7 @@ func (api *testServer) doCreate(w http.ResponseWriter, request *http.Request) {
 
 	defnId, err := api.client.CreateIndex4(
 		indexname, bucket, scope, collection, using, exprtype, whereExpr, secExprs,
-		desc, isPrimary, partnScheme, partnExprs, with)
+		desc, false, isPrimary, partnScheme, partnExprs, with)
 	if err != nil {
 		http.Error(w, jsonstr("%v", err), http.StatusInternalServerError)
 		return

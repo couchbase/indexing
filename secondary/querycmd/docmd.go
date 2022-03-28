@@ -387,7 +387,7 @@ func HandleCommand(
 		}
 		defnID, err = client.CreateIndex4(
 			iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
-			cmd.WhereStr, cmd.SecStrs, nil, cmd.IsPrimary, cmd.Scheme, cmd.PartitionKeys,
+			cmd.WhereStr, cmd.SecStrs, nil, false, cmd.IsPrimary, cmd.Scheme, cmd.PartitionKeys,
 			[]byte(cmd.With))
 		if err == nil {
 			fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
