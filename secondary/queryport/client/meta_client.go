@@ -313,7 +313,7 @@ func (b *metadataClient) GetIndexReplica(defnId uint64) []*mclient.InstanceDefn 
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool,
+	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	planJSON []byte) (uint64, error) {
 

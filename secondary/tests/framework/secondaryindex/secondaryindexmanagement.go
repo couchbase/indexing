@@ -185,8 +185,9 @@ func CreateSecondaryIndex3(
 	exprType := "N1QL"
 
 	start := time.Now()
+	// TODO: Add a way to pass indexMissingLeadingKey attribute here for functional tests
 	defnID, err := client.CreateIndex4(indexName, bucketName, scopeName, collectionName, IndexUsing, exprType,
-		whereExpr, secExprs, desc, isPrimary, partnScheme, partnKeys, with)
+		whereExpr, secExprs, desc, false, isPrimary, partnScheme, partnKeys, with)
 
 	if indexActiveTimeoutSeconds != 0 && err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)

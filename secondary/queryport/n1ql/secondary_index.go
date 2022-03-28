@@ -395,6 +395,7 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 		"",           /*whereStr*/
 		nil,          /*secStrs*/
 		nil,          /* desc */
+		false,        /* indexMissingLeadingKey */
 		true,         /*isPrimary*/
 		partitionScheme,
 		partitionKeys,
@@ -502,7 +503,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	// index keys
 	secStrs := make([]string, 0)
 	desc := make([]bool, 0)
-
+	indexMissingLeadingKey := false
 	// For flattened array index, explode the secExprs string. E.g.,
 	// for the index:
 	// create index idx on default(org,
@@ -523,7 +524,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	//   b. For scans which depend on key positions (like group, groupAggrs),
 	//      match the key position in scans with the key positions in secExprs.
 	//      E.g., keyPos 4 in scans will map to keyPos 4 in secExprs i.e. `email`
-	for _, key := range rangeKey {
+	for keyPos, key := range rangeKey {
 		s := expression.NewStringer().Visit(key.Expr)
 		isArray, _, isFlatten := key.Expr.IsArrayIndexKey()
 
@@ -533,11 +534,17 @@ func (gsi *gsiKeyspace) CreateIndex3(
 				for pos, _ := range fk.Operands() {
 					secStrs = append(secStrs, s)
 					desc = append(desc, fk.HasDesc(pos))
+					if keyPos == 0 && pos == 0 {
+						indexMissingLeadingKey = fk.HasMissing(pos)
+					}
 				}
 			}
 		} else {
 			secStrs = append(secStrs, s)
 			desc = append(desc, key.HasAttribute(datastore.IK_DESC))
+			if keyPos == 0 {
+				indexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
+			}
 		}
 	}
 
@@ -570,6 +577,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		whereStr,
 		secStrs,
 		desc,
+		indexMissingLeadingKey,
 		false, /*isPrimary*/
 		partitionScheme,
 		partitionKeys,
@@ -824,6 +832,7 @@ type secondaryIndex struct {
 	partnExpr expression.Expressions
 	secExprs  expression.Expressions
 	desc      []bool
+	missing   []bool
 	whereExpr expression.Expression
 	state     datastore.IndexState
 	err       string
@@ -855,6 +864,7 @@ func newSecondaryIndexFromMetaData(
 		isPrimary: indexDefn.IsPrimary,
 		using:     indexDefn.Using,
 		desc:      indexDefn.Desc,
+		missing:   nil, //TODO: Add here after adding missing to indexDefn
 		state:     gsi2N1QLState[imd.State],
 		err:       imd.Error,
 		deferred:  indexDefn.Deferred,
@@ -1245,6 +1255,9 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 			attr := datastore.IK_NONE
 			if si.desc != nil && si.desc[i] {
 				attr |= datastore.IK_DESC
+			}
+			if si.missing != nil && si.missing[i] {
+				attr |= datastore.IK_MISSING
 			}
 			idxkey.SetAttribute(attr, true)
 
