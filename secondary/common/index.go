@@ -214,24 +214,25 @@ type IndexDefn struct {
 	ExprType        ExprType        `json:"exprType,omitempty"`
 	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
 	//PartitionKey is obsolete
-	PartitionKey       string     `json:"partitionKey,omitempty"`
-	WhereExpr          string     `json:"where,omitempty"`
-	Desc               []bool     `json:"desc,omitempty"`
-	Deferred           bool       `json:"deferred,omitempty"`
-	Immutable          bool       `json:"immutable,omitempty"`
-	Nodes              []string   `json:"nodes,omitempty"`
-	IsArrayIndex       bool       `json:"isArrayIndex,omitempty"`
-	IsArrayFlattened   bool       `json:"isArrayFlattened,omitempty"`
-	NumReplica         uint32     `json:"numReplica,omitempty"`
-	PartitionKeys      []string   `json:"partitionKeys,omitempty"`
-	RetainDeletedXATTR bool       `json:"retainDeletedXATTR,omitempty"`
-	HashScheme         HashScheme `json:"hashScheme,omitempty"`
-	NumReplica2        Counter    `json:"NumReplica2,omitempty"`
-	Scope              string     `json:"Scope,omitempty"`
-	Collection         string     `json:"Collection,omitempty"`
-	ScopeId            string     `json:"ScopeId,omitempty"`
-	CollectionId       string     `json:"CollectionId,omitempty"`
-	HasArrItemsCount   bool       `json:"hasArrItemsCount,omitempty"`
+	PartitionKey           string     `json:"partitionKey,omitempty"`
+	WhereExpr              string     `json:"where,omitempty"`
+	Desc                   []bool     `json:"desc,omitempty"`
+	Deferred               bool       `json:"deferred,omitempty"`
+	Immutable              bool       `json:"immutable,omitempty"`
+	Nodes                  []string   `json:"nodes,omitempty"`
+	IsArrayIndex           bool       `json:"isArrayIndex,omitempty"`
+	IsArrayFlattened       bool       `json:"isArrayFlattened,omitempty"`
+	NumReplica             uint32     `json:"numReplica,omitempty"`
+	PartitionKeys          []string   `json:"partitionKeys,omitempty"`
+	RetainDeletedXATTR     bool       `json:"retainDeletedXATTR,omitempty"`
+	HashScheme             HashScheme `json:"hashScheme,omitempty"`
+	NumReplica2            Counter    `json:"NumReplica2,omitempty"`
+	Scope                  string     `json:"Scope,omitempty"`
+	Collection             string     `json:"Collection,omitempty"`
+	ScopeId                string     `json:"ScopeId,omitempty"`
+	CollectionId           string     `json:"CollectionId,omitempty"`
+	HasArrItemsCount       bool       `json:"hasArrItemsCount,omitempty"`
+	IndexMissingLeadingKey bool       `json:"indexMissingLeadingKey,omitempty"`
 
 	// Sizing info
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -293,6 +294,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
+	str += fmt.Sprintf("\n\t\tIndexMissingLeadingKey: %v", idx.IndexMissingLeadingKey)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("\n\t\tHashScheme: %v ", idx.HashScheme.String())
 	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
@@ -306,36 +308,37 @@ func (idx IndexDefn) String() string {
 // field.  It is a shallow copy (e.g. does not clone field 'Nodes').
 func (idx IndexDefn) Clone() *IndexDefn {
 	return &IndexDefn{
-		DefnId:             idx.DefnId,
-		Name:               idx.Name,
-		Using:              idx.Using,
-		Bucket:             idx.Bucket,
-		BucketUUID:         idx.BucketUUID,
-		Scope:              idx.Scope,
-		ScopeId:            idx.ScopeId,
-		Collection:         idx.Collection,
-		CollectionId:       idx.CollectionId,
-		IsPrimary:          idx.IsPrimary,
-		SecExprs:           idx.SecExprs,
-		Desc:               idx.Desc,
-		ExprType:           idx.ExprType,
-		PartitionScheme:    idx.PartitionScheme,
-		PartitionKeys:      idx.PartitionKeys,
-		HashScheme:         idx.HashScheme,
-		WhereExpr:          idx.WhereExpr,
-		Deferred:           idx.Deferred,
-		Immutable:          idx.Immutable,
-		Nodes:              idx.Nodes,
-		IsArrayIndex:       idx.IsArrayIndex,
-		IsArrayFlattened:   idx.IsArrayFlattened,
-		NumReplica:         idx.NumReplica,
-		RetainDeletedXATTR: idx.RetainDeletedXATTR,
-		NumDoc:             idx.NumDoc,
-		SecKeySize:         idx.SecKeySize,
-		DocKeySize:         idx.DocKeySize,
-		ArrSize:            idx.ArrSize,
-		NumReplica2:        idx.NumReplica2,
-		HasArrItemsCount:   idx.HasArrItemsCount,
+		DefnId:                 idx.DefnId,
+		Name:                   idx.Name,
+		Using:                  idx.Using,
+		Bucket:                 idx.Bucket,
+		BucketUUID:             idx.BucketUUID,
+		Scope:                  idx.Scope,
+		ScopeId:                idx.ScopeId,
+		Collection:             idx.Collection,
+		CollectionId:           idx.CollectionId,
+		IsPrimary:              idx.IsPrimary,
+		SecExprs:               idx.SecExprs,
+		Desc:                   idx.Desc,
+		ExprType:               idx.ExprType,
+		PartitionScheme:        idx.PartitionScheme,
+		PartitionKeys:          idx.PartitionKeys,
+		HashScheme:             idx.HashScheme,
+		WhereExpr:              idx.WhereExpr,
+		Deferred:               idx.Deferred,
+		Immutable:              idx.Immutable,
+		Nodes:                  idx.Nodes,
+		IsArrayIndex:           idx.IsArrayIndex,
+		IsArrayFlattened:       idx.IsArrayFlattened,
+		NumReplica:             idx.NumReplica,
+		RetainDeletedXATTR:     idx.RetainDeletedXATTR,
+		NumDoc:                 idx.NumDoc,
+		SecKeySize:             idx.SecKeySize,
+		DocKeySize:             idx.DocKeySize,
+		ArrSize:                idx.ArrSize,
+		NumReplica2:            idx.NumReplica2,
+		HasArrItemsCount:       idx.HasArrItemsCount,
+		IndexMissingLeadingKey: idx.IndexMissingLeadingKey,
 	}
 }
 
@@ -770,6 +773,12 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		if b1 != d2.Desc[i] {
 			return false
 		}
+	}
+
+	// Indexes are not considered equivalent if they treat indexing of missing
+	// leading key differently
+	if d1.IndexMissingLeadingKey != d2.IndexMissingLeadingKey {
+		return false
 	}
 
 	return true
