@@ -832,7 +832,6 @@ type secondaryIndex struct {
 	partnExpr expression.Expressions
 	secExprs  expression.Expressions
 	desc      []bool
-	missing   []bool
 	whereExpr expression.Expression
 	state     datastore.IndexState
 	err       string
@@ -840,6 +839,8 @@ type secondaryIndex struct {
 
 	scheduled bool
 	schedFail bool
+
+	indexMissingLeadingKey bool
 }
 
 // for metadata-provider.
@@ -857,19 +858,19 @@ func newSecondaryIndexFromMetaData(
 	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
 	si = &secondaryIndex{
-		gsi:       gsi,
-		bucketn:   indexDefn.Bucket,
-		name:      indexDefn.Name,
-		defnID:    defnID,
-		isPrimary: indexDefn.IsPrimary,
-		using:     indexDefn.Using,
-		desc:      indexDefn.Desc,
-		missing:   nil, //TODO: Add here after adding missing to indexDefn
-		state:     gsi2N1QLState[imd.State],
-		err:       imd.Error,
-		deferred:  indexDefn.Deferred,
-		scheduled: imd.Scheduled,
-		schedFail: imd.ScheduleFailed,
+		gsi:                    gsi,
+		bucketn:                indexDefn.Bucket,
+		name:                   indexDefn.Name,
+		defnID:                 defnID,
+		isPrimary:              indexDefn.IsPrimary,
+		using:                  indexDefn.Using,
+		desc:                   indexDefn.Desc,
+		state:                  gsi2N1QLState[imd.State],
+		err:                    imd.Error,
+		deferred:               indexDefn.Deferred,
+		scheduled:              imd.Scheduled,
+		schedFail:              imd.ScheduleFailed,
+		indexMissingLeadingKey: indexDefn.IndexMissingLeadingKey,
 	}
 
 	if indexDefn.SecExprs != nil {
@@ -1243,6 +1244,9 @@ func (si *secondaryIndex2) Scan2(
 }
 
 // RangeKey2 implements Index2{} interface.
+// Note: Missing attribute is only set for leading key. Its don't care for others
+// In case of flattened keys it will be extracted from the expression and the
+// attribute set here will not be used directly.
 func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 
 	if si != nil && si.secExprs != nil {
@@ -1256,7 +1260,7 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 			if si.desc != nil && si.desc[i] {
 				attr |= datastore.IK_DESC
 			}
-			if si.missing != nil && si.missing[i] {
+			if i == 0 && si.indexMissingLeadingKey {
 				attr |= datastore.IK_MISSING
 			}
 			idxkey.SetAttribute(attr, true)

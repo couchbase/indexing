@@ -121,6 +121,8 @@ type IndexSpec struct {
 	Using              string             `json:"using,omitempty"`
 	ExprType           string             `json:"exprType,omitempty"`
 
+	IndexMissingLeadingKey bool `json:"indexMissingLeadingKey,omitempty"`
+
 	// usage
 	NumDoc        uint64  `json:"numDoc,omitempty"`
 	DocKeySize    uint64  `json:"docKeySize,omitempty"`
@@ -2191,6 +2193,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.Defn.RetainDeletedXATTR = spec.RetainDeletedXATTR
 			index.Instance.Defn.Deferred = spec.Deferred
 			index.Instance.Defn.Desc = spec.Desc
+			index.Instance.Defn.IndexMissingLeadingKey = spec.IndexMissingLeadingKey
 			index.Instance.Defn.NumReplica = uint32(spec.Replica) - 1
 			index.Instance.Defn.PartitionScheme = common.PartitionScheme(spec.PartitionScheme)
 			index.Instance.Defn.PartitionKeys = spec.PartitionKeys
