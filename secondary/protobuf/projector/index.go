@@ -115,6 +115,8 @@ type IndexEvaluator struct {
 	// For flattened array index, this variable represents
 	// the number of keys in the flatten_keys expression
 	numFlattenKeys int
+
+	indexMissingLeadingKey bool
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -134,6 +136,9 @@ func NewIndexEvaluator(
 
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
+
+	ie.indexMissingLeadingKey = *defn.IndexMissingLeadingKey
+
 	exprtype := defn.GetExprType()
 	switch exprtype {
 	case ExprType_N1QL:
@@ -514,7 +519,9 @@ func (ie *IndexEvaluator) evaluate(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, context, ie.skExprs, ie.numFlattenKeys, encodeBuf, ie.stats)
+		return N1QLTransform(docid, docval, context, ie.skExprs,
+			ie.numFlattenKeys, encodeBuf, ie.stats,
+			ie.indexMissingLeadingKey)
 	}
 	return nil, nil, nil
 }
@@ -531,7 +538,8 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, 0, nil, ie.stats)
+		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs,
+			0, nil, ie.stats, ie.indexMissingLeadingKey)
 		return out, err
 	}
 	return nil, nil
@@ -551,7 +559,8 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, 0, encodeBuf, ie.stats)
+		out, _, err := N1QLTransform(nil, docval, context,
+			[]interface{}{ie.whExpr}, 0, encodeBuf, ie.stats, false)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false
