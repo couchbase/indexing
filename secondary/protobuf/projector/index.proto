@@ -94,4 +94,7 @@ message IndexDefn {
     optional string          scopeID      = 15; // ID  of the scope (base-16 string) on which index is defined
     optional string          collection   = 16; // Name of the collection on which index is defined
     optional string          collectionID = 17; // ID  of the collection (base-16 string) on which index is defined
+
+    // Index Missing Leading Key ?
+    optional bool            indexMissingLeadingKey = 18; // Should projector index if leading key is missing
 }
