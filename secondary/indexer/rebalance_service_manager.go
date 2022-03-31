@@ -29,6 +29,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/audit"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1063,24 +1064,114 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	}
 	<-respch
 
-	// cleanup transfer token
+	// order the transfer tokens to detect multiple partitions of same index on the same destination (this node)
+	// with same realInstId, using local meta determine which TT represents realinst and move it to end of list
+	// to avoide deleting realInst before proxy inst is deleted.
+
+	hasMultiPartsToSameDest := false
+	thisNodeId := string(m.nodeInfo.NodeID)
+	// count of partitions with same defn and realInst for this destination, for partitioned indexes.
+	destTTRealInstMap := make(map[c.IndexDefnId]map[c.IndexInstId]int)
+
+	for _, tt := range tts {
+		// only this node as dest and partitioned indexes
+		if tt.DestId == thisNodeId && common.IsPartitioned(tt.IndexInst.Defn.PartitionScheme) {
+			defnId := tt.IndexInst.Defn.DefnId
+			realInstId := tt.RealInstId
+			if _, ok := destTTRealInstMap[defnId]; !ok {
+				destTTRealInstMap[defnId] = make(map[c.IndexInstId]int)
+			}
+			if _, ok := destTTRealInstMap[defnId][realInstId]; !ok {
+				destTTRealInstMap[defnId][realInstId] = 1
+			} else {
+				// we have more than one instances to same dest, defn and same realInstid
+				destTTRealInstMap[defnId][realInstId] = destTTRealInstMap[defnId][realInstId] + 1
+				hasMultiPartsToSameDest = true
+			}
+		}
+	}
+
+	var localMeta *manager.LocalIndexMetadata
+	var err error
+
+	if hasMultiPartsToSameDest {
+		localMeta, err = getLocalMeta(m.localhttp)
+		if err != nil {
+			l.Errorf("%v Error Fetching Local Meta %v %v", "RebalanceServiceManager::cleanupTransferTokens", m.localhttp, err)
+			return err
+		}
+	}
+
+	type ttListElement struct {
+		ttid string
+		tt   *c.TransferToken
+	}
+
+	// normally transfer tokens are added to ttList
+	ttList := []ttListElement{}
+	// only transfter tokens of realInst where we have two or more TTs to same destid (this node)
+	// are added to ttListRealInst so that these real insts are processed at end.
+	ttListRealInst := []ttListElement{}
+
 	for ttid, tt := range tts {
-
-		l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", ttid, tt)
-
-		if tt.MasterId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForMaster(ttid, tt)
+		if hasMultiPartsToSameDest {
+			if tt.DestId == thisNodeId {
+				defnId := tt.IndexInst.Defn.DefnId
+				realInstId := tt.RealInstId
+				if _, ok := destTTRealInstMap[defnId]; ok {
+					// more than one tts for partitioned index to same dest with same defn and realInst
+					if cnt, ok := destTTRealInstMap[defnId][realInstId]; ok && cnt > 1 {
+						isProxy, err := m.isProxyFromMeta(tt, localMeta)
+						// we wont fail the rebalance here if isProxyFromMeta returned error and
+						// let it do the normal cleanup which may or may not fail later
+						if err == nil && !isProxy { // this is a realInst
+							ttListRealInst = append(ttListRealInst, ttListElement{ttid, tt})
+							continue
+						}
+					}
+				}
+			}
 		}
-		if tt.SourceId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForSource(ttid, tt)
+		ttList = append(ttList, ttListElement{ttid, tt})
+	}
+
+	ttList = append(ttList, ttListRealInst...)
+
+	// cleanup transfer token
+	for _, t := range ttList {
+
+		l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
+
+		if t.tt.MasterId == string(m.nodeInfo.NodeID) {
+			m.cleanupTransferTokensForMaster(t.ttid, t.tt)
 		}
-		if tt.DestId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForDest(ttid, tt, indexStateMap)
+		if t.tt.SourceId == string(m.nodeInfo.NodeID) {
+			m.cleanupTransferTokensForSource(t.ttid, t.tt)
+		}
+		if t.tt.DestId == string(m.nodeInfo.NodeID) {
+			m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
 		}
 
 	}
 
 	return nil
+}
+
+func (m *RebalanceServiceManager) isProxyFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (bool, error) {
+
+	method := "RebalanceServiceManager::isProxyFromMeta"
+
+	inst := tt.IndexInst
+
+	topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
+	if topology == nil {
+		err := fmt.Errorf("Topology Information Missing for Bucket %v Scope %v Collection %v",
+			inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
+		l.Errorf("%v %v", method, err)
+		return false, err
+	}
+	isProxy := topology.IsProxyIndexInst(tt.IndexInst.Defn.DefnId, tt.InstId)
+	return isProxy, nil
 }
 
 func (m *RebalanceServiceManager) cleanupTransferTokensForMaster(ttid string, tt *c.TransferToken) error {
