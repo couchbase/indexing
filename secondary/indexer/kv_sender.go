@@ -61,7 +61,9 @@ type kvSender struct {
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 	config c.Config) (KVSender, Message) {
 
-	useCInfoLite := config["use_cinfo_lite"].Bool()
+	// Disabled due to MB-51636
+	// useCInfoLite := config["use_cinfo_lite"].Bool()
+	useCInfoLite := false
 	cip, err := common.NewClusterInfoProvider(useCInfoLite, config["clusterAddr"].String(),
 		DEFAULT_POOL, "kvsender", config)
 	if err != nil {
@@ -1476,34 +1478,37 @@ func (k *kvSender) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 
 	newConfig := cfgUpdate.GetConfig()
-	oldConfig := k.config
-	newUseCInfoLite := newConfig["use_cinfo_lite"].Bool()
-	oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
+	
+	// Disabled due to MB-51636
+	
+	// oldConfig := k.config
+	// newUseCInfoLite := newConfig["use_cinfo_lite"].Bool()
+	// oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
 
-	if oldUseCInfoLite != newUseCInfoLite {
-		logging.Infof("KVSender::handleConfigUpdate Updating ClusterInfoProvider in kvsender")
+	// if oldUseCInfoLite != newUseCInfoLite {
+	// 	logging.Infof("KVSender::handleConfigUpdate Updating ClusterInfoProvider in kvsender")
 
-		cip, err := common.NewClusterInfoProvider(newUseCInfoLite,
-			newConfig["clusterAddr"].String(), DEFAULT_POOL, "kvsender", newConfig)
-		if err != nil {
-			logging.Errorf("KVSender::handleConfigUpdate Unable to update ClusterInfoProvider in kvsender err: %v, use_cinfo_lite: old %v new %v",
-				err, oldUseCInfoLite, newUseCInfoLite)
-			common.CrashOnError(err)
-		}
-		cip.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
+	// 	cip, err := common.NewClusterInfoProvider(newUseCInfoLite,
+	// 		newConfig["clusterAddr"].String(), DEFAULT_POOL, "kvsender", newConfig)
+	// 	if err != nil {
+	// 		logging.Errorf("KVSender::handleConfigUpdate Unable to update ClusterInfoProvider in kvsender err: %v, use_cinfo_lite: old %v new %v",
+	// 			err, oldUseCInfoLite, newUseCInfoLite)
+	// 		common.CrashOnError(err)
+	// 	}
+	// 	cip.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
 
-		k.cinfoProviderLock.Lock()
-		oldProvider := k.cinfoProvider
-		k.cinfoProvider = cip
-		k.cinfoProviderLock.Unlock()
+	// 	k.cinfoProviderLock.Lock()
+	// 	oldProvider := k.cinfoProvider
+	// 	k.cinfoProvider = cip
+	// 	k.cinfoProviderLock.Unlock()
 
-		if oldProvider != nil {
-			oldProvider.Close()
-		}
+	// 	if oldProvider != nil {
+	// 		oldProvider.Close()
+	// 	}
 
-		logging.Infof("KVSender::handleConfigUpdate Updated ClusterInfoProvider in Indexer use_cinfo_lite: old %v new %v",
-			oldUseCInfoLite, newUseCInfoLite)
-	}
+	// 	logging.Infof("KVSender::handleConfigUpdate Updated ClusterInfoProvider in Indexer use_cinfo_lite: old %v new %v",
+	// 		oldUseCInfoLite, newUseCInfoLite)
+	// }
 
 	k.config = newConfig
 
