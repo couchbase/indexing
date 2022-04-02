@@ -453,6 +453,54 @@ func (bi *bucketInfo) setClusterURL(u string) {
 	bi.clusterURL = u
 }
 
+func (bi *bucketInfo) String() string {
+	return fmt.Sprintf("bucket: %+v cluster: %v", bi.bucket, bi.clusterURL)
+}
+
+func NewBucketInfo(cluster, pooln, bucketn string) (*bucketInfo, error) {
+
+	if strings.HasPrefix(cluster, "http") {
+		u, err := url.Parse(cluster)
+		if err != nil {
+			return nil, err
+		}
+		cluster = u.Host
+	}
+
+	ah := &CbAuthHandler{
+		Hostport: cluster,
+		Bucket:   bucketn,
+	}
+
+	client, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
+	if err != nil {
+		return nil, err
+	}
+	client.SetUserAgent("NewBucketInfo")
+
+	var bucket *couchbase.Bucket
+	retryCount := 0
+	terseBucketsBase := fmt.Sprintf("/pools/%v/b/", pooln)
+	for retry := true; retry && retryCount <= 5; retryCount++ {
+		retry, bucket, err = client.GetTerseBucket(terseBucketsBase, bucketn)
+		if retry {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if retryCount > 1 {
+		logging.Warnf("NewBucketInfo: Retried %v times due to out of sync for"+
+			" bucket %s. Final err: %v", retryCount, bucketn, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	bi := newBucketInfo(bucket, client.BaseURL.Host)
+	bi.setClusterURL(cluster)
+
+	return bi, err
+}
+
 //
 // PoolInfo
 //
@@ -1999,7 +2047,6 @@ func (c *ClusterInfoCacheLiteClient) GetLocalNodeUUID() (string, error) {
 	return "", fmt.Errorf("no node has ThisNode set")
 }
 
-
 func (ni *NodesInfo) GetNodesByIds(nids []NodeId) (nodes []couchbase.Node) {
 	for _, nid := range nids {
 		nodes = append(nodes, ni.nodes[nid])
@@ -2013,7 +2060,6 @@ func (ni *NodesInfo) GetNodesByServiceType(srvc string) (nodes []couchbase.Node)
 	nids := ni.GetNodeIdsByServiceType(srvc)
 	return ni.GetNodesByIds(nids)
 }
-
 
 // The output of this function comes from querying the /pools/default endpoint
 // Thus the function returns list of nodes where "cluster membership of node is active".
