@@ -494,7 +494,7 @@ func (m *schedIndexCreator) getMetadataProvider() (*client.MetadataProvider, err
 	defer m.proMutex.Unlock()
 
 	if m.provider == nil {
-		provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "schedIndexCreator")
+		provider, _, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "schedIndexCreator")
 		if err != nil {
 			return nil, err
 		}

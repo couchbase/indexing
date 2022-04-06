@@ -275,7 +275,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	// nodes can be empty but it cannot be nil.
 	// If emtpy, then no node will be considered.
 	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:rebalanceDone")
+	provider, httpAddrMap, hasFailedNodes, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:rebalanceDone")
 	if err != nil {
 		logging.Errorf("DDLServiceMgr:rebalanceDone(): Failed to initialize metadata provider.  Error=%v.", err)
 		return
@@ -305,9 +305,9 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	// TODO: Investigate if gDDLServiceMgrLck has to be held for the
 	// below methods
 	m.cleanupCreateCommand()
-	m.cleanupDelCommand(false, m.provider)
-	m.cleanupDropInstanceCommand(false, m.provider)
-	m.cleanupBuildCommand(false, m.provider)
+	m.cleanupDelCommand(false, hasFailedNodes, m.provider)
+	m.cleanupDropInstanceCommand(false, hasFailedNodes, m.provider)
+	m.cleanupBuildCommand(false, hasFailedNodes, m.provider)
 	m.handleClusterStorageMode(httpAddrMap)
 }
 
@@ -350,7 +350,7 @@ func (m *DDLServiceMgr) startProcessDDL() {
 //
 // Recover drop index command
 //
-func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.MetadataProvider) {
+func (m *DDLServiceMgr) cleanupDelCommand(checkDDL, hasFailedNodes bool, provider *client.MetadataProvider) {
 
 	m.dropCleanupLck.Lock()
 	defer m.dropCleanupLck.Unlock()
@@ -367,7 +367,7 @@ func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.Metada
 
 	if provider == nil {
 		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDelCommand")
+		provider, _, hasFailedNodes, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDelCommand")
 		if err != nil {
 			logging.Errorf("DDLServiceMgr: cleanupDelCommand error in newMetadataProvider %v. Skip cleanup.", err)
 			return
@@ -377,6 +377,11 @@ func (m *DDLServiceMgr) cleanupDelCommand(checkDDL bool, provider *client.Metada
 
 	if provider == nil {
 		logging.Errorf("DDLServiceMgr: cleanupDelCommand nil MetadataProvider. Skip cleanup.")
+		return
+	}
+
+	if hasFailedNodes {
+		logging.Errorf("DDLServiceMgr: cleanupDelCommand has failed nodes in cluster. Skip cleanup.")
 		return
 	}
 
@@ -475,7 +480,7 @@ func (m *DDLServiceMgr) delTokenCleaner() {
 
 		case <-ticker.C:
 			if m.canProcessDDL() {
-				m.cleanupDelCommand(true, nil)
+				m.cleanupDelCommand(true, false, nil)
 			}
 
 		case <-m.dtCleanerStopCh:
@@ -492,7 +497,7 @@ func (m *DDLServiceMgr) delTokenCleaner() {
 //
 // Recover build index command
 //
-func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.MetadataProvider) {
+func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL, hasFailedNodes bool, provider *client.MetadataProvider) {
 
 	m.buildCleanupLck.Lock()
 	defer m.buildCleanupLck.Unlock()
@@ -509,7 +514,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 
 	if provider == nil {
 		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupBuildCommand")
+		provider, _, hasFailedNodes, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupBuildCommand")
 		if err != nil {
 			logging.Errorf("DDLServiceMgr: cleanupBuildCommand error in newMetadataProvider %v. Skip cleanup.", err)
 			return
@@ -519,6 +524,11 @@ func (m *DDLServiceMgr) cleanupBuildCommand(checkDDL bool, provider *client.Meta
 
 	if provider == nil {
 		logging.Errorf("DDLServiceMgr: cleanupBuildCommand nil MetadataProvider. Skip cleanup.")
+		return
+	}
+
+	if hasFailedNodes {
+		logging.Errorf("DDLServiceMgr: cleanupBuildCommand has failed nodes in cluster. Skip cleanup.")
 		return
 	}
 
@@ -586,7 +596,7 @@ func (m *DDLServiceMgr) buildTokenCleaner() {
 
 		case <-ticker.C:
 			if m.canProcessDDL() {
-				m.cleanupBuildCommand(true, nil)
+				m.cleanupBuildCommand(true, false, nil)
 			}
 
 		case <-m.btCleanerStopCh:
@@ -763,7 +773,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 	// able to start.  But once the metadata provider is able to fetch metadata for all the nodes, the
 	// metadata will be cached locally even if there is network partitioning afterwards.
 	//
-	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:handleCreateCommand")
+	provider, _, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:handleCreateCommand")
 	if err != nil {
 		logging.Errorf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
 		return
@@ -1071,7 +1081,7 @@ func (m *DDLServiceMgr) processCreateCommand() {
 //
 // Recover drop instance command
 //
-func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *client.MetadataProvider) {
+func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL, hasFailedNodes bool, provider *client.MetadataProvider) {
 
 	m.dropInstTokCleanupLck.Lock()
 	defer m.dropInstTokCleanupLck.Unlock()
@@ -1086,9 +1096,10 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 		return
 	}
 
+
 	if provider == nil {
 		// Use latest metadata provider.
-		provider, _, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDropInstanceCommand")
+		provider, _, hasFailedNodes, err = newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr:cleanupDropInstanceCommand")
 		if err != nil {
 			logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand error in newMetadataProvider %v. Skip cleanup.", err)
 			return
@@ -1099,6 +1110,11 @@ func (m *DDLServiceMgr) cleanupDropInstanceCommand(checkDDL bool, provider *clie
 
 	if provider == nil {
 		logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand nil MetadataProvider. Skip cleanup.")
+		return
+	}
+
+	if hasFailedNodes {
+		logging.Errorf("DDLServiceMgr: cleanupDropInstanceCommand has failed nodes in cluster. Skip cleanup.")
 		return
 	}
 
@@ -1176,7 +1192,7 @@ func (m *DDLServiceMgr) dropInstTokenCleaner() {
 
 		case <-ticker.C:
 			if m.canProcessDDL() {
-				m.cleanupDropInstanceCommand(true, nil)
+				m.cleanupDropInstanceCommand(true, false, nil)
 			}
 
 		case <-m.dropInstTokCleanerStopCh:
@@ -1857,7 +1873,7 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 	// nodes can be empty but it cannot be nil.
 	// If emtpy, then no node will be considered.
 	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:refreshMetadataProvider")
+	provider, httpAddrMap, _, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr:refreshMetadataProvider")
 	if err != nil {
 		return nil, err
 	}
@@ -1867,22 +1883,33 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 }
 
 func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, settings *ddlSettings,
-	logPrefix string) (*client.MetadataProvider, map[string]string, error) {
+	logPrefix string) (*client.MetadataProvider, map[string]string, bool, error) {
 
 	// initialize ClusterInfoCache
 	url, err := common.ClusterAuthUrl(clusterAddr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	cinfo.SetUserAgent(fmt.Sprintf("newMetadataProvider:%v", logPrefix))
 
 	if err := cinfo.FetchNodesAndSvsInfo(); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
+	}
+
+	hasFailedNodes := false
+	failedNodes := cinfo.GetFailedIndexerNodes()
+	if len(failedNodes) >= 1 {
+		hasFailedNodes = true
+		nodeIds := []string{}
+		for _, n := range(failedNodes) {
+			nodeIds = append(nodeIds, n.NodeUUID)
+		}
+		logging.Infof("%v found failed nodes %v", logPrefix, nodeIds)
 	}
 
 	adminAddrMap := make(map[string]string)
@@ -1914,7 +1941,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 
 					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 					if err != nil {
-						return nil, nil, err
+						return nil, nil, hasFailedNodes, err
 					}
 
 					adminAddrMap[localMeta.NodeUUID] = adminAddr
@@ -1924,7 +1951,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		}
 
 		if len(nodes) != 0 {
-			return nil, nil, errors.New(
+			return nil, nil, hasFailedNodes, errors.New(
 				fmt.Sprintf("%v: Failed to initialize metadata provider.  Unknown host=%v", logPrefix, nodes))
 		}
 	} else {
@@ -1940,7 +1967,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		for _, nid := range nids {
 			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE, true)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, hasFailedNodes, err
 			}
 			nodeUUID := cinfo.GetNodeUUID(nid)
 			adminAddrMap[nodeUUID] = adminAddr
@@ -1950,7 +1977,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 	// initialize a new MetadataProvider
 	ustr, err := common.NewUUID()
 	if err != nil {
-		return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  Internal Error = %v", logPrefix, err))
+		return nil, nil, hasFailedNodes, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  Internal Error = %v", logPrefix, err))
 	}
 	providerId := ustr.Str()
 
@@ -1959,7 +1986,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		if provider != nil {
 			provider.Close()
 		}
-		return nil, nil, err
+		return nil, nil, hasFailedNodes, err
 	}
 
 	// Watch Metadata
@@ -1980,7 +2007,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 		for range ticker.C {
 			retry = retry - 1
 			if provider.AllWatchersAlive() {
-				return provider, httpAddrMap, nil
+				return provider, httpAddrMap, hasFailedNodes, nil
 			}
 
 			if retry == 0 {
@@ -1991,13 +2018,13 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 				}
 
 				provider.Close()
-				return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
+				return nil, nil, hasFailedNodes, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
 					"%v within 30 seconds.", logPrefix, common.ErrIndexerConnection.Error()))
 			}
 		}
 	}
 
-	return provider, httpAddrMap, nil
+	return provider, httpAddrMap, hasFailedNodes, nil
 }
 
 //////////////////////////////////////////////////////////////
