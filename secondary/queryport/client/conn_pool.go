@@ -142,10 +142,10 @@ func (cp *connectionPool) doAuth(conn *connection) error {
 	// Check if auth is supported / configured before doing auth
 	clustVer := common.GetClusterVersion()
 	needsAuth := atomic.LoadUint32(cp.needsAuth)
-
-	if clustVer < common.INDEXER_71_VERSION && needsAuth == 0 {
-		logging.Verbosef("%v doAuth Auth is not needed for connection (%v,%v) clustVer %v, needsAuth %v ",
-			cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr(), clustVer, needsAuth)
+	intVer := common.GetInternalVersion()
+	if clustVer < common.INDEXER_71_VERSION && needsAuth == 0 && intVer.LessThan(common.MIN_VER_SRV_AUTH) {
+		logging.Verbosef("%v doAuth Auth is not needed for connection (%v,%v) clustVer %v, intVer %v, needsAuth %v ",
+			cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr(), clustVer, intVer, needsAuth)
 		return nil
 	}
 
