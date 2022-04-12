@@ -2144,11 +2144,26 @@ func (s *storageMgr) handleUpdateIndexSnapMapForIndex(cmd Message) {
 	partnMap := req.GetPartnMap()
 	streamId := req.GetStreamId()
 	keyspaceId := req.GetKeyspaceId()
+	replyCh := req.GetReplyChannel()
 
-	s.muSnap.Lock()
-	s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, keyspaceId)
-	s.muSnap.Unlock()
+	f := func() {
+		s.muSnap.Lock()
+		s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, keyspaceId)
+		s.muSnap.Unlock()
+		if replyCh != nil {
+			replyCh <- true
+		}
+	}
 
+	if replyCh != nil && (common.GetStorageMode() == common.MOI) {
+		// make updateIndexSnapMapForIndex async for MOI during bootstrap phase
+		// because it tries to load index from disk which can take lot of time (sometimes in 10s of mins)
+		// this will cause indexer to block and introduce failures such as rebalance failure.
+		// replyChan is only set during bootstrap phase.
+		go f()
+	} else {
+		f()
+	}
 	s.supvCmdch <- &MsgSuccess{}
 }
 

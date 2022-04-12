@@ -7533,13 +7533,28 @@ func (idx *indexer) initFromPersistedState() error {
 			continue
 		}
 
-		idx.internalRecvCh <- &MsgUpdateSnapMap{
-			idxInstId: inst.InstId,
-			idxInst:   inst,
-			partnMap:  partnInstMap,
-			streamId:  common.ALL_STREAMS,
-			//TODO Collections verify this will work
-			keyspaceId: "",
+		if common.GetStorageMode() == common.MOI {
+			respCh := make(chan bool)
+
+			idx.internalRecvCh <- &MsgUpdateSnapMap{
+				idxInstId:  inst.InstId,
+				idxInst:    inst,
+				partnMap:   partnInstMap,
+				streamId:   common.ALL_STREAMS,
+				keyspaceId: "",
+				respch:     respCh,
+			}
+			<-respCh
+
+		} else {
+			idx.internalRecvCh <- &MsgUpdateSnapMap{
+				idxInstId: inst.InstId,
+				idxInst:   inst,
+				partnMap:  partnInstMap,
+				streamId:  common.ALL_STREAMS,
+				//TODO Collections verify this will work
+				keyspaceId: "",
+			}
 		}
 
 		idx.initializeBootstrapStats(bootstrapStats, inst.InstId)
