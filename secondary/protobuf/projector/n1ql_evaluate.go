@@ -41,7 +41,7 @@ func N1QLTransform(
 	[]byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
-	isLeadingKey := true
+	isLeadingKey := !indexMissingLeadingKey
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		start := time.Now()
@@ -69,7 +69,7 @@ func N1QLTransform(
 				return nil, nil, nil
 			}
 			key := scalar
-			if key.Type() == qvalue.MISSING && isLeadingKey && !indexMissingLeadingKey {
+			if key.Type() == qvalue.MISSING && isLeadingKey {
 				return nil, nil, nil
 			} else if key.Type() == qvalue.MISSING {
 				arrValue = append(arrValue, key)
@@ -92,8 +92,6 @@ func N1QLTransform(
 					return nil, nil, nil
 				}
 				//if array is leading key and missing, skip indexing the entry
-				// TODO: Indexing Missing Leading key is not yet supported if leading index is
-				// Array index.
 				if isArrayMissing(vector) {
 					return nil, nil, nil
 				}
