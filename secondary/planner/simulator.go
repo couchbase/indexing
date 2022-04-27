@@ -12,13 +12,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"strconv"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -759,7 +759,7 @@ func (s *simulator) ReadWorkloadSpec(specFile string) (*WorkloadSpec, error) {
 
 		spec := &WorkloadSpec{}
 
-		buf, err := ioutil.ReadFile(specFile)
+		buf, err := iowrap.Ioutil_ReadFile(specFile)
 		if err != nil {
 			return nil, errors.New(fmt.Sprintf("Unable to read workload spec from %v. err = %s", specFile, err))
 		}

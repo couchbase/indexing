@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/transport"
@@ -202,7 +202,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	// finish sync with remote metadata repo master).
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
 	mgr.basepath = config["storage_dir"].String()
-	os.Mkdir(mgr.basepath, 0755)
+	iowrap.Os_Mkdir(mgr.basepath, 0755)
 	mgr.repoName = filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 
 	ninfo, err := mgr.cinfoProvider.GetNodesInfoProvider()

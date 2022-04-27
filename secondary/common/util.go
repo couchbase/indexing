@@ -31,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -998,13 +999,13 @@ func GetScopeAndCollectionID(cluster, bucket, scope, collection string) (string,
 }
 
 func FileSize(name string) (int64, error) {
-	f, err := os.Open(name)
+	f, err := iowrap.Os_Open(name)
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer iowrap.File_Close(f)
 
-	fi, err := f.Stat()
+	fi, err := iowrap.File_Stat(f)
 	if err != nil {
 		return 0, err
 	}
@@ -1073,27 +1074,27 @@ func CopyFile(dest, source string) (err error) {
 
 	defer func() {
 		if sf != nil {
-			sf.Close()
+			iowrap.File_Close(sf)
 		}
 		if df != nil {
-			df.Close()
+			iowrap.File_Close(df)
 		}
 	}()
 
-	if sf, err = os.Open(source); err != nil {
+	if sf, err = iowrap.Os_Open(source); err != nil {
 		return err
 	} else if IsPathExist(dest) {
 		return nil
-	} else if df, err = os.Create(dest); err != nil {
+	} else if df, err = iowrap.Os_Create(dest); err != nil {
 		return err
-	} else if _, err = io.Copy(df, sf); err != nil {
+	} else if _, err = iowrap.Io_Copy(df, sf); err != nil {
 		return err
 	}
 
 	var info os.FileInfo
-	if info, err = os.Stat(source); err != nil {
+	if info, err = iowrap.Os_Stat(source); err != nil {
 		return err
-	} else if err = os.Chmod(dest, info.Mode()); err != nil {
+	} else if err = iowrap.Os_Chmod(dest, info.Mode()); err != nil {
 		return err
 	}
 	return
@@ -1107,13 +1108,13 @@ func CopyFile(dest, source string) (err error) {
 func CopyDir(dest, source string) error {
 	var created bool
 
-	if fi, err := os.Stat(source); err != nil {
+	if fi, err := iowrap.Os_Stat(source); err != nil {
 		return err
 	} else if !fi.IsDir() {
 		return fmt.Errorf("source not a directory")
 	} else if IsPathExist(dest) == false {
 		created = true
-		if err := os.MkdirAll(dest, fi.Mode()); err != nil {
+		if err := iowrap.Os_MkdirAll(dest, fi.Mode()); err != nil {
 			return err
 		}
 	}
@@ -1122,12 +1123,12 @@ func CopyDir(dest, source string) error {
 	defer func() {
 		// if copy failed in the middle and directory was created by us, clean.
 		if err != nil && created {
-			os.RemoveAll(dest)
+			iowrap.Os_RemoveAll(dest)
 		}
 	}()
 
 	var entries []os.FileInfo
-	if entries, err = ioutil.ReadDir(source); err != nil {
+	if entries, err = iowrap.Ioutil_ReadDir(source); err != nil {
 		return err
 	} else {
 		for _, entry := range entries {
@@ -1146,7 +1147,7 @@ func CopyDir(dest, source string) error {
 }
 
 func IsPathExist(path string) bool {
-	if _, err := os.Stat(path); err != nil {
+	if _, err := iowrap.Os_Stat(path); err != nil {
 		return !os.IsNotExist(err)
 	}
 	return true
@@ -1587,16 +1588,16 @@ func GetCollectionDefaults(scope, collection string) (string, string) {
 	return scope, collection
 }
 
-// WriteFileWithSync simulates ioutil.WriteFile but also syncs (forces bytes
+// WriteFileWithSync simulates iowrap.Ioutil_WriteFile but also syncs (forces bytes
 // to disk) before closing. Returns the first error, if any.
 func WriteFileWithSync(path string, data []byte, perm os.FileMode) error {
-	fd, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, perm)
+	fd, err := iowrap.Os_OpenFile(path, os.O_WRONLY|os.O_CREATE, perm)
 	if err == nil { // opened, so must close
-		_, err = fd.Write(data)
+		_, err = iowrap.File_Write(fd, data)
 		if err == nil {
-			err = fd.Sync()
+			err = iowrap.File_Sync(fd)
 		}
-		err2 := fd.Close()
+		err2 := iowrap.File_Close(fd)
 		if err == nil {
 			err = err2
 		}

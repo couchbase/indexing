@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
 )
@@ -118,38 +119,38 @@ func main() {
 	// - else, it is not an upgrade situation.
 	storage_dir := config["indexer.storage_dir"].String()
 	if common.IsPathExist(storage_dir) == false {
-		if err := os.MkdirAll(storage_dir, 0755); err != nil {
+		if err := iowrap.Os_MkdirAll(storage_dir, 0755); err != nil {
 			common.CrashOnError(err)
 		}
 	}
 	lowcase_storage_dir := strings.ToLower(storage_dir)
 	if common.IsPathExist(lowcase_storage_dir) {
 		func() {
-			casefile, err := os.Open(storage_dir)
+			casefile, err := iowrap.Os_Open(storage_dir)
 			if err != nil {
-				logging.Errorf("os.Open(storage_dir): %v", err)
+				logging.Errorf("iowrap.Os_Open(storage_dir): %v", err)
 				common.CrashOnError(err)
 			}
-			defer casefile.Close()
-			lowerfile, err := os.Open(lowcase_storage_dir)
+			defer iowrap.File_Close(casefile)
+			lowerfile, err := iowrap.Os_Open(lowcase_storage_dir)
 			if err != nil {
-				logging.Errorf("os.Open(lowcase_storage_dir): %v", err)
+				logging.Errorf("iowrap.Os_Open(lowcase_storage_dir): %v", err)
 				common.CrashOnError(err)
 			}
-			defer lowerfile.Close()
+			defer iowrap.File_Close(lowerfile)
 
-			caseinfo, err := casefile.Stat()
+			caseinfo, err := iowrap.File_Stat(casefile)
 			if err != nil {
-				logging.Errorf("storage_dir.Stat(): %v", err)
+				logging.Errorf("File_Stat(storage_dir): %v", err)
 				common.CrashOnError(err)
 			}
-			lowerinfo, err := lowerfile.Stat()
+			lowerinfo, err := iowrap.File_Stat(lowerfile)
 			if err != nil {
-				logging.Errorf("lowcase_storage_dir.Stat(): %v", err)
+				logging.Errorf("File_Stat(lowcase_storage_dir): %v", err)
 				common.CrashOnError(err)
 			}
 			if os.SameFile(caseinfo, lowerinfo) == false {
-				err := os.Rename(lowcase_storage_dir, storage_dir)
+				err := iowrap.Os_Rename(lowcase_storage_dir, storage_dir)
 				if err != nil {
 					fmsg := "renaming from %v to %v: %v"
 					logging.Fatalf(fmsg, lowcase_storage_dir, storage_dir, err)
@@ -161,7 +162,7 @@ func main() {
 		}()
 	}
 
-	if err := os.MkdirAll(*diagDir, 0755); err != nil {
+	if err := iowrap.Os_MkdirAll(*diagDir, 0755); err != nil {
 		common.CrashOnError(err)
 	}
 

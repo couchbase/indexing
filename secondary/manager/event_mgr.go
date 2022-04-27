@@ -58,7 +58,7 @@ func (e *eventManager) close() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Warnf("panic in eventManager.Close() : %s.  Ignored.\n", r)
+			logging.Warnf("panic in eventManager.close() : %s.  Ignored.\n", r)
 		}
 	}()
 

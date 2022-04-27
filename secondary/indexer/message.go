@@ -1816,6 +1816,7 @@ type MsgUpdateSnapMap struct {
 	partnMap   PartitionInstMap
 	streamId   common.StreamId
 	keyspaceId string
+	respch     chan bool
 }
 
 func (m *MsgUpdateSnapMap) GetMsgType() MsgType {
@@ -1837,6 +1838,9 @@ func (m *MsgUpdateSnapMap) GetStreamId() common.StreamId {
 }
 func (m *MsgUpdateSnapMap) GetKeyspaceId() string {
 	return m.keyspaceId
+}
+func (m *MsgUpdateSnapMap) GetReplyChannel() chan bool {
+	return m.respch
 }
 
 type MsgIndexStorageStats struct {

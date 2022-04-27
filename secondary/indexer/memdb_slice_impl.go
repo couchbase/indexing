@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
@@ -193,9 +193,9 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	isPrimary bool, hasPersistance bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
 
-	info, err := os.Stat(path)
+	info, err := iowrap.Os_Stat(path)
 	if err != nil || err == nil && info.IsDir() {
-		os.Mkdir(path, 0777)
+		iowrap.Os_Mkdir(path, 0777)
 	}
 
 	mdb := &memdbSlice{}
@@ -347,7 +347,7 @@ func (mdb *memdbSlice) initStores() {
 }
 
 func (mdb *memdbSlice) checkStorageCorruptionError() error {
-	if data, err := ioutil.ReadFile(filepath.Join(mdb.path, "error")); err == nil {
+	if data, err := iowrap.Ioutil_ReadFile(filepath.Join(mdb.path, "error")); err == nil {
 		if string(data) == fmt.Sprintf("%v", errStorageCorrupted) {
 			return errStorageCorrupted
 		}
@@ -1024,7 +1024,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			dir := newSnapshotPath(mdb.path)
 			tmpdir := filepath.Join(mdb.path, tmpDirName)
 			manifest := filepath.Join(tmpdir, "manifest.json")
-			os.RemoveAll(tmpdir)
+			iowrap.Os_RemoveAll(tmpdir)
 
 			mdb.confLock.RLock()
 			maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
@@ -1042,8 +1042,8 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
 					" prepare persistence for create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
 
-				os.RemoveAll(tmpdir)
-				os.RemoveAll(dir)
+				iowrap.Os_RemoveAll(tmpdir)
+				iowrap.Os_RemoveAll(dir)
 
 				return
 			}
@@ -1073,7 +1073,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 				// If everything succeeded, rename the temp dir to the final dir
 				// and clean up old disk snapshots
 				if err == nil {
-					err = os.Rename(tmpdir, dir)
+					err = iowrap.Os_Rename(tmpdir, dir)
 					if err == nil {
 						mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info)
 					}
@@ -1088,8 +1088,8 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			} else {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
 					" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
-				os.RemoveAll(tmpdir)
-				os.RemoveAll(dir)
+				iowrap.Os_RemoveAll(tmpdir)
+				iowrap.Os_RemoveAll(dir)
 			}
 		}()
 	} else {
@@ -1150,7 +1150,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotIn
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Removing disk snapshot %v. Num snapshots %v.", mdb.id, mdb.idxInstId,
 					mdb.idxPartnId, dir, len(manifests)-i)
-				os.RemoveAll(dir)
+				iowrap.Os_RemoveAll(dir)
 				numDiskSnapshots--
 			} else {
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1168,7 +1168,7 @@ func (mdb *memdbSlice) cleanupAllOldSnapshotFiles() {
 	for _, m := range manifests {
 		dir := filepath.Dir(m)
 		logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
-		os.RemoveAll(dir)
+		iowrap.Os_RemoveAll(dir)
 	}
 }
 
@@ -1213,10 +1213,10 @@ func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
 	for i := len(files) - 1; i >= 0; i-- {
 		f := files[i]
 		info := &memdbSnapshotInfo{dataPath: filepath.Dir(f)}
-		fd, err := os.Open(f)
+		fd, err := iowrap.Os_Open(f)
 		if err == nil {
-			defer fd.Close()
-			bs, err := ioutil.ReadAll(fd)
+			defer iowrap.File_Close(fd)
+			bs, err := iowrap.Ioutil_ReadAll(fd)
 			if err == nil {
 				err = json.Unmarshal(bs, info)
 				if err == nil {
@@ -1307,7 +1307,7 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 			break
 		}
 
-		if err := os.RemoveAll(si.dataPath); err != nil {
+		if err := iowrap.Os_RemoveAll(si.dataPath); err != nil {
 			return err
 		}
 	}
@@ -1355,16 +1355,16 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, r, err)
 			if err != errStorageCorrupted {
-				os.RemoveAll(snapInfo.dataPath)
+				iowrap.Os_RemoveAll(snapInfo.dataPath)
 				os.Exit(1)
 			} else {
 				// Persist error in a file. Next time indexer comes up, required cleanup will happen.
-				os.RemoveAll(snapInfo.dataPath)
+				iowrap.Os_RemoveAll(snapInfo.dataPath)
 				msg := fmt.Sprintf("%v", errStorageCorrupted)
-				ioutil.WriteFile(filepath.Join(mdb.path, "error"), []byte(msg), 0755)
+				iowrap.Ioutil_WriteFile(filepath.Join(mdb.path, "error"), []byte(msg), 0755)
 			}
 		} else {
-			os.RemoveAll(filepath.Join(mdb.path, "error"))
+			iowrap.Os_RemoveAll(filepath.Join(mdb.path, "error"))
 		}
 	}()
 
@@ -1768,7 +1768,7 @@ func (mdb *memdbSlice) String() string {
 func tryDeletememdbSlice(mdb *memdbSlice) {
 
 	//cleanup the disk directory
-	if err := os.RemoveAll(mdb.path); err != nil {
+	if err := iowrap.Os_RemoveAll(mdb.path); err != nil {
 		logging.Errorf("MemDBSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id,
 			mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)

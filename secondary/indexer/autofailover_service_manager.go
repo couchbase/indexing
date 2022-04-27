@@ -13,11 +13,10 @@ import (
 	"io/ioutil"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/couchbase/cbauth/service"
+	// "github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 )
@@ -30,10 +29,9 @@ import (
 // AutofailoverManager (defined in cbauth/service/interface.go) which this class registers as the
 // GSI handler for by calling RegisterAutofailoverManager (defined in cbauth/service/revrpc.go).
 type AutofailoverServiceManager struct {
-	cpuThrottle  *CpuThrottle        // CPU throttler
-	ctExpirer    *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off
-	diskFailures unsafe.Pointer      // *uint64 ever-increasing count of disk read/write fails
-	httpAddr     string              // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
+	cpuThrottle *CpuThrottle        // CPU throttler
+	ctExpirer   *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off
+	httpAddr    string              // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
 
 	lastHealthCheckMux  sync.Mutex // mutex for lastHealthCheckTime
 	lastHealthCheckTime time.Time  // last time HealthCheck was called
@@ -50,20 +48,7 @@ func NewAutofailoverServiceManager(httpAddr string, cpuThrottle *CpuThrottle) *A
 		ctExpirer:   newCpuThrottleExpirer(cpuThrottle),
 		httpAddr:    httpAddr,
 	}
-	var diskFailures uint64 = 0
-	m.diskFailures = (unsafe.Pointer)(&diskFailures)
-
 	return m
-}
-
-// AddDiskFailures adds the value of the argument to m.diskFailures. Thread-safe.
-func (m *AutofailoverServiceManager) AddDiskFailures(diskFailures uint64) {
-	atomic.AddUint64((*uint64)(m.diskFailures), diskFailures)
-}
-
-// getDiskFailures returns the value of m.diskFailures. Thread-safe.
-func (m *AutofailoverServiceManager) getDiskFailures() uint64 {
-	return atomic.LoadUint64((*uint64)(m.diskFailures))
 }
 
 // getLastKnownIndexTopology sends a loopback HTTP REST call to the local Index service to get the
@@ -253,7 +238,10 @@ func (m *AutofailoverServiceManager) HealthCheck() (*service.HealthInfo, error) 
 	m.ctExpirer.resetCpuThrottleExpiry()
 
 	healthInfo := &service.HealthInfo{
-		DiskFailures: int(m.getDiskFailures()),
+		// DiskFailures: int(iowrap.GetDiskFailures()),
+		DiskFailures: 0, // TODO Replace this with the prior commented-out line for release. This is
+		// meant to be disabled until 100% of the work is complete so error counting is released
+		// all-or-nothing, not piecemeal.
 	}
 
 	// To avoid log flooding, only log slow heartbeats or calls. Heartbeat period is 2 seconds.

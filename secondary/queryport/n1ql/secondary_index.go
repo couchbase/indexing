@@ -11,7 +11,6 @@ package n1ql
 import (
 	"encoding/gob"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,6 +42,7 @@ import (
 	qlog "github.com/couchbase/query/logging"
 
 	json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/iowrap"
 )
 
 const DONEREQUEST = 1
@@ -1049,11 +1049,11 @@ func (si *secondaryIndex) Drop(requestId string) errors.Error {
 func (si *secondaryIndex) cleanupBackfillFile(requestId string, broker *qclient.RequestBroker) {
 	if broker != nil {
 		for _, tmpfile := range broker.GetBackfills() {
-			tmpfile.Close()
+			iowrap.File_Close(tmpfile)
 			name := tmpfile.Name()
 			fmsg := "%v request(%v) removing temp file %v ...\n"
 			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
+			if err := iowrap.Os_Remove(name); err != nil {
 				fmsg := "%v remove temp file %v unexpected failure: %v\n"
 				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
 			}
@@ -1626,7 +1626,7 @@ func makeResponsehandler(
 		name := tmpfile.Name()
 		defer func() {
 			if readfd != nil {
-				readfd.Close()
+				iowrap.File_Close(readfd)
 			}
 			waitGroup.Done()
 			atomic.AddInt64(&backfillFin, 1)
@@ -1762,7 +1762,7 @@ func makeResponsehandler(
 
 		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < skeys.GetLength()) {
 			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
-			tmpfile, err = ioutil.TempFile(si.gsi.getTmpSpaceDir(), prefix)
+			tmpfile, err = iowrap.Ioutil_TempFile(si.gsi.getTmpSpaceDir(), prefix)
 			name := ""
 			if tmpfile != nil {
 				name = tmpfile.Name()
@@ -1781,7 +1781,7 @@ func makeResponsehandler(
 				broker.AddBackfill(tmpfile)
 				// encoder
 				enc = gob.NewEncoder(tmpfile)
-				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
+				readfd, err = iowrap.Os_OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
 					fmsg := "%v %v reading temp file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
@@ -2403,7 +2403,7 @@ func (c *indexConfig) processConfig(conf map[string]interface{}) {
 //best effort cleanup as tmpdir may change during restart
 func cleanupTmpFiles(olddir string) {
 
-	files, err := ioutil.ReadDir(olddir)
+	files, err := iowrap.Ioutil_ReadDir(olddir)
 	if err != nil {
 		return
 	}
@@ -2418,7 +2418,7 @@ func cleanupTmpFiles(olddir string) {
 		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
 			fmsg := "GSI client: removing old file %v last-modified @ %v"
 			l.Infof(fmsg, fname, mtime)
-			os.Remove(fname)
+			iowrap.Os_Remove(fname)
 		}
 	}
 
@@ -2451,7 +2451,7 @@ func getTmpSpaceDir() string {
 func cleanupAllTmpFiles() {
 	dirpath := getTmpSpaceDir()
 
-	files, err := ioutil.ReadDir(dirpath)
+	files, err := iowrap.Ioutil_ReadDir(dirpath)
 	if err != nil {
 		l.Warnf("GSI client: Skipping cleaning of temp files due to error: %v", err)
 		return
@@ -2464,7 +2464,7 @@ func cleanupAllTmpFiles() {
 				strings.Contains(fname, BACKFILLPREFIX) {
 
 				l.Infof("GSI client: Removing old temp file %v ...", fname)
-				err := os.Remove(fname)
+				err := iowrap.Os_Remove(fname)
 				if err != nil {
 					l.Errorf("GSI client: Error while removing old temp file %v: %v", fname, err)
 				}
@@ -2517,13 +2517,13 @@ func (gsi *gsiKeyspace) getTmpSpaceLimit() int64 {
 }
 
 func getDefaultTmpDir() string {
-	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
+	file, err := iowrap.Ioutil_TempFile("" /*dir*/, BACKFILLPREFIX)
 	if err != nil {
 		return ""
 	}
 
 	default_temp_dir := path.Dir(file.Name())
-	os.Remove(file.Name()) // remove this file.
+	iowrap.Os_Remove(file.Name()) // remove this file.
 
 	return default_temp_dir
 }

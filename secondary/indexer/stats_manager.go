@@ -15,10 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	"math"
 	"net/http"
-	"os"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -33,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
@@ -3461,7 +3460,7 @@ type FlatFileStatsPersister struct {
 }
 
 func NewFlatFilePersister(dir string, chunksz int) *FlatFileStatsPersister {
-	os.MkdirAll(dir, 0755)
+	iowrap.Os_MkdirAll(dir, 0755)
 	file := path.Join(dir, "stats")
 	newfile := path.Join(dir, "stats_new")
 	fp := FlatFileStatsPersister{
@@ -3504,7 +3503,7 @@ func (fp *FlatFileStatsPersister) PersistStats(stats map[string]interface{}) err
 	}
 
 	// If the write succeeded, rename the file from temp to permanent name
-	err = os.Rename(fp.newFilePath, fp.filePath)
+	err = iowrap.Os_Rename(fp.newFilePath, fp.filePath)
 	if err != nil {
 		return err
 	}
@@ -3514,7 +3513,7 @@ func (fp *FlatFileStatsPersister) PersistStats(stats map[string]interface{}) err
 
 func (fp *FlatFileStatsPersister) ReadPersistedStats() (map[string]interface{}, error) {
 
-	content, err := ioutil.ReadFile(fp.filePath)
+	content, err := iowrap.Ioutil_ReadFile(fp.filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -3554,10 +3553,10 @@ func (fp *FlatFileStatsPersister) GetConfig(key string) interface{} {
 }
 
 func (fp *FlatFileStatsPersister) Close() error {
-	if err := os.RemoveAll(fp.filePath); err != nil {
+	if err := iowrap.Os_RemoveAll(fp.filePath); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(fp.newFilePath); err != nil {
+	if err := iowrap.Os_RemoveAll(fp.newFilePath); err != nil {
 		return err
 	}
 	return nil

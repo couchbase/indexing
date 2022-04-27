@@ -1,10 +1,14 @@
 package memdb
 
-import "os"
-import "bufio"
-import "errors"
-import "github.com/couchbase/indexing/secondary/fdb"
-import "bytes"
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"os"
+
+	"github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/iowrap"
+)
 
 const DiskBlockSize = 4 * 1024 // 4K is ok for page cache writes
 
@@ -67,7 +71,7 @@ type rawFileWriter struct {
 
 func (f *rawFileWriter) Open() error {
 	var err error
-	f.fd, err = os.OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
+	f.fd, err = iowrap.Os_OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
 	if err == nil {
 		if f.buf == nil {
 			f.buf = make([]byte, encodeBufSize)
@@ -90,12 +94,12 @@ func (f *rawFileWriter) FlushAndClose(sync bool) (reterr error) {
 
 	if f.fd != nil {
 		if sync {
-			err := f.fd.Sync()
+			err := iowrap.File_Sync(f.fd)
 			if reterr == nil {
 				reterr = err
 			}
 		}
-		err := f.fd.Close()
+		err := iowrap.File_Close(f.fd)
 		if reterr == nil {
 			reterr = err
 		}
@@ -156,7 +160,7 @@ type rawFileReader struct {
 
 func (f *rawFileReader) Open(path string) error {
 	var err error
-	f.fd, err = os.Open(path)
+	f.fd, err = iowrap.Os_Open(path)
 	if err == nil {
 		f.buf = make([]byte, encodeBufSize)
 		f.r = bufio.NewReaderSize(f.fd, DiskBlockSize)
@@ -177,7 +181,7 @@ func (f *rawFileReader) Checksum() uint32 {
 }
 
 func (f *rawFileReader) Close() error {
-	return f.fd.Close()
+	return iowrap.File_Close(f.fd)
 }
 
 // forestdbFileWriter implements the FileWriter interface defined above.
