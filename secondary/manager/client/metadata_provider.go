@@ -404,7 +404,7 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 // scope, collection params are ignored for now
 func (o *MetadataProvider) CreateIndexWithPlan(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool,
+	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
 	scheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
@@ -415,8 +415,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	// Create index definition
 	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, scope, collection,
-		using, exprType, whereExpr, secExprs, desc, isPrimary, scheme,
-		partitionKeys, plan)
+		using, exprType, whereExpr, secExprs, desc, indexMissingLeadingKey,
+		isPrimary, scheme, partitionKeys, plan)
 	if err != nil {
 		return c.IndexDefnId(0), err, retry
 	}
@@ -1818,7 +1818,7 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 //
 func (o *MetadataProvider) PrepareIndexDefn(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool,
+	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
 
@@ -2056,34 +2056,35 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	idxDefn := &c.IndexDefn{
-		DefnId:             defnID,
-		Name:               name,
-		Using:              c.IndexType(using),
-		Bucket:             bucket,
-		IsPrimary:          isPrimary,
-		SecExprs:           secExprs,
-		Desc:               desc,
-		ExprType:           c.ExprType(exprType),
-		PartitionScheme:    partitionScheme,
-		PartitionKeys:      partitionKeys,
-		WhereExpr:          whereExpr,
-		Deferred:           deferred,
-		Nodes:              nodes,
-		Immutable:          immutable,
-		IsArrayIndex:       isArrayIndex,
-		IsArrayFlattened:   isArrayFlattened,
-		NumReplica:         uint32(numReplica),
-		HashScheme:         c.CRC32,
-		NumPartitions:      uint32(numPartition),
-		RetainDeletedXATTR: retainDeletedXATTR,
-		NumDoc:             numDoc,
-		SecKeySize:         secKeySize,
-		DocKeySize:         docKeySize,
-		ArrSize:            arrSize,
-		ResidentRatio:      residentRatio,
-		Scope:              scope,
-		Collection:         collection,
-		HasArrItemsCount:   hasArrItemsCount,
+		DefnId:                 defnID,
+		Name:                   name,
+		Using:                  c.IndexType(using),
+		Bucket:                 bucket,
+		IsPrimary:              isPrimary,
+		SecExprs:               secExprs,
+		Desc:                   desc,
+		ExprType:               c.ExprType(exprType),
+		PartitionScheme:        partitionScheme,
+		PartitionKeys:          partitionKeys,
+		WhereExpr:              whereExpr,
+		Deferred:               deferred,
+		Nodes:                  nodes,
+		Immutable:              immutable,
+		IsArrayIndex:           isArrayIndex,
+		IsArrayFlattened:       isArrayFlattened,
+		NumReplica:             uint32(numReplica),
+		HashScheme:             c.CRC32,
+		NumPartitions:          uint32(numPartition),
+		RetainDeletedXATTR:     retainDeletedXATTR,
+		NumDoc:                 numDoc,
+		SecKeySize:             secKeySize,
+		DocKeySize:             docKeySize,
+		ArrSize:                arrSize,
+		ResidentRatio:          residentRatio,
+		Scope:                  scope,
+		Collection:             collection,
+		HasArrItemsCount:       hasArrItemsCount,
+		IndexMissingLeadingKey: indexMissingLeadingKey,
 	}
 
 	idxDefn.NumReplica2.InitializeCounter(idxDefn.NumReplica)
@@ -2106,6 +2107,7 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	spec.Immutable = defn.Immutable
 	spec.IsArrayIndex = defn.IsArrayIndex
 	spec.Desc = defn.Desc
+	spec.IndexMissingLeadingKey = defn.IndexMissingLeadingKey
 	spec.NumPartition = uint64(defn.NumPartitions)
 	spec.PartitionScheme = string(defn.PartitionScheme)
 	spec.HashScheme = uint64(defn.HashScheme)

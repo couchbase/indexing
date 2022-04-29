@@ -10,11 +10,12 @@ package manager
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
-	"strings"
 )
 
 //////////////////////////////////////////////////////////////
@@ -1268,6 +1269,7 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	spec.Immutable = defn.Immutable
 	spec.IsArrayIndex = defn.IsArrayIndex
 	spec.Desc = defn.Desc
+	spec.IndexMissingLeadingKey = defn.IndexMissingLeadingKey
 	spec.NumPartition = uint64(defn.NumPartitions)
 	spec.PartitionScheme = string(defn.PartitionScheme)
 	spec.HashScheme = uint64(defn.HashScheme)

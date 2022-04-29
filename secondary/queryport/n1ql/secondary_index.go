@@ -395,6 +395,7 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 		"",           /*whereStr*/
 		nil,          /*secStrs*/
 		nil,          /* desc */
+		false,        /* indexMissingLeadingKey */
 		true,         /*isPrimary*/
 		partitionScheme,
 		partitionKeys,
@@ -502,7 +503,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	// index keys
 	secStrs := make([]string, 0)
 	desc := make([]bool, 0)
-
+	indexMissingLeadingKey := false
 	// For flattened array index, explode the secExprs string. E.g.,
 	// for the index:
 	// create index idx on default(org,
@@ -523,7 +524,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	//   b. For scans which depend on key positions (like group, groupAggrs),
 	//      match the key position in scans with the key positions in secExprs.
 	//      E.g., keyPos 4 in scans will map to keyPos 4 in secExprs i.e. `email`
-	for _, key := range rangeKey {
+	for keyPos, key := range rangeKey {
 		s := expression.NewStringer().Visit(key.Expr)
 		isArray, _, isFlatten := key.Expr.IsArrayIndexKey()
 
@@ -533,11 +534,17 @@ func (gsi *gsiKeyspace) CreateIndex3(
 				for pos, _ := range fk.Operands() {
 					secStrs = append(secStrs, s)
 					desc = append(desc, fk.HasDesc(pos))
+					if keyPos == 0 && pos == 0 {
+						indexMissingLeadingKey = fk.HasMissing(pos)
+					}
 				}
 			}
 		} else {
 			secStrs = append(secStrs, s)
 			desc = append(desc, key.HasAttribute(datastore.IK_DESC))
+			if keyPos == 0 {
+				indexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
+			}
 		}
 	}
 
@@ -570,6 +577,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		whereStr,
 		secStrs,
 		desc,
+		indexMissingLeadingKey,
 		false, /*isPrimary*/
 		partitionScheme,
 		partitionKeys,
@@ -831,6 +839,8 @@ type secondaryIndex struct {
 
 	scheduled bool
 	schedFail bool
+
+	indexMissingLeadingKey bool
 }
 
 // for metadata-provider.
@@ -848,18 +858,19 @@ func newSecondaryIndexFromMetaData(
 	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
 	si = &secondaryIndex{
-		gsi:       gsi,
-		bucketn:   indexDefn.Bucket,
-		name:      indexDefn.Name,
-		defnID:    defnID,
-		isPrimary: indexDefn.IsPrimary,
-		using:     indexDefn.Using,
-		desc:      indexDefn.Desc,
-		state:     gsi2N1QLState[imd.State],
-		err:       imd.Error,
-		deferred:  indexDefn.Deferred,
-		scheduled: imd.Scheduled,
-		schedFail: imd.ScheduleFailed,
+		gsi:                    gsi,
+		bucketn:                indexDefn.Bucket,
+		name:                   indexDefn.Name,
+		defnID:                 defnID,
+		isPrimary:              indexDefn.IsPrimary,
+		using:                  indexDefn.Using,
+		desc:                   indexDefn.Desc,
+		state:                  gsi2N1QLState[imd.State],
+		err:                    imd.Error,
+		deferred:               indexDefn.Deferred,
+		scheduled:              imd.Scheduled,
+		schedFail:              imd.ScheduleFailed,
+		indexMissingLeadingKey: indexDefn.IndexMissingLeadingKey,
 	}
 
 	if indexDefn.SecExprs != nil {
@@ -1233,6 +1244,9 @@ func (si *secondaryIndex2) Scan2(
 }
 
 // RangeKey2 implements Index2{} interface.
+// Note: Missing attribute is only set for leading key. Its don't care for others
+// In case of flattened keys it will be extracted from the expression and the
+// attribute set here will not be used directly.
 func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 
 	if si != nil && si.secExprs != nil {
@@ -1245,6 +1259,9 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 			attr := datastore.IK_NONE
 			if si.desc != nil && si.desc[i] {
 				attr |= datastore.IK_DESC
+			}
+			if i == 0 && si.indexMissingLeadingKey {
+				attr |= datastore.IK_MISSING
 			}
 			idxkey.SetAttribute(attr, true)
 

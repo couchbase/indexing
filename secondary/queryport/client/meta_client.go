@@ -313,7 +313,7 @@ func (b *metadataClient) GetIndexReplica(defnId uint64) []*mclient.InstanceDefn 
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool,
+	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	planJSON []byte) (uint64, error) {
 
@@ -329,7 +329,8 @@ func (b *metadataClient) CreateIndex(
 RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, scope, collection, using, exprType, whereExpr,
-		secExprs, desc, isPrimary, scheme, partitionKeys, plan)
+		secExprs, desc, indexMissingLeadingKey, isPrimary, scheme,
+		partitionKeys, plan)
 
 	if needRefresh && refreshCnt == 0 {
 		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
@@ -716,6 +717,12 @@ func (b *metadataClient) equivalentIndex(
 		if b1 != d2.Desc[i] {
 			return false
 		}
+	}
+
+	// Indexes are not considered equivalent if they treat indexing of missing
+	// leading key differently
+	if d1.IndexMissingLeadingKey != d2.IndexMissingLeadingKey {
+		return false
 	}
 
 	return true

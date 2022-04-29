@@ -185,7 +185,7 @@ type BridgeAccessor interface {
 	//      JSON marshalled description about index deployment (and more...).
 	CreateIndex(
 		name, bucket, scope, collection, using, exprType, whereExpr string,
-		secExprs []string, desc []bool, isPrimary bool,
+		secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
 		scheme common.PartitionScheme, partitionKeys []string,
 		with []byte) (defnID uint64, err error)
 
@@ -548,13 +548,13 @@ func (c *GsiClient) CreateIndex3(
 
 	return c.CreateIndex4(name, bucket, common.DEFAULT_SCOPE,
 		common.DEFAULT_COLLECTION, using, exprType, whereExpr,
-		secExprs, desc, isPrimary, scheme, partitionKeys, with)
+		secExprs, desc, false, isPrimary, scheme, partitionKeys, with)
 }
 
 // scope and collection parameters are ignored as of now.
 func (c *GsiClient) CreateIndex4(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool,
+	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
 
@@ -571,15 +571,15 @@ func (c *GsiClient) CreateIndex4(
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, scope, collection, using, exprType, whereExpr,
-		secExprs, desc, isPrimary, scheme, partitionKeys, with)
+		secExprs, desc, indexMissingLeadingKey, isPrimary, scheme, partitionKeys, with)
 	fmsg := "CreateIndex %v %v %v %v/%v using:%v exprType:%v " +
-		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v scheme:%v " +
+		"whereExpr:%v secExprs:%v desc:%v indexMissingLeadingKey:%v isPrimary:%v scheme:%v " +
 		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
 
 	origSecExprs, _, _ := common.GetUnexplodedExprs(secExprs, desc)
 	logging.Infof(
 		fmsg, defnID, bucket, scope, collection, name, using, exprType, logging.TagUD(whereExpr),
-		logging.TagUD(origSecExprs), desc, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
+		logging.TagUD(origSecExprs), desc, indexMissingLeadingKey, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
 	return defnID, err
 }
 
