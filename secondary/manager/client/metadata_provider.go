@@ -2045,6 +2045,16 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	//
+	// Missing key
+	//
+
+	if indexMissingLeadingKey && (version < c.INDEXER_72_VERSION || clusterVersion < c.INDEXER_72_VERSION) {
+		return nil,
+			errors.New("Fail to create index with missing attribute. This option is enabled after cluster is fully upgraded and there is no failed node."),
+			false
+	}
+
+	//
 	// Create Index Definition
 	//
 

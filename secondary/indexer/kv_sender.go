@@ -1478,9 +1478,9 @@ func (k *kvSender) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 
 	newConfig := cfgUpdate.GetConfig()
-	
+
 	// Disabled due to MB-51636
-	
+
 	// oldConfig := k.config
 	// newUseCInfoLite := newConfig["use_cinfo_lite"].Bool()
 	// oldUseCInfoLite := oldConfig["use_cinfo_lite"].Bool()
@@ -1566,22 +1566,23 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 
 	secExprs, _, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, nil)
 	defn := &protobuf.IndexDefn{
-		DefnID:             proto.Uint64(uint64(indexDefn.DefnId)),
-		Bucket:             proto.String(indexDefn.Bucket),
-		IsPrimary:          proto.Bool(indexDefn.IsPrimary),
-		Name:               proto.String(indexDefn.Name),
-		Using:              using,
-		ExprType:           exprType,
-		SecExpressions:     secExprs,
-		PartitionScheme:    partnScheme,
-		PartnExpressions:   indexDefn.PartitionKeys,
-		HashScheme:         protobuf.HashScheme(indexDefn.HashScheme).Enum(),
-		WhereExpression:    proto.String(indexDefn.WhereExpr),
-		RetainDeletedXATTR: proto.Bool(indexDefn.RetainDeletedXATTR),
-		Scope:              proto.String(indexDefn.Scope),
-		ScopeID:            proto.String(indexDefn.ScopeId),
-		Collection:         proto.String(indexDefn.Collection),
-		CollectionID:       proto.String(indexDefn.CollectionId),
+		DefnID:                 proto.Uint64(uint64(indexDefn.DefnId)),
+		Bucket:                 proto.String(indexDefn.Bucket),
+		IsPrimary:              proto.Bool(indexDefn.IsPrimary),
+		Name:                   proto.String(indexDefn.Name),
+		Using:                  using,
+		ExprType:               exprType,
+		SecExpressions:         secExprs,
+		PartitionScheme:        partnScheme,
+		PartnExpressions:       indexDefn.PartitionKeys,
+		HashScheme:             protobuf.HashScheme(indexDefn.HashScheme).Enum(),
+		WhereExpression:        proto.String(indexDefn.WhereExpr),
+		RetainDeletedXATTR:     proto.Bool(indexDefn.RetainDeletedXATTR),
+		Scope:                  proto.String(indexDefn.Scope),
+		ScopeID:                proto.String(indexDefn.ScopeId),
+		Collection:             proto.String(indexDefn.Collection),
+		CollectionID:           proto.String(indexDefn.CollectionId),
+		IndexMissingLeadingKey: proto.Bool(indexDefn.IndexMissingLeadingKey),
 	}
 
 	return defn

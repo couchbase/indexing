@@ -750,9 +750,12 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			if desc != nil && desc[i] {
 				exprs += " DESC"
 			}
-			// TODO: Fix this for flattened array indexes
+
 			if i == 0 && def.IndexMissingLeadingKey { // Missing is implicit for non leading keys
-				exprs += " MISSING"
+				_, _, isFlatten, _ := queryutil.IsArrayExpression(exp) // For flatten MISSING is present in exp
+				if !isFlatten {
+					exprs += " MISSING"
+				}
 			}
 		}
 
@@ -1632,8 +1635,10 @@ func GetVersion(version, minorVersion uint32) uint64 {
 	if version == 7 {
 		if minorVersion < 1 {
 			return INDEXER_70_VERSION
-		} else {
+		} else if minorVersion == 1 {
 			return INDEXER_71_VERSION
+		} else {
+			return INDEXER_72_VERSION
 		}
 	}
 	return INDEXER_CUR_VERSION
