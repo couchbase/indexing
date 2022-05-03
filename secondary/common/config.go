@@ -570,7 +570,7 @@ var SystemConfig = Config{
 		true,
 		"force authentication for dataport server",
 		true,
-		true,  // immutable
+		false, // mutable
 		false, // case-insensitive
 	},
 	// indexer queryport configuration
