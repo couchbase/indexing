@@ -58,6 +58,8 @@ var snapLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000}
 // 1000ms-5000ms, 5000ms-10000ms, 10000ms-50000ms, 50000ms-Inf
 var scanReqLatencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100, 1000, 5000, 10000, 50000}
 
+var isJemallocProfilingActive int64
+
 func init() {
 	uptime = time.Now()
 }
@@ -2675,6 +2677,10 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
 	mux.HandleFunc("/stats/storage", s.handleStorageStatsReq)
 	mux.HandleFunc("/stats/reset", s.handleStatsResetReq)
+	mux.HandleFunc("/storage/jemalloc/profile", s.jemallocMemoryProfileHandler)
+	mux.HandleFunc("/storage/jemalloc/profileActivate", s.jemallocMemoryProfileActivateHandler)
+	mux.HandleFunc("/storage/jemalloc/profileDeactivate", s.jemallocMemoryProfileDeactivateHandler)
+	mux.HandleFunc("/storage/jemalloc/profileDump", s.jemallocMemoryProfileDumpHandler)
 	mux.HandleFunc("/stats/cinfolite", common.HandleCICLStats)
 	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
 	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
@@ -3110,6 +3116,200 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
 	}
+}
+
+func (s *statsManager) jemallocMemoryProfileHandler(w http.ResponseWriter, r *http.Request) {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::jemallocMemoryProfileHandler", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	}
+
+	sec, err := strconv.ParseInt(r.FormValue("seconds"), 10, 64)
+	if sec <= 0 || err != nil {
+		logging.Warnf("jemallocMemoryProfileHandler: Could not use duration [%d] from request: %v", sec, err)
+		sec = 30
+	}
+
+	logging.Infof("jemallocMemoryProfileHandler: Jemalloc memory profiling requested for %v seconds", sec)
+
+	srv, ok := r.Context().Value(http.ServerContextKey).(*http.Server)
+	if ok && srv.WriteTimeout != 0 && float64(sec) > srv.WriteTimeout.Seconds() {
+		w.WriteHeader(http.StatusBadRequest)
+		errStr := fmt.Sprintf("jemallocMemoryProfileHandler: Error: Profile duration exceeds WriteTimeout of %v", srv.WriteTimeout)
+		w.Write([]byte(errStr))
+		logging.Warnf(errStr)
+		return
+	}
+
+	if err := s.jemallocMemoryProfileActivate(w, r); err != nil {
+		return
+	}
+	defer s.jemallocMemoryProfileDeactivate(w, r)
+
+	// Sleep for sec seconds or till request is done
+	select {
+	case <-time.After(time.Duration(sec) * time.Second):
+	case <-r.Context().Done():
+	}
+
+	if err := s.jemallocMemoryProfileDump(w, r); err != nil {
+		return
+	}
+}
+
+func (s *statsManager) jemallocMemoryProfileActivateHandler(w http.ResponseWriter, r *http.Request) {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::jemallocMemoryProfileActivateHandler", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	}
+
+	logging.Infof("jemallocMemoryProfileActivateHandler: Request to activate jemalloc memory profiling")
+
+	s.jemallocMemoryProfileActivate(w, r)
+}
+
+func (s *statsManager) jemallocMemoryProfileDumpHandler(w http.ResponseWriter, r *http.Request) {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::jemallocMemoryProfileDumpHandler", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	}
+
+	logging.Infof("jemallocMemoryProfileDumpHandler: Request to dump jemalloc memory profile")
+
+	s.jemallocMemoryProfileDump(w, r)
+}
+
+func (s *statsManager) jemallocMemoryProfileDeactivateHandler(w http.ResponseWriter, r *http.Request) {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::jemallocMemoryProfileDeactivateHandler", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	}
+
+	logging.Infof("jemallocMemoryProfileDeactivateHandler: Request to deactivate jemalloc memory profiling")
+
+	s.jemallocMemoryProfileDeactivate(w, r)
+}
+
+func (s *statsManager) jemallocMemoryProfileActivate(w http.ResponseWriter, r *http.Request) error {
+	if !atomic.CompareAndSwapInt64(&isJemallocProfilingActive, 0, 1) {
+		return writeAndLogError(w, "jemallocMemoryProfileActivate: Could not activate jemalloc mem profiling: Profiling already active")
+	}
+
+	if err := mm.ProfActivate(); err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileActivate: Could not activate jemalloc mem profiling: %s", err))
+	}
+
+	logging.Infof("jemallocMemoryProfileActivate: Done activating jemalloc memory profiling")
+
+	return nil
+}
+
+func (s *statsManager) jemallocMemoryProfileDump(w http.ResponseWriter, r *http.Request) error {
+	if atomic.LoadInt64(&isJemallocProfilingActive) != 1 {
+		return writeAndLogError(w, "jemallocMemoryProfileDump: Could not dump jemalloc mem profiling: Profiling is not active")
+	}
+
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	// create a tmp file
+	conf := s.config.Load()
+	tmpDir := conf["storage_dir"].String()
+	file, err := iowrap.Ioutil_TempFile(tmpDir, "jemalloc_memory_profile")
+	if err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed to create temp file: %v", err))
+	}
+
+	fname := file.Name()
+	defer func() {
+		if err := iowrap.Os_Remove(fname); err != nil {
+			logging.Warnf("jemallocMemoryProfileDump: Failed to remove temp file: %v", err)
+		}
+	}()
+
+	if err := iowrap.File_Close(file); err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed to close temp file: %v", err))
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="jemem.prof"`)
+
+	if err := mm.ProfDump(fname); err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed dump jemalloc mem profile: %s", err))
+	}
+
+	if file, err = iowrap.Os_Open(fname); err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed to reopen temp file: %v", err))
+	}
+
+	// Copy contents of temp file to response
+	prof, err := iowrap.Os_ReadFile(fname)
+	if err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed to read temp file: %v", err))
+	}
+
+	if _, err = w.Write(prof); err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDump: Failed to write response: %v", err))
+	}
+
+	logging.Infof("jemallocMemoryProfileDump: Done dumping jemalloc memory profile")
+
+	return nil
+}
+
+func (s *statsManager) jemallocMemoryProfileDeactivate(w http.ResponseWriter, r *http.Request) error {
+	if atomic.LoadInt64(&isJemallocProfilingActive) != 1 {
+		return writeAndLogError(w, "jemallocMemoryProfileDeactivate: Failed to deactivate jemalloc memory profiling: Profiling already deactivated")
+	}
+
+	if err := mm.ProfDeactivate(); err != nil {
+		return writeAndLogError(w, fmt.Sprintf("jemallocMemoryProfileDeactivate: Failed to deactivate jemalloc memory profiling: %s", err))
+	}
+
+	if !atomic.CompareAndSwapInt64(&isJemallocProfilingActive, 1, 0) {
+		return writeAndLogError(w, "jemallocMemoryProfileDeactivate: Failed to deactivate jemalloc memory profiling: Profiling state changed unexpectedly")
+	}
+
+	logging.Infof("jemallocMemoryProfileDeactivate: Done deactivating jemalloc memory profiling")
+
+	return nil
+}
+
+func writeAndLogError(w http.ResponseWriter, errStr string) error {
+	err := fmt.Errorf(errStr)
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte(errStr))
+
+	logging.Warnf("Failed during jemalloc memory profiling: %v", err)
+
+	return err
 }
 
 func (s *statsManager) run() {
