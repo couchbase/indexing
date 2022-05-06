@@ -751,6 +751,10 @@ type IndexerStats struct {
 
 	// indexerStateHolder holds atomic ptr to a string giving indexer state (e.g. Active, Paused)
 	indexerStateHolder stats.StringVal
+
+	TotalRequests     stats.Int64Val
+	TotalRowsReturned stats.Int64Val
+	TotalRowsScanned  stats.Int64Val
 }
 
 func (s *IndexerStats) Init() {
@@ -802,6 +806,10 @@ func (s *IndexerStats) Init() {
 
 	// Set values of invariants on Init. GOMAXPROCS was already adjusted by settingsManager.
 	s.numCPU.Set(int64(runtime.GOMAXPROCS(0)))
+
+	s.TotalRequests.Init()
+	s.TotalRowsReturned.Init()
+	s.TotalRowsScanned.Init()
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -848,6 +856,10 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.storageMode.AddFilter(stats.SummaryFilter)
 	s.indexerStateHolder.AddFilter(stats.SummaryFilter)
 	s.uptime.AddFilter(stats.SummaryFilter)
+
+	s.TotalRequests.AddFilter(stats.SummaryFilter)
+	s.TotalRowsReturned.AddFilter(stats.SummaryFilter)
+	s.TotalRowsScanned.AddFilter(stats.SummaryFilter)
 
 }
 
@@ -1079,6 +1091,10 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("indexer_state", &is.indexerStateHolder)
 
 	statMap.AddStatValueFiltered("timings/stats_response", &is.statsResponse)
+
+	statMap.AddStatValueFiltered("total_requests", &is.TotalRequests)
+	statMap.AddStatValueFiltered("total_rows_returned", &is.TotalRowsReturned)
+	statMap.AddStatValueFiltered("total_rows_scanned", &is.TotalRowsScanned)
 }
 
 func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
@@ -3403,6 +3419,7 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].partitions[partnId].numRowsScanned.Set(val)
+					indexerStats.TotalRowsScanned.Add(val)
 				}
 			case last_num_rows_scanned:
 				val, ok := getInt64Val(value, statName)

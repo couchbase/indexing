@@ -256,6 +256,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 
 	ttime := time.Now()
 
+	stats := s.stats.Get()
+
 	req, err := NewScanRequest(protoReq, ctx, cancelCh, s)
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
@@ -305,6 +307,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 
 		now := time.Now().UnixNano()
 		req.Stats.numRequests.Add(1)
+		stats.TotalRequests.Add(1)
 		req.Stats.lastScanTime.Set(now)
 		if req.GroupAggr != nil {
 			req.Stats.numRequestsAggr.Add(1)
@@ -478,7 +481,12 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
+	stats := s.stats.Get()
+
 	if req.Stats != nil {
+		stats.TotalRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		stats.TotalRowsScanned.Add(int64(scanPipeline.RowsScanned()))
+
 		req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
 		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
 		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
