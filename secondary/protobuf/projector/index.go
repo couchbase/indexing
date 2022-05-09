@@ -137,7 +137,7 @@ func NewIndexEvaluator(
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
 
-	ie.indexMissingLeadingKey = *defn.IndexMissingLeadingKey
+	ie.indexMissingLeadingKey = defn.GetIndexMissingLeadingKey()
 
 	exprtype := defn.GetExprType()
 	switch exprtype {
