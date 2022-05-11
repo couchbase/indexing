@@ -229,10 +229,11 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 	}
 	logging.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
 
-	cinfo, err := c.FetchNewClusterInfoCache(cluster, c.DEFAULT_POOL, "NewMetaDataProvider")
+	cinfo, err := c.FetchNewClusterInfoCache2(cluster, c.DEFAULT_POOL, "NewMetaDataProvider")
 	if err != nil {
 		return nil, err
 	}
+	cinfo.FetchNodesAndSvsInfoWithLock()
 	s.clusterVersion = cinfo.GetClusterVersion()
 
 	lc, err1 := c.NewLimitsCache()
@@ -2042,6 +2043,39 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 	if desc != nil && len(secExprs) != len(desc) {
 		return nil, errors.New("Fail to create index.  Collation order is required for all expressions in the index."), false
+	}
+
+	//
+	// Missing key
+	//
+
+	if indexMissingLeadingKey {
+		cinfo, err := c.FetchNewClusterInfoCache2(o.clusterUrl, c.DEFAULT_POOL, "NewMetaDataProvider")
+		if err != nil {
+			return nil,
+				errors.New("Fail to create index with missing attribute. Error while Fetching Cluster Info Cache. Cluster must be atleast 7.1.1 for using Missing Keyword"),
+				false
+		}
+
+		err = cinfo.FetchNodesAndSvsInfo()
+		if err != nil {
+			return nil,
+				errors.New("Fail to create index with missing attribute. Error while Fetching Nodes and Services Info. Cluster must be atleast 7.1.1 for using Missing Keyword"),
+				false
+		}
+
+		internalVersion, err := c.GetInternalClusterVersion(c.NodesInfoProvider(cinfo), false)
+		if err != nil {
+			return nil,
+				errors.New("Fail to create index with missing attribute. Error while finding internal version of all nodes. Cluster must be atleast 7.1.1 for using Missing Keyword"),
+				false
+		}
+
+		if internalVersion.LessThan(c.InternalVersion(c.MIN_VER_MISSING_LEADING_KEY)) {
+			return nil,
+				errors.New("Fail to create index with missing attribute. This option is enabled after cluster is fully upgraded to atleast 7.1.1 and there is no failed node."),
+				false
+		}
 	}
 
 	//
