@@ -701,7 +701,7 @@ func (mon *internalVersionMonitor) notifier() {
 	for {
 		select {
 
-		case <-mon.tickerStopCh:
+		case <-mon.notifStopCh:
 			logging.Infof("internalVersionMonitor:notifier stopping ...")
 			return
 
