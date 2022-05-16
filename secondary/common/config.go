@@ -570,7 +570,7 @@ var SystemConfig = Config{
 		true,
 		"force authentication for dataport server",
 		true,
-		true,  // immutable
+		false, // mutable
 		false, // case-insensitive
 	},
 	// indexer queryport configuration
@@ -1500,6 +1500,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.evictSweepIntervalIncrementDuration": ConfigValue{
+		100,
+		"Time interval for sweep interval to be incremented to max value (in sec)",
+		100,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.evictRunInterval": ConfigValue{
 		100,
 		"Minimum elapsed time between each run for swapper to sweep pages (in millisecond)",
@@ -1658,6 +1665,13 @@ var SystemConfig = Config{
 		300,
 		"Time interval to sweep through all pages in an index (in sec)",
 		300,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictSweepIntervalIncrementDuration": ConfigValue{
+		100,
+		"Time interval for sweep interval to be incremented to max value (in sec)",
+		100,
 		false, // mutable
 		false, // case-insensitive
 	},

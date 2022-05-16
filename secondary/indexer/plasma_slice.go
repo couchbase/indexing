@@ -1,3 +1,4 @@
+//go:build !community
 // +build !community
 
 package indexer
@@ -395,6 +396,7 @@ func (slice *plasmaSlice) initStores() error {
 		mCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
 		mCfg.EvictDirtyPercent = slice.sysconf["plasma.mainIndex.evictDirtyPercent"].Float64()
 		mCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
+		mCfg.SweepIntervalIncrDur = time.Duration(slice.sysconf["plasma.mainIndex.evictSweepIntervalIncrementDuration"].Int()) * time.Second
 		mCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
 		mCfg.EvictUseMemEstimate = slice.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
 		mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
@@ -423,6 +425,7 @@ func (slice *plasmaSlice) initStores() error {
 		bCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
 		bCfg.EvictDirtyPercent = slice.sysconf["plasma.backIndex.evictDirtyPercent"].Float64()
 		bCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
+		bCfg.SweepIntervalIncrDur = time.Duration(slice.sysconf["plasma.backIndex.evictSweepIntervalIncrementDuration"].Int()) * time.Second
 		bCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
 		bCfg.EvictUseMemEstimate = slice.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
 		bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
@@ -2465,6 +2468,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EvictDirtyOnPersistRatio = mdb.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
 	mdb.mainstore.EvictDirtyPercent = mdb.sysconf["plasma.mainIndex.evictDirtyPercent"].Float64()
 	mdb.mainstore.EvictSweepInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
+	mdb.mainstore.SweepIntervalIncrDur = time.Duration(mdb.sysconf["plasma.mainIndex.evictSweepIntervalIncrementDuration"].Int()) * time.Second
 	mdb.mainstore.EvictRunInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
 	mdb.mainstore.EvictUseMemEstimate = mdb.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
 
@@ -2535,6 +2539,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EvictDirtyOnPersistRatio = mdb.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
 		mdb.backstore.EvictDirtyPercent = mdb.sysconf["plasma.backIndex.evictDirtyPercent"].Float64()
 		mdb.backstore.EvictSweepInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
+		mdb.backstore.SweepIntervalIncrDur = time.Duration(mdb.sysconf["plasma.backIndex.evictSweepIntervalIncrementDuration"].Int()) * time.Second
 		mdb.backstore.EvictRunInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
 		mdb.backstore.EvictUseMemEstimate = mdb.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
 
