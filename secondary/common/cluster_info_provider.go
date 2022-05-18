@@ -35,6 +35,8 @@ type ClusterInfoProvider interface {
 	// Bucket Info Level Information accessors in client
 	GetBucketUUID(bucket string) (uuid string, err error)
 
+	GetNumVBuckets(bucket string) (numVBuckets int, err error)
+
 	GetCollectionID(bucket, scope, collection string) string
 
 	IsEphemeral(bucket string) (bool, error)
@@ -183,6 +185,8 @@ type BucketInfoProvider interface {
 	GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error)
 
 	GetNodesByBucket(bucket string) (nids []NodeId, err error)
+
+	GetNumVBuckets(bucket string) (numVBuckets int, err error)
 
 	// Stub
 	FetchBucketInfo(bucketName string) error

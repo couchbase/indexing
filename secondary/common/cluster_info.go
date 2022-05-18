@@ -1150,6 +1150,17 @@ func (c *ClusterInfoCache) GetLocalVBuckets(bucket string) (vbs []uint16, err er
 	return
 }
 
+func (c *ClusterInfoCache) GetNumVBuckets(bucket string) (numVBuckets int, err error) {
+	b, berr := c.pool.GetBucket(bucket)
+	if berr != nil {
+		err = berr
+		return
+	}
+	defer b.Close()
+
+	return b.NumVBuckets, nil
+}
+
 func (c *ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
@@ -1764,6 +1775,36 @@ func (cic *ClusterInfoClient) IsMagmaStorage(bucket string) (bool, error) {
 		}
 	}
 	return isMagma, nil
+}
+
+func (cic *ClusterInfoClient) GetNumVBuckets(bucket string) (numVBuckets int,
+	err error) {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	getNumVBuckets := func() (int, error) {
+		numVBuckets, err := cinfo.GetNumVBuckets(bucket)
+		if err != nil {
+			return 0, err
+		}
+		return numVBuckets, nil
+	}
+
+	numVBs, err := getNumVBuckets()
+	if err != nil || numVBuckets == 0 {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchBucketInfo(bucket)
+		cinfo.RLock()
+		if err != nil {
+			return 0, err
+		} else {
+			return getNumVBuckets()
+		}
+	}
+	return numVBs, nil
 }
 
 func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {

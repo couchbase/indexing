@@ -2385,6 +2385,10 @@ func (bi *bucketInfo) IsMagmaStorage(bucket string) (bool, error) {
 	return strings.EqualFold(backend, "magma"), nil
 }
 
+func (bi *bucketInfo) GetNumVBuckets(bucket string) (int, error) {
+	return bi.bucket.NumVBuckets, nil
+}
+
 func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (
 	vbs []uint16, err error) {
 
@@ -2459,6 +2463,16 @@ func (cicl *ClusterInfoCacheLiteClient) GetBucketUUID(bucketName string) (uuid s
 	}
 
 	return bi.GetBucketUUID(bucketName), nil
+}
+
+func (cicl *ClusterInfoCacheLiteClient) GetNumVBuckets(bucketName string) (numVBuckets int,
+	err error) {
+
+	bi, err := cicl.GetBucketInfo(bucketName)
+	if err != nil {
+		return 0, err
+	}
+	return bi.GetNumVBuckets(bucketName)
 }
 
 func (cicl *ClusterInfoCacheLiteClient) IsEphemeral(bucketName string) (bool, error) {
