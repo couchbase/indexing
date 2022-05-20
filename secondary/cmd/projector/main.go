@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/projector"
+	regulator "github.com/couchbase/regulator/factory"
 )
 
 var done = make(chan bool)
@@ -159,6 +161,10 @@ func main() {
 	caFile := options.caFile
 
 	projector.NewProjector(options.numVbuckets, config, certFile, keyFile, caFile)
+
+	// MB-52130: start the KV regulator (piggybacked in the projector process)
+	// TODO: only start when in serverless
+	regulator.InitKvRegulator(service.NodeID(projector.GetNodeUUID()), caFile, options.kvaddrs)
 
 	<-done
 }

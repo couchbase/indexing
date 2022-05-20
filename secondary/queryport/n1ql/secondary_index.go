@@ -836,6 +836,7 @@ type secondaryIndex struct {
 	state     datastore.IndexState
 	err       string
 	deferred  bool
+	indexInfo map[string]interface{}
 
 	scheduled bool
 	schedFail bool
@@ -857,6 +858,8 @@ func newSecondaryIndexFromMetaData(
 
 	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
+	indexInfo := make(map[string]interface{})
+	indexInfo["num_replica"] = indexDefn.GetNumReplica()
 	si = &secondaryIndex{
 		gsi:                    gsi,
 		bucketn:                indexDefn.Bucket,
@@ -868,6 +871,7 @@ func newSecondaryIndexFromMetaData(
 		state:                  gsi2N1QLState[imd.State],
 		err:                    imd.Error,
 		deferred:               indexDefn.Deferred,
+		indexInfo:              indexInfo,
 		scheduled:              imd.Scheduled,
 		schedFail:              imd.ScheduleFailed,
 		indexMissingLeadingKey: indexDefn.IndexMissingLeadingKey,
@@ -969,6 +973,10 @@ func (si *secondaryIndex) Condition() expression.Expression {
 // IsPrimary implements Index{} interface.
 func (si *secondaryIndex) IsPrimary() bool {
 	return si.isPrimary
+}
+
+func (si *secondaryIndex) IndexMetadata() map[string]interface{} {
+	return si.indexInfo
 }
 
 // State implement Index{} interface.
