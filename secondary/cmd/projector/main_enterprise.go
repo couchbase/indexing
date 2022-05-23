@@ -1,3 +1,5 @@
+// +build !community
+
 package main
 
 import (
