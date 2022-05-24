@@ -325,6 +325,12 @@ func (b *metadataClient) CreateIndex(
 		}
 	}
 
+	if common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
+		if err := IsParameterAllowed(plan); err != nil {
+			return 0, err
+		}
+	}
+
 	refreshCnt := 0
 RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
@@ -342,6 +348,18 @@ RETRY:
 		goto RETRY
 	}
 	return uint64(defnID), err
+}
+
+func IsParameterAllowed(plan map[string]interface{}) error {
+
+	allowedParams := map[string]bool{"defer_build": true, "retain_deleted_xattr": true}
+
+	for attr, _ := range plan {
+		if _, ok := allowedParams[attr]; !ok {
+			return errors.New("Unsupported parameters in the With clause. Create Index With defer_build and retain_deleted_xattr is supported.")
+		}
+	}
+	return nil
 }
 
 // BuildIndexes implements BridgeAccessor{} interface.
