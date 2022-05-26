@@ -27,6 +27,10 @@ func Stats() string {
 	return ee.Stats()
 }
 
+func StatsJson() string {
+	return ee.StatsJson()
+}
+
 func GetAllocStats() (uint64, uint64) {
 	return ee.GetAllocStats()
 }

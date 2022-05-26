@@ -3063,8 +3063,18 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 
 	if r.Method == "POST" || r.Method == "GET" {
 
+		needJson := false
+		if r.URL.Query().Get("json") == "true" {
+			needJson = true
+		}
+
 		w.WriteHeader(200)
-		w.Write([]byte(mm.Stats()))
+
+		if needJson {
+			w.Write([]byte(mm.StatsJson()))
+		} else {
+			w.Write([]byte(mm.Stats()))
+		}
 
 	} else {
 		w.WriteHeader(400)
