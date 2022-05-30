@@ -49,3 +49,41 @@ func SetBuildMode(mode BuildMode) {
 	gBuildMode = mode
 
 }
+
+type ServerMode byte
+
+const (
+	ONPREM = iota
+	SERVERLESS
+)
+
+func (b ServerMode) String() string {
+	switch b {
+	case ONPREM:
+		return "Onprem"
+	case SERVERLESS:
+		return "Serverless"
+	default:
+		return "Invalid"
+	}
+}
+
+//Global Server Mode
+var gServerMode ServerMode
+var sLock sync.RWMutex
+
+func GetServerMode() ServerMode {
+
+	sLock.RLock()
+	defer sLock.RUnlock()
+	return gServerMode
+
+}
+
+func SetServerMode(mode ServerMode) {
+
+	sLock.Lock()
+	defer sLock.Unlock()
+	gServerMode = mode
+
+}

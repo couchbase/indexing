@@ -167,13 +167,15 @@ type plasmaSlice struct {
 	//This count is used to log message to console logs
 	//The count is reset when messages are logged to console
 	numKeysSkipped int32
+
+	meteringMgr *MeteringThrottlingMgr
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -185,6 +187,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 
 	slice.idxStats = idxStats
 	slice.indexerStats = indexerStats
+	slice.meteringMgr = meteringMgr
 
 	slice.get_bytes = 0
 	slice.insert_bytes = 0

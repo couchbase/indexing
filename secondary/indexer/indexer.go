@@ -150,21 +150,23 @@ type indexer struct {
 	settingsMgrCmdCh     MsgChannel
 	statsMgrCmdCh        MsgChannel
 	scanCoordCmdCh       MsgChannel //chhannel to send messages to scan coordinator
+	meteringMgrCmdCh     MsgChannel // channel to send messages to metering manager
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk              Timekeeper         //handle to timekeeper
-	storageMgr      StorageManager     //handle to storage manager
-	compactMgr      CompactionManager  //handle to compaction manager
-	mutMgr          MutationManager    //handle to mutation manager
-	ddlSrvMgr       *DDLServiceMgr     //handle to ddl service manager
-	schedIdxCreator *schedIndexCreator //handle to scheduled index creator
-	clustMgrAgent   ClustMgrAgent      //handle to ClustMgrAgent
-	kvSender        KVSender           //handle to KVSender
-	settingsMgr     *settingsManager   //handle to settings manager
-	statsMgr        *statsManager      //handle to statistics manager
-	scanCoord       ScanCoordinator    //handle to ScanCoordinator
-	cpuThrottle     *CpuThrottle       //handle to CPU throttler (for Autofailover)
+	tk              Timekeeper             //handle to timekeeper
+	storageMgr      StorageManager         //handle to storage manager
+	compactMgr      CompactionManager      //handle to compaction manager
+	mutMgr          MutationManager        //handle to mutation manager
+	ddlSrvMgr       *DDLServiceMgr         //handle to ddl service manager
+	schedIdxCreator *schedIndexCreator     //handle to scheduled index creator
+	clustMgrAgent   ClustMgrAgent          //handle to ClustMgrAgent
+	kvSender        KVSender               //handle to KVSender
+	settingsMgr     *settingsManager       //handle to settings manager
+	statsMgr        *statsManager          //handle to statistics manager
+	scanCoord       ScanCoordinator        //handle to ScanCoordinator
+	cpuThrottle     *CpuThrottle           //handle to CPU throttler (for Autofailover)
+	meteringMgr     *MeteringThrottlingMgr //handle to metering throttling service
 
 	// masterMgr holds AutofailoverServiceManager and RebalanceServiceManager singletons as
 	// ns_server only supports registering a single object for RPC calls.
@@ -277,6 +279,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		settingsMgrCmdCh:     make(MsgChannel),
 		statsMgrCmdCh:        make(MsgChannel),
 		scanCoordCmdCh:       make(MsgChannel),
+		meteringMgrCmdCh:     make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
 
@@ -477,6 +480,18 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//bootstrap phase 1
 	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
+
+	// we need to initialize metering manager after the bootstrap1 as we need to get indexerId.
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetServerMode() == common.SERVERLESS {
+		idx.meteringMgr, res = NewMeteringManager(idx.id, idx.config, idx.meteringMgrCmdCh)
+		if res.GetMsgType() != MSG_SUCCESS {
+			logging.Fatalf("Indexer::NewIndexer NewMeteringManager Init Error %+v", res)
+			return nil, res
+		}
+		idx.tk.SetMeteringMgr(idx.meteringMgr)
+		idx.scanCoord.SetMeteringMgr(idx.meteringMgr)
+		idx.meteringMgr.RegisterRestEndpoints()
+	}
 
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
@@ -696,6 +711,8 @@ func (idx *indexer) initFromConfig() {
 	isEnterprise := idx.config["isEnterprise"].Bool()
 	if isEnterprise {
 		common.SetBuildMode(common.ENTERPRISE)
+		//TBD... later set it from config
+		common.SetServerMode(common.SERVERLESS)
 	} else {
 		common.SetBuildMode(common.COMMUNITY)
 	}
@@ -1675,6 +1692,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.ddlSrvMgrCmdCh
 	idx.schedIdxCreatorCmdCh <- msg
 	<-idx.schedIdxCreatorCmdCh
+	idx.meteringMgrCmdCh <- msg
+	<-idx.meteringMgrCmdCh
 
 	idx.sendMsgToClustMgr(msg)
 
@@ -5142,7 +5161,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		if err != nil {
 			logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
 		} else {
-			slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase)
+			slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase, idx.meteringMgr)
 		}
 
 		if err == nil {
@@ -8934,7 +8953,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats, ephemeral, isNew bool) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats, ephemeral, isNew bool, meteringMgr *MeteringThrottlingMgr) (slice Slice, err error) {
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
 	iowrap.Os_Mkdir(storage_dir, 0755)
@@ -8958,7 +8977,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, meteringMgr)
 	}
 
 	return

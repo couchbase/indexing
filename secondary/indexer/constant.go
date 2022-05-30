@@ -83,3 +83,14 @@ const SNAP_STATS_KEY_SIZES_SINCE = "key_size_stats_since"
 const SNAP_STATS_RAW_DATA_SIZE = "raw_data_size"
 const SNAP_STATS_BACKSTORE_RAW_DATA_SIZE = "backstore_raw_data_size"
 const SNAP_STATS_ARR_ITEMS_COUNT = "arr_items_count"
+
+// redefine regulator constants
+// so that we dont need to import regulator module elsewhere
+type CheckResult uint
+
+const (
+	CheckResultNormal = CheckResult(iota)
+	CheckResultThrottle
+	CheckResultReject
+	CheckResultError
+)
