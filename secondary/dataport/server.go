@@ -672,6 +672,25 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.reqch <- []interface{}{msg}
 }
 
+func (s *Server) enforceTimeout(raddr string) bool {
+	clustVer := c.GetClusterVersion()
+	intVer := c.GetInternalVersion()
+
+	if atomic.LoadUint32(s.enableAuth) != 0 {
+
+		if clustVer >= c.INDEXER_71_VERSION {
+			return true
+		}
+		if intVer.Equals(c.MIN_VER_SRV_AUTH) || intVer.GreaterThan(c.MIN_VER_SRV_AUTH) {
+			return true
+		}
+	}
+
+	logging.Verbosef("%v connection %q not enforcing timeout %v:%v:%v", s.logPrefix, raddr,
+		clustVer, intVer, atomic.LoadUint32(s.enableAuth))
+	return false
+}
+
 func (s *Server) enforceAuth(raddr string) bool {
 	// When cluster is getting upgraded, client may lag behind in
 	// receiving cluster upgrade notification as compared to the server.
@@ -698,7 +717,7 @@ func (s *Server) enforceAuth(raddr string) bool {
 	}
 
 	logging.Infof("%v connection %q continue without auth %v:%v:%v", s.logPrefix, raddr,
-	clustVer, intVer, atomic.LoadUint32(s.enableAuth))
+		clustVer, intVer, atomic.LoadUint32(s.enableAuth))
 	return false
 }
 
@@ -709,14 +728,24 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 	rpkt := newTransportPkt(s.maxPayload)
 	logging.Infof("%v connection %q doAuth() ...", s.logPrefix, raddr)
 
-	// Set read deadline for auth to 10 Seconds.
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		logging.Warnf("%v doAuth %q error %v in SetReadDeadline", s.logPrefix, raddr, err)
+	needsTimeout := s.enforceTimeout(raddr)
+
+	if needsTimeout {
+		// Set read deadline for auth to 10 Seconds.
+		if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			logging.Warnf("%v doAuth %q error %v in SetReadDeadline", s.logPrefix, raddr, err)
+		}
 	}
 
 	reqMsg, err := rpkt.Receive(conn)
 	if err != nil {
 		return nil, err
+	}
+
+	if needsTimeout {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			logging.Warnf("%v doAuth %q error %v while reseting read deadline", s.logPrefix, raddr, err)
+		}
 	}
 
 	req, ok := reqMsg.(*protobuf.AuthRequest)
