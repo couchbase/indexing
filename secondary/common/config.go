@@ -916,6 +916,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.deploymentModel": ConfigValue{ // Storing for storage config
+		"",
+		"deployment model [serverless|default]",
+		"default",
+		true,  // immutable
+		false, // case-insensitive
+	},
 	"indexer.isIPv6": ConfigValue{
 		false,
 		"is cluster in IPv6 mode",

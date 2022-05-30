@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -18,18 +19,19 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	adminport   string
-	numVbuckets int
-	kvaddrs     string
-	logFile     string
-	auth        string
-	loglevel    string
-	diagDir     string
-	isIPv6      bool
-	certFile    string
-	keyFile     string
-	httpsPort   string
-	caFile      string
+	adminport       string
+	numVbuckets     int
+	kvaddrs         string
+	logFile         string
+	auth            string
+	loglevel        string
+	diagDir         string
+	isIPv6          bool
+	certFile        string
+	keyFile         string
+	httpsPort       string
+	caFile          string
+	deploymentModel string
 }
 
 func argParse() string {
@@ -46,6 +48,7 @@ func argParse() string {
 	fset.StringVar(&options.keyFile, "keyFile", "", "Index https cert key file")
 	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
 	fset.StringVar(&options.caFile, "caFile", "", "Multiple Root/Client CAs")
+	fset.StringVar(&options.deploymentModel, "deploymentModel", "default", "Specify the deployment model [serverless|default]")
 
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
@@ -61,6 +64,16 @@ func argParse() string {
 			}
 		}
 	}
+
+	// Validate DeploymentModel
+	if options.deploymentModel != "serverless" &&
+		options.deploymentModel != "default" {
+		c.CrashOnError(fmt.Errorf("Deployment model should be [serverless|default] but it is %v", options.deploymentModel))
+	}
+
+	// Set Deployment Model
+	c.SetDeploymentModel(options.deploymentModel)
+	logging.Infof("Projector DeploymentModel is set to: %v", common.GetDeploymentModel())
 
 	var isIPv6 bool
 	var err error

@@ -10,6 +10,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 
@@ -54,6 +55,7 @@ func main() {
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
 	caFile := fset.String("caFile", "", "Multiple Root/Client CAs")
+	deploymentModel := fset.String("deploymentModel", "default", "Specify the deployment model [serverless|default].")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
@@ -67,6 +69,15 @@ func main() {
 
 	logging.SetLogLevel(logging.Level(*logLevel))
 	forestdb.Log = &logging.SystemLogger
+
+	// Validate DeploymentModel
+	if *deploymentModel != "serverless" && *deploymentModel != "default" {
+		common.CrashOnError(fmt.Errorf("Deployment model should be [serverless|default] but it is %v", *deploymentModel))
+	}
+
+	// Set Deployment Model
+	common.SetDeploymentModel(*deploymentModel)
+	logging.Infof("Indexer DeploymentModel is set to: %v", common.GetDeploymentModel())
 
 	// setup cbauth
 	if *auth != "" {
@@ -108,6 +119,7 @@ func main() {
 	config.SetValue("indexer.nodeuuid", *nodeuuid)
 	config.SetValue("indexer.isEnterprise", *isEnterprise)
 	config.SetValue("indexer.isIPv6", isIPv6)
+	config.SetValue("indexer.deploymentModel", *deploymentModel)
 
 	// Prior to watson (4.5 version) storage_dir parameter was converted
 	// to lower case. Post watson, the plan is to keep the parameter
