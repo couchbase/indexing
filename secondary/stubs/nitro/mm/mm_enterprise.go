@@ -27,6 +27,22 @@ func Stats() string {
 	return ee.Stats()
 }
 
+func StatsJson() string {
+	return ee.StatsJson()
+}
+
 func GetAllocStats() (uint64, uint64) {
 	return ee.GetAllocStats()
+}
+
+func ProfActivate() error {
+	return ee.ProfActivate()
+}
+
+func ProfDeactivate() error {
+	return ee.ProfDeactivate()
+}
+
+func ProfDump(filePath string) error {
+	return ee.ProfDump(filePath)
 }

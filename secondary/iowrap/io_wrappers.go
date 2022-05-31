@@ -265,6 +265,15 @@ func Os_OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
 }
 
 // Os_Remove wraps Go-native FUNCTION os.Remove for disk failure tracking.
+func Os_ReadFile(name string) (data []byte, err error) {
+	data, err = os.ReadFile(name)
+	if err != nil {
+		countDiskFailures(err)
+	}
+	return data, err
+}
+
+// Os_Remove wraps Go-native FUNCTION os.Remove for disk failure tracking.
 func Os_Remove(name string) error {
 	err := os.Remove(name)
 	if err != nil {
