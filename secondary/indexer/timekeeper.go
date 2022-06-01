@@ -27,6 +27,7 @@ const (
 //Timekeeper manages the Stability Timestamp Generation and also
 //keeps track of the HWTimestamp for each keyspaceId
 type Timekeeper interface {
+	SetMeteringMgr(mtMgr *MeteringThrottlingMgr)
 }
 
 type timekeeper struct {
@@ -55,6 +56,8 @@ type timekeeper struct {
 
 	cinfoProvider     common.ClusterInfoProvider
 	cinfoProviderLock *sync.RWMutex
+
+	meteringMgr *MeteringThrottlingMgr
 }
 
 type InitialBuildInfo struct {
@@ -103,6 +106,12 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 
 	return tk, &MsgSuccess{}
 
+}
+
+func (tk *timekeeper) SetMeteringMgr(mtMgr *MeteringThrottlingMgr) {
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetServerMode() == common.SERVERLESS {
+		tk.meteringMgr = mtMgr
+	}
 }
 
 //run starts the timekeeper loop which listens to messages

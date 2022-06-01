@@ -1,3 +1,4 @@
+//go:build !community
 // +build !community
 
 package indexer
@@ -12,6 +13,7 @@ package indexer
 
 import (
 	"fmt"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/plasma"
 )
@@ -21,10 +23,10 @@ var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
-		sysconf, idxStats, indexerStats, isNew)
+		sysconf, idxStats, indexerStats, isNew, meteringMgr)
 }
 
 func DestroyPlasmaSlice(storageDir string, path string) error {

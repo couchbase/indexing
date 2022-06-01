@@ -43,6 +43,7 @@ const DECODE_ERR_THRESHOLD = 100
 var secKeyBufPool *common.BytesBufPool
 
 type ScanCoordinator interface {
+	SetMeteringMgr(mtMgr *MeteringThrottlingMgr)
 }
 
 type scanCoordinator struct {
@@ -69,6 +70,7 @@ type scanCoordinator struct {
 	indexerState    atomic.Value
 	numDecodeErrors uint32       // Number of errors in collatejson decode.
 	cpuThrottle     *CpuThrottle // for Autofailover CPU throttling
+	meteringMgr     *MeteringThrottlingMgr
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -125,6 +127,12 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	return s, &MsgSuccess{}
 
+}
+
+func (s *scanCoordinator) SetMeteringMgr(mtMgr *MeteringThrottlingMgr) {
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetServerMode() == common.SERVERLESS {
+		s.meteringMgr = mtMgr
+	}
 }
 
 func (s *scanCoordinator) run() {
