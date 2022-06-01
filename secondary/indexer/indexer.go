@@ -10221,7 +10221,7 @@ func (idx *indexer) monitorKVNodes() {
 		return
 	}
 
-	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL)
+	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL, "MonitorKvNodes")
 	if err != nil {
 		logging.Errorf("Indexer::monitorKVNodes, error observed while initializing ServicesChangeNotifier, err: %v", err)
 		selfRestart()

@@ -1425,7 +1425,7 @@ func (cicm *clusterInfoCacheLiteManager) watchClusterChanges(isRestart bool) {
 		}()
 	}
 
-	scn, err := NewServicesChangeNotifier(cicm.clusterURL, cicm.poolName)
+	scn, err := NewServicesChangeNotifier(cicm.clusterURL, cicm.poolName, "ClusterInfoCacheLiteManager")
 	if err != nil {
 		logging.Errorf("clusterInfoCacheLiteManager NewServicesChangeNotifier(): %v\n", err)
 		selfRestart()

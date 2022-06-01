@@ -95,6 +95,7 @@ type ClusterInfoClient struct {
 	bucketsHash               string
 	serverGroupsHash          string
 	nodeUUID2HashMap          map[string]int
+	userAgent                 string
 }
 
 type NodeId int
@@ -1465,13 +1466,14 @@ func GetLocalIpUrl(isIPv6 bool) string {
 	return "127.0.0.1"
 }
 
-func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *ClusterInfoClient, err error) {
+func NewClusterInfoClient(clusterURL, pool, userAgent string, config Config) (c *ClusterInfoClient, err error) {
 	cic := &ClusterInfoClient{
 		clusterURL:                clusterURL,
 		pool:                      pool,
 		finch:                     make(chan bool),
 		fetchDataOnHashChangeOnly: true,
 		nodeUUID2HashMap:          make(map[string]int),
+		userAgent:                 userAgent,
 	}
 	cic.servicesNotifierRetryTm = 1000 // TODO: read from config
 
@@ -1479,6 +1481,7 @@ func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *Clu
 	if err != nil {
 		return nil, err
 	}
+	cinfo.SetUserAgent(userAgent)
 	cic.cinfo = cinfo
 
 	go cic.watchClusterChanges()
@@ -1592,9 +1595,9 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 		return
 	}
 
-	scn, err := NewServicesChangeNotifier(clusterAuthURL, c.pool)
+	scn, err := NewServicesChangeNotifier(clusterAuthURL, c.pool, c.userAgent)
 	if err != nil {
-		logging.Errorf("ClusterInfoClient NewServicesChangeNotifier(): %v\n", err)
+		logging.Errorf("ClusterInfoClient NewServicesChangeNotifier(%v): %v\n", c.userAgent, err)
 		selfRestart()
 		return
 	}

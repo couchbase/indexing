@@ -91,10 +91,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 	// Initialize cluster info client at the first call of RetrievePlanFromCluster
 	cinfoClientMutex.Lock()
 	if cinfoClient == nil {
-		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", config)
-		if err == nil {
-			cinfoClient.SetUserAgent("RetrievePlanFromCluster")
-		}
+		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", "RetrievePlanFromCluster", config)
 	}
 	cinfoClientMutex.Unlock()
 	if err != nil { // Error while initializing clusterInfoClient

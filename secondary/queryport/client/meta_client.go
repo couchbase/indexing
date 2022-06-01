@@ -2044,7 +2044,7 @@ func (b *metadataClient) watchClusterChanges() {
 	//This listens to /poolsStreaming/default and /pools/default/nodeServicesStreaming
 	// With /poolsStreaming, ns-server is going to send notification when there is
 	// topology change or node status change (MB-25865)
-	scn, err := common.NewServicesChangeNotifier(clusterURL, "default")
+	scn, err := common.NewServicesChangeNotifier(clusterURL, "default", "meta_client")
 	if err != nil {
 		logging.Errorf("common.NewServicesChangeNotifier(): %v\n", err)
 		selfRestart()

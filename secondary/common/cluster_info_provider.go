@@ -65,7 +65,7 @@ func NewClusterInfoProvider(lite bool, clusterUrl string, pool, userAgent string
 		}
 		return ClusterInfoProvider(cicl), nil
 	} else {
-		ci, err := NewClusterInfoClient(clusterUrl, pool, cfg)
+		ci, err := NewClusterInfoClient(clusterUrl, pool, userAgent, cfg)
 		if err != nil {
 			return nil, err
 		}
