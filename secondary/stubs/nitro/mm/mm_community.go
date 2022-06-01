@@ -26,6 +26,10 @@ func Stats() string {
 	return ""
 }
 
+func StatsJson() string {
+	return "{}"
+}
+
 func ProfActivate() error {
 	return ErrJemallocProfilingNotSupported
 }
