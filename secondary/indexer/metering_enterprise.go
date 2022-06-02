@@ -116,13 +116,13 @@ func (m *MeteringThrottlingMgr) handleConfigUpdate(cmd Message) {
 
 // wrappers for checkQuota/throttle/metering etc which will use config and may be stream status
 // to determin how to record a certain operation
-func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket, user string, maxThrottle time.Duration) (
+func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	result CheckResult, throttleTime time.Duration, err error) {
-	ctx := getCtx(bucket, user)
+	ctx := getCtx(bucket, "")
 	estimatedUnits, err := regulator.NewUnits(regulator.Index, regulator.WriteCapacityUnit, uint64(0))
 	if err == nil {
 		quotaOpts := regulator.CheckQuotaOpts{
-			MaxThrottle:       maxThrottle,
+			MaxThrottle:       time.Duration(0),
 			NoThrottle:        false,
 			NoReject:          true,
 			EstimatedDuration: time.Duration(0),
@@ -135,21 +135,36 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket, user string, maxThrot
 }
 
 func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) error {
-	// caller not expected to check for error or fail for metering errors hence no need to return error
-	units, _ := metering.IndexReadToRCU(bytes)
-	//TBD... log error but take care of log flooding.
-	ctx := getCtx(bucket, user)
-	_ = regulator.RecordUnits(ctx, units)
-	return nil
+	// caller not expected to fail for metering errors
+	// hence returning errors for debugging and logging purpose only
+	units, err := metering.IndexReadToRCU(bytes)
+	if err == nil {
+		ctx := getCtx(bucket, user)
+		return regulator.RecordUnits(ctx, units)
+	}
+	return err
 }
 
-func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket, user string, bytes uint64, update bool) error {
-	// caller not expected to check for error or fail for metering errors hence no need to return error
-	units, _ := metering.IndexWriteToWCU(bytes, update)
-	//TBD... log error but take care of log flooding.
-	ctx := getCtx(bucket, user)
-	_ = regulator.RecordUnits(ctx, units)
-	return nil
+func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool) error {
+	// caller not expected to fail for metering errors
+	// hence returning errors for debugging and logging purpose only
+	units, err := metering.IndexWriteToWCU(bytes, update)
+	if err == nil {
+		ctx := getCtx(bucket, "")
+		return regulator.RecordUnits(ctx, units)
+	}
+	return err
+}
+
+func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) error {
+	// caller not expected to fail for metering errors
+	// hence returning errors for debugging and logging purpose only
+	units, err := metering.IndexWriteToWCU(bytes, false)
+	if err == nil {
+		ctx := getCtx(bucket, "")
+		return regulator.RefundUnits(ctx, regulator.Index, units)
+	}
+	return err
 }
 
 func getCtx(bucket, user string) regulator.Ctx {

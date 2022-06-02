@@ -482,7 +482,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
 
 	// we need to initialize metering manager after the bootstrap1 as we need to get indexerId.
-	if common.GetBuildMode() == common.ENTERPRISE && common.GetServerMode() == common.SERVERLESS {
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
 		idx.meteringMgr, res = NewMeteringManager(idx.id, idx.config, idx.meteringMgrCmdCh)
 		if res.GetMsgType() != MSG_SUCCESS {
 			logging.Fatalf("Indexer::NewIndexer NewMeteringManager Init Error %+v", res)
@@ -711,8 +711,6 @@ func (idx *indexer) initFromConfig() {
 	isEnterprise := idx.config["isEnterprise"].Bool()
 	if isEnterprise {
 		common.SetBuildMode(common.ENTERPRISE)
-		//TBD... later set it from config
-		common.SetServerMode(common.SERVERLESS)
 	} else {
 		common.SetBuildMode(common.COMMUNITY)
 	}

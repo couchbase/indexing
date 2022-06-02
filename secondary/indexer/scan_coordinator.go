@@ -130,7 +130,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 }
 
 func (s *scanCoordinator) SetMeteringMgr(mtMgr *MeteringThrottlingMgr) {
-	if common.GetBuildMode() == common.ENTERPRISE && common.GetServerMode() == common.SERVERLESS {
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
 		s.meteringMgr = mtMgr
 	}
 }
