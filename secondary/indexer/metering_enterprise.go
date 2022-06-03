@@ -153,8 +153,5 @@ func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket, user string, bytes uint
 }
 
 func getCtx(bucket, user string) regulator.Ctx {
-	return regulator.Ctx{
-		Bucket: bucket,
-		User:   user,
-	}
+	return regulator.NewUserCtx(bucket, user)
 }
