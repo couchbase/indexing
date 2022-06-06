@@ -753,7 +753,7 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			if i == 0 && def.IndexMissingLeadingKey { // Missing is implicit for non leading keys
 				_, _, isFlatten, _ := queryutil.IsArrayExpression(exp) // For flatten MISSING is present in exp
 				if !isFlatten {
-					exprs += " MISSING"
+					exprs += " INCLUDE MISSING"
 				}
 			}
 		}
