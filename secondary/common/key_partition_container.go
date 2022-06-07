@@ -9,8 +9,9 @@
 package common
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
 	"hash/crc32"
+
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //KeyPartitionDefn defines a key based partition in terms of topology
@@ -37,15 +38,13 @@ func (kp KeyPartitionDefn) Endpoints() []Endpoint {
 //for key based partitioning
 type KeyPartitionContainer struct {
 	PartitionMap  map[PartitionId]KeyPartitionDefn
-	NumVbuckets   int
 	NumPartitions int
-	PartitionSize int
 	scheme        PartitionScheme
 	hash          HashScheme
 }
 
 //NewKeyPartitionContainer initializes a new KeyPartitionContainer and returns
-func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme PartitionScheme, hash HashScheme) PartitionContainer {
+func NewKeyPartitionContainer(numPartitions int, scheme PartitionScheme, hash HashScheme) PartitionContainer {
 
 	if !IsPartitioned(scheme) {
 		numPartitions = 1
@@ -53,9 +52,7 @@ func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme Partiti
 
 	kpc := &KeyPartitionContainer{
 		PartitionMap:  make(map[PartitionId]KeyPartitionDefn),
-		NumVbuckets:   numVbuckets,
 		NumPartitions: numPartitions,
-		PartitionSize: numVbuckets / numPartitions,
 		scheme:        scheme,
 		hash:          hash,
 	}
@@ -159,7 +156,7 @@ func (pc *KeyPartitionContainer) GetNumPartitions() int {
 }
 
 func (pc *KeyPartitionContainer) Clone() PartitionContainer {
-	clone := NewKeyPartitionContainer(pc.NumVbuckets, pc.NumPartitions, pc.scheme, pc.hash)
+	clone := NewKeyPartitionContainer(pc.NumPartitions, pc.scheme, pc.hash)
 
 	for id, partition := range pc.PartitionMap {
 		clone.AddPartition(id, partition)

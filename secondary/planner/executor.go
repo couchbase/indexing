@@ -2128,7 +2128,6 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 		logging.Errorf("Error from retrieving indexer settings. Error = %v", err)
 		return nil, err
 	}
-	numVbuckets := config["indexer.numVbuckets"].Int()
 
 	if len(spec.PartitionScheme) == 0 {
 		spec.PartitionScheme = common.SINGLE
@@ -2172,7 +2171,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance = &common.IndexInst{}
 			index.Instance.InstId = index.InstId
 			index.Instance.ReplicaId = i
-			index.Instance.Pc = common.NewKeyPartitionContainer(numVbuckets, int(spec.NumPartition),
+			index.Instance.Pc = common.NewKeyPartitionContainer(int(spec.NumPartition),
 				common.PartitionScheme(spec.PartitionScheme), common.HashScheme(spec.HashScheme))
 			index.Instance.State = common.INDEX_STATE_READY
 			index.Instance.Stream = common.NIL_STREAM

@@ -928,8 +928,7 @@ func (meta *metaNotifier) fetchStats() {
 func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, versions []int, numPartitions uint32,
 	scheme common.PartitionScheme, hash common.HashScheme) common.PartitionContainer {
 
-	numVbuckets := meta.config["numVbuckets"].Int()
-	pc := common.NewKeyPartitionContainer(numVbuckets, int(numPartitions), scheme, hash)
+	pc := common.NewKeyPartitionContainer(int(numPartitions), scheme, hash)
 
 	//Add one partition for now
 	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())
