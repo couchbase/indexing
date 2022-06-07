@@ -205,6 +205,19 @@ func SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
 	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
 }
 
+// Query calls this function on the startup
+func SetDeploymentModel(serverLess bool) {
+
+	dm := common.SERVERLESS_DEPLOYMENT
+	if !serverLess {
+		dm = common.DEFAULT_DEPLOYMENT
+	}
+
+	common.SetDeploymentModel(dm)
+
+	l.Infof("GSIClient DeploymentModel is set to: %v", common.GetDeploymentModel())
+}
+
 // KeyspaceId implements datastore.Indexer{} interface.
 // Id of the keyspace to which this indexer belongs
 func (gsi *gsiKeyspace) KeyspaceId() string {

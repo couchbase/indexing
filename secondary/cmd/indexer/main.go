@@ -76,7 +76,7 @@ func main() {
 	}
 
 	// Set Deployment Model
-	common.SetDeploymentModel(*deploymentModel)
+	common.SetDeploymentModel(common.MakeDeploymentModel(*deploymentModel))
 	logging.Infof("Indexer DeploymentModel is set to: %v", common.GetDeploymentModel())
 
 	// setup cbauth

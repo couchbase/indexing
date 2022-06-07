@@ -13,7 +13,7 @@ import "sync"
 type DeploymentModel byte
 
 const (
-	DEFAULT_DEPLOYMENT = iota
+	DEFAULT_DEPLOYMENT DeploymentModel = iota
 	SERVERLESS_DEPLOYMENT
 )
 
@@ -28,7 +28,7 @@ func (b DeploymentModel) String() string {
 	}
 }
 
-func makeDeploymentModel(model string) DeploymentModel {
+func MakeDeploymentModel(model string) DeploymentModel {
 	if model == "serverless" {
 		return SERVERLESS_DEPLOYMENT
 	}
@@ -43,9 +43,8 @@ func GetDeploymentModel() DeploymentModel {
 	return gDeploymentModel
 }
 
-func SetDeploymentModel(model string) {
+func SetDeploymentModel(dm DeploymentModel) {
 	gDeploymentModelOnce.Do(func() {
-		dm := makeDeploymentModel(model)
 		gDeploymentModel = dm
 	})
 }

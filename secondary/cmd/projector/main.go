@@ -72,7 +72,7 @@ func argParse() string {
 	}
 
 	// Set Deployment Model
-	c.SetDeploymentModel(options.deploymentModel)
+	c.SetDeploymentModel(c.MakeDeploymentModel(options.deploymentModel))
 	logging.Infof("Projector DeploymentModel is set to: %v", common.GetDeploymentModel())
 
 	var isIPv6 bool
