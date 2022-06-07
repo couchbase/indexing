@@ -2787,11 +2787,15 @@ func (m *LifecycleMgr) getDiffFromLastSent(currStats *client.IndexStats2) *clien
 			}
 		}
 		statsToBroadCast.Stats[bucket] = &client.DedupedIndexStats{}
+		statsToBroadCast.Stats[bucket].Indexes = make(map[string]*client.PerIndexStats)
 		statsToBroadCast.Stats[bucket].NumDocsPending = currStats.Stats[bucket].NumDocsPending
 		statsToBroadCast.Stats[bucket].NumDocsQueued = currStats.Stats[bucket].NumDocsQueued
 		statsToBroadCast.Stats[bucket].LastRollbackTime = currStats.Stats[bucket].LastRollbackTime
 		statsToBroadCast.Stats[bucket].ProgressStatTime = currStats.Stats[bucket].ProgressStatTime
-		statsToBroadCast.Stats[bucket].Indexes = nil
+		for indexName := range currStats.Stats[bucket].Indexes {
+			statsToBroadCast.Stats[bucket].Indexes[indexName] = &client.PerIndexStats{}
+			statsToBroadCast.Stats[bucket].Indexes[indexName].LastScanTime = currStats.Stats[bucket].Indexes[indexName].LastScanTime
+		}
 	}
 
 	return statsToBroadCast
@@ -2812,6 +2816,7 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 		delete(stats, indexName+":num_docs_queued")
 		delete(stats, indexName+":last_rollback_time")
 		delete(stats, indexName+":progress_stat_time")
+		delete(stats, indexName+":last_known_scan_time")
 		delete(stats, indexName+":index_state")
 	}
 
@@ -2834,8 +2839,8 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 				indexStats2.Stats[bucketName].NumDocsQueued = stats[indexName+":num_docs_queued"].(float64)
 				indexStats2.Stats[bucketName].LastRollbackTime = stats[indexName+":last_rollback_time"].(string)
 				indexStats2.Stats[bucketName].ProgressStatTime = stats[indexName+":progress_stat_time"].(string)
-				indexStats2.Stats[bucketName].Indexes[indexName] = nil
-
+				indexStats2.Stats[bucketName].Indexes[indexName] = &client.PerIndexStats{}
+				indexStats2.Stats[bucketName].Indexes[indexName].LastScanTime = stats[indexName+":last_known_scan_time"].(float64)
 				clearIndexFromStats(indexName)
 			}
 		}

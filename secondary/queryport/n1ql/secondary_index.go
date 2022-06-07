@@ -874,6 +874,7 @@ func newSecondaryIndexFromMetaData(
 	defnID := uint64(indexDefn.DefnId)
 	indexInfo := make(map[string]interface{})
 	indexInfo["num_replica"] = indexDefn.GetNumReplica()
+	indexInfo["stats"] = imd.Stats
 	si = &secondaryIndex{
 		gsi:                    gsi,
 		bucketn:                indexDefn.Bucket,
