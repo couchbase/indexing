@@ -924,6 +924,19 @@ func GetBucketUUID(cluster, bucket string) (string, error) {
 	return cinfo.GetBucketUUID(bucket), nil
 }
 
+func GetNumVBuckets(cluster, bucketn string) (int, error) {
+	pooln := "default"
+
+	binfo, err := NewBucketInfo(cluster, pooln, bucketn)
+	if err != nil {
+		fmsg := "NewBucketInfo(`%v`, `%v`, `%v`): %v\n"
+		e := fmt.Errorf(fmsg, cluster, pooln, bucketn, err)
+		return 0, e
+	}
+
+	return binfo.GetNumVBuckets(bucketn)
+}
+
 //
 // This method will fetch the collectionID.  If this method returns an error,
 // then it means that the node is not able to connect in order to fetch
