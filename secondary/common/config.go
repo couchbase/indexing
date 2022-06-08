@@ -876,28 +876,42 @@ var SystemConfig = Config{
 	},
 	"indexer.httpPort": ConfigValue{
 		"9102",
-		"port for external stats amd settings",
+		"http port for external stats amd settings",
 		"9102",
 		true,  // immutable
 		false, // case-insensitive
 	},
 	"indexer.httpsPort": ConfigValue{
 		"",
-		"ssl port for external stats and settings",
+		"https port for external stats and settings",
 		"",
 		true,  // immutable
 		false, // case-insensitive
 	},
 	"indexer.certFile": ConfigValue{
 		"",
-		"ssl certificate",
+		"X.509 certificate PEM string for accepting external TLS connections",
 		"",
 		true, // immutable
 		true, // case-sensitive
 	},
 	"indexer.keyFile": ConfigValue{
 		"",
-		"ssl certificate key",
+		"X.509 private key PEM string for accepting external TLS connections",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
+	"indexer.clientCertFile": ConfigValue{
+		"",
+		"X.509 certificate PEM string for making internal TLS connections",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
+	"indexer.clientKeyFile": ConfigValue{
+		"",
+		"X.509 private key PEM string for making internal TLS connections",
 		"",
 		true, // immutable
 		true, // case-sensitive
