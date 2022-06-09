@@ -23,12 +23,18 @@ if [ "$TS" = "" ]; then
   TS="adhoc"
 fi
 
+SVR_LESS_OPT=""
+if [ "$DEPLOYMENT_MODEL" == "serverless" ]; then
+	echo 'Running with DeploymentModel: Serverless'
+	SVR_LESS_OPT="--serverless"
+fi
+
 start_cluster() {
   for a in {1..3}; do
     echo "Starting server: attempt $a"
     stop_cluster
     cd $WORKSPACE/ns_server
-    ./cluster_run -n4 1>$WORKSPACE/run.log 2>&1 &
+    ./cluster_run -n4 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
