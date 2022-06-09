@@ -81,6 +81,7 @@ func (m *MeteringThrottlingMgr) RegisterRestEndpoints() {
 
 // main loop that will handle config change and updates to index inst and stream status
 func (m *MeteringThrottlingMgr) run() {
+	logging.Infof("MeteringThrottlingMgr:: started")
 loop:
 	for {
 		select {
@@ -93,6 +94,7 @@ loop:
 			}
 		}
 	}
+	logging.Infof("MeteringThrottlingMgr:: exited...")
 }
 
 func (m *MeteringThrottlingMgr) handleSupvervisorCommands(cmd Message) {
@@ -162,7 +164,7 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 	units, err := metering.IndexWriteToWCU(bytes, false)
 	if err == nil {
 		ctx := getCtx(bucket, "")
-		return regulator.RefundUnits(ctx, regulator.Index, units)
+		return regulator.RefundUnits(ctx, units)
 	}
 	return err
 }

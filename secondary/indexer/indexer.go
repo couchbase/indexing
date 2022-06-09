@@ -1690,8 +1690,10 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.ddlSrvMgrCmdCh
 	idx.schedIdxCreatorCmdCh <- msg
 	<-idx.schedIdxCreatorCmdCh
-	idx.meteringMgrCmdCh <- msg
-	<-idx.meteringMgrCmdCh
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
+		idx.meteringMgrCmdCh <- msg
+		<-idx.meteringMgrCmdCh
+	}
 
 	idx.sendMsgToClustMgr(msg)
 

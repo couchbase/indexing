@@ -1274,12 +1274,10 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
 	buf := mdb.encodeBuf[workerId]
-	ndel = 0
-	changed = false
 	if err == nil {
 		// Delete the entries only if the entry is different
 		if hasEqualBackEntry(compareKey, backEntry) {
-			return ndel, changed
+			return 0, false
 		}
 
 		// track if either of the backindex or mainindex DeleteKV call is successful
@@ -1312,12 +1310,10 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 			keylen := getKeyLenFromEntry(entry)
 			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false)
 		}
-
-		ndel, changed = 1, true
 	}
 
 	mdb.isDirty = true
-	return ndel, changed
+	return 1, true
 }
 
 func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
