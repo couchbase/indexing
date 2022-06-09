@@ -112,8 +112,9 @@ type indexer struct {
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 	streamKeyspaceIdMinMergeTs   map[common.StreamId]KeyspaceIdMinMergeTs
 
-	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
-	streamKeyspaceIdPendStart     map[common.StreamId]map[string]bool
+	streamKeyspaceIdPendBuildDone      map[common.StreamId]map[string]*buildDoneSpec
+	streamKeyspaceIdPendStart          map[common.StreamId]map[string]bool
+	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
 
 	keyspaceIdRollbackTimes map[string]int64
 
@@ -211,7 +212,7 @@ type indexer struct {
 
 	pendingReset map[common.IndexInstId]bool
 
-	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
+	bsRunParams *runParams // bootstrap values of DDL running and inProgressIndexNames
 }
 
 type kvRequest struct {
@@ -285,24 +286,25 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		merged: make(map[common.IndexInstId]common.IndexInst),
 		pruned: make(map[common.IndexInstId]common.IndexInst),
 
-		streamKeyspaceIdStatus:           make(map[common.StreamId]KeyspaceIdStatus),
-		streamKeyspaceIdFlushInProgress:  make(map[common.StreamId]KeyspaceIdFlushInProgressMap),
-		streamKeyspaceIdObserveFlushDone: make(map[common.StreamId]KeyspaceIdObserveFlushDoneMap),
-		streamKeyspaceIdCurrRequest:      make(map[common.StreamId]KeyspaceIdCurrRequest),
-		streamKeyspaceIdRollbackTs:       make(map[common.StreamId]KeyspaceIdRollbackTs),
-		streamKeyspaceIdRetryTs:          make(map[common.StreamId]KeyspaceIdRetryTs),
-		streamKeyspaceIdMinMergeTs:       make(map[common.StreamId]KeyspaceIdMinMergeTs),
-		streamKeyspaceIdRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
-		streamKeyspaceIdRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
-		streamKeyspaceIdSessionId:        make(map[common.StreamId]map[string]uint64),
-		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
-		streamKeyspaceIdOSOException:     make(map[common.StreamId]map[string]bool),
-		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
-		streamKeyspaceIdPendStart:        make(map[common.StreamId]map[string]bool),
-		keyspaceIdBuildTs:                make(map[string]Timestamp),
-		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
-		keyspaceIdRollbackTimes:          make(map[string]int64),
-		keyspaceIdCreateClientChMap:      make(map[string]MsgChannel),
+		streamKeyspaceIdStatus:             make(map[common.StreamId]KeyspaceIdStatus),
+		streamKeyspaceIdFlushInProgress:    make(map[common.StreamId]KeyspaceIdFlushInProgressMap),
+		streamKeyspaceIdObserveFlushDone:   make(map[common.StreamId]KeyspaceIdObserveFlushDoneMap),
+		streamKeyspaceIdCurrRequest:        make(map[common.StreamId]KeyspaceIdCurrRequest),
+		streamKeyspaceIdRollbackTs:         make(map[common.StreamId]KeyspaceIdRollbackTs),
+		streamKeyspaceIdRetryTs:            make(map[common.StreamId]KeyspaceIdRetryTs),
+		streamKeyspaceIdMinMergeTs:         make(map[common.StreamId]KeyspaceIdMinMergeTs),
+		streamKeyspaceIdRequestQueue:       make(map[common.StreamId]map[string]chan *kvRequest),
+		streamKeyspaceIdRequestLock:        make(map[common.StreamId]map[string]chan *sync.Mutex),
+		streamKeyspaceIdSessionId:          make(map[common.StreamId]map[string]uint64),
+		streamKeyspaceIdCollectionId:       make(map[common.StreamId]map[string]string),
+		streamKeyspaceIdOSOException:       make(map[common.StreamId]map[string]bool),
+		streamKeyspaceIdPendBuildDone:      make(map[common.StreamId]map[string]*buildDoneSpec),
+		streamKeyspaceIdPendStart:          make(map[common.StreamId]map[string]bool),
+		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
+		keyspaceIdBuildTs:                  make(map[string]Timestamp),
+		buildTsLock:                        make(map[common.StreamId]map[string]*sync.Mutex),
+		keyspaceIdRollbackTimes:            make(map[string]int64),
+		keyspaceIdCreateClientChMap:        make(map[string]MsgChannel),
 
 		activeKVNodes: make(map[string]bool),
 
@@ -312,8 +314,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
 
 		pendingReset: make(map[common.IndexInstId]bool),
-
-		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
+		bsRunParams:  &runParams{},
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -5431,10 +5432,16 @@ func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 // (MsgType INDEXER_CHECK_DDL_IN_PROGRESS).
 func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
+	var ddlInProgress bool
+	var inProgressIndexNames []string
+
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
-
-	ddlInProgress, inProgressIndexNames := idx.checkDDLInProgress()
+	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
+		ddlInProgress, inProgressIndexNames = idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames
+	} else {
+		ddlInProgress, inProgressIndexNames = idx.checkDDLInProgress()
+	}
 	respCh <- &MsgDDLInProgressResponse{
 		ddlInProgress:        ddlInProgress,
 		inProgressIndexNames: inProgressIndexNames}
@@ -6926,20 +6933,21 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 
 	idx.recoverRebalanceState()
 
+	start := time.Now()
+	err := idx.recoverIndexInstMap()
+	if err != nil {
+		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+	}
+	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
+
+	idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames = idx.checkDDLInProgress()
+
 	go func() {
 		//set topic names based on indexer id
 		idx.initStreamTopicName()
 
 		//close any old streams with projector
 		idx.closeAllStreams()
-
-		start := time.Now()
-		err := idx.recoverIndexInstMap()
-		if err != nil {
-			logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
-		}
-
-		logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
 
 		idx.validateIndexInstMap()
 
