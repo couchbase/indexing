@@ -1562,31 +1562,6 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 	}
 }
 
-func updateMinNumShard(currConfig, newConfig common.Config) common.Config {
-	currCpu := currConfig["settings.max_cpu_percent"].Int() / 100
-	currMinNumShard := currConfig["plasma.minNumShard"].Uint64()
-	if currCpu == 0 {
-		currCpu = runtime.NumCPU()
-	}
-
-	// Current configuration is in sync with current max_cpu_percent.
-	// This means that this setting might not have been changed explictly.
-	// Hence, update it based on current GOMAXPROCS value. If current
-	// minNumShard is different from current CPU config, then user must
-	// have explicitly changed it. Hence, stick on to it
-	if currMinNumShard == uint64(math.Max(2.0, float64(currCpu)*(0.25))) {
-		value := common.ConfigValue{
-			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
-			Help:          "Minimum number of shard",
-			DefaultVal:    uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
-			Immutable:     false,
-			Casesensitive: false,
-		}
-		newConfig["plasma.minNumShard"] = value
-	}
-	return newConfig
-}
-
 // handleConfigUpdate updates Indexer config settings and propagates them to children / workers.
 func (idx *indexer) handleConfigUpdate(msg Message) {
 
@@ -1653,7 +1628,17 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		}
 	}
 
-	newConfig = updateMinNumShard(oldConfig, newConfig)
+	if newConfig["settings.max_cpu_percent"].Int() !=
+		oldConfig["settings.max_cpu_percent"].Int() {
+		value := common.ConfigValue{
+			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
+			Help:          "Minimum number of shard",
+			DefaultVal:    uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
+			Immutable:     false,
+			Casesensitive: false,
+		}
+		newConfig["plasma.minNumShard"] = value
+	}
 
 	if workersPerReader, ok := newConfig["vbseqnos.workers_per_reader"]; ok {
 		if newConfig["vbseqnos.workers_per_reader"].Int() !=
