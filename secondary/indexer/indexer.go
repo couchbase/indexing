@@ -1612,18 +1612,6 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		}
 	}
 
-	if newConfig["settings.max_cpu_percent"].Int() !=
-		oldConfig["settings.max_cpu_percent"].Int() {
-		value := common.ConfigValue{
-			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
-			Help:          "Minimum number of shard",
-			DefaultVal:    uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
-			Immutable:     false,
-			Casesensitive: false,
-		}
-		newConfig["plasma.minNumShard"] = value
-	}
-
 	if workersPerReader, ok := newConfig["vbseqnos.workers_per_reader"]; ok {
 		if newConfig["vbseqnos.workers_per_reader"].Int() !=
 			oldConfig["vbseqnos.workers_per_reader"].Int() {
