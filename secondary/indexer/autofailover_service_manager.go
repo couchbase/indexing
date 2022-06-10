@@ -26,8 +26,7 @@ import (
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // AutofailoverServiceManager provides the implementation of the ns_server RPC interface
-// AutofailoverManager (defined in cbauth/service/interface.go) which this class registers as the
-// GSI handler for by calling RegisterAutofailoverManager (defined in cbauth/service/revrpc.go).
+// AutofailoverManager (defined in cbauth/service/interface.go).
 type AutofailoverServiceManager struct {
 	cpuThrottle *CpuThrottle        // CPU throttler
 	ctExpirer   *cpuThrottleExpirer // CPU throttle automatic expirer when Autofailover is off

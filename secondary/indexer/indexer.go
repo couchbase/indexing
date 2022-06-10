@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/cbauth/service"
 	"io/ioutil"
 	"math"
 	"math/rand"
@@ -92,8 +93,9 @@ const (
 // indexer is the central GSI class that runs the main message loop.
 // It also implements the Indexer interface.
 type indexer struct {
-	id    string
-	state common.IndexerState
+	id       string
+	state    common.IndexerState
+	nodeInfo *service.NodeInfo // never changes; info about the local node
 
 	indexInstMap  common.IndexInstMap //map of indexInstId to IndexInst
 	indexPartnMap IndexPartnMap       //map of indexInstId to PartitionInst
@@ -509,14 +511,26 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	//Start Rebalance Manager
-	rebalMgr := NewRebalanceServiceManager(idx.rebalMgrCmdCh, idx.wrkrRecvCh,
-		idx.wrkrPrioRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken, idx.statsMgr)
+	// Construct nodeInfo, which never changes in the future
+	idx.nodeInfo = &service.NodeInfo{
+		NodeID:   service.NodeID(idx.config["nodeuuid"].String()),
+		Priority: service.Priority(common.INDEXER_CUR_VERSION),
+	}
+
+	// Start Rebalance Manager
+	rebalMgr := NewRebalanceServiceManager(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.wrkrPrioRecvCh,
+		idx.config, idx.nodeInfo, idx.rebalanceRunning, idx.rebalanceToken, idx.statsMgr)
+
+	// Start Pause-Resume Manager
+	pauseMgr := NewPauseServiceManager(httpAddr)
+
+	// Start Generic Service Manager, which also delegates to Pause and Rebalance Managers
+	genericMgr := NewGenericServiceManager(idx.nodeInfo, pauseMgr, rebalMgr)
 
 	// Register service managers with ns_server for RCP callbacks. This returns a single
 	// MasterServiceManager object that implements all the interfaces we want callbacks for via
 	// delegation to the API-specific objects passed to it.
-	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, rebalMgr)
+	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, genericMgr, pauseMgr, rebalMgr)
 
 	go idx.monitorKVNodes()
 

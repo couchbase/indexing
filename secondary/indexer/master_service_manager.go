@@ -19,21 +19,35 @@ import (
 // MasterServiceManager is used to work around cbauth's monolithic service manager architecture that
 // requires a singleton to implement all the different interfaces, as cbauth requires this to be
 // registered only once. These are thus "implemented" here as delegates to the real GSI implementing
-// clasess.
+// classes. This is intentionally done via explicit delegation rather than just adding anonymous
+// members of the delegate classes to the MasterServiceManager class because explicit code is far
+// easier to understand, troubleshoot, and maintain than implicit (i.e. invisible) code.
 //
-// ns_server interfaces implemented (defined in cbauto/service/interface.go)
-//   AutofailoverManager -- GSI class: AutofailoverServiceManager (autofailover_service_manager.go)
-//   Manager             -- GSI class: RebalanceServiceManager (rebalance_service_manager.go)
+// ns_server interfaces implemented (defined in cbauth/service/interface.go)
+//   AutofailoverManager
+//     GSI: AutofailoverServiceManager (autofailover_service_manager.go)
+//   Manager - a single mash-up iface in cbauth broken down into multiple separate pieces in GSI
+//     GSI: GenericServiceManager (generic_service_manager.go)
+//       GSI: PauseServiceManager (pause_service_manager.go)
+//       GSI: RebalanceServiceManager (rebalance_service_manager.go)
 type MasterServiceManager struct {
 	autofail *AutofailoverServiceManager
+	generic  *GenericServiceManager
+	pause    *PauseServiceManager
 	rebal    *RebalanceServiceManager
 }
 
 // NewMasterServiceManager is the constructor for the MasterServiceManager class
-func NewMasterServiceManager(autofailoverMgr *AutofailoverServiceManager,
-	rebalMgr *RebalanceServiceManager) *MasterServiceManager {
+func NewMasterServiceManager(
+	autofailoverMgr *AutofailoverServiceManager,
+	genericMgr *GenericServiceManager,
+	pauseMgr *PauseServiceManager,
+	rebalMgr *RebalanceServiceManager,
+) *MasterServiceManager {
 	this := &MasterServiceManager{
 		autofail: autofailoverMgr,
+		generic:  genericMgr,
+		pause:    pauseMgr,
 		rebal:    rebalMgr,
 	}
 	go this.registerWithServer()
@@ -73,25 +87,42 @@ func (this *MasterServiceManager) IsSafe(nodeUUIDs []service.NodeID) error {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// ns_server Manager interface methods (for Rebalance)
+// ns_server Manager interface methods (generic)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) GetNodeInfo() (*service.NodeInfo, error) {
-	return this.rebal.GetNodeInfo()
+	return this.generic.GetNodeInfo()
 }
 
 func (this *MasterServiceManager) Shutdown() error {
-	return this.rebal.Shutdown()
+	return this.generic.Shutdown()
 }
 
 func (this *MasterServiceManager) GetTaskList(rev service.Revision, cancel service.Cancel) (
 	*service.TaskList, error) {
-	return this.rebal.GetTaskList(rev, cancel)
+	return this.generic.GetTaskList(rev, cancel)
 }
 
 func (this *MasterServiceManager) CancelTask(id string, rev service.Revision) error {
-	return this.rebal.CancelTask(id, rev)
+	return this.generic.CancelTask(id, rev)
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ns_server (Pause)Manager interface methods -- Pause-Resume-specific APIs in Manager iface
+// kjc pending final signatures TBD by ns_server
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (this *MasterServiceManager) Pause(taskId string, bucket string, archiveRoot string) error {
+	return this.pause.Pause(taskId, bucket, archiveRoot)
+}
+
+func (this *MasterServiceManager) Resume(taskId string, bucket string, archiveRoot string) error {
+	return this.pause.Resume(taskId, bucket, archiveRoot)
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ns_server (Rebalance)Manager interface methods -- Rebalance-specific APIs in Manager iface
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) GetCurrentTopology(rev service.Revision, cancel service.Cancel) (*service.Topology, error) {
 	return this.rebal.GetCurrentTopology(rev, cancel)

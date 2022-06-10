@@ -58,7 +58,7 @@ type RebalanceServiceManager struct {
 	statsMgr    *statsManager // indexer's singleton, so rebalance can get local stats directly
 
 	rebalanceCtx *rebalanceContext
-	nodeInfo     *service.NodeInfo // info about the local node
+	nodeInfo     *service.NodeInfo // never changes; info about the local node
 
 	config        c.ConfigHolder
 	supvCmdch     MsgChannel //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
@@ -106,7 +106,16 @@ type state struct {
 	// (If any service reports isBalanced == false, the button becomes enabled.)
 	isBalanced bool // if true, UI Rebalance button is disabled; rev is not incremented for changes to this
 
-	rebalanceID   string
+	// rebalanceID is "" when no rebalance/failover/move is running. PrepareTopologyChange sets it
+	// to the TopologyChange.ID from ns_server. It gets reset to "" when the topology change either
+	// finishes or gets canceled (RebalCancelTask).
+	rebalanceID string
+
+	// rebalanceTask is nil if a rebalance/failover/move has never run or the last one was canceled
+	// before it either completed or failed. It is non-nil if either:
+	//   1. One is currently running (rebalanceID will be non-""), or
+	//   2. The last one failed (rebalanceID will be "").
+	// #2 causes RebalGetTaskList to return info on the failed rebalance.
 	rebalanceTask *service.Task
 }
 
@@ -134,7 +143,7 @@ var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 // NewRebalanceServiceManager is the constructor for the RebalanceServiceManager class. Indexer
 // constructs a singleton at boot.
 func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
-	supvPrioMsgch MsgChannel, config c.Config, rebalanceRunning bool,
+	supvPrioMsgch MsgChannel, config c.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
 	rebalanceToken *RebalanceToken, statsMgr *statsManager) *RebalanceServiceManager {
 
 	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
@@ -173,11 +182,7 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
 
-	mgr.nodeInfo = &service.NodeInfo{
-		NodeID:   service.NodeID(config["nodeuuid"].String()),
-		Priority: service.Priority(c.INDEXER_CUR_VERSION),
-	}
-
+	mgr.nodeInfo = nodeInfo
 	mgr.rebalanceRunning = rebalanceRunning
 	mgr.rebalanceToken = rebalanceToken
 	mgr.localhttp = getLocalHttpAddr(mgr.config.Load())
@@ -304,30 +309,28 @@ func (m *RebalanceServiceManager) handleIndexerReady(cmd Message) {
 
 /////////////////////////////////////////////////////////////////////////
 //
-//  service.Manager interface implementation
+//  service.Manager interface implementations
+//
+//  1. Delegates for generic APIs used by Rebalance:
+//       RebalGetTaskList: Rebalance's delegate for GetTaskList
+//       RebalCancelTask:  Rebalance's delegate for CancelTask
+//
+//  2. Direct implementation of Rebalance-specific APIs:
+//       GetCurrentTopology
+//       PrepareTopologyChange
+//       StartTopologyChange
+//
 //  Interface defined in cbauth/service/interface.go
 //
 /////////////////////////////////////////////////////////////////////////
 
-// GetNodeInfo is an external API called by ns_server (via cbauth).
-func (m *RebalanceServiceManager) GetNodeInfo() (*service.NodeInfo, error) {
-
-	return m.nodeInfo, nil
-}
-
-// Shutdown is an external API called by ns_server (via cbauth).
-func (m *RebalanceServiceManager) Shutdown() error {
-
-	return nil
-}
-
-// GetTaskList is an external API called by ns_server (via cbauth).
-// If rev is non-nil, respond only when the revision changes from that,
-// else respond immediately.
-func (m *RebalanceServiceManager) GetTaskList(rev service.Revision,
+// RebalGetTaskList is a delegate of GenericServiceManager.GetTaskList which is an external API
+// called by ns_server (via cbauth). If rev is non-nil, respond only when the revision changes from
+// that, else respond immediately. The cancel arg is a channel ns_server may use to cancel the call.
+func (m *RebalanceServiceManager) RebalGetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
-
-	l.Infof("RebalanceServiceManager::GetTaskList %v", rev)
+	const _RebalGetTaskList = "RebalanceServiceManager::RebalGetTaskList:"
+	l.Infof("%v called. rev: %v", _RebalGetTaskList, rev)
 
 	currState, err := m.wait(rev, cancel)
 	if err != nil {
@@ -335,13 +338,15 @@ func (m *RebalanceServiceManager) GetTaskList(rev service.Revision,
 	}
 
 	taskList := stateToTaskList(currState)
-	l.Infof("RebalanceServiceManager::GetTaskList returns %+v", taskList)
+	l.Infof("%v rev: %v returning taskList: %+v", _RebalGetTaskList, rev, taskList)
 	return taskList, nil
 }
 
-// CancelTask is an external API called by ns_server (via cbauth).
-func (m *RebalanceServiceManager) CancelTask(id string, rev service.Revision) error {
-	l.Infof("RebalanceServiceManager::CancelTask %v %v", id, rev)
+// RebalCancelTask is a delegate of GenericServiceManager.CancelTask which is an external API
+// called by ns_server (via cbauth).
+func (m *RebalanceServiceManager) RebalCancelTask(id string, rev service.Revision) error {
+	const _RebalCancelTask = "RebalanceServiceManager::RebalCancelTask:"
+	l.Infof("%v called. id: %v, rev: %v", _RebalCancelTask, id, rev)
 
 	currState := m.copyState()
 	tasks := stateToTaskList(currState).Tasks
@@ -365,7 +370,8 @@ func (m *RebalanceServiceManager) CancelTask(id string, rev service.Revision) er
 	}
 
 	if rev != nil && !bytes.Equal(rev, task.Rev) {
-		l.Errorf("RebalanceServiceManager::CancelTask %v %v", rev, task.Rev)
+		l.Errorf("%v returning error: %v. rev: %v, task.Rev: %v", _RebalCancelTask,
+			service.ErrConflict, rev, task.Rev)
 		return service.ErrConflict
 	}
 
@@ -1891,7 +1897,7 @@ func (m *RebalanceServiceManager) getStateServers() []service.NodeID {
 }
 
 // wait returns the current state immediately if it is newer than what the
-// caller (ultimately ns_server, from GetTaskList or GetTopologyChange APIs)
+// caller (ultimately ns_server via GetTaskList or GetTopologyChange APIs)
 // already has or if caller passed a nil rev. Otherwise it waits until the
 // revision changes and returns the new state. ns_server's cbauth API stub
 // may cancel the wait before that happens by closing the cancel channel, in
