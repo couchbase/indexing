@@ -370,6 +370,24 @@ func Rebalance(serverAddr, username, password string) error {
 	return nil
 }
 
+func RecoverNode(serverAddr, username, password, hostname, recoveryType string) (err error) {
+	//var res []byte      // raw HTTP response
+	for retries := 0; ; retries++ {
+		_, err = recoveryFromRest(serverAddr, username, password, hostname, recoveryType)
+		if err == nil {
+			return nil
+		}
+		if retries >= 30 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("RecoverNode: Error from recoverNodeNodeFromRest while adding node: %v (role: %v), err: %v", hostname, recoveryType, err)
+	}
+	return nil
+}
+
 func ResetCluster(serverAddr, username, password string, dropNodes []string, keepNodes map[string]string) error {
 
 	if res, err := rebalanceFromRest(serverAddr, username, password, dropNodes); err != nil {
