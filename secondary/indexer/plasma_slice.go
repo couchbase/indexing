@@ -834,6 +834,10 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		if err == nil {
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
+			if mdb.meteringMgr != nil {
+				bucket := mdb.idxDefn.Bucket
+				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false)
+			}
 		}
 		mdb.isDirty = true
 		return 1
@@ -873,11 +877,15 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		mdb.back[workerId].Begin()
 		defer mdb.back[workerId].End()
 
+		// track if either of the backindex or mainindex InsertKV call is successful
+		itemInserted := false
+
 		err = mdb.main[workerId].InsertKV(entry, nil)
 		if err == nil {
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 			addKeySizeStat(mdb.idxStats, len(entry))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+			itemInserted = true
 		}
 
 		// entry2BackEntry overwrites the buffer to remove docid
@@ -889,11 +897,20 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 			// rawDataSize is the sum of all data inserted into main store and back store
 			mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(backEntry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(backEntry)))
+			itemInserted = true
+		}
+
+		if mdb.meteringMgr != nil && itemInserted == true {
+			bucket := mdb.idxDefn.Bucket
+			// for an update operation deleteSecIndex has already accounted 1 WCU
+			// so we will only count 1 WCU here.
+			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(key)), false)
 		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
 			atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
 		}
+
 	}
 
 	mdb.isDirty = true
@@ -1014,6 +1031,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 					addKeySizeStat(mdb.idxStats, len(entry))
 					mdb.idxStats.arrItemsCount.Add(int64(oldKeyCount[i]))
+					if mdb.meteringMgr != nil {
+						bucket := mdb.idxDefn.Bucket
+						mdb.meteringMgr.RefundWriteUnits(bucket, uint64(len(docid)+entry.lenKey()))
+					}
 				}
 			}
 		}
@@ -1033,6 +1054,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
 					subtractKeySizeStat(mdb.idxStats, entrySz)
 					mdb.idxStats.arrItemsCount.Add(0 - int64(newKeyCount[i]))
+					if mdb.meteringMgr != nil {
+						bucket := mdb.idxDefn.Bucket
+						mdb.meteringMgr.RefundWriteUnits(bucket, uint64(len(docid)+entry.lenKey()))
+					}
 				}
 			}
 		}
@@ -1064,6 +1089,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				subtractKeySizeStat(mdb.idxStats, keyDelSz)
 				atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 				mdb.idxStats.arrItemsCount.Add(0 - int64(oldKeyCount[i]))
+				if mdb.meteringMgr != nil {
+					bucket := mdb.idxDefn.Bucket
+					mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false)
+				}
 			}
 			nmut++
 		}
@@ -1095,6 +1124,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
 				mdb.idxStats.arrItemsCount.Add(int64(newKeyCount[i]))
+				if mdb.meteringMgr != nil {
+					bucket := mdb.idxDefn.Bucket
+					mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(keyToBeAdded)), false)
+				}
 			}
 
 			if int64(len(keyToBeAdded)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1169,7 +1202,6 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 }
 
 func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
-
 	defer func() {
 		atomic.AddInt64(&mdb.qCount, -1)
 	}()
@@ -1218,6 +1250,11 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 		if err1 == nil {
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+
+			if mdb.meteringMgr != nil {
+				bucket := mdb.idxDefn.Bucket
+				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false)
+			}
 		}
 
 		mdb.isDirty = true
@@ -1237,12 +1274,14 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
 	buf := mdb.encodeBuf[workerId]
-
 	if err == nil {
 		// Delete the entries only if the entry is different
 		if hasEqualBackEntry(compareKey, backEntry) {
 			return 0, false
 		}
+
+		// track if either of the backindex or mainindex DeleteKV call is successful
+		itemDeleted := false
 
 		t0 := time.Now()
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
@@ -1252,6 +1291,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		if err == nil {
 			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+			itemDeleted = true
 		}
 
 		entry := backEntry2entry(docid, backEntry, buf, mdb.keySzConf[workerId])
@@ -1262,6 +1302,13 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		if err == nil {
 			mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
 			subtractKeySizeStat(mdb.idxStats, entrySz)
+			itemDeleted = true
+		}
+
+		if mdb.meteringMgr != nil && itemDeleted == true {
+			bucket := mdb.idxDefn.Bucket
+			keylen := getKeyLenFromEntry(entry)
+			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false)
 		}
 	}
 
@@ -1343,6 +1390,11 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 			subtractKeySizeStat(mdb.idxStats, keyDelSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
+
+			if mdb.meteringMgr != nil {
+				bucket := mdb.idxDefn.Bucket
+				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false)
+			}
 		}
 	}
 
@@ -3088,6 +3140,11 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 	}
 
 	return buf[:kl+2]
+}
+
+func getKeyLenFromEntry(entryBytes []byte) int {
+	se, _ := BytesToSecondaryIndexEntry(entryBytes)
+	return se.lenKey()
 }
 
 // Reformat secondary key to entry

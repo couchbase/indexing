@@ -19,15 +19,31 @@ type MeteringThrottlingMgr struct {
 }
 
 func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChannel) (*MeteringThrottlingMgr, Message) {
-	panic("Not implemented for Community Edition")
+	panic("MeteringManager::NewMeteringManager Not implemented for Community Edition")
 	return nil, &MsgSuccess{}
 }
 
 func (m *MeteringThrottlingMgr) RegisterRestEndpoints() {
-	panic("Not implemented for Community Edition")
+	panic("MeteringManager::RegisterRestEndpoints Not implemented for Community Edition")
 }
 
-func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket, user string, maxThrottle time.Duration) (
+func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	result CheckResult, throttleTime time.Duration, err error) {
-	panic("Not implemented for Community Edition")
+	panic("MeteringManager::Not implemented for Community Edition")
+	return
+}
+
+func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool) error {
+	panic("MeteringManager::RecordWriteUnits Not implemented for Community Edition")
+	return nil
+}
+
+func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) error {
+	panic("MeteringManager::RefundWriteUnits Not implemented for Community Edition")
+	return nil
+}
+
+func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) error {
+	panic("MeteringManager::RecordReadUnits Not implemented for Community Edition")
+	return nil
 }

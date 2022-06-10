@@ -95,6 +95,9 @@ type StreamState struct {
 
 	//used to ensure INIT_STREAM is not merged before TK initiated recovey completes
 	streamKeyspaceIdBlockMergeForRecovery map[common.StreamId]KeyspaceIdBlockMergeForRecovery
+
+	//only used to log debug information for throttle error and avoid log flooding
+	streamKeyspaceIdThrottleDebugLogTime map[common.StreamId]KeyspaceIdThrottleDebugLogTime
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -147,6 +150,7 @@ type KeyspaceIdVBMap map[string]map[Vbucket]string
 type KeyspaceIdHWTOSO map[string]*common.TsVbuuid
 type KeyspaceIdLastKVSeqFetch map[string]time.Time
 type KeyspaceIdBlockMergeForRecovery map[string]bool
+type KeyspaceIdThrottleDebugLogTime map[string]uint64
 
 type TsListElem struct {
 	ts       *common.TsVbuuid
@@ -216,7 +220,8 @@ func InitStreamState(config common.Config) *StreamState {
 		keyspaceIdPendBuildDebugLogTime:        make(map[string]uint64),
 		keyspaceIdFlushCheckDebugLogTime:       make(map[string]uint64),
 		streamKeyspaceIdLastKVSeqFetch:         make(map[common.StreamId]KeyspaceIdLastKVSeqFetch),
-		streamKeyspaceIdBlockMergeForRecovery:		make(map[common.StreamId]KeyspaceIdBlockMergeForRecovery),
+		streamKeyspaceIdBlockMergeForRecovery:  make(map[common.StreamId]KeyspaceIdBlockMergeForRecovery),
+		streamKeyspaceIdThrottleDebugLogTime:   make(map[common.StreamId]KeyspaceIdThrottleDebugLogTime),
 	}
 
 	return ss
@@ -358,8 +363,11 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdLastKVSeqFetch := make(KeyspaceIdLastKVSeqFetch)
 	ss.streamKeyspaceIdLastKVSeqFetch[streamId] = keyspaceIdLastKVSeqFetch
 
-	KeyspaceIdBlockMergeForRecovery := make(KeyspaceIdBlockMergeForRecovery)
-	ss.streamKeyspaceIdBlockMergeForRecovery[streamId] = KeyspaceIdBlockMergeForRecovery
+	keyspaceIdBlockMergeForRecovery := make(KeyspaceIdBlockMergeForRecovery)
+	ss.streamKeyspaceIdBlockMergeForRecovery[streamId] = keyspaceIdBlockMergeForRecovery
+
+	keyspaceIdThrottleDebugLogTime := make(KeyspaceIdThrottleDebugLogTime)
+	ss.streamKeyspaceIdThrottleDebugLogTime[streamId] = keyspaceIdThrottleDebugLogTime
 
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
@@ -415,6 +423,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Time{}
 	ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId] = uint64(time.Now().UnixNano())
 
 	if streamId == common.INIT_STREAM {
 		ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
@@ -488,6 +497,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdFlushDone[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdForceRecovery[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdBlockMergeForRecovery[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdThrottleDebugLogTime[streamId], keyspaceId)
 
 	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {
 		bs[keyspaceId] = STREAM_INACTIVE
@@ -544,6 +554,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdHWTOSO, streamId)
 	delete(ss.streamKeyspaceIdLastKVSeqFetch, streamId)
 	delete(ss.streamKeyspaceIdBlockMergeForRecovery, streamId)
+	delete(ss.streamKeyspaceIdThrottleDebugLogTime, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 

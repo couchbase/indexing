@@ -109,7 +109,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 }
 
 func (tk *timekeeper) SetMeteringMgr(mtMgr *MeteringThrottlingMgr) {
-	if common.GetBuildMode() == common.ENTERPRISE && common.GetServerMode() == common.SERVERLESS {
+	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
 		tk.meteringMgr = mtMgr
 	}
 }
@@ -3039,6 +3039,38 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	}
 
 	go func() {
+		//check for throttles here
+		if tk.meteringMgr != nil {
+			if flushTs.GetSnapType() != common.FORCE_COMMIT {
+
+				bucket, _, _ := SplitKeyspaceId(keyspaceId)
+				res, sleepDuration, err := tk.meteringMgr.CheckWriteThrottle(bucket)
+
+				if err == nil && res == CheckResultThrottle {
+					logging.Debugf("Timekeeper::sendNewStabilityTs: Flusher observed write throttles for keyspaceid %v streamId %v duration %v", keyspaceId, streamId, sleepDuration)
+					time.Sleep(sleepDuration)
+				} else {
+					// avoid log flooding
+					forceLog := false
+					now := uint64(time.Now().UnixNano())
+					sinceLastLog := now - tk.ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId]
+
+					if sinceLastLog > uint64(300*time.Second) {
+						forceLog = true
+						tk.ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId] = now
+					}
+
+					if forceLog || logging.IsEnabled(logging.Verbose) {
+						if err != nil {
+							logging.Warnf("Timekeeper::sendNewStabilityTs: Flusher observed check throttles error for keyspaceid %v streamId %v error %v ", keyspaceId, streamId, err)
+						} else if res != CheckResultNormal {
+							logging.Warnf("Timekeeper::sendNewStabilityTs: Flusher observed check throttles error return for keyspaceid %v streamId %v error ret %v ", keyspaceId, streamId, res)
+						}
+					}
+				}
+			}
+		}
+
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			keyspaceId: keyspaceId,
 			streamId:   streamId,
