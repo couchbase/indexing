@@ -500,6 +500,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		}
 		idx.tk.SetMeteringMgr(idx.meteringMgr)
 		idx.scanCoord.SetMeteringMgr(idx.meteringMgr)
+		idx.statsMgr.SetMeteringMgr(idx.meteringMgr)
 		idx.meteringMgr.RegisterRestEndpoints()
 	}
 

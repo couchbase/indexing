@@ -2648,6 +2648,7 @@ type statsManager struct {
 	loggerReqCh MsgChannel
 
 	stReqRecCount uint64
+	meteringMgr   *MeteringThrottlingMgr
 }
 
 // NewStatsManager is the constructor for statsManager.
@@ -2671,6 +2672,10 @@ func NewStatsManager(supvCmdch MsgChannel,
 	go s.runStatsDumpLogger()
 	StartCpuCollector()
 	return s, &MsgSuccess{}
+}
+
+func (s *statsManager) SetMeteringMgr(meteringMgr *MeteringThrottlingMgr) {
+	s.meteringMgr = meteringMgr
 }
 
 func (s *statsManager) RegisterRestEndpoints() {
@@ -2888,6 +2893,9 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 	if is == nil {
 		w.WriteHeader(200)
 		w.Write([]byte(""))
+		if s.meteringMgr != nil {
+			_ = s.meteringMgr.handler.WriteMetrics(w)
+		}
 		return
 	}
 
@@ -2898,6 +2906,9 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(200)
 	w.Write(out)
+	if s.meteringMgr != nil {
+		_ = s.meteringMgr.handler.WriteMetrics(w)
+	}
 }
 
 func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {
