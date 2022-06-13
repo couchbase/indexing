@@ -137,7 +137,6 @@ type Client struct {
 	adminport string
 	ap        apcommon.Client
 	// config
-	maxVbuckets   int
 	retryInterval int
 	maxRetries    int
 	expBackoff    int
@@ -147,7 +146,7 @@ type Client struct {
 // - `retryInterval` is specified in milliseconds.
 //   if retryInterval is ZERO, API will not perform retry.
 // - if `maxRetries` is ZERO, will perform indefinite retry.
-func NewClient(adminport string, maxvbs int, config c.Config) (*Client, error) {
+func NewClient(adminport string, config c.Config) (*Client, error) {
 	retryInterval := config["retryInterval"].Int()
 	maxRetries := config["maxRetries"].Int()
 	expBackoff := config["exponentialBackoff"].Int()
@@ -161,7 +160,6 @@ func NewClient(adminport string, maxvbs int, config c.Config) (*Client, error) {
 	client := &Client{
 		adminport:     adminport,
 		ap:            ap,
-		maxVbuckets:   maxvbs,
 		retryInterval: retryInterval,
 		maxRetries:    maxRetries,
 		expBackoff:    expBackoff,
@@ -261,7 +259,8 @@ func (client *Client) InitialTopicRequest(
 	opaque2 uint64,
 	collectionAware bool,
 	enableOSO bool,
-	needsAuth bool) (*protobuf.TopicResponse, error) {
+	needsAuth bool,
+	numVBuckets int) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
 	for _, instance := range instances {
@@ -271,7 +270,7 @@ func (client *Client) InitialTopicRequest(
 	req := protobuf.NewMutationTopicRequest(topic, endpointType,
 		instances, async, opaque2, collectionAware, enableOSO, needsAuth)
 	for bucketn := range buckets {
-		ts, err := client.InitialRestartTimestamp(pooln, bucketn)
+		ts, err := client.InitialRestartTimestamp(pooln, bucketn, numVBuckets)
 		if err != nil {
 			return nil, err
 		}
@@ -665,7 +664,7 @@ func (client *Client) ShutdownTopic(topic string) error {
 // for a subset of vbuckets in `bucket`.
 // - return http errors for transport related failures.
 func (client *Client) InitialRestartTimestamp(
-	pooln, bucketn string) (*protobuf.TsVbuuid, error) {
+	pooln, bucketn string, numVBuckets int) (*protobuf.TsVbuuid, error) {
 
 	// get vbucket map.
 	vbmap, err := client.GetVbmap(pooln, bucketn, nil)
@@ -680,7 +679,7 @@ func (client *Client) InitialRestartTimestamp(
 	vbnos := vbmap.AllVbuckets16()
 	flogs := pflogs.ToFailoverLog(vbnos)
 
-	ts := protobuf.NewTsVbuuid(pooln, bucketn, client.maxVbuckets)
+	ts := protobuf.NewTsVbuuid(pooln, bucketn, numVBuckets)
 	return ts.InitialRestartTs(flogs), nil
 }
 

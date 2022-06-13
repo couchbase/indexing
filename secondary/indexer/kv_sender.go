@@ -1671,8 +1671,7 @@ func newProjClient(addr string) (*projClient.Client, error) {
 
 	config := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
 	config.SetValue("retryInterval", 0) //no retry
-	maxvbs := c.SystemConfig["maxVbuckets"].Int()
-	return projClient.NewClient(addr, maxvbs, config)
+	return projClient.NewClient(addr, config)
 
 }
 
