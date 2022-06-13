@@ -126,10 +126,10 @@ type serverMessage struct {
 
 // maintain information about each remote connection.
 type netConn struct {
-	conn   net.Conn
-	worker chan interface{}
-	active bool
-	tpkt   *transport.TransportPacket
+	conn    net.Conn
+	closeCh chan interface{}
+	active  bool
+	tpkt    *transport.TransportPacket
 }
 
 // Server handles an active dataport server of mutation for all vbuckets.
@@ -145,7 +145,6 @@ type Server struct {
 	finch  chan bool
 
 	// config parameters
-	maxVbuckets  int
 	genChSize    int           // channel size for genServer routine
 	maxPayload   int           // maximum payload length from router
 	readDeadline time.Duration // timeout, in millisecond, reading from socket
@@ -158,7 +157,6 @@ type Server struct {
 // NewServer creates a new dataport daemon.
 func NewServer(
 	laddr string,
-	maxvbs int,
 	config c.Config,
 	appch chan<- interface{},
 	enableAuth *uint32) (s *Server, err error) {
@@ -175,7 +173,6 @@ func NewServer(
 		finch:  make(chan bool, 1),
 		conns:  make(map[string]*netConn),
 		// config parameters
-		maxVbuckets:  maxvbs,
 		genChSize:    genChSize,
 		maxPayload:   config["maxPayload"].Int(),
 		readDeadline: time.Duration(config["tcpReadDeadline"].Int()),
@@ -338,9 +335,9 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 					conn.Close()
 
 				} else { // connection accepted
-					worker := make(chan interface{}, s.maxVbuckets)
+					closeCh := make(chan interface{})
 					s.conns[raddr] = &netConn{
-						conn: conn, worker: worker,
+						conn: conn, closeCh: closeCh,
 						tpkt: newTransportPkt(s.maxPayload),
 					}
 					n := len(s.conns)
@@ -551,14 +548,14 @@ func (s *Server) jumboErrorHandler(
 }
 
 func (s *Server) logStats(hostUuids keeper) {
-	keyspaceIdkvs := make(map[string][]uint64)    // keyspaceId -> []count
-	keyspaceIdseqnos := make(map[string][]uint64) // keyspaceId -> []seqno
+	keyspaceIdkvs := make(map[string]map[uint16]uint64)    // keyspaceId -> map[vbno]count
+	keyspaceIdseqnos := make(map[string]map[uint16]uint64) // keyspaceId -> map[vbno]seqno
 	for _, avb := range hostUuids {
 		counts, ok := keyspaceIdkvs[avb.keyspaceId]
 		seqnos, ok := keyspaceIdseqnos[avb.keyspaceId]
 		if !ok {
-			counts = make([]uint64, s.maxVbuckets)
-			seqnos = make([]uint64, s.maxVbuckets)
+			counts = make(map[uint16]uint64)
+			seqnos = make(map[uint16]uint64)
 		}
 		counts[avb.vbno] = avb.kvers
 		seqnos[avb.vbno] = avb.seqno
@@ -581,7 +578,7 @@ func closeConnection(prefix, raddr string, nc *netConn) {
 			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
-	close(nc.worker)
+	close(nc.closeCh)
 	nc.conn.Close()
 	logging.Infof("%v connection %q closed !\n", prefix, raddr)
 }
@@ -784,7 +781,7 @@ func doReceive(
 	datach chan<- []interface{},
 	reqMsg interface{}) {
 
-	conn, worker := nc.conn, nc.worker
+	conn, closeCh := nc.conn, nc.closeCh
 
 	pkt := nc.tpkt
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
@@ -835,7 +832,7 @@ loop:
 			}
 			select {
 			case datach <- []interface{}{msg}:
-			case <-worker:
+			case <-closeCh:
 				msg.cmd, msg.err = serverCmdError, ErrorWorkerKilled
 				datach <- []interface{}{msg}
 				fmsg := "%v worker %q exit: %v\n"
