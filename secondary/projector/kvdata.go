@@ -259,7 +259,12 @@ func NewKVData(
 	}
 	kvdata.uuid = uuid.Uint64()
 
-	numVbuckets := config["maxVbuckets"].Int()
+	// TODO: Replace this with cinfo.
+	numVbuckets, err := common.GetNumVBuckets(config["clusterAddr"].String(), bucket)
+	if err != nil {
+		logging.Errorf("%v ##%x common.GetNumVBuckets(%v) failed: %v", kvdata.logPrefix, kvdata.opaque, bucket, err)
+		return nil, err
+	}
 
 	kvdata.stats.Init(numVbuckets, kvdata)
 	kvdata.stats.mutch = mutch
