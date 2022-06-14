@@ -222,6 +222,8 @@ type indexer struct {
 	pendingReset map[common.IndexInstId]bool
 
 	bsRunParams *runParams // bootstrap values of DDL running and inProgressIndexNames
+
+	instsPerColl map[string]map[string]map[common.IndexInstId]bool // bucket -> collId -> InstId
 }
 
 type kvRequest struct {
@@ -325,6 +327,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 		pendingReset: make(map[common.IndexInstId]bool),
 		bsRunParams:  &runParams{},
+		instsPerColl: make(map[string]map[string]map[common.IndexInstId]bool),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -4380,6 +4383,12 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	bucketUUID, _ := idx.cinfoProvider.GetBucketUUID(bucket)
 	idx.cinfoProviderLock.RUnlock()
 
+	if instMap, ok := idx.instsPerColl[bucket][collectionId]; !ok || len(instMap) == 0 {
+		logging.Tracef("Indexer::processCollectionDrop No Index Found for %v %v %v.",
+			streamId, keyspaceId, collectionId)
+		return
+	}
+
 	//get the collection name from index inst map(this may already be gone from manifest)
 	var collection, scope string
 	for _, index := range idx.indexInstMap {
@@ -4394,12 +4403,6 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 			bucketUUID = index.Defn.BucketUUID
 			break
 		}
-	}
-
-	if collection == "" {
-		logging.Infof("Indexer::processCollectionDrop No Index Found for %v %v %v.",
-			streamId, keyspaceId, collectionId)
-		return
 	}
 
 	// delete index inst on the keyspace from metadata repository and
@@ -4473,6 +4476,7 @@ func (idx *indexer) newKeyspaceStatsMsg() *MsgUpdateKeyspaceStatsMap {
 func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 	clientCh MsgChannel) {
 
+	idx.deleteFromInstsPerCollMap(indexInsts)
 	// Delete all instances from internal maps
 	var indexInstIds []common.IndexInstId
 	idxPartnInfoMap := make(map[common.IndexInstId]PartitionInstMap, len(indexInsts))
@@ -4734,6 +4738,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	async := enableAsync && clusterVer >= common.INDEXER_65_VERSION
 
 	idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId] = cid
+	idx.addToInstsPerCollMap(indexList)
 
 	//Set collectionAware to true unconditionally. DCP allows to enable
 	//collections on upgraded nodes in mixed mode.
@@ -6597,6 +6602,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		cid = idx.makeCollectionIdForStreamRequest(streamId, keyspaceId, cid, clusterVer)
 		idx.streamKeyspaceIdCollectionId[streamId][keyspaceId] = cid
 	}
+	idx.addToInstsPerCollMap(indexList)
 
 	//Set collectionAware to true unconditionally. DCP allows to enable
 	//collections on upgraded nodes in mixed mode.
@@ -10601,4 +10607,40 @@ func (idx *indexer) enablePlasmaInMemCompression() {
 		return
 	}
 	logging.Infof("Indexer::enablePlasmaInMemCompression done enabling feature for indexer %v", indexerId)
+}
+
+func (idx *indexer) addToInstsPerCollMap(indexList []common.IndexInst) {
+	for i := range indexList {
+		bucket := indexList[i].Defn.Bucket
+		collId := indexList[i].Defn.CollectionId
+		instId := indexList[i].InstId
+
+		if _, ok := idx.instsPerColl[bucket]; !ok {
+			idx.instsPerColl[bucket] = make(map[string]map[common.IndexInstId]bool)
+		}
+
+		if _, ok := idx.instsPerColl[bucket][collId]; !ok {
+			idx.instsPerColl[bucket][collId] = make(map[common.IndexInstId]bool)
+		}
+		idx.instsPerColl[bucket][collId][instId] = true
+	}
+	logging.Verbosef("Indexer::addToInstsPerCollMap: %v", idx.instsPerColl)
+}
+
+func (idx *indexer) deleteFromInstsPerCollMap(indexList []common.IndexInst) {
+	for i := range indexList {
+		bucket := indexList[i].Defn.Bucket
+		collId := indexList[i].Defn.CollectionId
+		instId := indexList[i].InstId
+
+		delete(idx.instsPerColl[bucket][collId], instId)
+		if len(idx.instsPerColl[bucket][collId]) == 0 {
+			delete(idx.instsPerColl[bucket], collId)
+		}
+
+		if len(idx.instsPerColl[bucket]) == 0 {
+			delete(idx.instsPerColl, bucket)
+		}
+	}
+	logging.Verbosef("Indexer::deleteFromInstsPerCollMap: %v", idx.instsPerColl)
 }
