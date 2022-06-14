@@ -19,14 +19,13 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	adminport   string
-	numVbuckets int
-	kvaddrs     string
-	logFile     string
-	auth        string
-	loglevel    string
-	diagDir     string
-	isIPv6      bool
+	adminport string
+	kvaddrs   string
+	logFile   string
+	auth      string
+	loglevel  string
+	diagDir   string
+	isIPv6    bool
 
 	certFile string // PEM-format signed public key for accepting external TLS connections
 	keyFile  string // PEM-format private key for accepting external TLS connections
@@ -42,7 +41,7 @@ var options struct {
 func argParse() string {
 	fset := flag.NewFlagSet("projector", flag.ContinueOnError)
 	fset.StringVar(&options.adminport, "adminport", "", "adminport address")
-	fset.IntVar(&options.numVbuckets, "vbuckets", 1024, "maximum number of vbuckets configured.")
+
 	// kvaddrs is passed in from ns-server.  For ipv6, it is expected that ns-server will pass in a proper address.
 	fset.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000", "comma separated list of kvaddrs")
 	fset.StringVar(&options.logFile, "logFile", "", "output logs to file default is stdout")
@@ -127,7 +126,6 @@ func main() {
 	config := c.SystemConfig.Clone()
 	logging.SetLogLevel(logging.Level(options.loglevel))
 
-	config.SetValue("maxVbuckets", options.numVbuckets)
 	if f := getlogFile(); f != nil {
 		fmt.Printf("Projector logging to %q\n", f.Name())
 		logging.SetLogWriter(f)
@@ -149,7 +147,7 @@ func main() {
 		}
 	}
 
-	epfactory := NewEndpointFactory(cluster, options.numVbuckets)
+	epfactory := NewEndpointFactory(cluster)
 	config.SetValue("projector.routerEndpointFactory", epfactory)
 
 	logging.Infof("%v\n", c.LogOs())
@@ -187,7 +185,7 @@ func main() {
 
 	caFile := options.caFile
 
-	projector.NewProjector(options.numVbuckets, config, certFile, keyFile, caFile)
+	projector.NewProjector(config, certFile, keyFile, caFile)
 
 	startRegulator()
 
@@ -195,12 +193,12 @@ func main() {
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(cluster string, nvbs int) c.RouterEndpointFactory {
+func NewEndpointFactory(cluster string) c.RouterEndpointFactory {
 
 	return func(topic, endpointType, addr string, config c.Config, needsAuth bool) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(cluster, topic, addr, nvbs, config, needsAuth)
+			return dataport.NewRouterEndpoint(cluster, topic, addr, config, needsAuth)
 		default:
 			logging.Fatalf("Unknown endpoint type\n")
 		}

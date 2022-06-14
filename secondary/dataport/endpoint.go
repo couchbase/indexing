@@ -171,8 +171,8 @@ func (stats *EndpointStats) String() string {
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(
-	cluster, topic, raddr string, maxvbs int,
-	config c.Config, needsAuth bool) (*RouterEndpoint, error) {
+	cluster, topic, raddr string, config c.Config, needsAuth bool) (
+	*RouterEndpoint, error) {
 
 	endpoint := &RouterEndpoint{
 		topic:           topic,

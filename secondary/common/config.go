@@ -73,18 +73,19 @@ type ConfigValue struct {
 // SystemConfig is default configuration for system and components.
 // configuration parameters follow flat namespacing like,
 //      "maxVbuckets"  for system-level config parameter
+// 	Example:
+// 		"maxVbuckets": ConfigValue{
+//			1024,
+//			"number of vbuckets configured in KV",
+//			1024,
+//			true,  // immutable
+//			false, // case-insensitive
+//		},
 //      "projector.xxx" for projector component.
 //      "projector.adminport.xxx" for adminport under projector component.
 // etc...
 var SystemConfig = Config{
 	// system parameters
-	"maxVbuckets": ConfigValue{
-		1024,
-		"number of vbuckets configured in KV",
-		1024,
-		true,  // immutable
-		false, // case-insensitive
-	},
 	// security parameters
 	// Note: If we set this to false and set node to node encryption level to all we will
 	// need both TLS and NonTLS versions for ports that are accessed both from local host
