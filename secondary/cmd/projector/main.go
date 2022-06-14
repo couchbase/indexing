@@ -19,16 +19,21 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	adminport       string
-	numVbuckets     int
-	kvaddrs         string
-	logFile         string
-	auth            string
-	loglevel        string
-	diagDir         string
-	isIPv6          bool
-	certFile        string
-	keyFile         string
+	adminport   string
+	numVbuckets int
+	kvaddrs     string
+	logFile     string
+	auth        string
+	loglevel    string
+	diagDir     string
+	isIPv6      bool
+
+	certFile string // PEM-format signed public key for accepting external TLS connections
+	keyFile  string // PEM-format private key for accepting external TLS connections
+
+	clientCertFile string // PEM-format signed public key for making internal TLS connections
+	clientKeyFile  string // PEM-format private key for making internal TLS connections
+
 	httpsPort       string
 	caFile          string
 	deploymentModel string
@@ -44,8 +49,19 @@ func argParse() string {
 	fset.StringVar(&options.loglevel, "logLevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
 	fset.StringVar(&options.auth, "auth", "", "Auth user and password")
 	fset.StringVar(&options.diagDir, "diagDir", "./", "Directory for writing projector diagnostic information")
-	fset.StringVar(&options.certFile, "certFile", "", "Index https X509 certificate file")
-	fset.StringVar(&options.keyFile, "keyFile", "", "Index https cert key file")
+
+	// "Server" key pair for accepting external TLS connections to CB Server (PEM-format strings)
+	fset.StringVar(&options.certFile, "certFile", "",
+		"Projector X.509 certificate PEM string for accepting external TLS connections")
+	fset.StringVar(&options.keyFile, "keyFile", "",
+		"Projector X.509 private key PEM string for accepting external TLS connections")
+
+	// "Client" key pair for making internal TLS connections to CB Server (PEM-format strings)
+	fset.StringVar(&options.clientCertFile, "clientCertFile", "",
+		"Projector X.509 certificate PEM string for making internal TLS connections")
+	fset.StringVar(&options.clientKeyFile, "clientKeyFile", "",
+		"Projector X.509 private key PEM string for making internal TLS connections")
+
 	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
 	fset.StringVar(&options.caFile, "caFile", "", "Multiple Root/Client CAs")
 	fset.StringVar(&options.deploymentModel, "deploymentModel", "default", "Specify the deployment model [serverless|default]")
@@ -72,7 +88,7 @@ func argParse() string {
 	}
 
 	// Set Deployment Model
-	c.SetDeploymentModel(options.deploymentModel)
+	c.SetDeploymentModel(c.MakeDeploymentModel(options.deploymentModel))
 	logging.Infof("Projector DeploymentModel is set to: %v", common.GetDeploymentModel())
 
 	var isIPv6 bool

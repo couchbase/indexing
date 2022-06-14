@@ -142,6 +142,7 @@ type Bucket struct {
 	BasicStats          map[string]interface{} `json:"basicStats,omitempty"`
 	Controllers         map[string]interface{} `json:"controllers,omitempty"`
 	StorageBackend      string                 `json:"storageBackend,omitempty"`
+	NumVBuckets         int                    `json:"numVBuckets,omitempty"`
 
 	CollectionManifestUID string `json:"collectionsManifestUid,omitempty"`
 

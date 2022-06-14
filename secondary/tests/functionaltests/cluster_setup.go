@@ -21,6 +21,16 @@ func addNode(hostname, role string, t *testing.T) {
 	}
 }
 
+func recoverNode(hostname, recoveryType string, t *testing.T) {
+	serverAddr := clusterconfig.KVAddress
+	username := clusterconfig.Username
+	password := clusterconfig.Password
+
+	if err := cluster.RecoverNode(serverAddr, username, password, hostname, recoveryType); err != nil {
+		t.Fatalf(err.Error())
+	}
+}
+
 // addNodeAndRebalance adds a node to the cluster and then does a rebalance.
 func addNodeAndRebalance(hostname, role string, t *testing.T) {
 	serverAddr := clusterconfig.KVAddress

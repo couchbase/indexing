@@ -754,7 +754,7 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			if i == 0 && def.IndexMissingLeadingKey { // Missing is implicit for non leading keys
 				_, _, isFlatten, _ := queryutil.IsArrayExpression(exp) // For flatten MISSING is present in exp
 				if !isFlatten {
-					exprs += " MISSING"
+					exprs += " INCLUDE MISSING"
 				}
 			}
 		}
@@ -922,6 +922,19 @@ func GetBucketUUID(cluster, bucket string) (string, error) {
 	}
 
 	return cinfo.GetBucketUUID(bucket), nil
+}
+
+func GetNumVBuckets(cluster, bucketn string) (int, error) {
+	pooln := "default"
+
+	binfo, err := NewBucketInfo(cluster, pooln, bucketn)
+	if err != nil {
+		fmsg := "NewBucketInfo(`%v`, `%v`, `%v`): %v\n"
+		e := fmt.Errorf(fmsg, cluster, pooln, bucketn, err)
+		return 0, e
+	}
+
+	return binfo.GetNumVBuckets(bucketn)
 }
 
 //

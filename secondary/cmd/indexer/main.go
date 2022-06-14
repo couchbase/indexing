@@ -49,8 +49,19 @@ func main() {
 	nodeuuid := fset.String("nodeUUID", "", "UUID of the node")
 	storageMode := fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
 	httpsPort := fset.String("httpsPort", "", "Index https mgmt port")
-	certFile := fset.String("certFile", "", "Index https X509 certificate file")
-	keyFile := fset.String("keyFile", "", "Index https cert key file")
+
+	// "Server" key pair for accepting external TLS connections to CB Server (PEM-format strings)
+	certFile := fset.String("certFile", "",
+		"Indexer X.509 certificate PEM string for accepting external TLS connections")
+	keyFile := fset.String("keyFile", "",
+		"Indexer X.509 private key PEM string for accepting external TLS connections")
+
+	// "Client" key pair for making internal TLS connections to CB Server (PEM-format strings)
+	clientCertFile := fset.String("clientCertFile", "",
+		"Indexer X.509 certificate PEM string for making internal TLS connections")
+	clientKeyFile := fset.String("clientKeyFile", "",
+		"Indexer X.509 private key PEM string for making internal TLS connections")
+
 	isEnterprise := fset.Bool("isEnterprise", true, "Enterprise Edition")
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
@@ -76,7 +87,7 @@ func main() {
 	}
 
 	// Set Deployment Model
-	common.SetDeploymentModel(*deploymentModel)
+	common.SetDeploymentModel(common.MakeDeploymentModel(*deploymentModel))
 	logging.Infof("Indexer DeploymentModel is set to: %v", common.GetDeploymentModel())
 
 	// setup cbauth
@@ -109,6 +120,8 @@ func main() {
 	config.SetValue("indexer.httpsPort", *httpsPort)
 	config.SetValue("indexer.certFile", *certFile)
 	config.SetValue("indexer.keyFile", *keyFile)
+	config.SetValue("indexer.clientCertFile", *clientCertFile)
+	config.SetValue("indexer.clientKeyFile", *clientKeyFile)
 	config.SetValue("indexer.caFile", *caFile)
 	config.SetValue("indexer.streamInitPort", *streamInitPort)
 	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)

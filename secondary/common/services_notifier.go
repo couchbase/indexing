@@ -2,6 +2,7 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +46,7 @@ type serviceNotifierInstance struct {
 	waiterCount int
 	client      couchbase.Client
 	valid       bool
-	waiters     map[int]chan Notification
+	waiters     map[string]chan Notification
 
 	buckets map[string]bool
 
@@ -93,7 +94,9 @@ func (instance *serviceNotifierInstance) getNotifyCallback(t NotificationType) f
 			select {
 			case w <- notifMsg:
 			case <-time.After(notifyWaitTimeout):
-				logging.Warnf("serviceChangeNotifier: Consumer for %v took too long to read notification, making the consumer invalid", instance.DebugStr())
+				split := strings.Split(id, "_")
+				consumer := split[:len(split)-1]
+				logging.Warnf("serviceChangeNotifier: Consumer (%v) for %v took too long to read notification, making the consumer invalid", strings.Join(consumer, "_"), instance.DebugStr())
 				close(w)
 				delete(instance.waiters, id)
 			}
@@ -216,7 +219,7 @@ func (n Notification) String() string {
 }
 
 type ServicesChangeNotifier struct {
-	id       int
+	id       string // A combination of "consumer" name and waiter count
 	instance *serviceNotifierInstance
 	ch       chan Notification
 	cancel   chan bool
@@ -227,7 +230,7 @@ func init() {
 }
 
 // Initialize change notifier object for a clusterUrl
-func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier, error) {
+func NewServicesChangeNotifier(clusterUrl, pool, consumer string) (*ServicesChangeNotifier, error) {
 	singletonServicesContainer.Lock()
 	defer singletonServicesContainer.Unlock()
 	id := clusterUrl + "-" + pool
@@ -243,7 +246,7 @@ func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier
 			clusterUrl: clusterUrl,
 			pool:       pool,
 			valid:      true,
-			waiters:    make(map[int]chan Notification),
+			waiters:    make(map[string]chan Notification),
 			buckets:    make(map[string]bool),
 			closeCh:    make(chan bool),
 		}
@@ -262,7 +265,7 @@ func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier
 		instance: notifier,
 		ch:       make(chan Notification, 1),
 		cancel:   make(chan bool),
-		id:       notifier.waiterCount,
+		id:       fmt.Sprintf("%v_%v", consumer, notifier.waiterCount),
 	}
 
 	notifier.waiters[scn.id] = scn.ch

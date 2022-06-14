@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	c "github.com/couchbase/indexing/secondary/common"
+	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
@@ -386,6 +388,48 @@ func TestSwapRebalance(t *testing.T) {
 func TestRebalanceReplicaRepair(t *testing.T) {
 	addTwoNodesAndRebalance("TestRebalanceReplicaRepair", t)
 	waitForRebalanceCleanup()
+}
+
+// Starting Config: [0: kv n1ql] [1: index] [2: index] [3: index]
+// This test failsover an indexer while index build is going on
+// and will trigger a rebalance. Due to the skewed index distribution
+// indexer is expected to move indexes during rebalance and this
+// rebalance should fail as DDL is in progress on the failed over node
+func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
+	bucket := "default"
+	scope := "_default"
+	coll := "_default"
+
+	// Create 3 indexes on node-1
+	for i := 0; i < 10; i++ {
+		index := fmt.Sprintf("index_%v", i)
+		err := secondaryindex.CreateSecondaryIndex3(index, bucket, scope, coll, indexManagementAddress,
+			"", []string{"abcdefgh"}, []bool{false}, false, []byte("{\"nodes\": [\"127.0.0.1:9001\"]}"), c.SINGLE, nil, true,
+			defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, fmt.Sprintf("Failed while creating index: %v", index), t)
+	}
+
+	docs := 100000
+	CreateDocs(docs)
+
+	err := secondaryindex.CreateSecondaryIndex3("index_11", bucket, scope, coll, indexManagementAddress,
+		"", []string{"name"}, []bool{false}, false, []byte("{\"nodes\": [\"127.0.0.1:9002\"], \"defer_build\":true}"), c.SINGLE, nil, true,
+		0, nil)
+	FailTestIfError(err, fmt.Sprintf("Failed while creating index_11"), t)
+	go func() {
+		err = secondaryindex.BuildIndex("index_11", bucketName, indexManagementAddress, defaultIndexActiveTimeout)
+	}()
+	time.Sleep(1 * time.Second)
+	// Failover Node-2
+	failoverNode(clusterconfig.Nodes[2], t)
+
+	// Add back node-2
+	log.Printf("TestFailureAndRebalanceDuringInitialIndexBuild: 1. Adding index node %v to the cluster", clusterconfig.Nodes[2])
+	recoverNode(clusterconfig.Nodes[2], "full", t)
+	time.Sleep(1 * time.Second)
+	if err := cluster.Rebalance(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password); err == nil {
+		t.Fatalf("TestFailureAndRebalanceDuringInitialIndexBuild: Rebalance is expected to fail, but it succeded")
+	}
 }
 
 // TestRebalanceResetCluster restores indexer.settings.rebalance.redistribute_indexes = false

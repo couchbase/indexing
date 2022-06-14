@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
@@ -385,7 +386,7 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 	logging.Infof("New settings received: \n%s", string(value))
 
 	var err error
-	upgradedConfig, upgraded := tryUpgradeConfig(value)
+	upgradedConfig, upgraded, minNumShardChanged := tryUpgradeConfig(value)
 	if upgraded {
 		if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
 			return err
@@ -398,6 +399,19 @@ func (s *settingsManager) applySettings(path string, value []byte, rev interface
 	newConfig := s.config.Clone()
 	newConfig.Update(value)
 	s.setGlobalSettings(s.config, newConfig)
+
+	// If the minNumShard setting has not been explicitly updated, then compute it based on max_cpu_percent
+	if !minNumShardChanged {
+		value := common.ConfigValue{
+			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
+			Help:          "Minimum number of shard",
+			DefaultVal:    uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
+			Immutable:     false,
+			Casesensitive: false,
+		}
+		newConfig["indexer.plasma.minNumShard"] = value
+		logging.Infof("SettingsManager::applySettings Updating 'plasma.minNumShard' setting to: %v", value.Uint64())
+	}
 
 	s.config = newConfig
 
@@ -644,14 +658,15 @@ func isValidDaysOfWeek(value []byte) bool {
 
 // Try upgrading the config and fix any issues in config values
 // Return true if upgraded, else false
-func tryUpgradeConfig(value []byte) ([]byte, bool) {
+func tryUpgradeConfig(value []byte) ([]byte, bool, bool) {
 	conf, err := common.NewConfig(value)
 	if err != nil {
 		logging.Errorf("tryUpgradeConfig: Failed to parse config err [%v]", err)
-		return value, false
+		return value, false, false
 	}
 
 	var upgradedCompactionDaysSetting, upgradedBloomSetting bool
+	var minNumShardChanged bool
 
 	// Correct compaction days setting
 	if val, ok := conf[compactionDaysSetting]; ok {
@@ -674,11 +689,15 @@ func tryUpgradeConfig(value []byte) ([]byte, bool) {
 		}
 	}
 
+	if _, ok := conf["indexer.plasma.minNumShard"]; ok {
+		minNumShardChanged = true
+	}
+
 	// Correct plasma bloom filter setting
 	if value, upgradedBloomSetting, err = common.MapSettings(conf.Json()); err != nil {
 		logging.Errorf("tryUpgradeConfig: Failed to map settings err [%v]", err)
-		return value, false
+		return value, false, minNumShardChanged
 	}
 
-	return value, upgradedCompactionDaysSetting || upgradedBloomSetting
+	return value, upgradedCompactionDaysSetting || upgradedBloomSetting, minNumShardChanged
 }

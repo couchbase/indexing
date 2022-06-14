@@ -113,8 +113,9 @@ type indexer struct {
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 	streamKeyspaceIdMinMergeTs   map[common.StreamId]KeyspaceIdMinMergeTs
 
-	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
-	streamKeyspaceIdPendStart     map[common.StreamId]map[string]bool
+	streamKeyspaceIdPendBuildDone      map[common.StreamId]map[string]*buildDoneSpec
+	streamKeyspaceIdPendStart          map[common.StreamId]map[string]bool
+	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
 
 	keyspaceIdRollbackTimes map[string]int64
 
@@ -214,7 +215,7 @@ type indexer struct {
 
 	pendingReset map[common.IndexInstId]bool
 
-	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
+	bsRunParams *runParams // bootstrap values of DDL running and inProgressIndexNames
 }
 
 type kvRequest struct {
@@ -289,24 +290,25 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		merged: make(map[common.IndexInstId]common.IndexInst),
 		pruned: make(map[common.IndexInstId]common.IndexInst),
 
-		streamKeyspaceIdStatus:           make(map[common.StreamId]KeyspaceIdStatus),
-		streamKeyspaceIdFlushInProgress:  make(map[common.StreamId]KeyspaceIdFlushInProgressMap),
-		streamKeyspaceIdObserveFlushDone: make(map[common.StreamId]KeyspaceIdObserveFlushDoneMap),
-		streamKeyspaceIdCurrRequest:      make(map[common.StreamId]KeyspaceIdCurrRequest),
-		streamKeyspaceIdRollbackTs:       make(map[common.StreamId]KeyspaceIdRollbackTs),
-		streamKeyspaceIdRetryTs:          make(map[common.StreamId]KeyspaceIdRetryTs),
-		streamKeyspaceIdMinMergeTs:       make(map[common.StreamId]KeyspaceIdMinMergeTs),
-		streamKeyspaceIdRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
-		streamKeyspaceIdRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
-		streamKeyspaceIdSessionId:        make(map[common.StreamId]map[string]uint64),
-		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
-		streamKeyspaceIdOSOException:     make(map[common.StreamId]map[string]bool),
-		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
-		streamKeyspaceIdPendStart:        make(map[common.StreamId]map[string]bool),
-		keyspaceIdBuildTs:                make(map[string]Timestamp),
-		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
-		keyspaceIdRollbackTimes:          make(map[string]int64),
-		keyspaceIdCreateClientChMap:      make(map[string]MsgChannel),
+		streamKeyspaceIdStatus:             make(map[common.StreamId]KeyspaceIdStatus),
+		streamKeyspaceIdFlushInProgress:    make(map[common.StreamId]KeyspaceIdFlushInProgressMap),
+		streamKeyspaceIdObserveFlushDone:   make(map[common.StreamId]KeyspaceIdObserveFlushDoneMap),
+		streamKeyspaceIdCurrRequest:        make(map[common.StreamId]KeyspaceIdCurrRequest),
+		streamKeyspaceIdRollbackTs:         make(map[common.StreamId]KeyspaceIdRollbackTs),
+		streamKeyspaceIdRetryTs:            make(map[common.StreamId]KeyspaceIdRetryTs),
+		streamKeyspaceIdMinMergeTs:         make(map[common.StreamId]KeyspaceIdMinMergeTs),
+		streamKeyspaceIdRequestQueue:       make(map[common.StreamId]map[string]chan *kvRequest),
+		streamKeyspaceIdRequestLock:        make(map[common.StreamId]map[string]chan *sync.Mutex),
+		streamKeyspaceIdSessionId:          make(map[common.StreamId]map[string]uint64),
+		streamKeyspaceIdCollectionId:       make(map[common.StreamId]map[string]string),
+		streamKeyspaceIdOSOException:       make(map[common.StreamId]map[string]bool),
+		streamKeyspaceIdPendBuildDone:      make(map[common.StreamId]map[string]*buildDoneSpec),
+		streamKeyspaceIdPendStart:          make(map[common.StreamId]map[string]bool),
+		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
+		keyspaceIdBuildTs:                  make(map[string]Timestamp),
+		buildTsLock:                        make(map[common.StreamId]map[string]*sync.Mutex),
+		keyspaceIdRollbackTimes:            make(map[string]int64),
+		keyspaceIdCreateClientChMap:        make(map[string]MsgChannel),
 
 		activeKVNodes: make(map[string]bool),
 
@@ -316,8 +318,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
 
 		pendingReset: make(map[common.IndexInstId]bool),
-
-		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
+		bsRunParams:  &runParams{},
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1412,12 +1413,22 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case MSG_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
+		respCh := make(chan bool)
+		idx.statsMgrCmdCh <- &MsgStatsPersister{
+			mType:  STATS_LOG_AT_EXIT,
+			respCh: respCh}
+		<-respCh // Wait for response
 		err := msg.(*MsgError).GetError()
 		common.CrashOnError(err.cause)
 
 	case STREAM_READER_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
+		respCh := make(chan bool)
+		idx.statsMgrCmdCh <- &MsgStatsPersister{
+			mType:  STATS_LOG_AT_EXIT,
+			respCh: respCh}
+		<-respCh // Wait for response
 		err := msg.(*MsgStreamError).GetError()
 		common.CrashOnError(err.cause)
 
@@ -1562,31 +1573,6 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 	}
 }
 
-func updateMinNumShard(currConfig, newConfig common.Config) common.Config {
-	currCpu := currConfig["settings.max_cpu_percent"].Int() / 100
-	currMinNumShard := currConfig["plasma.minNumShard"].Uint64()
-	if currCpu == 0 {
-		currCpu = runtime.NumCPU()
-	}
-
-	// Current configuration is in sync with current max_cpu_percent.
-	// This means that this setting might not have been changed explictly.
-	// Hence, update it based on current GOMAXPROCS value. If current
-	// minNumShard is different from current CPU config, then user must
-	// have explicitly changed it. Hence, stick on to it
-	if currMinNumShard == uint64(math.Max(2.0, float64(currCpu)*(0.25))) {
-		value := common.ConfigValue{
-			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
-			Help:          "Minimum number of shard",
-			DefaultVal:    uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
-			Immutable:     false,
-			Casesensitive: false,
-		}
-		newConfig["plasma.minNumShard"] = value
-	}
-	return newConfig
-}
-
 // handleConfigUpdate updates Indexer config settings and propagates them to children / workers.
 func (idx *indexer) handleConfigUpdate(msg Message) {
 
@@ -1652,8 +1638,6 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 			logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
 		}
 	}
-
-	newConfig = updateMinNumShard(oldConfig, newConfig)
 
 	if workersPerReader, ok := newConfig["vbseqnos.workers_per_reader"]; ok {
 		if newConfig["vbseqnos.workers_per_reader"].Int() !=
@@ -1752,6 +1736,11 @@ func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 
 		logging.Fatalf("Indexer::handleAdminMsgs Fatal Error On Admin Channel %+v", msg)
 		err := msg.(*MsgError).GetError()
+		respCh := make(chan bool)
+		idx.statsMgrCmdCh <- &MsgStatsPersister{
+			mType:  STATS_LOG_AT_EXIT,
+			respCh: respCh}
+		<-respCh // Wait for response
 		common.CrashOnError(err.cause)
 
 	default:
@@ -5478,10 +5467,16 @@ func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 // (MsgType INDEXER_CHECK_DDL_IN_PROGRESS).
 func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
+	var ddlInProgress bool
+	var inProgressIndexNames []string
+
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
-
-	ddlInProgress, inProgressIndexNames := idx.checkDDLInProgress()
+	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
+		ddlInProgress, inProgressIndexNames = idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames
+	} else {
+		ddlInProgress, inProgressIndexNames = idx.checkDDLInProgress()
+	}
 	respCh <- &MsgDDLInProgressResponse{
 		ddlInProgress:        ddlInProgress,
 		inProgressIndexNames: inProgressIndexNames}
@@ -6973,20 +6968,21 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 
 	idx.recoverRebalanceState()
 
+	start := time.Now()
+	err := idx.recoverIndexInstMap()
+	if err != nil {
+		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+	}
+	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
+
+	idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames = idx.checkDDLInProgress()
+
 	go func() {
 		//set topic names based on indexer id
 		idx.initStreamTopicName()
 
 		//close any old streams with projector
 		idx.closeAllStreams()
-
-		start := time.Now()
-		err := idx.recoverIndexInstMap()
-		if err != nil {
-			logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
-		}
-
-		logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
 
 		idx.validateIndexInstMap()
 
@@ -10248,7 +10244,7 @@ func (idx *indexer) monitorKVNodes() {
 		return
 	}
 
-	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL)
+	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL, "MonitorKvNodes")
 	if err != nil {
 		logging.Errorf("Indexer::monitorKVNodes, error observed while initializing ServicesChangeNotifier, err: %v", err)
 		selfRestart()

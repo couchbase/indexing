@@ -95,6 +95,7 @@ type ClusterInfoClient struct {
 	bucketsHash               string
 	serverGroupsHash          string
 	nodeUUID2HashMap          map[string]int
+	userAgent                 string
 }
 
 type NodeId int
@@ -1150,6 +1151,17 @@ func (c *ClusterInfoCache) GetLocalVBuckets(bucket string) (vbs []uint16, err er
 	return
 }
 
+func (c *ClusterInfoCache) GetNumVBuckets(bucket string) (numVBuckets int, err error) {
+	b, berr := c.pool.GetBucket(bucket)
+	if berr != nil {
+		err = berr
+		return
+	}
+	defer b.Close()
+
+	return b.NumVBuckets, nil
+}
+
 func (c *ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
@@ -1454,13 +1466,14 @@ func GetLocalIpUrl(isIPv6 bool) string {
 	return "127.0.0.1"
 }
 
-func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *ClusterInfoClient, err error) {
+func NewClusterInfoClient(clusterURL, pool, userAgent string, config Config) (c *ClusterInfoClient, err error) {
 	cic := &ClusterInfoClient{
 		clusterURL:                clusterURL,
 		pool:                      pool,
 		finch:                     make(chan bool),
 		fetchDataOnHashChangeOnly: true,
 		nodeUUID2HashMap:          make(map[string]int),
+		userAgent:                 userAgent,
 	}
 	cic.servicesNotifierRetryTm = 1000 // TODO: read from config
 
@@ -1468,6 +1481,7 @@ func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *Clu
 	if err != nil {
 		return nil, err
 	}
+	cinfo.SetUserAgent(userAgent)
 	cic.cinfo = cinfo
 
 	go cic.watchClusterChanges()
@@ -1581,9 +1595,9 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 		return
 	}
 
-	scn, err := NewServicesChangeNotifier(clusterAuthURL, c.pool)
+	scn, err := NewServicesChangeNotifier(clusterAuthURL, c.pool, c.userAgent)
 	if err != nil {
-		logging.Errorf("ClusterInfoClient NewServicesChangeNotifier(): %v\n", err)
+		logging.Errorf("ClusterInfoClient NewServicesChangeNotifier(%v): %v\n", c.userAgent, err)
 		selfRestart()
 		return
 	}
@@ -1764,6 +1778,36 @@ func (cic *ClusterInfoClient) IsMagmaStorage(bucket string) (bool, error) {
 		}
 	}
 	return isMagma, nil
+}
+
+func (cic *ClusterInfoClient) GetNumVBuckets(bucket string) (numVBuckets int,
+	err error) {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	getNumVBuckets := func() (int, error) {
+		numVBuckets, err := cinfo.GetNumVBuckets(bucket)
+		if err != nil {
+			return 0, err
+		}
+		return numVBuckets, nil
+	}
+
+	numVBs, err := getNumVBuckets()
+	if err != nil || numVBuckets == 0 {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchBucketInfo(bucket)
+		cinfo.RLock()
+		if err != nil {
+			return 0, err
+		} else {
+			return getNumVBuckets()
+		}
+	}
+	return numVBs, nil
 }
 
 func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {

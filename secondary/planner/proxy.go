@@ -91,10 +91,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 	// Initialize cluster info client at the first call of RetrievePlanFromCluster
 	cinfoClientMutex.Lock()
 	if cinfoClient == nil {
-		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", config)
-		if err == nil {
-			cinfoClient.SetUserAgent("RetrievePlanFromCluster")
-		}
+		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", "RetrievePlanFromCluster", config)
 	}
 	cinfoClientMutex.Unlock()
 	if err != nil { // Error while initializing clusterInfoClient
@@ -366,8 +363,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				index.NeedsEstimate = index.NoUsageInfo
 
 				// update partition
-				numVbuckets := config["indexer.numVbuckets"].Int()
-				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
+				pc := common.NewKeyPartitionContainer(int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
 				// Is the index being deleted by user?   This will read the delete token from metakv.  If unable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).s
@@ -1172,8 +1168,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId) *IndexUsage {
 			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions))
 
-			numVbuckets := config["indexer.numVbuckets"].Int()
-			pc := common.NewKeyPartitionContainer(numVbuckets, int(defn.NumPartitions), defn.PartitionScheme, defn.HashScheme)
+			pc := common.NewKeyPartitionContainer(int(defn.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
 			index.Instance = &common.IndexInst{
 				InstId:    defn.InstId,
