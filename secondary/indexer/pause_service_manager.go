@@ -179,10 +179,13 @@ func archiveInfoFromRoot(archiveRoot string) (
 	archiveType archiveEnum, archiveDir string, err error) {
 	const _archiveInfoFromRoot = "PauseServiceManager::archiveInfoFromRoot:"
 
+	const PREFIX_FILE = "file://" // prefix for local filesystem target
+	const PREFIX_S3 = "s3://"     // prefix for AWS S3 target
+
 	// Check for valid archive type
-	if strings.HasPrefix(archiveRoot, "file://") {
+	if strings.HasPrefix(archiveRoot, PREFIX_FILE) {
 		archiveType = archive_FILE
-	} else if strings.HasPrefix(archiveRoot, "s3://") {
+	} else if strings.HasPrefix(archiveRoot, PREFIX_S3) {
 		archiveType = archive_S3
 	} else { // missing or unrecognized archive type
 		err = fmt.Errorf("%v Missing or unrecognized archive type prefix in archiveRoot: %v", _archiveInfoFromRoot, archiveRoot)
@@ -191,8 +194,8 @@ func archiveInfoFromRoot(archiveRoot string) (
 	}
 
 	// Ensure there is more than just the archive type prefix
-	if (archiveType == archive_FILE && len(archiveRoot) < 8) ||
-		(archiveType == archive_S3 && len(archiveRoot) < 6) {
+	if (archiveType == archive_FILE && len(archiveRoot) <= len(PREFIX_FILE)) ||
+		(archiveType == archive_S3 && len(archiveRoot) <= len(PREFIX_S3)) {
 		err = fmt.Errorf("%v Missing path body in archiveRoot: %v", _archiveInfoFromRoot, archiveRoot)
 		logging.Errorf(err.Error())
 		return archive_NIL, "", err
@@ -207,7 +210,7 @@ func archiveInfoFromRoot(archiveRoot string) (
 
 	// For archive_FILE, strip off "file://" prefix
 	if archiveType == archive_FILE {
-		archiveDir = strings.Replace(archiveDir, "file://", "", 1)
+		archiveDir = strings.Replace(archiveDir, PREFIX_FILE, "", 1)
 	}
 
 	return archiveType, archiveDir, nil

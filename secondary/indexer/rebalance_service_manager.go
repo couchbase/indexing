@@ -1291,12 +1291,12 @@ func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 
 	defer resp.Body.Close()
 	bytes, _ := ioutil.ReadAll(resp.Body)
-	response := new(manager.IndexResponse)
+	response := new(IndexResponse)
 	if err := json.Unmarshal(bytes, &response); err != nil {
 		l.Errorf("RebalanceServiceManager::cleanupIndex Error unmarshal response %v %v", localaddr+url, err)
 		return err
 	}
-	if response.Code == manager.RESP_ERROR {
+	if response.Code == RESP_ERROR {
 		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
 			l.Errorf("RebalanceServiceManager::cleanupIndex Error dropping index %v %v. Ignored.", localaddr+url, response.Error)
 			return nil
@@ -2398,7 +2398,7 @@ func GetGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 		return nil, err
 	}
 
-	var topology manager.BackupResponse
+	var topology BackupResponse
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	defer resp.Body.Close()
 	if err := json.Unmarshal(bytes, &topology); err != nil {
@@ -2428,7 +2428,7 @@ func (m *RebalanceServiceManager) getCachedIndexerNodeUUIDs() (
 	}
 	defer resp.Body.Close()
 	bytes, _ := ioutil.ReadAll(resp.Body)
-	nodeUUIDsResponse := new(manager.NodeUUIDsResponse)
+	nodeUUIDsResponse := new(NodeUUIDsResponse)
 	if err = json.Unmarshal(bytes, &nodeUUIDsResponse); err != nil {
 		l.Errorf("%v Unmarshaling response from %v returned err: %v %s", _getCachedIndexerNodeUUIDs,
 			url, err, l.TagUD(string(bytes)))
@@ -2641,13 +2641,13 @@ func (m *RebalanceServiceManager) handleMoveIndex(w http.ResponseWriter, r *http
 			return
 		}
 
-		var req manager.IndexRequest
+		var req IndexRequest
 
 		idList := client.IndexIdList{DefnIds: []uint64{defn.DefnId}}
 		plan := make(map[string]interface{})
 		plan["nodes"] = nodes
 
-		req = manager.IndexRequest{IndexIds: idList, Plan: plan}
+		req = IndexRequest{IndexIds: idList, Plan: plan}
 
 		code, errStr := m.doHandleMoveIndex(&req)
 		if errStr != "" {
@@ -2672,7 +2672,7 @@ func (m *RebalanceServiceManager) handleMoveIndexInternal(w http.ResponseWriter,
 
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
-		var req manager.IndexRequest
+		var req IndexRequest
 		if err := json.Unmarshal(bytes, &req); err != nil {
 			l.Errorf("%v: err: %v", method, err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
@@ -2712,7 +2712,7 @@ func (m *RebalanceServiceManager) handleMoveIndexInternal(w http.ResponseWriter,
 	}
 }
 
-func (m *RebalanceServiceManager) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
+func (m *RebalanceServiceManager) doHandleMoveIndex(req *IndexRequest) (int, string) {
 
 	l.Infof("RebalanceServiceManager::doHandleMoveIndex %v", l.TagUD(req))
 
@@ -2750,7 +2750,7 @@ func (m *RebalanceServiceManager) monitorMoveIndex() {
 	}
 }
 
-func (m *RebalanceServiceManager) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
+func (m *RebalanceServiceManager) initMoveIndex(req *IndexRequest, nodes []string) (error, bool) {
 	const method = "RebalanceServiceManager::initMoveIndex" // for logging
 
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
@@ -2903,7 +2903,7 @@ func (m *RebalanceServiceManager) registerMoveIndexTokenInMetakv(token *Rebalanc
 	return nil
 }
 
-func (m *RebalanceServiceManager) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
+func (m *RebalanceServiceManager) generateTransferTokenForMoveIndex(req *IndexRequest,
 	reqNodes []string) (map[string]*c.TransferToken, error) {
 	const method = "RebalanceServiceManager::generateTransferTokenForMoveIndex" // for logging
 
@@ -3145,7 +3145,7 @@ func (m *RebalanceServiceManager) onMoveIndexDoneLOCKED(err error) {
 	m.rebalancerF = nil
 }
 
-func validateMoveIndexReq(req *manager.IndexRequest) ([]string, error) {
+func validateMoveIndexReq(req *IndexRequest) ([]string, error) {
 
 	if len(req.IndexIds.DefnIds) == 0 {
 		return nil, errors.New("Empty Index List for Move Index")
@@ -3294,17 +3294,17 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 }
 
 func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {
-	res := &manager.IndexResponse{Code: manager.RESP_ERROR, Error: msg}
+	res := &IndexResponse{Code: RESP_ERROR, Error: msg}
 	send(status, w, res)
 }
 
 func sendIndexResponse(w http.ResponseWriter) {
-	result := &manager.IndexResponse{Code: manager.RESP_SUCCESS}
+	result := &IndexResponse{Code: RESP_SUCCESS}
 	send(http.StatusOK, w, result)
 }
 
 func sendIndexResponseMsg(w http.ResponseWriter, msg string) {
-	result := &manager.IndexResponse{Code: manager.RESP_SUCCESS, Message: msg}
+	result := &IndexResponse{Code: RESP_SUCCESS, Message: msg}
 	send(http.StatusOK, w, result)
 }
 

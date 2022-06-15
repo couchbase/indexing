@@ -11,7 +11,6 @@ import (
 	"github.com/couchbase/indexing/secondary/audit"
 	c "github.com/couchbase/indexing/secondary/common"
 	log "github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager"
 )
 
 type target struct {
@@ -302,5 +301,5 @@ func genErrStr(keyspaceName string) string {
 // /api/v1/bucket/<bucket-name>/backup
 //
 func bucketHandler(req request) {
-	manager.BucketRequestHandler(req.w, req.r, req.creds)
+	BucketRequestHandler(req.w, req.r, req.creds)
 }

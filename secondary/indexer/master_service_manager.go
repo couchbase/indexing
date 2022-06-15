@@ -37,7 +37,8 @@ type MasterServiceManager struct {
 	rebal    *RebalanceServiceManager
 }
 
-// NewMasterServiceManager is the constructor for the MasterServiceManager class
+// NewMasterServiceManager is the constructor for the MasterServiceManager class. The service
+// managers passed in are all singletons created by NewIndexer.
 func NewMasterServiceManager(
 	autofailoverMgr *AutofailoverServiceManager,
 	genericMgr *GenericServiceManager,
@@ -50,7 +51,7 @@ func NewMasterServiceManager(
 		pause:    pauseMgr,
 		rebal:    rebalMgr,
 	}
-	go this.registerWithServer()
+	go this.registerWithServer() // register for ns_server RPC calls from cbauth
 	return this
 }
 

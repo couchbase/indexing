@@ -18,7 +18,6 @@ import (
 	"github.com/couchbase/cbauth/service"
 	// "github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -60,7 +59,7 @@ func NewAutofailoverServiceManager(httpAddr string, cpuThrottle *CpuThrottle) *A
 // cached: false -- Does a regular getIndexStatus call, which uses ClusterInfoCache to get current
 //   set of Index nodes and contacts them all to get latest index statuses, only serving out of
 //   cache for nodes that do not respond or when a node replies with HTTP code 304 Not Modified.
-func (m *AutofailoverServiceManager) getLastKnownIndexTopology(cached bool) ([]manager.IndexStatus, error) {
+func (m *AutofailoverServiceManager) getLastKnownIndexTopology(cached bool) ([]IndexStatus, error) {
 	const _getLastKnownIndexTopology = "AutofailoverServiceManager::getLastKnownIndexTopology:"
 
 	var url string
@@ -76,7 +75,7 @@ func (m *AutofailoverServiceManager) getLastKnownIndexTopology(cached bool) ([]m
 	}
 
 	defer resp.Body.Close()
-	statusResp := new(manager.IndexStatusResponse)
+	statusResp := new(IndexStatusResponse)
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	if err := json.Unmarshal(bytes, &statusResp); err != nil {
 		logging.Errorf("%v Error unmarshaling index topology. url: %v, err: %v",
@@ -92,7 +91,7 @@ func (m *AutofailoverServiceManager) getLastKnownIndexTopology(cached bool) ([]m
 // listed in the statuses. (Non-partitioned indexes always have one "partition" numbered 0.
 // Partitioned indexes have 1-based partn #s.) This tells us the totality of all index partitions
 // (both masters and replicas) hosted on all the nodes described by the slice of statuses.
-func mapifyTopology(indexStatuses []*manager.IndexStatus) map[string]map[int]struct{} {
+func mapifyTopology(indexStatuses []*IndexStatus) map[string]map[int]struct{} {
 	result := make(map[string]map[int]struct{})
 	for _, idxStatPtr := range indexStatuses {
 		indexKey := strings.Join([]string{idxStatPtr.Bucket, idxStatPtr.Scope,
@@ -167,7 +166,7 @@ func (this *cpuThrottleExpirer) runExpiryCountdown() {
 // isSafeLogDetails runs as a goroutine helper for IsSafe to log the cached index statuses that
 // method got and also the (possibly much slower to get) current, retrieved index statuses, which
 // will attempt to retrieve the latest from all the available Index nodes.
-func (m *AutofailoverServiceManager) isSafeLogDetails(indexStatusesCached []manager.IndexStatus) {
+func (m *AutofailoverServiceManager) isSafeLogDetails(indexStatusesCached []IndexStatus) {
 	const _isSafeLogDetails = "AutofailoverServiceManager::isSafeLogDetails:"
 
 	// Only log if last time was long ago as the messages, esp indexStatusesCurrent, can be huge,
@@ -295,8 +294,8 @@ func (m *AutofailoverServiceManager) IsSafe(nodeUUIDs []service.NodeID) (error e
 	// Create map from nodeUUID to host:index_http_port for userMessage.
 	// Also separate the statuses of kept vs to-be-failed-over nodes.
 	nodeToHostMap := make(map[service.NodeID]string)
-	keepStatuses := make([]*manager.IndexStatus, 0)
-	failoverStatuses := make([]*manager.IndexStatus, 0)
+	keepStatuses := make([]*IndexStatus, 0)
+	failoverStatuses := make([]*IndexStatus, 0)
 	numStatuses := len(indexStatuses)
 	for statusIdx := 0; statusIdx < numStatuses; statusIdx++ { // avoid range; it would make copies
 		indexStatusPtr := &indexStatuses[statusIdx]
@@ -333,7 +332,7 @@ func (m *AutofailoverServiceManager) IsSafe(nodeUUIDs []service.NodeID) (error e
 					bld.WriteString("Failing over nodes")
 					for _, nodeUUID := range nodeUUIDs {
 						fmt.Fprintf(&bld, " %v(%v)",
-							manager.Key2host(nodeToHostMap[nodeUUID]), nodeUUID)
+							Key2host(nodeToHostMap[nodeUUID]), nodeUUID)
 					}
 					bld.WriteString(" would lose the following indexes/partitions:")
 				}

@@ -87,9 +87,9 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 
 }
 
+// RegisterRestEndpoints registers the REST APIs defined in request_handler.go.
 func (c *clustMgrAgent) RegisterRestEndpoints() {
-	mux := GetHTTPMux()
-	c.mgr.RegisterRestEndpoints(mux, c.config)
+	RegisterRequestHandler(c.mgr, GetHTTPMux(), c.config)
 }
 
 //run starts the clustmgrAgent loop which listens to messages

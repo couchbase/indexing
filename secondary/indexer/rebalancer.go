@@ -305,14 +305,14 @@ func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) e
 		}
 	}
 
-	response := new(manager.IndexResponse)
+	response := new(IndexResponse)
 	err = convertResponse(resp, response)
 	if err != nil {
 		l.Errorf("%v encountered error parsing response, host %v, defnId %v, err %v", method, host, defn.DefnId, err)
 		return err
 	}
 
-	if response.Code == manager.RESP_ERROR {
+	if response.Code == RESP_ERROR {
 		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
 			l.Errorf("%v error dropping index, host %v defnId %v err %v. Ignored.", method, host, defn.DefnId, response.Error)
 			return nil
@@ -1583,14 +1583,14 @@ loop:
 				return
 			}
 
-			response := new(manager.IndexResponse)
+			response := new(IndexResponse)
 			if err := convertResponse(resp, response); err != nil {
 				l.Errorf("%v Error unmarshal response %v %v", method, r.localaddr+url, err)
 				r.setTransferTokenError(ttid, tt, err.Error())
 				return
 			}
 
-			if response.Code == manager.RESP_ERROR {
+			if response.Code == RESP_ERROR {
 				// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
 				if !isMissingBSC(response.Error) {
 					l.Errorf("%v Error dropping index %v %v",
@@ -1686,13 +1686,13 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			return true
 		}
 
-		response := new(manager.IndexResponse)
+		response := new(IndexResponse)
 		if err := convertResponse(resp, response); err != nil {
 			l.Errorf("%v Error unmarshal response %v %v", method, r.localaddr+url, err)
 			r.setTransferTokenError(ttid, tt, err.Error())
 			return true
 		}
-		if response.Code == manager.RESP_ERROR {
+		if response.Code == RESP_ERROR {
 			// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
 			if !isMissingBSC(response.Error) {
 				l.Errorf("%v Error cloning index %v %v", method, r.localaddr+url, response.Error)
@@ -1859,7 +1859,7 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 		return
 	}
 
-	response := new(manager.IndexResponse)
+	response := new(IndexResponse)
 	url := "/buildIndexRebalance"
 	var errStr string
 
@@ -1874,7 +1874,7 @@ func (r *Rebalancer) buildAcceptedIndexes(buildTokens map[string]*common.Transfe
 		errStr = err.Error()
 		goto cleanup
 	}
-	if response.Code == manager.RESP_ERROR {
+	if response.Code == RESP_ERROR {
 		// Error from index processing code. For rebalance this returns either ErrMarshalFailed.Error
 		// or a JSON string of a marshaled map[IndexInstId]string of error messages per instance ID. The
 		// keys for any entries having magic error string ErrIndexNotFoundRebal.Error are the submitted
@@ -2316,7 +2316,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	}
 
 	defer resp.Body.Close()
-	statusResp := new(manager.IndexStatusResponse)
+	statusResp := new(IndexStatusResponse)
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	if err := json.Unmarshal(bytes, &statusResp); err != nil {
 		l.Errorf("Rebalancer::computeProgress Error unmarshal response %v %v", r.localaddr+url, err)
@@ -2416,7 +2416,7 @@ func getDestNode(partitionId c.PartitionId, partitionMap map[string][]int) strin
 
 // getBuildProgressFromStatus is a helper for computeProgress that gets an estimate of index build progress for the
 // given transfer token from the status arg.
-func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, tt *c.TransferToken) float64 {
+func (r *Rebalancer) getBuildProgressFromStatus(status *IndexStatusResponse, tt *c.TransferToken) float64 {
 
 	instId := tt.InstId
 	realInstId := tt.RealInstId // for partitioned indexes
@@ -2443,7 +2443,7 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 // getBuildProgress is a helper for getBuildProgressFromStatus that gets the progress of an inde≈ build
 // for a given instId. Return value count gives the number of partitions of instId found to be building.
 // If this is 0 the caller will try again with realInstId to find the progress of a partitioned index.
-func (r *Rebalancer) getBuildProgress(status *manager.IndexStatusResponse, tt *c.TransferToken, instId c.IndexInstId) (
+func (r *Rebalancer) getBuildProgress(status *IndexStatusResponse, tt *c.TransferToken, instId c.IndexInstId) (
 	realInstProgress float64, count int) {
 
 	destId := tt.DestId
@@ -2575,8 +2575,8 @@ func convertResponse(r *http.Response, resp interface{}) error {
 	return nil
 }
 
-func getReqBody(data interface{}, url, logPrefix string) (*bytes.Buffer, *manager.IndexRequest, error) {
-	req := manager.IndexRequest{}
+func getReqBody(data interface{}, url, logPrefix string) (*bytes.Buffer, *IndexRequest, error) {
+	req := IndexRequest{}
 	switch data.(type) {
 	case common.IndexDefn:
 		req.Index = (data).(common.IndexDefn)

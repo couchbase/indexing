@@ -52,6 +52,9 @@ type Indexer interface {
 var StreamAddrMap StreamAddressMap
 var StreamTopicName map[common.StreamId]string
 var ServiceAddrMap map[string]string
+
+// httpMux holds the HTTP(S) REST server used by Indexer and its children. It can be retrieved
+// via function GetHTTPMux.
 var httpMux *http.ServeMux
 
 type KeyspaceIdIndexCountMap map[string]int

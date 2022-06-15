@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -47,7 +46,7 @@ type IndexManager struct {
 	requestServer RequestServer
 	basepath      string
 	quota         uint64
-	clusterURL    string
+	ClusterURL    string
 	factory       *message.ConcreteMsgFactory
 
 	repoName string
@@ -57,8 +56,8 @@ type IndexManager struct {
 	cinfoProviderLock sync.RWMutex
 
 	useCInfoLiteReqHandler      bool
-	cinfoProviderReqHandler     common.ClusterInfoProvider
-	cinfoProviderLockReqHandler sync.RWMutex
+	CinfoProviderReqHandler     common.ClusterInfoProvider // shared w/ request_handler.go
+	CinfoProviderLockReqHandler sync.RWMutex               // shared w/ request_handler.go
 
 	// bucket monitor
 	monitorKillch chan bool
@@ -160,14 +159,14 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		return nil, err
 	}
 
-	mgr.clusterURL = config["clusterAddr"].String()
+	mgr.ClusterURL = config["clusterAddr"].String()
 
 	mgr.useCInfoLite = config["use_cinfo_lite"].Bool()
 	mgr.cinfoProviderLock.Lock()
 	defer mgr.cinfoProviderLock.Unlock()
 
 	mgr.cinfoProvider, err = common.NewClusterInfoProvider(mgr.useCInfoLite,
-		mgr.clusterURL, common.DEFAULT_POOL, "IndexMgr", config)
+		mgr.ClusterURL, common.DEFAULT_POOL, "IndexMgr", config)
 	if err != nil {
 		logging.Errorf("NewIndexManagerInternal: Unable to get new ClusterInfoProvider for IndexMgr err: %v use_cinfo_lite: %v",
 			err, mgr.useCInfoLite)
@@ -177,11 +176,11 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 
 	// Another ClusterInfoClient for RequestHandler to avoid waiting due to locks of cinfoClient.
 	mgr.useCInfoLiteReqHandler = config["use_cinfo_lite"].Bool()
-	mgr.cinfoProviderLockReqHandler.Lock()
-	defer mgr.cinfoProviderLockReqHandler.Unlock()
+	mgr.CinfoProviderLockReqHandler.Lock()
+	defer mgr.CinfoProviderLockReqHandler.Unlock()
 
-	mgr.cinfoProviderReqHandler, err = common.NewClusterInfoProvider(mgr.useCInfoLiteReqHandler,
-		mgr.clusterURL, common.DEFAULT_POOL, "RequestHandler", config)
+	mgr.CinfoProviderReqHandler, err = common.NewClusterInfoProvider(mgr.useCInfoLiteReqHandler,
+		mgr.ClusterURL, common.DEFAULT_POOL, "RequestHandler", config)
 	if err != nil {
 		logging.Errorf("NewIndexManagerInternal: Unable to get new ClusterInfoProvider for RequestHandler err: %v use_cinfo_lite: %v",
 			err, mgr.useCInfoLiteReqHandler)
@@ -190,7 +189,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	}
 
 	// Initialize LifecycleMgr.
-	lifecycleMgr, err := NewLifecycleMgr(mgr.clusterURL, config)
+	lifecycleMgr, err := NewLifecycleMgr(mgr.ClusterURL, config)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -369,11 +368,6 @@ func (mgr *IndexManager) ServerAuth(conn net.Conn) (*gometaC.PeerPipe, gometaC.P
 	return pipe, nil, nil
 }
 
-func (mgr *IndexManager) RegisterRestEndpoints(mux *http.ServeMux, config common.Config) {
-	// register request handler
-	RegisterRequestHandler(mgr, mux, config)
-}
-
 func (mgr *IndexManager) StartCoordinator(config string) {
 
 	mgr.mutex.Lock()
@@ -447,11 +441,11 @@ func (m *IndexManager) Close() {
 	}
 	m.cinfoProviderLock.Unlock()
 
-	m.cinfoProviderLockReqHandler.Lock()
-	if m.cinfoProviderReqHandler != nil {
-		m.cinfoProviderReqHandler.Close()
+	m.CinfoProviderLockReqHandler.Lock()
+	if m.CinfoProviderReqHandler != nil {
+		m.CinfoProviderReqHandler.Close()
 	}
-	m.cinfoProviderLockReqHandler.Unlock()
+	m.CinfoProviderLockReqHandler.Unlock()
 
 	if m.monitorKillch != nil {
 		close(m.monitorKillch)
@@ -462,7 +456,7 @@ func (m *IndexManager) Close() {
 
 func (m *IndexManager) FetchNewClusterInfoCache() (*common.ClusterInfoCache, error) {
 
-	return common.FetchNewClusterInfoCache(m.clusterURL, common.DEFAULT_POOL, "IndexMgr")
+	return common.FetchNewClusterInfoCache(m.ClusterURL, common.DEFAULT_POOL, "IndexMgr")
 }
 
 ///////////////////////////////////////////////////////
@@ -861,7 +855,7 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 			var cip common.ClusterInfoProvider
 			cip, err = common.NewClusterInfoProvider(useCInfoLite,
-				m.clusterURL, common.DEFAULT_POOL, "IndexMgr", config)
+				m.ClusterURL, common.DEFAULT_POOL, "IndexMgr", config)
 			if err != nil {
 				logging.Errorf("IndexManager.NotifyConfigUpdate(): Unable to update ClusterInfoProvider in IndexMgr err: %v, use_cinfo_lite: old %v new %v",
 					err, m.useCInfoLite, useCInfoLite)
@@ -889,18 +883,18 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 
 			var cipReqHandler common.ClusterInfoProvider
 			cipReqHandler, errReqHandler = common.NewClusterInfoProvider(useCInfoLite,
-				m.clusterURL, common.DEFAULT_POOL, "RequestHandler", config)
+				m.ClusterURL, common.DEFAULT_POOL, "RequestHandler", config)
 			if errReqHandler != nil {
 				logging.Errorf("IndexManager.NotifyConfigUpdate(): Unable to update ClusterInfoProvider in RequestHandler err: %v, use_cinfo_lite: old %v new %v",
 					err, m.useCInfoLiteReqHandler, useCInfoLite)
 				common.CrashOnError(err)
 			}
 
-			m.cinfoProviderLockReqHandler.Lock()
-			oldPtrReqHandler := m.cinfoProviderReqHandler
-			m.cinfoProviderReqHandler = cipReqHandler
+			m.CinfoProviderLockReqHandler.Lock()
+			oldPtrReqHandler := m.CinfoProviderReqHandler
+			m.CinfoProviderReqHandler = cipReqHandler
 			m.useCInfoLiteReqHandler = useCInfoLite
-			m.cinfoProviderLockReqHandler.Unlock()
+			m.CinfoProviderLockReqHandler.Unlock()
 
 			logging.Infof("IndexManager.NotifyConfigUpdate(): Updated ClusterInfoProvider in RequestHandler use_cinfo_lite: old %v new %v",
 				m.useCInfoLiteReqHandler, useCInfoLite)
@@ -1047,11 +1041,11 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 ///////////////////////////////////////////////////////
 
 //
-// Get MetadataRepo
+// GetMetadataRepo
 // Any caller uses MetadatdaRepo should only for read purpose.
 // Writer operation should go through LifecycleMgr
 //
-func (m *IndexManager) getMetadataRepo() *MetadataRepo {
+func (m *IndexManager) GetMetadataRepo() *MetadataRepo {
 	return m.repo
 }
 
