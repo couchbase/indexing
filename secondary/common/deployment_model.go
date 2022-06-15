@@ -48,3 +48,11 @@ func SetDeploymentModel(dm DeploymentModel) {
 		gDeploymentModel = dm
 	})
 }
+
+func IsServerlessDeployment() bool {
+
+	if gDeploymentModel == SERVERLESS_DEPLOYMENT {
+		return true
+	}
+	return false
+}

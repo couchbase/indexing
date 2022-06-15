@@ -78,6 +78,10 @@ type ddlSettings struct {
 
 	allowPartialQuorum uint32
 	useGreedyPlanner   uint32
+
+	//serverless configs
+	memHighThreshold int32
+	memLowThreshold  int32
 }
 
 //////////////////////////////////////////////////////////////
@@ -1969,6 +1973,14 @@ func (s *ddlSettings) UseGreedyPlanner() bool {
 	return atomic.LoadUint32(&s.useGreedyPlanner) == 1
 }
 
+func (s *ddlSettings) MemHighThreshold() int32 {
+	return atomic.LoadInt32(&s.memHighThreshold)
+}
+
+func (s *ddlSettings) MemLowThreshold() int32 {
+	return atomic.LoadInt32(&s.memLowThreshold)
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2002,6 +2014,20 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
 	if useGreedyPlanner {
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
+	}
+
+	memHighThreshold := int32(config["settings.thresholds.mem_high"].Int())
+	if memHighThreshold >= 0 {
+		atomic.StoreInt32(&s.memHighThreshold, memHighThreshold)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for mem_high = %v", memHighThreshold)
+	}
+
+	memLowThreshold := int32(config["settings.thresholds.mem_low"].Int())
+	if memLowThreshold >= 0 {
+		atomic.StoreInt32(&s.memLowThreshold, memLowThreshold)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for mem_low = %v", memLowThreshold)
 	}
 }
 

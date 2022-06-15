@@ -88,6 +88,8 @@ type RunStats struct {
 	Initial_movedData         uint64
 }
 
+type SubCluster []*IndexerNode
+
 type Plan struct {
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
@@ -96,6 +98,8 @@ type Plan struct {
 	IsLive    bool           `json:"isLive,omitempty"`
 
 	UsedReplicaIdMap map[common.IndexDefnId]map[int]bool
+
+	SubClusters []SubCluster
 }
 
 type IndexSpec struct {
@@ -132,6 +136,12 @@ type IndexSpec struct {
 	ResidentRatio float64 `json:"residentRatio,omitempty"`
 	MutationRate  uint64  `json:"mutationRate,omitempty"`
 	ScanRate      uint64  `json:"scanRate,omitempty"`
+}
+
+//Resource Usage Thresholds for serverless model
+type UsageThreshold struct {
+	MemHighThreshold int32
+	MemLowThreshold  int32
 }
 
 //////////////////////////////////////////////////////////////
@@ -1620,6 +1630,391 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 	return planner, original, result, err
 }
 
+//ExecutePlan2 is the entry point for tenant aware planner
+//for integration with metadata provider.
+func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
+	usageThreshold *UsageThreshold) (*Solution, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Unable to read index layout "+
+			"from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	if err = verifyDuplicateIndex(plan, []*IndexSpec{indexSpec}); err != nil {
+		return nil, err
+	}
+
+	solution, err := executeTenantAwarePlan(plan, indexSpec, usageThreshold)
+
+	return solution, err
+
+}
+
+//executeTenantAwarePlan implements the tenant aware planning logic based on
+//the following rules:
+//1. All indexer nodes will be grouped into sub-clusters of 2 nodes each.
+//2. Each node in a sub-cluster belongs to a different server group.
+//3. All indexes will be created with 1 replica.
+//4. Index(and its replica) follow symmetrical distribution in a sub-cluster.
+//5. Indexes belonging to a tenant(bucket) will be mapped to a single sub-cluster.
+//6. Index of a new tenant can be placed on a sub-cluster with usage
+//   lower than LWM(Low Watermark Threshold).
+//7. Index of an existing tenant can be placed on a sub-cluster with usage
+//   lower than HWM(High Watermark Threshold).
+//8. No Index can be placed on a node above HWM(High Watermark Threshold).
+
+func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec,
+	usageThreshold *UsageThreshold) (*Solution, error) {
+
+	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan:"
+
+	solution := solutionFromPlan2(plan)
+
+	subClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
+	if err != nil {
+		return nil, err
+	}
+
+	err = validateSubClusterGrouping(subClusters, indexSpec)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Infof("%v Found SubClusters  %v", _executeTenantAwarePlan, subClusters)
+
+	candidates, err := findCandidateSubClustersBasedOnUsage(subClusters,
+		plan.MemQuota, usageThreshold)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Infof("%v Found Candidates %v", _executeTenantAwarePlan, candidates)
+
+	result, err := filterCandidatesBasedOnTenantAffinity(candidates, indexSpec)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(result) == 0 {
+		logging.Infof("%v Found no matching candidate for tenant %v", _executeTenantAwarePlan,
+			indexSpec)
+		return nil, errors.New("Planner not able to find any node for placement")
+	} else {
+		logging.Infof("%v Found Result %v", _executeTenantAwarePlan, result)
+	}
+
+	indexes, err := IndexUsagesFromSpec(nil, []*IndexSpec{indexSpec})
+	if err != nil {
+		return nil, err
+	}
+
+	err = placeIndexOnSubCluster(result, indexes)
+	if err != nil {
+		return nil, err
+	}
+
+	return solution, nil
+
+}
+
+//solutionFromPlan2 creates a Solution from the input Plan.
+//This function does a shallow copy of the Placement from the Plan
+//to create a Solution.
+func solutionFromPlan2(plan *Plan) *Solution {
+
+	s := &Solution{
+		Placement: make([]*IndexerNode, len(plan.Placement)),
+	}
+
+	for i, indexer := range plan.Placement {
+		s.Placement[i] = indexer
+	}
+
+	return s
+
+}
+
+//groupIndexNodesIntoSubClusters groups index nodes into sub-clusters.
+//Nodes are considered to be part of a sub-cluster if those are hosting
+//replicas of the same index. Empty nodes can be paired into a sub-cluster
+//if those belong to a different server group.
+func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, error) {
+
+	var err error
+	var subClusters []SubCluster
+
+	for _, node := range indexers {
+		var subcluster SubCluster
+
+		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
+			continue
+		}
+
+		//if there are no indexes on a node
+		if len(node.Indexes) == 0 {
+			subcluster, err = findSubClusterForEmptyNode(indexers, node, subClusters)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for _, index := range node.Indexes {
+			subcluster, err = findSubClusterForIndex(indexers, index)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+		subClusters = append(subClusters, subcluster)
+	}
+
+	return subClusters, nil
+}
+
+//validateSubClusterGrouping validates the constraints for
+//sub-cluster grouping.
+func validateSubClusterGrouping(subClusters []SubCluster,
+	indexSpec *IndexSpec) error {
+
+	const _validateSubClusterGrouping = "Planner::validateSubClusterGrouping:"
+
+	for _, subCluster := range subClusters {
+
+		//Number of nodes in the subCluster must not be greater than
+		//number of replicas. It can be less than number of replicas in
+		//case of a failed over node.
+		if len(subCluster) > int(indexSpec.Replica) {
+			logging.Errorf("%v SubCluster %v has more nodes than number of replicas %v.", _validateSubClusterGrouping,
+				subCluster, indexSpec.Replica)
+			return common.ErrPlannerConstraintViolation
+		}
+		sgMap := make(map[string]bool)
+		for _, indexer := range subCluster {
+			//All nodes in a sub-cluster must belong to a different server group
+			if _, ok := sgMap[indexer.ServerGroup]; ok {
+				logging.Errorf("%v SubCluster %v has multiple nodes in a server group.", _validateSubClusterGrouping,
+					subCluster)
+				return common.ErrPlannerConstraintViolation
+			} else {
+				sgMap[indexer.ServerGroup] = true
+			}
+		}
+	}
+
+	return nil
+}
+
+//filterCandidatesBasedOnTenantAffinity finds candidate sub-cluster
+//based on tenant affinity
+func filterCandidatesBasedOnTenantAffinity(subClusters []SubCluster,
+	indexSpec *IndexSpec) (SubCluster, error) {
+
+	var candidates []SubCluster
+	var result SubCluster
+
+	for _, subCluster := range subClusters {
+		for _, indexer := range subCluster {
+			for _, index := range indexer.Indexes {
+				if index.Bucket == indexSpec.Bucket {
+					candidates = append(candidates, subCluster)
+				}
+			}
+		}
+	}
+
+	//One or more matching subCluster found. Choose least loaded subCluster
+	//from the matching ones. /For phase 1, there will be only 1 matching
+	//sub-cluster as a single tenant's indexes can only be placed on one node.
+	if len(candidates) >= 1 {
+		result = findLeastLoadedSubCluster(candidates)
+		return result, nil
+	}
+
+	//No node found with matching tenant. Choose least loaded subCluster
+	//from all input subClusters.
+	if len(candidates) == 0 {
+		result = findLeastLoadedSubCluster(subClusters)
+		return result, nil
+	}
+
+	return nil, nil
+
+}
+
+//findLeastLoadedSubCluster finds the least loaded sub-cluster from the input
+//list of sub-clusters. Load is calculated based on the actual RSS of the indexer
+//process on the node.
+func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
+
+	//TODO This code assumes identically loaded nodes in the sub-cluster.
+	//When indexes move during rebalance, this may not always be true.
+
+	var leastLoad uint64
+	var result SubCluster
+
+	for _, subCluster := range subClusters {
+		for _, indexer := range subCluster {
+			if leastLoad == 0 || indexer.ActualRSS < leastLoad {
+				leastLoad = indexer.ActualRSS
+				result = subCluster
+			}
+			break
+		}
+	}
+
+	return result
+
+}
+
+//findCandidateSubClustersBasedOnUsage finds candidates sub-clusters for
+//placement based on resource usage. All sub-clusters below High Threshold
+//are potential candidates for index placement.
+func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster, quota uint64,
+	usageThreshold *UsageThreshold) ([]SubCluster, error) {
+
+	candidates, err := findSubClusterBelowHighThreshold(subClusters,
+		quota, usageThreshold)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(candidates) == 0 {
+		return nil, common.ErrPlannerMaxResourceUsageLimit
+	}
+
+	return candidates, nil
+}
+
+//findSubClusterBelowLowThreshold finds sub-clusters with usage lower than
+//LWT(Low Watermark Threshold).
+func findSubClusterBelowLowThreshold(subClusters []SubCluster, quota uint64,
+	usageThreshold *UsageThreshold) ([]SubCluster, error) {
+
+	var result []SubCluster
+	var found bool
+
+	for _, subCluster := range subClusters {
+		for _, indexNode := range subCluster {
+			//all nodes in the sub-cluster need to satisfy the condition
+			found = true
+			if indexNode.ActualRSS >
+				(uint64(usageThreshold.MemLowThreshold)*quota)/100 {
+				found = false
+				break
+			}
+		}
+		if found {
+			result = append(result, subCluster)
+		}
+	}
+	return result, nil
+}
+
+//findSubClusterBelowHighThreshold finds sub-clusters with usage lower than
+//HWT(High Watermark Threshold).
+func findSubClusterBelowHighThreshold(subClusters []SubCluster, quota uint64,
+	usageThreshold *UsageThreshold) ([]SubCluster, error) {
+
+	var result []SubCluster
+	var found bool
+
+	for _, subCluster := range subClusters {
+		found = true
+		for _, indexNode := range subCluster {
+			//all nodes in the sub-cluster need to satisfy the condition
+			if indexNode.ActualRSS >
+				(uint64(usageThreshold.MemHighThreshold)*quota)/100 {
+				found = false
+				break
+			}
+		}
+		if found {
+			result = append(result, subCluster)
+		}
+	}
+	return result, nil
+}
+
+//findSubClusterForEmptyNode finds another empty node in the cluster to
+//pair with the input node to form a sub-cluster. If excludeNodes is specified,
+//those nodes are excluded while finding the pair.
+func findSubClusterForEmptyNode(indexers []*IndexerNode,
+	node *IndexerNode, excludeNodes []SubCluster) (SubCluster, error) {
+
+	//TODO handle the case if a node is failed over/unhealthy in the cluster.
+
+	var subCluster SubCluster
+	for _, indexer := range indexers {
+		if indexer.NodeUUID != node.NodeUUID &&
+			indexer.ServerGroup != node.ServerGroup &&
+			len(indexer.Indexes) == 0 {
+
+			if !checkIfNodeBelongsToAnySubCluster(excludeNodes, indexer) {
+				subCluster = append(subCluster, indexer)
+				subCluster = append(subCluster, node)
+				return subCluster, nil
+
+			}
+		}
+	}
+	return nil, nil
+}
+
+//checkIfNodeBelongsToAnySubCluster checks if the given node belongs
+//to the list of input sub-cluster based on its NodeUUID
+func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
+	node *IndexerNode) bool {
+
+	for _, subCluster := range subClusters {
+
+		for _, subNode := range subCluster {
+			if node.NodeUUID == subNode.NodeUUID {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+//findSubClusterForIndex finds the sub-cluster for a given index.
+//Nodes are considered to be part of a sub-cluster if
+//those are hosting replicas of the same index.
+func findSubClusterForIndex(indexers []*IndexerNode,
+	index *IndexUsage) (SubCluster, error) {
+
+	//TODO Handle cases for in-flight indexes during rebalance. Create Index will
+	//be allowed during rebalance in Elixir.
+	//TODO handle the case if a node is failed over/unhealthy in the cluster.
+
+	var subCluster SubCluster
+	for _, indexer := range indexers {
+		for _, checkIdx := range indexer.Indexes {
+			if index.DefnId == checkIdx.DefnId &&
+				index.Instance.Version == checkIdx.Instance.Version &&
+				index.PartnId == checkIdx.PartnId {
+				subCluster = append(subCluster, indexer)
+			}
+		}
+	}
+
+	return subCluster, nil
+}
+
+//placeIndexOnSubCluster places the input list of indexes on the given sub-cluster
+func placeIndexOnSubCluster(subCluster SubCluster, indexes []*IndexUsage) error {
+
+	for i, indexer := range subCluster {
+		for _, index := range indexes {
+			if index.Instance.ReplicaId == i {
+				indexer.AddIndexes([]*IndexUsage{index})
+			}
+		}
+	}
+	return nil
+}
+
 //////////////////////////////////////////////////////////////
 // Generate DDL
 /////////////////////////////////////////////////////////////
@@ -2217,7 +2612,9 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 
 			// This is need to compute stats for new indexes
 			// The index size will be recomputed later on in plan/rebalance
-			sizing.ComputeIndexSize(index)
+			if sizing != nil {
+				sizing.ComputeIndexSize(index)
+			}
 
 			result = append(result, index)
 		}

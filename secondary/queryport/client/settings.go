@@ -47,6 +47,10 @@ type ClientSettings struct {
 	waitForScheduledIndex    uint32
 
 	useGreedyPlanner uint32
+
+	//serverless configs
+	memHighThreshold int32
+	memLowThreshold  int32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -303,6 +307,20 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		level := logging.Level(logLevel)
 		logging.SetLogLevel(level)
 	}
+
+	memHighThreshold := int32(config["indexer.settings.thresholds.mem_high"].Int())
+	if memHighThreshold >= 0 {
+		atomic.StoreInt32(&s.memHighThreshold, memHighThreshold)
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for memHighThreshold=%v", memHighThreshold)
+	}
+
+	memLowThreshold := int32(config["indexer.settings.thresholds.mem_low"].Int())
+	if memLowThreshold >= 0 {
+		atomic.StoreInt32(&s.memLowThreshold, memLowThreshold)
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for memLowThreshold=%v", memLowThreshold)
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -379,4 +397,12 @@ func (s *ClientSettings) WaitForScheduledIndex() bool {
 
 func (s *ClientSettings) UseGreedyPlanner() bool {
 	return atomic.LoadUint32(&s.useGreedyPlanner) == 1
+}
+
+func (s *ClientSettings) MemHighThreshold() int32 {
+	return atomic.LoadInt32(&s.memHighThreshold)
+}
+
+func (s *ClientSettings) MemLowThreshold() int32 {
+	return atomic.LoadInt32(&s.memLowThreshold)
 }

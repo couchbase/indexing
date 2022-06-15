@@ -60,6 +60,8 @@ type Settings interface {
 	AllowScheduleCreateRebal() bool
 	WaitForScheduledIndex() bool
 	UseGreedyPlanner() bool
+	MemHighThreshold() int32
+	MemLowThreshold() int32
 }
 
 ///////////////////////////////////////////////////////
@@ -1180,7 +1182,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	actualNumReplica := idxDefn.NumReplica
-	if allowLostReplica {
+	if allowLostReplica && !c.IsServerlessDeployment() {
 		numNodes := len(o.getAllAvailWatchers())
 		if numNodes < int(idxDefn.NumReplica)+1 {
 			logging.Infof("Allow index creation with lost replica for defn %v. Num replicas %v, num nodes %v",
@@ -1271,6 +1273,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	} else {
 		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
+		//DEEPK add error here for resource limit reached
 		if err != nil && (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error())) {
 			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 			return err
@@ -1334,6 +1337,11 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 
 func (o *MetadataProvider) canSkipPlanner(watcherMap map[c.IndexerId]int,
 	idxDefn *c.IndexDefn) bool {
+
+	//for serverless deployment always run the planner
+	if c.IsServerlessDeployment() {
+		return false
+	}
 
 	// The planner can be skipped if planner is always going to yield the same
 	// output for any kind of current index layout or any type of load generated
@@ -2234,9 +2242,20 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 
-	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes, len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits)
-	if err != nil {
-		return nil, nil, err
+	var solution *planner.Solution
+
+	if c.IsServerlessDeployment() {
+		usageThreshold := o.getUsageThresholdForPlanner()
+		solution, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, usageThreshold)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
+			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
@@ -2470,6 +2489,11 @@ func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string,
 
 	var nodes []string = nil
 
+	//ignore "nodes" param for serverless deployement
+	if c.IsServerlessDeployment() {
+		return nil, nil, false
+	}
+
 	ns, ok := plan["nodes"].([]interface{})
 	if ok {
 		for _, nse := range ns {
@@ -2648,6 +2672,12 @@ func (o *MetadataProvider) getNumPartitionParam(scheme c.PartitionScheme, plan m
 
 	numPartition := int(o.settings.NumPartition())
 
+	//Use config setting for numPartition for serverless,
+	//user override is not allowed
+	if c.IsServerlessDeployment() {
+		return numPartition, nil, false
+	}
+
 	numPartition2, ok := plan["num_partition"].(float64)
 	if !ok {
 		numPartition_str, ok := plan["num_partition"].(string)
@@ -2678,6 +2708,12 @@ func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}, version 
 	numReplica := int(0)
 	if version >= c.INDEXER_50_VERSION {
 		numReplica = int(o.settings.NumReplica())
+	}
+
+	//use num_replica from config for serverless,
+	//user override is not allowed
+	if c.IsServerlessDeployment() {
+		return numReplica, nil, false
 	}
 
 	numReplica2, ok := plan["num_replica"].(int64)
@@ -4451,6 +4487,15 @@ func (o *MetadataProvider) checkProviderHealthNoLock() (bool, error) {
 func (o *MetadataProvider) isClusterHealthy() bool {
 	return atomic.LoadInt32(&o.numFailedNode) == 0 &&
 		atomic.LoadInt32(&o.numUnhealthyNode) == 0
+}
+
+func (o *MetadataProvider) getUsageThresholdForPlanner() *planner.UsageThreshold {
+
+	usageThreshold := &planner.UsageThreshold{
+		MemHighThreshold: o.settings.MemHighThreshold(),
+		MemLowThreshold:  o.settings.MemHighThreshold(),
+	}
+	return usageThreshold
 }
 
 //

@@ -81,6 +81,8 @@ var ErrCollectionIdChanged = errors.New("CollectionId has changed. Collection ma
 var ErrIndexScopeLimitReached = errors.New("Limit for number of indexes that can be created per scope has been reached.")
 var ErrBucketAlreadyExist = errors.New("Bucket Already Present")
 var ErrUnInitializedClusterInfo = errors.New("uninitialized clusterInfo")
+var ErrPlannerMaxResourceUsageLimit = errors.New("Max Node Resource Usage Limit Reached.")
+var ErrPlannerConstraintViolation = errors.New("Planner Constraint Violation.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
