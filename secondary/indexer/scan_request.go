@@ -85,6 +85,8 @@ type ScanRequest struct {
 	decodePositions  []bool
 	explodeUpto      int
 
+	maxCompositeFilters int
+
 	// New parameters for partitioned index
 	Sorted bool
 
@@ -1090,6 +1092,33 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 	// Sort Index Points
 	sort.Sort(IndexPoints(points))
 	r.Scans = r.composeScans(points, filters)
+
+	r.maxCompositeFilters = 0
+	for _, sc := range r.Scans {
+		if sc.ScanType != FilterRangeReq {
+			continue
+		}
+
+		for _, fl := range sc.Filters {
+			num := len(fl.CompositeFilters)
+			if num > r.maxCompositeFilters {
+				r.maxCompositeFilters = num
+			}
+		}
+	}
+
+	// Adding extra logs for MB-52355
+	if r.maxCompositeFilters > len(r.IndexInst.Defn.SecExprs) {
+		fmsg := "%v ReqID: %v Defn: %v \n\tSecExprs: %v \n\tScans: %v \n\tMaxCompositeFilters: %v \n\tProtoScans: %v"
+		var sb strings.Builder
+		for i, s := range protoScans {
+			sb.WriteString(fmt.Sprintf("\n\t\t protobuf scan %v %v", i, s.String()))
+		}
+		logging.Errorf(fmsg, r.LogPrefix, r.RequestId, r.DefnID, r.IndexInst.Defn.SecExprs,
+			logging.TagUD(r.Scans), r.maxCompositeFilters, sb.String())
+		return fmt.Errorf("invalid length of composite element filters in scan request")
+	}
+
 	return
 }
 
@@ -1101,26 +1130,12 @@ func (r *ScanRequest) setExplodePositions() {
 		return
 	}
 
-	maxCompositeFilters := 0
-	for _, sc := range r.Scans {
-		if sc.ScanType != FilterRangeReq {
-			continue
-		}
-
-		for _, fl := range sc.Filters {
-			num := len(fl.CompositeFilters)
-			if num > maxCompositeFilters {
-				maxCompositeFilters = num
-			}
-		}
-	}
-
 	if r.explodePositions == nil {
 		r.explodePositions = make([]bool, len(r.IndexInst.Defn.SecExprs))
 		r.decodePositions = make([]bool, len(r.IndexInst.Defn.SecExprs))
 	}
 
-	for i := 0; i < maxCompositeFilters; i++ {
+	for i := 0; i < r.maxCompositeFilters; i++ {
 		r.explodePositions[i] = true
 	}
 
