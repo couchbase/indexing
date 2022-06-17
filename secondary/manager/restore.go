@@ -47,7 +47,7 @@ type RestoreContext struct {
 //
 // Initialize restore context
 //
-func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket string,
+func CreateRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket string,
 	filters map[string]bool, filterType string, remap map[string]string) *RestoreContext {
 
 	context := &RestoreContext{
@@ -72,7 +72,7 @@ func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket
 //
 // Restore and place index in the image onto the current cluster.
 //
-func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, error) {
+func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, error) {
 
 	// convert storage mode
 	if err := m.convertStorageMode(); err != nil {
@@ -96,7 +96,7 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 
 	// Get schedule create tokens from current cluster
 	var schedTokens map[common.IndexDefnId]*mc.ScheduleCreateToken
-	schedTokens, err = getSchedCreateTokens(m.target, m.filters, m.filterType)
+	schedTokens, err = GetSchedCreateTokens(m.target, m.filters, m.filterType)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +129,41 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 
 	// invoke placement
 	return m.placeIndex()
+}
+
+func GetSchedCreateTokens(bucket string, filters map[string]bool, filterType string) (
+	map[common.IndexDefnId]*mc.ScheduleCreateToken, error) {
+
+	schedTokensMap := make(map[common.IndexDefnId]*mc.ScheduleCreateToken)
+	stopSchedTokensMap := make(map[common.IndexDefnId]bool)
+
+	scheduleTokens, err := mc.ListAllScheduleCreateTokens()
+	if err != nil {
+		return nil, err
+	}
+
+	stopScheduleTokens, err1 := mc.ListAllStopScheduleCreateTokens()
+	if err1 != nil {
+		return nil, err1
+	}
+
+	for _, token := range stopScheduleTokens {
+		stopSchedTokensMap[token.DefnId] = true
+	}
+
+	for _, token := range scheduleTokens {
+		if _, ok := stopSchedTokensMap[token.Definition.DefnId]; !ok {
+			if !ApplyFilters(bucket, token.Definition.Bucket, token.Definition.Scope,
+				token.Definition.Collection, "", filters, filterType) {
+
+				continue
+			}
+
+			schedTokensMap[token.Definition.DefnId] = token
+		}
+	}
+
+	return schedTokensMap, nil
 }
 
 //
@@ -300,7 +335,7 @@ func (m *RestoreContext) findIndexToRestore() error {
 				filtBucket = index.Bucket
 			}
 
-			if !applyFilters(filtBucket, index.Bucket, index.Scope, index.Collection, "", m.filters, m.filterType) {
+			if !ApplyFilters(filtBucket, index.Bucket, index.Scope, index.Collection, "", m.filters, m.filterType) {
 				logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
 					index.Bucket, index.Scope, index.Collection, index.Name)
 				continue
@@ -478,7 +513,7 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 			filtBucket = token.Definition.Bucket
 		}
 
-		if !applyFilters(filtBucket, token.Definition.Bucket, token.Definition.Scope,
+		if !ApplyFilters(filtBucket, token.Definition.Bucket, token.Definition.Scope,
 			token.Definition.Collection, "", m.filters, m.filterType) {
 
 			logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
@@ -562,6 +597,56 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 	// TODO: Check for number of replicas and check if there are enough number of indexer nodes
 
 	return nil
+}
+
+// ApplyFilters returns true iff an IndexDefn's (idxBucket, scope, collection, name)
+// are selected by (bucket, filters, filterType).
+func ApplyFilters(bucket, idxBucket, scope, collection, name string,
+	filters map[string]bool, filterType string) bool {
+
+	if bucket == "" {
+		return true
+	}
+
+	if idxBucket != bucket {
+		return false
+	}
+
+	if filterType == "" {
+		return true
+	}
+
+	if _, ok := filters[scope]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if _, ok := filters[fmt.Sprintf("%v.%v", scope, collection)]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if name != "" {
+		if _, ok := filters[fmt.Sprintf("%v.%v.%v", scope, collection, name)]; ok {
+			if filterType == "include" {
+				return true
+			} else {
+				return false
+			}
+		}
+	}
+
+	if filterType == "include" {
+		return false
+	}
+
+	return true
 }
 
 //

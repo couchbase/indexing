@@ -84,9 +84,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 		"dataport.", true /*trim*/)
 
 	dpconf = overrideDataportConf(dpconf)
-	stream, err := dataport.NewServer(
-		string(StreamAddrMap[streamId]),
-		common.SystemConfig["maxVbuckets"].Int(),
+	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]),
 		dpconf, streamMutch, enableAuth)
 	if err != nil {
 		//return stream init error

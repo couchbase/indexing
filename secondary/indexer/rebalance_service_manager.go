@@ -58,7 +58,7 @@ type RebalanceServiceManager struct {
 	statsMgr    *statsManager // indexer's singleton, so rebalance can get local stats directly
 
 	rebalanceCtx *rebalanceContext
-	nodeInfo     *service.NodeInfo // info about the local node
+	nodeInfo     *service.NodeInfo // never changes; info about the local node
 
 	config        c.ConfigHolder
 	supvCmdch     MsgChannel //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
@@ -106,7 +106,16 @@ type state struct {
 	// (If any service reports isBalanced == false, the button becomes enabled.)
 	isBalanced bool // if true, UI Rebalance button is disabled; rev is not incremented for changes to this
 
-	rebalanceID   string
+	// rebalanceID is "" when no rebalance/failover/move is running. PrepareTopologyChange sets it
+	// to the TopologyChange.ID from ns_server. It gets reset to "" when the topology change either
+	// finishes or gets canceled (RebalCancelTask).
+	rebalanceID string
+
+	// rebalanceTask is nil if a rebalance/failover/move has never run or the last one was canceled
+	// before it either completed or failed. It is non-nil if either:
+	//   1. One is currently running (rebalanceID will be non-""), or
+	//   2. The last one failed (rebalanceID will be "").
+	// #2 causes RebalGetTaskList to return info on the failed rebalance.
 	rebalanceTask *service.Task
 }
 
@@ -134,7 +143,7 @@ var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 // NewRebalanceServiceManager is the constructor for the RebalanceServiceManager class. Indexer
 // constructs a singleton at boot.
 func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
-	supvPrioMsgch MsgChannel, config c.Config, rebalanceRunning bool,
+	supvPrioMsgch MsgChannel, config c.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
 	rebalanceToken *RebalanceToken, statsMgr *statsManager) *RebalanceServiceManager {
 
 	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
@@ -173,11 +182,7 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
 
-	mgr.nodeInfo = &service.NodeInfo{
-		NodeID:   service.NodeID(config["nodeuuid"].String()),
-		Priority: service.Priority(c.INDEXER_CUR_VERSION),
-	}
-
+	mgr.nodeInfo = nodeInfo
 	mgr.rebalanceRunning = rebalanceRunning
 	mgr.rebalanceToken = rebalanceToken
 	mgr.localhttp = getLocalHttpAddr(mgr.config.Load())
@@ -304,30 +309,28 @@ func (m *RebalanceServiceManager) handleIndexerReady(cmd Message) {
 
 /////////////////////////////////////////////////////////////////////////
 //
-//  service.Manager interface implementation
+//  service.Manager interface implementations
+//
+//  1. Delegates for generic APIs used by Rebalance:
+//       RebalGetTaskList: Rebalance's delegate for GetTaskList
+//       RebalCancelTask:  Rebalance's delegate for CancelTask
+//
+//  2. Direct implementation of Rebalance-specific APIs:
+//       GetCurrentTopology
+//       PrepareTopologyChange
+//       StartTopologyChange
+//
 //  Interface defined in cbauth/service/interface.go
 //
 /////////////////////////////////////////////////////////////////////////
 
-// GetNodeInfo is an external API called by ns_server (via cbauth).
-func (m *RebalanceServiceManager) GetNodeInfo() (*service.NodeInfo, error) {
-
-	return m.nodeInfo, nil
-}
-
-// Shutdown is an external API called by ns_server (via cbauth).
-func (m *RebalanceServiceManager) Shutdown() error {
-
-	return nil
-}
-
-// GetTaskList is an external API called by ns_server (via cbauth).
-// If rev is non-nil, respond only when the revision changes from that,
-// else respond immediately.
-func (m *RebalanceServiceManager) GetTaskList(rev service.Revision,
+// RebalGetTaskList is a delegate of GenericServiceManager.GetTaskList which is an external API
+// called by ns_server (via cbauth). If rev is non-nil, respond only when the revision changes from
+// that, else respond immediately. The cancel arg is a channel ns_server may use to cancel the call.
+func (m *RebalanceServiceManager) RebalGetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
-
-	l.Infof("RebalanceServiceManager::GetTaskList %v", rev)
+	const _RebalGetTaskList = "RebalanceServiceManager::RebalGetTaskList:"
+	l.Infof("%v called. rev: %v", _RebalGetTaskList, rev)
 
 	currState, err := m.wait(rev, cancel)
 	if err != nil {
@@ -335,13 +338,15 @@ func (m *RebalanceServiceManager) GetTaskList(rev service.Revision,
 	}
 
 	taskList := stateToTaskList(currState)
-	l.Infof("RebalanceServiceManager::GetTaskList returns %+v", taskList)
+	l.Infof("%v rev: %v returning taskList: %+v", _RebalGetTaskList, rev, taskList)
 	return taskList, nil
 }
 
-// CancelTask is an external API called by ns_server (via cbauth).
-func (m *RebalanceServiceManager) CancelTask(id string, rev service.Revision) error {
-	l.Infof("RebalanceServiceManager::CancelTask %v %v", id, rev)
+// RebalCancelTask is a delegate of GenericServiceManager.CancelTask which is an external API
+// called by ns_server (via cbauth).
+func (m *RebalanceServiceManager) RebalCancelTask(id string, rev service.Revision) error {
+	const _RebalCancelTask = "RebalanceServiceManager::RebalCancelTask:"
+	l.Infof("%v called. id: %v, rev: %v", _RebalCancelTask, id, rev)
 
 	currState := m.copyState()
 	tasks := stateToTaskList(currState).Tasks
@@ -365,7 +370,8 @@ func (m *RebalanceServiceManager) CancelTask(id string, rev service.Revision) er
 	}
 
 	if rev != nil && !bytes.Equal(rev, task.Rev) {
-		l.Errorf("RebalanceServiceManager::CancelTask %v %v", rev, task.Rev)
+		l.Errorf("%v returning error: %v. rev: %v, task.Rev: %v", _RebalCancelTask,
+			service.ErrConflict, rev, task.Rev)
 		return service.ErrConflict
 	}
 
@@ -1285,12 +1291,12 @@ func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 
 	defer resp.Body.Close()
 	bytes, _ := ioutil.ReadAll(resp.Body)
-	response := new(manager.IndexResponse)
+	response := new(IndexResponse)
 	if err := json.Unmarshal(bytes, &response); err != nil {
 		l.Errorf("RebalanceServiceManager::cleanupIndex Error unmarshal response %v %v", localaddr+url, err)
 		return err
 	}
-	if response.Code == manager.RESP_ERROR {
+	if response.Code == RESP_ERROR {
 		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
 			l.Errorf("RebalanceServiceManager::cleanupIndex Error dropping index %v %v. Ignored.", localaddr+url, response.Error)
 			return nil
@@ -1891,7 +1897,7 @@ func (m *RebalanceServiceManager) getStateServers() []service.NodeID {
 }
 
 // wait returns the current state immediately if it is newer than what the
-// caller (ultimately ns_server, from GetTaskList or GetTopologyChange APIs)
+// caller (ultimately ns_server via GetTaskList or GetTopologyChange APIs)
 // already has or if caller passed a nil rev. Otherwise it waits until the
 // revision changes and returns the new state. ns_server's cbauth API stub
 // may cancel the wait before that happens by closing the cancel channel, in
@@ -2392,7 +2398,7 @@ func GetGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 		return nil, err
 	}
 
-	var topology manager.BackupResponse
+	var topology BackupResponse
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	defer resp.Body.Close()
 	if err := json.Unmarshal(bytes, &topology); err != nil {
@@ -2422,7 +2428,7 @@ func (m *RebalanceServiceManager) getCachedIndexerNodeUUIDs() (
 	}
 	defer resp.Body.Close()
 	bytes, _ := ioutil.ReadAll(resp.Body)
-	nodeUUIDsResponse := new(manager.NodeUUIDsResponse)
+	nodeUUIDsResponse := new(NodeUUIDsResponse)
 	if err = json.Unmarshal(bytes, &nodeUUIDsResponse); err != nil {
 		l.Errorf("%v Unmarshaling response from %v returned err: %v %s", _getCachedIndexerNodeUUIDs,
 			url, err, l.TagUD(string(bytes)))
@@ -2635,13 +2641,13 @@ func (m *RebalanceServiceManager) handleMoveIndex(w http.ResponseWriter, r *http
 			return
 		}
 
-		var req manager.IndexRequest
+		var req IndexRequest
 
 		idList := client.IndexIdList{DefnIds: []uint64{defn.DefnId}}
 		plan := make(map[string]interface{})
 		plan["nodes"] = nodes
 
-		req = manager.IndexRequest{IndexIds: idList, Plan: plan}
+		req = IndexRequest{IndexIds: idList, Plan: plan}
 
 		code, errStr := m.doHandleMoveIndex(&req)
 		if errStr != "" {
@@ -2666,7 +2672,7 @@ func (m *RebalanceServiceManager) handleMoveIndexInternal(w http.ResponseWriter,
 
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
-		var req manager.IndexRequest
+		var req IndexRequest
 		if err := json.Unmarshal(bytes, &req); err != nil {
 			l.Errorf("%v: err: %v", method, err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
@@ -2706,7 +2712,7 @@ func (m *RebalanceServiceManager) handleMoveIndexInternal(w http.ResponseWriter,
 	}
 }
 
-func (m *RebalanceServiceManager) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
+func (m *RebalanceServiceManager) doHandleMoveIndex(req *IndexRequest) (int, string) {
 
 	l.Infof("RebalanceServiceManager::doHandleMoveIndex %v", l.TagUD(req))
 
@@ -2744,7 +2750,7 @@ func (m *RebalanceServiceManager) monitorMoveIndex() {
 	}
 }
 
-func (m *RebalanceServiceManager) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
+func (m *RebalanceServiceManager) initMoveIndex(req *IndexRequest, nodes []string) (error, bool) {
 	const method = "RebalanceServiceManager::initMoveIndex" // for logging
 
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
@@ -2897,7 +2903,7 @@ func (m *RebalanceServiceManager) registerMoveIndexTokenInMetakv(token *Rebalanc
 	return nil
 }
 
-func (m *RebalanceServiceManager) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
+func (m *RebalanceServiceManager) generateTransferTokenForMoveIndex(req *IndexRequest,
 	reqNodes []string) (map[string]*c.TransferToken, error) {
 	const method = "RebalanceServiceManager::generateTransferTokenForMoveIndex" // for logging
 
@@ -3139,7 +3145,7 @@ func (m *RebalanceServiceManager) onMoveIndexDoneLOCKED(err error) {
 	m.rebalancerF = nil
 }
 
-func validateMoveIndexReq(req *manager.IndexRequest) ([]string, error) {
+func validateMoveIndexReq(req *IndexRequest) ([]string, error) {
 
 	if len(req.IndexIds.DefnIds) == 0 {
 		return nil, errors.New("Empty Index List for Move Index")
@@ -3288,17 +3294,17 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 }
 
 func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {
-	res := &manager.IndexResponse{Code: manager.RESP_ERROR, Error: msg}
+	res := &IndexResponse{Code: RESP_ERROR, Error: msg}
 	send(status, w, res)
 }
 
 func sendIndexResponse(w http.ResponseWriter) {
-	result := &manager.IndexResponse{Code: manager.RESP_SUCCESS}
+	result := &IndexResponse{Code: RESP_SUCCESS}
 	send(http.StatusOK, w, result)
 }
 
 func sendIndexResponseMsg(w http.ResponseWriter, msg string) {
-	result := &manager.IndexResponse{Code: manager.RESP_SUCCESS, Message: msg}
+	result := &IndexResponse{Code: RESP_SUCCESS, Message: msg}
 	send(http.StatusOK, w, result)
 }
 

@@ -5,10 +5,11 @@
 // in that file, in accordance with the Business Source License, use of this
 // software will be governed by the Apache License, Version 2.0, included in
 // the file licenses/APL2.txt.
-package manager
+package indexer
 
 import (
 	"encoding/json"
+	"github.com/couchbase/indexing/secondary/manager"
 	"path"
 	"strings"
 	"sync"
@@ -31,10 +32,10 @@ const TEMP_FILE_SUFFIX string = ".tmp" // suffix for temporary filename to be at
 type requestHandlerCache struct {
 
 	// Index metadata memory cache
-	metaCache      map[string]*LocalIndexMetadata // IndexMetadata mem cache
-	metaCacheReady bool                           // is metaCache loaded from disk at boot yet?
-	metaDir        string                         // metaCache persistence directory
-	metaMutex      sync.RWMutex                   // metaCache, metaCacheReady mutex
+	metaCache      map[string]*manager.LocalIndexMetadata // IndexMetadata mem cache
+	metaCacheReady bool                                   // is metaCache loaded from disk at boot yet?
+	metaDir        string                                 // metaCache persistence directory
+	metaMutex      sync.RWMutex                           // metaCache, metaCacheReady mutex
 
 	// IndexStats subset memory cache
 	statsCache      map[string]*common.Statistics // IndexStats subset mem cache
@@ -49,8 +50,8 @@ type requestHandlerCache struct {
 
 // workChEntry_meta is an entry in the workCh channel for persisting a node's local index metadata.
 type workChEntry_meta struct {
-	hostKey string              // host:httpPort key to store under
-	meta    *LocalIndexMetadata // entry to store
+	hostKey string                      // host:httpPort key to store under
+	meta    *manager.LocalIndexMetadata // entry to store
 }
 
 // workChEntry_stats is an entry in the workCh channel for persisting a node's statistics subset.
@@ -71,7 +72,7 @@ func NewRequestHandlerCache(cacheDir string) *requestHandlerCache {
 	this := &requestHandlerCache{} // constructed object to return
 
 	// Create the memory caches
-	this.metaCache = make(map[string]*LocalIndexMetadata)
+	this.metaCache = make(map[string]*manager.LocalIndexMetadata)
 	this.statsCache = make(map[string]*common.Statistics)
 
 	// Create the disk cache directories (if not already there)
@@ -118,7 +119,7 @@ func Key2host(hostKey string) string {
 // the given hostKey is already present as that would be from a newer getIndexStatus call. It will
 // overwrite an older entry, which could exist if getIndexStats got that value from another node's
 // cache that was older than the entry just read from this node's local disk cache.
-func (this *requestHandlerCache) cacheLocalIndexMetadataBoot(hostKey string, meta *LocalIndexMetadata) {
+func (this *requestHandlerCache) cacheLocalIndexMetadataBoot(hostKey string, meta *manager.LocalIndexMetadata) {
 	this.metaMutex.Lock()
 	cached := this.metaCache[hostKey]
 	if cached == nil || cached.Timestamp < meta.Timestamp {
@@ -130,7 +131,7 @@ func (this *requestHandlerCache) cacheLocalIndexMetadataBoot(hostKey string, met
 // CacheLocalIndexMetadata adds an entry to the local metadata memory cache and stages write-through
 // to disk. hostKey is Host2key(host:httpPort). This will be skipped if a newer entry for the given
 // hostKey is already present as that would be from a newer getIndexStatus call.
-func (this *requestHandlerCache) CacheLocalIndexMetadata(hostKey string, meta *LocalIndexMetadata) {
+func (this *requestHandlerCache) CacheLocalIndexMetadata(hostKey string, meta *manager.LocalIndexMetadata) {
 	isNewer := false // is the meta arg newer than current cache contents?
 
 	// Memory cache (sync)
@@ -175,8 +176,8 @@ func (this *requestHandlerCache) CacheStats(hostKey string, stats *common.Statis
 // whether the metaCache had fully finished loading from disk at boot, as one caller needs to be
 // sure of that while another does not care.
 func (this *requestHandlerCache) GetAllCachedLocalIndexMetadata() (
-	clone map[string]*LocalIndexMetadata, metaCacheReady bool) {
-	clone = make(map[string]*LocalIndexMetadata)
+	clone map[string]*manager.LocalIndexMetadata, metaCacheReady bool) {
+	clone = make(map[string]*manager.LocalIndexMetadata)
 
 	this.metaMutex.RLock()
 	for key, value := range this.metaCache {
@@ -191,7 +192,7 @@ func (this *requestHandlerCache) GetAllCachedLocalIndexMetadata() (
 // GetLocalIndexMetadataFromCache looks up the cached LocalIndexMetadata for the given hostname from
 // the memory cache. It does not need to check disk cache as nothing ever gets evicted from memory.
 // hostKey is Host2key(host:httpPort).
-func (this *requestHandlerCache) GetLocalIndexMetadataFromCache(hostKey string) *LocalIndexMetadata {
+func (this *requestHandlerCache) GetLocalIndexMetadataFromCache(hostKey string) *manager.LocalIndexMetadata {
 	const method = "requestHandlerCache::GetLocalIndexMetadataFromCache:" // for logging
 
 	this.metaMutex.RLock()
@@ -431,7 +432,7 @@ func (this *requestHandlerCache) populateMetaMemCacheFromDisk() {
 					_populateMetaMemCacheFromDisk, filepath, err)
 			}
 
-			localMeta := new(LocalIndexMetadata)
+			localMeta := new(manager.LocalIndexMetadata)
 			if err := json.Unmarshal(content, localMeta); err != nil {
 				logging.Errorf("%v Failed to unmarshal metadata from file %v, error: %v",
 					_populateMetaMemCacheFromDisk, filepath, err)

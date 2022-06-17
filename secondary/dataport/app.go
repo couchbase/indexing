@@ -2,14 +2,18 @@
 
 package dataport
 
-import "fmt"
-import "sort"
-import "strings"
-import "time"
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+)
 
 var commandNames = map[byte]string{
 	c.Upsert:         "Upsert",
@@ -39,7 +43,6 @@ func Application(
 	addr string, // data port address to listen for connections
 	stats int, // timeout to periodically display statistics
 	timeout int, // timeout to break out of this function
-	maxvbs int,
 	config c.Config,
 	callb func(string, interface{}) bool, // callback for mutations, messages
 ) {
@@ -56,7 +59,7 @@ func Application(
 	enableAuth := uint32(1)
 
 	appch := make(chan interface{}, 10000)
-	_, err := NewServer(addr, maxvbs, config, appch, &enableAuth)
+	_, err := NewServer(addr, config, appch, &enableAuth)
 	if err != nil && doCallb(err) == false {
 		return
 	}

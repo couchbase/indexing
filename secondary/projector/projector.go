@@ -82,11 +82,10 @@ type Projector struct {
 
 // NewProjector creates a news projector instance and
 // starts a corresponding adminport.
-func NewProjector(maxvbs int, config c.Config, certFile, keyFile, caFile string) *Projector {
+func NewProjector(config c.Config, certFile, keyFile, caFile string) *Projector {
 	p := &Projector{
 		topics:               make(map[string]*Feed),
 		topicSerialize:       make(map[string]*sync.Mutex),
-		maxvbs:               maxvbs,
 		pooln:                "default", // TODO: should this be configurable ?
 		certFile:             certFile,
 		keyFile:              keyFile,
@@ -414,7 +413,6 @@ func (p *Projector) GetFeedConfig() c.Config {
 
 	config, _ := c.NewConfig(map[string]interface{}{})
 	config["clusterAddr"] = p.config["clusterAddr"] // copy by value.
-	config["maxVbuckets"] = p.config["maxVbuckets"]
 	pconfig := p.config.SectionConfig("projector.", true /*trim*/)
 	for _, key := range FeedConfigParams() {
 		config.Set(key, pconfig[key])
