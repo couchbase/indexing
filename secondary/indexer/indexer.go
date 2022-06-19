@@ -4344,7 +4344,7 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	}
 
 	if collection == "" {
-		logging.Infof("Indexer::processCollectionDrop No Index Found for %v %v %v.",
+		logging.Verbosef("Indexer::processCollectionDrop No Index Found for %v %v %v.",
 			streamId, keyspaceId, collectionId)
 		return
 	}
