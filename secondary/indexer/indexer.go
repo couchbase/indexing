@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth/service"
 	"io/ioutil"
 	"math"
 	"math/rand"
@@ -28,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/cbauth/service"
 
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
@@ -4718,22 +4719,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
-	bucket := GetBucketFromKeyspaceId(keyspaceId)
-	idx.cinfoProviderLock.RLock()
-	isMagmaStorage, err := idx.cinfoProvider.IsMagmaStorage(bucket)
-	idx.cinfoProviderLock.RUnlock()
-	if err != nil {
-		logging.Errorf("Indexer::sendStreamUpdateForBuildIndex %v %v. Unable to check bucket storage "+
-			"backend err %v", buildStream, keyspaceId, err)
-	} else if isMagmaStorage {
-		logging.Infof("Indexer::sendStreamUpdateForBuildIndex %v %v. OSO not supported for "+
-			"Magma bucket.", buildStream, keyspaceId)
-	}
-
 	if enableOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
-		buildStream == common.INIT_STREAM &&
-		!isMagmaStorage {
+		buildStream == common.INIT_STREAM {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -6578,22 +6566,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		allowOSO = true
 	}
 
-	bucket := GetBucketFromKeyspaceId(keyspaceId)
-	idx.cinfoProviderLock.RLock()
-	isMagmaStorage, err := idx.cinfoProvider.IsMagmaStorage(bucket)
-	idx.cinfoProviderLock.RUnlock()
-	if err != nil {
-		logging.Errorf("Indexer::startKeyspaceIdStream %v %v. Unable to check bucket storage backend err %v", streamId, keyspaceId, err)
-	} else if isMagmaStorage {
-		logging.Infof("Indexer::startKeyspaceIdStream %v %v. OSO not supported for Magma bucket.", streamId, keyspaceId)
-	}
-
 	enableOSO := idx.config["build.enableOSO"].Bool()
 	if enableOSO &&
 		allowOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
-		streamId == common.INIT_STREAM &&
-		!isMagmaStorage {
+		streamId == common.INIT_STREAM {
 		enableOSO = true
 	} else {
 		enableOSO = false
