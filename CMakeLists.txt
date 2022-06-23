@@ -98,7 +98,7 @@ ADD_CUSTOM_TARGET(proto-generated DEPENDS
 
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  DEPENDS forestdb
+  DEPENDS sigar forestdb platform proto-generated n1ql-yacc
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
@@ -106,10 +106,8 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   INSTALL_PATH bin OUTPUT indexer
   GOVERSION 1.18.1)
 
-ADD_DEPENDENCIES(indexer sigar forestdb platform)
-ADD_DEPENDENCIES(indexer proto-generated n1ql-yacc)
-
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
+  DEPENDS proto-generated n1ql-yacc sigar
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
@@ -118,9 +116,8 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
   INSTALL_PATH bin
   GOVERSION 1.18.1)
 
-ADD_DEPENDENCIES(projector proto-generated)
-
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
+  DEPENDS proto-generated n1ql-yacc
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
@@ -130,6 +127,7 @@ GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cb
   GOVERSION 1.18.1)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
+  DEPENDS proto-generated n1ql-yacc
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
@@ -139,8 +137,8 @@ GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cm
   GOVERSION 1.18.1)
 
 GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
+  DEPENDS n1ql-yacc forestdb
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  DEPENDS forestdb
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
