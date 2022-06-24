@@ -1523,9 +1523,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.evictSweepIntervalIncrementDuration": ConfigValue{
-		100,
+		0,
 		"Time interval for sweep interval to be incremented to max value (in sec)",
-		100,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1698,9 +1698,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.evictSweepIntervalIncrementDuration": ConfigValue{
-		100,
+		0,
 		"Time interval for sweep interval to be incremented to max value (in sec)",
-		100,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
