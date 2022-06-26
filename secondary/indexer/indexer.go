@@ -28,8 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/cbauth/service"
-
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
