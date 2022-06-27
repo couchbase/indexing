@@ -1523,9 +1523,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.evictSweepIntervalIncrementDuration": ConfigValue{
-		100,
+		0,
 		"Time interval for sweep interval to be incremented to max value (in sec)",
-		100,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1698,9 +1698,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.evictSweepIntervalIncrementDuration": ConfigValue{
-		100,
+		0,
 		"Time interval for sweep interval to be incremented to max value (in sec)",
-		100,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1904,6 +1904,48 @@ var SystemConfig = Config{
 		1024 * 1024 * 1024,
 		"Memtuner minimum quota",
 		1024 * 1024 * 1024,
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.enable": ConfigValue{
+		false,
+		"Enable Auto LSS FlushBuffer Tuning",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.fbtuner.minQuotaRatio": ConfigValue{
+		float64(0.10),
+		"Minimum ratio between flush buffer memory to plasma current memory quota tuner tries to keep",
+		float64(0.10),
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.adjustRate": ConfigValue{
+		float64(0.10),
+		"used by tuner to compute increment/decrement sizes in a readjustment cycle",
+		float64(0.10),
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.adjustInterval": ConfigValue{
+		270, // swapper eviction timeout is 300 secs
+		"interval (in seconds) at which tuner performs readjustments",
+		270,
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.lssSampleInterval": ConfigValue{
+		180,
+		"interval (in seconds) at which LSS offsets are sampled by tuner for checking write activity",
+		180,
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.debug": ConfigValue{
+		false,
+		"enable tuner debug logging",
+		false,
 		false,
 		false,
 	},

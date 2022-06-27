@@ -1070,10 +1070,10 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 	//
 	// Filter out inst based on pending item stats.
 	//
-	rollbackTimesList := b.pruneStaleReplica(replicas, excludes)
+	rollbackTimesList, prunedReplica := b.pruneStaleReplica(replicas, excludes)
 
 	// Filter based on timing of scan responses
-	b.filterByTiming(currmeta, replicas, rollbackTimesList, startPartnId, endPartnId)
+	filteredReplica := b.filterByTiming(currmeta, replicas, rollbackTimesList, startPartnId, endPartnId)
 
 	//
 	// Randomly select an inst after filtering
@@ -1124,8 +1124,10 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 	}
 
 	if len(chosenInst) != int(numPartn) {
-		logging.Errorf("PickRandom: Fail to find indexer for all index partitions. Num partition %v.  Partition with instances %v ",
+		logging.Errorf("metadataClient:PickRandom: Fail to find indexer for all index partitions. Num partition %v.  Partition with instances %v ",
 			numPartn, len(chosenInst))
+		logging.Errorf("metadataClient:PickRandom: Replicas - %v, PrunedReplica - %v, FilteredReplica %v", replicas,
+			prunedReplica, filteredReplica)
 		for n, instId := range replicas {
 			for partnId := startPartnId; partnId < endPartnId; partnId++ {
 				ts, ok := rollbackTimesList[n][common.PartitionId(partnId)]
@@ -1140,7 +1142,7 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 }
 
 func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint64, rollbackTimes []map[common.PartitionId]int64,
-	startPartnId uint64, endPartnId uint64) {
+	startPartnId uint64, endPartnId uint64) (filteredItems map[common.IndexInstId]map[common.PartitionId]string) {
 
 	numRollbackTimes := func(partnId uint64) int {
 		count := 0
@@ -1153,13 +1155,16 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 	}
 
 	if rand.Float64() >= b.randomWeight {
+		filteredItems = make(map[common.IndexInstId]map[common.PartitionId]string)
+
 		for partnId := startPartnId; partnId < endPartnId; partnId++ {
 			// Do not prune if there is only replica with this partition
 			if numRollbackTimes(partnId) <= 1 {
 				continue
 			}
 
-			loadList := make([]float64, len(replicas))
+			leastLoadPos := 0
+			loadList := make(sort.Float64Slice, len(replicas))
 			for i, instId := range replicas {
 				if load, ok := currmeta.loads[common.IndexInstId(instId)]; ok {
 					if n, ok := load.getLoad(common.PartitionId(partnId)); ok {
@@ -1170,29 +1175,38 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 				} else {
 					loadList[i] = math.MaxFloat64
 				}
+
+				if loadList.Less(i, leastLoadPos) {
+					leastLoadPos = i
+				}
 			}
 
 			// compute replica with least load.
-			sort.Float64s(loadList)
-			leastLoad := loadList[0]
+			leastLoad := loadList[leastLoadPos]
 
 			//
 			// Filter inst based on load
 			//
 			for i, instId := range replicas {
-				if load, ok := currmeta.loads[common.IndexInstId(instId)]; ok {
-					if n, ok := load.getLoad(common.PartitionId(partnId)); ok {
-						eqivLoad := n * b.equivalenceFactor
-						if eqivLoad > leastLoad {
-							logging.Verbosef("remove inst %v partition %v from scan due to slow response time (least %v load %v)",
-								instId, partnId, leastLoad, eqivLoad)
-							delete(rollbackTimes[i], common.PartitionId(partnId))
-						}
+				curLoad := loadList[i]
+				eqivLoad := curLoad * b.equivalenceFactor
+				if curLoad != math.MaxFloat64 && eqivLoad > leastLoad {
+					logging.Verbosef("remove inst %v partition %v from scan due to slow response time (least %v load %v)",
+						instId, partnId, leastLoad, eqivLoad)
+					delete(rollbackTimes[i], common.PartitionId(partnId))
+					instMap, ok := filteredItems[common.IndexInstId(instId)]
+					if !ok {
+						filteredItems[common.IndexInstId(instId)] = make(map[common.PartitionId]string)
+						instMap = filteredItems[common.IndexInstId(instId)]
 					}
+					data := fmt.Sprintf("{\"eqivLoad\": %v, \"leastLoad\": %v}", eqivLoad, leastLoad)
+					instMap[common.PartitionId(partnId)] = data
 				}
+
 			}
 		}
 	}
+	return
 }
 
 //
@@ -1209,9 +1223,11 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 // If there is no stats available for a particular partition (across all replicas), then
 // no pruning for that partition.
 //
-func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[common.PartitionId]map[uint64]bool) []map[common.PartitionId]int64 {
+func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[common.PartitionId]map[uint64]bool) (
+	[]map[common.PartitionId]int64, map[common.IndexInstId]map[common.PartitionId]string) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	prunedInsts := make(map[common.IndexInstId]map[common.PartitionId]string)
 
 	resetRollbackTimes := func(rollbackTimeList []map[common.PartitionId]int64) {
 		for _, rollbackTimes := range rollbackTimeList {
@@ -1244,7 +1260,7 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 	if len(replicas) == 1 || b.settings.DisablePruneReplica() {
 		_, rollbackTimes, _ := b.getPendingStats(replicas, currmeta, excludes, false)
 		resetRollbackTimes(rollbackTimes)
-		return rollbackTimes
+		return rollbackTimes, nil
 	}
 
 	// read the progress stats from each index -- exclude indexer that has not refreshed its stats
@@ -1263,6 +1279,7 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 		// find the index inst
 		inst, ok := currmeta.insts[common.IndexInstId(instId)]
 		if !ok {
+			prunedInsts[common.IndexInstId(instId)] = nil
 			continue
 		}
 
@@ -1295,11 +1312,18 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 				result[i][partnId] = rollbackTimes[i][partnId]
 			} else {
 				logging.Verbosef("remove inst %v partition %v from scan due to stale item count", instId, partnId)
+				instMap, ok := prunedInsts[common.IndexInstId(instId)]
+				if !ok {
+					prunedInsts[common.IndexInstId(instId)] = make(map[common.PartitionId]string)
+					instMap = prunedInsts[common.IndexInstId(instId)]
+				}
+				data := fmt.Sprintf("{\"pending\": %v, \"quota\": %v}", pending, quota)
+				instMap[common.PartitionId(partnId)] = data
 			}
 		}
 	}
 
-	return result
+	return result, prunedInsts
 }
 
 //

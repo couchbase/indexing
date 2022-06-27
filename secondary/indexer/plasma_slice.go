@@ -366,6 +366,15 @@ func (slice *plasmaSlice) initStores() error {
 		cfg.MaxSMRWorkerPerCore = slice.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
 		cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
+		cfg.AutoTuneLSSFlushBuffer = slice.sysconf["plasma.fbtuner.enable"].Bool()
+		cfg.AutoTuneFlushBufferMinQuota = slice.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
+		cfg.AutoTuneFlushBufferAdjustRate = slice.sysconf["plasma.fbtuner.adjustRate"].Float64()
+		cfg.AutoTuneFlushBufferAdjustInterval =
+			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second)
+		cfg.AutoTuneFlushBufferLSSSampleInterval =
+			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
+		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
+
 		cfg.StorageDir = slice.storageDir
 		cfg.LogDir = slice.logDir
 
@@ -2575,6 +2584,15 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
 	mdb.mainstore.MaxSMRInstPerCtx = mdb.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
+	mdb.mainstore.AutoTuneLSSFlushBuffer = mdb.sysconf["plasma.fbtuner.enable"].Bool()
+	mdb.mainstore.AutoTuneFlushBufferMinQuota = mdb.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
+	mdb.mainstore.AutoTuneFlushBufferAdjustRate = mdb.sysconf["plasma.fbtuner.adjustRate"].Float64()
+	mdb.mainstore.AutoTuneFlushBufferAdjustInterval =
+		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second)
+	mdb.mainstore.AutoTuneFlushBufferLSSSampleInterval =
+		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
+	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
+
 	mdb.mainstore.UpdateConfig()
 
 	if !mdb.isPrimary {
@@ -2648,6 +2666,15 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.BufMemQuotaRatio = mdb.sysconf["plasma.BufMemQuotaRatio"].Float64()
 		mdb.backstore.MaxSMRWorkerPerCore = mdb.sysconf["plasma.MaxSMRWorkerPerCore"].Uint64()
 		mdb.backstore.MaxSMRInstPerCtx = mdb.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
+
+		mdb.backstore.AutoTuneLSSFlushBuffer = mdb.sysconf["plasma.fbtuner.enable"].Bool()
+		mdb.backstore.AutoTuneFlushBufferMinQuota = mdb.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
+		mdb.backstore.AutoTuneFlushBufferAdjustRate = mdb.sysconf["plasma.fbtuner.adjustRate"].Float64()
+		mdb.backstore.AutoTuneFlushBufferAdjustInterval =
+			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second)
+		mdb.backstore.AutoTuneFlushBufferLSSSampleInterval =
+			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
+		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 		mdb.backstore.UpdateConfig()
 	}
