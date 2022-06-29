@@ -958,7 +958,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 
 func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId int,
 	init bool, meta *MutationMeta) (nmut int) {
-	var err error
+	var err, abortErr error
 	var oldkey []byte
 
 	szConf := mdb.updateSliceBuffers(workerId)
@@ -968,7 +968,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			logging.TagStrUD(docid), mdb.id, len(key), szConf.maxArrayIndexEntrySize)
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
-		mdb.deleteSecArrayIndex(docid, workerId)
+		mdb.deleteSecArrayIndex(docid, workerId, false)
 		return 0
 	}
 
@@ -1007,7 +1007,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v. "+
 					"Error from ReverseCollate of old key. Skipping docid:%s Error: %v",
 					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId, false)
 				return 0
 			}
 		}
@@ -1021,7 +1021,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				"compostite old secondary keys. Skipping docid:%s Error: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 			atomic.AddInt32(&mdb.numKeysSkipped, 1)
-			mdb.deleteSecArrayIndexNoTx(docid, workerId)
+			mdb.deleteSecArrayIndexNoTx(docid, workerId, false)
 			return 0
 		}
 	}
@@ -1036,7 +1036,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				"compostite new secondary keys. Skipping docid:%s Error: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 			atomic.AddInt32(&mdb.numKeysSkipped, 1)
-			mdb.deleteSecArrayIndexNoTx(docid, workerId)
+			mdb.deleteSecArrayIndexNoTx(docid, workerId, false)
 			return 0
 		}
 		if int64(newbufLen) > atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval) {
@@ -1057,6 +1057,18 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 	nmut = 0
 
+	var mt MeteringTransaction
+	if mdb.EnableMetering() {
+		mt = mdb.meteringMgr.StartMeteringTxn(mdb.GetBucketName(), "") // Write metering is not accounted at user level
+		defer func() {
+			if abortErr == nil {
+				mt.Commit()
+			} else {
+				mt.Abort()
+			}
+		}()
+	}
+
 	rollbackDeletes := func(upto int) {
 		for i := 0; i <= upto; i++ {
 			item := indexEntriesToBeDeleted[i]
@@ -1070,10 +1082,6 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 					addKeySizeStat(mdb.idxStats, len(entry))
 					mdb.idxStats.arrItemsCount.Add(int64(oldKeyCount[i]))
-					if mdb.meteringMgr != nil {
-						bucket := mdb.idxDefn.Bucket
-						mdb.meteringMgr.RefundWriteUnits(bucket, uint64(len(docid)+entry.lenKey()))
-					}
 				}
 			}
 		}
@@ -1093,10 +1101,6 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
 					subtractKeySizeStat(mdb.idxStats, entrySz)
 					mdb.idxStats.arrItemsCount.Add(0 - int64(newKeyCount[i]))
-					if mdb.meteringMgr != nil {
-						bucket := mdb.idxDefn.Bucket
-						mdb.meteringMgr.RefundWriteUnits(bucket, uint64(len(docid)+entry.lenKey()))
-					}
 				}
 			}
 		}
@@ -1107,14 +1111,14 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
-			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
-				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], nil, szConf); err != nil {
+			if keyToBeDeleted, abortErr = GetIndexEntryBytes3(item, docid, false, false,
+				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], nil, szConf); abortErr != nil {
 				rollbackDeletes(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
-					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), abortErr)
 				atomic.AddInt32(&mdb.numKeysSkipped, 1)
-				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId, false)
 				return 0
 			}
 			keyDelSz := len(keyToBeDeleted)
@@ -1128,9 +1132,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				subtractKeySizeStat(mdb.idxStats, keyDelSz)
 				atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 				mdb.idxStats.arrItemsCount.Add(0 - int64(oldKeyCount[i]))
-				if mdb.meteringMgr != nil {
-					bucket := mdb.idxDefn.Bucket
-					mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false)
+				if mdb.EnableMetering() {
+					secIdxEntry, _ := BytesToSecondaryIndexEntry(keyToBeDeleted)
+					secIdxEntryLen := secIdxEntry.lenKey() + secIdxEntry.lenDocId()
+					mt.AddIndexWrite(uint64(secIdxEntryLen), false)
 				}
 			}
 			nmut++
@@ -1142,15 +1147,15 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), szConf.allowLargeKeys)
-			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
-				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta, szConf); err != nil {
+			if keyToBeAdded, abortErr = GetIndexEntryBytes2(item, docid, false, false,
+				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta, szConf); abortErr != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
 				rollbackAdds(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
-					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), abortErr)
 				atomic.AddInt32(&mdb.numKeysSkipped, 1)
-				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId, false)
 				return 0
 			}
 
@@ -1163,9 +1168,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
 				mdb.idxStats.arrItemsCount.Add(int64(newKeyCount[i]))
-				if mdb.meteringMgr != nil {
-					bucket := mdb.idxDefn.Bucket
-					mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(keyToBeAdded)), false)
+				if mdb.EnableMetering() {
+					secIdxEntry, _ := BytesToSecondaryIndexEntry(keyToBeAdded)
+					secIdxEntryLen := secIdxEntry.lenKey() + secIdxEntry.lenDocId()
+					mt.AddIndexWrite(uint64(secIdxEntryLen), false)
 				}
 			}
 
@@ -1196,16 +1202,16 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		//convert to storage format
 		if mdb.idxDefn.Desc != nil {
-			_, err = jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
-			if err != nil {
+			_, abortErr = jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
+			if abortErr != nil {
 				// If error From ReverseCollate here, rollback adds, rollback deletes,
 				// skip mutation, log and delete old key
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
 				rollbackAdds(len(indexEntriesToBeAdded) - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v."+
 					"Error from ReverseCollate of new key. Skipping docid:%s Error: %v",
-					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), abortErr)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId, false)
 				return 0
 			}
 		}
@@ -1258,7 +1264,7 @@ func (mdb *plasmaSlice) delete2(docid []byte, workerId int, meterDelete bool) in
 	} else if !mdb.idxDefn.IsArrayIndex {
 		nmut, _ = mdb.deleteSecIndex(docid, nil, workerId, meterDelete)
 	} else {
-		nmut = mdb.deleteSecArrayIndex(docid, workerId)
+		nmut = mdb.deleteSecArrayIndex(docid, workerId, meterDelete)
 	}
 
 	mdb.logWriterStat()
@@ -1356,7 +1362,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 	return 1, true
 }
 
-func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
+func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int, meterDelete bool) (nmut int) {
 
 	mdb.back[workerId].Begin()
 	defer mdb.back[workerId].End()
@@ -1364,10 +1370,10 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	mdb.main[workerId].Begin()
 	defer mdb.main[workerId].End()
 
-	return mdb.deleteSecArrayIndexNoTx(docid, workerId)
+	return mdb.deleteSecArrayIndexNoTx(docid, workerId, meterDelete)
 }
 
-func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmut int) {
+func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, meterDelete bool) (nmut int) {
 	var olditm []byte
 	var err error
 
@@ -1431,7 +1437,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 
-			if mdb.meteringMgr != nil {
+			if meterDelete && mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
 				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false)
 			}
