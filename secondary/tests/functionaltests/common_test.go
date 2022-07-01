@@ -558,13 +558,22 @@ func getscanscount(id string, body map[string]interface{}) (int, error) {
 	return 0, nil
 }
 
+// makeurl makes a URL to call a REST API on an arbitrary Index node. If there are no Index nodes,
+// it returns an error.
 func makeurl(path string) (string, error) {
 	indexers, _ := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
 	if len(indexers) == 0 {
 		return "", fmt.Errorf("no indexer node")
 	}
+	return makeUrlForIndexNode(indexers[0], path), nil
+}
+
+// makeUrlForIndexNode makes a URL to call a REST API on a specific Index node.
+//   nodeAddr - ipAddr:port of the target Index node
+//   path - REST API path portion of the URL, including leading /
+func makeUrlForIndexNode(nodeAddr string, path string) string {
 	return fmt.Sprintf("http://%s:%s@%v%v",
-		clusterconfig.Username, clusterconfig.Password, indexers[0], path), nil
+		clusterconfig.Username, clusterconfig.Password, nodeAddr, path)
 }
 
 func restful_checkstatus(status string) bool {

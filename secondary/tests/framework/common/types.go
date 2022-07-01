@@ -1,6 +1,9 @@
 package common
 
-import n1ql "github.com/couchbase/query/value"
+import (
+	"github.com/couchbase/cbauth/service"
+	n1ql "github.com/couchbase/query/value"
+)
 import "github.com/couchbase/indexing/secondary/common"
 
 // A map that holds response results from 2i Scan APIs as well as from JSON document scan
@@ -64,7 +67,20 @@ type IndexStatus struct {
 	LastScanTime string             `json:"lastScanTime,omitempty"`
 }
 
+// IndexStatusResponse is a copy of the same type from generic_service_manager.go, as the tests
+// won't build if they try to import the indexer package (e.g. sigar code won't build).
 type IndexStatusResponse struct {
-	Code   string        `json:"code"`
-	Status []IndexStatus `json:"status"`
+	Version     uint64        `json:"version,omitempty"`
+	Code        string        `json:"code,omitempty"`
+	Error       string        `json:"error,omitempty"`
+	FailedNodes []string      `json:"failedNodes,omitempty"`
+	Status      []IndexStatus `json:"status,omitempty"`
+}
+
+// GetTaskListResponse is a copy of the same type from generic_service_manager.go, as the tests
+// won't build if they try to import the indexer package (e.g. sigar code won't build).
+type GetTaskListResponse struct {
+	Code     string            `json:"code,omitempty"`
+	Error    string            `json:"error,omitempty"`
+	TaskList *service.TaskList `json:"taskList,omitempty"`
 }

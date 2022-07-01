@@ -5,6 +5,7 @@
 // in that file, in accordance with the Business Source License, use of this
 // software will be governed by the Apache License, Version 2.0, included in
 // the file licenses/APL2.txt.
+
 package indexer
 
 import (
@@ -12,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/manager"
 	"io"
 	"math"
 	"net"
@@ -33,6 +33,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
@@ -203,14 +204,15 @@ type constraints struct {
 // requestHandlerContext defines state for the HTTP(S) server created by RegisterRequestHandler.
 //
 type requestHandlerContext struct {
-	initializer sync.Once             // HTTP(S) custom initialization at startup
-	finalizer   sync.Once             // cleanup at HTTP(S) server shutdown
-	mgr         *manager.IndexManager // parent
-	config      common.Config         // config settings map
-	clusterUrl  string                // this node's full URL
-	hostname    string                // this node's host:httpPort
-	hostKey     string                // this node's mem+disk cache key
-	eTagPeriod  time.Duration         // for computing ETag expiries on rounded time boundaries
+	initializer sync.Once // HTTP(S) custom initialization at startup
+	finalizer   sync.Once // cleanup at HTTP(S) server shutdown
+
+	mgr        *manager.IndexManager // parent
+	config     common.Config         // config settings map
+	clusterUrl string                // this node's full URL
+	hostname   string                // this node's host:httpPort
+	hostKey    string                // this node's mem+disk cache key
+	eTagPeriod time.Duration         // for computing ETag expiries on rounded time boundaries
 
 	// Current ETag info for /getIndexStatus global results
 	getIndexStatusETag       uint64       // current valid checksum of cached getIndexStatus full results
@@ -239,6 +241,7 @@ var handlerContext requestHandlerContext
 // will receive requests and call their handler functions. It is created as a singleton as part of
 // NewIndexer flow (idx.initHTTP -> initHTTPMux --> idx.clustMgrAgent.RegisterRestEndpoints).
 func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, config common.Config) {
+
 	handlerContext.initializer.Do(func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -279,9 +282,11 @@ func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, confi
 		mux.HandleFunc("/postScheduleCreateRequest", handlerContext.handleScheduleCreateRequest)
 		mux.HandleFunc("/getInternalVersion", handlerContext.handleInternalVersionRequest)
 
+		// Create cache for getIndexStatus results
 		cacheDir := path.Join(config["storage_dir"].String(), "cache")
 		handlerContext.rhc = NewRequestHandlerCache(cacheDir)
 
+		// Misc other configurations
 		handlerContext.schedTokenMon = newSchedTokenMonitor(mgr)
 		handlerContext.useGreedyPlanner = config["planner.useGreedyPlanner"].Bool()
 	})
@@ -3423,9 +3428,10 @@ func BucketRequestHandler(w http.ResponseWriter, r *http.Request, creds cbauth.C
 	handlerContext.bucketReqHandler(w, r, creds)
 }
 
-//
-// Schedule tokens
-//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// rhSchedTokenMonitor class for scheduled DDL metakv token monitoring and handling.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 type rhSchedTokenMonitor struct {
 	indexes   []*IndexStatus
 	listener  *mc.CommandListener
@@ -3466,6 +3472,7 @@ func newSchedTokenMonitor(mgr *manager.IndexManager) *rhSchedTokenMonitor {
 	defer s.cinfoLock.Unlock()
 	s.cinfo = cinfo
 
+	// Listen perpetually for and handle creation and changes of DDL tokens in metakv.
 	s.listener.ListenTokens()
 
 	return s

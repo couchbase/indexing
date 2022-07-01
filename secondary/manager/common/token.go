@@ -1541,6 +1541,9 @@ func (m *CommandListener) AddDeletedScheduleCreateTokenNoLock(path string) {
 	m.schedTokensDel[path] = true
 }
 
+// ListenTokens perpetually listens (in RunObserveChildren) for creation of and changes to DDL
+// tokens in metakv. RunObserveChildren will call the metaKVCallback function defined here for
+// each such event.
 func (m *CommandListener) ListenTokens() {
 
 	metaKVCallback := func(kve metakv.KVEntry) error {
