@@ -13,8 +13,10 @@ import (
 
 	c "github.com/couchbase/indexing/secondary/common"
 	nclient "github.com/couchbase/indexing/secondary/queryport/n1ql"
+	"github.com/couchbase/query/auth"
 	"github.com/couchbase/query/datastore"
 	"github.com/couchbase/query/errors"
+	"github.com/couchbase/query/tenant"
 	"github.com/couchbase/query/value"
 )
 
@@ -342,6 +344,30 @@ func (ctxt *perfContext) GetScanCap() int64 {
 
 func (ctxt *perfContext) MaxParallelism() int {
 	return 1
+}
+
+// RecordFtsRU added for Elixir
+func (ctxt *perfContext) RecordFtsRU(ru tenant.Unit) {
+}
+
+// RecordGsiRU added for Elixir
+func (ctxt *perfContext) RecordGsiRU(ru tenant.Unit) {
+}
+
+// RecordKvRU added for Elixir
+func (ctxt *perfContext) RecordKvRU(ru tenant.Unit) {
+}
+
+// RecordKvWU added for Elixir
+func (ctxt *perfContext) RecordKvWU(wu tenant.Unit) {
+}
+
+func (ctxt *perfContext) Credentials() *auth.Credentials {
+	return nil
+}
+
+func (ctxt *perfContext) GetReqDeadline() time.Time {
+	return time.Time{}
 }
 
 func skey2qkey(skey c.SecondaryKey) value.Values {

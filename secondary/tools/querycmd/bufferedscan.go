@@ -1,17 +1,23 @@
 package main
 
-import "fmt"
-import "time"
-import "log"
+import (
+	"fmt"
+	"log"
+	"time"
 
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/indexing/secondary/queryport/n1ql"
-import c "github.com/couchbase/indexing/secondary/common"
-import qparser "github.com/couchbase/query/expression/parser"
-import qexpr "github.com/couchbase/query/expression"
-import "github.com/couchbase/query/value"
-import "github.com/couchbase/query/errors"
-import "github.com/couchbase/query/datastore"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbase/indexing/secondary/queryport/n1ql"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/query/auth"
+	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/errors"
+	qexpr "github.com/couchbase/query/expression"
+	qparser "github.com/couchbase/query/expression/parser"
+	"github.com/couchbase/query/tenant"
+	"github.com/couchbase/query/value"
+)
 
 // backfill enable (2 KB)
 // * cap(ch) == 256 & limit 1,
@@ -185,6 +191,30 @@ func (ctxt *qcmdContext) Fatal(fatal errors.Error) {
 
 func (ctxt *qcmdContext) MaxParallelism() int {
 	return 1
+}
+
+// RecordFtsRU added for Elixir
+func (ctxt *qcmdContext) RecordFtsRU(ru tenant.Unit) {
+}
+
+// RecordGsiRU added for Elixir
+func (ctxt *qcmdContext) RecordGsiRU(ru tenant.Unit) {
+}
+
+// RecordKvRU added for Elixir
+func (ctxt *qcmdContext) RecordKvRU(ru tenant.Unit) {
+}
+
+// RecordKvWU added for Elixir
+func (ctxt *qcmdContext) RecordKvWU(wu tenant.Unit) {
+}
+
+func (ctxt *qcmdContext) Credentials() *auth.Credentials {
+	return nil
+}
+
+func (ctxt *qcmdContext) GetReqDeadline() time.Time {
+	return time.Time{}
 }
 
 func delay(n int) {
