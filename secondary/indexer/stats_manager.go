@@ -2894,7 +2894,7 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(200)
 		w.Write([]byte(""))
 		if s.meteringMgr != nil {
-			_ = s.meteringMgr.handler.WriteMetrics(w)
+			_ = s.meteringMgr.WriteMetrics(w)
 		}
 		return
 	}
@@ -2907,7 +2907,7 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(200)
 	w.Write(out)
 	if s.meteringMgr != nil {
-		_ = s.meteringMgr.handler.WriteMetrics(w)
+		_ = s.meteringMgr.WriteMetrics(w)
 	}
 }
 

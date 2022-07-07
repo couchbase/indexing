@@ -11,6 +11,7 @@
 package indexer
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/couchbase/cbauth/service"
@@ -166,6 +167,10 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 		return regulator.RefundUnits(ctx, units)
 	}
 	return err
+}
+
+func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
+	return m.handler.WriteMetrics(w)
 }
 
 func getCtx(bucket, user string) regulator.Ctx {

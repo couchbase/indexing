@@ -11,8 +11,10 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
+	"net/http"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type MeteringThrottlingMgr struct {
@@ -46,4 +48,8 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) error {
 	panic("MeteringManager::RecordReadUnits Not implemented for Community Edition")
 	return nil
+}
+
+func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
+	panic("MeteringManager::WriteMetrics Not implemented for Community Edition")
 }
