@@ -11,8 +11,10 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
+	"net/http"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type MeteringThrottlingMgr struct {
