@@ -47,3 +47,7 @@ func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint6
 	panic("MeteringManager::RecordReadUnits Not implemented for Community Edition")
 	return nil
 }
+
+func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
+	panic("MeteringManager::WriteMetrics Not implemented for Community Edition")
+}
