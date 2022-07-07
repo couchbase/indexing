@@ -11,7 +11,6 @@
 package indexer
 
 import (
-	"net/http"
 	"time"
 
 	"github.com/couchbase/cbauth/service"
@@ -23,7 +22,7 @@ import (
 )
 
 type MeteringThrottlingMgr struct {
-	handler   http.Handler
+	handler   regulator.StatsHttpHandler
 	config    common.ConfigHolder
 	supvCmdch MsgChannel //supervisor sends commands on this channel
 }

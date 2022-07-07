@@ -104,7 +104,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT indexer
-  GOVERSION 1.18.1)
+  GOVERSION 1.18.3)
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   DEPENDS proto-generated n1ql-yacc sigar
@@ -114,7 +114,7 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.18.1)
+  GOVERSION 1.18.3)
 
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   DEPENDS proto-generated n1ql-yacc
@@ -124,7 +124,7 @@ GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cb
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.18.1)
+  GOVERSION 1.18.3)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   DEPENDS proto-generated n1ql-yacc
@@ -134,7 +134,7 @@ GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cm
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.18.1)
+  GOVERSION 1.18.3)
 
 GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
   DEPENDS n1ql-yacc forestdb
@@ -144,4 +144,4 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
-  GOVERSION 1.18.1)
+  GOVERSION 1.18.3)
