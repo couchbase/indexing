@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/query/errors"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
+	"github.com/couchbase/query/tenant"
 	"github.com/couchbase/query/value"
 )
 
@@ -675,6 +676,12 @@ func gsiaggrtypeton1ql(gsiaggr c.AggrFuncType) datastore.AggregateType {
 	return datastore.AGG_COUNT
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// BEGIN testContext and its Query Context interface stubs
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// testContext is a mock of query/datastore/context.go's Context interface and thus implements stubs
+// of all methods in that interface.
 type testContext struct {
 	err error
 }
@@ -703,6 +710,26 @@ func (ctxt *testContext) MaxParallelism() int {
 func (ctxt *testContext) GetReqDeadline() time.Time {
 	return time.Time{}
 }
+
+// RecordFtsRU added for Elixir
+func (ctxt *testContext) RecordFtsRU(ru tenant.Unit) {
+}
+
+// RecordGsiRU added for Elixir
+func (ctxt *testContext) RecordGsiRU(ru tenant.Unit) {
+}
+
+// RecordKvRU added for Elixir
+func (ctxt *testContext) RecordKvRU(ru tenant.Unit) {
+}
+
+// RecordKvWU added for Elixir
+func (ctxt *testContext) RecordKvWU(wu tenant.Unit) {
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// END testContext and its Query Context interface stubs
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func WaitForIndexOnline(n1qlclient datastore.Indexer, indexName string, index datastore.Index) (datastore.Index, error) {
 

@@ -814,7 +814,7 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
 	if mdb.isPrimary {
 		nmut = mdb.insertPrimaryIndex(key, docid, workerId)
 	} else if len(key) == 0 {
-		nmut = mdb.delete2(docid, workerId)
+		nmut = mdb.delete2(docid, workerId, true)
 	} else {
 		if mdb.idxDefn.IsArrayIndex {
 			nmut = mdb.insertSecArrayIndex(key, docid, workerId, init, meta)
@@ -855,7 +855,8 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 	return 0
 }
 
-func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, init bool, meta *MutationMeta) int {
+func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
+	init bool, meta *MutationMeta) int {
 	t0 := time.Now()
 
 	var ndel int
@@ -865,7 +866,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 
 	// The docid does not exist if the doc is initialized for the first time
 	if !init {
-		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId); !changed {
+		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId,
+			false); !changed {
 			return 0
 		}
 	}
@@ -1215,18 +1217,18 @@ func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
 		atomic.AddInt64(&mdb.qCount, -1)
 	}()
 
-	return mdb.delete2(docid, workerId)
+	return mdb.delete2(docid, workerId, true)
 
 }
 
-func (mdb *plasmaSlice) delete2(docid []byte, workerId int) int {
+func (mdb *plasmaSlice) delete2(docid []byte, workerId int, meterDelete bool) int {
 
 	var nmut int
 
 	if mdb.isPrimary {
 		nmut = mdb.deletePrimaryIndex(docid, workerId)
 	} else if !mdb.idxDefn.IsArrayIndex {
-		nmut, _ = mdb.deleteSecIndex(docid, nil, workerId)
+		nmut, _ = mdb.deleteSecIndex(docid, nil, workerId, meterDelete)
 	} else {
 		nmut = mdb.deleteSecArrayIndex(docid, workerId)
 	}
@@ -1273,7 +1275,8 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	return 0
 }
 
-func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId int) (ndel int, changed bool) {
+func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
+	workerId int, meterDelete bool) (ndel int, changed bool) {
 
 	// Delete entry from back and main index if present
 	mdb.back[workerId].Begin()
@@ -1314,7 +1317,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 			itemDeleted = true
 		}
 
-		if mdb.meteringMgr != nil && itemDeleted == true {
+		if meterDelete && mdb.meteringMgr != nil && itemDeleted == true {
 			bucket := mdb.idxDefn.Bucket
 			keylen := getKeyLenFromEntry(entry)
 			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false)

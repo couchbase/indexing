@@ -3,6 +3,13 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"path"
+	"strings"
+	"testing"
+	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/queryport/n1ql"
@@ -13,15 +20,8 @@ import (
 	qerrors "github.com/couchbase/query/errors"
 	qexpr "github.com/couchbase/query/expression"
 	qparser "github.com/couchbase/query/expression/parser"
-
+	"github.com/couchbase/query/tenant"
 	//"github.com/couchbase/query/value"
-	"io/ioutil"
-	"log"
-	"os"
-	"path"
-	"strings"
-	"testing"
-	"time"
 )
 
 func TestBufferedScan_BackfillDisabled(t *testing.T) {
@@ -412,6 +412,22 @@ func (ctxt *qcmdContext) MaxParallelism() int {
 
 func (ctxt *qcmdContext) GetReqDeadline() time.Time {
 	return time.Time{}
+}
+
+// RecordFtsRU added for Elixir
+func (ctxt *qcmdContext) RecordFtsRU(ru tenant.Unit) {
+}
+
+// RecordGsiRU added for Elixir
+func (ctxt *qcmdContext) RecordGsiRU(ru tenant.Unit) {
+}
+
+// RecordKvRU added for Elixir
+func (ctxt *qcmdContext) RecordKvRU(ru tenant.Unit) {
+}
+
+// RecordKvWU added for Elixir
+func (ctxt *qcmdContext) RecordKvWU(wu tenant.Unit) {
 }
 
 func cleanbackfillFiles() {

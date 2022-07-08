@@ -59,7 +59,7 @@ func TestMissingLeadingKeyBasic(t *testing.T) {
 	kvutility.SetKeyValues(myDocs, bucket, "", clusterconfig.KVAddress)
 
 	// Create index with missing key
-	n1ql := "CREATE INDEX idx_vac ON default(vaccinated MISSING)"
+	n1ql := "CREATE INDEX idx_vac ON default(vaccinated INCLUDE MISSING)"
 	_, err := execN1QL(bucket, n1ql)
 	FailTestIfError(err, "Error in creating idx_vac with missing leading key", t)
 
@@ -88,7 +88,7 @@ func TestMissingLeadingKeyPartitioned(t *testing.T) {
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	// Create index with missing key
-	n1ql := "CREATE INDEX idx_doses_partn ON default(num_doses MISSING, vaccinated) PARTITION BY HASH(num_doses)"
+	n1ql := "CREATE INDEX idx_doses_partn ON default(num_doses INCLUDE MISSING, vaccinated) PARTITION BY HASH(num_doses)"
 	_, err := execN1QL(bucket, n1ql)
 	FailTestIfError(err, "Error in creating idx_vac with missing leading key", t)
 
