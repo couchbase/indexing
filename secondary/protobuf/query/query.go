@@ -1,10 +1,13 @@
 package protoQuery
 
-import "errors"
-import json "github.com/couchbase/indexing/secondary/common/json"
+import (
+	"errors"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/golang/protobuf/proto"
+	json "github.com/couchbase/indexing/secondary/common/json"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/golang/protobuf/proto"
+)
 
 // GetEntries implements queryport.client.ResponseReader{} method.
 func (r *ResponseStream) GetEntries(dataEncFmt c.DataEncodingFormat) (*c.ScanResultEntries, [][]byte, error) {
@@ -48,6 +51,10 @@ func (r *ResponseStream) Error() error {
 		}
 	}
 	return nil
+}
+
+func (r *ResponseStream) GetReadUnits() uint64 {
+	return 0
 }
 
 // GetEntries implements queryport.client.ResponseReader{} method.

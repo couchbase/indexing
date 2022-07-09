@@ -1,20 +1,23 @@
 package client
 
-import "errors"
-import "fmt"
-import "net"
-import "time"
-import "sync/atomic"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"sync/atomic"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/transport"
-import "github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/transport"
+	"github.com/golang/protobuf/proto"
 
-import "github.com/couchbase/cbauth"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import gometrics "github.com/rcrowley/go-metrics"
+	gometrics "github.com/rcrowley/go-metrics"
+)
 
 const (
 	CONN_RELEASE_INTERVAL      = 5  // Seconds. Don't change as long as go-metrics/ewma is being used.
@@ -158,8 +161,9 @@ func (cp *connectionPool) doAuth(conn *connection) error {
 
 	// Send Auth packet.
 	authReq := &protobuf.AuthRequest{
-		User: &user,
-		Pass: &pass,
+		User:          &user,
+		Pass:          &pass,
+		ClientVersion: proto.Uint32(uint32(common.INDEXER_CUR_VERSION)),
 	}
 
 	err = conn.pkt.Send(conn.conn, authReq)

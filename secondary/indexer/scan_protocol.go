@@ -10,11 +10,12 @@ package indexer
 
 import (
 	"encoding/binary"
+	"net"
+
 	"github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/golang/protobuf/proto"
-	"net"
 )
 
 type ScanResponseWriter interface {
@@ -23,7 +24,7 @@ type ScanResponseWriter interface {
 	Count(count uint64) error
 	RawBytes([]byte) error
 	Row(pk, sk []byte) error
-	Done() error
+	Done(readUnits uint64, clientVersion uint32) error
 	Helo() error
 }
 
@@ -152,7 +153,7 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 	return nil
 }
 
-func (w *protoResponseWriter) Done() error {
+func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32) error {
 	defer p.PutBlock(w.encBuf)
 	defer p.PutBlock(w.rowBuf)
 
@@ -162,6 +163,14 @@ func (w *protoResponseWriter) Done() error {
 		if err != nil {
 			return err
 		}
+	}
+
+	if clientVersion >= common.INDEXER_72_VERSION {
+		res := &protobuf.StreamEndResponse{
+			ReadUnits: proto.Uint64(readUnits),
+		}
+
+		return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 	}
 
 	return nil

@@ -36,6 +36,7 @@ import (
 	"github.com/couchbase/query/errors"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
+	"github.com/couchbase/query/tenant"
 	"github.com/couchbase/query/timestamp"
 	"github.com/couchbase/query/value"
 
@@ -1766,6 +1767,11 @@ func makeResponsehandler(
 	//    scatter/gather.
 	//
 	return func(data qclient.ResponseReader) bool {
+		if data.GetReadUnits() != 0 {
+			readUnits := data.GetReadUnits()
+			conn.RecordGsiRU(tenant.Unit(readUnits))
+		}
+
 		err := data.Error()
 		if err != nil {
 			conn.Error(n1qlError(client, err))

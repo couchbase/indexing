@@ -316,8 +316,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	r.keySzCfg = getKeySizeConfig(cfg)
 
-	// TODO: [ReadMetering] Get User from query and populate request
-
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
 		r.ScanType = HeloReq
@@ -379,6 +377,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.User = req.GetUser()
 		r.rollbackTime = req.GetRollbackTime()
 		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
@@ -438,6 +437,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.User = req.GetUser()
 		r.rollbackTime = req.GetRollbackTime()
 		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())

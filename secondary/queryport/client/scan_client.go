@@ -10,19 +10,23 @@
 
 package client
 
-import "errors"
-import "fmt"
-import "io"
-import "net"
-import "time"
-import json "github.com/couchbase/indexing/secondary/common/json"
-import "sync/atomic"
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/couchbase/indexing/secondary/transport"
-import "github.com/golang/protobuf/proto"
+	"sync/atomic"
+
+	"github.com/couchbase/indexing/secondary/common"
+	json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/transport"
+	"github.com/golang/protobuf/proto"
+)
 
 // GsiScanClient for scan operations.
 type GsiScanClient struct {
@@ -1352,8 +1356,10 @@ REQUEST_RESPONSE_RETRY:
 		healthy = false
 		return nil, err
 	} else if endResp != nil {
-		healthy = false
-		return nil, ErrorProtocol
+		if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+			healthy = false
+			return nil, ErrorProtocol
+		}
 	}
 	return resp, nil
 }
@@ -1397,34 +1403,38 @@ func (c *GsiScanClient) streamResponse(
 		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
-	} else {
-		if rsp, ok := resp.(*protobuf.AuthResponse); ok {
+	} else if ar, ok := resp.(*protobuf.AuthResponse); ok {
+		// When the cluster upgrade completes and the queryport starts supporting
+		// auth. See doRequestResponse for more details.
 
-			// When the cluster upgrade completes and the queryport starts supporting
-			// auth. See doRequestResponse for more details.
+		atomic.StoreUint32(c.needsAuth, uint32(1))
 
-			atomic.StoreUint32(c.needsAuth, uint32(1))
+		if ar.GetCode() == transport.AUTH_MISSING {
+			// Do not count this as a "retry"
+			logging.Infof("%v server needs authentication information. Retrying "+
+				"request with auth req(%v)", c.logPrefix, requestId)
+			// TODO: Update cluster version
 
-			if rsp.GetCode() == transport.AUTH_MISSING {
-				// Do not count this as a "retry"
-				logging.Infof("%v server needs authentication information. Retrying "+
-					"request with auth req(%v)", c.logPrefix, requestId)
-				// TODO: Update cluster version
-
-				// Perform authRetry only once.
-				if !authRetryOnce {
-					authRetry = true
-				}
-
-				return
+			// Perform authRetry only once.
+			if !authRetryOnce {
+				authRetry = true
 			}
-		}
 
-		streamResp := resp.(*protobuf.ResponseStream)
+			return
+		}
+	} else if streamResp, ok := resp.(*protobuf.ResponseStream); ok {
 		if err = streamResp.Error(); err == nil {
 			cont = callb(streamResp)
 		}
 		healthy = true
+	} else if ser, ok := resp.(*protobuf.StreamEndResponse); ok {
+		finish = true
+		logging.Tracef("%v req(%v) connection %q received StreamEndResponse", c.logPrefix, requestId, laddr)
+		callb(ser) // callback most likely return true
+		cont, healthy = false, true
+	} else {
+		cont, healthy = false, false
+		err = ErrorProtocol
 	}
 
 	if cont == false && healthy == true && finish == false {

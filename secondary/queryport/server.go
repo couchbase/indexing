@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 
@@ -26,13 +27,15 @@ import (
 // channel, until `quitch` is closed. When there are
 // no more response to post handler shall close `respch`.
 type RequestHandler func(
-	req interface{}, ctx interface{}, conn net.Conn, quitch <-chan bool)
+	req interface{}, ctx interface{}, conn net.Conn, quitch <-chan bool,
+	clientVersion uint32)
 
 type ConnectionHandler func() interface{}
 
 type request struct {
-	r      interface{}
-	quitch chan bool
+	r         interface{}
+	quitch    chan bool
+	clientVer uint32
 }
 
 var Ping *request = &request{}
@@ -263,7 +266,7 @@ func (s *Server) enforceAuth(raddr string) bool {
 	return false
 }
 
-func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
+func (s *Server) doAuth(conn net.Conn) (interface{}, uint32, error) {
 
 	// TODO: Some code deduplication with doReveive can be done.
 	raddr := conn.RemoteAddr().String()
@@ -283,7 +286,7 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 
 	reqMsg, err := rpkt.Receive(conn)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Reset read deadline
@@ -299,7 +302,7 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 		logging.Infof("%v connection %q doAuth() authentication is missing", s.logPrefix, raddr)
 
 		if !s.enforceAuth(raddr) {
-			return reqMsg, nil
+			return reqMsg, 0, nil
 		}
 
 		code = transport.AUTH_MISSING
@@ -325,21 +328,21 @@ func (s *Server) doAuth(conn net.Conn) (interface{}, error) {
 
 	err = rpkt.Send(conn, resp)
 	if err != nil {
-		return nil, err
+		return nil, req.GetClientVersion(), err
 	}
 
 	if authErr == nil {
 		logging.Verbosef("%v connection %q auth successful", s.logPrefix, raddr)
 	}
 
-	return nil, authErr
+	return nil, req.GetClientVersion(), authErr
 }
 
 // handle connection request. connection might be kept open in client's
 // connection pool.
 func (s *Server) handleConnection(conn net.Conn) {
 
-	req, err := s.doAuth(conn)
+	req, clientVersion, err := s.doAuth(conn)
 	if err != nil {
 		// On authentication error, just close the connection. Client
 		// will try with a new connection by sending AuthRequest.
@@ -382,8 +385,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	for req := range rcvch {
-		s.callb(req.r, ctx, conn, req.quitch) // blocking call
-		if req.r != Ping {
+		s.callb(req.r, ctx, conn, req.quitch, clientVersion) // blocking call
+		if clientVersion < common.INDEXER_72_VERSION && req.r != Ping {
 			transport.SendResponseEnd(conn)
 		}
 	}
