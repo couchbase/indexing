@@ -41,7 +41,7 @@ type Slice interface {
 	UpdateConfig(common.Config)
 
 	IndexWriter
-	GetReaderContext() IndexReaderContext
+	GetReaderContext(user string) IndexReaderContext
 
 	RecoveryDone()
 }
@@ -66,4 +66,15 @@ func (ctx *cursorCtx) SetCursorKey(cur *[]byte) {
 
 func (ctx *cursorCtx) GetCursorKey() *[]byte {
 	return ctx.cursor
+}
+
+func (ctx *cursorCtx) ReadUnits() uint64 {
+	return 0
+}
+
+func (ctx *cursorCtx) RecordReadUnits(byteLen uint64) {
+}
+
+func (ctx *cursorCtx) User() string {
+	return ""
 }

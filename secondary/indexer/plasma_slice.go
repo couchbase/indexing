@@ -547,9 +547,24 @@ func (slice *plasmaSlice) initStores() error {
 	return err
 }
 
+func (s *plasmaSlice) GetBucketName() string {
+	return s.idxDefn.Bucket
+}
+
+func (s *plasmaSlice) GetScopeName() string {
+	return s.idxDefn.Scope
+}
+
+func (s *plasmaSlice) EnableMetering() bool {
+	return (s.meteringMgr != nil) && // Don't meter when not in serverless
+		(s.GetScopeName() != common.SYSTEM_SCOPE) // Don't meter CBO Scans
+}
+
 type plasmaReaderCtx struct {
-	ch chan *plasma.Reader
-	r  *plasma.Reader
+	ch        chan *plasma.Reader
+	r         *plasma.Reader
+	readUnits uint64
+	user      string
 	cursorCtx
 }
 
@@ -569,9 +584,22 @@ func (ctx *plasmaReaderCtx) Done() {
 	}
 }
 
-func (mdb *plasmaSlice) GetReaderContext() IndexReaderContext {
+func (ctx *plasmaReaderCtx) ReadUnits() uint64 {
+	return ctx.readUnits
+}
+
+func (ctx *plasmaReaderCtx) RecordReadUnits(ru uint64) {
+	ctx.readUnits += ru
+}
+
+func (ctx *plasmaReaderCtx) User() string {
+	return ctx.user
+}
+
+func (mdb *plasmaSlice) GetReaderContext(user string) IndexReaderContext {
 	return &plasmaReaderCtx{
-		ch: mdb.readers,
+		ch:   mdb.readers,
+		user: user,
 	}
 }
 
@@ -2864,6 +2892,13 @@ func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) 
 	if s.slice.idxStats.useArrItemsCount {
 		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
 	}
+	enableMetering := s.slice.EnableMetering()
+	if enableMetering {
+		bytesScanned := 8
+		ru, _ := s.slice.meteringMgr.RecordReadUnits(s.slice.GetBucketName(),
+			ctx.User(), uint64(bytesScanned))
+		ctx.RecordReadUnits(ru)
+	}
 	return uint64(s.MainSnap.Count()), nil
 }
 
@@ -3055,6 +3090,25 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
+	var mt MeteringTransaction
+
+	enableMetering := s.slice.EnableMetering()
+	if enableMetering {
+		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User())
+		defer func() {
+			var ru uint64
+			unitSlice, e := mt.Commit()
+			if e != nil {
+				// TODO: Add logging without flooding
+				return
+			}
+			for _, u := range unitSlice {
+				ru += u.Whole()
+			}
+			ctx.RecordReadUnits(ru)
+		}()
+	}
+
 	// Snapshot became invalid due to rollback
 	if err == plasma.ErrInvalidSnapshot {
 		return ErrIndexRollback
@@ -3090,6 +3144,10 @@ loop:
 	for it.Valid() {
 		itm := it.Key()
 		s.newIndexEntry(itm, &entry)
+
+		if enableMetering {
+			mt.AddIndexRead(uint64(entry.MeteredByteLen()))
+		}
 
 		// Iterator has reached past the high key, no need to scan further
 		if cmpFn(high, entry) <= 0 {

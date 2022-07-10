@@ -446,6 +446,9 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	// Do the scan
 	s.processRequest(req, w, is, t0)
 
+	// TODO: [ReadMetering] return readUnits to query
+	// readUnits = req.GetReadUnits()
+
 	if len(req.Ctxs) != 0 {
 		for _, ctx := range req.Ctxs {
 			ctx.Done()
@@ -1381,8 +1384,9 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 // Find and return data structures for the specified index
 // This will also return the IndexReaderContext for each partition.  IndexReaderContext must
 // be returned in the same order as partitionIds.
-func (s *scanCoordinator) findIndexInstance(
-	defnID uint64, partitionIds []common.PartitionId) (*common.IndexInst, []IndexReaderContext, error) {
+func (s *scanCoordinator) findIndexInstance(defnID uint64,
+	partitionIds []common.PartitionId, user string) (
+	*common.IndexInst, []IndexReaderContext, error) {
 
 	hasIndex := false
 	isPartition := false
@@ -1410,7 +1414,7 @@ func (s *scanCoordinator) findIndexInstance(
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
-						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext()
+						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user)
 					} else {
 						found = false
 						missing[inst.InstId] = append(missing[inst.InstId], partnId)
