@@ -136,15 +136,15 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	return CheckResultError, time.Duration(0), err
 }
 
-func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) error {
+func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) (uint64, error) {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
 	units, err := metering.IndexReadToRCU(bytes)
 	if err == nil {
 		ctx := getCtx(bucket, user)
-		return regulator.RecordUnits(ctx, units)
+		return units.Whole(), regulator.RecordUnits(ctx, units)
 	}
-	return err
+	return 0, err
 }
 
 func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool) error {
@@ -171,6 +171,13 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 
 func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 	return m.handler.WriteMetrics(w)
+}
+
+type MeteringTransaction regulator.TransactionalRecorder
+
+func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string) MeteringTransaction {
+	ctx := getCtx(bucketName, user)
+	return regulator.BeginTransaction(ctx)
 }
 
 func getCtx(bucket, user string) regulator.Ctx {

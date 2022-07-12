@@ -132,6 +132,8 @@ const DEFAULT_COLLECTION = "_default"
 const DEFAULT_SCOPE_ID = "0"
 const DEFAULT_COLLECTION_ID = "0"
 
+const SYSTEM_SCOPE = "_system"
+
 const NON_PARTITION_ID = PartitionId(0)
 
 var NULL = []byte("null")

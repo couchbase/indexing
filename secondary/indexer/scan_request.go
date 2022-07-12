@@ -114,6 +114,8 @@ type ScanRequest struct {
 
 	dataEncFmt common.DataEncodingFormat
 	keySzCfg   keySizeConfig
+
+	User string // For read metering
 }
 
 type Projection struct {
@@ -305,6 +307,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	}
 
 	r.keySzCfg = getKeySizeConfig(cfg)
+
+	// TODO: [ReadMetering] Get User from query and populate request
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -1189,7 +1193,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	var indexInst *common.IndexInst
 
 	stats := r.sco.stats.Get()
-	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds)
+	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds, r.User)
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -1782,6 +1786,15 @@ func compileN1QLExpression(expr string) (expression.Expression, error) {
 	}
 	return cExpr, nil
 
+}
+
+func (req *ScanRequest) GetReadUnits() (ru uint64) {
+	if len(req.Ctxs) != 0 {
+		for _, ctx := range req.Ctxs {
+			ru += ctx.ReadUnits()
+		}
+	}
+	return
 }
 
 /////////////////////////////////////////////////////////////////////////

@@ -16,6 +16,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	"github.com/couchbase/query/auth"
 	"github.com/couchbase/query/datastore"
 	qerrors "github.com/couchbase/query/errors"
 	qexpr "github.com/couchbase/query/expression"
@@ -428,6 +429,10 @@ func (ctxt *qcmdContext) RecordKvRU(ru tenant.Unit) {
 
 // RecordKvWU added for Elixir
 func (ctxt *qcmdContext) RecordKvWU(wu tenant.Unit) {
+}
+
+func (ctxt *qcmdContext) Credentials() *auth.Credentials {
+	return nil
 }
 
 func cleanbackfillFiles() {

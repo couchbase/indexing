@@ -15,6 +15,7 @@ import (
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	nclient "github.com/couchbase/indexing/secondary/queryport/n1ql"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/query/auth"
 	"github.com/couchbase/query/datastore"
 	"github.com/couchbase/query/errors"
 	"github.com/couchbase/query/expression"
@@ -725,6 +726,10 @@ func (ctxt *testContext) RecordKvRU(ru tenant.Unit) {
 
 // RecordKvWU added for Elixir
 func (ctxt *testContext) RecordKvWU(wu tenant.Unit) {
+}
+
+func (ctxt *testContext) Credentials() *auth.Credentials {
+	return nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

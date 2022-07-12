@@ -54,6 +54,7 @@ type IndexEntry interface {
 	Count() int
 	Bytes() []byte
 	String() string
+	MeteredByteLen() int
 }
 
 // Generic index key abstraction (primary or secondary)
@@ -104,6 +105,10 @@ func (e *primaryIndexEntry) Bytes() []byte {
 
 func (e *primaryIndexEntry) String() string {
 	return string(*e)
+}
+
+func (e *primaryIndexEntry) MeteredByteLen() int {
+	return len([]byte(*e))
 }
 
 // Storage encoding for secondary index entry
@@ -210,6 +215,10 @@ func (e *secondaryIndexEntry) lenKey() int {
 		return len(*e) - e.lenDocId() - 4
 	}
 	return len(*e) - e.lenDocId() - 2
+}
+
+func (e *secondaryIndexEntry) MeteredByteLen() int {
+	return e.lenKey() + e.lenDocId()
 }
 
 func (e *secondaryIndexEntry) isCountEncoded() bool {

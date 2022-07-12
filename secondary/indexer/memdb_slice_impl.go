@@ -1750,7 +1750,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	}
 }
 
-func (mdb *memdbSlice) GetReaderContext() IndexReaderContext {
+func (mdb *memdbSlice) GetReaderContext(user string) IndexReaderContext {
 	return &cursorCtx{}
 }
 
