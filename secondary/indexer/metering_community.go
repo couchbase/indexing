@@ -47,16 +47,32 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 
 func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) (uint64, error) {
 	panic("MeteringManager::RecordReadUnits Not implemented for Community Edition")
-	return nil
+	return 0, nil
 }
 
 func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 	panic("MeteringManager::WriteMetrics Not implemented for Community Edition")
 }
 
-type MeteringTransaction regulator.TransactionalRecorder
+type Units struct {
+}
+
+func (u *Units) Whole() uint64 {
+	return 0
+}
+
+type MeteringTransaction struct {
+}
+
+func (mt *MeteringTransaction) AddIndexRead(bytes uint64) error {
+	return nil
+}
+
+func (mt *MeteringTransaction) Commit() ([]Units, error) {
+	return []Units{}, nil
+}
 
 func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string) MeteringTransaction {
 	panic("MeteringManager::StartMeteringTxn Not implemented for Community Edition")
-	return nil
+	return MeteringTransaction{}
 }
