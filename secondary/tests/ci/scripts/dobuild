@@ -123,6 +123,8 @@ cd $WORKSPACE/testrunner
 echo "Switching testrunner to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+git submodule init
+git submodule update --init --force --remote
 note_version testrunner $WORKSPACE/testrunner
 
 > ~/gerrit.list
