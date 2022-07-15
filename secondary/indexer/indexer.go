@@ -4724,9 +4724,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
+	useOSOForMagma := idx.useOSOForMagmaStorage(buildStream, keyspaceId)
+
 	if enableOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
-		buildStream == common.INIT_STREAM {
+		buildStream == common.INIT_STREAM &&
+		useOSOForMagma {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -4784,7 +4787,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.initBuildTsLock(buildStream, keyspaceId)
+	mutex := idx.loadOrStoreBuildTsLock(buildStream, keyspaceId)
 
 	stopCh := make(StopChannel)
 
@@ -4825,7 +4828,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//if there is a failover after this, it will be observed as a rollback
 
 					// Asyncronously compute the KV timestamp
-					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream)
+					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream, mutex)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
 						streamId:   buildStream,
@@ -6572,11 +6575,14 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		allowOSO = true
 	}
 
+	useOSOForMagma := idx.useOSOForMagmaStorage(streamId, keyspaceId)
+
 	enableOSO := idx.config["build.enableOSO"].Bool()
 	if enableOSO &&
 		allowOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
-		streamId == common.INIT_STREAM {
+		streamId == common.INIT_STREAM &&
+		useOSOForMagma {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -6649,7 +6655,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.initBuildTsLock(streamId, keyspaceId)
+	mutex := idx.loadOrStoreBuildTsLock(streamId, keyspaceId)
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -6737,7 +6743,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 					if streamId == common.INIT_STREAM {
 						// Asyncronously compute the KV timestamp
-						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId)
+						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId, mutex)
 					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
@@ -9267,7 +9273,7 @@ func dumpMemProfile(filename string) bool {
 }
 
 func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
-	keyspaceId string, cid string, numVb int, streamId common.StreamId) {
+	keyspaceId string, cid string, numVb int, streamId common.StreamId, mutex *sync.Mutex) {
 
 	// Acquire the buildTsLock
 	// The buildTsLock is per bucket per stream lock. It serves two purposes:
@@ -9276,7 +9282,6 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 	//     buildTs computed later by another go-routine
 	// (ii) Incase of any issues with KV, it prevents multiple go-routines to
 	//      flood the logs with error messages while fetching the KVT's
-	mutex := idx.buildTsLock[streamId][keyspaceId]
 	mutex.Lock()
 	defer mutex.Unlock()
 
@@ -10006,13 +10011,16 @@ func (idx *indexer) getMinMergeTsForCatchup(streamId common.StreamId,
 	return nil
 }
 
-func (idx *indexer) initBuildTsLock(streamId common.StreamId, keyspaceId string) {
+func (idx *indexer) loadOrStoreBuildTsLock(streamId common.StreamId, keyspaceId string) (mutex *sync.Mutex) {
 	if _, ok := idx.buildTsLock[streamId]; !ok {
 		idx.buildTsLock[streamId] = make(map[string]*sync.Mutex)
 	}
-	if _, ok := idx.buildTsLock[streamId][keyspaceId]; !ok {
-		idx.buildTsLock[streamId][keyspaceId] = &sync.Mutex{}
+	mutex, ok := idx.buildTsLock[streamId][keyspaceId]
+	if !ok {
+		mutex = new(sync.Mutex)
+		idx.buildTsLock[streamId][keyspaceId] = mutex
 	}
+	return mutex
 }
 
 //sessionId helper functions. these functions can only be called from the genserver
@@ -10644,4 +10652,38 @@ func (idx *indexer) deleteFromInstsPerCollMap(indexList []common.IndexInst) {
 		}
 	}
 	logging.Verbosef("Indexer::deleteFromInstsPerCollMap: %v", idx.instsPerColl)
+}
+
+//useOSOForMagmaStorage checks if the input keyspaceId is of magma storage
+//type and enables OSO only for non-default scope/collection in that case.
+func (idx *indexer) useOSOForMagmaStorage(streamId common.StreamId, keyspaceId string) bool {
+
+	const _useOSOForMagmaStorage = "Indexer::useOSOForMagmaStorage:"
+
+	if streamId == common.MAINT_STREAM {
+		//OSO is only used for INIT_STREAM
+		return false
+	}
+
+	useOSO := true
+	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+
+	idx.cinfoProviderLock.RLock()
+	isMagmaStorage, err := idx.cinfoProvider.IsMagmaStorage(bucket)
+	idx.cinfoProviderLock.RUnlock()
+	if err != nil {
+		logging.Errorf("%v %v %v. Unable to check bucket storage backend err %v", _useOSOForMagmaStorage,
+			streamId, keyspaceId, err)
+		//use OSO if bucket storage type cannot be determined
+	} else if isMagmaStorage {
+		//OSO for magma is enabled only for non-default collections (MB-52857)
+		if (scope == "" || scope == common.DEFAULT_SCOPE) &&
+			(collection == "" || collection == common.DEFAULT_COLLECTION) {
+			logging.Infof("%v %v %v. OSO not supported for default scope/collection with Magma bucket.", _useOSOForMagmaStorage, streamId, keyspaceId)
+			useOSO = false
+		}
+	}
+
+	return useOSO
+
 }

@@ -120,9 +120,14 @@ git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version gometa $WORKSPACE/goproj/src/github.com/couchbase/gometa
 
 cd $WORKSPACE/testrunner
+mkdir -p gauntlet
+mkdir -p java_sdk_client
+mkdir -p lib/capellaAPI
 echo "Switching testrunner to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+git submodule init
+git submodule update --init --force --remote
 note_version testrunner $WORKSPACE/testrunner
 
 > ~/gerrit.list
