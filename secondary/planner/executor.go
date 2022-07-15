@@ -1633,12 +1633,18 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 //ExecutePlan2 is the entry point for tenant aware planner
 //for integration with metadata provider.
 func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
-	usageThreshold *UsageThreshold) (*Solution, error) {
+	usageThreshold *UsageThreshold, serverlessIndexLimit uint32) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout "+
 			"from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	numIndexes := GetNumIndexesPerBucket(plan, indexSpec.Bucket)
+	if numIndexes >= serverlessIndexLimit {
+		errMsg := fmt.Sprintf("%v Limit : %v", common.ErrIndexBucketLimitReached.Error(), serverlessIndexLimit)
+		return nil, errors.New(errMsg)
 	}
 
 	if err = verifyDuplicateIndex(plan, []*IndexSpec{indexSpec}); err != nil {
@@ -1649,6 +1655,22 @@ func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
 
 	return solution, err
 
+}
+
+func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
+	var numIndexes uint32 = 0
+	indexSet := make(map[common.IndexDefnId]bool)
+	for _, indexernode := range plan.Placement {
+		for _, index := range indexernode.Indexes {
+			if index.Bucket == Bucket {
+				if _, found := indexSet[index.DefnId]; !found {
+					indexSet[index.DefnId] = true
+					numIndexes = numIndexes + 1
+				}
+			}
+		}
+	}
+	return numIndexes
 }
 
 //executeTenantAwarePlan implements the tenant aware planning logic based on

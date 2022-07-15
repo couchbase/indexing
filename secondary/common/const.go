@@ -83,6 +83,7 @@ var ErrBucketAlreadyExist = errors.New("Bucket Already Present")
 var ErrUnInitializedClusterInfo = errors.New("uninitialized clusterInfo")
 var ErrPlannerMaxResourceUsageLimit = errors.New("Max Node Resource Usage Limit Reached.")
 var ErrPlannerConstraintViolation = errors.New("Planner Constraint Violation.")
+var ErrIndexBucketLimitReached = errors.New("Limit for number of indexes that can be created per bucket has been reached.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,

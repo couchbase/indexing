@@ -62,6 +62,7 @@ type Settings interface {
 	UseGreedyPlanner() bool
 	MemHighThreshold() int32
 	MemLowThreshold() int32
+	ServerlessIndexLimit() uint32
 }
 
 ///////////////////////////////////////////////////////
@@ -425,6 +426,15 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	clusterVersion := o.GetClusterVersion()
+	if c.IsServerlessDeployment() {
+		serverlessIndexLimit := o.settings.ServerlessIndexLimit()
+		numIndexes := o.GetNumIndexesPerBucket(bucket)
+		if numIndexes >= serverlessIndexLimit {
+			errMsg := fmt.Sprintf("%v Limit : %v", c.ErrIndexBucketLimitReached.Error(), serverlessIndexLimit)
+			return c.IndexDefnId(0), errors.New(errMsg), false
+		}
+	}
+
 	enforceLimits := false
 	if clusterVersion >= c.INDEXER_71_VERSION {
 		enforceLimits, err = o.limitsCfg.EnforceLimits()
@@ -497,6 +507,18 @@ func (o *MetadataProvider) GetIndexScopeLimit(bucket, scope string) (uint32, err
 	defer cinfo.Unlock()
 	cinfo.SetUserAgent("Client:Metadata_provider:GetIndexScopeLimit")
 	return cinfo.GetIndexScopeLimit(bucket, scope)
+}
+
+func (o *MetadataProvider) GetNumIndexesPerBucket(bucket string) uint32 {
+	o.mutex.RLock()
+	defer o.mutex.RUnlock()
+	var numIndexes uint32 = 0
+	for _, metadata := range o.repo.indices {
+		if metadata.Definition.Bucket == bucket {
+			numIndexes = numIndexes + 1
+		}
+	}
+	return numIndexes
 }
 
 //
@@ -1263,7 +1285,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		enforceLimits = false
 	}
 
-	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits {
+	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() {
 		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
 			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
@@ -1274,7 +1296,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	} else {
 		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
 		//DEEPK add error here for resource limit reached
-		if err != nil && (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error())) {
+		if err != nil && (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error()) || strings.Contains(err.Error(), c.ErrIndexBucketLimitReached.Error())) {
 			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 			return err
 		}
@@ -2241,12 +2263,13 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	}
 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
+	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
 
 	var solution *planner.Solution
 
 	if c.IsServerlessDeployment() {
 		usageThreshold := o.getUsageThresholdForPlanner()
-		solution, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, usageThreshold)
+		solution, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, usageThreshold, serverlessIndexLimit)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -3283,6 +3283,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+
+	"indexer.settings.serverless.indexLimit": ConfigValue{
+		200,
+		"Limit on the number of indexes that can be created per bucket in Serverless Mode.",
+		200,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
