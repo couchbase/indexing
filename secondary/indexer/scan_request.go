@@ -286,6 +286,14 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 	r.sco = s
 
+	defer func() {
+		if rv := recover(); rv != nil {
+			logging.Errorf("%v Panic while creating new scan request - %v", r.LogPrefix, r)
+			logging.Errorf("%v %v\n%s", r.LogPrefix, rv, logging.StackTrace())
+			err = fmt.Errorf("Internal error while creating new scan request")
+		}
+	}()
+
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
 
