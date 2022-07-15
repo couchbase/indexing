@@ -51,8 +51,8 @@ type RebalanceServiceManager struct {
 	state   state         // state of the current rebalance, failover, or index move
 	stateMu *sync.RWMutex // protects state field; may be taken *after* svcMgrMu mutex
 
-	waiters   waiters       // set of channels of states for go routines waiting for next state change
-	waitersMu *sync.RWMutex // protects waiters field; may be taken *after* svcMgrMu mutex
+	waiters   waiters     // set of channels of states for go routines waiting for next state change
+	waitersMu *sync.Mutex // protects waiters field; may be taken *after* svcMgrMu mutex
 
 	rebalancer  *Rebalancer   // runs the rebalance, failover, or index move
 	rebalancerF *Rebalancer   // follower rebalancer handle
@@ -163,7 +163,7 @@ func NewRebalanceServiceManager(genericMgr *GenericServiceManager, httpAddr stri
 		stateMu: &sync.RWMutex{},
 
 		waiters:   make(waiters),
-		waitersMu: &sync.RWMutex{},
+		waitersMu: &sync.Mutex{},
 
 		supvCmdch:     supvCmdch,
 		supvMsgch:     supvMsgch,
@@ -333,21 +333,9 @@ func (m *RebalanceServiceManager) handleIndexerReady(cmd Message) {
 /////////////////////////////////////////////////////////////////////////
 
 // RebalGetTaskList is a delegate of GenericServiceManager.GetTaskList which is an external API
-// called by ns_server (via cbauth). If rev is non-nil, respond only when the revision changes from
-// that, else respond immediately. The cancel arg is a channel ns_server may use to cancel the call.
-func (m *RebalanceServiceManager) RebalGetTaskList(rev service.Revision,
-	cancel service.Cancel) (*service.TaskList, error) {
-	const _RebalGetTaskList = "RebalanceServiceManager::RebalGetTaskList:"
-	l.Infof("%v called. rev: %v", _RebalGetTaskList, rev)
-
-	currState, err := m.wait(rev, cancel)
-	if err != nil {
-		return nil, err
-	}
-
-	taskList := stateToTaskList(currState)
-	l.Infof("%v rev: %v returning taskList: %+v", _RebalGetTaskList, rev, taskList)
-	return taskList, nil
+// called by ns_server (via cbauth). Waiting for new rev is now done in the caller instead of here.
+func (m *RebalanceServiceManager) RebalGetTaskList() *service.TaskList {
+	return stateToTaskList(m.copyState())
 }
 
 // RebalCancelTask is a delegate of GenericServiceManager.CancelTask which is an external API
@@ -1934,7 +1922,7 @@ func (m *RebalanceServiceManager) wait(rev service.Revision,
 	select {
 	case <-cancel:
 		m.removeWaiter(ch)
-		return newState(), service.ErrCanceled // this reply to the cancel gets discarded
+		return newState(), service.ErrCanceled
 	case newState := <-ch:
 		return newState, nil
 	}

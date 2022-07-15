@@ -113,12 +113,22 @@ func (this *MasterServiceManager) CancelTask(id string, rev service.Revision) er
 // kjc pending final signatures TBD by ns_server
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func (this *MasterServiceManager) Pause(taskId string, bucket string, archiveRoot string) error {
-	return this.pauseMgr.Pause(taskId, bucket, archiveRoot)
+func (this *MasterServiceManager) PreparePause(taskId, bucket, bucketUuid, remotePath string,
+) error {
+	return this.pauseMgr.PreparePause(taskId, bucket, bucketUuid, remotePath)
 }
 
-func (this *MasterServiceManager) Resume(taskId string, bucket string, archiveRoot string) error {
-	return this.pauseMgr.Resume(taskId, bucket, archiveRoot)
+func (this *MasterServiceManager) Pause(taskId, bucket, bucketUuid, remotePath string) error {
+	return this.pauseMgr.Pause(taskId, bucket, bucketUuid, remotePath)
+}
+
+func (this *MasterServiceManager) PrepareResume(taskId, bucket, remotePath string, dryRun bool,
+) error {
+	return this.pauseMgr.PrepareResume(taskId, bucket, remotePath, dryRun)
+}
+
+func (this *MasterServiceManager) Resume(taskId, bucket, remotePath string, dryRun bool) error {
+	return this.pauseMgr.Resume(taskId, bucket, remotePath, dryRun)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

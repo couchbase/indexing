@@ -5,6 +5,7 @@
 // in that file, in accordance with the Business Source License, use of this
 // software will be governed by the Apache License, Version 2.0, included in
 // the file licenses/APL2.txt.
+
 package indexer
 
 import (
@@ -36,13 +37,19 @@ type GenericServiceManager struct {
 	pauseMgr *PauseServiceManager     // Pause-Resume Manager singleton from Indexer
 	rebalMgr *RebalanceServiceManager // Rebalance Manager singleton from Indexer
 
-	// rev is the canonical topology revision number for ns_server long polls. This gets converted
-	// to and from service.Revision. Both pauseMgr and rebalMgr children can generate new revisions,
-	// so rev is now owned by GenericServiceManager.
+	// waiters is a set of notification channels waiting to be notified that rev has incremented
+	waiters genericWaiters
+
+	// waitersMu is the mutex protecting waiters
+	waitersMu sync.Mutex
+
+	// rev is the canonical task list revision number for ns_server GetTaskList long polls. This
+	// gets converted to and from service.Revision. Both pauseMgr and rebalMgr children can generate
+	// new revisions, so rev is now owned by GenericServiceManager.
 	rev uint64
 
 	// revMu is the mutex protecting rev
-	revMu sync.Mutex
+	revMu sync.RWMutex
 }
 
 // NewGenericServiceManager is the constructor for the GenericServiceManager class. It needs all the
@@ -54,6 +61,7 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 
 	m := &GenericServiceManager{
 		nodeInfo: nodeInfo,
+		waiters:  make(genericWaiters),
 	}
 	pauseMgr := NewPauseServiceManager(mux, m, httpAddr)
 	m.pauseMgr = pauseMgr
@@ -109,20 +117,56 @@ func (m *GenericServiceManager) Shutdown() error {
 }
 
 // GetTaskList gets the list of ns_server-assigned task(s) currently running by delegating to area-
-// specific managers that might be running tasks. The cancel arg is a channel ns_server may use to
+// specific managers that might be running tasks. If rev is non-nil, respond only when the revision
+// differs from that, else respond immediately. The cancel arg is a channel ns_server may use to
 // cancel the call.
 func (m *GenericServiceManager) GetTaskList(rev service.Revision,
 	cancel service.Cancel) (*service.TaskList, error) {
+	const _GetTaskList = "GenericServiceManager::GetTaskList:"
+	logging.Infof("%v called with rev: %v", _GetTaskList, rev)
 
-	return m.rebalMgr.RebalGetTaskList(rev, cancel)
-	// kjc Pause-Resume feature: need to add delegation to pauseMgr
+	// Wait for new revision if needed
+	err := m.waitForNewRev(rev, cancel)
+	if err != nil {
+		// Log as Info because it is not really an error, just service.ErrCanceled
+		logging.Infof("%v return from rev %v call. err: %v", _GetTaskList, rev, err)
+		return nil, err
+	}
+
+	// Assemble the full task list from the child delegates
+	taskList := m.rebalMgr.RebalGetTaskList()
+	taskList.Tasks = append(taskList.Tasks, m.pauseMgr.PauseGetTaskList()...)
+	taskList.Rev = EncodeRev(m.getRev()) // overwrite the rev from RebalGetTaskList
+
+	logging.Infof("%v return from rev %v call. taskList: %+v", _GetTaskList, rev, taskList)
+	return taskList, nil
 }
 
-// CancelTask cancels an existing task by delegating to area-specific managers that might be running
-// it.
+// CancelTask cancels an existing task by delegating to children that might be running it. All tasks
+// except the Rebalance task have rev == 0 so rev is irrelevant for PauseCancelTask.
 func (m *GenericServiceManager) CancelTask(id string, rev service.Revision) error {
-	return m.rebalMgr.RebalCancelTask(id, rev)
-	// kjc Pause-Resume feature: need to add delegation to pauseMgr
+	const _CancelTask = "GenericServiceManager::CancelTask:"
+	logging.Infof("%v called with id: %v, rev: %v", _CancelTask, id, rev)
+
+	// Delegate to Rebalance
+	err := m.rebalMgr.RebalCancelTask(id, rev)
+	if err != nil && err != service.ErrNotFound { // task was found but cancel failed
+		logging.Infof("%v return from rev %v call. RebalCancelTask err: %v", _CancelTask,
+			rev, err)
+		return err
+	}
+
+	// Task not found in Rebalance so delegate to Pause-Resume
+	err = m.pauseMgr.PauseCancelTask(id)
+	if err != nil && err != service.ErrNotFound { // task was found but cancel failed
+		logging.Infof("%v return from rev %v call. PauseCancelTask err: %v", _CancelTask,
+			rev, err)
+		return err
+	}
+
+	// Here err is either nil or service.ErrNotFound
+	logging.Infof("%v return from id: %v, rev: %v call. err: %v", _CancelTask, id, rev, err)
+	return err
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -144,17 +188,17 @@ func (m *GenericServiceManager) testCancelTask(w http.ResponseWriter, r *http.Re
 	}
 
 	// Required parameters
-	taskId := r.FormValue("taskId")
+	id := r.FormValue("id")
 	revString := r.FormValue("rev") // can include prefix indicating base
 	rev := revStringToServiceRevision(revString)
 
-	err := m.CancelTask(taskId, rev)
+	err := m.CancelTask(id, rev)
 	if err == nil {
-		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: taskId}
+		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: id}
 		rhSend(http.StatusOK, w, resp)
 		return
 	}
-	err = fmt.Errorf("%v CancelTask RPC returned error: %v", _testCancelTask, err)
+	err = fmt.Errorf("%v CancelTask RPC returned err: %v", _testCancelTask, err)
 	resp := &TaskResponse{Code: RESP_ERROR, Error: err.Error()}
 	rhSend(http.StatusInternalServerError, w, resp)
 }
@@ -173,16 +217,14 @@ func (m *GenericServiceManager) testGetTaskList(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Call GetTaskList with max uint64 as revision number and nil cancel channel to force
-	// immediate return of current task list.
-	taskList, err := m.GetTaskList(
-		[]byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, nil)
+	// Call GetTaskList with nils to force immediate return of current task list.
+	taskList, err := m.GetTaskList(nil, nil)
 	if err == nil {
 		resp := &GetTaskListResponse{Code: RESP_SUCCESS, TaskList: taskList}
 		rhSend(http.StatusOK, w, resp)
 		return
 	}
-	err = fmt.Errorf("%v GetTaskList RPC returned error: %v", _testGetTaskList, err)
+	err = fmt.Errorf("%v GetTaskList RPC returned err: %v", _testGetTaskList, err)
 	resp := &GetTaskListResponse{Code: RESP_ERROR, Error: err.Error()}
 	rhSend(http.StatusInternalServerError, w, resp)
 }
@@ -191,12 +233,89 @@ func (m *GenericServiceManager) testGetTaskList(w http.ResponseWriter, r *http.R
 // General functions and methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// incRev atomically increments the rev member and returns the new value.
+// getRev returns the current rev value.
+func (m *GenericServiceManager) getRev() uint64 {
+	m.revMu.RLock()
+	defer m.revMu.RUnlock()
+	return m.rev
+}
+
+// incRev atomically increments the rev member, notifies all waiters, and returns the new rev value.
 func (m *GenericServiceManager) incRev() uint64 {
 	m.revMu.Lock()
-	defer m.revMu.Unlock()
 	m.rev++
-	return m.rev
+	rev := m.rev
+	m.revMu.Unlock()
+
+	m.notifyGenericWaiters()
+	return rev
+}
+
+// genericWaiter is a notification channel for one rev increment waiter.
+type genericWaiter chan struct{}
+
+// genericWaiters is a set of notification channels of all rev increment waiters.
+type genericWaiters map[genericWaiter]struct{}
+
+// addGenericWaiter creates and returns a notification channel to m.waiters that will be signaled
+// when m.rev is incremented.
+func (m *GenericServiceManager) addGenericWaiter() genericWaiter {
+	ch := make(genericWaiter, 1)
+
+	m.waitersMu.Lock()
+	m.waiters[ch] = struct{}{}
+	m.waitersMu.Unlock()
+
+	return ch
+}
+
+// notifyGenericWaiters sends an empty signal down all channels in the m.waiters set to notify the
+// waiters that m.rev has been incremented, then replaces m.waiters with a new empty set, enabling
+// the old notification channels to be garbage collected.
+func (m *GenericServiceManager) notifyGenericWaiters() {
+	m.waitersMu.Lock()
+	for ch := range m.waiters {
+		if ch != nil {
+			ch <- struct{}{}
+		}
+	}
+	m.waiters = make(genericWaiters) // reinit to the empty set
+	m.waitersMu.Unlock()
+}
+
+// removeGenericWaiter removes a notification channel from m.waiters due to a request cancellation.
+func (m *GenericServiceManager) removeGenericWaiter(w genericWaiter) {
+	m.waitersMu.Lock()
+	delete(m.waiters, w)
+	m.waitersMu.Unlock()
+}
+
+// waitForNewRev supports a long poll that does not return until canceled or a new revision occurs,
+// as well as a request for immediate reply.
+//   o Returns immediately if
+//     a. rev == nil: caller wants immediate reply
+//     b. rev != m.rev: caller does not yet have current rev
+//   o Otherwise waits until m.rev increments or caller cancels the request
+func (m *GenericServiceManager) waitForNewRev(callerRev service.Revision,
+	cancel service.Cancel) error {
+
+	if callerRev == nil {
+		return nil
+	}
+	callerRevUint64 := DecodeRev(callerRev)
+	if callerRevUint64 != m.getRev() {
+		return nil
+	}
+
+	// Caller has current revision so wait for the next one before returning
+	ch := m.addGenericWaiter()
+	select {
+	case <-cancel:
+		m.removeGenericWaiter(ch)
+		return service.ErrCanceled
+	case <-ch:
+		return nil
+	}
 }
 
 // revStringToServiceRevision converts a numeric string, which may include a prefix indicating its

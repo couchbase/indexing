@@ -94,9 +94,36 @@ func skipTest() bool {
 	return false
 }
 
-// cancelTask calls the generic_sercvice_manager.go CancelTaskList cbauth RPC API.
-func cancelTask() {
-	// kjc_implement
+// cancelTask calls the generic_sercvice_manager.go CancelTaskList cbauth RPC API on each index node
+// with the provided arguments.
+func cancelTask(id string, rev uint64, t *testing.T) {
+	const _cancelTask = "set14_rebalance_test.go::cancelTask:"
+
+	indexerNodeAddrs := getIndexerNodeAddrs(t)
+	for _, nodeAddr := range indexerNodeAddrs {
+		restPath := fmt.Sprintf(
+			"/test/CancelTask?id=%v&rev=%v", id, rev)
+		url := makeUrlForIndexNode(nodeAddr, restPath)
+		resp, err := http.Get(url)
+		FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _cancelTask, url), t)
+
+		_, err = ioutil.ReadAll(resp.Body)
+		FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll %v returned error", _cancelTask,
+			url), t)
+	}
+}
+
+// getIndexerNodeAddrs returns ipAddr:port of each index node.
+func getIndexerNodeAddrs(t *testing.T) []string {
+	const _getIndexerNodeAddrs = "set14_rebalance_test.go::getIndexerNodeAddrs:"
+
+	indexerNodeAddrs, err := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	FailTestIfError(err,
+		fmt.Sprintf("%v GetIndexerNodesHttpAddresses returned error", _getIndexerNodeAddrs), t)
+	if len(indexerNodeAddrs) == 0 {
+		t.Fatalf("%v No Index nodes found", _getIndexerNodeAddrs)
+	}
+	return indexerNodeAddrs
 }
 
 // getTaskList calls the generic generic_service_manager.go GetTaskList cbauth RPC API on each
@@ -105,25 +132,20 @@ func cancelTask() {
 func getTaskList(t *testing.T) (taskLists []*service.TaskList) {
 	const _getTaskList = "set14_rebalance_test.go::getTaskList:"
 
-	// Slice of strings each of which is ipAddr:port of an Index node
-	indexerNodeAddrs, err := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
-	FailTestIfError(err,
-		fmt.Sprintf("%v GetIndexerNodesHttpAddresses returned error", _getTaskList), t)
-	if len(indexerNodeAddrs) == 0 {
-		t.Fatalf("%v No Index nodes found", _getTaskList)
-	}
-
+	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	for _, nodeAddr := range indexerNodeAddrs {
 		url := makeUrlForIndexNode(nodeAddr, "/test/GetTaskList")
 		resp, err := http.Get(url)
-		FailTestIfError(err, fmt.Sprintf("%v http.Get returned error", _getTaskList), t)
+		FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _getTaskList, url), t)
 
 		respBody, err := ioutil.ReadAll(resp.Body)
-		FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll returned error", _getTaskList), t)
+		FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll %v returned error", _getTaskList,
+			url), t)
 
 		var getTaskListResponse tc.GetTaskListResponse
 		err = json.Unmarshal(respBody, &getTaskListResponse)
-		FailTestIfError(err, fmt.Sprintf("%v json.Unmarshal returned error", _getTaskList), t)
+		FailTestIfError(err, fmt.Sprintf("%v json.Unmarshal %v returned error", _getTaskList,
+			url), t)
 
 		// Return value
 		taskList := getTaskListResponse.TaskList
@@ -139,10 +161,50 @@ func getTaskList(t *testing.T) (taskLists []*service.TaskList) {
 	return taskLists
 }
 
+// preparePause calls the pause_service_manager.go PreparePause cbauth RPC API on each
+// index node with the provided arguments.
+func preparePause(id, bucket, bucketUuid, remotePath string, t *testing.T) {
+	const _preparePause = "set14_rebalance_test.go::preparePause:"
+
+	indexerNodeAddrs := getIndexerNodeAddrs(t)
+	for _, nodeAddr := range indexerNodeAddrs {
+		restPath := fmt.Sprintf(
+			"/test/PreparePause?id=%v&bucket=%v&bucketUuid=%v&remotePath=%v",
+			id, bucket, bucketUuid, remotePath)
+		url := makeUrlForIndexNode(nodeAddr, restPath)
+		resp, err := http.Get(url)
+		FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _preparePause, url), t)
+
+		_, err = ioutil.ReadAll(resp.Body)
+		FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll %v returned error", _preparePause,
+			url), t)
+	}
+}
+
 // pause performs the Elixir Pause action (hibernate a bucket) using local disk instead of S3 by
 // calling the pause_service_manager.go Pause cbauth RPC API on all Index nodes.
 func pause() {
 	// kjc_implement
+}
+
+// prepareResume calls the pause_service_manager.go PrepareResume cbauth RPC API on each
+// index node with the provided arguments.
+func prepareResume(id, bucket, remotePath string, dryRun bool, t *testing.T) {
+	const _prepareResume = "set14_rebalance_test.go::prepareResume:"
+
+	indexerNodeAddrs := getIndexerNodeAddrs(t)
+	for _, nodeAddr := range indexerNodeAddrs {
+		restPath := fmt.Sprintf(
+			"/test/PrepareResume?id=%v&bucket=%v&remotePath=%v&dryRun=%v",
+			id, bucket, remotePath, dryRun)
+		url := makeUrlForIndexNode(nodeAddr, restPath)
+		resp, err := http.Get(url)
+		FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _prepareResume, url), t)
+
+		_, err = ioutil.ReadAll(resp.Body)
+		FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll %v returned error", _prepareResume,
+			url), t)
+	}
 }
 
 // resume performs the Elixir Resume action (unhibernate a bucket) using local disk instead of S3 by
@@ -461,14 +523,159 @@ func TestPauseAndResume(t *testing.T) {
 		log.Printf("%v Test skipped", _TestPauseAndResume)
 		return
 	}
+	defer printClusterConfig(_TestPauseAndResume, "exit")
 
-	numIndexNodes := 3
+	log.Printf("%v Before start, calling GetTaskList", _TestPauseAndResume)
+	const numIndexNodes = 3 // number of index nodes throughout this test
 	taskLists := getTaskList(t)
 	if len(taskLists) != numIndexNodes {
 		t.Fatalf("%v Before Pause-Resume expected %v getTaskList replies, got %v", _TestPauseAndResume, numIndexNodes, len(taskLists))
 	}
 
-	printClusterConfig(_TestPauseAndResume, "exit")
+	// Arguments for PreparePause and PrepareResume create and cancel tests
+	const (
+		taskId     = "fakeTaskId"
+		bucket     = "fakeBucket"
+		bucketUuid = "fakeBucketUuid"
+		remotePath = "file:///fakeRemotePath"
+		archiveDir = "/fakeRemotePath/" // tweaked version of remotePath stored in the tasks
+		dryRun     = true
+		rev        = uint64(0) // rev for CancelTask; so far does not matter for Pause-Resume
+	)
+
+	// Proxies for some constants from pause_service_manager.go as tests cannot import the indexer
+	// package as that pulls in sigar which won't build here. (Thus these are also not exported.)
+	const (
+		archive_FILE        = "File"
+		task_PREPARE_PAUSE  = "task-prepare-pause"  // ns_server version of the string name
+		task_PREPARE_RESUME = "task-prepare-resume" // ditto
+	)
+
+	// PreparePause --------------------------------------------------------------------------------
+	log.Printf("%v Calling PreparePause", _TestPauseAndResume)
+	preparePause(taskId, bucket, bucketUuid, remotePath, t)
+	log.Printf("%v Calling GetTaskList(PreparePause)", _TestPauseAndResume)
+	taskLists = getTaskList(t)
+	if len(taskLists) != numIndexNodes {
+		t.Fatalf("%v After PreparePause expected %v getTaskList replies, got %v", _TestPauseAndResume,
+			numIndexNodes, len(taskLists))
+	}
+	numNodeTasks := 1 // number of tasks expected in each node's task list
+	for _, taskList := range taskLists {
+		if len(taskList.Tasks) != numNodeTasks {
+			t.Fatalf("%v PreparePause expected len(taskList.Tasks) = %v, got %v", _TestPauseAndResume,
+				numNodeTasks, len(taskList.Tasks))
+		}
+		task := taskList.Tasks[0]
+		if task.ID != taskId {
+			t.Fatalf("%v PreparePause expected task.ID '%v', got '%v'", _TestPauseAndResume,
+				taskId, task.ID)
+		}
+		if string(task.Type) != task_PREPARE_PAUSE {
+			t.Fatalf("%v PreparePause expected task.Type '%v', got '%v'", _TestPauseAndResume,
+				task_PREPARE_PAUSE, string(task.Type))
+		}
+		val := task.Extra["bucket"]
+		if val != bucket {
+			t.Fatalf("%v PreparePause expected bucket '%v', got '%v'", _TestPauseAndResume,
+				bucket, val)
+		}
+		val = task.Extra["bucketUuid"]
+		if val != bucketUuid {
+			t.Fatalf("%v PreparePause expected bucketUuid '%v', got '%v'", _TestPauseAndResume,
+				bucketUuid, val)
+		}
+		val = task.Extra["archiveDir"]
+		if val != archiveDir {
+			t.Fatalf("%v PreparePause expected archiveDir '%v', got '%v'", _TestPauseAndResume,
+				archiveDir, val)
+		}
+		val = task.Extra["archiveType"]
+		if val != archive_FILE {
+			t.Fatalf("%v PreparePause expected archiveType '%v', got '%v'", _TestPauseAndResume,
+				archive_FILE, val)
+		}
+	}
+
+	// CancelTask(PreparePause) --------------------------------------------------------------------
+	log.Printf("%v Calling CancelTask(PreparePause)", _TestPauseAndResume)
+	cancelTask(taskId, rev, t)
+	log.Printf("%v Calling GetTaskList()", _TestPauseAndResume)
+	taskLists = getTaskList(t)
+	if len(taskLists) != numIndexNodes {
+		t.Fatalf("%v After CancelTask(PreparePause) expected %v getTaskList replies, got %v", _TestPauseAndResume,
+			numIndexNodes, len(taskLists))
+	}
+	numNodeTasks = 0 // number of tasks expected in each node's task list
+	for _, taskList := range taskLists {
+		if len(taskList.Tasks) != numNodeTasks {
+			t.Fatalf("%v CancelTask(PreparePause) expected len(taskList.Tasks) = %v, got %v", _TestPauseAndResume,
+				numNodeTasks, len(taskList.Tasks))
+		}
+	}
+
+	// PrepareResume -------------------------------------------------------------------------------
+	log.Printf("%v Calling PrepareResume", _TestPauseAndResume)
+	prepareResume(taskId, bucket, remotePath, dryRun, t)
+	log.Printf("%v Calling GetTaskList(PrepareResume)", _TestPauseAndResume)
+	taskLists = getTaskList(t)
+	if len(taskLists) != numIndexNodes {
+		t.Fatalf("%v After PrepareResume expected %v getTaskList replies, got %v", _TestPauseAndResume,
+			numIndexNodes, len(taskLists))
+	}
+	numNodeTasks = 1 // number of tasks expected in each node's task list
+	for _, taskList := range taskLists {
+		if len(taskList.Tasks) != numNodeTasks {
+			t.Fatalf("%v PrepareResume expected len(taskList.Tasks) = %v, got %v", _TestPauseAndResume,
+				numNodeTasks, len(taskList.Tasks))
+		}
+		task := taskList.Tasks[0]
+		if task.ID != taskId {
+			t.Fatalf("%v PrepareResume expected task.ID '%v', got '%v'", _TestPauseAndResume,
+				taskId, task.ID)
+		}
+		if string(task.Type) != task_PREPARE_RESUME {
+			t.Fatalf("%v PrepareResume expected task.Type '%v', got '%v'", _TestPauseAndResume,
+				task_PREPARE_RESUME, string(task.Type))
+		}
+		val := task.Extra["bucket"]
+		if val != bucket {
+			t.Fatalf("%v PrepareResume expected bucket '%v', got '%v'", _TestPauseAndResume,
+				bucket, val)
+		}
+		val = task.Extra["dryRun"]
+		if val != dryRun {
+			t.Fatalf("%v PrepareResume expected dryRun '%v', got '%v'", _TestPauseAndResume,
+				dryRun, val)
+		}
+		val = task.Extra["archiveDir"]
+		if val != archiveDir {
+			t.Fatalf("%v PreparePause expected archiveDir '%v', got '%v'", _TestPauseAndResume,
+				archiveDir, val)
+		}
+		val = task.Extra["archiveType"]
+		if val != archive_FILE {
+			t.Fatalf("%v PreparePause expected archiveType '%v', got '%v'", _TestPauseAndResume,
+				archive_FILE, val)
+		}
+	}
+
+	// CancelTask(PrepareResume) -------------------------------------------------------------------
+	log.Printf("%v Calling CancelTask(PrepareResume)", _TestPauseAndResume)
+	cancelTask(taskId, rev, t)
+	log.Printf("%v Calling GetTaskList()", _TestPauseAndResume)
+	taskLists = getTaskList(t)
+	if len(taskLists) != numIndexNodes {
+		t.Fatalf("%v After CancelTask(PrepareResume) expected %v getTaskList replies, got %v", _TestPauseAndResume,
+			numIndexNodes, len(taskLists))
+	}
+	numNodeTasks = 0 // number of tasks expected in each node's task list
+	for _, taskList := range taskLists {
+		if len(taskList.Tasks) != numNodeTasks {
+			t.Fatalf("%v CancelTask(PrepareResume) expected len(taskList.Tasks) = %v, got %v", _TestPauseAndResume,
+				numNodeTasks, len(taskList.Tasks))
+		}
+	}
 }
 
 // This test failsover an indexer while index build is going on
