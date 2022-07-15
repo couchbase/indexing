@@ -4728,7 +4728,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.initBuildTsLock(buildStream, keyspaceId)
+	mutex := idx.loadOrStoreBuildTsLock(buildStream, keyspaceId)
 
 	stopCh := make(StopChannel)
 
@@ -4769,7 +4769,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//if there is a failover after this, it will be observed as a rollback
 
 					// Asyncronously compute the KV timestamp
-					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream)
+					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream, mutex)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
 						streamId:   buildStream,
@@ -6595,7 +6595,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.initBuildTsLock(streamId, keyspaceId)
+	mutex := idx.loadOrStoreBuildTsLock(streamId, keyspaceId)
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -6683,7 +6683,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 					if streamId == common.INIT_STREAM {
 						// Asyncronously compute the KV timestamp
-						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId)
+						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId, mutex)
 					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
@@ -9213,7 +9213,7 @@ func dumpMemProfile(filename string) bool {
 }
 
 func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
-	keyspaceId string, cid string, numVb int, streamId common.StreamId) {
+	keyspaceId string, cid string, numVb int, streamId common.StreamId, mutex *sync.Mutex) {
 
 	// Acquire the buildTsLock
 	// The buildTsLock is per bucket per stream lock. It serves two purposes:
@@ -9222,7 +9222,6 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 	//     buildTs computed later by another go-routine
 	// (ii) Incase of any issues with KV, it prevents multiple go-routines to
 	//      flood the logs with error messages while fetching the KVT's
-	mutex := idx.buildTsLock[streamId][keyspaceId]
 	mutex.Lock()
 	defer mutex.Unlock()
 
@@ -9952,13 +9951,16 @@ func (idx *indexer) getMinMergeTsForCatchup(streamId common.StreamId,
 	return nil
 }
 
-func (idx *indexer) initBuildTsLock(streamId common.StreamId, keyspaceId string) {
+func (idx *indexer) loadOrStoreBuildTsLock(streamId common.StreamId, keyspaceId string) (mutex *sync.Mutex) {
 	if _, ok := idx.buildTsLock[streamId]; !ok {
 		idx.buildTsLock[streamId] = make(map[string]*sync.Mutex)
 	}
-	if _, ok := idx.buildTsLock[streamId][keyspaceId]; !ok {
-		idx.buildTsLock[streamId][keyspaceId] = &sync.Mutex{}
+	mutex, ok := idx.buildTsLock[streamId][keyspaceId]
+	if !ok {
+		mutex = new(sync.Mutex)
+		idx.buildTsLock[streamId][keyspaceId] = mutex
 	}
+	return mutex
 }
 
 //sessionId helper functions. these functions can only be called from the genserver
