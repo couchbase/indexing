@@ -2053,27 +2053,27 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		cinfo, err := c.FetchNewClusterInfoCache2(o.clusterUrl, c.DEFAULT_POOL, "NewMetaDataProvider")
 		if err != nil {
 			return nil,
-				errors.New("Fail to create index with missing attribute. Error while Fetching Cluster Info Cache. Cluster must be atleast 7.1.1 for using Missing Keyword"),
+				errors.New("Fail to create index with missing attribute. Error while Fetching Cluster Info Cache. Cluster must be atleast 7.1.2 for using Missing Keyword"),
 				false
 		}
 
 		err = cinfo.FetchNodesAndSvsInfo()
 		if err != nil {
 			return nil,
-				errors.New("Fail to create index with missing attribute. Error while Fetching Nodes and Services Info. Cluster must be atleast 7.1.1 for using Missing Keyword"),
+				errors.New("Fail to create index with missing attribute. Error while Fetching Nodes and Services Info. Cluster must be atleast 7.1.2 for using Missing Keyword"),
 				false
 		}
 
 		internalVersion, err := c.GetInternalClusterVersion(c.NodesInfoProvider(cinfo), false)
 		if err != nil {
 			return nil,
-				errors.New("Fail to create index with missing attribute. Error while finding internal version of all nodes. Cluster must be atleast 7.1.1 for using Missing Keyword"),
+				errors.New("Fail to create index with missing attribute. Error while finding internal version of all nodes. Cluster must be atleast 7.1.2 for using Missing Keyword"),
 				false
 		}
 
 		if internalVersion.LessThan(c.InternalVersion(c.MIN_VER_MISSING_LEADING_KEY)) {
 			return nil,
-				errors.New("Fail to create index with missing attribute. This option is enabled after cluster is fully upgraded to atleast 7.1.1 and there is no failed node."),
+				errors.New("Fail to create index with missing attribute. This option is enabled after cluster is fully upgraded to atleast 7.1.2 and there is no failed node."),
 				false
 		}
 	}
