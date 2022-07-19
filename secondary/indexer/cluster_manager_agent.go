@@ -27,16 +27,13 @@ type ClustMgrAgent interface {
 }
 
 type clustMgrAgent struct {
-	supvCmdch  MsgChannel //supervisor sends commands on this channel
-	supvRespch MsgChannel //channel to send any message to supervisor
-
-	mgr    *manager.IndexManager //handle to index manager
-	config common.Config
-
+	supvCmdch    MsgChannel            //supervisor sends commands on this channel
+	supvRespch   MsgChannel            //channel to send any message to supervisor
+	mgr          *manager.IndexManager // handle to index manager singleton
+	config       common.Config
 	metaNotifier *metaNotifier
-
-	stats      IndexerStatsHolder
-	statsCount uint64
+	stats        IndexerStatsHolder
+	statsCount   uint64
 }
 
 // NewClustMgrAgent creates a new ClustMgrAgent. This is a singleton owned by the Indexer.
@@ -59,7 +56,6 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 				severity: FATAL,
 				category: CLUSTER_MGR,
 				cause:    err}}
-
 	}
 
 	c.mgr = mgr

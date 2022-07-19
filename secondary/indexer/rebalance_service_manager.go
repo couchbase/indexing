@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"sync"
 	"time"
 
@@ -43,6 +42,8 @@ import (
 // Rebalance and Failover through RPC. This class also handles index move, which is an internal GSI
 // feature that does not involve ns_server.
 type RebalanceServiceManager struct {
+	genericMgr *GenericServiceManager // pointer to our parent
+
 	// svcMgrMu protects m.rebalancer, m.rebalancerF, and other shared fields that do not have their
 	// own mutexes
 	svcMgrMu *sync.RWMutex
@@ -97,14 +98,19 @@ type waiters map[waiter]struct{}
 
 // state contains the state information for a rebalance, failover, or index move.
 type state struct {
-	rev uint64 // revision number of the state; incremented with each material change
+	// revCopy is the service.Revision number associated with this current Rebalance state. Other
+	// components can also trigger revision changes, so GenericServiceManager now owns the canonical
+	// rev counter. revCopy is a copy of the value corresponding to the last Rebalance state rev.
+	revCopy uint64
 
-	servers []service.NodeID // Index Service NodeUUIDs for GetCurrentTopology response
+	// servers holds Index Service NodeUUIDs for GetCurrentTopology response
+	servers []service.NodeID
 
-	// isBalanced tells whether GSI considers itself balanced. It is also sent to ns_server as part of
-	// GetCurrentTopology response, which uses it as one input to tell UI whether to enable the Rebalance button.
-	// (If any service reports isBalanced == false, the button becomes enabled.)
-	isBalanced bool // if true, UI Rebalance button is disabled; rev is not incremented for changes to this
+	// isBalanced tells whether GSI considers itself balanced. It is also sent to ns_server as part
+	// of GetCurrentTopology response, which uses it as one input to tell UI whether to enable the
+	// Rebalance button. (If any service reports isBalanced == false, the button becomes enabled.)
+	// revCopy is not incremented for changes to this.
+	isBalanced bool
 
 	// rebalanceID is "" when no rebalance/failover/move is running. PrepareTopologyChange sets it
 	// to the TopologyChange.ID from ns_server. It gets reset to "" when the topology change either
@@ -119,10 +125,10 @@ type state struct {
 	rebalanceTask *service.Task
 }
 
-// NewState constructs a zero-value state object.
-func NewState() state {
+// newState constructs a zero-value state object.
+func newState() state {
 	return state{
-		rev:           0,
+		revCopy:       0,
 		servers:       nil,
 		isBalanced:    true, // Default value of isBalanced should be true
 		rebalanceID:   "",
@@ -140,18 +146,20 @@ var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress an
 
 var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 
-// NewRebalanceServiceManager is the constructor for the RebalanceServiceManager class. Indexer
-// constructs a singleton at boot.
-func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
-	supvPrioMsgch MsgChannel, config c.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
-	rebalanceToken *RebalanceToken, statsMgr *statsManager) *RebalanceServiceManager {
+// NewRebalanceServiceManager is the constructor for the RebalanceServiceManager class.
+// GenericServiceManager constructs a singleton at boot.
+func NewRebalanceServiceManager(genericMgr *GenericServiceManager, httpAddr string,
+	supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch MsgChannel, config c.Config,
+	nodeInfo *service.NodeInfo, rebalanceRunning bool, rebalanceToken *RebalanceToken,
+	statsMgr *statsManager) *RebalanceServiceManager {
 
 	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
 
 	mgr := &RebalanceServiceManager{
-		svcMgrMu: &sync.RWMutex{},
+		genericMgr: genericMgr,
+		svcMgrMu:   &sync.RWMutex{},
 
-		state:   NewState(),
+		state:   newState(),
 		stateMu: &sync.RWMutex{},
 
 		waiters:   make(waiters),
@@ -185,7 +193,7 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	mgr.nodeInfo = nodeInfo
 	mgr.rebalanceRunning = rebalanceRunning
 	mgr.rebalanceToken = rebalanceToken
-	mgr.localhttp = getLocalHttpAddr(mgr.config.Load())
+	mgr.localhttp = httpAddr
 
 	if rebalanceToken != nil {
 		mgr.cleanupPending = true
@@ -636,8 +644,9 @@ func (m *RebalanceServiceManager) StartTopologyChange(change service.TopologyCha
 
 	if change.CurrentTopologyRev != nil {
 		haveRev := DecodeRev(change.CurrentTopologyRev)
-		if haveRev != currState.rev {
-			l.Errorf("%v err %v %v %v", method, service.ErrConflict, haveRev, currState.rev)
+		if haveRev != currState.revCopy {
+			l.Errorf("%v err %v %v %v", method, service.ErrConflict,
+				haveRev, currState.revCopy)
 			if change.Type == service.TopologyChangeTypeRebalance {
 				m.setStateIsBalanced(false)
 			}
@@ -1862,7 +1871,7 @@ func (m *RebalanceServiceManager) copyState() state {
 func (m *RebalanceServiceManager) updateState(body func(state *state)) {
 	m.stateMu.Lock()
 	body(&m.state)
-	m.state.rev++
+	m.state.revCopy = m.genericMgr.incRev()
 	m.stateMu.Unlock()
 
 	m.notifyWaiters()
@@ -1915,7 +1924,7 @@ func (m *RebalanceServiceManager) wait(rev service.Revision,
 	}
 
 	haveRev := DecodeRev(rev)
-	if haveRev != currState.rev {
+	if haveRev != currState.revCopy {
 		return currState, nil
 	}
 
@@ -1925,7 +1934,7 @@ func (m *RebalanceServiceManager) wait(rev service.Revision,
 	select {
 	case <-cancel:
 		m.removeWaiter(ch)
-		return NewState(), service.ErrCanceled // this reply to the cancel gets discarded
+		return newState(), service.ErrCanceled // this reply to the cancel gets discarded
 	case newState := <-ch:
 		return newState, nil
 	}
@@ -2009,7 +2018,7 @@ func (m *RebalanceServiceManager) cancelFailedRebalanceTask() error {
 func (m *RebalanceServiceManager) stateToTopology(s state) *service.Topology {
 	topology := &service.Topology{}
 
-	topology.Rev = EncodeRev(s.rev)
+	topology.Rev = EncodeRev(s.revCopy)
 	if s.servers != nil && len(s.servers) != 0 {
 		topology.Nodes = append([]service.NodeID(nil), s.servers...)
 	} else {
@@ -2021,10 +2030,11 @@ func (m *RebalanceServiceManager) stateToTopology(s state) *service.Topology {
 	return topology
 }
 
+// stateToTaskList formats the state into a TaskList as needed in GetTaskList response.
 func stateToTaskList(s state) *service.TaskList {
 	tasks := &service.TaskList{}
 
-	tasks.Rev = EncodeRev(s.rev)
+	tasks.Rev = EncodeRev(s.revCopy)
 	tasks.Tasks = make([]service.Task, 0)
 
 	if s.rebalanceID != "" {
@@ -3274,13 +3284,6 @@ func (m *RebalanceServiceManager) validateAuth(w http.ResponseWriter, r *http.Re
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
 	}
 	return creds, valid
-}
-
-func getLocalHttpAddr(cfg c.Config) string {
-	addr := cfg["clusterAddr"].String()
-	host, _, _ := net.SplitHostPort(addr)
-	port := cfg["httpPort"].String()
-	return net.JoinHostPort(host, port)
 }
 
 func getWithAuth(url string) (*http.Response, error) {

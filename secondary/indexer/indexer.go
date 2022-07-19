@@ -175,8 +175,9 @@ type indexer struct {
 	cpuThrottle     *CpuThrottle           //handle to CPU throttler (for Autofailover)
 	meteringMgr     *MeteringThrottlingMgr //handle to metering throttling service
 
-	// masterMgr holds AutofailoverServiceManager and RebalanceServiceManager singletons as
-	// ns_server only supports registering a single object for RPC calls.
+	// masterMgr holds AutofailoverServiceManager, GenericServiceManager, PauseServiceManager, and
+	// RebalanceServiceManager singletons as ns_server only supports registering a single object
+	// for RPC calls.
 	masterMgr *MasterServiceManager
 
 	config common.Config // map of current indexer config settings with "indexer." prefix stripped
@@ -525,15 +526,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		Priority: service.Priority(common.INDEXER_CUR_VERSION),
 	}
 
-	// Start Rebalance Manager
-	rebalMgr := NewRebalanceServiceManager(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.wrkrPrioRecvCh,
-		idx.config, idx.nodeInfo, idx.rebalanceRunning, idx.rebalanceToken, idx.statsMgr)
-
-	// Start Pause-Resume Manager
-	pauseMgr := NewPauseServiceManager(httpAddr)
-
-	// Start Generic Service Manager, which also delegates to Pause and Rebalance Managers
-	genericMgr := NewGenericServiceManager(idx.nodeInfo, pauseMgr, rebalMgr)
+	// Start Generic Service Manager, which creates Pause and Rebalance Managers it delegates to
+	genericMgr, pauseMgr, rebalMgr := NewGenericServiceManager(httpMux, httpAddr, idx.rebalMgrCmdCh,
+		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
+		idx.rebalanceToken, idx.statsMgr)
 
 	// Register service managers with ns_server for RCP callbacks. This returns a single
 	// MasterServiceManager object that implements all the interfaces we want callbacks for via
@@ -10503,6 +10499,13 @@ func (idx *indexer) restartMaintStreamForCatchup(bucket string, restartTs *commo
 	idx.setStreamKeyspaceIdState(streamId, bucket, STREAM_ACTIVE)
 	maintSessionId := idx.genNextSessionId(streamId, bucket)
 	idx.startKeyspaceIdStream(streamId, bucket, restartTs, nil, nil, false, false, maintSessionId)
+}
+
+func getLocalHttpAddr(cfg common.Config) string {
+	addr := cfg["clusterAddr"].String()
+	host, _, _ := net.SplitHostPort(addr)
+	port := cfg["httpPort"].String()
+	return net.JoinHostPort(host, port)
 }
 
 // If user enables the feature before upgrade to 7.1 we will not override it.

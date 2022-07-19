@@ -9,19 +9,25 @@ package indexer
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
+	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // PauseServiceManager class
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// pauseMgr points to the singleton of this class
+var pauseMgr *PauseServiceManager
+
 // PauseServiceManager provides the implementation of the Pause-Resume-specific APIs of
 // ns_server RPC Manager interface (defined in cbauth/service/interface.go).
 type PauseServiceManager struct {
-	httpAddr string // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
+	genericMgr *GenericServiceManager // pointer to our parent
+	httpAddr   string                 // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
 
 	// tasks is the current list of Pause-Resume tasks that are running, if any
 	tasks      []*taskObj
@@ -29,16 +35,29 @@ type PauseServiceManager struct {
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
+// GenericServiceManager constructs a singleton at boot.
+// genericMgr is a pointer to our parent.
 // httpAddr gives the host:port of the local node for Index Service HTTP calls.
-func NewPauseServiceManager(httpAddr string) *PauseServiceManager {
+func NewPauseServiceManager(mux *http.ServeMux, genericMgr *GenericServiceManager,
+	httpAddr string) *PauseServiceManager {
+
 	m := &PauseServiceManager{
-		httpAddr: httpAddr,
+		genericMgr: genericMgr,
+		httpAddr:   httpAddr,
 	}
+
+	// Save the singleton
+	pauseMgr = m
+
+	// Unit test REST APIs -- THESE MUST STILL DO AUTHENTICATION!!
+	mux.HandleFunc("/test/Pause", pauseMgr.testPause)
+	mux.HandleFunc("/test/Resume", pauseMgr.testResume)
+
 	return m
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// ENUMS
+// Enums
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // taskEnum defines types of tasks (following task_XXX constants)
@@ -60,7 +79,7 @@ const (
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// TYPES
+// Type definitions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // taskObj represents one Pause or Resume task
@@ -163,7 +182,62 @@ func (m *PauseServiceManager) Resume(taskId string, bucket string, archiveRoot s
 // kjc implement and add delegation in GenericServiceManager.GetTaskList
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// METHODS / FUNCTIONS
+// Handlers for unit test REST APIs (/test/methodName) -- MUST STILL DO AUTHENTICATION!!
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// testPause handles unit test REST API "/test/Pause" by calling
+// pause_service_manager.go Pause, which is normally called by ns_server via cbauth RPC.
+func (m *PauseServiceManager) testPause(w http.ResponseWriter, r *http.Request) {
+	const _testPause = "PauseServiceManager::testPause:"
+
+	m.testPauseOrResume(w, r, _testPause, "Pause")
+}
+
+// testResume handles unit test REST API "/test/Resume" by calling
+// pause_service_manager.go Resume, which is normally called by ns_server via cbauth RPC.
+func (m *PauseServiceManager) testResume(w http.ResponseWriter, r *http.Request) {
+	const _testResume = "PauseServiceManager::testResume:"
+
+	m.testPauseOrResume(w, r, _testResume, "Resume")
+}
+
+// testPauseOrResume is the delegate of testPause and testResume, since their logic differs only in
+// which API they call.
+func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.Request,
+	logPrefix string, funcName string) {
+
+	logging.Infof("%v called", logPrefix)
+	defer logging.Infof("%v returned", logPrefix)
+
+	// Authenticate
+	_, ok := doAuth(r, w, logPrefix)
+	if !ok {
+		return
+	}
+
+	// Required parameters
+	taskId := r.FormValue("taskId")
+	bucket := r.FormValue("bucket")
+	archiveRoot := r.FormValue("archiveRoot") // e.g. S3 bucket or filesystem path
+
+	var err error
+	if funcName == "Pause" {
+		err = m.Pause(taskId, bucket, archiveRoot)
+	} else { // Resume
+		err = m.Resume(taskId, bucket, archiveRoot)
+	}
+	if err == nil {
+		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: taskId}
+		rhSend(http.StatusOK, w, resp)
+		return
+	}
+	err = fmt.Errorf("%v %v RPC returned error: %v", logPrefix, funcName, err)
+	resp := &TaskResponse{Code: RESP_ERROR, Error: err.Error()}
+	rhSend(http.StatusInternalServerError, w, resp)
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// General methods and functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // archiveInfoFromRoot returns the archive type and archive directory from the archive root from

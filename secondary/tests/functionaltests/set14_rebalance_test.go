@@ -1,11 +1,15 @@
 package functionaltests
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -71,11 +75,11 @@ func printClusterConfig(caller string, location string) {
 // Node 0 is assumed to be correct already and not actually set here. Any existing nodes 1-3
 // are dropped and readded as index-only nodes.
 func setupCluster(t *testing.T) {
-	const method string = "setupCluster" // for logging
+	const _setupCluster = "set14_rebalance_test.go::setupCluster:"
 	resetCluster(t)
 	status := getClusterStatus()
 	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
-		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
+		t.Fatalf("%v Unexpected cluster configuration: %v", _setupCluster, status)
 	}
 }
 
@@ -90,6 +94,63 @@ func skipTest() bool {
 	return false
 }
 
+// cancelTask calls the generic_sercvice_manager.go CancelTaskList cbauth RPC API.
+func cancelTask() {
+	// kjc_implement
+}
+
+// getTaskList calls the generic generic_service_manager.go GetTaskList cbauth RPC API on each
+// index node and returns the TaskList responses for each. It omits nil responses so as not to mask
+// mysterious failures by making it look like a non-trivial response was received.
+func getTaskList(t *testing.T) (taskLists []*service.TaskList) {
+	const _getTaskList = "set14_rebalance_test.go::getTaskList:"
+
+	// Slice of strings each of which is ipAddr:port of an Index node
+	indexerNodeAddrs, err := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	FailTestIfError(err,
+		fmt.Sprintf("%v GetIndexerNodesHttpAddresses returned error", _getTaskList), t)
+	if len(indexerNodeAddrs) == 0 {
+		t.Fatalf("%v No Index nodes found", _getTaskList)
+	}
+
+	for _, nodeAddr := range indexerNodeAddrs {
+		url := makeUrlForIndexNode(nodeAddr, "/test/GetTaskList")
+		resp, err := http.Get(url)
+		FailTestIfError(err, fmt.Sprintf("%v http.Get returned error", _getTaskList), t)
+
+		respBody, err := ioutil.ReadAll(resp.Body)
+		FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll returned error", _getTaskList), t)
+
+		var getTaskListResponse tc.GetTaskListResponse
+		err = json.Unmarshal(respBody, &getTaskListResponse)
+		FailTestIfError(err, fmt.Sprintf("%v json.Unmarshal returned error", _getTaskList), t)
+
+		// Return value
+		taskList := getTaskListResponse.TaskList
+		if taskList != nil {
+			taskLists = append(taskLists, taskList)
+		}
+
+		// For debugging: Print the response
+		log.Printf("%v getTaskListResponse: %+v, TaskList %+v", _getTaskList,
+			getTaskListResponse, taskList)
+	}
+
+	return taskLists
+}
+
+// pause performs the Elixir Pause action (hibernate a bucket) using local disk instead of S3 by
+// calling the pause_service_manager.go Pause cbauth RPC API on all Index nodes.
+func pause() {
+	// kjc_implement
+}
+
+// resume performs the Elixir Resume action (unhibernate a bucket) using local disk instead of S3 by
+// calling the pause_service_manager.go Resume cbauth RPC API on all Index nodes.
+func resume() {
+	// kjc_implement
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // TEST FUNCTIONS
 ///////////////////////////////////////////////////////////////////////////////
@@ -100,27 +161,27 @@ func skipTest() bool {
 // It also sets indexer.settings.rebalance.redistribute_indexes = true so rebalance will move
 // indexes to empty nodes.
 func TestRebalanceSetupCluster(t *testing.T) {
-	const method string = "TestRebalanceSetupCluster" // for logging
-	printClusterConfig(method, "entry")
+	const _TestRebalanceSetupCluster = "set14_rebalance_test.go::TestRebalanceSetupCluster:"
+	printClusterConfig(_TestRebalanceSetupCluster, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestRebalanceSetupCluster)
 		return
 	}
 
-	log.Printf("%v: 1. Setting up initial cluster configuration", method)
+	log.Printf("%v 1. Setting up initial cluster configuration", _TestRebalanceSetupCluster)
 	setupCluster(t)
 	status := getClusterStatus()
 	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
-		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
+		t.Fatalf("%v Unexpected cluster configuration: %v", _TestRebalanceSetupCluster, status)
 	}
 
 	// Enable Rebalance to move indexes onto empty nodes
-	log.Printf("%v: 2. Changing indexer.settings.rebalance.redistribute_indexes to true", method)
+	log.Printf("%v 2. Changing indexer.settings.rebalance.redistribute_indexes to true", _TestRebalanceSetupCluster)
 	err := secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.redistribute_indexes",
 		true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error setting indexer.settings.rebalance.redistribute_indexes to true")
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestRebalanceSetupCluster, "exit")
 }
 
 // TestCreateDocsBeforeRebalance creates some documents (from testdata/Users_mut.txt.gz)
@@ -128,19 +189,19 @@ func TestRebalanceSetupCluster(t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index]
 //   Ending config:   same
 func TestCreateDocsBeforeRebalance(t *testing.T) {
-	const method string = "TestCreateDocsBeforeRebalance" // for logging
-	printClusterConfig(method, "entry")
+	const _TestCreateDocsBeforeRebalance = "set14_rebalance_test.go::TestCreateDocsBeforeRebalance:"
+	printClusterConfig(_TestCreateDocsBeforeRebalance, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestCreateDocsBeforeRebalance)
 		return
 	}
 
 	docs := 100 // # docs to create
-	log.Printf("%v: 1. Creating %v documents", method, docs)
+	log.Printf("%v 1. Creating %v documents", _TestCreateDocsBeforeRebalance, docs)
 	CreateDocs(docs)
-	log.Printf("%v: %v documents created", method, docs)
+	log.Printf("%v %v documents created", _TestCreateDocsBeforeRebalance, docs)
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestCreateDocsBeforeRebalance, "exit")
 }
 
 // TestCreateIndexesBeforeRebalance creates some indexes so Rebalance will do
@@ -149,26 +210,26 @@ func TestCreateDocsBeforeRebalance(t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index]
 //   Ending config:   same
 func TestCreateIndexesBeforeRebalance(t *testing.T) {
-	const method string = "TestCreateIndexesBeforeRebalance" // for logging
-	printClusterConfig(method, "entry")
+	const _TestCreateIndexesBeforeRebalance = "set14_rebalance_test.go::TestCreateIndexesBeforeRebalance:"
+	printClusterConfig(_TestCreateIndexesBeforeRebalance, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestCreateIndexesBeforeRebalance)
 		return
 	}
 
 	// Create non-partitioned, 0-replica, non-deferred indexes
-	log.Printf("%v: 1. Creating %v indexes: non-partitioned, 0-replica, non-deferred",
-		method, len(fieldNames))
+	log.Printf("%v 1. Creating %v indexes: non-partitioned, 0-replica, non-deferred",
+		_TestCreateIndexesBeforeRebalance, len(fieldNames))
 	for _, fieldName := range fieldNames {
 		indexName := indexNamePrefix + "PLAIN_" + fieldName
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v)", indexName, bucketName, fieldName)
-		executeN1qlStmt(n1qlStmt, bucketName, method, t)
-		log.Printf("%v: %v index is now active.", method, indexName)
+		executeN1qlStmt(n1qlStmt, bucketName, _TestCreateIndexesBeforeRebalance, t)
+		log.Printf("%v %v index is now active.", _TestCreateIndexesBeforeRebalance, indexName)
 	}
 
 	// Create non-partitioned, 0-replica, DEFERRED indexes
-	log.Printf("%v: 2. Creating %v indexes: non-partitioned, 0-replica, DEFERRED",
-		method, len(fieldNames))
+	log.Printf("%v 2. Creating %v indexes: non-partitioned, 0-replica, DEFERRED",
+		_TestCreateIndexesBeforeRebalance, len(fieldNames))
 	for field1, fieldName1 := range fieldNames {
 		fieldName2 := fieldNames[(field1+1)%len(fieldNames)]
 		indexName := indexNamePrefix + "DEFERRED_" + fieldName1 + "_" + fieldName2
@@ -177,30 +238,30 @@ func TestCreateIndexesBeforeRebalance(t *testing.T) {
 		if clusterconfig.IndexUsing == "memory_optimized" {
 			time.Sleep(100 * time.Millisecond) // need to slow these a bit on memory_optimized
 		}
-		executeN1qlStmt(n1qlStmt, bucketName, method, t)
-		log.Printf("%v: %v index is now deferred.", method, indexName)
+		executeN1qlStmt(n1qlStmt, bucketName, _TestCreateIndexesBeforeRebalance, t)
+		log.Printf("%v %v index is now deferred.", _TestCreateIndexesBeforeRebalance, indexName)
 	}
 
 	// Create 7-PARTITION, 0-replica, non-deferred indexes. Skip on FDB to avoid error:
 	// [5000] GSI CreateIndex() - cause: Create Index fails. Reason = Cannot create partitioned index using forestdb
 	if clusterconfig.IndexUsing != "forestdb" {
 		numToCreate := 3
-		log.Printf("%v: 3. Creating %v indexes: 7-PARTITION, 0-replica, non-deferred",
-			method, numToCreate)
+		log.Printf("%v 3. Creating %v indexes: 7-PARTITION, 0-replica, non-deferred",
+			_TestCreateIndexesBeforeRebalance, numToCreate)
 		for field1 := 0; field1 < numToCreate; field1++ {
 			fieldName1 := fieldNames[field1%len(fieldNames)]
 			fieldName2 := fieldNames[(field1+2)%len(fieldNames)]
 			indexName := indexNamePrefix + "7PARTITIONS_" + fieldName1 + "_" + fieldName2
 			n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":7}",
 				indexName, bucketName, fieldName1, fieldName2)
-			executeN1qlStmt(n1qlStmt, bucketName, method, t)
-			log.Printf("%v: %v index is now active.", method, indexName)
+			executeN1qlStmt(n1qlStmt, bucketName, _TestCreateIndexesBeforeRebalance, t)
+			log.Printf("%v %v index is now active.", _TestCreateIndexesBeforeRebalance, indexName)
 		}
 	} else {
-		log.Printf("%v: Skipped unsupported creation of partitioned indexes on ForestDB.", method)
+		log.Printf("%v Skipped unsupported creation of partitioned indexes on ForestDB.", _TestCreateIndexesBeforeRebalance)
 	}
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestCreateIndexesBeforeRebalance, "exit")
 }
 
 // TestIndexNodeRebalanceIn adds nodes [2: index] and [3: index], then rebalances. The actions performed are
@@ -253,33 +314,33 @@ func addTwoNodesAndRebalance(caller string, t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
 //   Ending config:   same
 func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
-	const method string = "TestCreateReplicatedIndexesBeforeRebalance" // for logging
-	printClusterConfig(method, "entry")
+	const _TestCreateReplicatedIndexesBeforeRebalance = "set14_rebalance_test.go::TestCreateReplicatedIndexesBeforeRebalance:"
+	printClusterConfig(_TestCreateReplicatedIndexesBeforeRebalance, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestCreateReplicatedIndexesBeforeRebalance)
 		return
 	}
 
 	// Create non-partitioned, 2-REPLICA, non-deferred indexes
 	numToCreate := 5
-	log.Printf("%v: 1. Creating %v indexes: non-partitioned, 2-REPLICA, non-deferred",
-		method, numToCreate)
+	log.Printf("%v 1. Creating %v indexes: non-partitioned, 2-REPLICA, non-deferred",
+		_TestCreateReplicatedIndexesBeforeRebalance, numToCreate)
 	for field1 := 0; field1 < numToCreate; field1++ {
 		fieldName1 := fieldNames[field1%len(fieldNames)]
 		fieldName2 := fieldNames[(field1+3)%len(fieldNames)]
 		indexName := indexNamePrefix + "2REPLICAS_" + fieldName1 + "_" + fieldName2
 		n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v) with {\"num_replica\":2}",
 			indexName, bucketName, fieldName1, fieldName2)
-		executeN1qlStmt(n1qlStmt, bucketName, method, t)
-		log.Printf("%v: %v index is now active.", method, indexName)
+		executeN1qlStmt(n1qlStmt, bucketName, _TestCreateReplicatedIndexesBeforeRebalance, t)
+		log.Printf("%v %v index is now active.", _TestCreateReplicatedIndexesBeforeRebalance, indexName)
 	}
 
 	// Create 5-PARTITION, 1-REPLICA, non-deferred indexes. Skip on FDB to avoid error:
 	// [5000] GSI CreateIndex() - cause: Create Index fails. Reason = Cannot create partitioned index using forestdb
 	if clusterconfig.IndexUsing != "forestdb" {
 		numToCreate = 2
-		log.Printf("%v: 2. Creating %v indexes: 5-PARTITION, 1-REPLICA, non-deferred",
-			method, numToCreate)
+		log.Printf("%v 2. Creating %v indexes: 5-PARTITION, 1-REPLICA, non-deferred",
+			_TestCreateReplicatedIndexesBeforeRebalance, numToCreate)
 		for field1 := 0; field1 < numToCreate; field1++ {
 			fieldName1 := fieldNames[field1%len(fieldNames)]
 			fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
@@ -287,14 +348,14 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 			n1qlStmt := fmt.Sprintf(
 				"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"num_replica\":1}",
 				indexName, bucketName, fieldName1, fieldName2)
-			executeN1qlStmt(n1qlStmt, bucketName, method, t)
-			log.Printf("%v: %v index is now active.", method, indexName)
+			executeN1qlStmt(n1qlStmt, bucketName, _TestCreateReplicatedIndexesBeforeRebalance, t)
+			log.Printf("%v %v index is now active.", _TestCreateReplicatedIndexesBeforeRebalance, indexName)
 		}
 	} else {
-		log.Printf("%v: Skipped unsupported creation of partitioned indexes on ForestDB.", method)
+		log.Printf("%v Skipped unsupported creation of partitioned indexes on ForestDB.", _TestCreateReplicatedIndexesBeforeRebalance)
 	}
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestCreateReplicatedIndexesBeforeRebalance, "exit")
 }
 
 // TestIndexNodeRebalanceOut removes node [1: index] from the cluster, which includes an implicit
@@ -304,23 +365,23 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 //   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
 //   Ending config:   [0: kv n1ql]            [2: index] [3: index]
 func TestIndexNodeRebalanceOut(t *testing.T) {
-	const method string = "TestIndexNodeRebalanceOut" // for logging
-	printClusterConfig(method, "entry")
+	const _TestIndexNodeRebalanceOut = "set14_rebalance_test.go::TestIndexNodeRebalanceOut:"
+	printClusterConfig(_TestIndexNodeRebalanceOut, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestIndexNodeRebalanceOut)
 		return
 	}
 
 	node := 1
-	log.Printf("%v: 1. Rebalancing index node %v out of the cluster", method, clusterconfig.Nodes[node])
+	log.Printf("%v 1. Rebalancing index node %v out of the cluster", _TestIndexNodeRebalanceOut, clusterconfig.Nodes[node])
 	removeNode(clusterconfig.Nodes[node], t)
 
 	status := getClusterStatus()
 	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[2]) && !isNodeIndex(status, clusterconfig.Nodes[3]) {
-		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
+		t.Fatalf("%v Unexpected cluster configuration: %v", _TestIndexNodeRebalanceOut, status)
 	}
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestIndexNodeRebalanceOut, "exit")
 	waitForRebalanceCleanup()
 }
 
@@ -328,26 +389,26 @@ func TestIndexNodeRebalanceOut(t *testing.T) {
 //   Starting config: [0: kv n1ql]            [2: index] [3: index]
 //   Ending config:   [0: kv n1ql]                       [3: index]
 func TestFailoverAndRebalance(t *testing.T) {
-	const method string = "TestFailoverAndRebalance" // for logging
-	printClusterConfig(method, "entry")
+	const _TestFailoverAndRebalance = "set14_rebalance_test.go::TestFailoverAndRebalance:"
+	printClusterConfig(_TestFailoverAndRebalance, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestFailoverAndRebalance)
 		return
 	}
 
 	node := 2
-	log.Printf("%v: 1. Failing over index node %v", method, clusterconfig.Nodes[node])
+	log.Printf("%v 1. Failing over index node %v", _TestFailoverAndRebalance, clusterconfig.Nodes[node])
 	failoverNode(clusterconfig.Nodes[node], t)
 
-	log.Printf("%v: 2. Rebalancing", method)
+	log.Printf("%v 2. Rebalancing", _TestFailoverAndRebalance)
 	rebalance(t)
 
 	status := getClusterStatus()
 	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[3]) {
-		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
+		t.Fatalf("%v Unexpected cluster configuration: %v", _TestFailoverAndRebalance, status)
 	}
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestFailoverAndRebalance, "exit")
 	waitForRebalanceCleanup()
 }
 
@@ -356,27 +417,27 @@ func TestFailoverAndRebalance(t *testing.T) {
 //   Starting config: [0: kv n1ql]                       [3: index]
 //   Ending config:   [0: kv n1ql] [1: index]
 func TestSwapRebalance(t *testing.T) {
-	const method string = "TestSwapRebalance" // for logging
-	printClusterConfig(method, "entry")
+	const _TestSwapRebalance = "set14_rebalance_test.go::TestSwapRebalance:"
+	printClusterConfig(_TestSwapRebalance, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestSwapRebalance)
 		return
 	}
 
 	node := 1
-	log.Printf("%v: 1. Adding index node %v to the cluster", method, clusterconfig.Nodes[node])
+	log.Printf("%v 1. Adding index node %v to the cluster", _TestSwapRebalance, clusterconfig.Nodes[node])
 	addNode(clusterconfig.Nodes[node], "index", t)
 
 	node = 3
-	log.Printf("%v: 2. Swap rebalancing index node %v out of the cluster", method, clusterconfig.Nodes[node])
+	log.Printf("%v 2. Swap rebalancing index node %v out of the cluster", _TestSwapRebalance, clusterconfig.Nodes[node])
 	removeNode(clusterconfig.Nodes[node], t)
 
 	status := getClusterStatus()
 	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
-		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
+		t.Fatalf("%v Unexpected cluster configuration: %v", _TestSwapRebalance, status)
 	}
 
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestSwapRebalance, "exit")
 	waitForRebalanceCleanup()
 }
 
@@ -390,12 +451,40 @@ func TestRebalanceReplicaRepair(t *testing.T) {
 	waitForRebalanceCleanup()
 }
 
-// Starting Config: [0: kv n1ql] [1: index] [2: index] [3: index]
+// TestPauseAndResume tests Elixir Pause and Resume features using local disk instead of S3.
+//   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+func TestPauseAndResume(t *testing.T) {
+	const _TestPauseAndResume = "set14_rebalance_test.go::TestPauseAndResume:"
+	printClusterConfig(_TestPauseAndResume, "entry")
+	if skipTest() {
+		log.Printf("%v Test skipped", _TestPauseAndResume)
+		return
+	}
+
+	numIndexNodes := 3
+	taskLists := getTaskList(t)
+	if len(taskLists) != numIndexNodes {
+		t.Fatalf("%v Before Pause-Resume expected %v getTaskList replies, got %v", _TestPauseAndResume, numIndexNodes, len(taskLists))
+	}
+
+	printClusterConfig(_TestPauseAndResume, "exit")
+}
+
 // This test failsover an indexer while index build is going on
 // and will trigger a rebalance. Due to the skewed index distribution
 // indexer is expected to move indexes during rebalance and this
 // rebalance should fail as DDL is in progress on the failed over node
+//   Starting Config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
+	const _TestFailureAndRebalanceDuringInitialIndexBuild = "set14_rebalance_test.go::TestPauseAndResume:"
+	printClusterConfig(_TestFailureAndRebalanceDuringInitialIndexBuild, "entry")
+	if skipTest() {
+		log.Printf("%v Test skipped", _TestFailureAndRebalanceDuringInitialIndexBuild)
+		return
+	}
+
 	bucket := "default"
 	scope := "_default"
 	coll := "_default"
@@ -430,32 +519,34 @@ func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
 	if err := cluster.Rebalance(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password); err == nil {
 		t.Fatalf("TestFailureAndRebalanceDuringInitialIndexBuild: Rebalance is expected to fail, but it succeded")
 	}
+
+	printClusterConfig(_TestFailureAndRebalanceDuringInitialIndexBuild, "exit")
 }
 
 // TestRebalanceResetCluster restores indexer.settings.rebalance.redistribute_indexes = false
 // to avoid affecting other tests, including those that call addNodeAndRebalance/AddNodeAndRebalance,
 // amd then resets the expected starting cluster configuration, as some later tests depend on it.
 func TestRebalanceResetCluster(t *testing.T) {
-	const method string = "TestRebalanceResetCluster" // for logging
-	printClusterConfig(method, "entry")
+	const _TestRebalanceResetCluster = "set14_rebalance_test.go::TestRebalanceResetCluster:"
+	printClusterConfig(_TestRebalanceResetCluster, "entry")
 	if skipTest() {
-		log.Printf("%v: Test skipped", method)
+		log.Printf("%v Test skipped", _TestRebalanceResetCluster)
 		return
 	}
 
 	// Disable Rebalance from moving indexes onto empty nodes (its normal setting from ns_server)
-	log.Printf("%v: 1. Restoring indexer.settings.rebalance.redistribute_indexes to false", method)
+	log.Printf("%v 1. Restoring indexer.settings.rebalance.redistribute_indexes to false", _TestRebalanceResetCluster)
 	err := secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.redistribute_indexes",
 		false, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error setting indexer.settings.rebalance.redistribute_indexes to false")
 
-	log.Printf("%v: 2. Resetting cluster to initial configuration", method)
+	log.Printf("%v 2. Resetting cluster to initial configuration", _TestRebalanceResetCluster)
 	setupCluster(t)
 	status := getClusterStatus()
 	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
-		t.Fatalf("%v: Unexpected cluster configuration: %v", method, status)
+		t.Fatalf("%v Unexpected cluster configuration: %v", _TestRebalanceResetCluster, status)
 	}
-	printClusterConfig(method, "exit")
+	printClusterConfig(_TestRebalanceResetCluster, "exit")
 	waitForRebalanceCleanup()
 }
 

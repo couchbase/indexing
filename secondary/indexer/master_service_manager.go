@@ -31,25 +31,25 @@ import (
 //       GSI: PauseServiceManager (pause_service_manager.go)
 //       GSI: RebalanceServiceManager (rebalance_service_manager.go)
 type MasterServiceManager struct {
-	autofail *AutofailoverServiceManager
-	generic  *GenericServiceManager
-	pause    *PauseServiceManager
-	rebal    *RebalanceServiceManager
+	autofailMgr *AutofailoverServiceManager
+	genericMgr  *GenericServiceManager
+	pauseMgr    *PauseServiceManager
+	rebalMgr    *RebalanceServiceManager
 }
 
 // NewMasterServiceManager is the constructor for the MasterServiceManager class. The service
 // managers passed in are all singletons created by NewIndexer.
 func NewMasterServiceManager(
-	autofailoverMgr *AutofailoverServiceManager,
+	autofailMgr *AutofailoverServiceManager,
 	genericMgr *GenericServiceManager,
 	pauseMgr *PauseServiceManager,
 	rebalMgr *RebalanceServiceManager,
 ) *MasterServiceManager {
 	this := &MasterServiceManager{
-		autofail: autofailoverMgr,
-		generic:  genericMgr,
-		pause:    pauseMgr,
-		rebal:    rebalMgr,
+		autofailMgr: autofailMgr,
+		genericMgr:  genericMgr,
+		pauseMgr:    pauseMgr,
+		rebalMgr:    rebalMgr,
 	}
 	go this.registerWithServer() // register for ns_server RPC calls from cbauth
 	return this
@@ -80,11 +80,11 @@ func (this *MasterServiceManager) registerWithServer() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) HealthCheck() (*service.HealthInfo, error) {
-	return this.autofail.HealthCheck()
+	return this.autofailMgr.HealthCheck()
 }
 
 func (this *MasterServiceManager) IsSafe(nodeUUIDs []service.NodeID) error {
-	return this.autofail.IsSafe(nodeUUIDs)
+	return this.autofailMgr.IsSafe(nodeUUIDs)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -92,20 +92,20 @@ func (this *MasterServiceManager) IsSafe(nodeUUIDs []service.NodeID) error {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) GetNodeInfo() (*service.NodeInfo, error) {
-	return this.generic.GetNodeInfo()
+	return this.genericMgr.GetNodeInfo()
 }
 
 func (this *MasterServiceManager) Shutdown() error {
-	return this.generic.Shutdown()
+	return this.genericMgr.Shutdown()
 }
 
 func (this *MasterServiceManager) GetTaskList(rev service.Revision, cancel service.Cancel) (
 	*service.TaskList, error) {
-	return this.generic.GetTaskList(rev, cancel)
+	return this.genericMgr.GetTaskList(rev, cancel)
 }
 
 func (this *MasterServiceManager) CancelTask(id string, rev service.Revision) error {
-	return this.generic.CancelTask(id, rev)
+	return this.genericMgr.CancelTask(id, rev)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -114,11 +114,11 @@ func (this *MasterServiceManager) CancelTask(id string, rev service.Revision) er
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) Pause(taskId string, bucket string, archiveRoot string) error {
-	return this.pause.Pause(taskId, bucket, archiveRoot)
+	return this.pauseMgr.Pause(taskId, bucket, archiveRoot)
 }
 
 func (this *MasterServiceManager) Resume(taskId string, bucket string, archiveRoot string) error {
-	return this.pause.Resume(taskId, bucket, archiveRoot)
+	return this.pauseMgr.Resume(taskId, bucket, archiveRoot)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -126,13 +126,13 @@ func (this *MasterServiceManager) Resume(taskId string, bucket string, archiveRo
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) GetCurrentTopology(rev service.Revision, cancel service.Cancel) (*service.Topology, error) {
-	return this.rebal.GetCurrentTopology(rev, cancel)
+	return this.rebalMgr.GetCurrentTopology(rev, cancel)
 }
 
 func (this *MasterServiceManager) PrepareTopologyChange(change service.TopologyChange) error {
-	return this.rebal.PrepareTopologyChange(change)
+	return this.rebalMgr.PrepareTopologyChange(change)
 }
 
 func (this *MasterServiceManager) StartTopologyChange(change service.TopologyChange) error {
-	return this.rebal.StartTopologyChange(change)
+	return this.rebalMgr.StartTopologyChange(change)
 }
