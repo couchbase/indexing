@@ -653,6 +653,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
+	newEntriesCount := len(newEntriesBytes)
 	if int64(newbufLen) > atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval) {
 		atomic.StoreInt64(&mdb.maxArrKeySizeInLastInterval, int64(newbufLen))
 	}
@@ -670,6 +671,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	}
 
 	list := memdb.NewNodeList((*skiplist.Node)(ptr), mdb.exposeItemCopy)
+
 	oldEntriesBytes := list.Keys()
 	oldKeyCount := make([]int, len(oldEntriesBytes))
 	for i, _ := range oldEntriesBytes {
@@ -677,6 +679,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		oldKeyCount[i] = e.Count()
 		oldEntriesBytes[i] = oldEntriesBytes[i][:e.lenKey()]
 	}
+
+	oldEntriesCount := len(oldEntriesBytes)
 
 	// For DESC field, newEntriesBytes will not be reverse collate encoded
 	// and oldEntriesBytes (from storage) will be reverse collate encoded.
@@ -766,6 +770,16 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
 			atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
 		}
+	}
+
+	if list.Head() == nil {
+		logging.Fatalf("MemDBSlice::insertSecArrayIndex[%v] About to update a list with nil head, "+
+			" lookupentry: %s, newEntriesBytes: %s, oldEntriesBytes: %s, newKeyCount: %v, oldKeyCount: %v, "+
+			"newEntriesCount-BeforeProcessing: %v, oldEntriesCount-BeforeProcessing: %v, "+
+			"entryBytesToBeAdded: %s, entryBytesToBeDeleted: %s, key: %s, docId: %s",
+			workerId, lookupentry, newEntriesBytes, oldEntriesBytes, newKeyCount,
+			oldKeyCount, newEntriesCount, oldEntriesCount,
+			entryBytesToBeAdded, entryBytesToDeleted, keys, docid)
 	}
 
 	// Update back index entry
@@ -1394,9 +1408,27 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 							entryBytes = entry.Item().Bytes()
 						}
 
-						if updated, oldPtr := mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node())); updated {
+						forceLog := false
+						if entry.Node() == nil {
+							forceLog = true
+						}
+
+						var updated bool
+						var oldPtr unsafe.Pointer
+						if updated, oldPtr = mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node())); updated {
+							if forceLog { // In case SetLink panics, we will know entryBytes before panic
+								logging.Fatalf("MemDBSlice::LoadSnapshot  Slice Id %v, IndexInstId %v, PartitionId %v, "+
+									"nil entry.Node() for entryBytes: %s, updated: %v, oldPtr: %v",
+									mdb.id, mdb.idxInstId, mdb.idxPartnId, entryBytes, updated, oldPtr)
+							}
 							oldNode := (*skiplist.Node)(oldPtr)
 							entry.Node().SetLink(oldNode)
+						}
+
+						if forceLog {
+							logging.Fatalf("MemDBSlice::LoadSnapshot  Slice Id %v, IndexInstId %v, PartitionId %v, "+
+								"nil entry.Node() for entryBytes: %s, updated: %v, oldPtr: %v",
+								mdb.id, mdb.idxInstId, mdb.idxPartnId, entryBytes, updated, oldPtr)
 						}
 					}
 				}
