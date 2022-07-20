@@ -122,8 +122,8 @@ echo "</pre><h3>Building</h3><pre>"
 > $WORKSPACE/versions.cfg
 > $WORKSPACE/make.log
 
-if [ ! -d ~/.reference/.repo ]; then
-  mkdir -p ~/.reference
+if [ ! -d ~/.reference ]; then
+  mkdir ~/.reference
   cd ~/.reference
   repo init -u ssh://github.com/couchbase/build-manifests -b master -m $MANIFEST -g all --mirror 1>>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
