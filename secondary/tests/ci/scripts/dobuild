@@ -142,7 +142,7 @@ git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
 
 echo "Updating mirror"
 cd ~/.reference
-repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+repo sync --jobs=32 --fetch-submodules 1>>$WORKSPACE/make.log 2>&1
 
 echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
 find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
@@ -153,7 +153,7 @@ test $? -eq 0 || error_exit "Repo Init at $SHA"
 
 echo "Updating tree for run $TS"
 cd $WORKSPACE
-repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+repo sync --jobs=32 --fetch-submodules 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Updating tree"
 test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
 
@@ -191,15 +191,14 @@ git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout mast
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version gometa $WORKSPACE/goproj/src/github.com/couchbase/gometa
 
-cd $WORKSPACE/testrunner
-mkdir -p gauntlet
-mkdir -p java_sdk_client
-mkdir -p lib/capellaAPI
+cd $WORKSPACE
+# rm -rf testrunner
+# git clone --recurse-submodules https://github.com/couchbase/testrunner
+cd testrunner
 echo "Switching testrunner to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
-git submodule init
-git submodule update --init --force --remote
+git submodule update --init --force
 note_version testrunner $WORKSPACE/testrunner
 
 > ~/gerrit.list

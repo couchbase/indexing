@@ -2,7 +2,7 @@
 
 source ~/.cienv
 
-echo "Disabled integration tests"
+# echo "Disabled integration tests"
 
 echo '</pre><h3>Testing</h3><pre>'
 
@@ -252,8 +252,8 @@ if [[ "$MODE" == *"$phase"* ]]; then
   [ "$STORAGE" = "memdb" ] && export TYPE="memory_optimized"
   [ "$STORAGE" = "plasma" ] && export TYPE="plasma"
   [ "$STORAGE" = "fdb" ] && export TYPE="forestdb"
-  echo "Disabled integration tests"
-  # (timeout 1h make test-gsi-integrations-tests PARAMS=gsi_type=$TYPE 2>&1) | tee -a $WORKSPACE/test.log
+  # echo "Disabled integration tests"
+  (timeout 1h make test-gsi-integrations-tests PARAMS=gsi_type=$TYPE 2>&1) | tee -a $WORKSPACE/test.log
   collect_logs
 fi
 
