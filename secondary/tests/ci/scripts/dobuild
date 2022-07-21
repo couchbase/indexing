@@ -48,7 +48,7 @@ note_version() {
 
 build() (
   FORCEX86=0
-  if [ $(echo "$1" | tr 'A-Z' 'a-z') = "-forcex86" ]; then
+  if [ "$(echo $1 | tr 'A-Z' 'a-z')" = "-forcex86" ]; then
     FORCEX86=1
     echo "Forcing to build for x86 architecture"
   fi
