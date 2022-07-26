@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -712,10 +712,7 @@ func (sm *storageMgr) rollbackIndex(streamId common.StreamId, bucket string,
 	var restartTs *common.TsVbuuid
 	var err error
 
-	var markAsUsed bool
-	if rollbackTs.HasZeroSeqNum() {
-		markAsUsed = true
-	}
+	markAsUsed := true
 
 	//for all partitions managed by this indexer
 	partnInstList := sm.getSortedPartnInst(partnMap)
@@ -755,43 +752,41 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 	}
 	s := NewSnapshotInfoContainer(infos)
 
-	//if dcp has requested rollback to 0 for any vb, it is better to
-	//try with all available disk snapshots. The rollback could be
-	//due to vbuuid mismatch and using an older disk snapshot may work.
+	//It is better to try with all available disk snapshots on DCP
+	//rollback. There can be cases where vbucket replica is behind indexer.
+	//When such a replica gets promoted to active, it may ask to rollback
+	//as indexer is asking to start using snapshot/seqno/vbuuid it is not aware of.
 	var snapInfo SnapshotInfo
-	if rollbackTs.HasZeroSeqNum() {
-		lastRollbackTs := slice.LastRollbackTs()
-		latestSnapInfo := s.GetLatest()
+	lastRollbackTs := slice.LastRollbackTs()
+	latestSnapInfo := s.GetLatest()
 
-		if latestSnapInfo == nil || lastRollbackTs == nil {
-			logging.Infof("StorageMgr::handleRollback latestSnapInfo %v "+
-				"lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
-			snapInfo = latestSnapInfo
-		} else {
-			slist := s.List()
-			for i, si := range slist {
-				if lastRollbackTs.Equal(si.Timestamp()) {
-					//if there are more snapshots, use the next one
-					if len(slist) >= i+2 {
-						snapInfo = slist[i+1]
-						logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
-							"Snapshot %v. Using Next snapshot %v", si, snapInfo)
-					} else {
-						logging.Infof("StorageMgr::handleRollback Unable to find a snapshot "+
-							"older than last used Snapshot %v. Use nil snapshot.", latestSnapInfo)
-						snapInfo = nil
-					}
-					break
+	if latestSnapInfo == nil || lastRollbackTs == nil {
+		logging.Infof("StorageMgr::handleRollback %v latestSnapInfo %v "+
+			"lastRollbackTs %v. Use latest snapshot.", slice.IndexInstId(), latestSnapInfo,
+			lastRollbackTs)
+		snapInfo = latestSnapInfo
+	} else {
+		slist := s.List()
+		for i, si := range slist {
+			if lastRollbackTs.Equal(si.Timestamp()) {
+				//if there are more snapshots, use the next one
+				if len(slist) >= i+2 {
+					snapInfo = slist[i+1]
+					logging.Infof("StorageMgr::handleRollback %v Discarding Already Used "+
+						"Snapshot %v. Using Next snapshot %v", slice.IndexInstId(), si, snapInfo)
 				} else {
-					//if lastRollbackTs is set(i.e. MTR after rollback wasn't completely successful)
-					//use only snapshots lower than lastRollbackTs
-					logging.Infof("StorageMgr::handleRollback Discarding Snapshot %v. Need older "+
-						"than last used snapshot %v.", si, lastRollbackTs)
+					logging.Infof("StorageMgr::handleRollback %v Unable to find a snapshot "+
+						"older than last used Snapshot %v. Use nil snapshot.", slice.IndexInstId(), latestSnapInfo)
+					snapInfo = nil
 				}
+				break
+			} else {
+				//if lastRollbackTs is set(i.e. MTR after rollback wasn't completely successful)
+				//use only snapshots lower than lastRollbackTs
+				logging.Infof("StorageMgr::handleRollback %v Discarding Snapshot %v. Need older "+
+					"than last used snapshot %v.", slice.IndexInstId(), si, lastRollbackTs)
 			}
 		}
-	} else {
-		snapInfo = s.GetOlderThanTS(rollbackTs)
 	}
 
 	return snapInfo
