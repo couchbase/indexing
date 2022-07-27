@@ -121,7 +121,7 @@ func (m *MeteringThrottlingMgr) handleConfigUpdate(cmd Message) {
 func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	result CheckResult, throttleTime time.Duration, err error) {
 	ctx := getCtx(bucket, "")
-	estimatedUnits, err := regulator.NewUnits(regulator.Index, regulator.WriteCapacityUnit, uint64(0))
+	estimatedUnits, err := regulator.NewUnits(regulator.Index, regulator.Write, uint64(0))
 	if err == nil {
 		quotaOpts := regulator.CheckQuotaOpts{
 			MaxThrottle:       time.Duration(0),
@@ -139,7 +139,7 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) (uint64, error) {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
-	units, err := metering.IndexReadToRCU(bytes)
+	units, err := metering.IndexReadToRU(bytes)
 	if err == nil {
 		ctx := getCtx(bucket, user)
 		return units.Whole(), regulator.RecordUnits(ctx, units)
@@ -150,7 +150,7 @@ func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint6
 func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool) error {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
-	units, err := metering.IndexWriteToWCU(bytes, update)
+	units, err := metering.IndexWriteToWU(bytes, update)
 	if err == nil {
 		ctx := getCtx(bucket, "")
 		return regulator.RecordUnits(ctx, units)
@@ -161,7 +161,7 @@ func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, up
 func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) error {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
-	units, err := metering.IndexWriteToWCU(bytes, false)
+	units, err := metering.IndexWriteToWU(bytes, false)
 	if err == nil {
 		ctx := getCtx(bucket, "")
 		return regulator.RefundUnits(ctx, units)
