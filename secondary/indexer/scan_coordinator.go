@@ -250,8 +250,8 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 /////////////////////////////////////////////////////////////////////////
 
 // serverCallback is the single routine that starts each index scan.
-func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, conn net.Conn,
-	cancelCh <-chan bool) {
+func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
+	conn net.Conn, cancelCh <-chan bool, clientVersion uint32) {
 
 	if protoReq == queryport.Ping {
 		if ctx != nil {
@@ -269,8 +269,9 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	req, err := NewScanRequest(protoReq, ctx, cancelCh, s)
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
+	var readUnits uint64 = 0
 	defer func() {
-		s.handleError(req.LogPrefix, w.Done())
+		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion))
 		req.Done()
 	}()
 
@@ -445,9 +446,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 
 	// Do the scan
 	s.processRequest(req, w, is, t0)
-
-	// TODO: [ReadMetering] return readUnits to query
-	// readUnits = req.GetReadUnits()
+	readUnits = req.GetReadUnits()
 
 	if len(req.Ctxs) != 0 {
 		for _, ctx := range req.Ctxs {

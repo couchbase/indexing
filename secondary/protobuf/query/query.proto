@@ -60,34 +60,36 @@ message StatisticsResponse {
 
 // Scan request to indexer.
 message ScanRequest {
-    required uint64        	defnID    		= 1;
-    required Span          	span      		= 2;
-    required bool          	distinct  		= 3;
-    required int64         	limit     		= 4;
-    required uint32        	cons      		= 5;
-    optional TsConsistency 	vector    		= 6;
-    optional string        	requestId 		= 7;
-    repeated Scan        	scans 		        = 8;
-    optional IndexProjection  indexprojection	= 9;
+    required uint64        	    defnID    		= 1;
+    required Span          	    span      		= 2;
+    required bool          	    distinct  		= 3;
+    required int64         	    limit     		= 4;
+    required uint32        	    cons      		= 5;
+    optional TsConsistency 	    vector    		= 6;
+    optional string        	    requestId 		= 7;
+    repeated Scan        	    scans 		    = 8;
+    optional IndexProjection    indexprojection	= 9;
 	optional bool				reverse			= 10;
 	optional int64				offset			= 11;
 	optional int64				rollbackTime    = 12;
-	repeated uint64				partitionIds     = 13;
-    optional GroupAggr        groupAggr       = 14;
-    optional bool             sorted          = 15;
-    optional uint32           dataEncFmt      = 16;
+	repeated uint64				partitionIds    = 13;
+    optional GroupAggr          groupAggr       = 14;
+    optional bool               sorted          = 15;
+    optional uint32             dataEncFmt      = 16;
+    optional string             user            = 17;
 }
 
 // Full table scan request from indexer.
 message ScanAllRequest {
-    required uint64        defnID     = 1;
-    required int64         limit     = 2;
-    required uint32        cons      = 3;
-    optional TsConsistency vector    = 4;
-    optional string        requestId = 5;
-	optional int64		   rollbackTime    = 6;
-	repeated uint64		   partitionIds     = 7;
-	optional uint32        dataEncFmt       = 8;
+    required uint64        defnID        = 1;
+    required int64         limit         = 2;
+    required uint32        cons          = 3;
+    optional TsConsistency vector        = 4;
+    optional string        requestId     = 5;
+	optional int64		   rollbackTime  = 6;
+	repeated uint64		   partitionIds  = 7;
+	optional uint32        dataEncFmt    = 8;
+    optional string        user          = 9;
 }
 
 // Request by client to stop streaming the query results.
@@ -101,7 +103,8 @@ message ResponseStream {
 
 // Last response packet sent by server to end query results.
 message StreamEndResponse {
-    optional Error err = 1;
+    optional Error  err       = 1;
+    optional uint64 readUnits = 2;
 }
 
 // Count request to indexer.
@@ -195,8 +198,9 @@ message GroupAggr {
 // Queryport server authentication
 
 message AuthRequest {
-    required string user = 1;
-    required string pass = 2;
+    required string user          = 1;
+    required string pass          = 2;
+    optional uint32 clientVersion = 3;
 }
 
 message AuthResponse {

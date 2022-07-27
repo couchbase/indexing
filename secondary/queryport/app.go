@@ -1,9 +1,13 @@
 package queryport
 
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "net"
+import (
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	"net"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+)
 
 // Application is example application logic that uses query-port server
 func Application(config c.Config) {
@@ -12,7 +16,7 @@ func Application(config c.Config) {
 		"",
 		"localhost:9990",
 		func(req interface{}, ctx interface{},
-			conn net.Conn, quitch <-chan bool) {
+			conn net.Conn, quitch <-chan bool, clientVersion uint32) {
 			requestHandler(req, conn, quitch, killch)
 		},
 		nil,

@@ -46,6 +46,78 @@ note_version() {
   fi
 }
 
+build() (
+  FORCEX86=0
+  if [ "$(echo $1 | tr 'A-Z' 'a-z')" = "-forcex86" ]; then
+    FORCEX86=1
+    echo "Forcing to build for x86 architecture"
+  fi
+  if [ "$BUILD_ENTERPRISE" = "" ]; then
+    echo "BUILD_ENTERPRISE empty. Building enterprise edition"
+    export BUILD_ENTERPRISE=true
+  fi
+
+  BUILD_ENTERPRISE=$(echo "$BUILD_ENTERPRISE" | tr 'a-z' 'A-Z')
+  if [ $BUILD_ENTERPRISE = "TRUE" ]; then
+    echo "Building Enterprise Edition"
+  else
+    echo "Building community edition"
+  fi
+
+  SUFFIX=""
+  if [ $BUILD_ENTERPRISE = "TRUE" ]; then
+    SUFFIX="EE"
+  else
+    SUFFIX="CE"
+  fi
+
+  cd $WORKSPACE
+  PRODUCT_VERSION=${RELEASE}-${BLD_NUM}-rel-$SUFFIX
+  rm -f *.rpm *.deb
+  rm -rf ~/rpmbuild
+  rm -rf $WORKSPACE/voltron/build/deb
+  rm -rf $WORKSPACE/install/*
+  find goproj godeps -name \*.a -print0 | xargs -0 rm -f
+
+  cd $WORKSPACE
+  mkdir -p build
+  cd build
+
+  CMAKE_x86_OPTS=
+  if [ $FORCEX86 -eq 1 ];then
+    CMAKE_x86_OPTS="-D CMAKE_APPLE_SILICON_PROCESSOR=x86_64 -D CMAKE_OSX_ARCHITECTURES=x86_64"
+  fi
+
+  echo "Building cmakefiles and deps [$SUFFIX]"
+  cmake  ${CMAKE_x86_OPTS} \
+        -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
+        -D CMAKE_PREFIX_PATH=$WORKSPACE/install \
+        -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+        -D PRODUCT_VERSION=${PRODUCT_VERSION} \
+        -D BUILD_ENTERPRISE=${BUILD_ENTERPRISE} \
+        -D CB_DOWNLOAD_DEPS=1 \
+        -D SNAPPY_OPTION=Disable \
+        .. 1>>$WORKSPACE/make.log 2>&1
+  test $? -eq 0 || error_exit "CMake build [$SUFFIX]"
+
+  echo "Building main product [$SUFFIX]"
+  cd $WORKSPACE/build
+  make -j8 install 1>> $WORKSPACE/make.log 2>&1
+  test $? -eq 0 || error_exit "Making Install [$SUFFIX]"
+
+  cd $WORKSPACE
+  repo manifest -r > current.xml
+  repo manifest -r > manifest.xml
+
+  echo "Actual Versions:" >> $WORKSPACE/versions.cfg
+  cd $WORKSPACE
+  repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' 2>/dev/null 1>>$WORKSPACE/versions.cfg
+
+  chmod a+r /var/www/*
+  echo "Build $SUFFIX finished"
+
+)
+
 echo "</pre><h3>Building</h3><pre>"
 > $WORKSPACE/versions.cfg
 > $WORKSPACE/make.log
@@ -174,42 +246,6 @@ if [ "$CIBOT" = "true" ]; then
   done
 fi
 
-
-cd $WORKSPACE
-PRODUCT_VERSION=${RELEASE}-${BLD_NUM}-rel
-rm -f *.rpm *.deb
-rm -rf ~/rpmbuild
-rm -rf $WORKSPACE/voltron/build/deb
-rm -rf $WORKSPACE/install/*
-find goproj godeps -name \*.a -print0 | xargs -0 rm -f
-
-cd $WORKSPACE
-mkdir -p build
-cd build
-
-echo "Building cmakefiles and deps"
-cmake -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
-      -D CMAKE_PREFIX_PATH=$WORKSPACE/install \
-      -D CMAKE_BUILD_TYPE=RelWithDebInfo \
-      -D PRODUCT_VERSION=${PRODUCT_VERSION} \
-      -D BUILD_ENTERPRISE=TRUE \
-      -D CB_DOWNLOAD_DEPS=1 \
-      -D SNAPPY_OPTION=Disable \
-      .. 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "CMake build"
-
-echo "Building main product"
-cd $WORKSPACE/build
-make -j8 install 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "Making Install"
-
-cd $WORKSPACE
-repo manifest -r > current.xml
-repo manifest -r > manifest.xml
-
-echo "Actual Versions:" >> $WORKSPACE/versions.cfg
-cd $WORKSPACE
-repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' 2>/dev/null 1>>$WORKSPACE/versions.cfg
-
-chmod a+r /var/www/*
-
+BUILD_ENTERPRISE=false build # -forcex86 # add -forcex86 if build fail on arm64
+# Building again will delete output from previous build
+build # -forcex86 # add -forcex86 if build fail on arm64

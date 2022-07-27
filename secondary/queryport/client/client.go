@@ -55,6 +55,8 @@ type ResponseReader interface {
 
 	// Error returns the error value, if nil there is no error.
 	Error() error
+
+	GetReadUnits() uint64
 }
 
 // ResponseSender is responsible for forwarding result to the client

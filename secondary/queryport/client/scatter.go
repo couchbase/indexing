@@ -1412,6 +1412,10 @@ func (d *bypassResponseReader) Error() error {
 	return nil
 }
 
+func (d *bypassResponseReader) GetReadUnits() uint64 {
+	return 0
+}
+
 func makeDefaultRequestBroker(cb ResponseHandler,
 	dataEncFmt common.DataEncodingFormat) *RequestBroker {
 
