@@ -74,6 +74,13 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	value.Value = sigarNumCpuPrc
 	config[cpuKey] = value
 
+	numCPU := config.GetIndexerNumCpuPrc() / 100
+	numSliceWritersKey := "indexer.numSliceWriters"
+	value = config[numSliceWritersKey]
+	value.Value = numCPU
+	config[numSliceWritersKey] = value
+	logging.Infof("IndexerSettingsManager: Setting numSliceWriters to %v cgroup.max_cpu_percent: %v runtime.NumCPU: %v", numCPU, sigarNumCpuPrc, runtime.NumCPU()*100)
+
 	// This method will merge metakv indexer settings onto default settings.
 	config, err := common.GetSettingsConfig(config)
 	if err != nil {
