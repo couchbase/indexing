@@ -1,7 +1,9 @@
 package main
 
 import (
+	crand "crypto/rand"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"strconv"
 	"time"
@@ -58,14 +60,42 @@ func ScanRangeFactory(spec *ScanConfig) ScanRange {
 }
 
 func randomString(n uint32, low string, high string) []interface{} {
-	if lowInt, err := strconv.ParseInt(low, 16, 64); err == nil {
-		if highInt, err := strconv.ParseInt(high, 16, 64); err == nil {
-			randomInt := rand.Intn(int(highInt - lowInt - 2))
-			lowInt2 := int(lowInt) + randomInt
-			format := fmt.Sprintf("%%%03dx", n)
-			low = fmt.Sprintf(format, lowInt2)
+	lowLen, highLen := len(low), len(high)
+
+	if lowLen <= 16 && highLen <= 16 {
+		if lowInt, err := strconv.ParseInt(low, 16, 64); err == nil {
+			if highInt, err := strconv.ParseInt(high, 16, 64); err == nil {
+				randomInt := rand.Intn(int(highInt - lowInt - 2))
+				lowInt2 := int(lowInt) + randomInt
+				format := fmt.Sprintf("%%%03dx", n)
+				low = fmt.Sprintf(format, lowInt2)
+			}
 		}
+	} else {
+		var bigLow, bigHigh, bigDiff, bigRandLow big.Int
+		var success bool
+
+		if _, success = bigLow.SetString(low, 16); !success {
+			return []interface{}{low}
+		}
+
+		if _, success = bigHigh.SetString(high, 16); !success {
+			return []interface{}{low}
+		}
+
+		bigDiff.Sub(&bigHigh, &bigLow)
+
+		bigRandDiff, err := crand.Int(crand.Reader, &bigDiff)
+		if err != nil {
+			return []interface{}{low}
+		}
+
+		bigRandLow.Add(&bigLow, bigRandDiff)
+
+		format := fmt.Sprintf("%%0%ds", n)
+		return []interface{}{fmt.Sprintf(format, bigRandLow.Text(16))}
 	}
+
 	return []interface{}{low}
 }
 
