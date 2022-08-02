@@ -1320,6 +1320,11 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//generate new stability timestamp
 	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
 
+	//Explicitly set the snapAligned flag to false as the initial state.
+	//HWT can be set from an earlier restartTs which is snap aligned
+	//and the flag needs to be reset for new timestamp.
+	tsVbuuid.SetSnapAligned(false)
+
 	tsVbuuid.SetSnapType(common.NO_SNAP)
 
 	ss.alignSnapBoundary(streamId, bucket, tsVbuuid)
@@ -1329,6 +1334,8 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 
 	if tsVbuuid.CheckSnapAligned() {
 		tsVbuuid.SetSnapAligned(true)
+	} else {
+		tsVbuuid.SetSnapAligned(false)
 	}
 
 	return tsVbuuid

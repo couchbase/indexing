@@ -2695,6 +2695,8 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 
 	if flushTs.CheckSnapAligned() {
 		flushTs.SetSnapAligned(true)
+	} else {
+		flushTs.SetSnapAligned(false)
 	}
 
 }
