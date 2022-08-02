@@ -1422,6 +1422,11 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//generate new stability timestamp
 	tsVbuuid := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId].Copy()
 
+	//Explicitly set the snapAligned flag to false as the initial state.
+	//HWT can be set from an earlier restartTs which is snap aligned
+	//and the flag needs to be reset for new timestamp.
+	tsVbuuid.SetSnapAligned(false)
+
 	tsElem := &TsListElem{
 		ts: tsVbuuid,
 	}
@@ -1442,6 +1447,8 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 
 	if tsElem.ts.CheckSnapAligned() {
 		tsElem.ts.SetSnapAligned(true)
+	} else {
+		tsElem.ts.SetSnapAligned(false)
 	}
 
 	return tsElem
@@ -1662,7 +1669,10 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 	if enableOSO {
 		if ts.CheckSnapAligned() {
 			ts.SetSnapAligned(true)
+		} else {
+			ts.SetSnapAligned(false)
 		}
+
 	}
 
 	return changeVec, noChange, countVec
