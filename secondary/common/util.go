@@ -1,9 +1,11 @@
 package common
 
 import (
+	"encoding/binary"
 	"errors"
 	"expvar"
 	"fmt"
+	"hash/crc32"
 	"hash/crc64"
 	"io"
 	"io/ioutil"
@@ -34,6 +36,7 @@ import (
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
+	"github.com/golang/snappy"
 )
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
@@ -62,6 +65,27 @@ func Crc64Checksum(bytes []byte) uint64 {
 // The order in which original checksum and updates are made affects the result.
 func Crc64Update(checksum uint64, bytes []byte) uint64 {
 	return crc64.Update(checksum, crc64ECMA, bytes)
+}
+
+// ChecksumAndCompress checksums and optionally compresses a byte slice, prepending an 8-byte
+// header comprised of:
+//   header[0] - flags:
+//     bit 0    - compressed?
+//     bits 1-7 - unused bits
+//   header[1-4] - crc32 checksum written in big-endian order
+//   header[5-7] - unused bytes
+func ChecksumAndCompress(byteSlice []byte, compress bool) []byte {
+	const FLAG_COMPRESSED = byte(1) // compressed flag
+
+	header := make([]byte, 8)
+	if compress {
+		header[0] |= FLAG_COMPRESSED
+		byteSlice = snappy.Encode(nil, byteSlice)
+	}
+	checkSum := crc32.ChecksumIEEE(byteSlice)
+	binary.BigEndian.PutUint32(header[1:5], checkSum)
+
+	return append(header, byteSlice...)
 }
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the

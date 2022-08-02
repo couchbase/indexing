@@ -36,12 +36,11 @@ type GenericServiceManager struct {
 	nodeInfo *service.NodeInfo        // never changes; info about the local node
 	pauseMgr *PauseServiceManager     // Pause-Resume Manager singleton from Indexer
 	rebalMgr *RebalanceServiceManager // Rebalance Manager singleton from Indexer
+	statsMgr *statsManager            // Stats Manager singleton from Indexer
 
-	// waiters is a set of notification channels waiting to be notified that rev has incremented
-	waiters genericWaiters
-
-	// waitersMu is the mutex protecting waiters
-	waitersMu sync.Mutex
+	// cinfo is a long-lived local instance of ClusterInfoCache shareable among this class and its
+	// member "child" service manager classes, currently used by {Pause,Rebalance}ServiceManager
+	cinfo *common.ClusterInfoCache
 
 	// rev is the canonical task list revision number for ns_server GetTaskList long polls. This
 	// gets converted to and from service.Revision. Both pauseMgr and rebalMgr children can generate
@@ -50,6 +49,12 @@ type GenericServiceManager struct {
 
 	// revMu is the mutex protecting rev
 	revMu sync.RWMutex
+
+	// waiters is a set of notification channels waiting to be notified that rev has incremented
+	waiters genericWaiters
+
+	// waitersMu is the mutex protecting waiters
+	waitersMu sync.Mutex
 }
 
 // NewGenericServiceManager is the constructor for the GenericServiceManager class. It needs all the
@@ -58,16 +63,36 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 	rebalSupvMsgch MsgChannel, rebalSupvPrioMsgch MsgChannel, config common.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
 	rebalanceToken *RebalanceToken, statsMgr *statsManager) (
 	*GenericServiceManager, *PauseServiceManager, *RebalanceServiceManager) {
+	const _class = "GenericServiceManager"
+	const _NewGenericServiceManager = "GenericServiceManager::NewGenericServiceManager:"
 
 	m := &GenericServiceManager{
 		nodeInfo: nodeInfo,
+		statsMgr: statsMgr,
 		waiters:  make(genericWaiters),
 	}
-	pauseMgr := NewPauseServiceManager(mux, m, httpAddr)
+
+	// ClusterInfoCache setup (formerly in rebalance_service_manager.go)
+	url, err := common.ClusterAuthUrl(config["clusterAddr"].String())
+	if err == nil {
+		m.cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
+	if err != nil {
+		panic(fmt.Sprintf(
+			"%v Unable to initialize ClusterInfoCache, err: %v", _NewGenericServiceManager,
+			err.Error()))
+	}
+	m.cinfo.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
+	m.cinfo.SetLogPrefix(_class + ": ")
+	m.cinfo.SetUserAgent(_class)
+
+	// Create PauseServiceManager singleton
+	pauseMgr := NewPauseServiceManager(m, mux, httpAddr)
 	m.pauseMgr = pauseMgr
 
+	// Create RebalanceServiceManager singleton
 	rebalMgr := NewRebalanceServiceManager(m, httpAddr, rebalSupvCmdch, rebalSupvMsgch,
-		rebalSupvPrioMsgch, config, nodeInfo, rebalanceRunning, rebalanceToken, statsMgr)
+		rebalSupvPrioMsgch, config, nodeInfo, rebalanceRunning, rebalanceToken)
 	m.rebalMgr = rebalMgr
 
 	// Save the singleton
@@ -87,9 +112,10 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 // TaskResponse is the REST return payload of testCancelTask, testPause, and testResume, as they
 // only need generic fields.
 type TaskResponse struct {
-	Code   string `json:"code,omitempty"`
-	Error  string `json:"error,omitempty"`
-	TaskId string `json:"taskId,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Error   string `json:"error,omitempty"`
+	TaskId  string `json:"taskId,omitempty"`
+	Prepare bool   `json:"prepare,omitempty"`
 }
 
 // GetTaskListResponse is the REST return payload of testGetTaskList.
@@ -157,11 +183,13 @@ func (m *GenericServiceManager) CancelTask(id string, rev service.Revision) erro
 	}
 
 	// Task not found in Rebalance so delegate to Pause-Resume
-	err = m.pauseMgr.PauseCancelTask(id)
-	if err != nil && err != service.ErrNotFound { // task was found but cancel failed
-		logging.Infof("%v return from rev %v call. PauseCancelTask err: %v", _CancelTask,
-			rev, err)
-		return err
+	if err == service.ErrNotFound {
+		err = m.pauseMgr.PauseCancelTask(id)
+		if err != nil && err != service.ErrNotFound { // task was found but cancel failed
+			logging.Infof("%v return from rev %v call. PauseCancelTask err: %v", _CancelTask,
+				rev, err)
+			return err
+		}
 	}
 
 	// Here err is either nil or service.ErrNotFound

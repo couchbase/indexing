@@ -3518,6 +3518,7 @@ func (s *statsManager) runStatsDumpLogger() {
 	}
 }
 
+// Stats abbreviations used in persisted stats
 const last_known_scan_time = "lqt" //last_query_time
 const avg_scan_rate = "asr"
 const num_rows_scanned = "nrs"
@@ -3527,10 +3528,68 @@ const num_rollbacks_to_zero = "nrbz"
 const chunkSz = "chunkSz"
 const STREAM_PREFIX = "stream"
 
+// GetStatsToBePersistedBinary is the external statsManager class member API to get the same binary
+// stats image as internal getStatsToBePersistedBinary(getStatsToBePersistedMap(IndexerStats)) in a
+// single call without exposing statsManager internals. Image will be nil if there are no stats.
+func (s *statsManager) GetStatsToBePersistedBinary(compress bool) ([]byte, error) {
+	statsMap := getStatsToBePersistedMap(s.stats.Get())
+	return getStatsToBePersistedBinary(statsMap, compress)
+}
+
+// getStatsToBePersistedBinary internal helper that returns a checksummed, optionally compressed
+// binary image of statsMap to be written to disk, or nil if statsMap is nil. Cannot be a member
+// of the statsManager class as it is called by PersistStats which is not a class member.
+func getStatsToBePersistedBinary(statsMap map[string]interface{}, compress bool) ([]byte, error) {
+	const _getStatsToBePersistedBinary = "stats_manager.go::getStatsToBePersistedBinary:"
+
+	if statsMap == nil {
+		return nil, nil
+	}
+
+	statsJson, err := commonjson.Marshal(statsMap)
+	if err != nil {
+		logging.Errorf("%v Marshal returned error: %v", _getStatsToBePersistedBinary, err)
+		return nil, err
+	}
+
+	return common.ChecksumAndCompress(statsJson, compress), nil
+}
+
+// getStatsToBePersistedMap returns a map from stat name to value of all the Indexer and per-index
+// stats we persist to disk. If there are no stats it will return nil instead.
+func getStatsToBePersistedMap(indexerStats *IndexerStats) (statsMap map[string]interface{}) {
+	if indexerStats != nil {
+		statsMap = make(map[string]interface{})
+		for k, indexStats := range indexerStats.indexes {
+			instdId := strconv.FormatUint(uint64(k), 10)
+			statsMap[instdId+":"+last_known_scan_time] = indexStats.lastScanTime.Value()
+
+			for pk, partnStats := range indexStats.partitions {
+				partnId := strconv.FormatUint(uint64(pk), 10)
+				statsMap[instdId+":"+partnId+":"+avg_scan_rate] = partnStats.avgScanRate.Value()
+				statsMap[instdId+":"+partnId+":"+num_rows_scanned] = partnStats.numRowsScanned.Value()
+				statsMap[instdId+":"+partnId+":"+last_num_rows_scanned] = partnStats.lastNumRowsScanned.Value()
+			}
+		}
+
+		keyspaceStatsMap := indexerStats.keyspaceStatsMap.Get()
+		for streamId, keyspaceIdStats := range keyspaceStatsMap {
+			for keyspaceId, keyspaceStats := range keyspaceIdStats {
+				numRollbacksKey := fmt.Sprintf("%v:%v:%v:%v", STREAM_PREFIX, streamId, keyspaceId, num_rollbacks)
+				statsMap[numRollbacksKey] = keyspaceStats.numRollbacks.Value()
+				numRollbacksToZeroKey := fmt.Sprintf("%v:%v:%v:%v", STREAM_PREFIX, streamId, keyspaceId, num_rollbacks_to_zero)
+				statsMap[numRollbacksToZeroKey] = keyspaceStats.numRollbacksToZero.Value()
+			}
+		}
+	}
+	return statsMap
+}
+
 // runStatsPersister runs in a goroutine and persists a subset of index stats every
 // statsPersistenceInterval seconds (not including the time taken to do the persistence),
 // unless this is disabled by being set to 0. It will recover from panics and restart.
 func (s *statsManager) runStatsPersister() {
+	const _runStatsPersister = "statsManager::runStatsPersister:"
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -3540,48 +3599,6 @@ func (s *statsManager) runStatsPersister() {
 		}
 	}()
 
-	persist := func() { // persist only if statsPersistenceInterval > 0
-		if atomic.LoadUint64(&s.statsPersistenceInterval) > 0 {
-			indexerStats := s.stats.Get()
-			if indexerStats != nil {
-				statsToBePersisted := make(map[string]interface{})
-				for k, indexStats := range indexerStats.indexes {
-					instdId := strconv.FormatUint(uint64(k), 10)
-					statsToBePersisted[instdId+":"+last_known_scan_time] = indexStats.lastScanTime.Value()
-
-					for pk, partnStats := range indexStats.partitions {
-						partnId := strconv.FormatUint(uint64(pk), 10)
-						statsToBePersisted[instdId+":"+partnId+":"+avg_scan_rate] = partnStats.avgScanRate.Value()
-						statsToBePersisted[instdId+":"+partnId+":"+num_rows_scanned] = partnStats.numRowsScanned.Value()
-						statsToBePersisted[instdId+":"+partnId+":"+last_num_rows_scanned] = partnStats.lastNumRowsScanned.Value()
-					}
-				}
-
-				keyspaceStatsMap := indexerStats.keyspaceStatsMap.Get()
-				for streamId, keyspaceIdStats := range keyspaceStatsMap {
-					for keyspaceId, keyspaceStats := range keyspaceIdStats {
-						numRollbacksKey := fmt.Sprintf("%v:%v:%v:%v", STREAM_PREFIX, streamId, keyspaceId, num_rollbacks)
-						statsToBePersisted[numRollbacksKey] = keyspaceStats.numRollbacks.Value()
-						numRollbacksToZeroKey := fmt.Sprintf("%v:%v:%v:%v", STREAM_PREFIX, streamId, keyspaceId, num_rollbacks_to_zero)
-						statsToBePersisted[numRollbacksToZeroKey] = keyspaceStats.numRollbacksToZero.Value()
-					}
-				}
-
-				err := s.statsPersister.PersistStats(statsToBePersisted)
-				if err != nil {
-					logging.Warnf("Encountered error while persisting stats. Error: %v", err)
-				}
-			}
-		}
-	}
-
-	closePersister := func() {
-		err := s.statsPersister.Close()
-		if err != nil {
-			logging.Warnf("Error closing the persister: %v", err)
-		}
-	}
-
 loop:
 	for {
 		if atomic.LoadUint64(&s.exitPersister) == 1 { // exitPersister is 1 only when stats manager shuts down
@@ -3589,11 +3606,16 @@ loop:
 			break loop
 		}
 		interval := atomic.LoadUint64(&s.statsPersistenceInterval)
-		if interval == 0 {
-			closePersister()
+		if interval == 0 { // persistence disabled
+			if err := s.statsPersister.Close(); err != nil {
+				logging.Warnf("%v Error closing statsPersister: %v", _runStatsPersister, err)
+			}
 			time.Sleep(time.Second * 600) // Sleep for default interval if persistence is disabled
-		} else {
-			persist()
+		} else { // persistence enabled
+			statsMap := getStatsToBePersistedMap(s.stats.Get())
+			if err := s.statsPersister.PersistStats(statsMap); err != nil {
+				logging.Warnf("%v Error persisting stats: %v", _runStatsPersister, err)
+			}
 			time.Sleep(time.Second * time.Duration(interval))
 		}
 	}
@@ -3733,41 +3755,30 @@ func NewFlatFilePersister(dir string, chunksz int) *FlatFileStatsPersister {
 	return &fp
 }
 
-// PersistStats is called by runStatsPersister to write stats to disk.
-func (fp *FlatFileStatsPersister) PersistStats(stats map[string]interface{}) error {
-
-	statsJson, err := commonjson.Marshal(stats)
+// PersistStats is called by runStatsPersister to write statsMap to disk in compressed, checksummed
+// binary form.
+func (fp *FlatFileStatsPersister) PersistStats(statsMap map[string]interface{}) error {
+	content, err := getStatsToBePersistedBinary(statsMap, true)
 	if err != nil {
 		return err
 	}
 
 	// Improvement: Implement chunking for large file sizes
-	// chunkSize := fp.GetConfig("chunkSize")
-
-	// 8 bytes header for metadata
-	// byte 1 : indicates if data is compressed(0 or 1)
-	// bytes 2 to 5 : checksum of content
-	// remaining bytes - currently unused
-	header := make([]byte, 8)
-	header[0] = byte(uint8(1))
-
-	compressed := snappy.Encode(nil, statsJson)
-	checkSum := crc32.ChecksumIEEE(compressed)
-	binary.BigEndian.PutUint32(header[1:5], checkSum)
+	// chunkSize := fp.GetConfig("statsPersistenceChunkSize")
 
 	// Write the stats to disk
-	content := append(header, compressed...)
-	err = common.WriteFileWithSync(fp.newFilePath, content, 0755)
-	if err != nil {
-		return err
-	}
+	if content != nil {
+		err := common.WriteFileWithSync(fp.newFilePath, content, 0755)
+		if err != nil {
+			return err
+		}
 
-	// If the write succeeded, rename the file from temp to permanent name
-	err = iowrap.Os_Rename(fp.newFilePath, fp.filePath)
-	if err != nil {
-		return err
+		// If the write succeeded, rename the file from temp to permanent name
+		err = iowrap.Os_Rename(fp.newFilePath, fp.filePath)
+		if err != nil {
+			return err
+		}
 	}
-
 	return nil
 }
 

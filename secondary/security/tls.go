@@ -669,11 +669,18 @@ func getWithAuthInternal(u string, params *RequestParams, eTag string, allowTls 
 	return client.Do(req)
 }
 
-//
+// PostWithAuth
 // HTTP Post with Basic Auth.  If encryption is enabled, the request is made over HTTPS.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
 //
+// ##### IMPORTANT #####
+// Do not pass nil for the body or Go's NewRequestWithContext will panic.
+//   ====> INSTEAD pass: bytes.NewBuffer([]byte("{}"))
+// Passing nil to body does not produce a nil io.Reader, as that is an interface. It will produce a
+// non-nil io.Reader interface object that contains a nil pointer to the body that will lead to the
+// panic ("if body == nil" here will return false, but the interface object will contain a nil
+// pointer to its value, causing the panic. See https://github.com/golang/go/issues/44327).
 func PostWithAuth(u string, bodyType string, body io.Reader, params *RequestParams) (*http.Response, error) {
 
 	url, err := GetURL(u)

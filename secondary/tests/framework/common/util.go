@@ -77,6 +77,32 @@ func HandleError(err error, msg string) {
 	}
 }
 
+// ReadFileToString reads the contents of a file into a string.
+func ReadFileToString(filePath string) (string, error) {
+	const _ReadFileToString = "util.go::ReadFileToString:"
+
+	fileHandle, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("%v os.Open(%v) returned error: %v", _ReadFileToString, filePath, err)
+		return "", err
+	}
+	defer fileHandle.Close()
+
+	var result strings.Builder
+	buffer := make([]byte, 64*1024)
+	var bytesRead int            // avoid bytesRead, err := in loop shadowing loop condition err
+	for err = nil; err == nil; { // err == io.EOF terminates loop; other errors return from it
+		bytesRead, err = fileHandle.Read(buffer)
+		result.Write(buffer[0:bytesRead]) // process bytesRead before err
+		if err != nil && err != io.EOF {
+			log.Printf("%v fileHandle.Read(%v) returned error: %v", _ReadFileToString,
+				filePath, err)
+			return "", err
+		}
+	}
+	return result.String(), nil
+}
+
 // Read a .gz file
 func ReadCompressedFile(filePath string) ([]byte, error) {
 	file, err := os.Open(filePath)

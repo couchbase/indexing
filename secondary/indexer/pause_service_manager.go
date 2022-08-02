@@ -1,4 +1,4 @@
-// @copyright 2021-Present Couchbase, Inc.
+// @copyright 2022-Present Couchbase, Inc.
 //
 // Use of this software is governed by the Business Source License included
 // in the file licenses/BSL-Couchbase.txt.  As of the Change Date specified
@@ -9,12 +9,17 @@
 package indexer
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"github.com/couchbase/cbauth/service"
+	"io/ioutil"
 	"net/http"
-	"strings"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
+	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -22,8 +27,9 @@ import (
 // PauseServiceManager class
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// pauseMgr points to the singleton of this class
-var pauseMgr *PauseServiceManager
+// PauseMgr points to the singleton of this class, which will still be nil early in user
+// ScanCoordinator's lifecycle, hence the need for atomics. It is really type *PauseServiceManager.
+var PauseMgr unsafe.Pointer
 
 // PauseServiceManager provides the implementation of the Pause-Resume-specific APIs of
 // ns_server RPC Manager interface (defined in cbauth/service/interface.go).
@@ -47,28 +53,57 @@ type PauseServiceManager struct {
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
 // GenericServiceManager constructs a singleton at boot.
-// genericMgr is a pointer to our parent.
-// httpAddr gives the host:port of the local node for Index Service HTTP calls.
-func NewPauseServiceManager(mux *http.ServeMux, genericMgr *GenericServiceManager,
+//   genericMgr - pointer to our parent
+//   mux - Indexer's HTTP server
+//   httpAddr - host:port of the local node for Index Service HTTP calls
+func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux,
 	httpAddr string) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
 		httpAddr:   httpAddr,
-		tasks:      make(map[string]*taskObj),
+
+		bucketStates: make(map[string]bucketStateEnum),
+		tasks:        make(map[string]*taskObj),
 	}
 
 	// Save the singleton
-	pauseMgr = m
+	SetPauseMgr(m)
+
+	// Internal REST APIs
+	mux.HandleFunc("/pauseMgr/FailedTask", m.RestHandleFailedTask)
+	mux.HandleFunc("/pauseMgr/Pause", m.RestHandlePause)
 
 	// Unit test REST APIs -- THESE MUST STILL DO AUTHENTICATION!!
-	mux.HandleFunc("/test/Pause", pauseMgr.testPause)
-	mux.HandleFunc("/test/PreparePause", pauseMgr.testPreparePause)
-	mux.HandleFunc("/test/PrepareResume", pauseMgr.testPrepareResume)
-	mux.HandleFunc("/test/Resume", pauseMgr.testResume)
+	mux.HandleFunc("/test/Pause", m.testPause)
+	mux.HandleFunc("/test/PreparePause", m.testPreparePause)
+	mux.HandleFunc("/test/PrepareResume", m.testPrepareResume)
+	mux.HandleFunc("/test/Resume", m.testResume)
 
 	return m
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Constants
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// ARCHIVE_VERSION is the version of the archive format used for Pause and Resume. Later versions
+// are expected to understand earlier versions but not vice versa. This version needs to be
+// increased when a breaking change is made to anything that gets persisted in the archive.
+//
+// For future-proofing, the initial version is 100, and we expect to increment by 100. This allows
+// us to easily insert new versions in the middle of the history, which could happen e.g. if a prior
+// release branch diverges from the main branch due to a bug fix.
+const ARCHIVE_VERSION int = 100 // increment by +100 -- see above
+
+// FILENAME_METADATA is the name of the file to write containing the index metadata from ONE node.
+const FILENAME_METADATA = "indexMetadata.json"
+
+// FILENAME_STATS is the name of the file to write containing persisted index stats from ONE node.
+const FILENAME_STATS = "indexStats.json"
+
+// FILENAME_VERSION is the name of the file to write containing the ARCHIVE_VERSION.
+const FILENAME_VERSION = "version.json"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Enums
@@ -82,6 +117,10 @@ type bucketStateEnum int
 const (
 	// bst_NIL is the zero-value state, indicating a bucket has no Pause-Resume state.
 	bst_NIL bucketStateEnum = iota
+
+	// bst_PREPARE_PAUSE is entered when ns_server calls PreparePause. Nothing is happening yet,
+	// but the state must be tracked to verify legality of state transitions.
+	bst_PREPARE_PAUSE
 
 	// bst_PAUSING state is entered when ns_server calls Pause (after PreparePause already
 	// succeeded). It means Pause actions such as rejecting scans and closing DCP streams for the
@@ -98,6 +137,10 @@ const (
 	// connections and stop blocking scans. Pause-related tasks do NOT exist. This state ends when
 	// either the bucket is dropped or marked active.
 	bst_PAUSED
+
+	// bst_PREPARE_RESUME is entered when ns_server calls PrepareResume. Nothing is happening yet,
+	// but the state must be tracked to verify legality of state transitions.
+	bst_PREPARE_RESUME
 
 	// bst_RESUMING state is entered when ns_server calls Resume (after PrepareResume already
 	// succeeded). Resume work is ongoing. Resume-related tasks still exist.
@@ -117,10 +160,14 @@ func (this bucketStateEnum) String() string {
 	switch this {
 	case bst_NIL:
 		return "NilBucketState"
+	case bst_PREPARE_PAUSE:
+		return "PreparePause"
 	case bst_PAUSING:
 		return "Pausing"
 	case bst_PAUSED:
 		return "Paused"
+	case bst_PREPARE_RESUME:
+		return "PrepareResume"
 	case bst_RESUMING:
 		return "Resuming"
 	case bst_RESUMED:
@@ -136,11 +183,7 @@ type taskEnum int
 
 const (
 	task_NIL taskEnum = iota // undefined
-
-	task_PREPARE_PAUSE
 	task_PAUSE
-
-	task_PREPARE_RESUME
 	task_RESUME
 )
 
@@ -149,12 +192,8 @@ func (this taskEnum) String() string {
 	switch this {
 	case task_NIL:
 		return "NilTask"
-	case task_PREPARE_PAUSE:
-		return "PreparePause"
 	case task_PAUSE:
 		return "Pause"
-	case task_PREPARE_RESUME:
-		return "PrepareResume"
 	case task_RESUME:
 		return "Resume"
 	default:
@@ -166,12 +205,8 @@ func (this taskEnum) String() string {
 // service.TaskTypeXxx constants (cbauth/service/interface.go).
 func (this taskEnum) StringNs() string {
 	switch this {
-	case task_PREPARE_PAUSE:
-		return "task-prepare-pause" // kjc not defined in interface.go yet
 	case task_PAUSE:
 		return "task-pause" // kjc not defined in interface.go yet
-	case task_PREPARE_RESUME:
-		return "task-prepare-resume" // kjc not defined in interface.go yet
 	case task_RESUME:
 		return "task-resume" // kjc not defined in interface.go yet
 	default:
@@ -218,35 +253,6 @@ func (this statusEnum) StringNs() string {
 	}
 }
 
-// archiveEnum defines types of storage archives for Pause-Resume (following archive_XXX constants)
-type archiveEnum int
-
-const (
-	archive_NIL  archiveEnum = iota // undefined
-	archive_AZ                      // Azure Cloud Storage
-	archive_FILE                    // local filesystem
-	archive_GS                      // Google Cloud Storage
-	archive_S3                      // AWS S3 bucket
-)
-
-// String converter for archiveEnum type.
-func (this archiveEnum) String() string {
-	switch this {
-	case archive_NIL:
-		return "NilArchive"
-	case archive_AZ:
-		return "Azure"
-	case archive_FILE:
-		return "File"
-	case archive_GS:
-		return "Google"
-	case archive_S3:
-		return "S3"
-	default:
-		return fmt.Sprintf("undefinedArchiveEnum_%v", int(this))
-	}
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Type definitions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -257,6 +263,8 @@ func (this archiveEnum) String() string {
 // For GetTaskList response to ns_server, we convert a taskObj to a service.Task struct (shared
 // with Rebalance).
 type taskObj struct {
+	taskMu *sync.RWMutex // protects this taskObj; pointer as taskObj may be cloned
+
 	taskType     taskEnum   // local analog of service.TaskType
 	taskId       string     // opaque ns_server unique ID for this task
 	taskStatus   statusEnum // local analog of service.TaskStatus
@@ -267,12 +275,23 @@ type taskObj struct {
 	bucketUuid string // Pause: UUID of bucket; Resume: ""
 	dryRun     bool   // is task for Resume dry run (cluster capacity check)?
 
-	// archiveDir gives the top-level "directory" to use to write/read Pause/Resume images. For:
+	// archivePath is path to top-level "directory" to use to write/read Pause/Resume images. For:
 	//   S3 format:       "s3://<s3_bucket>/index/"
 	//   Local FS format: "/absolute/path/" or "relative/path/"
 	// The trailing slash is always present. For FS the original "file://" prefix has been removed.
-	archiveDir  string
-	archiveType archiveEnum // type of storage archive used for this task
+	archivePath string
+	archiveType ArchiveEnum // type of storage archive used for this task
+
+	// master gets set to true on the master node for this task once ns_server calls Pause or
+	// Resume, which it only does on the master node. At PreparePause and PrepareResume time we do
+	// not yet know what node will be master.
+	master bool
+
+	// pauser is the async object executing this task iff it is a task_PAUSE, else nil
+	pauser *Pauser
+
+	// resumer is the async object executing this task iff it is a task_RESUME, else nil
+	resumer *Resumer
 }
 
 // NewTaskObj is the constructor for the taskObj class. If the parameters are not valid, it will
@@ -280,18 +299,19 @@ type taskObj struct {
 func NewTaskObj(taskType taskEnum, taskId, bucket, bucketUuid, remotePath string, dryRun bool,
 ) (*taskObj, error) {
 
-	archiveType, archiveDir, err := archiveInfoFromRemotePath(remotePath)
+	archiveType, archivePath, err := ArchiveInfoFromRemotePath(remotePath)
 	if err != nil {
 		return nil, err
 	}
 	return &taskObj{
+		taskMu:      &sync.RWMutex{},
 		taskType:    taskType,
 		taskId:      taskId,
 		taskStatus:  status_RUNNING,
 		bucket:      bucket,
 		bucketUuid:  bucketUuid,
 		dryRun:      dryRun,
-		archiveDir:  archiveDir,
+		archivePath: archivePath,
 		archiveType: archiveType,
 	}, nil
 }
@@ -339,10 +359,14 @@ func (m *PauseServiceManager) PreparePause(taskId, bucket, bucketUuid, remotePat
 	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, taskId, bucket, bucketUuid,
 		remotePath)
 
-	// kjc Test ability to access the target archive
+	// Set bst_PREPARE_PAUSE state
+	err = m.bucketStateSet(_PreparePause, bucket, bst_NIL, bst_PREPARE_PAUSE)
+	if err != nil {
+		return err
+	}
 
 	// Record the task in progress
-	return m.taskAddPreparePause(taskId, bucket, bucketUuid, remotePath)
+	return m.taskAddPause(taskId, bucket, bucketUuid, remotePath)
 }
 
 // Pause is an external API called by ns_server (via cbauth) only on the GSI master node to initiate
@@ -359,20 +383,25 @@ func (m *PauseServiceManager) Pause(taskId, bucket, bucketUuid, remotePath strin
 	defer logging.Infof("%v Returned %v. "+args, _Pause, err, taskId, bucket, bucketUuid,
 		remotePath)
 
-	// Set bst_PAUSING state
-	priorBucketState := m.bucketStateSetIfNil(bucket, bst_PAUSING)
-	if priorBucketState != bst_NIL {
-		err = service.ErrConflict
-		logging.Errorf("%v Cannot pause bucket %v as it already has Pause-Resume state %v", _Pause,
-			bucket, priorBucketState)
+	// Update the task to set this node as master
+	task := m.taskSetMaster(taskId)
+	if task == nil {
+		err = service.ErrNotFound
+		logging.Errorf("%v taskId %v (from PreparePause) not found", _Pause, taskId)
 		return err
 	}
 
-	// kjc implement Pause
+	// Set bst_PAUSING state
+	err = m.bucketStateSet(_Pause, bucket, bst_PREPARE_PAUSE, bst_PAUSING)
+	if err != nil {
+		return err
+	}
 
-	// Record the task in progress
-	err = m.taskAddPause(taskId, bucket, bucketUuid, remotePath)
-	return err
+	// Create a Pauser object to run the master orchestration loop. It will be the only thread
+	// that changes or deletes *task after this point. It will save a pointer to itself into
+	// task.pauser and start its own goroutine, so we don't need to save a pointer to it here.
+	RunPauser(m, task, true)
+	return nil
 }
 
 // PrepareResume is an external API called by ns_server (via cbauth) on all index nodes before
@@ -434,10 +463,14 @@ func (m *PauseServiceManager) PrepareResume(taskId, bucket, remotePath string, d
 	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, taskId, bucket, remotePath,
 		dryRun)
 
-	// kjc Test ability to access the target archive
+	// Set bst_PREPARE_RESUME state
+	err = m.bucketStateSet(_PrepareResume, bucket, bst_NIL, bst_PREPARE_RESUME)
+	if err != nil {
+		return err
+	}
 
 	// Record the task in progress
-	return m.taskAddPrepareResume(taskId, bucket, remotePath, dryRun)
+	return m.taskAddResume(taskId, bucket, remotePath, dryRun)
 }
 
 // Resume is an external API called by ns_server (via cbauth) only on the GSI master node to
@@ -453,20 +486,25 @@ func (m *PauseServiceManager) Resume(taskId, bucket, remotePath string, dryRun b
 	logging.Infof("%v Called. "+args, _Resume, taskId, bucket, remotePath, dryRun)
 	defer logging.Infof("%v Returned %v. "+args, _Resume, err, taskId, bucket, remotePath, dryRun)
 
-	// Set bst_RESUMING state
-	priorBucketState := m.bucketStateSetIfNil(bucket, bst_RESUMING)
-	if priorBucketState != bst_NIL {
-		err = service.ErrConflict
-		logging.Errorf("%v Cannot resume bucket %v as it already has Pause-Resume state %v", _Resume,
-			bucket, priorBucketState)
+	// Update the task to set this node as master
+	task := m.taskSetMaster(taskId)
+	if task == nil {
+		err = service.ErrNotFound
+		logging.Errorf("%v taskId %v (from PrepareResume) not found", _Resume, taskId)
 		return err
 	}
 
-	// kjc implement Resume
+	// Set bst_RESUMING state
+	err = m.bucketStateSet(_Resume, bucket, bst_PREPARE_RESUME, bst_RESUMING)
+	if err != nil {
+		return err
+	}
 
-	// Record the task in progress
-	err = m.taskAddResume(taskId, bucket, remotePath, dryRun)
-	return err
+	// Create a Resumer object to run the master orchestration loop. It will be the only thread
+	// that changes or deletes *task after this point. It will save a pointer to itself into
+	// task.resumer and start its own goroutine, so we don't need to save a pointer to it here.
+	RunResumer(m, task, true)
+	return nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -488,65 +526,177 @@ func (m *PauseServiceManager) PauseGetTaskList() (tasks []service.Task) {
 // PauseCancelTask is a delegate of GenericServiceManager.CancelTask which is an external API
 // called by ns_server (via cbauth). It cancels a Pause-Resume task owned by the current node.
 func (m *PauseServiceManager) PauseCancelTask(id string) error {
-	taskClone, found := m.taskFind(id)
-	if !found {
+	taskClone := m.taskClone(id)
+	if taskClone == nil {
 		return service.ErrNotFound
 	}
 
 	switch taskClone.taskType {
-	case task_PREPARE_PAUSE:
-		return m.CancelPreparePause(&taskClone)
 	case task_PAUSE:
-		return m.CancelPause(&taskClone)
-	case task_PREPARE_RESUME:
-		return m.CancelPrepareResume(&taskClone)
+		return m.CancelPause(taskClone)
 	case task_RESUME:
-		return m.CancelResume(&taskClone)
+		return m.CancelResume(taskClone)
 	default:
 		return service.ErrNotSupported
 	}
 }
 
-// CancelPreparePause cancels a local PreparePause task.
-func (m *PauseServiceManager) CancelPreparePause(taskClone *taskObj) error {
-	const _CancelPreparePause = "PauseServiceManager::CancelPreparePause:"
-	logging.Infof("%v canceling PreparePause taskId: %v, task: %+v", _CancelPreparePause,
-		taskClone.taskId, taskClone)
-
-	found := m.taskDelete(taskClone.taskId)
-	if !found {
-		// Something else deleted it since caller found and cloned it
-		logging.Infof("%v taskId: %v not found (already finished or canceled)", _CancelPreparePause,
-			taskClone.taskId)
-		return service.ErrNotFound
-	}
-	return nil
-}
-
-// CancelPause cancels a local Pause task.
+// CancelPause cancels a local Pause task and deletes its Pause-Resume state. If the current node
+// was the master and the state had reached bst_PAUSING, this must do extra work to abort the
+// Pause.
 func (m *PauseServiceManager) CancelPause(taskClone *taskObj) error {
-	return nil // kjc implement CancelPause
-}
-
-// CancelPrepareResume cancels a local PrepareResume task.
-func (m *PauseServiceManager) CancelPrepareResume(taskClone *taskObj) error {
-	const _CancelPrepareResume = "PauseServiceManager::CancelPrepareResume:"
-	logging.Infof("%v canceling PrepareResume taskId: %v, task: %+v", _CancelPrepareResume,
+	const _CancelPause = "PauseServiceManager::CancelPause:"
+	logging.Infof("%v canceling Pause taskId: %v, task: %+v", _CancelPause,
 		taskClone.taskId, taskClone)
 
-	found := m.taskDelete(taskClone.taskId)
-	if !found {
+	// Delete the Pause task
+	task := m.taskDelete(taskClone.taskId)
+	if task == nil {
 		// Something else deleted it since caller found and cloned it
-		logging.Infof("%v taskId: %v not found (already finished or canceled)", _CancelPrepareResume,
+		logging.Infof("%v taskId %v not found (already finished or canceled)", _CancelPause,
 			taskClone.taskId)
 		return service.ErrNotFound
 	}
+
+	// Master orchestrates aborting the Pause. If no node is master, the task never got past
+	// prepare, so there is nothing to orchestrate.
+	if task.master {
+		// kjc abort Pause
+	}
+
+	// Delete the bucket state
+	m.bucketStateDelete(task.bucket)
 	return nil
 }
 
-// CancelResume cancels a local Resume task.
+// CancelResume cancels a local Resume task and deletes its Pause-Resume state. If the current node
+// was the master and the state had reached bst_RESUMING, this must do extra work to abort the
+// Resume.
 func (m *PauseServiceManager) CancelResume(taskClone *taskObj) error {
-	return nil // kjc implement CancelResume
+	const _CancelResume = "PauseServiceManager::CancelResume:"
+	logging.Infof("%v canceling Resume taskId: %v, task: %+v", _CancelResume,
+		taskClone.taskId, taskClone)
+
+	// Delete the Resume task
+	task := m.taskDelete(taskClone.taskId)
+	if task == nil {
+		// Something else deleted it since caller found and cloned it
+		logging.Infof("%v taskId: %v not found (already finished or canceled)", _CancelResume,
+			taskClone.taskId)
+		return service.ErrNotFound
+	}
+
+	// Master orchestrates aborting the Resume. If no node is master, the task never got past
+	// prepare, so there is nothing to orchestrate.
+	if task.master {
+		// kjc abort Resume
+	}
+
+	// Delete the bucket state
+	m.bucketStateDelete(task.bucket)
+	return nil
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// REST orchestration sender methods. These are all called by the master to instruct the followers.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// RestNotifyFailedTask calls REST API /pauseMgr/FailedTask to tell followers (otherIndexAddrs
+// "host:port") that task has failed for the reason given in errMsg.
+func (m *PauseServiceManager) RestNotifyFailedTask(otherIndexAddrs []string, task *taskObj,
+	errMsg string) {
+	const _RestNotifyFailedTask = "PauseServiceManager::RestNotifyFailedTask:"
+
+	bodyStr := fmt.Sprintf("{\"errMsg\":%v}", errMsg)
+	bodyBuf := bytes.NewBuffer([]byte(bodyStr))
+	for _, indexAddr := range otherIndexAddrs {
+		url := fmt.Sprintf("%v/pauseMgr/FailedTask?id=%v", indexAddr, task.taskId)
+		go postWithAuthWrapper(_RestNotifyFailedTask, url, bodyBuf, task)
+	}
+}
+
+// RestNotifyPause calls REST API /pauseMgr/Pause to tell followers (otherIndexAddrs "host:port")
+// to initiate Pause work for task.
+func (m *PauseServiceManager) RestNotifyPause(otherIndexAddrs []string, task *taskObj) {
+	const _RestNotifyPause = "PauseServiceManager::RestNotifyPause:"
+
+	for _, indexAddr := range otherIndexAddrs {
+		url := fmt.Sprintf("%v/pauseMgr/Pause?id=%v", indexAddr, task.taskId)
+		go postWithAuthWrapper(_RestNotifyPause, url, bytes.NewBuffer([]byte("{}")), task)
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// REST orchestration receiver methods. These are all invoked on followers to handle and respond to
+// instructions from the master.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// RestHandleFailedTask handles REST API /pauseMgr/FailedTask by marking the task as failed.
+func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *http.Request) {
+	const _RestHandleFailedTask = "PauseServiceManager::RestHandleFailedTask:"
+
+	logging.Infof("%v called", _RestHandleFailedTask)
+	defer logging.Infof("%v returned", _RestHandleFailedTask)
+
+	// Authenticate
+	_, ok := doAuth(r, w, _RestHandleFailedTask)
+	if !ok {
+		return
+	}
+
+	// Parameters
+	id := r.FormValue("id")
+	errMsg := r.FormValue("errMsg")
+
+	task := m.taskFind(id)
+	if task != nil {
+		// Do the work for this task
+		logging.Infof("%v Marking taskId %v (taskType %v) failed. errMsg: %v", _RestHandleFailedTask,
+			id, task.taskType, errMsg)
+		task.TaskObjSetFailed(errMsg)
+		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: id}
+		rhSend(http.StatusOK, w, resp)
+
+		return
+	}
+
+	// Task not found error reply
+	errMsg2 := fmt.Sprintf("%v taskId %v not found", _RestHandleFailedTask, id)
+	logging.Errorf(errMsg2)
+	resp := &TaskResponse{Code: RESP_ERROR, Error: errMsg2}
+	rhSend(http.StatusInternalServerError, w, resp)
+}
+
+// RestHandlePause handles REST API /pauseMgr/Pause by initiating work on the specified taskId on
+// this follower node.
+func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Request) {
+	const _RestHandlePause = "PauseServiceManager::RestHandlePause:"
+
+	logging.Infof("%v called", _RestHandlePause)
+	defer logging.Infof("%v returned", _RestHandlePause)
+
+	// Authenticate
+	_, ok := doAuth(r, w, _RestHandlePause)
+	if !ok {
+		return
+	}
+
+	// Parameters
+	id := r.FormValue("id")
+
+	task := m.taskFind(id)
+	if task != nil {
+		// Do the work for this task
+		RunPauser(m, task, false)
+
+		return
+	}
+
+	// Task not found error reply
+	errMsg2 := fmt.Sprintf("%v taskId %v not found", _RestHandlePause, id)
+	logging.Errorf(errMsg2)
+	resp := &TaskResponse{Code: RESP_ERROR, Error: errMsg2}
+	rhSend(http.StatusInternalServerError, w, resp)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -558,7 +708,7 @@ func (m *PauseServiceManager) CancelResume(taskClone *taskObj) error {
 func (m *PauseServiceManager) testPreparePause(w http.ResponseWriter, r *http.Request) {
 	const _testPreparePause = "PauseServiceManager::testPreparePause:"
 
-	m.testPauseOrResume(w, r, _testPreparePause, task_PREPARE_PAUSE)
+	m.testPauseOrResume(w, r, _testPreparePause, task_PAUSE, true)
 }
 
 // testPause handles unit test REST API "/test/Pause" by calling the Pause API directly, which is
@@ -566,7 +716,7 @@ func (m *PauseServiceManager) testPreparePause(w http.ResponseWriter, r *http.Re
 func (m *PauseServiceManager) testPause(w http.ResponseWriter, r *http.Request) {
 	const _testPause = "PauseServiceManager::testPause:"
 
-	m.testPauseOrResume(w, r, _testPause, task_PAUSE)
+	m.testPauseOrResume(w, r, _testPause, task_PAUSE, false)
 }
 
 // testPrepareResume handles unit test REST API "/test/PrepareResume" by calling the PreparePause
@@ -574,7 +724,7 @@ func (m *PauseServiceManager) testPause(w http.ResponseWriter, r *http.Request) 
 func (m *PauseServiceManager) testPrepareResume(w http.ResponseWriter, r *http.Request) {
 	const _testPrepareResume = "PauseServiceManager::testPrepareResume:"
 
-	m.testPauseOrResume(w, r, _testPrepareResume, task_PREPARE_RESUME)
+	m.testPauseOrResume(w, r, _testPrepareResume, task_RESUME, true)
 }
 
 // testResume handles unit test REST API "/test/Resume" by calling the Resume API directly, which is
@@ -582,13 +732,13 @@ func (m *PauseServiceManager) testPrepareResume(w http.ResponseWriter, r *http.R
 func (m *PauseServiceManager) testResume(w http.ResponseWriter, r *http.Request) {
 	const _testResume = "PauseServiceManager::testResume:"
 
-	m.testPauseOrResume(w, r, _testResume, task_RESUME)
+	m.testPauseOrResume(w, r, _testResume, task_RESUME, false)
 }
 
 // testPauseOrResume is the delegate of testPreparePause, testPause, testPrepareResume, testResume
 // since their logic differs only in a few parameters and which API they call.
 func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.Request,
-	logPrefix string, taskType taskEnum) {
+	logPrefix string, taskType taskEnum, prepare bool) {
 
 	logging.Infof("%v called", logPrefix)
 	defer logging.Infof("%v returned", logPrefix)
@@ -613,14 +763,18 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 
 	var err error
 	switch taskType {
-	case task_PREPARE_PAUSE:
-		err = m.PreparePause(id, bucket, bucketUuid, remotePath)
 	case task_PAUSE:
-		err = m.Pause(id, bucket, bucketUuid, remotePath)
-	case task_PREPARE_RESUME:
-		err = m.PrepareResume(id, bucket, remotePath, dryRun)
+		if prepare {
+			err = m.PreparePause(id, bucket, bucketUuid, remotePath)
+		} else {
+			err = m.Pause(id, bucket, bucketUuid, remotePath)
+		}
 	case task_RESUME:
-		err = m.Resume(id, bucket, remotePath, dryRun)
+		if prepare {
+			err = m.PrepareResume(id, bucket, remotePath, dryRun)
+		} else {
+			err = m.Resume(id, bucket, remotePath, dryRun)
+		}
 	default:
 		err = fmt.Errorf("%v invalid taskType %v", logPrefix, int(taskType))
 	}
@@ -638,18 +792,99 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 // General methods and functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// bucketStateSetIfNil sets m.bucketState to the state passed in iff the bucket had no state, else
-// it does nothing. It returns the prior state, which is bst_NIL if it did set the new state.
-func (m *PauseServiceManager) bucketStateSetIfNil(bucket string, state bucketStateEnum) (
-	priorState bucketStateEnum) {
+// BucketScansBlocked checks whether a bucket must not currently allow scans due to its Pause-
+// Resume state. If scans are blocked, this returns the specific blocking state the bucket is in for
+// logging, otherwise it returns bst_NIL. Note that bucket state bst_PREPARE_PAUSE does not block
+// scans, so bst_NIL will be returned in this case, thus this method is NOT meant to look up the
+// current bucket state but only to check the boolean condition of whether scans should be blocked
+// and if so return the blocking state for logging in the caller. bst_RESUMED state still blocks
+// scans as this state ends (reverting to bst_NIL) only when ns_server marks the bucket active.
+func (m *PauseServiceManager) BucketScansBlocked(bucket string) bucketStateEnum {
+	m.bucketStatesMu.RLock()
+	defer m.bucketStatesMu.RUnlock()
+	bucketState := m.bucketStates[bucket]
+	if bucketState >= bst_PAUSING {
+		return bucketState
+	}
+	return bst_NIL
+}
+
+// bucketStateCompareAndSwap is a helper for bucketStateSet. It sets m.bucketState to newState iff
+// the bucket was in oldState, else it does nothing. It returns both the prior state and whether it
+// set newState.
+func (m *PauseServiceManager) bucketStateCompareAndSwap(bucket string,
+	oldState, newState bucketStateEnum) (priorState bucketStateEnum, swapped bool) {
 
 	m.bucketStatesMu.Lock()
 	defer m.bucketStatesMu.Unlock()
+
 	priorState = m.bucketStates[bucket]
-	if priorState == bst_NIL {
-		m.bucketStates[bucket] = state
+	if priorState == oldState {
+		m.bucketStates[bucket] = newState
+		return priorState, true
 	}
-	return priorState
+	return priorState, false
+}
+
+// bucketStateDelete deletes a bucket state from m.bucketState, no matter the prior state.
+func (m *PauseServiceManager) bucketStateDelete(bucket string) {
+	m.bucketStatesMu.Lock()
+	delete(m.bucketStates, bucket)
+	m.bucketStatesMu.Unlock()
+}
+
+// bucketStateSet sets m.bucketState to newState iff the bucket was in oldState, else it does
+// nothing but log and return an error with caller's log prefix.
+func (m *PauseServiceManager) bucketStateSet(logPrefix, bucket string,
+	oldState, newState bucketStateEnum) error {
+
+	priorState, swapped := m.bucketStateCompareAndSwap(bucket, oldState, newState)
+	if !swapped {
+		err := service.ErrConflict
+		logging.Errorf("%v Cannot set bucket %v to Pause-Resume state %v as it already has conflicting state %v", logPrefix,
+			bucket, newState, priorState)
+		return err
+	}
+	return nil
+}
+
+// GetIndexerNodeAddresses returns a slice of "host:port" for all the current Indexer nodes
+// EXCLUDING the one passed in (used to exclude the current node). This does a cinfo.FetchWithLock
+// so it can be expensive. It will return a nil slice if this class has never been able to get a
+// valid cinfoClient or if there are no Indexer nodes other than excludeAddr.
+func (m *PauseServiceManager) GetIndexerNodeAddresses(excludeAddr string) (nodeAddrs []string) {
+	const _GetIndexerNodeAddresses = "PauseCinfo::GetIndexerNodeAddresses:"
+
+	if err := m.genericMgr.cinfo.FetchWithLock(); err != nil {
+		logging.Warnf("%v Using potentially stale CIC data as FetchWithLock returned err: %v", _GetIndexerNodeAddresses, err)
+	}
+
+	m.genericMgr.cinfo.RLock()
+	defer m.genericMgr.cinfo.RUnlock()
+	nids := m.genericMgr.cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+	for _, nid := range nids {
+		nodeAddr, err := m.genericMgr.cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+		if err == nil {
+			if nodeAddr != excludeAddr {
+				nodeAddrs = append(nodeAddrs, nodeAddr)
+			}
+		} else { // err != nil
+			logging.Errorf("%v Skipping nid %v as GetServiceAddress returned error: %v", _GetIndexerNodeAddresses, nid, err)
+		}
+	}
+	return nodeAddrs
+}
+
+// GetPauseMgr atomically gets the global PauseMgr pointer. When called from ScanCoordinator it may
+// still be nil as ScanCoordinator is constructed long before PauseServiceManager.
+func GetPauseMgr() *PauseServiceManager {
+	return (*PauseServiceManager)(atomic.LoadPointer(&PauseMgr))
+}
+
+// SetPauseMgr atomically sets the global PauseMgr pointer. This is done only once, when the
+// PauseServiceManager singleton is constructed.
+func SetPauseMgr(pauseMgr *PauseServiceManager) {
+	atomic.StorePointer(&PauseMgr, unsafe.Pointer(pauseMgr))
 }
 
 // taskAdd adds a task to m.tasks.
@@ -659,33 +894,9 @@ func (m *PauseServiceManager) taskAdd(task *taskObj) {
 	m.tasksMu.Unlock()
 }
 
-// taskAddPreparePause constructs and adds a PreparePause task to m.tasks.
-func (m *PauseServiceManager) taskAddPreparePause(taskId, bucket, bucketUuid, remotePath string,
-) error {
-
-	task, err := NewTaskObj(task_PREPARE_PAUSE, taskId, bucket, bucketUuid, remotePath, false)
-	if err != nil {
-		return err
-	}
-	m.taskAdd(task)
-	return nil
-}
-
 // taskAddPause constructs and adds a Pause task to m.tasks.
 func (m *PauseServiceManager) taskAddPause(taskId, bucket, bucketUuid, remotePath string) error {
 	task, err := NewTaskObj(task_PAUSE, taskId, bucket, bucketUuid, remotePath, false)
-	if err != nil {
-		return err
-	}
-	m.taskAdd(task)
-	return nil
-}
-
-// taskAddPrepareResume constructs and adds a PrepareResume task to m.tasks.
-func (m *PauseServiceManager) taskAddPrepareResume(taskId, bucket, remotePath string,
-	dryRun bool) error {
-
-	task, err := NewTaskObj(task_PREPARE_RESUME, taskId, bucket, "", remotePath, dryRun)
 	if err != nil {
 		return err
 	}
@@ -703,93 +914,68 @@ func (m *PauseServiceManager) taskAddResume(taskId, bucket, remotePath string, d
 	return nil
 }
 
-// taskDelete deletes a task by taskId, returning true if it was found and false otherwise (no-op).
-func (m *PauseServiceManager) taskDelete(taskId string) bool {
+// taskClone looks up a task by taskId and if found returns a pointer to a CLONE of it, else nil.
+// The clone has no mutex and thus should not be shared.
+func (m *PauseServiceManager) taskClone(taskId string) *taskObj {
+	task := m.taskFind(taskId)
+	if task != nil {
+		task.taskMu.RLock()
+		taskClone := *task
+		task.taskMu.RUnlock()
+
+		taskClone.taskMu = nil // don't share original mutex; nil as clone does not need locking
+		return &taskClone
+	}
+	return nil
+}
+
+// taskDelete deletes a task by taskId if it exists. If the task existed, this method returns the
+// deleted task, else nil (no-op).
+func (m *PauseServiceManager) taskDelete(taskId string) *taskObj {
 	m.tasksMu.Lock()
 	defer m.tasksMu.Unlock()
-	_, found := m.tasks[taskId]
-	if found {
+	task := m.tasks[taskId]
+	if task != nil {
 		delete(m.tasks, taskId)
 	}
-	return found
+	return task
 }
 
-// findAndCloneTask looks up a task by taskId and if found returns a clone of it and found = true,
-// else returns found = false.
-func (m *PauseServiceManager) taskFind(taskId string) (taskClone taskObj, found bool) {
+// taskFind looks up a task by taskId and if found returns a pointer to it (not a copy), else nil.
+func (m *PauseServiceManager) taskFind(taskId string) *taskObj {
 	m.tasksMu.RLock()
 	defer m.tasksMu.RUnlock()
-	task, found := m.tasks[taskId]
-	if found {
-		taskClone = *task
-	}
-	return taskClone, found
+	return m.tasks[taskId]
 }
 
-// archiveInfoFromRemotePath returns the archive type and directory from the remotePath from
-// either ns_server or test code, or logs and returns an error if the type is missing or
-// unrecognized. The type is determined by the remotePath prefix:
-//   file:// - local filesystem path; used in tests
-//   s3://   - AWS S3 bucket and path; used in production
-// In all cases this will append a trailing "/" if one is not present. For local filesystem, the
-// "file://" prefix will be removed from the returned archiveDir, so it works as a regular path:
-//   "file://foo/bar" becomes relative path "foo/bar/"
-//   "file:///foo/bar" becomes absolute path "/foo/bar/"
-func archiveInfoFromRemotePath(remotePath string) (
-	archiveType archiveEnum, archiveDir string, err error) {
-	const _archiveInfoFromRemotePath = "PauseServiceManager::archiveInfoFromRemotePath:"
-
-	const (
-		PREFIX_AZ   = "az://"   // Azure Cloud Storage target
-		PREFIX_FILE = "file://" // local filesystem target
-		PREFIX_GS   = "gs://"   // Google Cloud Storage target
-		PREFIX_S3   = "s3://"   // AWS S3 target
-	)
-
-	// Check for valid archive type
-	hasPrefix := true
-	if strings.HasPrefix(remotePath, PREFIX_AZ) {
-		archiveType = archive_AZ
-	} else if strings.HasPrefix(remotePath, PREFIX_FILE) {
-		archiveType = archive_FILE
-	} else if strings.HasPrefix(remotePath, PREFIX_GS) {
-		archiveType = archive_GS
-	} else if strings.HasPrefix(remotePath, PREFIX_S3) {
-		archiveType = archive_S3
-	} else { // treat as FILE, which does not require the prefix
-		hasPrefix = false
-		archiveType = archive_FILE
+// taskSetFailed looks up a task by taskId and if found marks it as failed with the given errMsg and
+// returns true, else returns false (not found).
+func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
+	task := m.taskFind(taskId)
+	if task != nil {
+		task.TaskObjSetFailed(errMsg)
+		return true
 	}
+	return false
+}
 
-	// Ensure there is more than just the archive type prefix
-	if (!hasPrefix && len(remotePath) == 0) ||
-		hasPrefix && ((archiveType == archive_AZ && len(remotePath) <= len(PREFIX_AZ)) ||
-			(archiveType == archive_FILE && len(remotePath) <= len(PREFIX_FILE)) ||
-			(archiveType == archive_GS && len(remotePath) <= len(PREFIX_GS)) ||
-			(archiveType == archive_S3 && len(remotePath) <= len(PREFIX_S3))) {
-		err = fmt.Errorf("%v Missing path body in remotePath '%v'", _archiveInfoFromRemotePath, remotePath)
-		logging.Errorf(err.Error())
-		return archive_NIL, "", err
+// taskSetMaster looks up a task by taskId and if found sets task.master to true and returns a
+// pointer to the task object (not a copy), else returns nil.
+func (m *PauseServiceManager) taskSetMaster(taskId string) *taskObj {
+	task := m.taskFind(taskId)
+	if task != nil {
+		task.taskMu.Lock()
+		task.master = true
+		task.taskMu.Unlock()
 	}
-
-	// Ensure there is a trailing slash
-	if strings.HasSuffix(remotePath, "/") {
-		archiveDir = remotePath
-	} else {
-		archiveDir = remotePath + "/"
-	}
-
-	// For archive_FILE, strip off "file://" prefix
-	if hasPrefix && archiveType == archive_FILE {
-		archiveDir = strings.Replace(archiveDir, PREFIX_FILE, "", 1)
-	}
-
-	return archiveType, archiveDir, nil
+	return task
 }
 
 // hasBucketUuid returns whether this task has the bucketUuid parameter.
 func (this *taskObj) hasBucketUuid() bool {
-	if this.taskType == task_PREPARE_PAUSE || this.taskType == task_PAUSE {
+	this.taskMu.RLock()
+	defer this.taskMu.RUnlock()
+	if this.taskType == task_PAUSE {
 		return true
 	}
 	return false
@@ -797,15 +983,70 @@ func (this *taskObj) hasBucketUuid() bool {
 
 // hasDryRun returns whether this task has the dryRun parameter.
 func (this *taskObj) hasDryRun() bool {
-	if this.taskType == task_PREPARE_RESUME || this.taskType == task_RESUME {
+	this.taskMu.RLock()
+	defer this.taskMu.RUnlock()
+	if this.taskType == task_RESUME {
 		return true
 	}
 	return false
 }
 
+// postWithAuthWrapper wraps postWithAuth so it can be called as a goroutine for parallel scatter.
+// Errors are logged with caller's logPrefix. bodyBuf contains JSON POST body. If anything fails
+// this will mark the task as failed here on the master and also notify the workers of the failure.
+func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, task *taskObj) {
+
+	resp, err := postWithAuth(url, "application/json", bodyBuf)
+	if err != nil {
+		err = fmt.Errorf("%v postWithAuth to url: %v returned error: %v", logPrefix, url, err)
+		logging.Errorf(err.Error())
+		task.pauser.failPause(logPrefix, "postWithAuth", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		err = fmt.Errorf("%v ReadAll(resp.Body) from url: %v returned error: %v", logPrefix,
+			url, err)
+		logging.Errorf(err.Error())
+		task.pauser.failPause(logPrefix, "ReadAll(resp.Body)", err)
+		return
+	}
+
+	var taskResponse TaskResponse
+	err = json.Unmarshal(bytes, &taskResponse)
+	if err != nil {
+		err = fmt.Errorf("%v Unmarshal from url: %v returned error: %v", logPrefix, url, err)
+		logging.Errorf(err.Error())
+		task.pauser.failPause(logPrefix, "Unmarshal", err)
+		return
+	}
+
+	// Check if taskResponse reports an error, which would be from GSI code, not HTTP
+	if taskResponse.Code == RESP_ERROR {
+		err = fmt.Errorf("%v TaskResponse from url: %v reports error: %v", logPrefix,
+			url, taskResponse.Error)
+		logging.Errorf(err.Error())
+		task.pauser.failPause(logPrefix, "TaskResponse", err)
+		return
+	}
+}
+
+// TaskObjSetFailed sets task.status to status_FAILED and task.errMessage to errMsg.
+func (this *taskObj) TaskObjSetFailed(errMsg string) {
+	this.taskMu.Lock()
+	this.errorMessage = errMsg
+	this.taskStatus = status_FAILED
+	this.taskMu.Unlock()
+}
+
 // taskObjToServiceTask creates the ns_server service.Task (cbauth/service/interface.go)
 // representation of a taskObj.
 func (this *taskObj) taskObjToServiceTask() *service.Task {
+	this.taskMu.RLock()
+	defer this.taskMu.RUnlock()
+
 	nsTask := service.Task{
 		Rev:          EncodeRev(0),
 		ID:           this.taskId,
@@ -825,8 +1066,9 @@ func (this *taskObj) taskObjToServiceTask() *service.Task {
 	if this.hasDryRun() {
 		nsTask.Extra["dryRun"] = this.dryRun
 	}
-	nsTask.Extra["archiveDir"] = this.archiveDir
+	nsTask.Extra["archivePath"] = this.archivePath
 	nsTask.Extra["archiveType"] = this.archiveType.String()
+	nsTask.Extra["master"] = this.master
 
 	return &nsTask
 }
