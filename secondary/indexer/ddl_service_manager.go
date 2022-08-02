@@ -82,6 +82,7 @@ type ddlSettings struct {
 	//serverless configs
 	memHighThreshold int32
 	memLowThreshold  int32
+	indexLimit       uint32
 }
 
 //////////////////////////////////////////////////////////////
@@ -1981,6 +1982,10 @@ func (s *ddlSettings) MemLowThreshold() int32 {
 	return atomic.LoadInt32(&s.memLowThreshold)
 }
 
+func (s *ddlSettings) ServerlessIndexLimit() uint32 {
+	return atomic.LoadUint32(&s.indexLimit)
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2028,6 +2033,13 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		atomic.StoreInt32(&s.memLowThreshold, memLowThreshold)
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for mem_low = %v", memLowThreshold)
+	}
+
+	indexLimit := uint32(config["settings.serverless.indexLimit"].Int())
+	if indexLimit >= 0 {
+		atomic.StoreUint32(&s.indexLimit, indexLimit)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for indexLimit = %v", indexLimit)
 	}
 }
 

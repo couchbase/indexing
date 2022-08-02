@@ -51,6 +51,7 @@ type ClientSettings struct {
 	//serverless configs
 	memHighThreshold int32
 	memLowThreshold  int32
+	indexLimit       uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -321,6 +322,16 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 	} else {
 		logging.Errorf("ClientSettings: invalid setting value for memLowThreshold=%v", memLowThreshold)
 	}
+
+	indexLimit := config["indexer.settings.serverless.indexLimit"].Int()
+	if indexLimit >= 0 {
+		atomic.StoreUint32(&s.indexLimit, uint32(indexLimit))
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing indexer.settings.serverless.indexLimit")
+		atomic.StoreUint32(&s.indexLimit, 200)
+	}
+
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -405,4 +416,8 @@ func (s *ClientSettings) MemHighThreshold() int32 {
 
 func (s *ClientSettings) MemLowThreshold() int32 {
 	return atomic.LoadInt32(&s.memLowThreshold)
+}
+
+func (s *ClientSettings) ServerlessIndexLimit() uint32 {
+	return atomic.LoadUint32(&s.indexLimit)
 }
