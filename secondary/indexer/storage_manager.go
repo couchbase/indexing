@@ -810,9 +810,9 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 			logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
 				"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 				slice.Id(), snapInfo)
-			restartTs = snapInfo.Timestamp()
+			restartTs = snapInfo.Timestamp().Copy()
 			if markAsUsed {
-				slice.SetLastRollbackTs(restartTs)
+				slice.SetLastRollbackTs(restartTs.Copy())
 			}
 		} else {
 			//send error response back
