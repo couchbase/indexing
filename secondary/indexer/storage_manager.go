@@ -256,6 +256,13 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	snapType := tsVbuuid.GetSnapType()
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
+	if (snapType == common.DISK_SNAP ||
+		snapType == common.FORCE_COMMIT ||
+		snapType == common.FORCE_COMMIT_MERGE) && (tsVbuuid.CheckSnapAligned() == false) {
+		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
+			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)
+	}
+
 	//if snapType is FORCE_COMMIT_MERGE, sync response
 	//will be sent after snasphot creation
 	if snapType != common.FORCE_COMMIT_MERGE {
