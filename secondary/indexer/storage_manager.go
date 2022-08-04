@@ -256,13 +256,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	snapType := tsVbuuid.GetSnapType()
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
-	if (snapType == common.DISK_SNAP ||
-		snapType == common.FORCE_COMMIT ||
-		snapType == common.FORCE_COMMIT_MERGE) && (tsVbuuid.CheckSnapAligned() == false) {
-		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
-			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)
-	}
-
 	//if snapType is FORCE_COMMIT_MERGE, sync response
 	//will be sent after snasphot creation
 	if snapType != common.FORCE_COMMIT_MERGE {
@@ -314,6 +307,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	s.muSnap.Unlock()
+
+	s.assertOnNonAlignedDiskCommit(streamId, keyspaceId, tsVbuuid_copy)
 
 	if snapType == common.FORCE_COMMIT_MERGE {
 		//response is sent on supvCmdch in case of FORCE_COMMIT_MERGE
@@ -2239,4 +2234,24 @@ func (s *storageMgr) getNumSnapshotWorkers() int {
 		numSnapshotWorkers = 10000
 	}
 	return numSnapshotWorkers
+}
+
+func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
+	keyspaceId string, tsVbuuid *common.TsVbuuid) {
+
+	snapType := tsVbuuid.GetSnapType()
+	// For INIT_STREAM, disk snapshot need not be snap aligned
+	// Hence, the assertion is only for MAINT_STREAM
+	// From 7.x all initial index builds happen in INIT_STREAM. So,
+	// there is no need to check for index state from 7.0 as we are
+	// doing this assertion check only for MAINT_STREAM
+	if (streamId == common.MAINT_STREAM) &&
+		(snapType == common.DISK_SNAP ||
+			snapType == common.FORCE_COMMIT ||
+			snapType == common.FORCE_COMMIT_MERGE) && (tsVbuuid.CheckSnapAligned() == false) {
+
+		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
+			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)
+
+	}
 }
