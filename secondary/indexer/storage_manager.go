@@ -302,9 +302,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid_copy := tsVbuuid.Copy()
 	stats := s.stats.Get()
 
+	s.assertOnNonAlignedDiskCommit(streamId, bucket, indexInstMap, tsVbuuid)
+
 	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
 		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats, flushWasAborted, hasAllSB)
-
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
@@ -2164,4 +2165,23 @@ func (s *storageMgr) getNumSnapshotWorkers() int {
 		numSnapshotWorkers = 10000
 	}
 	return numSnapshotWorkers
+}
+
+func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
+	keyspaceId string, tsVbuuid *common.TsVbuuid) {
+
+	snapType := tsVbuuid.GetSnapType()
+	// For INIT_STREAM, disk snapshot need not be snap aligned
+	// Hence, the assertion is only for MAINT_STREAM
+	// From 7.x all initial index builds happen in INIT_STREAM. So,
+	// there is no need to check for index state from 7.0 as we are
+	// doing this assertion check only for MAINT_STREAM
+	if (streamId == common.MAINT_STREAM) &&
+		(snapType == common.DISK_SNAP || snapType == common.FORCE_COMMIT) &&
+		(tsVbuuid.CheckSnapAligned() == false) {
+
+		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
+			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)
+
+	}
 }
