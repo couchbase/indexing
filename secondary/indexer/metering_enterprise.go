@@ -50,13 +50,9 @@ func init() {
 
 func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChannel) (*MeteringThrottlingMgr, Message) {
 
-	tlsCaFile := config["caFile"].String()
 	settings := regulator.InitSettings{
 		NodeID:           service.NodeID(nodeID),
 		Service:          regulator.Index,
-		TlsCAFile:        tlsCaFile,
-		BindHttpPort:     0,
-		ServiceCheckMask: 0,
 	}
 
 	handler := factory.InitRegulator(settings)

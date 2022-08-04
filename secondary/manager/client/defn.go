@@ -205,6 +205,7 @@ type DedupedIndexStats struct {
 type PerIndexStats struct {
 	// Nothing for now. With CBO, num_docs_indexed,
 	// resident_percent and other stats will come here
+	LastScanTime float64 `json:"last_scan_time,omitempty"`
 }
 
 type IndexStats2Holder struct {

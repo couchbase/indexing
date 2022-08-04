@@ -580,6 +580,7 @@ func (s *IndexStats) SetGSIClientFilters() {
 	s.numDocsQueued.AddFilter(stats.GSIClientFilter)
 	s.lastRollbackTime.AddFilter(stats.GSIClientFilter)
 	s.progressStatTime.AddFilter(stats.GSIClientFilter)
+	s.lastScanTime.AddFilter(stats.GSIClientFilter)
 	s.indexState.AddFilter(stats.GSIClientFilter)
 }
 

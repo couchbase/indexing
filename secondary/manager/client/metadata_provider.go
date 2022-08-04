@@ -167,6 +167,7 @@ type IndexMetadata struct {
 	Error            string
 	Scheduled        bool
 	ScheduleFailed   bool
+	Stats            map[string]interface{}
 }
 
 type InstanceDefn struct {
@@ -4626,6 +4627,7 @@ func (r *metadataRepo) listAllDefn() (map[c.IndexDefnId]*IndexMetadata, uint64) 
 				Error:            meta.Error,
 				Instances:        insts,
 				InstsInRebalance: instsInRebalance,
+				Stats:            meta.Stats,
 			}
 
 			result[id] = tmp
@@ -4669,6 +4671,7 @@ func (r *metadataRepo) listDefnWithValidInstNoLock() (map[c.IndexDefnId]*IndexMe
 				Error:            meta.Error,
 				Instances:        insts,
 				InstsInRebalance: instsInRebalance,
+				Stats:            meta.Stats,
 			}
 
 			result[id] = tmp
@@ -5230,6 +5233,7 @@ func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 		InstsInRebalance: nil,
 		State:            c.INDEX_STATE_NIL,
 		Error:            "",
+		Stats:            map[string]interface{}{},
 	}
 }
 
@@ -5494,6 +5498,13 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 							result[inst.InstId][partitionId].Set("last_rollback_time", interface{}(dedupedIndexStats.LastRollbackTime))
 							result[inst.InstId][partitionId].Set("progress_stat_time", interface{}(dedupedIndexStats.ProgressStatTime))
 						}
+					}
+					if val, ok := meta.Stats["last_known_scan_time"]; ok {
+						if val.(float64) < dedupedIndexStats.Indexes[indexName].LastScanTime {
+							meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
+						}
+					} else {
+						meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
 					}
 				}
 			}
