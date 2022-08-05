@@ -243,12 +243,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		return
 	}
 
-	if (snapType == common.DISK_SNAP ||
-		snapType == common.FORCE_COMMIT) && (tsVbuuid.CheckSnapAligned() == false) {
-		logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
-			"Stream: %v, Bucket: %v, tsVbuuid: %v", streamId, bucket, tsVbuuid)
-	}
-
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
@@ -257,6 +251,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 	indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 	stats := s.stats.Get()
+
+	s.assertOnNonAlignedDiskCommit(streamId, bucket, indexInstMap, tsVbuuid)
 
 	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
 		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted, hasAllSB)
@@ -1677,4 +1673,33 @@ func (s IndexStorageStats) getPlasmaFragmentation() float64 {
 	}
 
 	return fragPercent
+}
+
+func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
+	bucket string, indexInstMap common.IndexInstMap, tsVbuuid *common.TsVbuuid) {
+
+	snapType := tsVbuuid.GetSnapType()
+	// For INIT_STREAM, disk snapshot need not be snap aligned
+	// Hence, the assertion is only for MAINT_STREAM
+	if (streamId == common.MAINT_STREAM) &&
+		(snapType == common.DISK_SNAP ||
+			snapType == common.FORCE_COMMIT) && (tsVbuuid.CheckSnapAligned() == false) {
+
+		skipAssertion := false
+		for _, idxInst := range indexInstMap {
+
+			// If index belongs to this stream & keyspaceId at still in INITIAL state,
+			// the skip assertion as the index can be building in MAINT_STREAM
+			if idxInst.Defn.Bucket == bucket &&
+				idxInst.Stream == streamId &&
+				idxInst.State == common.INDEX_STATE_INITIAL {
+				skipAssertion = skipAssertion || true
+				break
+			}
+		}
+		if !skipAssertion {
+			logging.Fatalf("StorageMgr::handleCreateSnapshot Disk commit timestamp is not snapshot aligned. "+
+				"Stream: %v, Bucket: %v, tsVbuuid: %v", streamId, bucket, tsVbuuid)
+		}
+	}
 }
