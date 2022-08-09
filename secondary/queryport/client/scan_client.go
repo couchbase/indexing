@@ -100,7 +100,7 @@ func (c *GsiScanClient) Helo() (uint32, error) {
 		Version: proto.Uint32(uint32(protobuf.ProtobufVersion())),
 	}
 
-	resp, err := c.doRequestResponse(req, "", true)
+	resp, _, err := c.doRequestResponse(req, "", true)
 	if err != nil {
 		return 0, err
 	}
@@ -121,7 +121,7 @@ func (c *GsiScanClient) LookupStatistics(
 		DefnID: proto.Uint64(defnID),
 		Span:   &protobuf.Span{Equals: [][]byte{val}},
 	}
-	resp, err := c.doRequestResponse(req, "", true)
+	resp, _, err := c.doRequestResponse(req, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (c *GsiScanClient) RangeStatistics(
 			},
 		},
 	}
-	resp, err := c.doRequestResponse(req, "", true)
+	resp, _, err := c.doRequestResponse(req, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +639,7 @@ func (c *GsiScanClient) CountLookup(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	resp, err := c.doRequestResponse(req, requestId, retry)
+	resp, _, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -673,7 +673,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	resp, err := c.doRequestResponse(req, requestId, retry)
+	resp, _, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -722,7 +722,7 @@ func (c *GsiScanClient) CountRange(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId, retry)
+	resp, _, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -761,7 +761,7 @@ func (c *GsiScanClient) CountRangePrimary(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId, retry)
+	resp, _, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -775,7 +775,8 @@ func (c *GsiScanClient) CountRangePrimary(
 
 func (c *GsiScanClient) MultiScanCount(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64,
+	partitions []common.PartitionId, retry bool) (int64, uint64, error) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -790,7 +791,7 @@ func (c *GsiScanClient) MultiScanCount(
 				for i, seek := range scan.Seek {
 					s, err := json.Marshal(seek)
 					if err != nil {
-						return 0, err
+						return 0, 0, err
 					}
 					equals[i] = s
 				}
@@ -803,13 +804,13 @@ func (c *GsiScanClient) MultiScanCount(
 						if f.Low != common.MinUnbounded { // Do not encode if unbounded
 							l, err = json.Marshal(f.Low)
 							if err != nil {
-								return 0, err
+								return 0, 0, err
 							}
 						}
 						if f.High != common.MaxUnbounded { // Do not encode if unbounded
 							h, err = json.Marshal(f.High)
 							if err != nil {
-								return 0, err
+								return 0, 0, err
 							}
 						}
 
@@ -852,21 +853,22 @@ func (c *GsiScanClient) MultiScanCount(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId, retry)
+	resp, ru, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	countResp := resp.(*protobuf.CountResponse)
 	if countResp.GetErr() != nil {
 		err = errors.New(countResp.GetErr().GetError())
-		return 0, err
+		return 0, 0, err
 	}
-	return countResp.GetCount(), nil
+	return countResp.GetCount(), ru, nil
 }
 
 func (c *GsiScanClient) MultiScanCountPrimary(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64,
+	partitions []common.PartitionId, retry bool) (int64, uint64, error) {
 
 	var what string
 	// serialize scans
@@ -924,7 +926,7 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 	}
 
 	if len(protoScans) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	partnIds := make([]uint64, len(partitions))
@@ -950,16 +952,16 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId, retry)
+	resp, ru, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	countResp := resp.(*protobuf.CountResponse)
 	if countResp.GetErr() != nil {
 		err = errors.New(countResp.GetErr().GetError())
-		return 0, err
+		return 0, 0, err
 	}
-	return countResp.GetCount(), nil
+	return countResp.GetCount(), ru, nil
 }
 
 func (c *GsiScanClient) Scan3(
@@ -1257,12 +1259,12 @@ func (c *GsiScanClient) IsClosed() bool {
 	return atomic.LoadUint32(&c.closed) == uint32(1)
 }
 
-func (c *GsiScanClient) doRequestResponse(
-	req interface{}, requestId string, retry bool) (interface{}, error) {
+func (c *GsiScanClient) doRequestResponse(req interface{}, requestId string,
+	retry bool) (interface{}, uint64, error) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	healthy := true
 	defer func() { c.pool.Return(connectn, healthy) }()
@@ -1292,7 +1294,7 @@ REQUEST_RESPONSE_RETRY:
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, arg1, requestId, err)
 		healthy = false
-		return nil, err
+		return nil, 0, err
 	}
 
 	laddr := conn.LocalAddr()
@@ -1339,11 +1341,12 @@ REQUEST_RESPONSE_RETRY:
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
 		healthy = false
-		return nil, err
+		return nil, 0, err
 	}
 
 	c.trySetDeadline(conn, c.readDeadline)
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
+	var readUnits uint64
 	endResp, err := pkt.Receive(conn)
 	if isgone(err) && retry && renew() {
 		retry = false
@@ -1354,14 +1357,16 @@ REQUEST_RESPONSE_RETRY:
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
 		healthy = false
-		return nil, err
+		return nil, 0, err
 	} else if endResp != nil {
-		if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+		if ser, ok := endResp.(*protobuf.StreamEndResponse); !ok {
 			healthy = false
-			return nil, ErrorProtocol
+			return nil, 0, ErrorProtocol
+		} else {
+			readUnits = ser.GetReadUnits()
 		}
 	}
-	return resp, nil
+	return resp, readUnits, nil
 }
 
 func (c *GsiScanClient) sendRequest(

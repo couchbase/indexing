@@ -1104,7 +1104,7 @@ func (api *testServer) doMultiScanCount(w http.ResponseWriter, request *http.Req
 
 	w.WriteHeader(http.StatusOK)
 
-	count, err := api.client.MultiScanCount(
+	count, _, err := api.client.MultiScanCount(
 		uint64(index.Definition.DefnId), "", scans,
 		distinct, cons, ts)
 	if err != nil {
