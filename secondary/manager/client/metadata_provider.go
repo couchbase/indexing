@@ -1309,8 +1309,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	} else {
 		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
-		//DEEPK add error here for resource limit reached
-		if err != nil && (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error()) || strings.Contains(err.Error(), c.ErrIndexBucketLimitReached.Error())) {
+
+		if err != nil && (c.IsServerlessDeployment() || (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error()) || strings.Contains(err.Error(), c.ErrIndexBucketLimitReached.Error()))) {
 			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 			return err
 		}
