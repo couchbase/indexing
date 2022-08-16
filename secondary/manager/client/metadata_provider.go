@@ -1239,7 +1239,15 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		if sched {
 			scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 			if scheduleErr == nil {
-				if o.settings.WaitForScheduledIndex() && !rebalRunning {
+				wait := true
+				if rebalRunning {
+					wait = false
+					if c.IsServerlessDeployment() {
+						wait = true
+					}
+				}
+
+				if o.settings.WaitForScheduledIndex() && wait {
 					err := o.waitForScheduledIndex(idxDefn)
 					if err != nil {
 						logging.Errorf("Error in waitForScheduledIndex %v", err)
@@ -1254,6 +1262,11 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 					message = message + " The index will be created in the background after the ongoing rebalance."
 				}
 				logging.Warnf("%v", message)
+
+				if c.IsServerlessDeployment() {
+					return c.ErrServerBusy
+				}
+
 				return fmt.Errorf("%v", message)
 			} else {
 				if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
@@ -1265,7 +1278,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 			}
 		}
 
-		logging.Errorf("Fail to create index: %v", err)
+		logging.Errorf("Fail to create index: %v, msg: %v", err, msg)
 		return fmt.Errorf("%v", msg)
 	}
 

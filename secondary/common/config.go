@@ -3200,6 +3200,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.serverless.allowScheduleCreateRebal": ConfigValue{
+		true,
+		"Allow scheduling of index creation in the background during rebalance",
+		true,
+		false,
+		false,
+	},
 	"indexer.scheduleCreateRetries": ConfigValue{
 		1000,
 		"Number of retries - per index - for background index creation.",

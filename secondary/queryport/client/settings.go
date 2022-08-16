@@ -227,7 +227,12 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowScheduleCreate, 0)
 	}
 
-	allowScheduleCreateRebal, ok := config["indexer.allowScheduleCreateRebal"]
+	var schedCreateRebalparam = "indexer.allowScheduleCreateRebal"
+	if common.IsServerlessDeployment() {
+		schedCreateRebalparam = "indexer.serverless.allowScheduleCreateRebal"
+	}
+
+	allowScheduleCreateRebal, ok := config[schedCreateRebalparam]
 	if ok {
 		if allowScheduleCreateRebal.Bool() {
 			atomic.StoreUint32(&s.allowScheduleCreateRebal, 1)
@@ -235,8 +240,12 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 			atomic.StoreUint32(&s.allowScheduleCreateRebal, 0)
 		}
 	} else {
-		logging.Errorf("ClientSettings: missing allowScheduleCreateRebal")
-		atomic.StoreUint32(&s.allowScheduleCreateRebal, 0)
+		logging.Errorf("ClientSettings: missing %v", schedCreateRebalparam)
+		if common.IsServerlessDeployment() {
+			atomic.StoreUint32(&s.allowScheduleCreateRebal, 1)
+		} else {
+			atomic.StoreUint32(&s.allowScheduleCreateRebal, 0)
+		}
 	}
 
 	listSchedIndexes, ok := config["queryport.client.listSchedIndexes"]
