@@ -3144,7 +3144,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 		// Discard equal keys if low inclusion is requested
 		if inclusion == Neither || inclusion == High {
-			err = s.iterEqualKeys(low, it, cmpFn, nil)
+			err = s.iterEqualKeys(low, it, cmpFn, nil, nil)
 			if err != nil {
 				return err
 			}
@@ -3176,7 +3176,7 @@ loop:
 
 	// Include equal keys if high inclusion is requested
 	if inclusion == Both || inclusion == High {
-		err = s.iterEqualKeys(high, it, cmpFn, callback)
+		err = s.iterEqualKeys(high, it, cmpFn, callback, mt)
 		if err != nil {
 			return err
 		}
@@ -3201,7 +3201,7 @@ func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
-	cmpFn CmpEntry, callback func([]byte) error) error {
+	cmpFn CmpEntry, callback func([]byte) error, mt MeteringTransaction) error {
 	var err error
 
 	var entry IndexEntry
@@ -3214,6 +3214,9 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 				if err != nil {
 					return err
 				}
+			}
+			if mt != nil {
+				mt.AddIndexRead(uint64(entry.MeteredByteLen()))
 			}
 		} else {
 			break
