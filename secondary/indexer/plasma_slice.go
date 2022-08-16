@@ -561,10 +561,11 @@ func (s *plasmaSlice) EnableMetering() bool {
 }
 
 type plasmaReaderCtx struct {
-	ch        chan *plasma.Reader
-	r         *plasma.Reader
-	readUnits uint64
-	user      string
+	ch               chan *plasma.Reader
+	r                *plasma.Reader
+	readUnits        uint64
+	user             string
+	skipReadMetering bool
 	cursorCtx
 }
 
@@ -596,10 +597,15 @@ func (ctx *plasmaReaderCtx) User() string {
 	return ctx.user
 }
 
-func (mdb *plasmaSlice) GetReaderContext(user string) IndexReaderContext {
+func (ctx *plasmaReaderCtx) SkipReadMetering() bool {
+	return ctx.skipReadMetering
+}
+
+func (mdb *plasmaSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
 	return &plasmaReaderCtx{
-		ch:   mdb.readers,
-		user: user,
+		ch:               mdb.readers,
+		user:             user,
+		skipReadMetering: skipReadMetering,
 	}
 }
 
@@ -871,7 +877,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		if err == nil {
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
-			if mdb.meteringMgr != nil {
+			if mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
 				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false)
 			}
@@ -939,7 +945,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 			itemInserted = true
 		}
 
-		if mdb.meteringMgr != nil && itemInserted == true {
+		if mdb.EnableMetering() && itemInserted == true {
 			bucket := mdb.idxDefn.Bucket
 			// for an update operation deleteSecIndex has already accounted 1 WCU
 			// so we will only count 1 WCU here.
@@ -1296,7 +1302,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 
-			if mdb.meteringMgr != nil {
+			if mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
 				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false)
 			}
@@ -1351,7 +1357,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 			itemDeleted = true
 		}
 
-		if meterDelete && mdb.meteringMgr != nil && itemDeleted == true {
+		if meterDelete && mdb.EnableMetering() && itemDeleted == true {
 			bucket := mdb.idxDefn.Bucket
 			keylen := getKeyLenFromEntry(entry)
 			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false)
@@ -2898,7 +2904,7 @@ func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) 
 	if s.slice.idxStats.useArrItemsCount {
 		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
 	}
-	enableMetering := s.slice.EnableMetering()
+	enableMetering := s.slice.EnableMetering() && !ctx.SkipReadMetering()
 	if enableMetering {
 		bytesScanned := 8
 		ru, _ := s.slice.meteringMgr.RecordReadUnits(s.slice.GetBucketName(),
@@ -3098,7 +3104,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	var mt MeteringTransaction
 
-	enableMetering := s.slice.EnableMetering()
+	enableMetering := s.slice.EnableMetering() && !ctx.SkipReadMetering()
 	if enableMetering {
 		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User())
 		defer func() {

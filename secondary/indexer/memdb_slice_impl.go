@@ -1782,7 +1782,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	}
 }
 
-func (mdb *memdbSlice) GetReaderContext(user string) IndexReaderContext {
+func (mdb *memdbSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
 	return &cursorCtx{}
 }
 

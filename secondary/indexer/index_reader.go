@@ -82,4 +82,5 @@ type IndexReaderContext interface {
 	User() string
 	ReadUnits() uint64
 	RecordReadUnits(byteLen uint64)
+	SkipReadMetering() bool
 }

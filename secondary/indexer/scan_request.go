@@ -1194,6 +1194,14 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 	return
 }
 
+// Skip metering for CBO Queries
+func (r *ScanRequest) SkipReadMetering() bool {
+	if r.RequestId == "advise_retriever" {
+		return true
+	}
+	return false
+}
+
 func (r *ScanRequest) setIndexParams() (localErr error) {
 	r.sco.mu.RLock()
 	defer r.sco.mu.RUnlock()
@@ -1201,7 +1209,8 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	var indexInst *common.IndexInst
 
 	stats := r.sco.stats.Get()
-	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds, r.User)
+	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID,
+		r.PartitionIds, r.User, r.SkipReadMetering())
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -1853,8 +1862,8 @@ func IndexKeyLessThan(a, b IndexKey) bool {
 }
 
 func (r ScanRequest) String() string {
-	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v, partitions:%v",
-		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType, r.PartitionIds)
+	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v, partitions:%v user:%v",
+		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType, r.PartitionIds, r.User)
 
 	if len(r.Scans) == 0 {
 		var incl, span string

@@ -1398,7 +1398,7 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 // This will also return the IndexReaderContext for each partition.  IndexReaderContext must
 // be returned in the same order as partitionIds.
 func (s *scanCoordinator) findIndexInstance(defnID uint64,
-	partitionIds []common.PartitionId, user string) (
+	partitionIds []common.PartitionId, user string, skipReadMetering bool) (
 	*common.IndexInst, []IndexReaderContext, error) {
 
 	hasIndex := false
@@ -1427,7 +1427,7 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64,
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
-						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user)
+						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
 					} else {
 						found = false
 						missing[inst.InstId] = append(missing[inst.InstId], partnId)
