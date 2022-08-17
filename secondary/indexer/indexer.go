@@ -4789,7 +4789,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		sessionId:          sessionId,
 		collectionId:       cid,
 		collectionAware:    collectionAware,
-		enableOSO:          enableOSO}
+		enableOSO:          enableOSO,
+		numVBuckets:        numVBuckets,
+	}
 
 	// Create the corresponding KeyspaceStats object before starting the stream
 	idx.stats.AddKeyspaceStats(buildStream, keyspaceId)
@@ -5812,13 +5814,16 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 
 	//use bucket as keyspaceId for MAINT_STREAM
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	numVBuckets := idx.bucketNameNumVBucketsMap[bucket]
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
-		streamId:   common.MAINT_STREAM,
-		keyspaceId: bucket,
-		indexList:  indexList,
-		respCh:     respCh,
-		stopCh:     stopCh,
-		sessionId:  sessionId}
+		streamId:    common.MAINT_STREAM,
+		keyspaceId:  bucket,
+		indexList:   indexList,
+		respCh:      respCh,
+		stopCh:      stopCh,
+		sessionId:   sessionId,
+		numVBuckets: numVBuckets,
+	}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
@@ -6703,7 +6708,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		sessionId:          sessionId,
 		collectionId:       cid,
 		collectionAware:    collectionAware,
-		enableOSO:          enableOSO}
+		enableOSO:          enableOSO,
+		numVBuckets:        numVBuckets,
+	}
 
 	//For recovery of INIT_STREAM, send the stored mergeTs to timekeeper.
 	//If indexes are in Catchup state, it will be used for merging to MAINT_STREAM.

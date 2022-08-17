@@ -499,6 +499,7 @@ type MsgStreamUpdate struct {
 	sessionId    uint64
 	collectionId string
 	mergeTs      *common.TsVbuuid
+	numVBuckets  int
 
 	allowMarkFirstSnap bool
 	keyspaceInRecovery bool
@@ -584,6 +585,10 @@ func (m *MsgStreamUpdate) GetMergeTs() *common.TsVbuuid {
 	return m.mergeTs
 }
 
+func (m *MsgStreamUpdate) GetNumVBuckets() int {
+	return m.numVBuckets
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -598,6 +603,9 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
 	str += fmt.Sprintf("\n\tEnableOSO: %v", m.enableOSO)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
+	if m.numVBuckets != 0 {
+		str += fmt.Sprintf("\n\tNumVBuckets: %v", m.numVBuckets)
+	}
 	return str
 
 }
