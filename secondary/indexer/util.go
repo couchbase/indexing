@@ -157,13 +157,15 @@ func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVBuckets int) (Ti
 		logging.Errorf(fmsg, err)
 		return nil, err
 	}
-	if len(seqnos) < numVBuckets {
+
+	// Skip validating the numVBuckets if user sets to 0
+	if (numVBuckets != 0) && (len(seqnos) < numVBuckets) {
 		fmsg := "BucketSeqnos(): got ts only for %v vbs"
 		return nil, fmt.Errorf(fmsg, len(seqnos))
 	}
 
-	ts := NewTimestamp(numVBuckets)
-	for i := 0; i < numVBuckets; i++ {
+	ts := NewTimestamp(len(seqnos))
+	for i := 0; i < len(seqnos); i++ {
 		ts[i] = seqnos[i]
 	}
 

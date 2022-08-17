@@ -275,6 +275,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 	collectionId := cmd.(*MsgStreamUpdate).GetCollectionId()
 	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
+	numVBuckets := cmd.(*MsgStreamUpdate).GetNumVBuckets()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -291,7 +292,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
 	//fresh start or recovery
 	case STREAM_INACTIVE, STREAM_PREPARE_DONE:
-		tk.ss.initKeyspaceIdInStream(streamId, keyspaceId)
+		tk.ss.initKeyspaceIdInStream(streamId, keyspaceId, numVBuckets)
 		if restartTs != nil {
 			tk.ss.streamKeyspaceIdRestartTsMap[streamId][keyspaceId] = restartTs.Copy()
 			tk.ss.setHWTFromRestartTs(streamId, keyspaceId)
@@ -1973,7 +1974,8 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	}
 
 	if openTs == nil {
-		openTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), tk.config["numVbuckets"].Int())
+		numVBuckets := tk.ss.streamKeyspaceIdNumVBuckets[streamId][keyspaceId]
+		openTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVBuckets)
 	}
 
 	tk.ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId] = openTs
@@ -2100,7 +2102,8 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	}
 
 	if openTs == nil {
-		openTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), tk.config["numVbuckets"].Int())
+		numVBuckets := tk.ss.streamKeyspaceIdNumVBuckets[streamId][keyspaceId]
+		openTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVBuckets)
 	}
 
 	tk.resetWaitForRecovery(streamId, keyspaceId)
@@ -2114,8 +2117,8 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 		if mergeTs == nil {
 			logging.Infof("Timekeeper::handleRecoveryDone %v %v. Received nil mergeTs. "+
 				"Considering it as rollback to 0", streamId, keyspaceId)
-			numVbuckets := tk.config["numVbuckets"].Int()
-			mergeTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+			numVBuckets := tk.ss.streamKeyspaceIdNumVBuckets[streamId][keyspaceId]
+			mergeTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVBuckets)
 		}
 		tk.setMergeTs(streamId, keyspaceId, mergeTs)
 	}
@@ -4116,12 +4119,12 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			if _, ok := keyspaceIdTsMap[stream][keyspaceId]; !ok {
 				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
 					cluster := tk.config["clusterAddr"].String()
-					numVbuckets := tk.config["numVbuckets"].Int()
 					cid := ""
 					if inst.Stream == common.INIT_STREAM && inst.Defn.KeyspaceId(inst.Stream) != inst.Defn.Bucket {
 						cid = keyspaceIdCollectionId[keyspaceId]
 					}
-					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, numVbuckets)
+					// TODO Elixir - Clone streamKeyspaceIdNumVBucketsMap from streamstate and use here
+					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, 0)
 					return err
 				})
 				if err = rh.Run(); err != nil {
