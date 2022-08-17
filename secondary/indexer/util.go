@@ -123,7 +123,7 @@ func GetRealIndexInstId(inst *common.IndexInst) common.IndexInstId {
 }
 
 // GetCurrentKVTs gets the current KV timestamp vector for the specified number of vBuckets.
-func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVbs int) (Timestamp, error) {
+func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVBuckets int) (Timestamp, error) {
 
 	var seqnos []uint64
 	bucketn := GetBucketFromKeyspaceId(keyspaceId)
@@ -157,13 +157,13 @@ func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVbs int) (Timesta
 		logging.Errorf(fmsg, err)
 		return nil, err
 	}
-	if len(seqnos) < numVbs {
+	if len(seqnos) < numVBuckets {
 		fmsg := "BucketSeqnos(): got ts only for %v vbs"
 		return nil, fmt.Errorf(fmsg, len(seqnos))
 	}
 
-	ts := NewTimestamp(numVbs)
-	for i := 0; i < numVbs; i++ {
+	ts := NewTimestamp(numVBuckets)
+	for i := 0; i < numVBuckets; i++ {
 		ts[i] = seqnos[i]
 	}
 
