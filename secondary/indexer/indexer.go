@@ -4558,7 +4558,7 @@ func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []stri
 
 	if anyBucketRemoved {
 		idx.bucketNameNumVBucketsMap = bucketNameNumVBucketsMap
-		idx.sendBucketNameNumVBucketsMapToStorageMgr()
+		idx.sendBucketNameNumVBucketsMap()
 	}
 }
 
@@ -5167,18 +5167,24 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 }
 
-func (idx *indexer) sendBucketNameNumVBucketsMapToStorageMgr() {
-	bucketNameNumVBucketsMap := make(map[string]int)
-	for b, nvb := range idx.bucketNameNumVBucketsMap {
-		bucketNameNumVBucketsMap[b] = nvb
+func (idx *indexer) sendBucketNameNumVBucketsMap() {
+
+	getMessage := func() *MsgUpdateNumVbuckets {
+		bucketNameNumVBucketsMap := make(map[string]int)
+		for b, nvb := range idx.bucketNameNumVBucketsMap {
+			bucketNameNumVBucketsMap[b] = nvb
+		}
+		msg := &MsgUpdateNumVbuckets{
+			bucketNameNumVBucketsMap: bucketNameNumVBucketsMap,
+		}
+		return msg
 	}
 
-	msg := &MsgUpdateNumVbuckets{
-		bucketNameNumVBucketsMap: bucketNameNumVBucketsMap,
-	}
-
-	idx.storageMgrCmdCh <- msg
+	idx.storageMgrCmdCh <- getMessage()
 	<-idx.storageMgrCmdCh
+
+	idx.scanCoordCmdCh <- getMessage()
+	<-idx.scanCoordCmdCh
 }
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
@@ -5224,7 +5230,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 					return
 				}
 				idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket] = numVBuckets
-				idx.sendBucketNameNumVBucketsMapToStorageMgr()
+				idx.sendBucketNameNumVBucketsMap()
 			}
 		}()
 		if err != nil {

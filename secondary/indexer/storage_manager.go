@@ -54,7 +54,7 @@ type storageMgr struct {
 	indexInstMap  IndexInstMapHolder
 	indexPartnMap IndexPartnMapHolder
 
-	bucketNameNumVBucketsMapHolder BucketNameNumVBucketsMapHolder
+	bucketNameNumVBucketsMapHolder common.BucketNameNumVBucketsMapHolder
 
 	streamKeyspaceIdInstList       StreamKeyspaceIdInstListHolder
 	streamKeyspaceIdInstsPerWorker StreamKeyspaceIdInstsPerWorkerHolder
@@ -240,7 +240,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
 
-	case STORAGE_UPDATE_NUMVBUCKETS:
+	case UPDATE_NUMVBUCKETS:
 		s.handleUpdateNumVBuckets(cmd)
 	}
 }
