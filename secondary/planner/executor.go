@@ -1964,8 +1964,6 @@ func findSubClusterBelowHighThreshold(subClusters []SubCluster, quota uint64,
 func findSubClusterForEmptyNode(indexers []*IndexerNode,
 	node *IndexerNode, excludeNodes []SubCluster) (SubCluster, error) {
 
-	//TODO handle the case if a node is failed over/unhealthy in the cluster.
-
 	var subCluster SubCluster
 	for _, indexer := range indexers {
 		if indexer.NodeUUID != node.NodeUUID &&
@@ -1980,7 +1978,15 @@ func findSubClusterForEmptyNode(indexers []*IndexerNode,
 			}
 		}
 	}
-	return nil, nil
+
+	//create a single node subcluster. Such a situation can happen if one
+	//node fails over in a subcluster. Replica will be created via repair
+	//during the next rebalance.
+	if len(subCluster) == 0 {
+		subCluster = append(subCluster, node)
+	}
+
+	return subCluster, nil
 }
 
 //checkIfNodeBelongsToAnySubCluster checks if the given node belongs
