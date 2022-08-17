@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"time"
 
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
@@ -84,8 +88,41 @@ func InitClusterFromREST() error {
 		} else {
 			return fmt.Errorf("Error while initialising cluster. Check cluster status")
 		}
+
+		err := setStorageMode("plasma", username, password)
+		if err != nil {
+			log.Fatalf("Error in setting storage mode to plasma")
+		}
 	}
 	status = getClusterStatus()
 	log.Printf("Cluster status: %v", status)
+
+	return nil
+}
+
+func setStorageMode(storageMode, username, password string) error {
+	client := http.Client{}
+	// TODO: This is a bad way of doing things. Use Nodes value and extract
+	// correct indexer address to set storage mode. Current logic assumes node
+	// with server port 9001 is always available when initialising cluster
+	url := "http://127.0.0.1:9108/internal/settings"
+
+	log.Printf("Changing storage mode value %v\n", storageMode)
+	jbody := make(map[string]interface{})
+	jbody["indexer.settings.storage_mode"] = storageMode
+	pbody, err := json.Marshal(jbody)
+	if err != nil {
+		return err
+	}
+	preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
+	preq.SetBasicAuth(username, password)
+
+	resp, err := client.Do(preq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	ioutil.ReadAll(resp.Body)
+
 	return nil
 }
