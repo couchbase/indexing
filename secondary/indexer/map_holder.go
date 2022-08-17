@@ -162,3 +162,36 @@ func CopyStreamKeyspaceIdInstsPerWorker(inList StreamKeyspaceIdInstsPerWorker) S
 	}
 	return outList
 }
+
+type BucketNameNumVBucketsMapHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (h *BucketNameNumVBucketsMapHolder) Init() {
+	h.ptr = new(unsafe.Pointer)
+}
+
+func (h *BucketNameNumVBucketsMapHolder) Set(bucketNameNumVBucketsMap map[string]int) {
+	atomic.StorePointer(h.ptr, unsafe.Pointer(&bucketNameNumVBucketsMap))
+}
+
+func (h *BucketNameNumVBucketsMapHolder) Get() map[string]int {
+	if ptr := atomic.LoadPointer(h.ptr); ptr != nil {
+		return *(*map[string]int)(ptr)
+	} else {
+		return make(map[string]int)
+	}
+}
+
+func (h *BucketNameNumVBucketsMapHolder) Clone() map[string]int {
+	if ptr := atomic.LoadPointer(h.ptr); ptr != nil {
+		currMap := *(*map[string]int)(ptr)
+		newMap := make(map[string]int)
+		for b, nvb := range currMap {
+			newMap[b] = nvb
+		}
+		return newMap
+	} else {
+		return make(map[string]int)
+	}
+}

@@ -1485,7 +1485,7 @@ func (flog FailoverLog) LowestVbuuid(vb int, seqno uint64) (vbuuid uint64, err e
 	return vbuuid, ErrNoEntry
 }
 
-func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLog, ret error) {
+func BucketFailoverLog(cluster, pooln, bucketn string) (fl FailoverLog, ret error) {
 
 	//panic safe
 	defer func() {
@@ -1505,7 +1505,8 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 	}
 	defer bucket.Close()
 
-	vbnos := listOfVbnos(numVb)
+	numVBuckets := bucket.NumVBuckets
+	vbnos := listOfVbnos(numVBuckets)
 	dcpConfig := map[string]interface{}{
 		"genChanSize":    10000,
 		"dataChanSize":   10000,
@@ -1517,7 +1518,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 	flogs, err := bucket.GetFailoverLogs(0 /*opaque*/, vbnos, uuid, dcpConfig)
 
 	if err == nil {
-		if len(flogs) != numVb {
+		if len(flogs) != numVBuckets {
 			ret = ErrIncompleteLog
 			return
 		}

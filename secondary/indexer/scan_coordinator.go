@@ -1065,6 +1065,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	// Compute counts asynchronously and reply to stats request
 	go func() {
 		for id, idxStats := range stats.indexes {
+
 			err := s.updateItemsCount(id, idxStats)
 			if err != nil {
 				logging.Errorf("%v: Unable to compute index items_count for %v/%v/%v state %v (%v)", s.logPrefix,

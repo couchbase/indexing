@@ -54,6 +54,8 @@ type storageMgr struct {
 	indexInstMap  IndexInstMapHolder
 	indexPartnMap IndexPartnMapHolder
 
+	bucketNameNumVBucketsMapHolder BucketNameNumVBucketsMapHolder
+
 	streamKeyspaceIdInstList       StreamKeyspaceIdInstListHolder
 	streamKeyspaceIdInstsPerWorker StreamKeyspaceIdInstsPerWorkerHolder
 
@@ -133,6 +135,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 	s.streamKeyspaceIdInstList.Init()
 	s.streamKeyspaceIdInstsPerWorker.Init()
+
+	s.bucketNameNumVBucketsMapHolder.Init()
 
 	//if manager is not enabled, create meta file
 	if config["enableManager"].Bool() == false {
@@ -235,6 +239,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
+
+	case STORAGE_UPDATE_NUMVBUCKETS:
+		s.handleUpdateNumVBuckets(cmd)
 	}
 }
 
@@ -252,7 +259,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	flushWasAborted := msgFlushDone.GetAborted()
 	hasAllSB := msgFlushDone.HasAllSB()
 
-	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
@@ -313,18 +319,18 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	if snapType == common.FORCE_COMMIT_MERGE {
 		//response is sent on supvCmdch in case of FORCE_COMMIT_MERGE
 		s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
-			numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
+			indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
 			flushWasAborted, hasAllSB, s.supvCmdch)
 	} else {
 		go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
-			numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
+			indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats,
 			flushWasAborted, hasAllSB, s.supvRespch)
 	}
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
-	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
+	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	instIdList []common.IndexInstId, instsPerWorker [][]common.IndexInstId,
 	stats *IndexerStats, flushWasAborted bool, hasAllSB bool, respch MsgChannel) {
@@ -346,7 +352,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 		go func(instList []common.IndexInstId) {
 			for _, idxInstId := range instList {
 				s.createSnapshotForIndex(streamId, keyspaceId, indexInstMap,
-					indexPartnMap, indexSnapMap, numVbuckets, idxInstId, tsVbuuid,
+					indexPartnMap, indexSnapMap, idxInstId, tsVbuuid,
 					stats, hasAllSB, flushWasAborted, needsCommit, forceCommit,
 					&wg, startTime)
 			}
@@ -377,7 +383,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 
 func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 	keyspaceId string, indexInstMap common.IndexInstMap,
-	indexPartnMap IndexPartnMap, indexSnapMap IndexSnapMap, numVbuckets int,
+	indexPartnMap IndexPartnMap, indexSnapMap IndexSnapMap,
 	idxInstId common.IndexInstId, tsVbuuid *common.TsVbuuid, stats *IndexerStats,
 	hasAllSB bool, flushWasAborted bool, needsCommit bool,
 	forceCommit bool, wg *sync.WaitGroup, startTime int64) {
@@ -450,7 +456,9 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 				snapTsVbuuid := latestSnapshot.Timestamp()
 				snapTs = Timestamp(snapTsVbuuid.Seqnos)
 			} else {
-				snapTs = NewTimestamp(numVbuckets)
+				bucketNameNumVBucketsMap := s.bucketNameNumVBucketsMapHolder.Get()
+				numVBuckets := bucketNameNumVBucketsMap[idxInst.Defn.Bucket]
+				snapTs = NewTimestamp(numVBuckets)
 			}
 
 			// Get Seqnos from TsVbuuid
@@ -1050,14 +1058,11 @@ func (sm *storageMgr) validateRestartTsVbuuid(keyspaceId string,
 	restartTs *common.TsVbuuid) *common.TsVbuuid {
 
 	clusterAddr := sm.config["clusterAddr"].String()
-	numVbuckets := sm.config["numVbuckets"].Int()
-
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
 
-		flog, err := common.BucketFailoverLog(clusterAddr, DEFAULT_POOL,
-			bucket, numVbuckets)
+		flog, err := common.BucketFailoverLog(clusterAddr, DEFAULT_POOL, bucket)
 
 		if err != nil {
 			logging.Warnf("StorageMgr::validateRestartTsVbuuid Bucket %v. "+
@@ -1087,7 +1092,8 @@ func (sm *storageMgr) validateRestartTsVbuuid(keyspaceId string,
 }
 
 // The caller of this method should acquire muSnap Lock
-func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId, is IndexSnapshot) (*IndexSnapshotContainer, bool) {
+func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId,
+	is IndexSnapshot) (*IndexSnapshotContainer, bool) {
 	indexInstMap := s.indexInstMap.Get()
 	if inst, ok := indexInstMap[instId]; !ok || inst.State == common.INDEX_STATE_DELETED {
 		return nil, false
@@ -1099,7 +1105,9 @@ func (s *storageMgr) initSnapshotContainerForInst(instId common.IndexInstId, is 
 		var snap IndexSnapshot
 		bucket := inst.Defn.Bucket
 		if is == nil {
-			ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
+			bucketNameNumVBucketsMap := s.bucketNameNumVBucketsMapHolder.Get()
+			numVBuckets := bucketNameNumVBucketsMap[bucket]
+			ts := common.NewTsVbuuid(bucket, numVBuckets)
 			snap = &indexSnapshot{
 				instId: instId,
 				ts:     ts, // nil snapshot should have ZERO Crc64 :)
@@ -1142,7 +1150,9 @@ func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string,
 	indexSnapMap := s.indexSnapMap.Get()
 	if _, ok := indexSnapMap[idxInstId]; !ok {
 		indexSnapMap := s.indexSnapMap.Clone()
-		ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
+		bucketNameNumVBucketsMap := s.bucketNameNumVBucketsMapHolder.Get()
+		numVBuckets := bucketNameNumVBucketsMap[bucket]
+		ts := common.NewTsVbuuid(bucket, numVBuckets)
 		snap := &indexSnapshot{
 			instId: idxInstId,
 			ts:     ts, // nil snapshot should have ZERO Crc64 :)
@@ -1188,6 +1198,17 @@ func (s *storageMgr) notifySnapshotCreation(is IndexSnapshot) {
 
 	index := uint64(is.IndexInstId()) % uint64(len(s.snapshotNotifych))
 	s.snapshotNotifych[index] <- CloneIndexSnapshot(is)
+}
+
+func (s *storageMgr) handleUpdateNumVBuckets(cmd Message) {
+	logging.Tracef("StorageMgr::handleUpdateNumVBuckets %v", cmd)
+
+	req := cmd.(*MsgUpdateNumVbuckets)
+	bucketNameNumVBucketsMap := req.GetBucketNameNumVBucketsMap()
+
+	s.bucketNameNumVBucketsMapHolder.Set(bucketNameNumVBucketsMap)
+
+	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {

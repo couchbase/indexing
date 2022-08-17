@@ -4558,6 +4558,7 @@ func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []stri
 
 	if anyBucketRemoved {
 		idx.bucketNameNumVBucketsMap = bucketNameNumVBucketsMap
+		idx.sendBucketNameNumVBucketsMapToStorageMgr()
 	}
 }
 
@@ -5164,6 +5165,20 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 }
 
+func (idx *indexer) sendBucketNameNumVBucketsMapToStorageMgr() {
+	bucketNameNumVBucketsMap := make(map[string]int)
+	for b, nvb := range idx.bucketNameNumVBucketsMap {
+		bucketNameNumVBucketsMap[b] = nvb
+	}
+
+	msg := &MsgUpdateNumVbuckets{
+		bucketNameNumVBucketsMap: bucketNameNumVBucketsMap,
+	}
+
+	idx.storageMgrCmdCh <- msg
+	<-idx.storageMgrCmdCh
+}
+
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool) (PartitionInstMap, PartitionInstMap, error) {
 
@@ -5207,6 +5222,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 					return
 				}
 				idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket] = numVBuckets
+				idx.sendBucketNameNumVBucketsMapToStorageMgr()
 			}
 		}()
 		if err != nil {

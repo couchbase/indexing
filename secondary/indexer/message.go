@@ -73,6 +73,7 @@ const (
 	STORAGE_INDEX_MERGE_SNAPSHOT
 	STORAGE_INDEX_PRUNE_SNAPSHOT
 	STORAGE_UPDATE_SNAP_MAP
+	STORAGE_UPDATE_NUMVBUCKETS
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -1735,6 +1736,18 @@ func (m *MsgTKInitBuildDone) GetFlushTs() *common.TsVbuuid {
 
 func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
 	return m.sessionId
+}
+
+type MsgUpdateNumVbuckets struct {
+	bucketNameNumVBucketsMap map[string]int
+}
+
+func (m *MsgUpdateNumVbuckets) GetMsgType() MsgType {
+	return STORAGE_UPDATE_NUMVBUCKETS
+}
+
+func (m *MsgUpdateNumVbuckets) GetBucketNameNumVBucketsMap() map[string]int {
+	return m.bucketNameNumVBucketsMap
 }
 
 type MsgIndexSnapRequest struct {
