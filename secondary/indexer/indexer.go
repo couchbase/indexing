@@ -381,7 +381,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.stats = NewIndexerStats()
 	idx.initFromConfig()
 
-	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
+	logging.Infof("Indexer::NewIndexer done initializing from config")
 
 	useCInfoLite := idx.config["use_cinfo_lite"].Bool()
 	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr,
@@ -5154,22 +5154,43 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		//add a single slice per partition for now
 		var slice Slice
-		idx.cinfoProviderLock.RLock()
-		ephemeral, err := idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
-		idx.cinfoProviderLock.RUnlock()
+		var err error
+		var ephemeral bool
+		var numVBuckets int
+
+		func() {
+			idx.cinfoProviderLock.RLock()
+			defer idx.cinfoProviderLock.RUnlock()
+
+			ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+			if err != nil {
+				logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
+				return
+			}
+
+			numVBuckets, err = idx.cinfoProvider.GetNumVBuckets(indexInst.Defn.Bucket)
+			if err != nil {
+				logging.Errorf("Indexer::initPartnInstance Failed to get number of vBuckets: %v\n", err)
+				return
+			}
+		}()
 		if err != nil {
-			logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
-		} else {
-			slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase, idx.meteringMgr)
+			errStr := fmt.Sprintf("Error getting cluster info for creating slice %v", err)
+			err1 := errors.New(errStr)
+
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err1,
+						category: INDEXER}}
+			}
+			return nil, nil, err1
 		}
 
-		if err == nil {
-			partnInst.Sc.AddSlice(0, slice)
-			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
-				indexInst.InstId, slice)
-
-			partnInstMap[partnDefn.GetPartitionId()] = partnInst
-		} else {
+		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
+			idx.meteringMgr, numVBuckets)
+		if err != nil {
 			if bootstrapPhase && err == errStorageCorrupted {
 				errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
 				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
@@ -5190,6 +5211,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			}
 			return nil, nil, err1
 		}
+
+		partnInst.Sc.AddSlice(0, slice)
+		logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
+			indexInst.InstId, slice)
+
+		partnInstMap[partnDefn.GetPartitionId()] = partnInst
 	}
 
 	return partnInstMap, failedPartnInstances, nil
@@ -6740,6 +6767,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 					if streamId == common.INIT_STREAM {
 						// Asyncronously compute the KV timestamp
 						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId, mutex)
+
 					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
@@ -8952,7 +8980,8 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats, ephemeral, isNew bool, meteringMgr *MeteringThrottlingMgr) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -8976,13 +9005,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId))
+			stats.GetPartitionStats(indInst.InstId, partitionId), numVBuckets)
 	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets)
 	}
 
 	return

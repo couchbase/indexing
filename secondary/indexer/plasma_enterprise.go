@@ -24,10 +24,11 @@ func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
-	meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (*plasmaSlice, error) {
+
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
-		sysconf, idxStats, indexerStats, isNew, isInitialBuild, meteringMgr)
+		sysconf, idxStats, indexerStats, isNew, isInitialBuild, meteringMgr, numVBuckets)
 }
 
 func DestroyPlasmaSlice(storageDir string, path string) error {
