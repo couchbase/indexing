@@ -91,7 +91,7 @@ type RunStats struct {
 type SubCluster []*IndexerNode
 
 type Plan struct {
-	// placement of indexes	in nodes
+	// placement of indexes in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
 	MemQuota  uint64         `json:"memQuota,omitempty"`
 	CpuQuota  uint64         `json:"cpuQuota,omitempty"`
@@ -99,7 +99,8 @@ type Plan struct {
 
 	UsedReplicaIdMap map[common.IndexDefnId]map[int]bool
 
-	SubClusters []SubCluster
+	SubClusters    []SubCluster
+	UsageThreshold *UsageThreshold
 }
 
 type IndexSpec struct {
@@ -142,6 +143,8 @@ type IndexSpec struct {
 type UsageThreshold struct {
 	MemHighThreshold int32
 	MemLowThreshold  int32
+
+	MemQuota uint64
 }
 
 //////////////////////////////////////////////////////////////
@@ -1633,7 +1636,7 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 //ExecutePlan2 is the entry point for tenant aware planner
 //for integration with metadata provider.
 func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
-	usageThreshold *UsageThreshold, serverlessIndexLimit uint32) (*Solution, error) {
+	serverlessIndexLimit uint32) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1651,7 +1654,7 @@ func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
 		return nil, err
 	}
 
-	solution, err := executeTenantAwarePlan(plan, indexSpec, usageThreshold)
+	solution, err := executeTenantAwarePlan(plan, indexSpec)
 
 	return solution, err
 
@@ -1686,8 +1689,7 @@ func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
 //   lower than HWM(High Watermark Threshold).
 //8. No Index can be placed on a node above HWM(High Watermark Threshold).
 
-func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec,
-	usageThreshold *UsageThreshold) (*Solution, error) {
+func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (*Solution, error) {
 
 	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan:"
 
@@ -1705,8 +1707,7 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec,
 
 	logging.Infof("%v Found SubClusters  %v", _executeTenantAwarePlan, subClusters)
 
-	candidates, err := findCandidateSubClustersBasedOnUsage(subClusters,
-		plan.MemQuota, usageThreshold)
+	candidates, err := findCandidateSubClustersBasedOnUsage(subClusters, plan.UsageThreshold)
 	if err != nil {
 		return nil, err
 	}
@@ -1892,11 +1893,11 @@ func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 //findCandidateSubClustersBasedOnUsage finds candidates sub-clusters for
 //placement based on resource usage. All sub-clusters below High Threshold
 //are potential candidates for index placement.
-func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster, quota uint64,
+func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	candidates, err := findSubClusterBelowHighThreshold(subClusters,
-		quota, usageThreshold)
+		usageThreshold)
 	if err != nil {
 		return nil, err
 	}
@@ -1910,11 +1911,13 @@ func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster, quota uint64
 
 //findSubClusterBelowLowThreshold finds sub-clusters with usage lower than
 //LWT(Low Watermark Threshold).
-func findSubClusterBelowLowThreshold(subClusters []SubCluster, quota uint64,
+func findSubClusterBelowLowThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
 	var found bool
+
+	quota := usageThreshold.MemQuota
 
 	for _, subCluster := range subClusters {
 		for _, indexNode := range subCluster {
@@ -1935,11 +1938,13 @@ func findSubClusterBelowLowThreshold(subClusters []SubCluster, quota uint64,
 
 //findSubClusterBelowHighThreshold finds sub-clusters with usage lower than
 //HWT(High Watermark Threshold).
-func findSubClusterBelowHighThreshold(subClusters []SubCluster, quota uint64,
+func findSubClusterBelowHighThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
 	var found bool
+
+	quota := usageThreshold.MemQuota
 
 	for _, subCluster := range subClusters {
 		found = true

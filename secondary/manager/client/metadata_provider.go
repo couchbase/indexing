@@ -2282,8 +2282,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	var solution *planner.Solution
 
 	if c.IsServerlessDeployment() {
-		usageThreshold := o.getUsageThresholdForPlanner()
-		solution, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, usageThreshold, serverlessIndexLimit)
+		solution, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, serverlessIndexLimit)
 		if err != nil {
 			return nil, nil, err
 		}
