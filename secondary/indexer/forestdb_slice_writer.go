@@ -1855,3 +1855,7 @@ func (fdb *fdbSlice) RecoveryDone() {
 func (fdb *fdbSlice) BuildDone() {
 	// done nothing
 }
+
+func (fdb *fdbSlice) GetTenantDiskSize() (int64, error) {
+	return int64(0), nil
+}

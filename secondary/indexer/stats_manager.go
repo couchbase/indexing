@@ -707,6 +707,20 @@ func (s *IndexStats) partnTimingStats(f func(*IndexStats) *stats.TimingStat) str
 	return f(s).Value()
 }
 
+type BucketStats struct {
+	name     string
+	diskUsed stats.Int64Val
+}
+
+func (s *BucketStats) Init() {
+	s.diskUsed.Init()
+}
+
+func (s *BucketStats) clone() *BucketStats {
+	var clone BucketStats = *s // shallow copy
+	return &clone
+}
+
 // IndexerStats contains both indexer stats at top level and individual index stats under the
 // indexes map.
 type IndexerStats struct {
@@ -715,6 +729,10 @@ type IndexerStats struct {
 
 	// keyspaceStatsMap wraps per-keyspace stats. Never nil.
 	keyspaceStatsMap KeyspaceStatsMapHolder
+
+	// bucketStats
+	buckets map[string]*BucketStats
+	bslock  sync.RWMutex
 
 	numConnections     stats.Int64Val
 	memoryQuota        stats.Int64Val
@@ -764,6 +782,7 @@ type IndexerStats struct {
 func (s *IndexerStats) Init() {
 	s.indexes = make(map[common.IndexInstId]*IndexStats)
 	s.keyspaceStatsMap.Init()
+	s.buckets = make(map[string]*BucketStats)
 	s.numConnections.Init()
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
@@ -897,6 +916,60 @@ func (s *IndexerStats) Reset() {
 			s.AddKeyspaceStats(streamId, keyspaceId)
 		}
 	}
+
+	func() {
+		old.bslock.RLock()
+		defer old.bslock.RUnlock()
+
+		// Recreate BucketStats objects
+		for bucket, bstats := range old.buckets {
+			bstats := &BucketStats{name: bstats.name}
+			bstats.Init()
+			s.buckets[bucket] = bstats
+		}
+	}()
+}
+
+func (s *IndexerStats) addBucketStats(bucket string) {
+
+	s.bslock.Lock()
+	defer s.bslock.Unlock()
+
+	if _, ok := s.buckets[bucket]; !ok {
+		bstats := &BucketStats{name: bucket}
+		bstats.Init()
+		s.buckets[bucket] = bstats
+	}
+}
+
+func (s *IndexerStats) removeBucketStats(bucket string) {
+
+	s.bslock.Lock()
+	defer s.bslock.Unlock()
+
+	// TODO: Make this O(1)
+	canRemove := true
+	for _, stats := range s.indexes {
+		if stats.bucket == bucket {
+			canRemove = false
+			break
+		}
+	}
+
+	if canRemove {
+		delete(s.buckets, bucket)
+	}
+}
+
+func (s *IndexerStats) GetBucketStats(bucket string) *BucketStats {
+	s.bslock.RLock()
+	defer s.bslock.RUnlock()
+
+	if bstats, ok := s.buckets[bucket]; ok {
+		return bstats
+	}
+
+	return nil
 }
 
 // AddKeyspaceStats adds or reinitializes an entry to the per-keyspace stats map
@@ -957,6 +1030,9 @@ func (s *IndexerStats) AddPartitionStats(indexInst common.IndexInst, partitionId
 			indexInst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount)
 	}
 	s.indexes[instId].addPartition(partitionId)
+
+	// Add bucket stats, if not added already.
+	s.addBucketStats(defn.Bucket)
 }
 
 func (s *IndexerStats) GetPartitionStats(id common.IndexInstId, partnId common.PartitionId) *IndexStats {
@@ -990,6 +1066,10 @@ func (s *IndexerStats) RemoveIndexStats(indexInst common.IndexInst) {
 		return
 	}
 	delete(s.indexes, instId)
+
+	// Remove bucket stats, only if all index stats for this bucket are removed.
+	defn := indexInst.Defn
+	s.removeBucketStats(defn.Bucket)
 }
 
 func (s *IndexStats) getKeySizeStats() map[string]interface{} {
@@ -1122,6 +1202,18 @@ func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
 	}
 }
 
+func (is *IndexerStats) PopulateBucketStats(statMap *StatsMap) {
+
+	is.bslock.RLock()
+	defer is.bslock.RUnlock()
+
+	for bucket, bstats := range is.buckets {
+		statMap.SetPrefix(bucket + ":")
+		bstats.addBucketStatsToMap(statMap)
+	}
+	statMap.SetPrefix("")
+}
+
 func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 	var prefix string
 	var instId string
@@ -1129,6 +1221,8 @@ func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 	statMap := NewStatsMap(spec)
 
 	is.PopulateIndexerStats(statMap)
+
+	is.PopulateBucketStats(statMap)
 
 	is.PopulateProjectorLatencyStats(statMap)
 
@@ -1501,6 +1595,10 @@ func (s *IndexStats) initializeScanStats() {
 	s.scanReqLat.Set(scanReqLat)
 	s.scanReqInitLat.Set(scanReqInitLat)
 	s.scanReqAllocLat.Set(scanReqAllocLat)
+}
+
+func (s *BucketStats) addBucketStatsToMap(statMap *StatsMap) {
+	statMap.AddStatValueFiltered("disk_used", &s.diskUsed)
 }
 
 func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
@@ -2264,6 +2362,17 @@ func (s *IndexerStats) Clone() *IndexerStats {
 
 	clone.keyspaceStatsMap.Set(s.GetKeyspaceStatsMap().Clone())
 
+	clone.buckets = make(map[string]*BucketStats)
+
+	func() {
+		s.bslock.RLock()
+		defer s.bslock.RUnlock()
+
+		for bucket, bstats := range s.buckets {
+			clone.buckets[bucket] = bstats.clone()
+		}
+	}()
+
 	return &clone
 }
 
@@ -2520,6 +2629,7 @@ const ST_TYPE_INDEX = "index_"
 const ST_TYPE_KEYSPACE = "keyspace"
 const ST_TYPE_PROJ_LAT = "projlat"
 const ST_TYPE_INDEXSTORAGE = "indexstorage_"
+const ST_TYPE_BUCKET = "bucket"
 
 type statLogger struct {
 	s              *statsManager
@@ -2585,6 +2695,22 @@ func (l *statLogger) writeIndexerStats(stats *IndexerStats, spec *statsSpec) {
 			}
 		}
 	}
+
+	func() {
+		stats.bslock.RLock()
+		defer stats.bslock.RUnlock()
+
+		// Bucket Stats
+		for bucket, bstats := range stats.buckets {
+			statMap := NewStatsMap(spec)
+			sType := ST_TYPE_BUCKET + "_" + bucket
+			bstats.addBucketStatsToMap(statMap)
+			err = l.sLogger.Write(sType, statMap.GetMap())
+			if err != nil {
+				logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", sType, err)
+			}
+		}
+	}()
 
 	// Projector Latency Stats
 	statMap = NewStatsMap(spec)
@@ -2911,6 +3037,16 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 	for _, s := range is.indexes {
 		out = s.populateMetrics(out)
 	}
+
+	func() {
+		is.bslock.RLock()
+		defer is.bslock.RUnlock()
+
+		for bucket, bstats := range is.buckets {
+			str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
+			out = append(out, []byte(str)...)
+		}
+	}()
 
 	w.WriteHeader(200)
 	w.Write(out)

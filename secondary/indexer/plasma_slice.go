@@ -2804,6 +2804,10 @@ func (mdb *plasmaSlice) String() string {
 
 }
 
+func (mdb *plasmaSlice) GetTenantDiskSize() (int64, error) {
+	return plasma.GetTenantDiskSize(mdb.idxDefn.Bucket)
+}
+
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 
 	//cleanup the disk directory
