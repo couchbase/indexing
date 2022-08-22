@@ -3291,6 +3291,26 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 
+	"indexer.settings.thresholds.units_high": ConfigValue{
+		60,
+		"Percentage of units_quota usage above which Indexer node " +
+			"is considered to have maxed out the units usage and needs " +
+			"additional capacity.",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.settings.thresholds.units_low": ConfigValue{
+		40,
+		"Percentage of units_quota usage above which Indexer node " +
+			"doesn't accept new create index except for existing tenants. " +
+			"The capacity between low and high threshold is for existing tenant growth.",
+		40,
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.settings.serverless.indexLimit": ConfigValue{
 		200,
 		"Limit on the number of indexes that can be created per bucket in Serverless Mode.",

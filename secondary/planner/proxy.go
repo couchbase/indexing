@@ -1559,7 +1559,11 @@ func getUsageThresholds(plan *Plan, config common.Config) {
 	plan.UsageThreshold.MemHighThreshold = int32(config["indexer.settings.thresholds.mem_high"].Int())
 	plan.UsageThreshold.MemLowThreshold = int32(config["indexer.settings.thresholds.mem_low"].Int())
 
+	plan.UsageThreshold.UnitsHighThreshold = int32(config["indexer.settings.thresholds.units_high"].Int())
+	plan.UsageThreshold.UnitsLowThreshold = int32(config["indexer.settings.thresholds.units_low"].Int())
+
 	plan.UsageThreshold.MemQuota = config["indexer.settings.memory_quota"].Uint64()
+	plan.UsageThreshold.UnitsQuota = config["indexer.settings.units_quota"].Uint64()
 }
 
 // rebalanceRemoveFromPlan is called only in the Rebalance case to remove any indexes whose numbers

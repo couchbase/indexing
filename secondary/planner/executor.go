@@ -144,7 +144,11 @@ type UsageThreshold struct {
 	MemHighThreshold int32
 	MemLowThreshold  int32
 
-	MemQuota uint64
+	UnitsHighThreshold int32
+	UnitsLowThreshold  int32
+
+	MemQuota   uint64
+	UnitsQuota uint64
 }
 
 //////////////////////////////////////////////////////////////
@@ -1910,7 +1914,7 @@ func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 }
 
 //findSubClusterBelowLowThreshold finds sub-clusters with usage lower than
-//LWT(Low Watermark Threshold).
+//LWM(Low Watermark Threshold).
 func findSubClusterBelowLowThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
