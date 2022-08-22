@@ -204,6 +204,7 @@ type TokenBuildSource byte
 const (
 	TokenBuildSourceDcp TokenBuildSource = iota
 	TokenBuildSourcePeer
+	TokenBuildSourceS3
 )
 
 func (bs TokenBuildSource) String() string {
@@ -213,6 +214,8 @@ func (bs TokenBuildSource) String() string {
 		return "Dcp"
 	case TokenBuildSourcePeer:
 		return "Peer"
+	case TokenBuildSourceS3:
+		return "S3"
 	}
 	return "unknown"
 }
@@ -235,6 +238,32 @@ func (tm TokenTransferMode) String() string {
 	return "unknown"
 }
 
+type TransferTokenVersion byte
+
+const (
+	// Used for moving single instance per transfer token
+	// when the index instance is built using DCP on destination node
+	// Default mode pre 7.2.0 versions
+	SINGLE_INST_DCP_BUILD TransferTokenVersion = iota
+
+	// Used when moving multiple index instanes per transfer token
+	// Data of all the index instances on disk (a.k.a shard) is
+	// transferred to the destination node and index is rebuilt from
+	// the data on disk
+	MULTI_INST_SHARD_TRANSFER
+)
+
+func (ttv TransferTokenVersion) String() string {
+
+	switch ttv {
+	case SINGLE_INST_DCP_BUILD:
+		return "SINGLE_INST_DCP_BUILD"
+	case MULTI_INST_SHARD_TRANSFER:
+		return "MULTI_INIT_SHARD_TRANSFER"
+	}
+	return "unknown"
+}
+
 // TransferToken represents a sindgle index partition movement for rebalance or move index.
 // These get stored in metakv, which makes callbacks on creation and each change.
 type TransferToken struct {
@@ -253,11 +282,35 @@ type TransferToken struct {
 	//used for logging
 	SourceHost string
 	DestHost   string
+
+	// For shard transfer based rebalance
+
+	Version TransferTokenVersion
+
+	// If shard based rebalance is being used, then the state
+	// of transfer token is captured in shardTokenState variable
+	ShardTransferTokenState ShardTokenState
+
+	// Set of index instances belonging to a shard
+	InstIds     []IndexInstId
+	RealInstIds []IndexInstId
+	IndexInsts  []IndexInst
+
+	// IDs of the main and back index shards for the group
+	// of index instances being moved. Source node may use
+	// this information to initiate transfer of corresponding
+	// shard  to destination node
+	ShardIds []uint64
+
+	// Location on S3 from which destination node can download
+	// the shard data
+	Destination string
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
 // only one layer deep, this can be done by returning the value receiver as Go already copied it.
 func (tt TransferToken) Clone() TransferToken {
+
 	return tt
 }
 
@@ -288,17 +341,40 @@ func (tt *TransferToken) String() string {
 		fmt.Fprintf(sbp, "(%v) ", tt.DestHost)
 	}
 	fmt.Fprintf(sbp, "RebalId: %v ", tt.RebalId)
-	fmt.Fprintf(sbp, "State: %v ", tt.State)
+
+	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "State: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
+	}
+
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
 	if tt.Error != "" {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
-	fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
-	fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
-	fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
-	fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
-	fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
+
+	// If more than one index instance exists, print all of them
+	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
+		for i := range tt.IndexInsts {
+			fmt.Fprintf(sbp, "InstId: %v ", tt.InstIds[i])
+			fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstIds[i])
+			fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInsts[i].Defn.Partitions)
+			fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInsts[i].Defn.Versions)
+			fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInsts[i])
+		}
+	} else {
+		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
+		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
+		fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
+		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
+		fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
+	}
 
 	return sb.String()
+}
+
+func (tt *TransferToken) IsShardTransferToken() bool {
+	return (tt.Version == MULTI_INST_SHARD_TRANSFER)
 }
