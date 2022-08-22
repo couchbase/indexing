@@ -89,7 +89,7 @@ func InitClusterFromREST() error {
 			return fmt.Errorf("Error while initialising cluster. Check cluster status")
 		}
 
-		err := setStorageMode("plasma", username, password)
+		err := setStorageModeAndShardAwareRebalance("plasma", username, password)
 		if err != nil {
 			log.Fatalf("Error in setting storage mode to plasma")
 		}
@@ -100,7 +100,7 @@ func InitClusterFromREST() error {
 	return nil
 }
 
-func setStorageMode(storageMode, username, password string) error {
+func setStorageModeAndShardAwareRebalance(storageMode, username, password string) error {
 	client := http.Client{}
 	// TODO: This is a bad way of doing things. Use Nodes value and extract
 	// correct indexer address to set storage mode. Current logic assumes node
@@ -110,6 +110,7 @@ func setStorageMode(storageMode, username, password string) error {
 	log.Printf("Changing storage mode value %v\n", storageMode)
 	jbody := make(map[string]interface{})
 	jbody["indexer.settings.storage_mode"] = storageMode
+	jbody["indexer.rebalance.shard_aware_rebalance"] = true
 	pbody, err := json.Marshal(jbody)
 	if err != nil {
 		return err
