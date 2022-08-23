@@ -495,7 +495,11 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 	}
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector)
+	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector)
+	if ru != 0 {
+		log.Printf("MultiScanCount: ReadUnits: %v bucket: %v indexName: %v scans: %v distinct: %v", ru,
+			bucketName, indexName, scans, distinct)
+	}
 	if err != nil {
 		return 0, err
 	} else {

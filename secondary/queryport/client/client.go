@@ -341,14 +341,14 @@ type GsiAccessor interface {
 	MultiScanCount(
 		defnID uint64, requestId string,
 		scans Scans, distinct bool,
-		cons common.Consistency, vector *TsConsistency) (int64, error)
+		cons common.Consistency, vector *TsConsistency) (int64, uint64, error)
 
 	// Count using MultiScan
 	MultiScanCountInternal(
 		defnID uint64, requestId string,
 		scans Scans, distinct bool,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker) (int64, error)
+		broker *RequestBroker) (int64, uint64, error)
 
 	// Scan API3 with grouping and aggregates support
 	Scan3(
@@ -1049,10 +1049,9 @@ func (c *GsiClient) CountRangeInternal(
 	return count, err
 }
 
-func (c *GsiClient) MultiScanCount(
-	defnID uint64, requestId string,
-	scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
+func (c *GsiClient) MultiScanCount(defnID uint64, requestId string, scans Scans,
+	distinct bool, cons common.Consistency, vector *TsConsistency) (
+	count int64, readUnits uint64, err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(nil, dataEncFmt)
@@ -1063,34 +1062,38 @@ func (c *GsiClient) MultiScanCountInternal(
 	defnID uint64, requestId string,
 	scans Scans, distinct bool,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker) (count int64, err error) {
+	broker *RequestBroker) (
+	count int64, readUnits uint64, err error) {
 
 	if c.bridge == nil {
-		return count, ErrorClientUninitialized
+		return count, 0, ErrorClientUninitialized
 	}
 
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
 		var err error
+		var ru uint64
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return 0, err, false
 		}
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
-			count, err = qc.MultiScanCountPrimary(
+			count, ru, err = qc.MultiScanCountPrimary(
 				uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry())
+			atomic.AddUint64(&readUnits, ru)
 			return count, err, false
 		}
 
-		count, err = qc.MultiScanCount(
-			uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry())
+		count, ru, err = qc.MultiScanCount(uint64(index.DefnId), requestId,
+			scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry())
+		atomic.AddUint64(&readUnits, ru)
 		return count, err, false
 	}
 
@@ -1100,7 +1103,7 @@ func (c *GsiClient) MultiScanCountInternal(
 
 	fmsg := "MultiScanCount {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
-	return count, err
+	return count, readUnits, err
 }
 
 func (c *GsiClient) Scan3(

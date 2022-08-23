@@ -1032,7 +1032,7 @@ func (si *secondaryIndex) Statistics(
 	return newStatistics(pstats), nil
 }
 
-// Count implement Index{} interface.
+// Count implement Index{} interface and is not Metered
 func (si *secondaryIndex) Count(span *datastore.Span,
 	cons datastore.ScanConsistency,
 	vector timestamp.Vector) (int64, errors.Error) {
@@ -1296,12 +1296,12 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 }
 
 //--------------------
-// datastore.CountIndex2{}
+// countInternal
 //--------------------
 
-// Count2 implements CountIndex2{} interface.
-func (si *secondaryIndex2) Count2(requestId string, spans datastore.Spans2,
-	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+func (si *secondaryIndex2) countInternal(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector, distinct bool,
+	conn *datastore.IndexConnection) (int64, errors.Error) {
 
 	if si == nil {
 		return 0, ErrorIndexEmpty
@@ -1314,12 +1314,48 @@ func (si *secondaryIndex2) Count2(requestId string, spans datastore.Spans2,
 
 	gsiscans := n1qlspanstogsi(spans)
 
-	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, false,
+	count, readUnits, e := client.MultiScanCount(si.defnID, requestId, gsiscans, distinct,
 		n1ql2GsiConsistency[cons], vector2ts(vector))
 	if e != nil {
 		return 0, n1qlError(client, e)
 	}
+
+	if conn != nil {
+		conn.RecordGsiRU(tenant.Unit(readUnits))
+	}
+
 	return count, nil
+}
+
+//--------------------
+// datastore.CountIndex5{}
+//--------------------
+
+// Count5 implements CountIndex5{} interface and is Metered
+func (si *secondaryIndex2) Count5(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) (int64, errors.Error) {
+
+	return si.countInternal(requestId, spans, cons, vector, false, conn)
+}
+
+// CountDistinct5 implements CountIndex5{} interface and is Metered
+func (si *secondaryIndex2) CountDistinct5(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) (int64, errors.Error) {
+
+	return si.countInternal(requestId, spans, cons, vector, true, conn)
+}
+
+//--------------------
+// datastore.CountIndex2{}
+//--------------------
+
+// Count2 implements CountIndex2{} interface and is UnMetered
+func (si *secondaryIndex2) Count2(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+
+	return si.countInternal(requestId, spans, cons, vector, false, nil)
 }
 
 // CanCountDistinct implements CountIndex2{} interface.
@@ -1327,27 +1363,11 @@ func (si *secondaryIndex2) CanCountDistinct() bool {
 	return true
 }
 
-// CountDistinct implements CountIndex2{} interface.
+// CountDistinct implements CountIndex2{} interface and is UnMetered
 func (si *secondaryIndex2) CountDistinct(requestId string, spans datastore.Spans2,
 	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
 
-	if si == nil {
-		return 0, ErrorIndexEmpty
-	}
-	client := si.gsi.gsiClient
-
-	if err := si.CheckScheduled(); err != nil {
-		return 0, n1qlError(client, err)
-	}
-
-	gsiscans := n1qlspanstogsi(spans)
-
-	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, true,
-		n1ql2GsiConsistency[cons], vector2ts(vector))
-	if e != nil {
-		return 0, n1qlError(client, e)
-	}
-	return count, nil
+	return si.countInternal(requestId, spans, cons, vector, true, nil)
 }
 
 //-------------------------------------

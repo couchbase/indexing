@@ -41,7 +41,7 @@ type Slice interface {
 	UpdateConfig(common.Config)
 
 	IndexWriter
-	GetReaderContext(user string) IndexReaderContext
+	GetReaderContext(user string, skipReadMetering bool) IndexReaderContext
 
 	RecoveryDone()
 }
@@ -77,4 +77,8 @@ func (ctx *cursorCtx) RecordReadUnits(byteLen uint64) {
 
 func (ctx *cursorCtx) User() string {
 	return ""
+}
+
+func (ctx *cursorCtx) SkipReadMetering() bool {
+	return true // Not used
 }

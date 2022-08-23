@@ -1823,7 +1823,7 @@ func (fdb *fdbSlice) canRunCompaction(abortTime time.Time) bool {
 	return true
 }
 
-func (fdb *fdbSlice) GetReaderContext(user string) IndexReaderContext {
+func (fdb *fdbSlice) GetReaderContext(user string, skipReadMetering bool) IndexReaderContext {
 	return &cursorCtx{}
 }
 

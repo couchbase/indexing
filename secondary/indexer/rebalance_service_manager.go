@@ -31,7 +31,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
-	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -54,21 +53,18 @@ type RebalanceServiceManager struct {
 	waiters   waiters     // set of channels of states for go routines waiting for next state change
 	waitersMu *sync.Mutex // protects waiters field; may be taken *after* svcMgrMu mutex
 
-	rebalancer  *Rebalancer   // runs the rebalance, failover, or index move
-	rebalancerF *Rebalancer   // follower rebalancer handle
-	statsMgr    *statsManager // indexer's singleton, so rebalance can get local stats directly
+	rebalancer  *Rebalancer // runs the rebalance, failover, or index move
+	rebalancerF *Rebalancer // follower rebalancer handle
 
 	rebalanceCtx *rebalanceContext
 	nodeInfo     *service.NodeInfo // never changes; info about the local node
 
-	config        c.ConfigHolder
-	supvCmdch     MsgChannel //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
-	supvMsgch     MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
-	supvPrioMsgch MsgChannel //channel to send msg to supervisor for high-priority handling (idx.wrkrPrioRecvCh)
+	config        c.ConfigHolder // Indexer config settings; updated via handleConfigUpdate
+	supvCmdch     MsgChannel     //supervisor sends commands on this channel (idx.rebalMgrCmdCh)
+	supvMsgch     MsgChannel     //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
+	supvPrioMsgch MsgChannel     //channel to send msg to supervisor for high-priority handling (idx.wrkrPrioRecvCh)
 	moveStatusCh  chan error
 	monitorStopCh StopChannel
-
-	cinfo *c.ClusterInfoCache // long-lived unshared local instance
 
 	localhttp string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
 
@@ -151,7 +147,7 @@ var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 func NewRebalanceServiceManager(genericMgr *GenericServiceManager, httpAddr string,
 	supvCmdch MsgChannel, supvMsgch MsgChannel, supvPrioMsgch MsgChannel, config c.Config,
 	nodeInfo *service.NodeInfo, rebalanceRunning bool, rebalanceToken *RebalanceToken,
-	statsMgr *statsManager) *RebalanceServiceManager {
+) *RebalanceServiceManager {
 
 	l.Infof("RebalanceServiceManager::NewRebalanceServiceManager %v %v ", rebalanceRunning, rebalanceToken)
 
@@ -169,24 +165,8 @@ func NewRebalanceServiceManager(genericMgr *GenericServiceManager, httpAddr stri
 		supvMsgch:     supvMsgch,
 		supvPrioMsgch: supvPrioMsgch,
 		moveStatusCh:  make(chan error),
-		statsMgr:      statsMgr,
 	}
-
 	mgr.config.Store(config)
-
-	var cinfo *c.ClusterInfoCache
-	url, err := c.ClusterAuthUrl(config["clusterAddr"].String())
-	if err == nil {
-		cinfo, err = c.NewClusterInfoCache(url, DEFAULT_POOL)
-	}
-	if err != nil {
-		panic("Unable to initialize cluster_info - " + err.Error())
-	}
-	cinfo.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
-	cinfo.SetLogPrefix("RebalanceServiceManager: ")
-	cinfo.SetUserAgent("RebalanceServiceManager")
-
-	mgr.cinfo = cinfo
 
 	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
 
@@ -437,7 +417,7 @@ func (m *RebalanceServiceManager) PrepareTopologyChange(change service.TopologyC
 		s.servers = nodeList
 	})
 
-	logging.Infof("RebalanceServiceManager::PrepareTopologyChange Success. isBalanced %v",
+	l.Infof("RebalanceServiceManager::PrepareTopologyChange Success. isBalanced %v",
 		currState.isBalanced)
 	return nil
 }
@@ -655,7 +635,7 @@ func (m *RebalanceServiceManager) StartTopologyChange(change service.TopologyCha
 		err = service.ErrNotSupported
 	}
 
-	logging.Infof("%v returns Error %v. isBalanced %v.", method, err, currState.isBalanced)
+	l.Infof("%v returns Error %v. isBalanced %v.", method, err, currState.isBalanced)
 	return err
 }
 
@@ -670,7 +650,7 @@ func (m *RebalanceServiceManager) startFailover(change service.TopologyChange) e
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), &change, false, nil, m.statsMgr)
+		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), &change, false, nil, m.genericMgr.statsMgr)
 
 	return nil
 }
@@ -750,7 +730,7 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 
 	m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-		m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.statsMgr)
+		m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
 
 	return nil
 }
@@ -1454,9 +1434,9 @@ func (m *RebalanceServiceManager) initStartPhase(
 	change service.TopologyChange) (err error, skipRebalance bool) {
 
 	err = func() error {
-		m.cinfo.Lock()
-		defer m.cinfo.Unlock()
-		return m.cinfo.Fetch() // can be very slow; do here so multiple children don't need to
+		m.genericMgr.cinfo.Lock()
+		defer m.genericMgr.cinfo.Unlock()
+		return m.genericMgr.cinfo.Fetch() // can be very slow; do here so multiple children don't need to
 	}()
 	if err != nil {
 		return err, true
@@ -1464,9 +1444,9 @@ func (m *RebalanceServiceManager) initStartPhase(
 
 	var masterIP string // real IP address of this node (Rebal master), so other nodes can reach it
 	masterIP, err = func() (string, error) {
-		m.cinfo.RLock()
-		defer m.cinfo.RUnlock()
-		return m.cinfo.GetLocalHostname()
+		m.genericMgr.cinfo.RLock()
+		defer m.genericMgr.cinfo.RUnlock()
+		return m.genericMgr.cinfo.GetLocalHostname()
 	}()
 	if err != nil {
 		return err, true
@@ -1555,19 +1535,19 @@ func (m *RebalanceServiceManager) registerGlobalRebalanceToken(rebalToken *Rebal
 
 	numKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
 
-	m.cinfo.Lock()
-	defer m.cinfo.Unlock()
+	m.genericMgr.cinfo.Lock()
+	defer m.genericMgr.cinfo.Unlock()
 
 	var nids []c.NodeId
 	valid := false
 	const maxRetry = 10
 	for i := 0; i <= maxRetry; i++ {
-		nids = m.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
+		nids = m.genericMgr.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 		if len(nids) != numKnownNodes { // invalid case
 			if isSingleNodeRebal(change) {
 				l.Infof("%v ClusterInfo Node List doesn't match Known Nodes in Rebalance"+
 					" Request. Skip Rebalance. cinfo.nodes : %v, change : %v",
-					method, m.cinfo.Nodes(), change)
+					method, m.genericMgr.cinfo.Nodes(), change)
 				return nil, true
 			}
 
@@ -1579,7 +1559,7 @@ func (m *RebalanceServiceManager) registerGlobalRebalanceToken(rebalToken *Rebal
 				time.Sleep(2 * time.Second)
 
 				// cinfo.Fetch has its own internal retries
-				if err = m.cinfo.Fetch(); err != nil {
+				if err = m.genericMgr.cinfo.Fetch(); err != nil {
 					l.Errorf("%v Error on iter %v fetching cluster information: %v", method, i, err)
 				}
 			}
@@ -1591,17 +1571,17 @@ func (m *RebalanceServiceManager) registerGlobalRebalanceToken(rebalToken *Rebal
 	}
 
 	if !valid {
-		l.Errorf("%v cinfo.nodes: %v, change: %v", method, m.cinfo.Nodes(), change)
+		l.Errorf("%v cinfo.nodes: %v, change: %v", method, m.genericMgr.cinfo.Nodes(), change)
 		return err, true
 	}
 
 	url := "/registerRebalanceToken"
 	for _, nid := range nids {
 
-		addr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
+		addr, err := m.genericMgr.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 		if err == nil {
 
-			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
+			localaddr, err := m.genericMgr.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				l.Errorf("%v Error Fetching Local Service Address %v", method, err)
 				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
@@ -2367,7 +2347,8 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 
 			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, &m.p, m.statsMgr)
+				m.localhttp, m.config.Load(), nil, false, &m.p,
+				m.genericMgr.statsMgr)
 			m.writeOk(w)
 			return
 
@@ -2395,13 +2376,23 @@ func GetGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 		l.Errorf("%v %v returned err: %v", _GetGlobalTopology, addr+url, err)
 		return nil, err
 	}
+	defer resp.Body.Close()
+
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		l.Errorf("%v ReadAll returned err: %v", _GetGlobalTopology, err)
+		return nil, err
+	}
 
 	var topology BackupResponse
-	bytes, _ := ioutil.ReadAll(resp.Body)
-	defer resp.Body.Close()
 	if err := json.Unmarshal(bytes, &topology); err != nil {
 		l.Errorf("%v Unmarshaling response from %v returned err: %v %s", _GetGlobalTopology,
 			addr+url, err, l.TagUD(string(bytes)))
+		return nil, err
+	}
+
+	if topology.Error != "" {
+		l.Errorf("%v getIndexMetadata response reported err: %v", _GetGlobalTopology, err)
 		return nil, err
 	}
 
@@ -2550,7 +2541,7 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 			}
 			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, nil, m.statsMgr)
+				m.localhttp, m.config.Load(), nil, false, nil, m.genericMgr.statsMgr)
 		}
 	}
 
@@ -2828,7 +2819,7 @@ func (m *RebalanceServiceManager) initMoveIndex(req *IndexRequest, nodes []strin
 	time.Sleep(2 * time.Second)
 
 	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false, nil, m.statsMgr)
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false, nil, m.genericMgr.statsMgr)
 
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true
@@ -3031,32 +3022,32 @@ func (m *RebalanceServiceManager) getNodeIdFromDest(dest string) (string, error)
 		}
 	}
 
-	m.cinfo.Lock()
-	defer m.cinfo.Unlock()
+	m.genericMgr.cinfo.Lock()
+	defer m.genericMgr.cinfo.Unlock()
 
-	if err := m.cinfo.FetchNodesAndSvsInfo(); err != nil {
+	if err := m.genericMgr.cinfo.FetchNodesAndSvsInfo(); err != nil {
 		l.Errorf("RebalanceServiceManager::getNodeIdFromDest Error Fetching Cluster Information %v", err)
 		return "", err
 	}
 
-	nids := m.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
+	nids := m.genericMgr.cinfo.GetNodeIdsByServiceType(c.INDEX_HTTP_SERVICE)
 	url := "/nodeuuid"
 
 	for _, nid := range nids {
 
-		maddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", false)
+		maddr, err := m.genericMgr.cinfo.GetServiceAddress(nid, "mgmt", false)
 		if err != nil {
 			return "", err
 		}
 
-		meaddr, err := m.cinfo.GetServiceAddress(nid, "mgmt", true)
+		meaddr, err := m.genericMgr.cinfo.GetServiceAddress(nid, "mgmt", true)
 		if err != nil {
 			return "", err
 		}
 
 		if isDest(maddr, meaddr) {
 
-			haddr, err := m.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
+			haddr, err := m.genericMgr.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
 				return "", err
 			}

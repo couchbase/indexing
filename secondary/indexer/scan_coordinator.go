@@ -80,7 +80,8 @@ type scanCoordinator struct {
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	config common.Config, snapshotNotifych []chan IndexSnapshot,
-	snapshotReqCh []MsgChannel, stats *IndexerStats, cpuThrottle *CpuThrottle) (ScanCoordinator, Message) {
+	snapshotReqCh []MsgChannel, stats *IndexerStats,
+	cpuThrottle *CpuThrottle) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
@@ -914,17 +915,30 @@ func isSnapTsConsistentOrAhead(snapTs, reqTs *common.TsVbuuid, strict_chk_thresh
 	return true, isSnapAhead
 }
 
+// isScanAllowed checks several conditions for whether the scan request is allowed to proceed,
+// including whether the Indexer is "paused" due to MOI running out of memory, or the bucket is
+// being Elixir Paused or Resumed (hibernate/unhibernate tenant bucket).
 func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {
+	const _isScanAllowed = "ScanCoordinator::isScanAllowed:"
+
 	if s.getIndexerState() == common.INDEXER_PAUSED {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
 
 		if c != common.AnyConsistency {
-			return errors.New(fmt.Sprintf("Indexer Cannot Service %v Scan In Paused State", c.String()))
+			return fmt.Errorf("%v Indexer Cannot Service %v Scan In Paused State", _isScanAllowed,
+				c.String())
 		} else if !allow_scan_when_paused {
-			return errors.New(fmt.Sprintf("Indexer Cannot Service Scan In Paused State"))
+			return fmt.Errorf("%v Indexer Cannot Service Scan In Paused State", _isScanAllowed)
 		} else {
 			return nil
+		}
+	}
+
+	if pauseMgr := GetPauseMgr(); pauseMgr != nil {
+		if bucketState := pauseMgr.BucketScansBlocked(scan.Bucket); bucketState != bst_NIL {
+			return fmt.Errorf("%v Bucket '%v' scans blocked while in Pause-Resume state %v", _isScanAllowed,
+				scan.Bucket, bucketState)
 		}
 	}
 
@@ -1384,7 +1398,7 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 // This will also return the IndexReaderContext for each partition.  IndexReaderContext must
 // be returned in the same order as partitionIds.
 func (s *scanCoordinator) findIndexInstance(defnID uint64,
-	partitionIds []common.PartitionId, user string) (
+	partitionIds []common.PartitionId, user string, skipReadMetering bool) (
 	*common.IndexInst, []IndexReaderContext, error) {
 
 	hasIndex := false
@@ -1413,7 +1427,7 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64,
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
-						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user)
+						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
 					} else {
 						found = false
 						missing[inst.InstId] = append(missing[inst.InstId], partnId)
