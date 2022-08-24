@@ -307,6 +307,7 @@ func (slice *plasmaSlice) initStores() error {
 		//
 		// 1. Set config values in cfg that are the same for main and back indexes
 		//
+		cfg.IsServerless = common.IsServerlessDeployment()
 		cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
 		cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
 		cfg.RecoveryFlushBufferSize = int(slice.sysconf["plasma.recoveryFlushBufferSize"].Int())
