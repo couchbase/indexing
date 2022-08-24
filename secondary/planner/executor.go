@@ -1914,21 +1914,28 @@ func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 }
 
 //findSubClusterBelowLowThreshold finds sub-clusters with usage lower than
-//LWM(Low Watermark Threshold).
+//LWM(Low Watermark Threshold). A subCluster is considered below LWM if usage for
+//both units and memory is below threshold.
 func findSubClusterBelowLowThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
 	var found bool
 
-	quota := usageThreshold.MemQuota
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
 
 	for _, subCluster := range subClusters {
 		for _, indexNode := range subCluster {
 			//all nodes in the sub-cluster need to satisfy the condition
 			found = true
 			if indexNode.ActualRSS >
-				(uint64(usageThreshold.MemLowThreshold)*quota)/100 {
+				(uint64(usageThreshold.MemLowThreshold)*memQuota)/100 {
+				found = false
+				break
+			}
+			if indexNode.ActualUnits >
+				(uint64(usageThreshold.UnitsLowThreshold)*unitsQuota)/100 {
 				found = false
 				break
 			}
@@ -1941,21 +1948,28 @@ func findSubClusterBelowLowThreshold(subClusters []SubCluster,
 }
 
 //findSubClusterBelowHighThreshold finds sub-clusters with usage lower than
-//HWT(High Watermark Threshold).
+//HWT(High Watermark Threshold). A subCluster is considered below high
+//threhsold if both units and memory usage is below HWM.
 func findSubClusterBelowHighThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
 	var found bool
 
-	quota := usageThreshold.MemQuota
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
 
 	for _, subCluster := range subClusters {
 		found = true
 		for _, indexNode := range subCluster {
 			//all nodes in the sub-cluster need to satisfy the condition
 			if indexNode.ActualRSS >
-				(uint64(usageThreshold.MemHighThreshold)*quota)/100 {
+				(uint64(usageThreshold.MemHighThreshold)*memQuota)/100 {
+				found = false
+				break
+			}
+			if indexNode.ActualUnits >
+				(uint64(usageThreshold.UnitsHighThreshold)*unitsQuota)/100 {
 				found = false
 				break
 			}

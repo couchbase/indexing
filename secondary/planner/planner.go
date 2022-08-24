@@ -192,6 +192,7 @@ type IndexerNode struct {
 	ActualScanRate    uint64  `json:"actualScanRate"`
 	ActualMemMin      uint64  `json:"actualMemMin"`
 	ActualRSS         uint64  `json:"actualRSS"`
+	ActualUnits       uint64  `json:"actualUnits"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
