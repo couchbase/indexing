@@ -1486,7 +1486,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
-func (mdb *memdbSlice) RollbackToZero() error {
+func (mdb *memdbSlice) RollbackToZero(initialBuild bool) error {
 
 	//before rollback make sure there are no mutations
 	//in the slice buffer. Timekeeper will make sure there

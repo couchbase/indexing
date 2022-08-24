@@ -175,7 +175,8 @@ type plasmaSlice struct {
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
+	meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -233,7 +234,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.samplerStopCh = make(chan bool)
 	slice.snapInterval = sysconf["settings.inmemory_snapshot.moi.interval"].Uint64() * uint64(time.Millisecond)
 
-	if err := slice.initStores(); err != nil {
+	if err := slice.initStores(isInitialBuild); err != nil {
 		// Index is unusable. Remove the data files and reinit
 		if err == errStorageCorrupted {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
@@ -294,7 +295,7 @@ func backupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(st
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
-func (slice *plasmaSlice) initStores() error {
+func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 	var err error
 
 	// This function encapsulates confLock.RLock + defer confLock.RUnlock
@@ -474,7 +475,7 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New3(*mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX)
+		slice.mainstore, mErr = plasma.New4(slice.idxDefn.Bucket, *mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX, isInitialBuild)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -486,7 +487,7 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New3(*bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX)
+			slice.backstore, bErr = plasma.New4(slice.idxDefn.Bucket, *bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX, isInitialBuild)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
@@ -536,7 +537,7 @@ func (slice *plasmaSlice) initStores() error {
 	if !slice.newBorn {
 		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
 			slice.id, slice.idxInstId, slice.idxPartnId)
-		err = slice.doRecovery()
+		err = slice.doRecovery(isInitialBuild)
 		dur := time.Since(t0)
 		if err == nil {
 			slice.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
@@ -616,7 +617,7 @@ func cmpRPMeta(a, b []byte) int {
 	return int(av - bv)
 }
 
-func (mdb *plasmaSlice) doRecovery() error {
+func (mdb *plasmaSlice) doRecovery(initBuild bool) error {
 	snaps, err := mdb.GetSnapshots()
 	if err != nil {
 		return err
@@ -625,7 +626,7 @@ func (mdb *plasmaSlice) doRecovery() error {
 	if len(snaps) == 0 {
 		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Unable to find recovery point. Resetting store ..",
 			mdb.id, mdb.idxInstId, mdb.idxPartnId)
-		if err := mdb.resetStores(); err != nil {
+		if err := mdb.resetStores(initBuild); err != nil {
 			return err
 		}
 	} else {
@@ -1930,7 +1931,7 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&mdb.committedCount)
 }
 
-func (mdb *plasmaSlice) resetStores() error {
+func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 	// Clear all readers
 	for i := 0; i < cap(mdb.readers); i++ {
 		<-mdb.readers
@@ -1949,7 +1950,7 @@ func (mdb *plasmaSlice) resetStores() error {
 	}
 
 	mdb.newBorn = true
-	if err := mdb.initStores(); err != nil {
+	if err := mdb.initStores(initBuild); err != nil {
 		return err
 	}
 
@@ -2087,11 +2088,11 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
-func (mdb *plasmaSlice) RollbackToZero() error {
+func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 
-	if err := mdb.resetStores(); err != nil {
+	if err := mdb.resetStores(initialBuild); err != nil {
 		return err
 	}
 

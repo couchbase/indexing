@@ -8953,6 +8953,12 @@ func (idx *indexer) memoryUsedStorage() int64 {
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats, ephemeral, isNew bool, meteringMgr *MeteringThrottlingMgr) (slice Slice, err error) {
+
+	isInitialBuild := func() bool {
+		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
+			indInst.State == common.INDEX_STATE_CREATED || indInst.State == common.INDEX_STATE_READY
+	}
+
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
 	iowrap.Os_Mkdir(storage_dir, 0755)
@@ -8976,7 +8982,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, meteringMgr)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr)
 	}
 
 	return

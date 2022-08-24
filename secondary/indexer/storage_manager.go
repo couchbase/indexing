@@ -800,7 +800,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			idxInst.State != common.INDEX_STATE_DELETED {
 
 			restartTs, err = sm.rollbackIndex(streamId,
-				keyspaceId, rollbackTs, idxInstId, partnMap, restartTs)
+				keyspaceId, rollbackTs, idxInstId, partnMap, restartTs, idxInst.State)
 
 			if err != nil {
 				sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
@@ -873,7 +873,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 func (sm *storageMgr) rollbackIndex(streamId common.StreamId, keyspaceId string,
 	rollbackTs *common.TsVbuuid, idxInstId common.IndexInstId,
-	partnMap PartitionInstMap, minRestartTs *common.TsVbuuid) (*common.TsVbuuid, error) {
+	partnMap PartitionInstMap, minRestartTs *common.TsVbuuid,
+	instState common.IndexState) (*common.TsVbuuid, error) {
 
 	var restartTs *common.TsVbuuid
 	var err error
@@ -890,7 +891,7 @@ func (sm *storageMgr) rollbackIndex(streamId common.StreamId, keyspaceId string,
 			snapInfo := sm.findRollbackSnapshot(slice, rollbackTs)
 
 			restartTs, err = sm.rollbackToSnapshot(idxInstId, partnId,
-				slice, snapInfo, markAsUsed)
+				slice, snapInfo, markAsUsed, instState)
 
 			if err != nil {
 				return nil, err
@@ -970,7 +971,12 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 
 func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 	partnId common.PartitionId, slice Slice, snapInfo SnapshotInfo,
-	markAsUsed bool) (*common.TsVbuuid, error) {
+	markAsUsed bool, instState common.IndexState) (*common.TsVbuuid, error) {
+
+	isInitialBuild := func() bool {
+		return instState == common.INDEX_STATE_INITIAL || instState == common.INDEX_STATE_CATCHUP ||
+			instState == common.INDEX_STATE_CREATED || instState == common.INDEX_STATE_READY
+	}
 
 	var restartTs *common.TsVbuuid
 	if snapInfo != nil {
@@ -990,7 +996,7 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 
 	} else {
 		//if there is no snapshot available, rollback to zero
-		err := slice.RollbackToZero()
+		err := slice.RollbackToZero(isInitialBuild())
 		if err == nil {
 			logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
 				"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
@@ -1029,7 +1035,7 @@ func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
 
 				for _, slice := range sc.GetAllSlices() {
 					_, err := sm.rollbackToSnapshot(idxInstId, partnId,
-						slice, nil, false)
+						slice, nil, false, idxInst.State)
 					if err != nil {
 						return err
 					}
@@ -2091,7 +2097,7 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 
 				for _, slice := range sc.GetAllSlices() {
 					_, err := s.rollbackToSnapshot(idxInstId, partnId,
-						slice, nil, false)
+						slice, nil, false, idxInst.State)
 					if err != nil {
 						panic("Unable to rollback to 0 - " + err.Error())
 					}
