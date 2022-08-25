@@ -3298,6 +3298,85 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+
+	"indexer.plasma.serverless.maxInstancePerShard": ConfigValue{
+		uint64(400),
+		"Maximum number of instances per shard for serverless",
+		uint64(400),
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.maxDiskUsagePerShard": ConfigValue{
+		uint64(math.MaxUint64),
+		"Maximum disk usage per shard for serverless",
+		uint64(math.MaxUint64),
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.minNumShard": ConfigValue{
+		uint64(1),
+		"Minimum number of shard",
+		uint64(1),
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.mainIndex.maxNumPageDeltas": ConfigValue{
+		150,
+		"Maximum number of page deltas",
+		150,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.mainIndex.pageSplitThreshold": ConfigValue{
+		150,
+		"Threshold for triggering page split",
+		150,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.backIndex.pageSplitThreshold": ConfigValue{
+		100,
+		"Threshold for triggering page split",
+		100,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.recovery.requestQuoteIncrement": ConfigValue{
+		1024 * 1024,
+		"minimum amount of quota increment during recovery",
+		1024 * 1024,
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.targetResidentRatio": ConfigValue{
+		float64(0.1),
+		"Target resident ratio for index instance",
+		float64(0.1),
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.mutationRateLimit": ConfigValue{
+		5000,
+		"Mutation Rate Limit",
+		5000,
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.mainIndex.evictMinThreshold": ConfigValue{
+		0.9,
+		"Minimum memory use for periodic eviction to run. When memory use over min threshold," +
+			" eviction will not run if plasma estimates all indexes can fit into quota.",
+		0.9,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.backIndex.evictMinThreshold": ConfigValue{
+		0.9,
+		"See indexer.plasma.mainIndex.evictMinThreshold",
+		0.9,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

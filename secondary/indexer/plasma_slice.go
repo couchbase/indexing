@@ -377,6 +377,15 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
 
+		if common.IsServerlessDeployment() {
+			cfg.MaxInstsPerShard = slice.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
+			cfg.MaxDiskPerShard = slice.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
+			cfg.MinNumShard = slice.sysconf["plasma.serverless.minNumShard"].Uint64()
+			cfg.DefaultMinRequestQuota = int64(slice.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
+			cfg.TargetRR = slice.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+			cfg.MutationRateLimit = int64(slice.sysconf["plasma.serverless.mutationRateLimit"].Int())
+		}
+
 		cfg.StorageDir = slice.storageDir
 		cfg.LogDir = slice.logDir
 
@@ -425,6 +434,12 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		mCfg.CompressMemoryThreshold = slice.sysconf["plasma.mainIndex.compressMemoryThresholdPercent"].Int()
 		mCfg.CompressFullMarshal = slice.sysconf["plasma.mainIndex.enableCompressFullMarshal"].Bool()
 
+		if common.IsServerlessDeployment() {
+			mCfg.MaxDeltaChainLen = slice.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
+			mCfg.MaxPageItems = slice.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
+			mCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
+		}
+
 		//
 		// 4. Set back-specific config values only in the bCfg object
 		//
@@ -457,6 +472,11 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		bCfg.CompressAfterSwapin = slice.sysconf["plasma.backIndex.enableCompressAfterSwapin"].Bool()
 		bCfg.CompressMemoryThreshold = slice.sysconf["plasma.backIndex.compressMemoryThresholdPercent"].Int()
 		bCfg.CompressFullMarshal = slice.sysconf["plasma.backIndex.enableCompressFullMarshal"].Bool()
+
+		if common.IsServerlessDeployment() {
+			bCfg.MaxPageItems = slice.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
+			bCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
+		}
 
 		return mCfg, bCfg
 	}()
@@ -2638,6 +2658,18 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
+	if common.IsServerlessDeployment() {
+		mdb.mainstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
+		mdb.mainstore.MaxDiskPerShard = mdb.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
+		mdb.mainstore.MinNumShard = mdb.sysconf["plasma.serverless.minNumShard"].Uint64()
+		mdb.mainstore.DefaultMinRequestQuota = int64(mdb.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
+		mdb.mainstore.TargetRR = mdb.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+		mdb.mainstore.MutationRateLimit = int64(mdb.sysconf["plasma.serverless.mutationRateLimit"].Int())
+		mdb.mainstore.MaxDeltaChainLen = mdb.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
+		mdb.mainstore.MaxPageItems = mdb.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
+		mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
+	}
+
 	mdb.mainstore.UpdateConfig()
 
 	if !mdb.isPrimary {
@@ -2720,6 +2752,17 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.AutoTuneFlushBufferLSSSampleInterval =
 			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
+
+		if common.IsServerlessDeployment() {
+			mdb.backstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
+			mdb.backstore.MaxDiskPerShard = mdb.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
+			mdb.backstore.MinNumShard = mdb.sysconf["plasma.serverless.minNumShard"].Uint64()
+			mdb.backstore.DefaultMinRequestQuota = int64(mdb.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
+			mdb.backstore.TargetRR = mdb.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+			mdb.backstore.MutationRateLimit = int64(mdb.sysconf["plasma.serverless.mutationRateLimit"].Int())
+			mdb.backstore.MaxPageItems = mdb.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
+			mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
+		}
 
 		mdb.backstore.UpdateConfig()
 	}
