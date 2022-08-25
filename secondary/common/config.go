@@ -973,13 +973,6 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-	"indexer.numVbuckets": ConfigValue{
-		1024,
-		"Number of vbuckets",
-		1024,
-		true,  // immutable
-		false, // case-insensitive
-	},
 	"indexer.numPartitions": ConfigValue{
 		8,
 		"Number of vbuckets",
