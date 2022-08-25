@@ -1842,6 +1842,10 @@ func (mdb *memdbSlice) RecoveryDone() {
 	// nothing to do
 }
 
+func (mdb *memdbSlice) BuildDone() {
+	// nothing to do
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

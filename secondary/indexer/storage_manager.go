@@ -1197,6 +1197,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	indexInstMap := req.GetIndexInstMap()
 	copyIndexInstMap := common.CopyIndexInstMap(indexInstMap)
 	s.stats.Set(req.GetStatsObject())
+	oldIndexInstMap := s.indexInstMap.Get()
 	s.indexInstMap.Set(copyIndexInstMap)
 
 	s.muSnap.Lock()
@@ -1256,6 +1257,9 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		}
 	}
 
+	// notify inst state change to ACTIVE
+	s.notifyBuildDone(oldIndexInstMap)
+
 	//if manager is not enable, store the updated InstMap in
 	//meta file
 	if s.config["enableManager"].Bool() == false {
@@ -1287,6 +1291,37 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	}
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) notifyBuildDone(oldIndexInstMap common.IndexInstMap) {
+
+	newActiveInst := func() common.IndexInstMap {
+		result := make(common.IndexInstMap)
+
+		for id, newInst := range s.indexInstMap.Get() {
+			oldInst, ok := oldIndexInstMap[id]
+			if newInst.State == common.INDEX_STATE_ACTIVE &&
+				(!ok ||
+					oldInst.State == common.INDEX_STATE_INITIAL ||
+					oldInst.State == common.INDEX_STATE_CATCHUP) {
+				result[id] = newInst
+			}
+		}
+
+		return result
+	}
+
+	indexPartnMap := s.indexPartnMap.Get()
+	for idxInstId, _ := range newActiveInst() {
+		partnMap := indexPartnMap[idxInstId]
+
+		for _, partnInst := range partnMap {
+			slices := partnInst.Sc.GetAllSlices()
+			for _, slice := range slices {
+				slice.BuildDone()
+			}
+		}
+	}
 }
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {

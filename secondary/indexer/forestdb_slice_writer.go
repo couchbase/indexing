@@ -1851,3 +1851,7 @@ func (fdb *fdbSlice) cancelCompact() {
 func (fdb *fdbSlice) RecoveryDone() {
 	// done nothing
 }
+
+func (fdb *fdbSlice) BuildDone() {
+	// done nothing
+}

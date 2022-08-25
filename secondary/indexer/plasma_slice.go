@@ -2792,6 +2792,13 @@ func (mdb *plasmaSlice) RecoveryDone() {
 	plasma.RecoveryDone()
 }
 
+func (mdb *plasmaSlice) BuildDone() {
+	mdb.mainstore.BuildDone()
+	if !mdb.isPrimary {
+		mdb.backstore.BuildDone()
+	}
+}
+
 func (info *plasmaSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }
