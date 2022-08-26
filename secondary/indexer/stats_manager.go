@@ -832,6 +832,7 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.memoryUsedStorage.AddFilter(stats.PlannerFilter)
 	s.memoryUsed.AddFilter(stats.PlannerFilter)
 	s.memoryQuota.AddFilter(stats.PlannerFilter)
+	s.memoryRss.AddFilter(stats.PlannerFilter)
 	s.uptime.AddFilter(stats.PlannerFilter)
 	s.cpuUtilization.AddFilter(stats.PlannerFilter)
 }

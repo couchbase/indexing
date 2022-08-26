@@ -3311,6 +3311,14 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 
+	"indexer.settings.units_quota": ConfigValue{
+		uint64(5000 * 20),
+		"Maximum RU/WU quota for indexer",
+		uint64(5000 * 20),
+		false, // mutable
+		false, // case-insensitive
+	},
+
 	"indexer.settings.serverless.indexLimit": ConfigValue{
 		200,
 		"Limit on the number of indexes that can be created per bucket in Serverless Mode.",
