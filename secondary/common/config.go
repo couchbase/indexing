@@ -3377,6 +3377,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.serverless.discretionaryQuotaThreshold": ConfigValue{
+		0.6,
+		"",
+		0.6,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
