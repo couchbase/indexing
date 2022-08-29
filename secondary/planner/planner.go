@@ -439,6 +439,10 @@ type GreedyPlanner struct {
 	numNewIndexes int
 }
 
+type TenantAwarePlanner struct {
+	Result *Solution
+}
+
 //////////////////////////////////////////////////////////////
 // Interface Implementation - CostMethod
 //////////////////////////////////////////////////////////////
@@ -7381,4 +7385,29 @@ func NewPlannerForCommandPlan(config *RunConfig, indexes []*IndexUsage, movedInd
 	}
 
 	return planner, nil
+}
+
+//TenantAwarePlanner Implmentation
+
+func (p *TenantAwarePlanner) Plan(command CommandType, sol *Solution) (*Solution, error) {
+	return nil, nil
+}
+
+func (p *TenantAwarePlanner) GetResult() *Solution {
+	return p.Result
+}
+
+func (p *TenantAwarePlanner) Print() {
+	if p.Result != nil {
+		logging.Infof("Using TenantAwarePlanner")
+		logging.Infof("----------------------------------------")
+		p.Result.PrintLayout()
+	}
+}
+
+func (p *TenantAwarePlanner) PrintCost() {
+}
+
+func (p *TenantAwarePlanner) SetParam(param map[string]interface{}) error {
+	return nil
 }

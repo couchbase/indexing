@@ -1666,9 +1666,9 @@ func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
 		return nil, err
 	}
 
-	solution, err := executeTenantAwarePlan(plan, indexSpec)
+	tenantAwarePlanner, err := executeTenantAwarePlan(plan, indexSpec)
 
-	return solution, err
+	return tenantAwarePlanner.GetResult(), err
 
 }
 
@@ -1701,7 +1701,7 @@ func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
 //   lower than HWM(High Watermark Threshold).
 //8. No Index can be placed on a node above HWM(High Watermark Threshold).
 
-func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (*Solution, error) {
+func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 
 	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan:"
 
@@ -1749,7 +1749,9 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (*Solution, error)
 		return nil, err
 	}
 
-	return solution, nil
+	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
+
+	return tenantAwarePlanner, nil
 
 }
 
