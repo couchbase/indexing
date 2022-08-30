@@ -76,6 +76,127 @@ func (ts TokenState) String() string {
 
 }
 
+type ShardTokenState int
+
+// Token states for shard rebalance
+const (
+	// Initial state of the tokens: ShardTokenCreated
+	//
+	// After planner run, rebalance master posts all transfer tokens
+	// to metaKV with "ShardTokenCreated" state. This is the default
+	// state of the transfer token
+	ShardTokenCreated ShardTokenState = iota + 10000
+
+	// Rebalance Source node will read tokens (that are in
+	// "ShardTokenCreated" state) updates in-memory book-keeping
+	// with all the potential movements during rebalance and changes
+	// the transfer token state to "ShardTokenScheduledOnSource"
+	ShardTokenScheduledOnSource
+
+	// Rebalance destination node will read the transfer token in
+	// state "ShardTokenScheduledOnSource", updates its in-memory
+	// book keeping with all the potential movements during index
+	// rebalance and changes the transfer token state to
+	// "ShardTokenScheduleAck" for further processing.
+	ShardTokenScheduleAck
+
+	// Rebalance master would wait for all the shard tokens to reach
+	// the "ShardTokenScheduleAck" state. After all tokens reach this
+	// state, then master node would group the transfer tokens into
+	// multiple batches. The state of the transfer tokens in each batch
+	// is changed to "ShardTokenTransferShard". Source node will read
+	// this state and start transferring indexed data to S3
+	//
+	// A metaKV token in this state means that the source node is yet
+	// to start transferring shard (or) it has already initiated transferring
+	// shard
+	ShardTokenTransferShard
+
+	// Rebalance source node, on a successful transfer will update the
+	// state of transfer token to "ShardTokenRestoreShard", along with
+	// the path from which destination node can download the shard data
+	// to local file system.
+	//
+	// A metaKV token in this state means that the destination node is yet
+	// to start downloading shard (or) it has already initiated downloading
+	// shards
+	ShardTokenRestoreShard
+
+	// On a successful download, rebalance destination node will change
+	// the transfer token state to "ShardTokenRecoverShard" which
+	// indicates that the download  is successful and indexer should now
+	// start to establih streams with KV nodes for index build catchup
+	//
+	// A metaKV token in this state means that the destination node has
+	// succecssfully downloaded shard data and is yet to start establishing
+	// KV streams
+	ShardTokenRecoverShard
+
+	// After all the indexes in a shard are recovered successfully, then the
+	// state of the transfer token is moved to "ShardTokenReady". In case of
+	// any errors during restore/recovery, index movements belonging to this
+	// shard will be cancelled and rebalance would fail.
+	//
+	// For non-partitioned indexes, source node on seeing this state change
+	// will drop the shard and move the state to "ShardTokenCommit". For
+	// partitioned indexes, source node would wait for the state to move to
+	// "ShardTokenMerged" after which the shard would be dropped
+	//
+	// A metaKV token in this state means that all indexes belonging to the
+	// shard have successfully caught up with KV.
+	ShardTokenReady
+
+	// Placeholder for partitioned indexes where in the proxy instance can
+	// be merged to real instance after the state of the transfer token is
+	// moved to "ShardTokenReady". On a successful merge, the state of the
+	// transfer token is moved to "ShardTokenMerged"
+	ShardTokenMerged
+
+	// This token state means that index instances on source node have
+	// been successfully deleted. The in-mem tokens would move to this
+	// state and metaKV tokens would move to ShardTokenDeleted state
+	ShardTokenCommit
+
+	// This states indicates that the token processing is done and
+	// the token can be deleted from metaKV
+	ShardTokenDeleted
+
+	// If any error is encountered during rebalance, the state of the token
+	// can be updated to ShardTokenError
+	ShardTokenError
+)
+
+func (sts ShardTokenState) String() string {
+
+	switch sts {
+	case ShardTokenCreated:
+		return "ShardTokenCreated"
+	case ShardTokenScheduledOnSource:
+		return "ShardTokenScheduledOnSource"
+	case ShardTokenScheduleAck:
+		return "ShardTokenScheduleAck"
+	case ShardTokenTransferShard:
+		return "ShardTokenTransferShard"
+	case ShardTokenRestoreShard:
+		return "ShardTokenRestoreShard"
+	case ShardTokenRecoverShard:
+		return "ShardTokenRecoverShard"
+	case ShardTokenReady:
+		return "ShardTokenReady"
+	case ShardTokenMerged:
+		return "ShardTokenMerged"
+	case ShardTokenCommit:
+		return "ShardTokenCommit"
+	case ShardTokenDeleted:
+		return "ShardTokenDeleted"
+	case ShardTokenError:
+		return "ShardTokenError"
+	}
+
+	return "unknown"
+
+}
+
 // TokenBuildSource is the type of the TransferToken.BuildSource field, which is currently unused
 // but will be used in future when rebalance is done using file copy rather than DCP.
 type TokenBuildSource byte
