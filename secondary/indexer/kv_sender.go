@@ -104,6 +104,13 @@ func (k *kvSender) FetchCInfoWithLock() {
 	k.cinfoProvider.FetchWithLock()
 }
 
+func (k *kvSender) getNumVBucketsWithLock(bucket string) (int, error) {
+	k.cinfoProviderLock.RLock()
+	defer k.cinfoProviderLock.RUnlock()
+
+	return k.cinfoProvider.GetNumVBuckets(bucket)
+}
+
 //run starts the kvsender loop which listens to messages
 //from it supervisor(indexer)
 func (k *kvSender) run() {
@@ -301,7 +308,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	//use any bucket as list of vbs remain the same for all buckets
-	vbnos, addrs, err := k.getAllVbucketsInCluster(bucket)
+	vbnos, addrs, numVbuckets, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		// This failure could be due to stale cluster info cache
 		// Force fetch cluster info cache so that the next call
@@ -316,7 +323,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 		return
 	}
 
-	numVbuckets := k.config["numVbuckets"].Int()
 	if len(vbnos) != numVbuckets {
 		logging.Warnf("KVSender::openMutationStream mismatch in number of configured "+
 			"vbuckets. conf %v actual %v", numVbuckets, vbnos)
@@ -456,7 +462,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 	repairVbs []Vbucket, sessionId uint64, respCh MsgChannel, stopCh StopChannel) {
 
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-	addrs, err := k.getProjAddrsForVbuckets(bucket, repairVbs)
+	addrs, numVbuckets, err := k.getProjAddrsForVbuckets(bucket, repairVbs)
 	if err != nil {
 		k.FetchCInfoWithLock()
 
@@ -474,7 +480,6 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 
 	//convert TS to protobuf format
 	var protoRestartTs *protobuf.TsVbuuid
-	numVbuckets := k.config["numVbuckets"].Int()
 	protoTs := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, numVbuckets)
 	protoRestartTs = protoTs.FromTsVbuuid(restartTs)
 
@@ -616,7 +621,7 @@ func (k *kvSender) addIndexForExistingKeyspace(streamId c.StreamId, keyspaceId s
 	respCh MsgChannel, stopCh StopChannel) {
 
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-	_, addrs, err := k.getAllVbucketsInCluster(bucket)
+	_, addrs, numVbuckets, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		k.FetchCInfoWithLock()
 
@@ -668,7 +673,6 @@ func (k *kvSender) addIndexForExistingKeyspace(streamId c.StreamId, keyspaceId s
 		}
 
 		//check if we have received currentTs for all vbuckets
-		numVbuckets := k.config["numVbuckets"].Int()
 		if currentTs == nil || currentTs.Len() != numVbuckets {
 			return errors.New("ErrPartialVbStart")
 		} else {
@@ -694,7 +698,6 @@ func (k *kvSender) addIndexForExistingKeyspace(streamId c.StreamId, keyspaceId s
 		return
 	}
 
-	numVbuckets := k.config["numVbuckets"].Int()
 	nativeTs := currentTs.ToTsVbuuid(numVbuckets)
 
 	respCh <- &MsgStreamUpdate{mType: MSG_SUCCESS,
@@ -988,6 +991,10 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 		logging.Infof("KVSender::sendRestartVbuckets ShutdownVbuckets %v Topic %v %v %v ConnErrVbs %v",
 			ap, topic, keyspaceId, restartTs.GetBucket(), connErrVbs)
 
+		// Ignoring error as this is only used to reserve the capacity for
+		// shutdownTs worst case we start from 0 and append vb to the ts.
+		numVbuckets, _ := k.getNumVBucketsWithLock(restartTs.GetBucket())
+
 		// Only shutting down the Vb that receieve connection error.  It is probably not harmful
 		// to shutdown every VB in the repairTS, including those that only receive StreamEnd.
 		// But due to network / projecctor latency, a VB StreamBegin may be coming on the way
@@ -995,7 +1002,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 		// So shutting all VB in restartTs may unnecessarily causing race condition and
 		// make the protocol longer to converge. ShutdownVbuckets should have no effect on
 		// projector that does not own the Vb.
-		shutdownTs := k.computeShutdownTs(restartTs, connErrVbs)
+		shutdownTs := k.computeShutdownTs(restartTs, connErrVbs, numVbuckets)
 
 		logging.Infof("KVSender::sendRestartVbuckets ShutdownVbuckets Projector %v Topic %v %v %v \n\tShutdownTs %v",
 			ap, topic, keyspaceId, restartTs.GetBucket(), shutdownTs.Repr())
@@ -1124,9 +1131,8 @@ func getTopicForStreamId(streamId c.StreamId) string {
 
 }
 
-func (k *kvSender) computeShutdownTs(restartTs *protobuf.TsVbuuid, connErrVbs []Vbucket) *protobuf.TsVbuuid {
+func (k *kvSender) computeShutdownTs(restartTs *protobuf.TsVbuuid, connErrVbs []Vbucket, numVbuckets int) *protobuf.TsVbuuid {
 
-	numVbuckets := k.config["numVbuckets"].Int()
 	shutdownTs := protobuf.NewTsVbuuid(*restartTs.Pool, *restartTs.Bucket, numVbuckets)
 	for _, vbno1 := range connErrVbs {
 		for i, vbno2 := range restartTs.Vbnos {
@@ -1354,27 +1360,33 @@ loop:
 	return res, err
 }
 
-func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, error) {
+func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, int, error) {
 
 	k.cinfoProviderLock.RLock()
 	binfo, err := k.cinfoProvider.GetBucketInfoProvider(bucket)
 	k.cinfoProviderLock.RUnlock()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	err = binfo.FetchBucketInfo(bucket)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	binfo.RLock()
 	defer binfo.RUnlock()
 
+	// get NumVBuckets for this bucket
+	numVBuckets, err := binfo.GetNumVBuckets(bucket)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
 	//get all kv nodes
 	nodes, err := binfo.GetNodesByBucket(bucket)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	var vbs []uint32
@@ -1383,18 +1395,19 @@ func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, e
 	for _, nid := range nodes {
 		//get the list of vbnos for this kv
 		if vbnos, err := binfo.GetVBuckets(nid, bucket); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		} else {
 			vbs = append(vbs, vbnos...)
 			addr, err := binfo.GetServiceAddress(nid, "projector", true)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 			addrList = append(addrList, addr)
 
 		}
 	}
-	return vbs, addrList, nil
+
+	return vbs, addrList, numVBuckets, nil
 }
 
 func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
@@ -1423,18 +1436,18 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 
 }
 
-func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]string, error) {
+func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]string, int, error) {
 
 	k.cinfoProviderLock.RLock()
 	binfo, err := k.cinfoProvider.GetBucketInfoProvider(bucket)
 	k.cinfoProviderLock.RUnlock()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	err = binfo.FetchBucketInfo(bucket)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	binfo.RLock()
@@ -1442,15 +1455,20 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]st
 
 	var addrList []string
 
+	numVBuckets, err := binfo.GetNumVBuckets(bucket)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	nodes, err := binfo.GetNodesByBucket(bucket)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	for _, n := range nodes {
 		vbs, err := binfo.GetVBuckets(n, bucket)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		found := false
 	outerloop:
@@ -1466,12 +1484,12 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]st
 		if found {
 			addr, err := binfo.GetServiceAddress(n, "projector", true)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			addrList = append(addrList, addr)
 		}
 	}
-	return addrList, nil
+	return addrList, numVBuckets, nil
 }
 
 func (k *kvSender) handleConfigUpdate(cmd Message) {

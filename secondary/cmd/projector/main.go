@@ -187,7 +187,9 @@ func main() {
 
 	projector.NewProjector(config, certFile, keyFile, caFile)
 
-	startRegulator()
+	if c.IsServerlessDeployment() {
+		startRegulator()
+	}
 
 	<-done
 }
