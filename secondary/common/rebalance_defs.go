@@ -320,9 +320,10 @@ type TransferToken struct {
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
 // only one layer deep, this can be done by returning the value receiver as Go already copied it.
-func (tt TransferToken) Clone() TransferToken {
-
-	return tt
+func (tt *TransferToken) Clone() *TransferToken {
+	tt1 := *tt
+	tt2 := tt1
+	return &tt2
 }
 
 // TransferToken.IsUserDeferred returns whether the transfer token represents an index
