@@ -2918,6 +2918,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-interface
 	},
+	"indexer.rebalance.shard_aware_rebalance": ConfigValue{
+		false,
+		"use shard aware rebalance algorithm",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.use_simple_planner": ConfigValue{
 		false,
 		"use simple round-robin planner for index placement." +

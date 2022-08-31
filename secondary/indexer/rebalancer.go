@@ -500,7 +500,7 @@ func (r *Rebalancer) doRebalance() {
 		<-r.dropIndexDone // wait for duplicate index removal to finish
 	}
 	if r.transferTokens != nil {
-		if ddl, err := r.checkDDLRunning(); ddl {
+		if ddl, err := r.runParams.checkDDLRunning("Rebalancer"); ddl {
 			r.finishRebalance(err)
 			return
 		}
@@ -843,24 +843,29 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 
 // selectSmartToBuildTokenLOCKED attempts to select one token to build from those available to build
 // for a node, in the following priority order (Smart Batching for Rebalance feature):
-//   1. Replica repairs (stream-sharing preferred) - reduce scan load on other replicas, smoothing
-//      load across nodes
-//   2. Partitions of same index - share a stream and all have identical keys
-//   3. Indexes on same collection - share a stream but have different keys, adding fields Projector
-//      must forward
-//   4. Everything else
+//  1. Replica repairs (stream-sharing preferred) - reduce scan load on other replicas, smoothing
+//     load across nodes
+//  2. Partitions of same index - share a stream and all have identical keys
+//  3. Indexes on same collection - share a stream but have different keys, adding fields Projector
+//     must forward
+//  4. Everything else
+//
 // A selected token must satisfy the constraints that it cannot need a DCP init stream that indexer
 // already has running for that node (as indexer supports only one copy of a stream at a time) nor
 // push the total number of streams for that node above the maximum allowed.
 //
 // Return: ID and ptr to selected token and SB_xxx type iff any legally selectable token is found,
-//   else "", nil, -1
+//
+//	else "", nil, -1
+//
 // Arguments:
-//   toBuildTTsForNode: tokens by [ttid] available to select for the node
-//   selectedTTsForNode: tokens by [ttid] already selected for the node
-//   forbiddenStreamsForNode: set of keys of streams already running on the node for prior builds
-//   newStreamsForNode: set of keys of streams to be started on the node for already-selected tokens
-//   maxStreamsPerNode: limit on number of streams the node is allowed to run concurrently
+//
+//	toBuildTTsForNode: tokens by [ttid] available to select for the node
+//	selectedTTsForNode: tokens by [ttid] already selected for the node
+//	forbiddenStreamsForNode: set of keys of streams already running on the node for prior builds
+//	newStreamsForNode: set of keys of streams to be started on the node for already-selected tokens
+//	maxStreamsPerNode: limit on number of streams the node is allowed to run concurrently
+//
 // Caller must be holding r.bigMutex at least read locked.
 func (r *Rebalancer) selectSmartToBuildTokenLOCKED(toBuildTTsForNode, selectedTTsForNode map[string]*common.TransferToken,
 	forbiddenStreamsForNode, newStreamsForNode map[string]struct{}, maxStreamsPerNode int) (ttid string, tt *common.TransferToken, sb int) {
@@ -1267,7 +1272,7 @@ func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := r.decodeTransferToken(kve.Path, kve.Value)
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value)
 			if err != nil {
 				l.Errorf("%v Unable to decode transfer token. Ignored.", _processTokens)
 				return nil
@@ -1309,7 +1314,7 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 
 	defer r.wg.Done()
 
-	if ddl, err := r.checkDDLRunning(); ddl {
+	if ddl, err := r.runParams.checkDDLRunning("Rebalancer"); ddl {
 		r.setTransferTokenError(ttid, tt, err.Error())
 		return
 	}
@@ -2257,7 +2262,7 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 }
 
 // decodeTransferToken unmarshals a transfer token received in a callback from metakv.
-func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.TransferToken, error) {
+func decodeTransferToken(path string, value []byte) (string, *c.TransferToken, error) {
 
 	ttidpos := strings.Index(path, TransferTokenTag)
 	ttid := path[ttidpos:]
@@ -2367,12 +2372,12 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 	return true
 }
 
-func (r *Rebalancer) checkDDLRunning() (bool, error) {
+func (rp *runParams) checkDDLRunning(caller string) (bool, error) {
 
-	if r.runParams != nil && r.runParams.ddlRunning {
-		l.Errorf("Rebalancer::doRebalance Found index build running. Cannot process rebalance.")
+	if rp != nil && rp.ddlRunning {
+		l.Errorf("%v::doRebalance Found index build running. Cannot process rebalance.")
 		fmtMsg := "indexer rebalance failure - index build is in progress for indexes: %v."
-		err := errors.New(fmt.Sprintf(fmtMsg, r.runParams.ddlRunningIndexNames))
+		err := errors.New(fmt.Sprintf(fmtMsg, caller, rp.ddlRunningIndexNames))
 		return true, err
 	}
 	return false, nil
@@ -2495,7 +2500,7 @@ func getLocalMeta(addr string) (*manager.LocalIndexMetadata, error) {
 	return localMeta, nil
 }
 
-//returs if all indexers are warmedup and addr of any paused indexer
+// returs if all indexers are warmedup and addr of any paused indexer
 func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
 
 	var pausedAddr []string
@@ -2557,9 +2562,7 @@ func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
 	return allWarmedup, pausedAddr
 }
 
-//
 // This function unmarshalls a response.
-//
 func convertResponse(r *http.Response, resp interface{}) error {
 	defer r.Body.Close()
 
