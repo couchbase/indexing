@@ -2354,10 +2354,22 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 				return
 			}
 
-			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
-				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, &m.p,
-				m.genericMgr.statsMgr)
+			// TODO: Add a cluster version check
+			cfg := m.config.Load()
+			isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
+
+			if isShardAwareRebalance {
+				m.rebalancerF = NewShardRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
+					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
+					m.localhttp, m.config.Load(), nil, false, &m.p,
+					m.genericMgr.statsMgr)
+			} else {
+				m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
+					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
+					m.localhttp, m.config.Load(), nil, false, &m.p,
+					m.genericMgr.statsMgr)
+			}
+
 			m.writeOk(w)
 			return
 
