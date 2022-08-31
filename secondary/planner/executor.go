@@ -1719,22 +1719,46 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 
 	logging.Infof("%v Found SubClusters  %v", _executeTenantAwarePlan, subClusters)
 
-	candidates, err := findCandidateSubClustersBasedOnUsage(subClusters, plan.UsageThreshold)
+	tenantSubCluster, err := filterCandidateBasedOnTenantAffinity(subClusters, indexSpec)
 	if err != nil {
 		return nil, err
 	}
 
-	logging.Infof("%v Found Candidates %v", _executeTenantAwarePlan, candidates)
+	logging.Infof("%v Found Candidate Based on Tenant Affinity %v", _executeTenantAwarePlan, tenantSubCluster)
 
-	result, err := filterCandidatesBasedOnTenantAffinity(candidates, indexSpec)
-	if err != nil {
-		return nil, err
+	var result SubCluster
+	var errStr string
+	if len(tenantSubCluster) == 0 {
+		//No subCluster found with matching tenant. Choose any subCluster
+		//below LWM.
+		subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
+		if err != nil {
+			return nil, err
+		}
+		if len(subClustersBelowLWM) != 0 {
+			result = findLeastLoadedSubCluster(subClustersBelowLWM)
+		} else {
+			errStr = "No SubCluster Below Low Usage Threshold"
+		}
+	} else {
+		//Found subCluster with matching tenant. Choose this subCluster
+		//if below HWM.
+		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, plan.UsageThreshold)
+		if err != nil {
+			return nil, err
+		}
+		if len(subClusterBelowHWM) != 0 {
+			result = subClusterBelowHWM[0]
+		} else {
+			errStr = "Tenant SubCluster Above High Usage Threshold"
+		}
 	}
 
 	if len(result) == 0 {
 		logging.Infof("%v Found no matching candidate for tenant %v", _executeTenantAwarePlan,
 			indexSpec)
-		return nil, errors.New("Planner not able to find any node for placement")
+		retErr := "Planner not able to find any node for placement - " + errStr
+		return nil, errors.New(retErr)
 	} else {
 		logging.Infof("%v Found Result %v", _executeTenantAwarePlan, result)
 	}
@@ -1848,9 +1872,9 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 	return nil
 }
 
-//filterCandidatesBasedOnTenantAffinity finds candidate sub-cluster
+//filterCandidateBasedOnTenantAffinity finds candidate sub-cluster
 //based on tenant affinity
-func filterCandidatesBasedOnTenantAffinity(subClusters []SubCluster,
+func filterCandidateBasedOnTenantAffinity(subClusters []SubCluster,
 	indexSpec *IndexSpec) (SubCluster, error) {
 
 	var candidates []SubCluster
@@ -1867,17 +1891,10 @@ func filterCandidatesBasedOnTenantAffinity(subClusters []SubCluster,
 	}
 
 	//One or more matching subCluster found. Choose least loaded subCluster
-	//from the matching ones. /For phase 1, there will be only 1 matching
+	//from the matching ones. For phase 1, there will be only 1 matching
 	//sub-cluster as a single tenant's indexes can only be placed on one node.
 	if len(candidates) >= 1 {
 		result = findLeastLoadedSubCluster(candidates)
-		return result, nil
-	}
-
-	//No node found with matching tenant. Choose least loaded subCluster
-	//from all input subClusters.
-	if len(candidates) == 0 {
-		result = findLeastLoadedSubCluster(subClusters)
 		return result, nil
 	}
 
@@ -1916,7 +1933,7 @@ func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
-	candidates, err := findSubClusterBelowHighThreshold(subClusters,
+	candidates, err := findSubClustersBelowHighThreshold(subClusters,
 		usageThreshold)
 	if err != nil {
 		return nil, err
@@ -1929,10 +1946,10 @@ func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 	return candidates, nil
 }
 
-//findSubClusterBelowLowThreshold finds sub-clusters with usage lower than
+//findSubClustersBelowLowThreshold finds sub-clusters with usage lower than
 //LWM(Low Watermark Threshold). A subCluster is considered below LWM if usage for
 //both units and memory is below threshold.
-func findSubClusterBelowLowThreshold(subClusters []SubCluster,
+func findSubClustersBelowLowThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
@@ -1963,10 +1980,10 @@ func findSubClusterBelowLowThreshold(subClusters []SubCluster,
 	return result, nil
 }
 
-//findSubClusterBelowHighThreshold finds sub-clusters with usage lower than
+//findSubClustersBelowHighThreshold finds sub-clusters with usage lower than
 //HWT(High Watermark Threshold). A subCluster is considered below high
 //threhsold if both units and memory usage is below HWM.
-func findSubClusterBelowHighThreshold(subClusters []SubCluster,
+func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
@@ -2878,7 +2895,7 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 		return tenantAwarePlanner, nil, nil
 	}
 
-	subClustersBelowLWM, err := findSubClusterBelowLowThreshold(allSubClusters,
+	subClustersBelowLWM, err := findSubClustersBelowLowThreshold(allSubClusters,
 		plan.UsageThreshold)
 	if err != nil {
 		return nil, nil, err
