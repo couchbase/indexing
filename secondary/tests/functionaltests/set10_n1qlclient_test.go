@@ -435,6 +435,10 @@ func (ctxt *qcmdContext) Credentials() *auth.Credentials {
 	return nil
 }
 
+func (ctxt *qcmdContext) SkipKey(key string) bool {
+	return false
+}
+
 func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)
