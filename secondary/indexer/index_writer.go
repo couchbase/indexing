@@ -68,7 +68,7 @@ type IndexWriter interface {
 	Rollback(s SnapshotInfo) error
 
 	//Rollback to initial state
-	RollbackToZero() error
+	RollbackToZero(bool) error
 
 	//Return TS for last rollback operation
 	LastRollbackTs() *common.TsVbuuid

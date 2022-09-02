@@ -175,7 +175,8 @@ type plasmaSlice struct {
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
+	meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -233,7 +234,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.samplerStopCh = make(chan bool)
 	slice.snapInterval = sysconf["settings.inmemory_snapshot.moi.interval"].Uint64() * uint64(time.Millisecond)
 
-	if err := slice.initStores(); err != nil {
+	if err := slice.initStores(isInitialBuild); err != nil {
 		// Index is unusable. Remove the data files and reinit
 		if err == errStorageCorrupted {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
@@ -294,7 +295,7 @@ func backupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(st
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
-func (slice *plasmaSlice) initStores() error {
+func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 	var err error
 
 	// This function encapsulates confLock.RLock + defer confLock.RUnlock
@@ -307,6 +308,7 @@ func (slice *plasmaSlice) initStores() error {
 		//
 		// 1. Set config values in cfg that are the same for main and back indexes
 		//
+		cfg.IsServerless = common.IsServerlessDeployment()
 		cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
 		cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
 		cfg.RecoveryFlushBufferSize = int(slice.sysconf["plasma.recoveryFlushBufferSize"].Int())
@@ -375,6 +377,15 @@ func (slice *plasmaSlice) initStores() error {
 			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
 
+		if common.IsServerlessDeployment() {
+			cfg.MaxInstsPerShard = slice.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
+			cfg.MaxDiskPerShard = slice.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
+			cfg.MinNumShard = slice.sysconf["plasma.serverless.minNumShard"].Uint64()
+			cfg.DefaultMinRequestQuota = int64(slice.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
+			cfg.TargetRR = slice.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+			cfg.MutationRateLimit = int64(slice.sysconf["plasma.serverless.mutationRateLimit"].Int())
+		}
+
 		cfg.StorageDir = slice.storageDir
 		cfg.LogDir = slice.logDir
 
@@ -423,6 +434,12 @@ func (slice *plasmaSlice) initStores() error {
 		mCfg.CompressMemoryThreshold = slice.sysconf["plasma.mainIndex.compressMemoryThresholdPercent"].Int()
 		mCfg.CompressFullMarshal = slice.sysconf["plasma.mainIndex.enableCompressFullMarshal"].Bool()
 
+		if common.IsServerlessDeployment() {
+			mCfg.MaxDeltaChainLen = slice.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
+			mCfg.MaxPageItems = slice.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
+			mCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
+		}
+
 		//
 		// 4. Set back-specific config values only in the bCfg object
 		//
@@ -456,6 +473,11 @@ func (slice *plasmaSlice) initStores() error {
 		bCfg.CompressMemoryThreshold = slice.sysconf["plasma.backIndex.compressMemoryThresholdPercent"].Int()
 		bCfg.CompressFullMarshal = slice.sysconf["plasma.backIndex.enableCompressFullMarshal"].Bool()
 
+		if common.IsServerlessDeployment() {
+			bCfg.MaxPageItems = slice.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
+			bCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
+		}
+
 		return mCfg, bCfg
 	}()
 
@@ -473,7 +495,7 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New3(*mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX)
+		slice.mainstore, mErr = plasma.New4(slice.idxDefn.Bucket, *mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX, isInitialBuild)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -485,7 +507,7 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New3(*bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX)
+			slice.backstore, bErr = plasma.New4(slice.idxDefn.Bucket, *bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX, isInitialBuild)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
@@ -535,7 +557,7 @@ func (slice *plasmaSlice) initStores() error {
 	if !slice.newBorn {
 		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
 			slice.id, slice.idxInstId, slice.idxPartnId)
-		err = slice.doRecovery()
+		err = slice.doRecovery(isInitialBuild)
 		dur := time.Since(t0)
 		if err == nil {
 			slice.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
@@ -615,7 +637,7 @@ func cmpRPMeta(a, b []byte) int {
 	return int(av - bv)
 }
 
-func (mdb *plasmaSlice) doRecovery() error {
+func (mdb *plasmaSlice) doRecovery(initBuild bool) error {
 	snaps, err := mdb.GetSnapshots()
 	if err != nil {
 		return err
@@ -624,7 +646,7 @@ func (mdb *plasmaSlice) doRecovery() error {
 	if len(snaps) == 0 {
 		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Unable to find recovery point. Resetting store ..",
 			mdb.id, mdb.idxInstId, mdb.idxPartnId)
-		if err := mdb.resetStores(); err != nil {
+		if err := mdb.resetStores(initBuild); err != nil {
 			return err
 		}
 	} else {
@@ -1929,7 +1951,7 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&mdb.committedCount)
 }
 
-func (mdb *plasmaSlice) resetStores() error {
+func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 	// Clear all readers
 	for i := 0; i < cap(mdb.readers); i++ {
 		<-mdb.readers
@@ -1948,7 +1970,7 @@ func (mdb *plasmaSlice) resetStores() error {
 	}
 
 	mdb.newBorn = true
-	if err := mdb.initStores(); err != nil {
+	if err := mdb.initStores(initBuild); err != nil {
 		return err
 	}
 
@@ -2086,11 +2108,11 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
-func (mdb *plasmaSlice) RollbackToZero() error {
+func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 
-	if err := mdb.resetStores(); err != nil {
+	if err := mdb.resetStores(initialBuild); err != nil {
 		return err
 	}
 
@@ -2542,6 +2564,7 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
 	plasma.MFragThreshold = cfg["plasma.memFragThreshold"].Float64()
 	plasma.EnableContainerSupport = cfg["plasma.EnableContainerSupport"].Bool()
+	plasma.DQThreshold = cfg["plasma.serverless.discretionaryQuotaThreshold"].Float64()
 
 	// hole cleaner global config
 	numHoleCleanerThreads := int(math.Ceil(float64(runtime.GOMAXPROCS(0)) *
@@ -2636,6 +2659,18 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
+	if common.IsServerlessDeployment() {
+		mdb.mainstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
+		mdb.mainstore.MaxDiskPerShard = mdb.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
+		mdb.mainstore.MinNumShard = mdb.sysconf["plasma.serverless.minNumShard"].Uint64()
+		mdb.mainstore.DefaultMinRequestQuota = int64(mdb.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
+		mdb.mainstore.TargetRR = mdb.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+		mdb.mainstore.MutationRateLimit = int64(mdb.sysconf["plasma.serverless.mutationRateLimit"].Int())
+		mdb.mainstore.MaxDeltaChainLen = mdb.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
+		mdb.mainstore.MaxPageItems = mdb.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
+		mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
+	}
+
 	mdb.mainstore.UpdateConfig()
 
 	if !mdb.isPrimary {
@@ -2719,6 +2754,17 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
+		if common.IsServerlessDeployment() {
+			mdb.backstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
+			mdb.backstore.MaxDiskPerShard = mdb.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
+			mdb.backstore.MinNumShard = mdb.sysconf["plasma.serverless.minNumShard"].Uint64()
+			mdb.backstore.DefaultMinRequestQuota = int64(mdb.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
+			mdb.backstore.TargetRR = mdb.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+			mdb.backstore.MutationRateLimit = int64(mdb.sysconf["plasma.serverless.mutationRateLimit"].Int())
+			mdb.backstore.MaxPageItems = mdb.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
+			mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
+		}
+
 		mdb.backstore.UpdateConfig()
 	}
 	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
@@ -2788,6 +2834,13 @@ func (mdb *plasmaSlice) logWriterStat() {
 
 func (mdb *plasmaSlice) RecoveryDone() {
 	plasma.RecoveryDone()
+}
+
+func (mdb *plasmaSlice) BuildDone() {
+	mdb.mainstore.BuildDone()
+	if !mdb.isPrimary {
+		mdb.backstore.BuildDone()
+	}
 }
 
 func (info *plasmaSnapshotInfo) Timestamp() *common.TsVbuuid {

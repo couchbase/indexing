@@ -44,6 +44,7 @@ type Slice interface {
 	GetReaderContext(user string, skipReadMetering bool) IndexReaderContext
 
 	RecoveryDone()
+	BuildDone()
 }
 
 // cursorCtx implements IndexReaderContext and is used

@@ -1,16 +1,19 @@
 package memdb
 
-import "fmt"
-import "sync/atomic"
-import "os"
-import "testing"
-import "time"
-import "math/rand"
-import "path/filepath"
-import "sync"
-import "runtime"
-import "encoding/binary"
-import "github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+import (
+	"encoding/binary"
+	"fmt"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+)
 
 var testConf Config
 
@@ -909,16 +912,18 @@ func TestDiskCorruption(t *testing.T) {
 	if cwr, err := os.OpenFile(shard0, os.O_WRONLY, 0755); err != nil {
 		panic(err)
 	} else {
-		cwr.WriteAt([]byte("corrupt"), 100)
+		info, _ := os.Stat(shard0)
+		cwr.WriteAt([]byte("corrupt"), info.Size()/2)
 		cwr.Close()
 	}
 
-	db = NewWithConfig(testConf)
-	defer db.Close()
+	db2 := NewWithConfig(testConf)
+	defer db2.Close()
 	t0 = time.Now()
 	snap, err = db.LoadFromDisk("db.dump", 8, nil)
 	if err != ErrCorruptSnapshot {
 		t.Errorf("Expected corrupted snapshot! got=%v", err)
+		snap.Close()
 	}
 	fmt.Printf("Loading from disk took %v\n", time.Since(t0))
 }

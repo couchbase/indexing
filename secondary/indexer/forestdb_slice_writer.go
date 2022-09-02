@@ -1090,7 +1090,7 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
-func (fdb *fdbSlice) RollbackToZero() error {
+func (fdb *fdbSlice) RollbackToZero(initialBuild bool) error {
 
 	//before rollback make sure there are no mutations
 	//in the slice buffer. Timekeeper will make sure there
@@ -1849,5 +1849,9 @@ func (fdb *fdbSlice) cancelCompact() {
 }
 
 func (fdb *fdbSlice) RecoveryDone() {
+	// done nothing
+}
+
+func (fdb *fdbSlice) BuildDone() {
 	// done nothing
 }

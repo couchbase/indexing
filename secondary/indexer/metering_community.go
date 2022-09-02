@@ -72,6 +72,18 @@ func (mt *MeteringTransaction) Commit() ([]Units, error) {
 	return []Units{}, nil
 }
 
+func (mt *MeteringTransaction) Abort() error {
+	return nil
+}
+
+func (mt *MeteringTransaction) Flush() error {
+	return nil
+}
+
+func (mt *MeteringTransaction) AddIndexWrite(bytes uint64, update bool) error {
+	return nil
+}
+
 func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string) MeteringTransaction {
 	panic("MeteringManager::StartMeteringTxn Not implemented for Community Edition")
 	return MeteringTransaction{}

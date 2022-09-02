@@ -26,7 +26,6 @@ var errBucketSeqnosPanic = errors.New("Recovered from an error in BucketSeqnosLo
 // to make Stats-Seqnos fast.
 var dcp_buckets_seqnos struct {
 	rw        sync.RWMutex
-	numVbs    int
 	buckets   map[string]*couchbase.Bucket // bucket ->*couchbase.Bucket
 	errors    map[string]error             // bucket -> error
 	readerMap map[string]*vbSeqnosReader   // bucket->*vbSeqnosReader
@@ -55,8 +54,9 @@ func newKVConn(mc *memcached.Client) *kvConn {
 }
 
 type vbSeqnosRequest struct {
-	cid    string // Collection ID
-	respCh chan *vbSeqnosResponse
+	cid        string // Collection ID
+	respCh     chan *vbSeqnosResponse
+	bucketName string
 }
 
 func (req *vbSeqnosRequest) Reply(response *vbSeqnosResponse) {
@@ -100,7 +100,11 @@ func (r *vbSeqnosReader) GetSeqnos(cid string) (seqs []uint64, err error) {
 		}
 	}()
 
-	req := vbSeqnosRequest{cid: cid, respCh: make(chan *vbSeqnosResponse)}
+	req := vbSeqnosRequest{
+		cid:        cid,
+		respCh:     make(chan *vbSeqnosResponse),
+		bucketName: r.bucket,
+	}
 	r.requestCh <- req
 	seqs, err = req.Response()
 	return
@@ -112,7 +116,7 @@ func (r *vbSeqnosReader) Routine() {
 	for req := range r.requestCh {
 		l := len(r.requestCh)
 		t0 := time.Now()
-		seqnos, err := CollectSeqnos(r.kvfeeds, req.cid)
+		seqnos, err := CollectSeqnos(r.kvfeeds, req.cid, req.bucketName)
 		response := &vbSeqnosResponse{
 			seqnos: seqnos,
 			err:    err,
@@ -181,18 +185,6 @@ func addDBSbucket(cluster, pooln, bucketn, kvaddr string) (err error) {
 		err = fmt.Errorf("Empty kv-nodes list")
 		logging.Errorf("addDBSbucket:: Error %v for bucket %v", err, bucketn)
 		return err
-	}
-
-	// calculate and cache the number of vbuckets.
-	if dcp_buckets_seqnos.numVbs == 0 { // to happen only first time.
-		for _, vbnos := range m {
-			dcp_buckets_seqnos.numVbs += len(vbnos)
-		}
-	}
-
-	if dcp_buckets_seqnos.numVbs == 0 {
-		err = fmt.Errorf("Found 0 vbuckets - perhaps the bucket is not ready yet")
-		return
 	}
 
 	// make sure a feed is available for all kv-nodes
@@ -330,7 +322,7 @@ func ResetBucketSeqnos() error {
 	return nil
 }
 
-func CollectSeqnos(kvfeeds map[string]*kvConn, cid string) (l_seqnos []uint64, err error) {
+func CollectSeqnos(kvfeeds map[string]*kvConn, cid string, bucketName string) (l_seqnos []uint64, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Return error as callers take care of retry.
@@ -394,9 +386,28 @@ func CollectSeqnos(kvfeeds map[string]*kvConn, cid string) (l_seqnos []uint64, e
 	// The following code is to detect rebalance or recovery !!
 	// this is not yet supported in KV, GET_SEQNOS returns all
 	// seqnos.
-	if len(seqnos) < dcp_buckets_seqnos.numVbs {
+	numVBuckets, ok := func() (int, bool) {
+		dcp_buckets_seqnos.rw.RLock()
+		defer dcp_buckets_seqnos.rw.RUnlock()
+
+		nvb, nvbok := dcp_buckets_seqnos.buckets[bucketName]
+		if !nvbok {
+			return 0, nvbok
+		}
+
+		return nvb.NumVBuckets, true
+	}()
+
+	if !ok {
+		fmsg := "unable to get numVBuckets for bucket: %v len(seqnos): %v numVBuckets: %v)"
+		err = fmt.Errorf(fmsg, bucketName, len(seqnos), numVBuckets)
+		logging.Errorf("%v\n", err)
+		return nil, err
+	}
+
+	if len(seqnos) < numVBuckets {
 		fmsg := "unable to get seqnos ts for all vbuckets (%v out of %v)"
-		err = fmt.Errorf(fmsg, len(seqnos), dcp_buckets_seqnos.numVbs)
+		err = fmt.Errorf(fmsg, len(seqnos), numVBuckets)
 		logging.Errorf("%v\n", err)
 		return nil, err
 	}
