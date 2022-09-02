@@ -268,7 +268,7 @@ type IndexInst struct {
 	Error          string
 	BuildTs        []uint64
 	Version        int
-	ReplicaId      int
+	ReplicaId      int `json:"replicaId:omitempty"`
 	Scheduled      bool
 	StorageMode    string
 	OldStorageMode string

@@ -100,7 +100,7 @@ type Plan struct {
 	UsedReplicaIdMap map[common.IndexDefnId]map[int]bool
 
 	SubClusters    []SubCluster
-	UsageThreshold *UsageThreshold
+	UsageThreshold *UsageThreshold `json:usageThreshold,omitempty"`
 }
 
 type IndexSpec struct {
@@ -141,14 +141,14 @@ type IndexSpec struct {
 
 //Resource Usage Thresholds for serverless model
 type UsageThreshold struct {
-	MemHighThreshold int32
-	MemLowThreshold  int32
+	MemHighThreshold int32 `json:memHighThreshold,omitempty"`
+	MemLowThreshold  int32 `json:memLowThreshold,omitempty"`
 
-	UnitsHighThreshold int32
-	UnitsLowThreshold  int32
+	UnitsHighThreshold int32 `json:unitsHighThreshold,omitempty"`
+	UnitsLowThreshold  int32 `json:unitsLowThreshold,omitempty"`
 
-	MemQuota   uint64
-	UnitsQuota uint64
+	MemQuota   uint64 `json:memQuota,omitempty"`
+	UnitsQuota uint64 `json:unitsQuota,omitempty"`
 }
 
 type TenantUsage struct {
