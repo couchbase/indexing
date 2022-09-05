@@ -51,8 +51,8 @@ func init() {
 func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChannel) (*MeteringThrottlingMgr, Message) {
 
 	settings := regulator.InitSettings{
-		NodeID:           service.NodeID(nodeID),
-		Service:          regulator.Index,
+		NodeID:  service.NodeID(nodeID),
+		Service: regulator.Index,
 	}
 
 	handler := factory.InitRegulator(settings)
@@ -143,13 +143,17 @@ func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint6
 	return 0, err
 }
 
-func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool) error {
+func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool, billable bool) error {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
 	units, err := metering.IndexWriteToWU(bytes, update)
 	if err == nil {
 		ctx := getCtx(bucket, "")
-		return regulator.RecordUnits(ctx, units)
+		if billable {
+			return regulator.RecordUnits(ctx, units)
+		} else {
+			return regulator.RecordUnbillableUnits(ctx, units)
+		}
 	}
 	return err
 }
@@ -171,9 +175,12 @@ func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 
 type MeteringTransaction regulator.TransactionalRecorder
 
-func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string) MeteringTransaction {
+func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string, billable bool) MeteringTransaction {
 	ctx := getCtx(bucketName, user)
-	return regulator.BeginTransaction(ctx)
+	options := &regulator.TransactionOptions{
+		Unbilled: !billable,
+	}
+	return regulator.BeginTransactionV2(ctx, options)
 }
 
 func getCtx(bucket, user string) regulator.Ctx {
