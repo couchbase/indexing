@@ -9,6 +9,7 @@
 package functionaltests
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -1193,6 +1194,13 @@ type tenantAwarePlannerFuncTestCase struct {
 	errStr        string
 }
 
+type tenantAwarePlannerRebalFuncTestCase struct {
+	comment  string
+	topology string
+	result   string
+	errStr   string
+}
+
 var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
 	// Place single index instace
 	{
@@ -1348,6 +1356,7 @@ var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
 func tenantAwarePlannerTests(t *testing.T) {
 
 	tenantAwarePlannerFuncTests(t)
+	tenantAwarePlannerRebalanceTests(t)
 
 }
 
@@ -1446,4 +1455,164 @@ func validateTenantAwarePlacement(t *testing.T, p planner.Planner,
 			t.Fatalf("Some indexes are not found in the result")
 		}
 	}
+}
+
+var tenantAwarePlannerRebalFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Rebalance - 3 SG, 1 empty, 1 Memory Above HWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_a.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_a_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, 1 empty, 1 Units Above HWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_b.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_b_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, 1 empty, Both Memory/Units Above HWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_c.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_c_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, Multiple tenants to move, single source, multiple destination",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_d.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_d_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, Multiple tenants to move, no nodes below LWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_e.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_e_out.json",
+		"",
+	},
+	{
+		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(non-uniform memory/units usage)",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_f.json",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_f_out.json",
+		"",
+	},
+	{
+		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(non-uniform memory/units usage)",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_g.json",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_g_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, Single Large Tenant, Nothing to move",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_h.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_h_out.json",
+		"",
+	},
+	{
+		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(zero usage tenants)",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_h.json",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_h_out.json",
+		"",
+	},
+}
+
+func tenantAwarePlannerRebalanceTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerRebalFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadPlan(testcase.result)
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwareRebal(plan, nil)
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+		err = validateTenantAwareRebalanceSolution(t, solution, result)
+		if err != nil {
+			log.Printf("Actual Solution \n")
+			solution.PrintLayout()
+			log.Printf("Expected Result %v\n", result)
+		}
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+	}
+}
+
+func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Solution,
+	result *planner.Plan) error {
+
+	if len(solution.Placement) != len(result.Placement) {
+		return errors.New(fmt.Sprintf("Mismatch in indexer node count."+
+			"Solution %v Expected %v", len(solution.Placement), len(result.Placement)))
+	}
+	for _, indexer := range solution.Placement {
+
+		indexer1, err := findIndexerNodeInResult(result, indexer)
+		if err != nil {
+			return err
+		}
+
+		err = compareIndexesOnNodes(indexer, indexer1)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.IndexerNode) error {
+
+	if len(indexer.Indexes) != len(indexer1.Indexes) {
+		return errors.New(fmt.Sprintf("Mismatch in index count on "+
+			"node %v. Solution %v. Expected %v", indexer.NodeUUID,
+			len(indexer.Indexes), len(indexer1.Indexes)))
+	}
+
+	for _, index := range indexer.Indexes {
+
+		err := findIndexOnNode(index, indexer1)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+
+}
+
+func findIndexOnNode(index *planner.IndexUsage, indexer1 *planner.IndexerNode) error {
+
+	found := false
+	for _, index1 := range indexer1.Indexes {
+
+		if index.DefnId == index1.DefnId &&
+			index.InstId == index1.InstId &&
+			index.PartnId == index1.PartnId &&
+			index.Name == index1.Name &&
+			index.Bucket == index1.Bucket &&
+			index.Instance.ReplicaId == index1.Instance.ReplicaId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return errors.New(fmt.Sprintf("Index %v not found on Node %v in expected result.", index, indexer1.NodeUUID))
+	}
+
+	return nil
+}
+
+func findIndexerNodeInResult(result *planner.Plan, indexer *planner.IndexerNode) (*planner.IndexerNode, error) {
+
+	for _, indexer1 := range result.Placement {
+		if indexer.NodeUUID == indexer1.NodeUUID {
+			return indexer1, nil
+		}
+	}
+	return nil, errors.New(fmt.Sprintf("Indexer Node %v not found in expected result.", indexer))
+
 }

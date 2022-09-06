@@ -403,6 +403,12 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 	return nil, nil, nil
 }
 
+func (t *simulator) RunSingleTestTenantAwareRebal(plan *Plan, deletedNodes []string) (*Solution, error) {
+
+	p, _, e := executeTenantAwareRebal(CommandRebalance, plan, deletedNodes)
+	return p.Result, e
+}
+
 //////////////////////////////////////////////////////////////
 // Topology Change
 /////////////////////////////////////////////////////////////
