@@ -1859,9 +1859,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.memtuner.overshootRatio": ConfigValue{
-		float64(0.15),
+		float64(0.10),
 		"Allow RSS to overshoot quota by this ratio",
-		float64(0.15),
+		float64(0.10),
 		false,
 		false,
 	},
@@ -3411,6 +3411,20 @@ var SystemConfig = Config{
 		0.6,
 		false, // mutable
 		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.idleDurationThreshold": ConfigValue{
+		300,
+		"elpased time before tenant considered idle (in second)",
+		300,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.idleResidentRatio": ConfigValue{
+		float64(0.05),
+		"resident ratio for idle instance",
+		float64(0.05),
+		false,
+		false,
 	},
 }
 
