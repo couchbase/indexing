@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -82,38 +84,79 @@ func newTsVbuuid(numVbuckets int) interface{} {
 	return ts
 }
 
-// TODO Elixir - Convert the below lock implementation to lockless one using holder object and making an atomic update
 // Map of sync.Pool per numVBuckets
-var tsVbuuidPoolMap struct {
-	tsMap map[int]sync.Pool // NumVBuckets can range from 16 to 1024
-	sync.RWMutex
+type TsVbuuidPoolMap map[int]*sync.Pool
+
+type TsVbuuidPoolMapHolder struct {
+	ptr *unsafe.Pointer
 }
 
+func (t *TsVbuuidPoolMapHolder) Init() {
+	t.ptr = new(unsafe.Pointer)
+	newMap := make(TsVbuuidPoolMap)
+	t.Set(&newMap)
+}
+
+func (t *TsVbuuidPoolMapHolder) Set(tsVbuuidPoolMap *TsVbuuidPoolMap) {
+	atomic.StorePointer(t.ptr, unsafe.Pointer(tsVbuuidPoolMap))
+}
+
+func (t *TsVbuuidPoolMapHolder) Get() *TsVbuuidPoolMap {
+	ptr := atomic.LoadPointer(t.ptr)
+	return (*TsVbuuidPoolMap)(ptr)
+}
+
+func (t *TsVbuuidPoolMapHolder) CompareAndSwap(old, new *TsVbuuidPoolMap) bool {
+	return atomic.CompareAndSwapPointer(t.ptr, unsafe.Pointer(old),
+		unsafe.Pointer(new))
+}
+
+func (t *TsVbuuidPoolMapHolder) Clone() *TsVbuuidPoolMap {
+	newMap := make(TsVbuuidPoolMap)
+	if ptr := atomic.LoadPointer(t.ptr); ptr != nil {
+		oldMap := *(*TsVbuuidPoolMap)(ptr)
+		for numVb, pool := range oldMap {
+			newMap[numVb] = pool
+		}
+	}
+	return &newMap
+}
+
+var tsVbuuidPoolMapHolder TsVbuuidPoolMapHolder
+
 func init() {
-	tsVbuuidPoolMap.tsMap = make(map[int]sync.Pool)
+	tsVbuuidPoolMapHolder.Init()
 }
 
 func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 
-	tsVbuuidPoolMap.RLock()
-	defer tsVbuuidPoolMap.RUnlock()
-
-	tsVbuuidPool, ok := tsVbuuidPoolMap.tsMap[numVbuckets]
+	mapPtr := tsVbuuidPoolMapHolder.Get()
+	tsVbUUIDPoolMap := *mapPtr
+	tsVbUUIDPool, ok := tsVbUUIDPoolMap[numVbuckets]
 	if !ok {
-		tsVbuuidPoolMap.RUnlock()
-		func() {
-			tsVbuuidPoolMap.Lock()
-			defer tsVbuuidPoolMap.Unlock()
-
-			tsVbuuidPool = sync.Pool{New: func() interface{} {
+		swapped := false
+		for !swapped {
+			mapPtr = tsVbuuidPoolMapHolder.Get()
+			tsVbUUIDPoolMap = *mapPtr
+			tsVbUUIDPool, ok = tsVbUUIDPoolMap[numVbuckets]
+			if ok {
+				break
+			}
+			tsVbUUIDPool = &sync.Pool{New: func() interface{} {
 				return newTsVbuuid(numVbuckets)
 			}}
-			tsVbuuidPoolMap.tsMap[numVbuckets] = tsVbuuidPool
-		}()
-		tsVbuuidPoolMap.RLock()
+			newMapPtr := tsVbuuidPoolMapHolder.Clone()
+			newTsVbUUIDPoolMap := *newMapPtr
+			newTsVbUUIDPoolMap[numVbuckets] = tsVbUUIDPool
+			swapped = tsVbuuidPoolMapHolder.CompareAndSwap(mapPtr, newMapPtr)
+			if swapped {
+				logging.Infof("NewTsVbuuidCached: %v, %v TsVbuuidPoolMap is updated from: %v to: %v",
+					bucket, numVbuckets, *mapPtr, *newMapPtr)
+			}
+		}
 	}
 
-	ts := tsVbuuidPool.Get().(*TsVbuuid)
+	ts := tsVbUUIDPool.Get().(*TsVbuuid)
 
 	//re-init
 	for i, _ := range ts.Vbuuids {
@@ -132,10 +175,10 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 }
 
 func (ts *TsVbuuid) Free() {
-	tsVbuuidPoolMap.RLock()
-	defer tsVbuuidPoolMap.RUnlock()
+	mapPtr := tsVbuuidPoolMapHolder.Get()
+	tsVbuuidPoolMap := *mapPtr
 
-	tsVbuuidPool, ok := tsVbuuidPoolMap.tsMap[ts.NumVBuckets]
+	tsVbuuidPool, ok := tsVbuuidPoolMap[ts.NumVBuckets]
 	if ok {
 		tsVbuuidPool.Put(ts)
 	}
