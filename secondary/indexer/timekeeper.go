@@ -4123,6 +4123,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 	tk.lock.Lock()
 	keyspaceIdCollectionId := tk.ss.CloneCollectionIdMap(common.INIT_STREAM)
+	streamKeyspaceIdNumVBucketsMap := tk.ss.CloneStreamKeyspaceIdNumVBucketsMap()
 	tk.lock.Unlock()
 
 	indexInstMap := tk.indexInstMap.Get()
@@ -4161,8 +4162,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					if inst.Stream == common.INIT_STREAM && inst.Defn.KeyspaceId(inst.Stream) != inst.Defn.Bucket {
 						cid = keyspaceIdCollectionId[keyspaceId]
 					}
-					// TODO Elixir - Clone streamKeyspaceIdNumVBucketsMap from streamstate and use here
-					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, 0)
+					numVBuckets := streamKeyspaceIdNumVBucketsMap[inst.Stream][keyspaceId]
+					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, numVBuckets)
 					return err
 				})
 				if err = rh.Run(); err != nil {
