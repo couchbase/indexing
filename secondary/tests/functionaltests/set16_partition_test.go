@@ -15,6 +15,7 @@ import (
 )
 
 func TestPartitionDistributionWithReplica(t *testing.T) {
+	t.Skipf("Skipping TestPartitionDistributionWithReplica(). Please enable this in future...")
 	if clusterconfig.IndexUsing == "forestdb" {
 		log.Printf("Not running TestPartitionDistributionWithReplica for forestdb as" +
 			" partition indexes are not supported with forestdb storage mode")
