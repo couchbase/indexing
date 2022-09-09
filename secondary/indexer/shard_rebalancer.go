@@ -50,6 +50,9 @@ type ShardRebalancer struct {
 	config      c.ConfigHolder
 	retErr      error
 
+	// topologyChange is populated in Rebalance and Failover cases only, else nil
+	topologyChange *service.TopologyChange
+
 	// Metakv management
 	metakvCancel chan struct{}
 	metakvMutex  sync.RWMutex
@@ -92,6 +95,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		done:                make(chan struct{}),
 		metakvCancel:        make(chan struct{}),
 		waitForTokenPublish: make(chan struct{}),
+
+		topologyChange: topologyChange,
 	}
 
 	sr.config.Store(config)
