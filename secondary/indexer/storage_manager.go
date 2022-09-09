@@ -77,6 +77,8 @@ type storageMgr struct {
 	statsLock sync.Mutex
 
 	lastFlushDone int64
+
+	stm *ShardTransferManager
 }
 
 type snapshotWaiter struct {
@@ -110,11 +112,11 @@ func (w *snapshotWaiter) Error(err error) {
 	w.wch <- err
 }
 
-//NewStorageManager returns an instance of storageMgr or err message
-//It listens on supvCmdch for command and every command is followed
-//by a synchronous response of the supvCmdch.
-//Any async response to supervisor is sent to supvRespch.
-//If supvCmdch get closed, storageMgr will shut itself down.
+// NewStorageManager returns an instance of storageMgr or err message
+// It listens on supvCmdch for command and every command is followed
+// by a synchronous response of the supvCmdch.
+// Any async response to supervisor is sent to supvRespch.
+// If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych []chan IndexSnapshot,
 	snapshotReqCh []MsgChannel, stats *IndexerStats) (StorageManager, Message) {
@@ -154,6 +156,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
+	s.stm = NewShardTransferManager()
+
 	for i := 0; i < len(s.snapshotReqCh); i++ {
 		go s.listenSnapshotReqs(i)
 	}
@@ -165,8 +169,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 }
 
-//run starts the storage manager loop which listens to messages
-//from its supervisor(indexer)
+// run starts the storage manager loop which listens to messages
+// from its supervisor(indexer)
 func (s *storageMgr) run() {
 
 	//main Storage Manager loop
@@ -242,11 +246,14 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_NUMVBUCKETS:
 		s.handleUpdateNumVBuckets(cmd)
+
+	case START_SHARD_TRANSFER:
+		s.handleShardTransfer(cmd)
 	}
 }
 
-//handleCreateSnapshot will create the necessary snapshots
-//after flush has completed
+// handleCreateSnapshot will create the necessary snapshots
+// after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	logging.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
@@ -773,7 +780,7 @@ func (sm *storageMgr) getSortedPartnInst(partnMap PartitionInstMap) partitionIns
 	return result
 }
 
-//handleRollback will rollback to given timestamp
+// handleRollback will rollback to given timestamp
 func (sm *storageMgr) handleRollback(cmd Message) {
 
 	sm.supvCmdch <- &MsgSuccess{}
@@ -1904,14 +1911,17 @@ func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
 //
 // is -- the index shapshot to clone
 // doPrune -- false clones ALL partitions and IGNORES the keepPartnIds[] arg. true clones only the
-//   subset of partitions listed in the keepPartnIds[] arg.
+//
+//	subset of partitions listed in the keepPartnIds[] arg.
+//
 // keepPartnIds[] -- used ONLY if doPrune == true, this gives the set of partitions whose snapshots
-//   are to be cloned, which MAY BE EMPTY OR NIL to indicate pruning away of ALL partitions is
-//   desired, in which case none of the partition snapshots are cloned. (This case can occur when a
-//   prune is done of all partitions currently in the real instance while there is also an
-//   outstanding proxy to be merged into the real instance. Even though all existing partns are
-//   moving out, other partns are moving in, so we do a prune of all partitions in the real instance
-//   instead of a drop of the index.)
+//
+//	are to be cloned, which MAY BE EMPTY OR NIL to indicate pruning away of ALL partitions is
+//	desired, in which case none of the partition snapshots are cloned. (This case can occur when a
+//	prune is done of all partitions currently in the real instance while there is also an
+//	outstanding proxy to be merged into the real instance. Even though all existing partns are
+//	moving out, other partns are moving in, so we do a prune of all partitions in the real instance
+//	instead of a drop of the index.)
 func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, doPrune bool, keepPartnIds []common.PartitionId) IndexSnapshot {
 
 	snap := is.(*indexSnapshot)
@@ -2316,4 +2326,12 @@ func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
 			"Stream: %v, KeyspaceId: %v, tsVbuuid: %v", streamId, keyspaceId, tsVbuuid)
 
 	}
+}
+
+func (s *storageMgr) handleShardTransfer(cmd Message) {
+	// TODO: Add a configurable setting to enable or disable disk snapshotting
+	// of shards that are in transfesr
+	go s.stm.processShardTransferMessage(cmd)
+
+	s.supvCmdch <- &MsgSuccess{}
 }

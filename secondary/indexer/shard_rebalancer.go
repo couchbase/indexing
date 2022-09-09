@@ -28,6 +28,8 @@ type ShardRebalancer struct {
 	// and destination nodes
 	ackedTokens map[string]*c.TransferToken
 
+	transferStats map[string]map[uint64]*ShardTransferStatistics // ttid -> shardId -> stats
+
 	// lock protecting access to maps like transferTokens, sourceTokens etc.
 	mu sync.RWMutex
 
@@ -97,6 +99,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		waitForTokenPublish: make(chan struct{}),
 
 		topologyChange: topologyChange,
+		transferStats:  make(map[string]map[uint64]*ShardTransferStatistics),
 	}
 
 	sr.config.Store(config)
@@ -342,12 +345,91 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		// in such case
 		return true
 
+	case c.ShardTokenTransferShard:
+		sr.updateInMemToken(ttid, tt, "source")
+
+		go sr.startShardTransfer(ttid, tt)
+
+		return true
+
 	default:
 		l.Infof("VarunLog: In the source code in default ttid: %v", ttid)
 		return false
 	}
 
 	return false
+}
+
+func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) {
+
+	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
+	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
+
+	msg := &MsgStartShardTransfer{
+		shardIds:        tt.ShardIds,
+		rebalanceId:     sr.rebalToken.RebalId,
+		transferTokenId: ttid,
+		destination:     tt.Destination,
+
+		cancelCh:   sr.cancel,
+		respCh:     respCh,
+		progressCh: progressCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	for {
+		select {
+		// Incase rebalance is cancelled upstream, transfer would be
+		// aborted and rebalancer would still get a message on respCh
+		// with errors as sr.cancel is passed on to downstream
+		case respMsg := <-respCh:
+
+			msg := respMsg.(*MsgShardTransferResp)
+			errMap := msg.GetErrorMap()
+			shardPaths := msg.GetShardPaths()
+
+			for shardId, err := range errMap {
+				if err != nil {
+					l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
+						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, shardId, shardPaths, err)
+
+					// Invoke clean-up for all shards even if error is observed for one shard transfer
+					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid)
+					return
+				}
+			}
+
+			// No errors are observed during shard transfer. Change the state of
+			// the transfer token and update metaKV
+			sr.mu.Lock()
+			defer sr.mu.Unlock()
+
+			tt.ShardTransferTokenState = c.ShardTokenRestoreShard
+			setTransferTokenInMetakv(ttid, tt)
+			return
+
+		case stats := <-progressCh:
+			sr.updateTransferStatistics(ttid, stats)
+			l.Infof("ShardRebalancer::startShardTranfser ShardId: %v bytesWritten: %v, totalBytes: %v, transferRate: %v",
+				stats.shardId, stats.bytesWritten, stats.totalBytes, stats.transferRate)
+		}
+	}
+}
+
+func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTransferStatistics) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if _, ok := sr.transferStats[ttid]; !ok {
+		sr.transferStats[ttid] = make(map[uint64]*ShardTransferStatistics)
+	}
+	sr.transferStats[ttid][stats.shardId] = stats
+}
+
+func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]string, destination string, ttid string) {
+	// TODO: Add logic to initiate clean-up
 }
 
 func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.TransferToken) bool {
