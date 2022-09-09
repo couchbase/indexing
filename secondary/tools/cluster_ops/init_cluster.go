@@ -7,10 +7,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 )
 
 func getClusterStatus() map[string][]string {
@@ -56,7 +57,7 @@ func InitClusterFromREST() error {
 		if err := cluster.Rebalance(serverAddr, username, password); err != nil {
 			return err
 		}
-		kvutility.CreateBucket("default", "sasl", "", username, password, serverAddr, "1500", "11213")
+		CreateBucket("default", "sasl", "", username, password, serverAddr, "1500", "11213")
 		time.Sleep(1 * time.Second)
 		status = getClusterStatus()
 		log.Printf("Cluster status: %v", status)
@@ -126,4 +127,27 @@ func setStorageModeAndShardAwareRebalance(storageMode, username, password string
 	ioutil.ReadAll(resp.Body)
 
 	return nil
+}
+
+func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota, proxyPort string) {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/pools/default/buckets"
+	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}, "flushEnabled": {"1"}, "replicaNumber": {"1"}}
+	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("CreateBucket failed for bucket %v \n", bucketName)
+	}
+	// todo : error out if response is error
+	if err != nil {
+		log.Fatalf("Error while creating bucket, err: %v", err)
+	}
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
+	log.Printf("Created bucket %v, responseBody: %s", bucketName, responseBody)
 }
