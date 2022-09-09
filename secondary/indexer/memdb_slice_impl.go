@@ -189,9 +189,9 @@ type memdbSlice struct {
 
 // NewMemDBSlice is the constructor for memdbSlice.
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, partitionId common.PartitionId,
-	isPrimary bool, hasPersistance bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
+	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool,
+	hasPersistance bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
+	numVBuckets int) (*memdbSlice, error) {
 
 	info, err := iowrap.Os_Stat(path)
 	if err != nil || err == nil && info.IsDir() {
@@ -219,7 +219,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	mdb.numWriters = sysconf["numSliceWriters"].Int()
 	mdb.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
 	mdb.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
-	mdb.numVbuckets = sysconf["numVbuckets"].Int()
+	mdb.numVbuckets = numVBuckets
 	mdb.clusterAddr = sysconf["clusterAddr"].String()
 	mdb.exposeItemCopy = sysconf["moi.exposeItemCopy"].Bool()
 

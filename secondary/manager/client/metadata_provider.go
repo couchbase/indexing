@@ -5497,7 +5497,7 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 			if dedupedIndexStats, ok := stats[meta.Definition.Bucket]; !ok {
 				return result
 			} else {
-				if _, exists := dedupedIndexStats.Indexes[indexName]; exists {
+				if perIndexStats, exists := dedupedIndexStats.Indexes[indexName]; exists {
 					for partitionId, indexerId2 := range inst.IndexerId {
 						if indexerId == indexerId2 {
 							if _, ok := result[inst.InstId]; !ok {
@@ -5512,12 +5512,14 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 							result[inst.InstId][partitionId].Set("progress_stat_time", interface{}(dedupedIndexStats.ProgressStatTime))
 						}
 					}
-					if val, ok := meta.Stats["last_known_scan_time"]; ok {
-						if val.(float64) < dedupedIndexStats.Indexes[indexName].LastScanTime {
+					if perIndexStats != nil {
+						if val, ok := meta.Stats["last_known_scan_time"]; ok {
+							if val.(float64) < dedupedIndexStats.Indexes[indexName].LastScanTime {
+								meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
+							}
+						} else {
 							meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
 						}
-					} else {
-						meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
 					}
 				}
 			}

@@ -176,7 +176,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
-	meteringMgr *MeteringThrottlingMgr) (*plasmaSlice, error) {
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -207,7 +207,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.maxNumWriters = sysconf["numSliceWriters"].Int()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
 	slice.clusterAddr = sysconf["clusterAddr"].String()
-	slice.numVbuckets = sysconf["numVbuckets"].Int()
+	slice.numVbuckets = numVBuckets
 
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()

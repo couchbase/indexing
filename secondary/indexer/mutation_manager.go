@@ -65,8 +65,6 @@ type mutationMgr struct {
 	indexInstMap  IndexInstMapHolder
 	indexPartnMap IndexPartnMapHolder
 
-	numVbuckets uint16 //number of vbuckets
-
 	flusherWaitGroup sync.WaitGroup
 
 	indexerState common.IndexerState
@@ -114,7 +112,6 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		shutdownCh:     make(DoneChannel),
 		supvCmdch:      supvCmdch,
 		supvRespch:     supvRespch,
-		numVbuckets:    uint16(config["numVbuckets"].Int()),
 		config:         config,
 		memUsed:        0,
 		maxMemory:      0,
@@ -460,6 +457,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
+	numVBuckets := cmd.(*MsgStreamUpdate).GetNumVBuckets()
 
 	keyspaceIdFilter := make(map[string]*common.TsVbuuid)
 	keyspaceIdFilter[keyspaceId] = restartTs
@@ -471,7 +469,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	if _, ok := m.streamReaderMap[streamId]; ok {
 
 		respMsg := m.addIndexListToExistingStream(streamId,
-			keyspaceId, indexList, keyspaceIdFilter, sessionId, enableOSO)
+			keyspaceId, indexList, keyspaceIdFilter, sessionId, enableOSO, numVBuckets)
 		m.supvCmdch <- respMsg
 		return
 	}
@@ -488,7 +486,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := keyspaceIdQueueMap[keyspaceId]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(keyspaceId, m.numVbuckets,
+			if queue = NewAtomicMutationQueue(keyspaceId, uint16(numVBuckets),
 				&m.maxMemory, &m.memUsed, m.config); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
@@ -549,6 +547,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
+	numVBuckets := cmd.(*MsgStreamUpdate).GetNumVBuckets()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -567,7 +566,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 	}
 
 	respMsg := m.addIndexListToExistingStream(streamId,
-		keyspaceId, indexList, nil, sessionId, enableOSO)
+		keyspaceId, indexList, nil, sessionId, enableOSO, numVBuckets)
 	//send the message back on supv channel
 	m.supvCmdch <- respMsg
 
@@ -575,7 +574,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 
 func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	keyspaceId string, indexList []common.IndexInst, keyspaceIdFilter map[string]*common.TsVbuuid,
-	sessionId uint64, enableOSO bool) Message {
+	sessionId uint64, enableOSO bool, numVBuckets int) Message {
 
 	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
@@ -588,7 +587,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := keyspaceIdQueueMap[keyspaceId]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(keyspaceId, m.numVbuckets,
+			if queue = NewAtomicMutationQueue(keyspaceId, uint16(numVBuckets),
 				&m.maxMemory, &m.memUsed, m.config); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,

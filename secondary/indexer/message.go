@@ -148,6 +148,7 @@ const (
 	COMPACTION_MGR_SHUTDOWN
 
 	//COMMON
+	UPDATE_NUMVBUCKETS
 	UPDATE_INDEX_INSTANCE_MAP
 	UPDATE_INDEX_PARTITION_MAP
 	UPDATE_KEYSPACE_STATS_MAP
@@ -498,6 +499,7 @@ type MsgStreamUpdate struct {
 	sessionId    uint64
 	collectionId string
 	mergeTs      *common.TsVbuuid
+	numVBuckets  int
 
 	allowMarkFirstSnap bool
 	keyspaceInRecovery bool
@@ -583,6 +585,10 @@ func (m *MsgStreamUpdate) GetMergeTs() *common.TsVbuuid {
 	return m.mergeTs
 }
 
+func (m *MsgStreamUpdate) GetNumVBuckets() int {
+	return m.numVBuckets
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -597,6 +603,9 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
 	str += fmt.Sprintf("\n\tEnableOSO: %v", m.enableOSO)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
+	if m.numVBuckets != 0 {
+		str += fmt.Sprintf("\n\tNumVBuckets: %v", m.numVBuckets)
+	}
 	return str
 
 }
@@ -1735,6 +1744,18 @@ func (m *MsgTKInitBuildDone) GetFlushTs() *common.TsVbuuid {
 
 func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
 	return m.sessionId
+}
+
+type MsgUpdateNumVbuckets struct {
+	bucketNameNumVBucketsMap map[string]int
+}
+
+func (m *MsgUpdateNumVbuckets) GetMsgType() MsgType {
+	return UPDATE_NUMVBUCKETS
+}
+
+func (m *MsgUpdateNumVbuckets) GetBucketNameNumVBucketsMap() map[string]int {
+	return m.bucketNameNumVBucketsMap
 }
 
 type MsgIndexSnapRequest struct {

@@ -42,6 +42,7 @@ type TsVbuuid struct {
 	SnapAligned  bool
 	DisableAlign bool
 	OpenOSOSnap  bool
+	NumVBuckets  int
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -53,6 +54,7 @@ func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 		Vbuuids:      make([]uint64, numVbuckets),
 		ManifestUIDs: make([]string, numVbuckets),
 		Snapshots:    make([][2]uint64, numVbuckets),
+		NumVBuckets:  numVbuckets,
 	}
 	ts.SetEpochManifestUIDIfEmpty()
 	return ts
@@ -67,24 +69,49 @@ func NewTsVbuuid2(bucket string, seqnos, vbuuids []uint64) *TsVbuuid {
 	}
 }
 
-func newTsVbuuid() interface{} {
+func newTsVbuuid(numVbuckets int) interface{} {
 	ts := &TsVbuuid{
 		Bucket:       "",
-		Seqnos:       make([]uint64, NUM_VBUCKETS),
-		Vbuuids:      make([]uint64, NUM_VBUCKETS),
-		ManifestUIDs: make([]string, NUM_VBUCKETS),
-		Snapshots:    make([][2]uint64, NUM_VBUCKETS),
+		Seqnos:       make([]uint64, numVbuckets),
+		Vbuuids:      make([]uint64, numVbuckets),
+		ManifestUIDs: make([]string, numVbuckets),
+		Snapshots:    make([][2]uint64, numVbuckets),
+		NumVBuckets:  numVbuckets,
 	}
 	ts.SetEpochManifestUIDIfEmpty()
 	return ts
 }
 
-var tsVbuuidPool = sync.Pool{New: newTsVbuuid}
-var NUM_VBUCKETS int
+// TODO Elixir - Convert the below lock implementation to lockless one using holder object and making an atomic update
+// Map of sync.Pool per numVBuckets
+var tsVbuuidPoolMap struct {
+	tsMap map[int]sync.Pool // NumVBuckets can range from 16 to 1024
+	sync.RWMutex
+}
+
+func init() {
+	tsVbuuidPoolMap.tsMap = make(map[int]sync.Pool)
+}
 
 func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 
-	NUM_VBUCKETS = numVbuckets
+	tsVbuuidPoolMap.RLock()
+	defer tsVbuuidPoolMap.RUnlock()
+
+	tsVbuuidPool, ok := tsVbuuidPoolMap.tsMap[numVbuckets]
+	if !ok {
+		tsVbuuidPoolMap.RUnlock()
+		func() {
+			tsVbuuidPoolMap.Lock()
+			defer tsVbuuidPoolMap.Unlock()
+
+			tsVbuuidPool = sync.Pool{New: func() interface{} {
+				return newTsVbuuid(numVbuckets)
+			}}
+			tsVbuuidPoolMap.tsMap[numVbuckets] = tsVbuuidPool
+		}()
+		tsVbuuidPoolMap.RLock()
+	}
 
 	ts := tsVbuuidPool.Get().(*TsVbuuid)
 
@@ -105,7 +132,13 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 }
 
 func (ts *TsVbuuid) Free() {
-	tsVbuuidPool.Put(ts)
+	tsVbuuidPoolMap.RLock()
+	defer tsVbuuidPoolMap.RUnlock()
+
+	tsVbuuidPool, ok := tsVbuuidPoolMap.tsMap[ts.NumVBuckets]
+	if ok {
+		tsVbuuidPool.Put(ts)
+	}
 }
 
 // GetVbnos will return the list of all vbnos.
@@ -340,6 +373,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs.ScopeId = ts.ScopeId
 	newTs.CollectionId = ts.CollectionId
 	newTs.OpenOSOSnap = ts.OpenOSOSnap
+	newTs.NumVBuckets = ts.NumVBuckets
 	return newTs
 }
 
@@ -356,6 +390,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	ts.ScopeId = src.ScopeId
 	ts.CollectionId = src.CollectionId
 	ts.OpenOSOSnap = src.OpenOSOSnap
+	ts.NumVBuckets = src.NumVBuckets
 }
 
 // Equal returns whether `ts` and `other` compare equal.

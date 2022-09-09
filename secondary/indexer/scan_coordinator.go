@@ -71,6 +71,8 @@ type scanCoordinator struct {
 	numDecodeErrors uint32       // Number of errors in collatejson decode.
 	cpuThrottle     *CpuThrottle // for Autofailover CPU throttling
 	meteringMgr     *MeteringThrottlingMgr
+
+	bucketNameNumVBucketsMapHolder common.BucketNameNumVBucketsMapHolder
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -100,6 +102,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	s.config.Store(config)
 	s.initRollbackInProgress()
 	s.lastSnapshot.Init()
+	s.bucketNameNumVBucketsMapHolder.Init()
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
@@ -234,6 +237,8 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case INDEXER_SECURITY_CHANGE:
 		s.handleSecurityChange(cmd)
 
+	case UPDATE_NUMVBUCKETS:
+		s.handleUpdateNumVBuckets(cmd)
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -748,7 +753,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 			}
 
 			seqnos, vbuuids, e := bucketSeqVbuuidsWithRetry(retries, s.logPrefix,
-				cluster, r.Bucket, cfg["numVbuckets"].Int())
+				cluster, r.Bucket)
 			if e != nil {
 				return nil, e
 			}
@@ -1050,6 +1055,17 @@ func (s *scanCoordinator) updateErrStats(req *ScanRequest, err error) {
 //
 /////////////////////////////////////////////////////////////////////////
 
+func (s *scanCoordinator) handleUpdateNumVBuckets(cmd Message) {
+	logging.Tracef("scanCoordinator::handleUpdateNumVBuckets %v", cmd)
+
+	req := cmd.(*MsgUpdateNumVbuckets)
+	bucketNameNumVBucketsMap := req.GetBucketNameNumVBucketsMap()
+
+	s.bucketNameNumVBucketsMapHolder.Set(bucketNameNumVBucketsMap)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
 func (s *scanCoordinator) handleStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
@@ -1065,6 +1081,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	// Compute counts asynchronously and reply to stats request
 	go func() {
 		for id, idxStats := range stats.indexes {
+
 			err := s.updateItemsCount(id, idxStats)
 			if err != nil {
 				logging.Errorf("%v: Unable to compute index items_count for %v/%v/%v state %v (%v)", s.logPrefix,
@@ -1519,7 +1536,7 @@ func (s *scanCoordinator) isBootstrapMode() bool {
 	return s.getIndexerState() == common.INDEXER_BOOTSTRAP
 }
 
-func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs int, cid string, useBucketSeqnos bool) (seqnos []uint64, err error) {
+func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, cid string, useBucketSeqnos bool) (seqnos []uint64, err error) {
 	fn := func(r int, err error) error {
 		if r > 0 {
 			logging.Errorf("%s BucketSeqnos(%s): failed with error (%v)...Retrying (%d)",
@@ -1531,9 +1548,10 @@ func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs 
 			seqnos, err = common.GetSeqnos(cluster, "default", bucket, cid)
 		}
 
-		if err == nil && len(seqnos) < numVbs {
-			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)
-		}
+		// Commenting this check as this is already done in BucketSeqnos and GetSeqnos
+		// if err == nil && len(seqnos) < numVbs {
+		// 	return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)
+		// }
 
 		return err
 	}
@@ -1544,7 +1562,7 @@ func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs 
 }
 
 func bucketSeqVbuuidsWithRetry(retries int, logPrefix, cluster,
-	bucket string, numVbs int) (seqnos, vbuuids []uint64, err error) {
+	bucket string) (seqnos, vbuuids []uint64, err error) {
 	fn := func(r int, err error) error {
 		if r > 0 {
 			logging.Errorf("%s BucketTs(%s): failed with error (%v)...Retrying (%d)",
@@ -1557,13 +1575,15 @@ func bucketSeqVbuuidsWithRetry(retries int, logPrefix, cluster,
 		}
 		defer b.Close()
 
-		seqnos, vbuuids, err = common.BucketTs(b, numVbs)
+		numVBuckets := b.NumVBuckets
+
+		seqnos, vbuuids, err = common.BucketTs(b, numVBuckets)
 		if err != nil {
 			return err
 		}
 
-		if err == nil && len(seqnos) < numVbs {
-			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)
+		if err == nil && len(seqnos) < numVBuckets {
+			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVBuckets)
 		}
 
 		return err

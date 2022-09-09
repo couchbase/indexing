@@ -366,6 +366,10 @@ func (ctxt *perfContext) Credentials() *auth.Credentials {
 	return nil
 }
 
+func (ctxt *perfContext) SkipKey(key string) bool {
+	return false
+}
+
 func (ctxt *perfContext) GetReqDeadline() time.Time {
 	return time.Time{}
 }

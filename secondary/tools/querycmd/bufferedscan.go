@@ -209,6 +209,10 @@ func (ctxt *qcmdContext) RecordKvRU(ru tenant.Unit) {
 func (ctxt *qcmdContext) RecordKvWU(wu tenant.Unit) {
 }
 
+func (ctxt *qcmdContext) SkipKey(key string) bool {
+	return false
+}
+
 func (ctxt *qcmdContext) Credentials() *auth.Credentials {
 	return nil
 }

@@ -451,7 +451,6 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 
 	hwt := make(map[string]*common.TsVbuuid)
 	prevSnap := make(map[string]*common.TsVbuuid)
-	numVbuckets := r.config["numVbuckets"].Int()
 
 	var hwtOSOMap map[string]*common.TsVbuuid
 	var hwtOSO *common.TsVbuuid
@@ -459,15 +458,16 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 	sent := false
 
 	r.queueMapLock.RLock()
-	for keyspaceId := range r.keyspaceIdQueueMap {
+	for keyspaceId, q := range r.keyspaceIdQueueMap {
+		numVBuckets := int(q.queue.GetNumVbuckets())
 		//actual TS uses bucket as keyspaceId
-		hwt[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
-		prevSnap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+		hwt[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVBuckets)
+		prevSnap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVBuckets)
 		if r.keyspaceIdEnableOSO[keyspaceId] {
 			if hwtOSOMap == nil {
 				hwtOSOMap = make(map[string]*common.TsVbuuid)
 			}
-			hwtOSOMap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+			hwtOSOMap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVBuckets)
 		}
 	}
 
@@ -495,7 +495,8 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 			vb := 0
 			for {
 				vb = loopCnt*nWrkr + i
-				if vb < numVbuckets {
+				numVBuckets := int(r.keyspaceIdQueueMap[keyspaceId].queue.GetNumVbuckets())
+				if vb < numVBuckets {
 
 					filter := r.streamWorkers[i].keyspaceIdFilter[keyspaceId]
 					filterOSO := r.streamWorkers[i].keyspaceIdFilterOSO[keyspaceId]

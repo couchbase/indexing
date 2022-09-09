@@ -123,6 +123,8 @@ type indexer struct {
 	streamKeyspaceIdPendStart          map[common.StreamId]map[string]bool
 	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
 
+	bucketNameNumVBucketsMap map[string]int
+
 	keyspaceIdRollbackTimes map[string]int64
 
 	keyspaceIdBuildTs map[string]Timestamp
@@ -318,6 +320,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		buildTsLock:                        make(map[common.StreamId]map[string]*sync.Mutex),
 		keyspaceIdRollbackTimes:            make(map[string]int64),
 		keyspaceIdCreateClientChMap:        make(map[string]MsgChannel),
+		bucketNameNumVBucketsMap:           make(map[string]int),
 
 		activeKVNodes: make(map[string]bool),
 
@@ -381,7 +384,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.stats = NewIndexerStats()
 	idx.initFromConfig()
 
-	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
+	logging.Infof("Indexer::NewIndexer done initializing from config")
 
 	useCInfoLite := idx.config["use_cinfo_lite"].Bool()
 	idx.cinfoProvider, err = common.NewClusterInfoProvider(useCInfoLite, clusterAddr,
@@ -2613,6 +2616,7 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 
 	inst.State = common.INDEX_STATE_DELETED
 	idx.indexInstMap[inst.InstId] = inst
+	deletedInstBucketNames := []string{inst.Defn.Bucket}
 
 	// Remove the inst
 	delete(idx.indexInstMap, inst.InstId)
@@ -2630,6 +2634,8 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
 	}
+
+	idx.updateBucketNameNumVBucketsMap(deletedInstBucketNames)
 }
 
 //
@@ -3084,7 +3090,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		collectionId := inst.Defn.CollectionId
 
 		cluster := idx.config["clusterAddr"].String()
-		numVbuckets := idx.config["numVbuckets"].Int()
+		numVBuckets := idx.bucketNameNumVBucketsMap[inst.Defn.Bucket]
 
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
@@ -3095,7 +3101,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		reqcid := idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, collectionId, clusterVer)
 
-		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVbuckets)
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
 				idx.config["clusterAddr"].String(), err)
@@ -3153,7 +3159,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		//send Stream Update to workers
 		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId,
-			reqcid, clusterVer, buildTs, clientCh)
+			reqcid, clusterVer, buildTs, clientCh, numVBuckets)
 
 		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
 
@@ -4223,8 +4229,9 @@ func (idx *indexer) initRecoveryForOSO(streamId common.StreamId,
 		"Initiate Recovery.", streamId, keyspaceId, sessionId)
 
 	//create zero ts for rollback to 0
-	numVbuckets := idx.config["numVbuckets"].Int()
-	restartTs := common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+	bucketName := GetBucketFromKeyspaceId(keyspaceId)
+	numVbuckets := idx.bucketNameNumVBucketsMap[bucketName]
+	restartTs := common.NewTsVbuuid(bucketName, numVbuckets)
 
 	idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 		streamId:   streamId,
@@ -4476,11 +4483,13 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 	idx.deleteFromInstsPerCollMap(indexInsts)
 	// Delete all instances from internal maps
 	var indexInstIds []common.IndexInstId
+	var deletedInstBucketNames []string
 	idxPartnInfoMap := make(map[common.IndexInstId]PartitionInstMap, len(indexInsts))
 	for _, indexInst := range indexInsts {
 		indexInstId := indexInst.InstId
 		indexInstIds = append(indexInstIds, indexInstId)
 		idxPartnInfoMap[indexInstId] = idx.indexPartnMap[indexInstId] // to-be-deleted metadata needed below
+		deletedInstBucketNames = append(deletedInstBucketNames, indexInst.Defn.Bucket)
 
 		delete(idx.indexInstMap, indexInstId)
 		delete(idx.indexPartnMap, indexInstId)
@@ -4526,6 +4535,30 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 				}
 			}
 		}
+	}
+
+	idx.updateBucketNameNumVBucketsMap(deletedInstBucketNames)
+}
+
+func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []string) {
+	bucketNameNumVBucketsMap := make(map[string]int)
+	for _, inst := range idx.indexInstMap {
+		if _, ok := bucketNameNumVBucketsMap[inst.Defn.Bucket]; !ok {
+			bucketNameNumVBucketsMap[inst.Defn.Bucket] = idx.bucketNameNumVBucketsMap[inst.Defn.Bucket]
+		}
+	}
+
+	anyBucketRemoved := false
+	for _, bucketName := range deletedInstBucketNames {
+		if _, ok := bucketNameNumVBucketsMap[bucketName]; !ok {
+			anyBucketRemoved = true
+			break
+		}
+	}
+
+	if anyBucketRemoved {
+		idx.bucketNameNumVBucketsMap = bucketNameNumVBucketsMap
+		idx.sendBucketNameNumVBucketsMap()
 	}
 }
 
@@ -4701,8 +4734,8 @@ func (idx *indexer) Shutdown() Message {
 // in the particular case of an index build. (startKeyspaceIdStream does this for
 // all other cases.)
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
-	buildStream common.StreamId, keyspaceId string, cid string,
-	clusterVer uint64, buildTs Timestamp, clientCh MsgChannel) {
+	buildStream common.StreamId, keyspaceId string, cid string, clusterVer uint64,
+	buildTs Timestamp, clientCh MsgChannel, numVBuckets int) {
 
 	var cmd Message
 	var indexList []common.IndexInst
@@ -4716,7 +4749,6 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	respCh := make(MsgChannel)
 
 	clustAddr := idx.config["clusterAddr"].String()
-	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
@@ -4757,7 +4789,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		sessionId:          sessionId,
 		collectionId:       cid,
 		collectionAware:    collectionAware,
-		enableOSO:          enableOSO}
+		enableOSO:          enableOSO,
+		numVBuckets:        numVBuckets,
+	}
 
 	// Create the corresponding KeyspaceStats object before starting the stream
 	idx.stats.AddKeyspaceStats(buildStream, keyspaceId)
@@ -4824,7 +4858,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//if there is a failover after this, it will be observed as a rollback
 
 					// Asyncronously compute the KV timestamp
-					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream, mutex)
+					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVBuckets, buildStream, mutex)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
 						streamId:   buildStream,
@@ -5133,6 +5167,26 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 }
 
+func (idx *indexer) sendBucketNameNumVBucketsMap() {
+
+	getMessage := func() *MsgUpdateNumVbuckets {
+		bucketNameNumVBucketsMap := make(map[string]int)
+		for b, nvb := range idx.bucketNameNumVBucketsMap {
+			bucketNameNumVBucketsMap[b] = nvb
+		}
+		msg := &MsgUpdateNumVbuckets{
+			bucketNameNumVBucketsMap: bucketNameNumVBucketsMap,
+		}
+		return msg
+	}
+
+	idx.storageMgrCmdCh <- getMessage()
+	<-idx.storageMgrCmdCh
+
+	idx.scanCoordCmdCh <- getMessage()
+	<-idx.scanCoordCmdCh
+}
+
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool) (PartitionInstMap, PartitionInstMap, error) {
 
@@ -5154,22 +5208,48 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		//add a single slice per partition for now
 		var slice Slice
-		idx.cinfoProviderLock.RLock()
-		ephemeral, err := idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
-		idx.cinfoProviderLock.RUnlock()
+		var err error
+		var ephemeral bool
+		var numVBuckets int
+
+		func() {
+			idx.cinfoProviderLock.RLock()
+			defer idx.cinfoProviderLock.RUnlock()
+
+			ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+			if err != nil {
+				logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
+				return
+			}
+
+			var ok bool
+			if numVBuckets, ok = idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket]; !ok {
+				numVBuckets, err = idx.cinfoProvider.GetNumVBuckets(indexInst.Defn.Bucket)
+				if err != nil {
+					logging.Errorf("Indexer::initPartnInstance Failed to get numVBuckets: %v\n", err)
+					return
+				}
+				idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket] = numVBuckets
+				idx.sendBucketNameNumVBucketsMap()
+			}
+		}()
 		if err != nil {
-			logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
-		} else {
-			slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase, idx.meteringMgr)
+			errStr := fmt.Sprintf("Error getting cluster info for creating slice %v", err)
+			err1 := errors.New(errStr)
+
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err1,
+						category: INDEXER}}
+			}
+			return nil, nil, err1
 		}
 
-		if err == nil {
-			partnInst.Sc.AddSlice(0, slice)
-			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
-				indexInst.InstId, slice)
-
-			partnInstMap[partnDefn.GetPartitionId()] = partnInst
-		} else {
+		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
+			idx.meteringMgr, numVBuckets)
+		if err != nil {
 			if bootstrapPhase && err == errStorageCorrupted {
 				errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
 				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
@@ -5190,6 +5270,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			}
 			return nil, nil, err1
 		}
+
+		partnInst.Sc.AddSlice(0, slice)
+		logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
+			indexInst.InstId, slice)
+
+		partnInstMap[partnDefn.GetPartitionId()] = partnInst
 	}
 
 	return partnInstMap, failedPartnInstances, nil
@@ -5734,13 +5820,16 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 
 	//use bucket as keyspaceId for MAINT_STREAM
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	numVBuckets := idx.bucketNameNumVBucketsMap[bucket]
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
-		streamId:   common.MAINT_STREAM,
-		keyspaceId: bucket,
-		indexList:  indexList,
-		respCh:     respCh,
-		stopCh:     stopCh,
-		sessionId:  sessionId}
+		streamId:    common.MAINT_STREAM,
+		keyspaceId:  bucket,
+		indexList:   indexList,
+		respCh:      respCh,
+		stopCh:      stopCh,
+		sessionId:   sessionId,
+		numVBuckets: numVBuckets,
+	}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
@@ -6555,7 +6644,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	}
 
 	clustAddr := idx.config["clusterAddr"].String()
-	numVb := idx.config["numVbuckets"].Int()
+	numVBuckets := idx.bucketNameNumVBucketsMap[GetBucketFromKeyspaceId(keyspaceId)]
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
 	idx.cinfoProviderLock.RLock()
@@ -6625,7 +6714,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		sessionId:          sessionId,
 		collectionId:       cid,
 		collectionAware:    collectionAware,
-		enableOSO:          enableOSO}
+		enableOSO:          enableOSO,
+		numVBuckets:        numVBuckets,
+	}
 
 	//For recovery of INIT_STREAM, send the stored mergeTs to timekeeper.
 	//If indexes are in Catchup state, it will be used for merging to MAINT_STREAM.
@@ -6739,7 +6830,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 					if streamId == common.INIT_STREAM {
 						// Asyncronously compute the KV timestamp
-						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId, mutex)
+						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVBuckets, streamId, mutex)
+
 					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
@@ -7550,6 +7642,7 @@ func (idx *indexer) initFromPersistedState() error {
 			idx.stats.RemoveIndexStats(inst)
 			delete(idx.indexInstMap, inst.InstId)
 			delete(idx.indexPartnMap, inst.InstId)
+			idx.updateBucketNameNumVBucketsMap([]string{inst.Defn.Bucket})
 			continue
 		}
 
@@ -8952,7 +9045,8 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats, ephemeral, isNew bool, meteringMgr *MeteringThrottlingMgr) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -8976,13 +9070,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId))
+			stats.GetPartitionStats(indInst.InstId, partitionId), numVBuckets)
 	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets)
 	}
 
 	return
@@ -9308,11 +9402,11 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 //which will keep trying till success as indexer cannot work
 //without a buildts.
 func computeKeyspaceBuildTs(clustAddr string, keyspaceId string,
-	cid string, numVb int) (buildTs Timestamp, err error) {
+	cid string, numVBuckets int) (buildTs Timestamp, err error) {
 
 kvtsloop:
 	for {
-		buildTs, err = GetCurrentKVTs(clustAddr, "default", keyspaceId, cid, numVb)
+		buildTs, err = GetCurrentKVTs(clustAddr, "default", keyspaceId, cid, numVBuckets)
 		//TODO Collections - handle the case when collection doesn't exist
 		if err != nil {
 			logging.Errorf("Indexer::computeKeyspaceBuildTs Error Fetching BuildTs %v", err)
