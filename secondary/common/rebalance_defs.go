@@ -316,6 +316,9 @@ type TransferToken struct {
 	// information is used to read the state of the sibling token to take
 	// an action of dropping the indexes in source subcluster
 	SiblingTokenId string
+	// shardId -> Location on S3 where the shard is uploaded
+	// shardPath is a sub-directory of "destination"
+	ShardPaths map[uint64]string
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is

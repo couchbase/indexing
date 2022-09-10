@@ -407,6 +407,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 			defer sr.mu.Unlock()
 
 			tt.ShardTransferTokenState = c.ShardTokenRestoreShard
+			tt.ShardPaths = shardPaths
 			setTransferTokenInMetakv(ttid, tt)
 			return
 
@@ -479,11 +480,79 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		// rebalance in such case
 		return true
 
+	case c.ShardTokenRestoreShard:
+		sr.updateInMemToken(ttid, tt, "dest")
+
+		go sr.startRestoreShard(ttid, tt)
+
+		return true
 	default:
 		return false
 	}
 
 	return false
+}
+
+func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
+	respCh := make(chan Message)                            // Carries final response of shard restore to rebalancer
+	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard restore to indexer
+
+	msg := &MsgStartShardRestore{
+		shardPaths:      tt.ShardPaths,
+		rebalanceId:     sr.rebalToken.RebalId,
+		transferTokenId: ttid,
+		destination:     tt.Destination,
+
+		cancelCh:   sr.cancel,
+		respCh:     respCh,
+		progressCh: progressCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	for {
+		select {
+		case respMsg := <-respCh:
+
+			msg := respMsg.(*MsgShardTransferResp)
+			errMap := msg.GetErrorMap()
+			shardPaths := msg.GetShardPaths()
+
+			for shardId, err := range errMap {
+				if err != nil {
+					// If there are any errors during restore, the restored data on local file system
+					// is cleaned by the destination node. The data on S3 will be cleaned by the rebalance
+					// source node. Rebalance source node is the only writer (insert/delete) of data on S3
+					l.Errorf("ShardRebalancer::startRestoreShard Observed error during trasfer"+
+						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, shardId, shardPaths, err)
+
+					// Invoke clean-up for all shards even if error is observed for one shard transfer
+					sr.initiateLocalShardCleanup(shardPaths)
+					return
+				}
+			}
+
+			// No errors are observed during shard transfer. Change the state of
+			// the transfer token and update metaKV
+			sr.mu.Lock()
+			defer sr.mu.Unlock()
+
+			tt.ShardTransferTokenState = c.ShardTokenRecoverShard
+			setTransferTokenInMetakv(ttid, tt)
+			return
+
+		case stats := <-progressCh:
+			sr.updateTransferStatistics(ttid, stats)
+			l.Infof("ShardRebalancer::startRestoreShard ShardId: %v bytesWritten: %v, totalBytes: %v, transferRate: %v",
+				stats.shardId, stats.bytesWritten, stats.totalBytes, stats.transferRate)
+		}
+	}
+}
+
+// Cleans-up the shard data from local file system
+func (sr *ShardRebalancer) initiateLocalShardCleanup(shardPaths map[uint64]string) {
+	// TODO: Add logic to clean-up shard data from local file system
 }
 
 func (sr *ShardRebalancer) doRebalance() {

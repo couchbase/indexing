@@ -156,7 +156,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	s.stm = NewShardTransferManager()
+	s.stm = NewShardTransferManager(s.config)
 
 	for i := 0; i < len(s.snapshotReqCh); i++ {
 		go s.listenSnapshotReqs(i)
@@ -252,6 +252,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case SHARD_TRANSFER_CLEANUP:
 		s.handleTransferCleanup(cmd)
+
+	case START_SHARD_RESTORE:
+		s.handleShardRestore(cmd)
 	}
 }
 
@@ -2341,6 +2344,12 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 
 func (s *storageMgr) handleTransferCleanup(cmd Message) {
 	go s.stm.processTransferCleanupMessage(cmd)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handleShardRestore(cmd Message) {
+	go s.stm.processShardRestoreMessage(cmd)
 
 	s.supvCmdch <- &MsgSuccess{}
 }

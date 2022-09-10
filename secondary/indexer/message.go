@@ -193,6 +193,7 @@ const (
 	START_SHARD_TRANSFER
 	SHARD_TRANSFER_RESPONSE
 	SHARD_TRANSFER_CLEANUP
+	START_SHARD_RESTORE
 )
 
 type Message interface {
@@ -2459,6 +2460,52 @@ func (m *MsgShardTransferCleanup) String() string {
 	return sbp.String()
 }
 
+type MsgStartShardRestore struct {
+	shardPaths      map[uint64]string
+	rebalanceId     string
+	transferTokenId string
+	destination     string
+
+	// The rebalance cancelCh shared with indexer to indicate
+	// any upstream cancellation of rebalance
+	cancelCh chan struct{}
+
+	progressCh chan *ShardTransferStatistics
+	respCh     chan Message
+}
+
+func (m *MsgStartShardRestore) GetMsgType() MsgType {
+	return START_SHARD_RESTORE
+}
+
+func (m *MsgStartShardRestore) GetShardPaths() map[uint64]string {
+	return m.shardPaths
+}
+
+func (m *MsgStartShardRestore) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgStartShardRestore) GetTransferTokenId() string {
+	return m.transferTokenId
+}
+
+func (m *MsgStartShardRestore) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgStartShardRestore) GetCancelCh() chan struct{} {
+	return m.cancelCh
+}
+
+func (m *MsgStartShardRestore) GetProgressCh() chan *ShardTransferStatistics {
+	return m.progressCh
+}
+
+func (m *MsgStartShardRestore) GetRespCh() chan Message {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -2757,6 +2804,8 @@ func (m MsgType) String() string {
 		return "SHARD_TRANSFER_RESPONSE"
 	case SHARD_TRANSFER_CLEANUP:
 		return "SHARD_TRANSFER_CLEANUP"
+	case START_SHARD_RESTORE:
+		return "START_SHARD_RESTORE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"
