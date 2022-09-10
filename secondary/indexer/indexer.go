@@ -1530,6 +1530,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case SHARD_TRANSFER_CLEANUP:
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))

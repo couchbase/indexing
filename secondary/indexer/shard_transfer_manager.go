@@ -23,8 +23,8 @@ func NewShardTransferManager() *ShardTransferManager {
 
 func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 
-	logging.Infof("ShardTransferManager::processShardTransferMessage Initiating command: %v", cmd)
 	msg := cmd.(*MsgStartShardTransfer)
+	logging.Infof("ShardTransferManager::processShardTransferMessage Initiating command: %v", msg)
 
 	shardIds := msg.GetShardIds()
 	rebalanceId := msg.GetRebalanceId()
@@ -69,6 +69,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 
 		mu.Lock()
 		defer mu.Unlock()
+
+		logging.Infof("ShardTransferManager::processShardTransferMessage doneCb invoked for shardId: %v, path: %v, err: %v", shardId, shardPath, err)
 
 		errMap[uint64(shardId)] = err
 		shardPaths[uint64(shardId)] = shardPath
@@ -155,4 +157,35 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		return
 	}
 
+}
+
+func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
+
+	msg := cmd.(*MsgShardTransferCleanup)
+	logging.Infof("ShardTransferManager::processTransferCleanupMessage Initiating command: %v", msg)
+
+	shardPaths := msg.GetShardPaths()
+	destination := msg.GetDestination()
+	rebalanceId := msg.GetRebalanceId()
+	ttid := msg.GetTransferTokenId()
+	respCh := msg.GetRespCh()
+
+	for shardId, shardPath := range shardPaths {
+		meta := make(map[string]interface{})
+		meta[plasma.GSIRebalanceId] = rebalanceId
+		meta[plasma.GSIRebalanceTransferToken] = ttid
+		meta[plasma.GSIShardID] = int64(shardId)
+		meta[plasma.GSIShardUploadPath] = shardPath
+
+		plasma.UnlockShard(plasma.ShardId(shardId))
+		err := plasma.DoCleanup(destination, meta)
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
+				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
+		}
+	}
+
+	logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards")
+	// Notify the caller that cleanup has been initiated for all shards
+	respCh <- true
 }

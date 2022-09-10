@@ -192,6 +192,7 @@ const (
 
 	START_SHARD_TRANSFER
 	SHARD_TRANSFER_RESPONSE
+	SHARD_TRANSFER_CLEANUP
 )
 
 type Message interface {
@@ -2415,6 +2416,49 @@ func (m *MsgShardTransferResp) GetShardPaths() map[uint64]string {
 	return m.shardPaths
 }
 
+type MsgShardTransferCleanup struct {
+	shardPaths      map[uint64]string // shardId -> Location of shard transfer
+	destination     string
+	rebalanceId     string
+	transferTokenId string
+	respCh          chan bool
+}
+
+func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
+	return SHARD_TRANSFER_CLEANUP
+}
+
+func (m *MsgShardTransferCleanup) GetShardPaths() map[uint64]string {
+	return m.shardPaths
+}
+
+func (m *MsgShardTransferCleanup) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgShardTransferCleanup) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgShardTransferCleanup) GetTransferTokenId() string {
+	return m.transferTokenId
+}
+
+func (m *MsgShardTransferCleanup) GetRespCh() chan bool {
+	return m.respCh
+}
+
+func (m *MsgShardTransferCleanup) String() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " ShardPaths: %v ", m.shardPaths)
+	fmt.Fprintf(sbp, " RebalanceId: %v ", m.rebalanceId)
+	fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferTokenId)
+
+	return sbp.String()
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -2711,6 +2755,8 @@ func (m MsgType) String() string {
 		return "START_SHARD_TRANSFER"
 	case SHARD_TRANSFER_RESPONSE:
 		return "SHARD_TRANSFER_RESPONSE"
+	case SHARD_TRANSFER_CLEANUP:
+		return "SHARD_TRANSFER_CLEANUP"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

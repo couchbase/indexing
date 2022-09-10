@@ -249,6 +249,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case START_SHARD_TRANSFER:
 		s.handleShardTransfer(cmd)
+
+	case SHARD_TRANSFER_CLEANUP:
+		s.handleTransferCleanup(cmd)
 	}
 }
 
@@ -2332,6 +2335,12 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 	// TODO: Add a configurable setting to enable or disable disk snapshotting
 	// of shards that are in transfesr
 	go s.stm.processShardTransferMessage(cmd)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handleTransferCleanup(cmd Message) {
+	go s.stm.processTransferCleanupMessage(cmd)
 
 	s.supvCmdch <- &MsgSuccess{}
 }

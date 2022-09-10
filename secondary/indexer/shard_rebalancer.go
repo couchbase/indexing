@@ -429,7 +429,25 @@ func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTra
 }
 
 func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]string, destination string, ttid string) {
-	// TODO: Add logic to initiate clean-up
+
+	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
+		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
+
+	respCh := make(chan bool)
+	msg := &MsgShardTransferCleanup{
+		shardPaths:      shardPaths,
+		destination:     destination,
+		rebalanceId:     sr.rebalToken.RebalId,
+		transferTokenId: ttid,
+		respCh:          respCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	<-respCh // Wait for response of clean-up
+
+	l.Infof("ShardRebalancer::initiateShardTransferCleanup Done clean-up for ttid: %v, "+
+		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
 }
 
 func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.TransferToken) bool {
