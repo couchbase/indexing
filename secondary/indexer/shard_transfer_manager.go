@@ -322,3 +322,23 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	}
 
 }
+
+func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
+
+	msg := cmd.(*MsgDestroyLocalShardData)
+	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage processing command: %v", msg)
+
+	shardIds := msg.GetShardIds()
+	respCh := msg.GetRespCh()
+
+	for _, shardId := range shardIds {
+		if err := plasma.DestroyShardID(plasma.ShardId(shardId)); err != nil {
+			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v from "+
+				"local file system, err: %v", shardId, err)
+		}
+	}
+
+	logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Done clean-up for shards: %v", shardIds)
+
+	respCh <- true
+}

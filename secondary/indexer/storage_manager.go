@@ -255,6 +255,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case START_SHARD_RESTORE:
 		s.handleShardRestore(cmd)
+
+	case DESTROY_LOCAL_SHARD:
+		s.handleDestroyLocalShard(cmd)
 	}
 }
 
@@ -2350,6 +2353,12 @@ func (s *storageMgr) handleTransferCleanup(cmd Message) {
 
 func (s *storageMgr) handleShardRestore(cmd Message) {
 	go s.stm.processShardRestoreMessage(cmd)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handleDestroyLocalShard(cmd Message) {
+	go s.stm.processDestroyLocalShardMessage(cmd)
 
 	s.supvCmdch <- &MsgSuccess{}
 }

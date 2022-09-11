@@ -1526,15 +1526,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_DROP_COLLECTION:
 		idx.handleDropCollection(msg)
 
-	case START_SHARD_TRANSFER:
-		idx.storageMgrCmdCh <- msg
-		<-idx.storageMgrCmdCh
+	case START_SHARD_TRANSFER,
+		SHARD_TRANSFER_CLEANUP,
+		START_SHARD_RESTORE,
+		DESTROY_LOCAL_SHARD:
 
-	case SHARD_TRANSFER_CLEANUP:
-		idx.storageMgrCmdCh <- msg
-		<-idx.storageMgrCmdCh
-
-	case START_SHARD_RESTORE:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 

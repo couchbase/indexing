@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -255,6 +256,19 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		return true
 	}
 
+	// Finish rebalance so that rebalance_service_manager will take care
+	// of initiating clean-up for other transfer tokens in the batch
+	//
+	// TODO: Update logic in rebalance service manager to clean-up on-going
+	// transfer tokens
+	if tt.Error != "" {
+		l.Errorf("Rebalancer::processShardTransferTokenAsMaster Detected TransferToken in Error state %v. Abort.", tt)
+
+		sr.cancelMetakv()
+		go sr.finishRebalance(errors.New(tt.Error))
+		return true
+	}
+
 	if !sr.checkValidNotifyState(ttid, tt, "master") {
 		return true
 	}
@@ -313,7 +327,6 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		return false
 	}
 
-	return false
 }
 
 func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.TransferToken) bool {
@@ -396,7 +409,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 						tt.Destination, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid)
+					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid, tt, err)
 					return
 				}
 			}
@@ -429,7 +442,8 @@ func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTra
 	sr.transferStats[ttid][stats.shardId] = stats
 }
 
-func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]string, destination string, ttid string) {
+func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]string,
+	destination string, ttid string, tt *c.TransferToken, err error) {
 
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
 		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
@@ -449,6 +463,12 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]st
 
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Done clean-up for ttid: %v, "+
 		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
+
+	// Update error in transfer token so that rebalance master
+	// will finish the rebalance and clean-up can be invoked for
+	// other transfer tokens in the batch depending on their state
+	sr.setTransferTokenError(ttid, tt, err.Error())
+
 }
 
 func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.TransferToken) bool {
@@ -528,7 +548,7 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 						tt.Destination, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateLocalShardCleanup(shardPaths)
+					sr.initiateLocalShardCleanup(ttid, shardPaths, tt, err)
 					return
 				}
 			}
@@ -551,8 +571,33 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 }
 
 // Cleans-up the shard data from local file system
-func (sr *ShardRebalancer) initiateLocalShardCleanup(shardPaths map[uint64]string) {
-	// TODO: Add logic to clean-up shard data from local file system
+func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map[uint64]string,
+	tt *c.TransferToken, err error) {
+
+	l.Infof("ShardRebalancer::initiateLocalShardCleanup Initiating clean-up on local file "+
+		"system for ttid: %v, shards: %v ", ttid, shardPaths)
+
+	shardIds := make([]uint64, 0)
+	for shardId, _ := range shardPaths {
+		shardIds = append(shardIds, shardId)
+	}
+
+	respCh := make(chan bool)
+
+	msg := &MsgDestroyLocalShardData{
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	// Wait for response
+	<-respCh
+
+	// Update error in transfer token so that rebalance master
+	// will finish the rebalance and clean-up can be invoked for
+	// other transfer tokens in the batch depending on their state
+	sr.setTransferTokenError(ttid, tt, err.Error())
 }
 
 func (sr *ShardRebalancer) doRebalance() {

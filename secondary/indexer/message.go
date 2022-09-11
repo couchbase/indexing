@@ -194,6 +194,7 @@ const (
 	SHARD_TRANSFER_RESPONSE
 	SHARD_TRANSFER_CLEANUP
 	START_SHARD_RESTORE
+	DESTROY_LOCAL_SHARD
 )
 
 type Message interface {
@@ -2506,6 +2507,23 @@ func (m *MsgStartShardRestore) GetRespCh() chan Message {
 	return m.respCh
 }
 
+type MsgDestroyLocalShardData struct {
+	shardIds []uint64 // shardId -> Location of shard transfer
+	respCh   chan bool
+}
+
+func (m *MsgDestroyLocalShardData) GetMsgType() MsgType {
+	return DESTROY_LOCAL_SHARD
+}
+
+func (m *MsgDestroyLocalShardData) GetShardIds() []uint64 {
+	return m.shardIds
+}
+
+func (m *MsgDestroyLocalShardData) GetRespCh() chan bool {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -2806,6 +2824,8 @@ func (m MsgType) String() string {
 		return "SHARD_TRANSFER_CLEANUP"
 	case START_SHARD_RESTORE:
 		return "START_SHARD_RESTORE"
+	case DESTROY_LOCAL_SHARD:
+		return "DESTROY_LOCAL_SHARD"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"
