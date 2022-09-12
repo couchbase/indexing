@@ -158,9 +158,10 @@ perl -pi -e 's/num_files, 10/num_files, 50/' $WORKSPACE/install/etc/couchbase/st
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
 gover="`grep -A20 'TARGET indexer PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\([0-9]\.[0-9]*.[0-9]\).*$/\1/'`"
+golatest="`ls $HOME/.cbdepscache/exploded/x86_64/ | grep $gover | tail -1`"
 
 mkdir -p "$WORKSPACE/go"
-export GOROOT=$HOME/.cbdepscache/exploded/x86_64/go-$gover/go
+export GOROOT=$HOME/.cbdepscache/exploded/x86_64/$golatest/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
 export PATH=$PATH:$GOROOT/bin
 export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include
