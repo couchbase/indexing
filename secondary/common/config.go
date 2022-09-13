@@ -3307,9 +3307,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.serverless.maxDiskUsagePerShard": ConfigValue{
-		uint64(math.MaxUint64),
+		uint64(math.MaxInt64),
 		"Maximum disk usage per shard for serverless",
-		uint64(math.MaxUint64),
+		uint64(math.MaxInt64),
 		false,
 		false,
 	},
