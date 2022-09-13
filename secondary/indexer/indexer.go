@@ -9025,6 +9025,9 @@ func (idx *indexer) handleStats(cmd Message) {
 	idx.stats.memoryUsed.Set(int64(used))
 	idx.stats.memoryTotalStorage.Set(int64(storage))
 	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
+	//set plasma mandatory quota as memoryUsedActual. This is the min
+	//memory required by plasma to keep indexes at 10% RR.
+	idx.stats.memoryUsedActual.Set(plasma.TenantQuotaNeeded())
 
 	idx.updateStatsFromMemStats()
 

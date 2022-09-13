@@ -21,6 +21,10 @@ func MemoryInUse() int64 {
 	return 0
 }
 
+func TenantQuotaNeeded() int64 {
+	return 0
+}
+
 func (d *StubType) HandleHttp(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "not implemented")
 }

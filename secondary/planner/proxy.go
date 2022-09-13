@@ -504,6 +504,10 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			indexer.ActualRSS = uint64(memRSS.(float64))
 		}
 
+		if mandatoryQuota, ok := statsMap["memory_used_actual"]; ok {
+			indexer.MandatoryQuota = uint64(mandatoryQuota.(float64))
+		}
+
 		// uptime
 		var elapsed uint64
 		if uptimeStat, ok := statsMap["uptime"]; ok {

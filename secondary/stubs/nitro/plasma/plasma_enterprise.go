@@ -19,3 +19,7 @@ func SetLogReclaimBlockSize(sz int64) {
 func MemoryInUse() int64 {
 	return ee.MemoryInUse()
 }
+
+func TenantQuotaNeeded() int64 {
+	return ee.TenantQuotaNeeded()
+}

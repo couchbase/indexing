@@ -193,6 +193,7 @@ type IndexerNode struct {
 	ActualMemMin      uint64  `json:"actualMemMin"`
 	ActualRSS         uint64  `json:"actualRSS"`
 	ActualUnits       uint64  `json:"actualUnits"`
+	MandatoryQuota    uint64  `json:"mandatoryQuota"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
@@ -1884,7 +1885,7 @@ func (s *Solution) moveIndex2(source *IndexerNode, idx *IndexUsage, target *Inde
 //
 func (s *Solution) addIndex2(n *IndexerNode, idx *IndexUsage) {
 	n.Indexes = append(n.Indexes, idx)
-	n.ActualRSS += idx.ActualMemUsage
+	n.MandatoryQuota += idx.ActualMemUsage
 	n.ActualUnits += idx.ActualUnitsUsage
 }
 
@@ -1898,7 +1899,7 @@ func (s *Solution) removeIndex2(n *IndexerNode, i int) {
 	} else {
 		n.Indexes = n.Indexes[:i]
 	}
-	n.ActualRSS -= idx.ActualMemUsage
+	n.MandatoryQuota -= idx.ActualMemUsage
 	n.ActualUnits -= idx.ActualUnitsUsage
 }
 

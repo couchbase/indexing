@@ -1812,7 +1812,7 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 		var subcluster SubCluster
 
 		logging.Infof("Planner::executeTenantAwareRebal Index Node %v SG %v Memory %v Units %v", node.NodeId,
-			node.ServerGroup, node.ActualRSS, node.ActualUnits)
+			node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
 
 		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
 			continue
@@ -1915,8 +1915,8 @@ func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 
 	for _, subCluster := range subClusters {
 		for _, indexer := range subCluster {
-			if leastLoad == 0 || indexer.ActualRSS < leastLoad {
-				leastLoad = indexer.ActualRSS
+			if leastLoad == 0 || indexer.MandatoryQuota < leastLoad {
+				leastLoad = indexer.MandatoryQuota
 				result = subCluster
 			}
 			break
@@ -1962,7 +1962,7 @@ func findSubClustersBelowLowThreshold(subClusters []SubCluster,
 		for _, indexNode := range subCluster {
 			//all nodes in the sub-cluster need to satisfy the condition
 			found = true
-			if indexNode.ActualRSS >=
+			if indexNode.MandatoryQuota >=
 				(uint64(usageThreshold.MemLowThreshold)*memQuota)/100 {
 				found = false
 				break
@@ -1996,7 +1996,7 @@ func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 		found = true
 		for _, indexNode := range subCluster {
 			//all nodes in the sub-cluster need to satisfy the condition
-			if indexNode.ActualRSS >
+			if indexNode.MandatoryQuota >
 				(uint64(usageThreshold.MemHighThreshold)*memQuota)/100 {
 				found = false
 				break
@@ -2933,7 +2933,7 @@ func findSubClusterAboveHighThreshold(subClusters []SubCluster,
 			//if any node in the subCluster is above HWM,
 			//it is considered above HWM
 			found = false
-			if indexNode.ActualRSS >
+			if indexNode.MandatoryQuota >
 				(uint64(usageThreshold.MemHighThreshold)*memQuota)/100 {
 				found = true
 				break
@@ -2986,8 +2986,8 @@ func findTenantsToMoveOutFromSubCluster(subCluster SubCluster,
 	//TODO Elixir What if the highestUsageNode doesn't have enough units usage to move
 	//unitsToBeMoved
 	for _, indexNode := range subCluster {
-		if indexNode.ActualRSS > maxMemoryUsage {
-			maxMemoryUsage = indexNode.ActualRSS
+		if indexNode.MandatoryQuota > maxMemoryUsage {
+			maxMemoryUsage = indexNode.MandatoryQuota
 			highestUsageNode = indexNode
 		}
 		if indexNode.ActualUnits > maxUnitsUsage {
@@ -3255,7 +3255,7 @@ func checkIfTenantCanBePlacedOnTarget(tenant *TenantUsage, target SubCluster, us
 	for _, indexerNode := range target {
 		lowThresholdMemoryUsage := (uint64(usageThreshold.MemLowThreshold) * memQuota) / 100
 
-		if indexerNode.ActualRSS+memoryToBeAdded > lowThresholdMemoryUsage {
+		if indexerNode.MandatoryQuota+memoryToBeAdded > lowThresholdMemoryUsage {
 			return false
 		}
 
@@ -3317,7 +3317,7 @@ func updateTargetSubClusterUsage(subCluster SubCluster, tenant *TenantUsage) {
 
 	//update the target subCluster statistics
 	for _, indexerNode := range subCluster {
-		indexerNode.ActualRSS += tenant.MemoryUsage
+		indexerNode.MandatoryQuota += tenant.MemoryUsage
 		indexerNode.ActualUnits += tenant.UnitsUsage
 	}
 }
@@ -3327,10 +3327,10 @@ func updateTargetSubClusterUsage(subCluster SubCluster, tenant *TenantUsage) {
 func updateSourceSubClusterUsage(source SubCluster, tenant *TenantUsage) {
 
 	for _, indexerNode := range source {
-		if tenant.MemoryUsage < indexerNode.ActualRSS {
-			indexerNode.ActualRSS -= tenant.MemoryUsage
+		if tenant.MemoryUsage < indexerNode.MandatoryQuota {
+			indexerNode.MandatoryQuota -= tenant.MemoryUsage
 		} else {
-			indexerNode.ActualRSS = 0
+			indexerNode.MandatoryQuota = 0
 		}
 
 		if tenant.UnitsUsage < indexerNode.ActualUnits {
@@ -3349,8 +3349,8 @@ func sortSubClustersByMemUsage(subClustersBelowLWM []SubCluster) []SubCluster {
 
 		var maxMem uint64
 		for _, indexerNode := range subCluster {
-			if indexerNode.ActualRSS > maxMem {
-				maxMem = indexerNode.ActualRSS
+			if indexerNode.MandatoryQuota > maxMem {
+				maxMem = indexerNode.MandatoryQuota
 			}
 		}
 		return maxMem
