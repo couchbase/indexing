@@ -62,6 +62,7 @@ const (
 	OPCODE_BOOTSTRAP_STATS_UPDATE                   = OPCODE_INVALID_COLLECTION + 1
 	OPCODE_AUTH_REQUEST                             = OPCODE_BOOTSTRAP_STATS_UPDATE + 1
 	OPCODE_AUTH_RESPONSE                            = OPCODE_AUTH_REQUEST + 1
+	OPCODE_CREATE_RECOVER_INDEX_REBAL               = OPCODE_AUTH_RESPONSE + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -136,14 +137,16 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_AUTH_REQUEST"
 	case OPCODE_AUTH_RESPONSE:
 		return "OPCODE_AUTH_RESPONSE"
+	case OPCODE_CREATE_RECOVER_INDEX_REBAL:
+		return "OPCODE_CREATE_RECOVER_INDEX_REBAL"
 	}
 
 	return fmt.Sprintf("%v", op)
 }
 
-/////////////////////////////////////////////////////////////////////////
+// ///////////////////////////////////////////////////////////////////////
 // Client Response Messages
-/////////////////////////////////////////////////////////////////////////
+// ///////////////////////////////////////////////////////////////////////
 var RespAnotherIndexCreation = "Another index creation is in progress"
 var RespRebalanceRunning = "Rebalance is running"
 var RespDuplicateIndex = "Duplicate index exists"

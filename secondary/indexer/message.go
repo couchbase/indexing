@@ -107,6 +107,7 @@ const (
 	CLUST_MGR_CLEANUP_PARTITION
 	CLUST_MGR_MERGE_PARTITION
 	CLUST_MGR_PRUNE_PARTITION
+	CLUST_MGR_RECOVER_INDEX
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -141,6 +142,7 @@ const (
 	INDEXER_SECURITY_CHANGE
 	INDEXER_RESET_INDEX_DONE
 	INDEXER_ACTIVE
+	INDEXER_INST_RECOVERY_RESPONSE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -1052,6 +1054,68 @@ func (m *MsgCreateIndex) GetRequestCtx() *common.MetadataRequestContext {
 func (m *MsgCreateIndex) GetString() string {
 
 	str := "\n\tMessage: MsgCreateIndex"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
+	return str
+}
+
+type MsgRecoverIndex struct {
+	mType     MsgType
+	indexInst common.IndexInst
+	respCh    MsgChannel
+	reqCtx    *common.MetadataRequestContext
+}
+
+func (m *MsgRecoverIndex) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgRecoverIndex) GetIndexInst() common.IndexInst {
+	return m.indexInst
+}
+
+func (m *MsgRecoverIndex) GetResponseChannel() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgRecoverIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
+}
+
+func (m *MsgRecoverIndex) GetString() string {
+
+	str := "\n\tMessage: MsgRecoverIndex"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
+	return str
+}
+
+type MsgRecoverIndexResp struct {
+	mType        MsgType
+	indexInst    common.IndexInst
+	partnInstMap PartitionInstMap
+	respCh       MsgChannel
+}
+
+func (m *MsgRecoverIndexResp) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgRecoverIndexResp) GetIndexInst() common.IndexInst {
+	return m.indexInst
+}
+
+func (m *MsgRecoverIndexResp) GetPartnInstMap() PartitionInstMap {
+	return m.partnInstMap
+}
+
+func (m *MsgRecoverIndexResp) GetRespCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgRecoverIndexResp) GetString() string {
+
+	str := "\n\tMessage: MsgRecoverIndex"
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
 	return str
@@ -2757,6 +2821,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_RESET_INDEX_ON_UPGRADE"
 	case CLUST_MGR_RESET_INDEX_ON_ROLLBACK:
 		return "CLUST_MGR_RESET_INDEX_ON_ROLLBACK"
+	case CLUST_MGR_RECOVER_INDEX:
+		return "CLUST_MGR_RECOVER_INDEX"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"

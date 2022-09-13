@@ -503,6 +503,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleCleanupIndexFromInvalidKeyspace(key)
 	case client.OPCODE_CREATE_INDEX_REBAL:
 		err = m.handleCreateIndexScheduledBuild(key, content, common.NewRebalanceRequestContext())
+	case client.OPCODE_CREATE_RECOVER_INDEX_REBAL:
+		err = m.handleCreateIndexDeferBuild(key, content, common.NewShardRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
 		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_DROP_INDEX_REBAL:
@@ -571,9 +573,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 // Atomic Create Index
 //-----------------------------------------------------------
 
-//
 // Prepare create index
-//
 func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) {
 
 	prepareCreateIndex, err := client.UnmarshallPrepareCreateRequest(content)
@@ -658,12 +658,10 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	return nil, fmt.Errorf("Unknown operation %v for prepare create index", prepareCreateIndex.Op)
 }
 
-//
 // Following function takes a prepare create request as input and returns
 // a boolean value base on the priority of the current in-progress request
 // and the new incoming request. Returns true if the new incoming request
 // has higher priority than the current in-progress request.
-//
 func (m *LifecycleMgr) isHigherPriorityRequest(req *client.PrepareCreateRequest) bool {
 	if m.prepareLock == nil {
 		return true
@@ -705,9 +703,7 @@ func (m *LifecycleMgr) isHigherPriorityRequest(req *client.PrepareCreateRequest)
 	return false
 }
 
-//
 // handle Commit operation
-//
 func (m *LifecycleMgr) handleCommit(content []byte) ([]byte, error) {
 
 	commit, err := client.UnmarshallCommitCreateRequest(content)
@@ -733,9 +729,7 @@ func (m *LifecycleMgr) handleCommit(content []byte) ([]byte, error) {
 	return nil, fmt.Errorf("Unknown operation %v", commit.Op)
 }
 
-//
 // Commit create index
-//
 func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitCreateRequest) ([]byte, error) {
 
 	if m.prepareLock == nil {
@@ -807,7 +801,6 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 	return msg, err
 }
 
-//
 // Check for duplicate index name; returns true if duplicate index exists
 //
 // This function checks if an index with same name/keyspace is either
@@ -829,7 +822,6 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 //
 // In case of lock timeout, the new request will forcefully hold the lock and
 // the older request will fail to release the lock during commit phase.
-//
 func (m *LifecycleMgr) checkDuplicateIndex(req *client.PrepareCreateRequest) (exists bool, err error) {
 
 	key := fmt.Sprintf("%v:%v:%v:%v", req.Bucket, req.Scope, req.Collection, req.Name)
@@ -933,9 +925,7 @@ loop:
 	return fmt.Sprintf("the index name lock is not acquired by defnId %v", commitCreateIndex.DefnId)
 }
 
-//
 // Notify rebalance running
-//
 func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 
 	if m.prepareLock != nil {
@@ -946,9 +936,7 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 	return nil
 }
 
-//
 // Process commit token
-//
 func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 	layout map[common.IndexerId][]common.IndexDefn, asyncCreate bool) (bool, string, string, string, error) {
 
@@ -1019,9 +1007,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 // Atomic Alter Index
 //-----------------------------------------------------------
 
-//
 // Commit add replica
-//
 func (m *LifecycleMgr) handleCommitAddReplica(commitRequest *client.CommitCreateRequest) ([]byte, error) {
 
 	if common.GetBuildMode() != common.ENTERPRISE {
@@ -1094,9 +1080,7 @@ func (m *LifecycleMgr) handleCommitAddReplica(commitRequest *client.CommitCreate
 	return msg, err
 }
 
-//
 // Process commit token for add replica index
-//
 func (m *LifecycleMgr) processAddReplicaCommitToken(defnId common.IndexDefnId, layout map[common.IndexerId][]common.IndexDefn) (bool,
 	*common.Counter, string, string, string, error) {
 
@@ -1125,9 +1109,7 @@ func (m *LifecycleMgr) processAddReplicaCommitToken(defnId common.IndexDefnId, l
 	return false, nil, "", "", "", nil
 }
 
-//
 // Commit remove replica
-//
 func (m *LifecycleMgr) handleCommitDropReplica(commitRequest *client.CommitCreateRequest) ([]byte, error) {
 
 	if common.GetBuildMode() != common.ENTERPRISE {
@@ -1206,9 +1188,7 @@ func (m *LifecycleMgr) handleCommitDropReplica(commitRequest *client.CommitCreat
 	return msg, err
 }
 
-//
 // handle updating replica count
-//
 func (m *LifecycleMgr) handleUpdateReplicaCount(content []byte) error {
 
 	defn, err := common.UnmarshallIndexDefn(content)
@@ -1253,9 +1233,7 @@ func (m *LifecycleMgr) updateIndexReplicaCount(defnId common.IndexDefnId, numRep
 	return nil
 }
 
-//
 // handle retrieve index replica count
-//
 func (m *LifecycleMgr) handleGetIndexReplicaCount(content []byte) ([]byte, error) {
 
 	var defnId common.IndexDefnId
@@ -1290,9 +1268,7 @@ func (m *LifecycleMgr) handleGetIndexReplicaCount(content []byte) ([]byte, error
 	return result, nil
 }
 
-//
 // handle check for tokens
-//
 func (m *LifecycleMgr) handleCheckTokenExist(content []byte) ([]byte, error) {
 
 	checkToken, err := client.UnmarshallChecKToken(content)
@@ -1495,11 +1471,25 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// 1) Index Definition is not deleted due to error from metadata repository.   The index will be repaired
 	//    during indexer bootstrap or implicit dropIndex.
 	// 2) Index definition is deleted.  This effectively "delete index".
+	//
+	// For shard based rebalance, indexer would create the index metadata and also
+	// recover the indexed data from disk. The OnIndexRecover method will only create
+	// index metadata and spawn an asyncronous go-routine to recover the data from disk.
+	// Once the data recovery is done, then the state of the index instance will be
+	// updated to INDEX_STATE_RECOVERED
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
-			logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
-			m.DeleteIndex(defn.DefnId, false, false, nil)
-			return err
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
+				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
+				m.DeleteIndex(defn.DefnId, false, false, nil)
+				return err
+			}
+		} else {
+			if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
+				logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
+				m.DeleteIndex(defn.DefnId, false, false, nil)
+				return err
+			}
 		}
 	}
 
@@ -1507,23 +1497,47 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// Update Index State
 	/////////////////////////////////////////////////////
 
-	// If cannot move the index to READY state, then abort create index by cleaning up the metadata.
-	// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
-	// the index definition from repository. If drop index is not successful during cleanup,
-	// the index will be repaired upon bootstrap or cleanup by janitor.
-	if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
-		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
-		m.DeleteIndex(defn.DefnId, true, false, reqCtx)
-		return err
-	}
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		// Move index state to INDEX_STATE_RECOVERED. If indexer were to crash before making this state
+		// change, then bootstrap will cleanup the index instance as the index will be in state CREATED
+		// with RState as REBAL_PENDING. If indexer crashes after changing the state, then bootstrap will
+		// cleanup the index as rebalance will have failed due to indexer crash and the index movement
+		// is no longer valid
 
-	instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
-	if instState != common.INDEX_STATE_READY {
-		logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
-			"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
-		err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
-			defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_READY)
-		return err
+		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_RECOVERED); err != nil {
+			logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
+			m.DeleteIndex(defn.DefnId, true, false, reqCtx)
+			return err
+		}
+
+		instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
+		if instState != common.INDEX_STATE_RECOVERED {
+			logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_RECOVERED. Instance: %v (%v, %v, %v, %v). "+
+				"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
+			err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_RECOVERED)
+			return err
+		}
+
+	} else {
+		// If cannot move the index to READY state, then abort create index by cleaning up the metadata.
+		// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
+		// the index definition from repository. If drop index is not successful during cleanup,
+		// the index will be repaired upon bootstrap or cleanup by janitor.
+		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
+			logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
+			m.DeleteIndex(defn.DefnId, true, false, reqCtx)
+			return err
+		}
+
+		instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
+		if instState != common.INDEX_STATE_READY {
+			logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
+				"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
+			err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_READY)
+			return err
+		}
 	}
 	/////////////////////////////////////////////////////
 	// Build Index
@@ -1990,12 +2004,12 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 }
 
 // buildIndexesLifecycleMgr builds the set of indexes specified by "defnIds". Return values:
-//   1. retryErrList -- decorated errors from failed build attempts that WILL be retried
-//   2. skipList -- index defnIds not built and not retried because their metadata could not be found
-//   3. errList -- decorated errors from failed build attempts that will NOT be retried
-//   4. errMap -- undecorated error strings by instId from Indexer for entries in retryErrList and errList;
-//      messages added here for failures in skipList since Indexer was never called for these
-//      (and the keys for these will be defnId instead of instId as we don't have the latter)
+//  1. retryErrList -- decorated errors from failed build attempts that WILL be retried
+//  2. skipList -- index defnIds not built and not retried because their metadata could not be found
+//  3. errList -- decorated errors from failed build attempts that will NOT be retried
+//  4. errMap -- undecorated error strings by instId from Indexer for entries in retryErrList and errList;
+//     messages added here for failures in skipList since Indexer was never called for these
+//     (and the keys for these will be defnId instead of instId as we don't have the latter)
 func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	reqCtx *common.MetadataRequestContext, isRebal bool) (
 	retryErrList []error, skipList []common.IndexDefnId, errList []error, errMap map[common.IndexInstId]string) {
@@ -2345,10 +2359,8 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 // Delete Bucket
 //-----------------------------------------------------------
 
-//
 // Indexer will crash if this function returns an error.
 // On bootstap, it will retry deleting the bucket again.
-//
 func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 
 	result := error(nil)
@@ -2588,9 +2600,7 @@ func (m *LifecycleMgr) deleteCreateTokenForCollection(bucket, scope, collection 
 // Cleanup Index from invalid keyspace
 //-----------------------------------------------------------
 
-//
 // Cleanup any deferred and active MAINT_STREAM indexes from invalid keyspace.
-//
 func (m *LifecycleMgr) handleCleanupIndexFromInvalidKeyspace(keyspace string) error {
 	bucket, scope, collection := SplitKeyspaceId(keyspace)
 
@@ -2848,9 +2858,9 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 	return indexStats2
 }
 
-//-----------------------------------------------------------
+// -----------------------------------------------------------
 // Client Stats
-//-----------------------------------------------------------
+// -----------------------------------------------------------
 func (m *LifecycleMgr) handleClientStats(content []byte) ([]byte, error) {
 	m.clientStatsMutex.Lock()
 	defer m.clientStatsMutex.Unlock()
@@ -3304,7 +3314,6 @@ func (m *LifecycleMgr) handleDeleteOrPruneIndexInstance(content []byte, reqCtx *
 	return m.DeleteOrPruneIndexInstance(change.Defn, change.Notify, change.UpdateStatusOnly, change.DeletedOnly, reqCtx)
 }
 
-//
 // DeleteOrPruneIndexInstance either delete index, delete instance or prune instance, depending on metadata state and
 // given index definition.   This operation is idempotent.   Caller (e.g. rebalancer) can retry this operation until
 // successful.    If this operation returns successfully, it means that
@@ -3321,7 +3330,6 @@ func (m *LifecycleMgr) handleDeleteOrPruneIndexInstance(content []byte, reqCtx *
 //
 // For projector, stream operation is serialized.  So stream request for new index cannot proceed until the delete request
 // has processed.
-//
 func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, notify bool, updateStatusOnly bool, deletedOnly bool,
 	reqCtx *common.MetadataRequestContext) error {
 
@@ -3665,13 +3673,11 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
 
-//
 // A proxy can be
 // 1) index instance that yet to be merged.  If a proxy has been merged, it will be removed from metadata.
 // 2) A DELETED instance that contains the partitions already pruned.   This proxy is only used for crash recovery.
 //
 // This function will only return proxy belong to (1)
-//
 func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
 	defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
 
@@ -4002,7 +4008,6 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
 // This function returns an error if it cannot connect for fetching bucket info.
 // It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
-//
 func (m *LifecycleMgr) getBucketUUID(bucket string, retry bool) (string, error) {
 	m.cinfoProviderLock.RLock()
 	defer m.cinfoProviderLock.RUnlock()
@@ -4027,7 +4032,6 @@ RETRY:
 
 // This function returns an error if it cannot connect for fetching manifest info.
 // It returns COLLECTION_ID_NIL (err == nil) if collection does not exist.
-//
 func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string, retry bool) (string, error) {
 	m.cinfoProviderLock.RLock()
 	defer m.cinfoProviderLock.RUnlock()
@@ -4060,7 +4064,6 @@ RETRY:
 
 // This function returns an error if it cannot connect for fetching manifest info.
 // It returns SCOPE_ID_NIL (err == nil) if scope does not exist.
-//
 func (m *LifecycleMgr) getScopeID(bucket, scope string) (string, error) {
 	m.cinfoProviderLock.RLock()
 	defer m.cinfoProviderLock.RUnlock()
@@ -4092,7 +4095,6 @@ RETRY:
 // This function returns an error if it cannot connect for fetching manifest info.
 // It returns SCOPE_ID_NIL, COLLECTION_ID_NIL (err == nil) if scope, collection does
 // not exist.
-//
 func (m *LifecycleMgr) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
 	m.cinfoProviderLock.RLock()
 	defer m.cinfoProviderLock.RUnlock()
@@ -4126,7 +4128,6 @@ RETRY:
 // 1) Bucket exists
 // 2) Existing Index Definition matches the UUID of existing bucket
 // 3) If bucket does not exist AND there is no existing definition, this returns common.BUCKET_UUID_NIL
-//
 func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 
 	// If this function returns an error, then it cannot fetch bucket UUID.
@@ -4178,7 +4179,6 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 // 2) Existing Index Definition matches the UUID of existing Scope and Collection
 // 3) If scope does not exist AND there is no existing definition in scope, this returns SCOPE_ID_NIL
 // 4) If collection does not exist AND there is no existing definition in collection, this returns COLLECTION_ID_NIL
-//
 func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string) (string, string, error) {
 
 	scopeID, collectionID, err := m.getScopeAndCollectionID(bucket, scope, collection)
@@ -4254,10 +4254,8 @@ func extractDefnIdInstIdReplicaString(entries map[string]*mc.DropInstanceCommand
 	return dataStrList
 }
 
-//
 // 1) This is important that this function does not mutate the repository directly.
 // 2) Any call to mutate the repository must be async request.
-//
 func (m *janitor) cleanup() {
 
 	// if rebalancing is running

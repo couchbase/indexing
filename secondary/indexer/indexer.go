@@ -1534,6 +1534,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case INDEXER_INST_RECOVERY_RESPONSE:
+		idx.handleInstRecoveryResponse(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -1773,6 +1776,11 @@ func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 			respCh: respCh}
 		<-respCh // Wait for response
 		common.CrashOnError(err.cause)
+
+	case CLUST_MGR_RECOVER_INDEX:
+
+		idx.handleRecoverIndex(msg)
+		resp = &MsgSuccess{}
 
 	default:
 		logging.Errorf("Indexer::handleAdminMsgs Unknown Message %+v", msg)
@@ -2029,6 +2037,231 @@ func (idx *indexer) isAllowedEphemeral(bucket string) (bool, string, error) {
 	}
 
 	return true, "", nil
+}
+
+func (idx *indexer) handleRecoverIndex(msg Message) {
+
+	indexInst := msg.(*MsgRecoverIndex).GetIndexInst()
+	clientCh := msg.(*MsgRecoverIndex).GetResponseChannel()
+	logging.Infof("Indexer::handleRecoverIndex %v", indexInst)
+
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
+
+	is := idx.getIndexerState()
+	if is != common.INDEXER_ACTIVE {
+
+		errStr := fmt.Sprintf("Indexer Cannot Process Create Index In %v State", is)
+		logging.Errorf("Indexer::handleRecoverIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_NOT_ACTIVE,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
+	var ephemeral, valid bool
+	var err error
+
+	func() {
+		idx.cinfoProviderLock.RLock()
+		defer idx.cinfoProviderLock.RUnlock()
+
+		valid = idx.cinfoProvider.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID})
+		if valid {
+			ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+		}
+	}()
+
+	if !valid {
+		logging.Errorf("Indexer::handleRecoverIndex Bucket %v Not Found")
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_UNKNOWN_BUCKET,
+					severity: FATAL,
+					cause:    ErrUnknownBucket,
+					category: INDEXER}}
+
+		}
+		return
+	}
+
+	if err != nil {
+		errStr := fmt.Sprintf("Cannot Query Bucket Type of %v", indexInst.Defn.Bucket)
+		logging.Errorf("Indexer::handleRecoverIndex %v", errStr)
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
+	if ephemeral {
+		allowed, reason, err := idx.isAllowedEphemeral(indexInst.Defn.Bucket)
+		if err != nil {
+			errStr := fmt.Sprintf("Cannot check if index creation is allowed on ephemeral bucket %v. Error %v",
+				indexInst.Defn.Bucket, err)
+
+			logging.Errorf("Indexer::handleRecoverIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER,
+					},
+				}
+			}
+
+			return
+		}
+
+		if !allowed {
+			logging.Errorf("Indexer::handleRecoverIndex %v", reason)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_BUCKET_EPHEMERAL_STD,
+						severity: FATAL,
+						cause:    ErrBucketEphemeralStd,
+						category: INDEXER,
+					},
+				}
+			}
+
+			return
+		}
+	}
+
+	if idx.rebalanceRunning || idx.rebalanceToken != nil {
+		reqCtx := msg.(*MsgRecoverIndex).GetRequestCtx()
+		if reqCtx.ReqSource != common.DDLRequestSourceShardRebalance {
+			errStr := fmt.Sprintf("Indexer Cannot Process recover Index - Shard Rebalance is Not In Progress")
+			logging.Errorf("Indexer::handleRecoverIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_SHARD_REBALANCE_NOT_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return
+		}
+	}
+
+	//check if this is duplicate index instance
+	if ok := idx.checkDuplicateIndex(indexInst, clientCh); !ok {
+		return
+	}
+
+	//validate storage mode with using specified in CreateIndex
+	if common.GetStorageMode() == common.NOT_SET {
+		errStr := "Please Set Indexer Storage Mode Before Create Index"
+		logging.Errorf(errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+		}
+		return
+	} else {
+		if common.IndexTypeToStorageMode(indexInst.Defn.Using) != common.GetStorageMode() {
+
+			errStr := fmt.Sprintf("Cannot Create Index with Using %v. Indexer "+
+				"Storage Mode %v", indexInst.Defn.Using, common.GetStorageMode())
+
+			logging.Errorf(errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+			}
+			return
+		}
+	}
+
+	partitions := indexInst.Pc.GetAllPartitions()
+	for _, partnDefn := range partitions {
+		idx.stats.AddPartitionStats(indexInst, partnDefn.GetPartitionId())
+	}
+
+	go func() {
+		//allocate partition/slice
+		partnInstMap, _, err := idx.initPartnInstance(indexInst, clientCh, false)
+		// In case of nil error, send a message to indexer to add this instance
+		// to the index instance map. Otherwise, dont do anything as the error
+		// must have been passed via clientCh to the caller
+		if err == nil {
+			logging.Infof("Indexer::handleRecoverIndex Sending message to indexer "+
+				"on successful recovery of inst: %v", indexInst.InstId)
+			idx.internalRecvCh <- &MsgRecoverIndexResp{
+				mType:        INDEXER_INST_RECOVERY_RESPONSE,
+				indexInst:    indexInst,
+				partnInstMap: partnInstMap,
+				respCh:       clientCh,
+			}
+		} else {
+			logging.Errorf("Indexer::handleRecoverIndex Encountered error during "+
+				"initilization of instance, err: %v", err)
+		}
+		return
+	}()
+}
+
+func (idx *indexer) handleInstRecoveryResponse(msg Message) {
+	indexInst := msg.(*MsgRecoverIndexResp).GetIndexInst()
+	partnInstMap := msg.(*MsgRecoverIndexResp).GetPartnInstMap()
+	clientCh := msg.(*MsgRecoverIndexResp).GetRespCh()
+
+	logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received for instId: %v", indexInst.InstId)
+	// update rollback time for the bucket
+	if _, ok := idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket]; !ok {
+		idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
+	}
+
+	// For in-memory bookkeeping
+	indexInst.State = common.INDEX_STATE_RECOVERED
+
+	//update index maps with this index
+	idx.indexInstMap[indexInst.InstId] = indexInst
+	idx.indexPartnMap[indexInst.InstId] = partnInstMap
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
+
+	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+	msgUpdateIndexPartnMap.SetUpdatedPartnMap(partnInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    err,
+					category: INDEXER}}
+		}
+		common.CrashOnError(err)
+	}
+
+	clientCh <- &MsgSuccess{}
+
 }
 
 func (idx *indexer) handleCancelMergePartition(msg Message) {
