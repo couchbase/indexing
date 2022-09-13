@@ -4,7 +4,7 @@
          "nodeId":"127.0.0.1:9001",
          "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg1",
-         "actualRSS":0
+         "mandatoryQuota":0
       }
    ],
    "isLive":true,

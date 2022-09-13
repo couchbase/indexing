@@ -4,7 +4,7 @@
          "nodeId":"127.0.0.1:9001",
          "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg1",
-         "actualRSS":300000000,
+         "mandatoryQuota":300000000,
 	 "actualUnits":1000,
          "indexes": [
                 {
@@ -22,7 +22,7 @@
          "nodeId":"127.0.0.1:9002",
          "nodeUUID":"abc15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg2",
-         "actualRSS":300000000,
+         "mandatoryQuota":300000000,
 	 "actualUnits":1000,
          "indexes": [
                 {
@@ -40,14 +40,14 @@
          "nodeId":"127.0.0.1:9003",
          "nodeUUID":"def15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg1",
-         "actualRSS":300000000,
+         "mandatoryQuota":300000000,
 	 "actualUnits":1000
       },
       {
          "nodeId":"127.0.0.1:9004",
          "nodeUUID":"zzz15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg3",
-         "actualRSS":300000000,
+         "mandatoryQuota":300000000,
 	 "actualUnits":1000
       }
    ],

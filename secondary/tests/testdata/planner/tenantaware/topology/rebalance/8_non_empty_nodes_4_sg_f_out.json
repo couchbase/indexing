@@ -4,7 +4,7 @@
          "nodeId":"127.0.0.1:9001",
          "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg1",
-         "actualRSS":600000000,
+         "mandatoryQuota":600000000,
 	 "actualUnits":4000,
          "indexes": [
                 {
@@ -35,7 +35,7 @@
          "nodeId":"127.0.0.1:9002",
          "nodeUUID":"abc15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg2",
-         "actualRSS":600000000,
+         "mandatoryQuota":600000000,
 	 "actualUnits":4000,
          "indexes": [
                 {
@@ -66,7 +66,7 @@
          "nodeId":"127.0.0.1:9003",
          "nodeUUID":"def15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg1",
-         "actualRSS":525000000,
+         "mandatoryQuota":525000000,
 	 "actualUnits":4000,
 	 "indexes": [
                 {
@@ -130,7 +130,7 @@
          "nodeId":"127.0.0.1:9004",
          "nodeUUID":"zzz15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg2",
-         "actualRSS":600000000,
+         "mandatoryQuota":600000000,
 	 "actualUnits":4000,
          "indexes": [
                 {
@@ -161,7 +161,7 @@
          "nodeId":"127.0.0.1:9005",
          "nodeUUID":"hhh15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg3",
-         "actualRSS":600000000,
+         "mandatoryQuota":600000000,
 	 "actualUnits":4000,
          "indexes": [
                 {
@@ -192,7 +192,7 @@
          "nodeId":"127.0.0.1:9006",
          "nodeUUID":"qqq5192216a984a53fc19de249e0ba4",
          "serverGroup":"sg3",
-         "actualRSS":525000000,
+         "mandatoryQuota":525000000,
 	 "actualUnits":4000,
 	 "indexes" : [
                 {
@@ -257,7 +257,7 @@
          "nodeId":"127.0.0.1:9007",
          "nodeUUID":"ppp15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg1",
-         "actualRSS":375000000,
+         "mandatoryQuota":375000000,
 	 "actualUnits":3100,
          "indexes": [
                 {
@@ -310,7 +310,7 @@
          "nodeId":"127.0.0.1:9008",
          "nodeUUID":"www15192216a984a53fc19de249e0ba4",
          "serverGroup":"sg2",
-         "actualRSS":375000000,
+         "mandatoryQuota":375000000,
 	 "actualUnits":3100,
          "indexes": [
                 {
