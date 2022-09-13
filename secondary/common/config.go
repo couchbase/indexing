@@ -3272,21 +3272,21 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.thresholds.mem_high": ConfigValue{
-		80,
+		70,
 		"Percentage of memory_quota usage above which Indexer node " +
 			"is considered to have maxed out the memory usage and needs " +
 			"additional capacity.",
-		80,
+		70,
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.settings.thresholds.mem_low": ConfigValue{
-		60,
+		50,
 		"Percentage of memory_quota usage above which Indexer node " +
 			"doesn't accept new create index except for existing tenants. " +
 			"The capacity between low and high threshold is for existing tenant growth.",
-		60,
+		50,
 		false, // mutable
 		false, // case-insensitive
 	},
