@@ -33,6 +33,7 @@ GET_FILENAME_COMPONENT (ZSTD_CPP_LIBRARY_DIR "${ZSTD_CPP_LIBRARIES}" DIRECTORY)
 
 SET(CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR};${sigar_SOURCE_DIR}/include;${Platform_SOURCE_DIR}/include;${CURL_INCLUDE_DIR};${ZSTD_CPP_INCLUDE_DIR}")
 SET(CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR};${sigar_BINARY_DIR}/src;${Platform_BINARY_DIR};${CURL_LIBRARY_DIR};${ZSTD_CPP_LIBRARY_DIR}")
+SET(DEPS sigar forestdb platform proto-generated n1ql-yacc)
 
 IF(NOT JEMALLOC_FOUND)
   MESSAGE (FATAL_ERROR "GSI requires jemalloc normally, but it was not found")
@@ -96,52 +97,47 @@ ADD_CUSTOM_TARGET(proto-generated DEPENDS
         ${QUERY_PBGO_FILES}
 )
 
-GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
-  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  DEPENDS sigar forestdb platform proto-generated n1ql-yacc
+GoModBuild (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
+  DEPENDS ${DEPS}
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT indexer
-  GOVERSION 1.18.4)
+  GOVERSION 1.18)
 
-GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
-  DEPENDS proto-generated n1ql-yacc sigar
-  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+GoModBuild (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
+  DEPENDS ${DEPS}
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.18.4)
+  GOVERSION 1.18)
 
-GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
-  DEPENDS proto-generated n1ql-yacc
-  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+GoModBuild (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
+  DEPENDS ${DEPS}
   GOTAGS "${TAGS}"
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.18.4)
+  GOVERSION 1.18)
 
-GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
-  DEPENDS proto-generated n1ql-yacc
-  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+GoModBuild (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
+  DEPENDS ${DEPS}
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.18.4)
+  GOVERSION 1.18)
 
-GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
-  DEPENDS n1ql-yacc forestdb
-  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+GoModBuild (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
+  DEPENDS ${DEPS}
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
-  GOVERSION 1.18.4)
+  GOVERSION 1.18)

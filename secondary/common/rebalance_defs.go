@@ -318,9 +318,13 @@ func (tt TransferToken) Clone() TransferToken {
 // that was created by the user as deferred (with {"defer_build":true}) and not yet built.
 // Rebalance will move the index metadata from source to dest but will NOT build these.
 // All deferred indexes have flag setting
-//   tt.IndexInst.Defn.Deferred == true
+//
+//	tt.IndexInst.Defn.Deferred == true
+//
 // User-deferred indexes additionally have state value
-//   tt.IndexInst.State == INDEX_STATE_READY
+//
+//	tt.IndexInst.State == INDEX_STATE_READY
+//
 // whereas system-deferred indexes have a different State (usually INDEX_STATE_ACTIVE).
 func (tt *TransferToken) IsUserDeferred() bool {
 	return tt.IndexInst.Defn.Deferred && tt.IndexInst.State == INDEX_STATE_READY
@@ -343,7 +347,7 @@ func (tt *TransferToken) String() string {
 	fmt.Fprintf(sbp, "RebalId: %v ", tt.RebalId)
 
 	if tt.IsShardTransferToken() {
-		fmt.Fprintf(sbp, "State: %v ", tt.ShardTransferTokenState)
+		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
 	} else {
 		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}

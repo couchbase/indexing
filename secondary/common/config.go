@@ -973,13 +973,6 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-	"indexer.numVbuckets": ConfigValue{
-		1024,
-		"Number of vbuckets",
-		1024,
-		true,  // immutable
-		false, // case-insensitive
-	},
 	"indexer.numPartitions": ConfigValue{
 		8,
 		"Number of vbuckets",
@@ -2917,6 +2910,13 @@ var SystemConfig = Config{
 		false,
 		false, // mutable
 		false, // case-interface
+	},
+	"indexer.rebalance.shard_aware_rebalance": ConfigValue{
+		false,
+		"use shard aware rebalance algorithm",
+		false,
+		false, // mutable
+		false, // case-insensitive
 	},
 	"indexer.rebalance.use_simple_planner": ConfigValue{
 		false,

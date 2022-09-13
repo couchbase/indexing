@@ -33,7 +33,6 @@ func main() {
 	fset := flag.NewFlagSet("indexer", flag.ContinueOnError)
 
 	logLevel := fset.String("loglevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
-	numVbuckets := fset.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
 	cluster := fset.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
 	adminPort := fset.String("adminPort", "9100", "Index ddl and status port")
 	scanPort := fset.String("scanPort", "9101", "Index scanner port")
@@ -112,7 +111,6 @@ func main() {
 
 	config := common.SystemConfig
 	config.SetValue("indexer.clusterAddr", *cluster)
-	config.SetValue("indexer.numVbuckets", *numVbuckets)
 	config.SetValue("indexer.enableManager", *enableManager)
 	config.SetValue("indexer.adminPort", *adminPort)
 	config.SetValue("indexer.scanPort", *scanPort)

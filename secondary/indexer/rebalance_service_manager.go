@@ -53,8 +53,8 @@ type RebalanceServiceManager struct {
 	waiters   waiters     // set of channels of states for go routines waiting for next state change
 	waitersMu *sync.Mutex // protects waiters field; may be taken *after* svcMgrMu mutex
 
-	rebalancer  *Rebalancer // runs the rebalance, failover, or index move
-	rebalancerF *Rebalancer // follower rebalancer handle
+	rebalancer  RebalanceProvider // runs the rebalance, failover, or index move
+	rebalancerF RebalanceProvider // follower rebalancer handle
 
 	rebalanceCtx *rebalanceContext
 	nodeInfo     *service.NodeInfo // never changes; info about the local node
@@ -239,8 +239,8 @@ func (m *RebalanceServiceManager) updateNodeList() {
 	l.Infof("%v Initialized with %v NodeUUIDs: %v", _updateNodeList, len(nodeList), nodeList)
 }
 
-//run starts the rebalance manager loop which listens to messages
-//from it supervisor(indexer)
+// run starts the rebalance manager loop which listens to messages
+// from it supervisor(indexer)
 func (m *RebalanceServiceManager) run() {
 
 	//main Rebalance Manager loop
@@ -376,8 +376,8 @@ func (m *RebalanceServiceManager) GetCurrentTopology(rev service.Revision,
 // to prepare for a rebalance or failover that will later be started by StartTopologyChange
 // on the rebalance/failover master indexer node.
 //
-//All errors need to be reported as return value. Status of prepared task is not
-//considered for failure reporting.
+// All errors need to be reported as return value. Status of prepared task is not
+// considered for failure reporting.
 func (m *RebalanceServiceManager) PrepareTopologyChange(change service.TopologyChange) error {
 	l.Infof("RebalanceServiceManager::PrepareTopologyChange %v", change)
 
@@ -667,6 +667,8 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	var skipRebalance bool
 	var transferTokens map[string]*c.TransferToken
 
+	cfg := m.config.Load()
+
 	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
 		err := errors.New("Node receiving Start request not part of cluster")
 		l.Errorf("RebalanceServiceManager::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
@@ -704,8 +706,6 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 			return err
 		}
 
-		cfg := m.config.Load()
-
 		if c.GetBuildMode() != c.ENTERPRISE {
 			l.Infof("RebalanceServiceManager::startRebalance skip planner for non-enterprise edition")
 			runPlanner = false
@@ -728,9 +728,18 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	m.rebalanceCtx = ctx
 	m.updateRebalanceProgressLOCKED(0)
 
-	m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-		m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
+	// TODO: Add a cluster version check
+	isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
+
+	if isShardAwareRebalance {
+		m.rebalancer = NewShardRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
+			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
+			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
+	} else {
+		m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
+			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
+			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
+	}
 
 	return nil
 }
@@ -1658,9 +1667,9 @@ func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken Rebalan
 }
 
 // runRebalanceCallback is a callback used by Rebalancer used for all of:
-//   1. Rebalance progress
-//   2. Rebalance done
-//   3. MoveIndex done
+//  1. Rebalance progress
+//  2. Rebalance done
+//  3. MoveIndex done
 func (m *RebalanceServiceManager) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 	done := make(chan struct{})
 	const method = "RebalanceServiceManager::runRebalanceCallback:" // for logging
@@ -2345,10 +2354,22 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 				return
 			}
 
-			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
-				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, &m.p,
-				m.genericMgr.statsMgr)
+			// TODO: Add a cluster version check
+			cfg := m.config.Load()
+			isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
+
+			if isShardAwareRebalance {
+				m.rebalancerF = NewShardRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
+					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
+					m.localhttp, m.config.Load(), nil, false, &m.p,
+					m.genericMgr.statsMgr)
+			} else {
+				m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
+					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
+					m.localhttp, m.config.Load(), nil, false, &m.p,
+					m.genericMgr.statsMgr)
+			}
+
 			m.writeOk(w)
 			return
 
