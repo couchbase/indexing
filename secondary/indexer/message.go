@@ -108,6 +108,7 @@ const (
 	CLUST_MGR_MERGE_PARTITION
 	CLUST_MGR_PRUNE_PARTITION
 	CLUST_MGR_RECOVER_INDEX
+	CLUST_MGR_BUILD_RECOVERED_INDEXES
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -1328,7 +1329,9 @@ func (m *MsgClustMgrPrunePartition) GetString() string {
 
 // INDEXER_CANCEL_MERGE_PARTITION
 // CLUST_MGR_BUILD_INDEX_DDL
+// CLUST_MGR_BUILD_RECOVERED_INDEXES
 type MsgBuildIndex struct {
+	mType         MsgType
 	indexInstList []common.IndexInstId
 	bucketList    []string
 	respCh        MsgChannel
@@ -1336,7 +1339,7 @@ type MsgBuildIndex struct {
 }
 
 func (m *MsgBuildIndex) GetMsgType() MsgType {
-	return CLUST_MGR_BUILD_INDEX_DDL
+	return m.mType
 }
 
 func (m *MsgBuildIndex) GetIndexList() []common.IndexInstId {
@@ -2823,6 +2826,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_RESET_INDEX_ON_ROLLBACK"
 	case CLUST_MGR_RECOVER_INDEX:
 		return "CLUST_MGR_RECOVER_INDEX"
+	case CLUST_MGR_BUILD_RECOVERED_INDEXES:
+		return "CLUST_MGR_BUILD_RECOVERED_INDEXES"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"

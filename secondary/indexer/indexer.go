@@ -1782,6 +1782,10 @@ func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 		idx.handleRecoverIndex(msg)
 		resp = &MsgSuccess{}
 
+	case CLUST_MGR_BUILD_RECOVERED_INDEXES:
+		idx.handleBuildRecoveredIndexes(msg)
+		resp = &MsgSuccess{}
+
 	default:
 		logging.Errorf("Indexer::handleAdminMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Admin Channel"))
@@ -1994,8 +1998,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		clientCh <- &MsgSuccess{}
 	} else {
 		//for cbq bridge, simulate build index
-		idx.handleBuildIndex(&MsgBuildIndex{indexInstList: []common.IndexInstId{indexInst.InstId},
-			respCh: clientCh})
+		idx.handleBuildIndex(
+			&MsgBuildIndex{
+				mType:         CLUST_MGR_BUILD_INDEX_DDL,
+				indexInstList: []common.IndexInstId{indexInst.InstId},
+				respCh:        clientCh})
 	}
 }
 
@@ -3276,7 +3283,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
-		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap)
+		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap, false)
 		if !ok {
 			logging.Errorf("Indexer::handleBuildIndex Invalid Index List "+
 				"KeyspaceId %v. Index in error %v.", keyspaceId, errMap)
@@ -3392,6 +3399,188 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			reqcid, clusterVer, buildTs, clientCh, numVBuckets)
 
 		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
+
+		//store updated state and streamId in meta store
+		if idx.enableManager {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true,
+				true, false, true, true, false, false, false, nil); err != nil {
+				common.CrashOnError(err)
+			}
+		} else {
+			idx.keyspaceIdCreateClientChMap[keyspaceId] = clientCh
+			return
+		}
+	}
+
+	if idx.enableManager {
+		clientCh <- &MsgBuildIndexResponse{errMap: errMap} // return instId-specific build errors to caller
+	} else {
+		clientCh <- &MsgSuccess{}
+	}
+}
+
+func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
+	instIdList := msg.(*MsgBuildIndex).GetIndexList()
+	clientCh := msg.(*MsgBuildIndex).GetRespCh()
+	logging.Infof("Indexer::handleBuildRecoveredIndexes %v", instIdList)
+
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
+
+	if len(instIdList) == 0 {
+		logging.Warnf("Indexer::handleBuildRecoveredIndexes Nothing To Build")
+		if clientCh != nil {
+			clientCh <- &MsgSuccess{}
+		}
+	}
+
+	is := idx.getIndexerState()
+	if is != common.INDEXER_ACTIVE {
+		errStr := fmt.Sprintf("Indexer Cannot Process Build Index In %v State", is)
+		logging.Errorf("Indexer::handleBuildRecoveredIndexes %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_NOT_ACTIVE,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
+	if idx.rebalanceRunning || idx.rebalanceToken != nil {
+		reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
+		if reqCtx.ReqSource != common.DDLRequestSourceShardRebalance {
+			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Request not from shard rebalancer")
+			logging.Errorf("Indexer::handleBuildRecoveredIndexes %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_SHARD_REBALANCE_NOT_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+			}
+			return
+		}
+	}
+
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	errMap := make(map[common.IndexInstId]error) // build errors by instId
+
+	for keyspaceId, instIdList := range keyspaceIdIndexList {
+		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap, true)
+		if !ok {
+			logging.Errorf("Indexer::handleBuildRecoveredIndexes Invalid Index List "+
+				"KeyspaceId %v. Index in error %v.", keyspaceId, errMap)
+			if idx.enableManager {
+				if len(instIdList) == 0 {
+					delete(keyspaceIdIndexList, keyspaceId)
+					continue
+				}
+			} else {
+				return
+			}
+		}
+
+		// Check if Initial Build is already running for this index's keyspace. Indexer does not support multiple
+		// builds on the same keyspace because the keyspaceId is used as a key to stream maps.
+		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
+			logging.Errorf("Indexer::handleBuildRecoveredIndexes Build Already In"+
+				" Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
+			if idx.enableManager {
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else {
+				return
+			}
+		}
+
+		// Limit the number of concurrent build streams.
+		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
+			maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
+			logging.Errorf("Indexer::handleBuildRecoveredIndexes Build is already in progress for %v collections."+
+				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, instIdList, keyspaceId)
+			if idx.enableManager {
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else {
+				return
+			}
+		}
+
+		//all indexes get built using INIT_STREAM
+		var buildStream common.StreamId = common.INIT_STREAM
+
+		if len(instIdList) != 0 {
+			keyspaceIdIndexList[keyspaceId] = instIdList
+		} else {
+			delete(keyspaceIdIndexList, keyspaceId)
+			continue
+		}
+
+		// TODO: Do not add deferred indexes to INIT_STREAM
+		// Filter instIdList based on build and non-build indexes
+		idx.bulkUpdateStream(instIdList, buildStream)
+
+		// Set the state of indexes to catchup as the indexed data is already
+		// recovered from disk
+		var buildState common.IndexState = common.INDEX_STATE_CATCHUP
+
+		idx.bulkUpdateState(instIdList, buildState)
+		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
+
+		logging.Infof("Indexer::handleBuildRecoveredIndexes Added Index: %v to Stream: %v State: %v",
+			instIdList, buildStream, buildState)
+
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+		updatedIndexes := idx.getInsts(instIdList)
+		msgUpdateIndexInstMap.AppendUpdatedInsts(updatedIndexes)
+
+		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err,
+						category: INDEXER}}
+			}
+			common.CrashOnError(err)
+		}
+
+		// Compute restartTs for allKeyspaceIds and extract the restartTs for
+		// this keyspaceId
+		allRestartTs, allNilSnaps := idx.makeRestartTs(common.INIT_STREAM)
+
+		idx.prepareStreamKeyspaceIdForFreshStart(common.INIT_STREAM, keyspaceId)
+
+		if restartTs, ok := allRestartTs[keyspaceId]; ok {
+			sessionId := idx.genNextSessionId(common.INIT_STREAM, keyspaceId)
+			idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, restartTs, nil, allNilSnaps,
+				false, false, sessionId)
+			idx.setStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId, STREAM_ACTIVE)
+		} else {
+			allKeyspaceIds := make([]string, 0)
+			for kid, _ := range allRestartTs {
+				allKeyspaceIds = append(allKeyspaceIds, kid)
+			}
+			err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
+				"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
+			logging.Errorf("Indexer::handleBuildRecoveredIndexes: err: %v", err)
+			// Not able to compute restartTs is an error
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err,
+						category: INDEXER}}
+			}
+			return
+		}
 
 		//store updated state and streamId in meta store
 		if idx.enableManager {
@@ -9067,7 +9256,8 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 
 	for _, instId := range instIdList {
 		idxInst := idx.indexInstMap[instId]
-		if reqCtx.ReqSource == common.DDLRequestSourceRebalance && idxInst.Version != 0 {
+		if (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+			reqCtx.ReqSource == common.DDLRequestSourceShardRebalance) && idxInst.Version != 0 {
 			idxInst.RState = common.REBAL_PENDING
 			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to PENDING", instId)
 		} else {
@@ -9136,7 +9326,7 @@ func (idx *indexer) checkKeyspaceIdInRecovery(keyspaceId string,
 }
 
 func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.IndexInstId,
-	clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
+	clientCh MsgChannel, errMap map[common.IndexInstId]error, isShardRebalanceBuild bool) ([]common.IndexInstId, bool) {
 
 	if len(instIdList) == 0 {
 		return instIdList, true
@@ -9160,6 +9350,16 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 						cause:    common.ErrIndexNotFound,
 						category: INDEXER}}
 				return instIdList, false
+			}
+		} else if isShardRebalanceBuild {
+			if index.State == common.INDEX_STATE_RECOVERED {
+				newList = append(newList, instId)
+				count++
+			} else {
+				errStr := fmt.Sprintf("Invalid Index State %v for %v In Build Request. "+
+					"Expected INDEX_STATE_RECOVERED", index.State, instId)
+				idx.updateError(instId, errStr)
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexInvalidState}
 			}
 		} else {
 

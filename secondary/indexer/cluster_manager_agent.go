@@ -822,10 +822,11 @@ func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
 
 	respCh := make(MsgChannel)
 
-	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
-		respCh:     respCh,
-		bucketList: buckets,
-		reqCtx:     reqCtx}
+	meta.adminCh <- &MsgBuildIndex{mType: CLUST_MGR_BUILD_INDEX_DDL,
+		indexInstList: indexInstList,
+		respCh:        respCh,
+		bucketList:    buckets,
+		reqCtx:        reqCtx}
 
 	//wait for response
 	if res, ok := <-respCh; ok {
@@ -859,6 +860,59 @@ func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
 	} else {
 
 		logging.Fatalf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
+			"for Create Index %v", indexInstList)
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+
+	return nil
+}
+
+func (meta *metaNotifier) OnRecoveredIndexBuild(indexInstList []common.IndexInstId,
+	buckets []string, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
+
+	logging.Infof("clustMgrAgent::OnRecoveredIndexBuild Notification "+
+		"Received for Build Index %v %v", indexInstList, reqCtx)
+
+	respCh := make(MsgChannel)
+
+	meta.adminCh <- &MsgBuildIndex{mType: CLUST_MGR_BUILD_RECOVERED_INDEXES,
+		indexInstList: indexInstList,
+		respCh:        respCh,
+		bucketList:    buckets,
+		reqCtx:        reqCtx}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case CLUST_MGR_BUILD_INDEX_DDL_RESPONSE:
+			errMap := res.(*MsgBuildIndexResponse).GetErrorMap()
+			logging.Infof("clustMgrAgent::OnRecoveredIndexBuild returns "+
+				"for Build Index %v", indexInstList)
+			return errMap
+
+		case MSG_ERROR:
+			logging.Errorf("clustMgrAgent::OnRecoveredIndexBuild Error "+
+				"for Build Index %v. Error %v.", indexInstList, res)
+			err := res.(*MsgError).GetError()
+			errMap := make(map[common.IndexInstId]error)
+			for _, instId := range indexInstList {
+				errMap[instId] = &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+			}
+
+			return errMap
+
+		default:
+			logging.Fatalf("clustMgrAgent::OnRecoveredIndexBuild Unknown Response "+
+				"Received for Build Index %v. Response %v", indexInstList, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+
+		logging.Fatalf("clustMgrAgent::OnRecoveredIndexBuild Unexpected Channel Close "+
 			"for Create Index %v", indexInstList)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}

@@ -507,6 +507,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleCreateIndexDeferBuild(key, content, common.NewShardRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
 		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
+	case client.OPCODE_BUILD_RECOVERED_INDEXES_REBAL:
+		err = m.handleBuildIndexes(content, common.NewShardRebalanceRequestContext())
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_RETRY:
@@ -2052,35 +2054,44 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 
+		isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 		for _, inst := range insts {
 
-			if inst.State != uint32(common.INDEX_STATE_READY) {
-				logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in ready state. Inst state: %v. Skip this index.",
-					inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
+			if isShardRebalanceBuild {
+				if inst.State != uint32(common.INDEX_STATE_RECOVERED) {
+					logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in recovered state. Inst state: %v. Skip this index.",
+						inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
+					continue
+				}
+			} else {
+				if inst.State != uint32(common.INDEX_STATE_READY) {
+					logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in ready state. Inst state: %v. Skip this index.",
+						inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
 
-				// Instance can exist in any state but not in INDEX_STATE_CREATED
-				// This code path can get executed only after an index is successfully created
-				// On a successful index creation, index state would be in INDEX_STATE_READY or higher
-				if inst.State == uint32(common.INDEX_STATE_CREATED) {
-					logging.Fatalf("LifecycleMgr.handleBuildIndexes: Index instance: %+v is in state: INDEX_STATE_CREATED", inst)
+					// Instance can exist in any state but not in INDEX_STATE_CREATED
+					// This code path can get executed only after an index is successfully created
+					// On a successful index creation, index state would be in INDEX_STATE_READY or higher
+					if inst.State == uint32(common.INDEX_STATE_CREATED) {
+						logging.Fatalf("LifecycleMgr.handleBuildIndexes: Index instance: %+v is in state: INDEX_STATE_CREATED", inst)
 
-					// It could be possible that the in-memory topoCache is corrupt(?) - a guess at this point
-					// Retrieve the topology directly from meta and log the instance to understand the state in meta store
-					topoFromMeta, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
-					if err == nil {
-						for i, _ := range topoFromMeta.Definitions {
-							if topoFromMeta.Definitions[i].DefnId == uint64(defn.DefnId) {
-								for j, _ := range topoFromMeta.Definitions[i].Instances {
-									if inst.InstId == topoFromMeta.Definitions[i].Instances[j].InstId {
-										logging.Fatalf("LifecycleMgr.handleBuildIndexes: Value of index instance: %+v in metastore", inst)
+						// It could be possible that the in-memory topoCache is corrupt(?) - a guess at this point
+						// Retrieve the topology directly from meta and log the instance to understand the state in meta store
+						topoFromMeta, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
+						if err == nil {
+							for i, _ := range topoFromMeta.Definitions {
+								if topoFromMeta.Definitions[i].DefnId == uint64(defn.DefnId) {
+									for j, _ := range topoFromMeta.Definitions[i].Instances {
+										if inst.InstId == topoFromMeta.Definitions[i].Instances[j].InstId {
+											logging.Fatalf("LifecycleMgr.handleBuildIndexes: Value of index instance: %+v in metastore", inst)
+										}
 									}
 								}
 							}
 						}
+						logging.Errorf("LifecycleMgr.handleBuildIndexes: Error while retrieving topology from meta, err: %v", err)
 					}
-					logging.Errorf("LifecycleMgr.handleBuildIndexes: Error while retrieving topology from meta, err: %v", err)
+					continue
 				}
-				continue
 			}
 
 			//Schedule the build
@@ -2111,8 +2122,14 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	}
 
 	if m.notifier != nil && len(instIdList) != 0 {
+		var errMap2 map[common.IndexInstId]error
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+			errMap2 = m.notifier.OnRecoveredIndexBuild(instIdList, buckets, reqCtx)
+		} else {
+			errMap2 = m.notifier.OnIndexBuild(instIdList, buckets, reqCtx)
+		}
 
-		if errMap2 := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx); len(errMap2) != 0 {
+		if len(errMap2) != 0 {
 			logging.Errorf("LifecycleMgr::handleBuildIndexes: received build errors for instIds %v", errMap2)
 
 			// Handle all the errors from the build attempt(s)

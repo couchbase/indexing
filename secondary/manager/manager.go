@@ -111,6 +111,7 @@ type MetadataNotifier interface {
 	OnIndexRecover(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
+	OnRecoveredIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
 	OnPartitionPrune(common.IndexInstId, []common.PartitionId, *common.MetadataRequestContext) error
 	OnFetchStats() error
 }
@@ -608,6 +609,15 @@ func (m *IndexManager) HandleBuildIndexRebalDDL(indexIds client.IndexIdList) err
 	//TODO handle err
 
 	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_REBAL, key, content)
+}
+
+func (m *IndexManager) HandleBuildRecoveredIndexesRebalance(indexIds client.IndexIdList) error {
+
+	key := fmt.Sprintf("%d", indexIds.DefnIds[0])
+	content, _ := client.MarshallIndexIdList(&indexIds)
+	//TODO handle err
+
+	return m.requestServer.MakeRequest(client.OPCODE_BUILD_RECOVERED_INDEXES_REBAL, key, content)
 }
 
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
