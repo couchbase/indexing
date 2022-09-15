@@ -421,7 +421,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 					// if there is a build token for the definition, set index STATE to active so the
 					// index will be built as part of rebalancing.
-					if index.pendingBuild && !index.pendingDelete {
+					if index.pendingBuild && !index.PendingDelete {
 						if token.IndexInst.State == common.INDEX_STATE_CREATED || token.IndexInst.State == common.INDEX_STATE_READY {
 							token.IndexInst.State = common.INDEX_STATE_ACTIVE
 						}
@@ -1811,8 +1811,46 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 	for _, node := range indexers {
 		var subcluster SubCluster
 
+		//skip empty nodes
+		if len(node.Indexes) == 0 {
+			continue
+		}
+
 		logging.Infof("Planner::executeTenantAwareRebal Index Node %v SG %v Memory %v Units %v", node.NodeId,
 			node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
+
+		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
+			continue
+		}
+
+		for _, index := range node.Indexes {
+			subcluster, err = findSubClusterForIndex(indexers, index)
+			if err != nil {
+				return nil, err
+			}
+			//In case of missing replica, subCluster may be smaller than the expected size.
+			//Try with all the indexes on the node.
+			if len(subcluster) == cSubClusterLen {
+				break
+			}
+		}
+		if len(subcluster) == 1 {
+			subcluster, err = findPairForSingleNodeSubCluster(indexers, subcluster, subClusters)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		subClusters = append(subClusters, subcluster)
+	}
+
+	//group empty nodes into subCluster
+	for _, node := range indexers {
+
+		logging.Infof("Planner::executeTenantAwareRebal Index Node %v SG %v Memory %v Units %v", node.NodeId,
+			node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
+
+		var subcluster SubCluster
 
 		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
 			continue
@@ -1825,16 +1863,13 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 				return nil, err
 			}
 		}
-
-		for _, index := range node.Indexes {
-			subcluster, err = findSubClusterForIndex(indexers, index)
-			if err != nil {
-				return nil, err
-			}
-			break
-		}
 		subClusters = append(subClusters, subcluster)
 	}
+
+	//TODO It is possible to have a server group assignment which fails to pair all nodes
+	//e.g. n1[sg1], n2[sg2]. CP adds n3[sg2], n4[sg3]. This can be paired as (n1, n3) and
+	//(n2, n4). But if n1 gets paired with n4 first i.e. (n1, n4), then (n2, n3) cannot happen
+	//as both belong to the same server group sg2.
 
 	return subClusters, nil
 }
@@ -2012,6 +2047,31 @@ func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 		}
 	}
 	return result, nil
+}
+
+//findSubClusterForEmptyNode finds another empty node in the cluster to
+//pair with the input single node subCluster to form a sub-cluster. If excludeNodes is specified,
+//those nodes are excluded while finding the pair.
+func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubCluster, excludeNodes []SubCluster) (SubCluster, error) {
+
+	if len(subCluster) != 1 {
+		return nil, nil
+	}
+
+	node := subCluster[0]
+	for _, indexer := range indexers {
+		if indexer.NodeUUID != node.NodeUUID &&
+			indexer.ServerGroup != node.ServerGroup &&
+			len(indexer.Indexes) == 0 {
+
+			if !checkIfNodeBelongsToAnySubCluster(excludeNodes, indexer) {
+				subCluster = append(subCluster, indexer)
+				return subCluster, nil
+
+			}
+		}
+	}
+	return subCluster, nil
 }
 
 //findSubClusterForEmptyNode finds another empty node in the cluster to
@@ -2870,6 +2930,8 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 
 	logging.Infof("%v Found SubClusters  %v", _executeTenantAwareRebal, allSubClusters)
 
+	repairMissingReplica(solution, allSubClusters)
+
 	subClustersOverHWM, err := findSubClusterAboveHighThreshold(allSubClusters,
 		plan.UsageThreshold)
 	if err != nil {
@@ -3388,5 +3450,128 @@ func (t *TenantUsage) String() string {
 	str += fmt.Sprintf("MemoryUsage %v ", t.MemoryUsage)
 	str += fmt.Sprintf("UnitsUsage %v ", t.UnitsUsage)
 	return str
+
+}
+
+//repairMissingReplica repairs the missing replicas in the subCluster
+func repairMissingReplica(solution *Solution, allSubClusters []SubCluster) {
+
+	const _repairMissingReplica = "Planner::repairMissingReplica"
+
+	for _, subCluster := range allSubClusters {
+		if len(subCluster) != cSubClusterLen {
+			logging.Infof("%v Found SubCluster %v with len %v. Skipping replica repair attempt.", _repairMissingReplica,
+				subCluster, len(subCluster))
+			continue
+		}
+		for i, indexer := range subCluster {
+			missingReplicaList := findMissingReplicaForIndexerNode(indexer, subCluster)
+			target := findPairNodeUsingIndex(subCluster, i)
+			for _, missingReplica := range missingReplicaList {
+				placeMissingReplicaOnTarget(missingReplica, target, solution)
+			}
+		}
+	}
+}
+
+//findMissingReplicaForIndexerNode checks if there is any missing index
+//on the input indexer node which doesn't have a replica in the given subCluster.
+func findMissingReplicaForIndexerNode(indexer *IndexerNode, subCluster SubCluster) []*IndexUsage {
+
+	const _findMissingReplicaForIndexerNode = "Planner::findMissingReplicaForIndexerNode"
+	missingReplicaList := make([]*IndexUsage, 0)
+
+	for _, index := range indexer.Indexes {
+		numReplica := findNumReplicaForSubCluster(index, subCluster)
+
+		missingReplica := 0
+		if index.Instance != nil {
+			missingReplica = int(index.Instance.Defn.NumReplica+1) - numReplica
+		}
+
+		if index.Instance != nil && missingReplica > 0 &&
+			!index.PendingDelete {
+			missingReplicaList = append(missingReplicaList, index)
+		}
+
+		if index.PendingDelete {
+			logging.Infof("%v Skipping Replica Repair for %v. PendingDelete %v", _findMissingReplicaForIndexerNode,
+				index, index.PendingDelete)
+		}
+	}
+	return missingReplicaList
+
+}
+
+//placeMissingReplicaOnTarget places the repaired replica on the input target node and
+//adds it to the solution.
+func placeMissingReplicaOnTarget(index *IndexUsage, target *IndexerNode, solution *Solution) {
+
+	const _placeMissingReplicaOnTarget = "Planner::placeMissingReplicaOnTarget"
+
+	// clone the original and update the replicaId
+	if index.Instance != nil {
+		newReplicaId := findMissingReplicaId(index)
+
+		cloned := index.clone()
+		cloned.Instance.ReplicaId = newReplicaId
+		cloned.initialNode = nil
+
+		instId, err := common.NewIndexInstId()
+		if err != nil {
+			return
+		}
+		cloned.InstId = instId
+		cloned.Instance.InstId = instId
+
+		// add the new replica to the solution
+		solution.addIndex2(target, cloned)
+
+		logging.Infof("%v Rebuilding lost replica for (%v,%v,%v,%v,%v) on %v",
+			_placeMissingReplicaOnTarget, index.Bucket, index.Scope,
+			index.Collection, index.Name, newReplicaId, target)
+	}
+}
+
+//findMissingReplicaId returns the replicaId of the missing replica
+//based on the replicaId of the input index. This function only works
+//for serverless model with fixed NumReplica=1.
+func findMissingReplicaId(index *IndexUsage) int {
+
+	if index.Instance.ReplicaId == 0 {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+//
+//findNumReplicaForSubCluster returns the number of replicas for the given index
+//in the input subcluster including self..
+func findNumReplicaForSubCluster(u *IndexUsage, subCluster SubCluster) int {
+
+	count := 0
+	for _, indexer := range subCluster {
+		for _, index := range indexer.Indexes {
+
+			// check replica
+			if index.IsReplica(u) {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+//findPairNodeUsingIndex finds the pair node in the subCluster using the index
+//of the input node.
+func findPairNodeUsingIndex(subCluster SubCluster, index int) *IndexerNode {
+
+	if index == 0 {
+		return subCluster[1]
+	} else {
+		return subCluster[0]
+	}
 
 }

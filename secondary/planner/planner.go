@@ -85,6 +85,8 @@ const (
 	EMPTY_INDEX_MEMUSAGE = 8
 )
 
+const cSubClusterLen = 2
+
 var ErrNoAvailableIndexer = errors.New("Cannot find any indexer that can add new indexes")
 
 //////////////////////////////////////////////////////////////
@@ -1467,7 +1469,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 		return
 	}
 
-	// numLiveNode = newNode + existing node - excluded node
+	// numLiveNode = newNode + existing node - (excluded node + ejected node)
 	numLiveNode := s.findNumAvailLiveNode()
 
 	// Check to see if it is needed to add replica
