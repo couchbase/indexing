@@ -63,6 +63,10 @@ type ShardRebalancer struct {
 	metakvCancel chan struct{}
 	metakvMutex  sync.RWMutex
 
+	// Dropping of shards
+	dropQueue  chan string     // ttids of source indexes waiting to be submitted for drop
+	dropQueued map[string]bool // set of ttids already added to dropQueue, as metakv can send duplicate notifications
+
 	runPlanner bool
 
 	runParams *runParams // For DDL during rebalance
@@ -104,6 +108,9 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 		topologyChange: topologyChange,
 		transferStats:  make(map[string]map[uint64]*ShardTransferStatistics),
+
+		dropQueue:  make(chan string, 10000),
+		dropQueued: make(map[string]bool),
 	}
 
 	sr.config.Store(config)
@@ -114,7 +121,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		close(sr.waitForTokenPublish)
 		go sr.observeRebalance()
 	}
-	go sr.processDropShard()
+	go sr.processDropShards()
 
 	return sr
 }
@@ -242,7 +249,7 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 		processed = sr.processShardTransferTokenAsMaster(ttid, tt)
 	}
 
-	if tt.SourceId == sr.nodeUUID && !processed {
+	if (tt.SourceId == sr.nodeUUID && !processed) || (tt.ShardTransferTokenState == c.ShardTokenReady) {
 		processed = sr.processShardTransferTokenAsSource(ttid, tt)
 	}
 
@@ -368,6 +375,16 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 
 		return true
 
+	case c.ShardTokenReady:
+		sr.updateInMemToken(ttid, tt, "source")
+
+		if sr.isSiblingTokenReady(tt) {
+			sourceTokenId, sourceTT := sr.getSourceTokenId(ttid, tt)
+			if sourceTT.SourceId == sr.nodeUUID {
+				sr.queueDropShardRequests(sourceTokenId)
+			}
+		}
+		return true
 	default:
 		l.Infof("VarunLog: In the source code in default ttid: %v", ttid)
 		return false
@@ -472,6 +489,55 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]st
 	// other transfer tokens in the batch depending on their state
 	sr.setTransferTokenError(ttid, tt, err.Error())
 
+}
+
+func (sr *ShardRebalancer) isSiblingTokenReady(tt *c.TransferToken) bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if siblingToken, ok := sr.sourceTokens[tt.SiblingTokenId]; ok && siblingToken != nil {
+		if tt.ShardTransferTokenState == c.ShardTokenReady &&
+			siblingToken.ShardTransferTokenState == c.ShardTokenReady {
+			return true
+		}
+	}
+	return false
+}
+
+func (sr *ShardRebalancer) getSourceTokenId(ttid string, tt *c.TransferToken) (string, *c.TransferToken) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if tt.SourceId == sr.nodeUUID {
+		return ttid, tt
+	} else {
+		return tt.SiblingTokenId, sr.sourceTokens[tt.SiblingTokenId]
+	}
+}
+
+func (sr *ShardRebalancer) queueDropShardRequests(ttid string) {
+	const method string = "ShardRebalancer::queueDropShardRequests:" // for logging
+
+	select {
+	case <-sr.cancel:
+		l.Warnf("ShardRebalancer::queueDropShardRequests: Cannot drop shards for ttid: %v "+
+			"when rebalance being canceled.", ttid)
+		return
+
+	case <-sr.done:
+		l.Warnf("ShardRebalancer::queueDropShardRequests: Cannot drop shards for ttid: %v "+
+			"when rebalance is done.", ttid)
+		return
+
+	default:
+		if _, ok := sr.dropQueued[ttid]; !ok {
+			sr.dropQueued[ttid] = true
+			sr.dropQueue <- ttid
+			logging.Infof("ShardRebalancer::queueDropShardRequests: Queued ttid: %v for drop", ttid)
+		} else {
+			logging.Warnf("ShardRebalancer::queueDropShardRequests: Skipped ttid: %v that was previously queued for drop", ttid)
+		}
+	}
 }
 
 func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.TransferToken) bool {
@@ -862,7 +928,7 @@ loop:
 					err1 := fmt.Errorf("Could not get index status; bucket/scope/collection likely dropped."+
 						" Skipping. instId: %v, indexState %v, tt %v.", instId, indexState, tt)
 					logging.Errorf("ShardRebalancer::waitForIndexBuild, err: %v", err1)
-					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+					tt.ShardTransferTokenState = c.ShardTokenCommit // skip forward instead of failing rebalance
 					setTransferTokenInMetakv(ttid, tt)
 					return err1
 				} else if err != "" {
@@ -1049,8 +1115,8 @@ func (sr *ShardRebalancer) allShardTransferTokensAcked() bool {
 
 func (sr *ShardRebalancer) updateInMemToken(ttid string, tt *c.TransferToken, caller string) {
 
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
 
 	if caller == "master" {
 		sr.transferTokens[ttid] = tt.Clone()
@@ -1136,8 +1202,235 @@ func (sr *ShardRebalancer) computeProgress() float64 {
 	return 0
 }
 
-func (sr *ShardRebalancer) processDropShard() {
-	// TODO: Add logic to drop shard
+func (sr *ShardRebalancer) processDropShards() {
+
+	notifych := make(chan bool, 2)
+
+	first := true
+	cfg := sr.config.Load()
+	waitTime := cfg["rebalance.drop_index.wait_time"].Int()
+
+	for {
+		select {
+		case <-sr.cancel:
+			l.Infof("ShardRebalancer::processDropShards Cancel Received")
+			return
+		case <-sr.done:
+			l.Infof("ShardRebalancer::processDropShards Done Received")
+			return
+		case ttid := <-sr.dropQueue:
+
+			logging.Infof("ShardRebalancer::processDropShards processing drop shards request for ttid: %v", ttid)
+			if first {
+				// If it is the first drop, let wait to give a chance for the target's metadata
+				// being synchronized with the cbq nodes.  This is to ensure that the cbq nodes
+				// can direct scan to the target nodes, before we start dropping the index in the source.
+				time.Sleep(time.Duration(waitTime) * time.Second)
+				first = false
+			}
+
+			sr.mu.Lock()
+			tt, ok := sr.sourceTokens[ttid]
+			sr.mu.Unlock()
+
+			if !ok {
+				l.Warnf("ShardRebalancer::processDropShards Cannot find token %v in sr.sourceTokens. Skip drop shards.", ttid)
+				continue
+			}
+
+			if tt.ShardTransferTokenState == c.ShardTokenReady {
+				if sr.addToWaitGroup() {
+					notifych <- true
+					go sr.dropShardsWhenIdle(ttid, tt.Clone(), notifych)
+				} else {
+					logging.Warnf("ShardRebalancer::processDropShards Skip processing drop shards request for ttid: %v "+
+						"as rebalancer can not add to wait group", tt)
+				}
+			} else {
+				logging.Warnf("ShardRebalancer::processDropShards Skipping drop shard request for tt: %v "+
+					"as state: %v != ShardTokenReady", ttid, tt.ShardTransferTokenState.String())
+			}
+		}
+	}
+}
+
+func (sr *ShardRebalancer) dropShardsWhenIdle(ttid string, tt *c.TransferToken, notifyCh chan bool) {
+	const method = "ShardRebalancer::dropShardsWhenIdle:" // for logging
+	const sleepSecs = 1                                   // seconds to sleep per loop iteration
+
+	defer sr.wg.Done()
+
+	defer func() {
+		if notifyCh != nil {
+			// Blocking wait to ensure indexes are dropped sequentially
+			<-notifyCh
+		}
+	}()
+
+	missingStatRetry := 0
+	droppedIndexes := make(map[c.IndexInstId]bool)
+
+loop:
+	for {
+	labelselect:
+		select {
+		case <-sr.cancel:
+			l.Infof("ShardRebalancer::dropShardsWhenIdle: Cancel Received")
+			break loop
+		case <-sr.done:
+			l.Infof("ShardRebalancer::dropShardsWhenIdle: Done Received")
+			break loop
+
+		default:
+
+			for _, inst := range tt.IndexInsts {
+
+				defn := &inst.Defn
+				defn.SetCollectionDefaults()
+				defn.InstId = inst.InstId
+				defn.RealInstId = inst.RealInstId
+
+				allStats := sr.statsMgr.stats.Get()
+
+				defnKey := inst.RealInstId
+				if inst.RealInstId == 0 {
+					defnKey = inst.InstId
+				}
+
+				defnStats := allStats.indexes[defnKey] // stats for current defn
+				if defnStats == nil {
+					l.Infof("ShardRebalancer::dropShardsWhenIdle Missing defnStats for instId %v. Retrying...", method, defnKey)
+					break
+				}
+
+				var pending, numRequests, numCompletedRequests int64
+				for _, partitionId := range defn.Partitions {
+					partnStats := defnStats.partitions[partitionId] // stats for this partition
+					if partnStats != nil {
+						numRequests = partnStats.numRequests.GetValue().(int64)
+						numCompletedRequests = partnStats.numCompletedRequests.GetValue().(int64)
+					} else {
+						l.Infof("ShardRebalancer::dropShardsWhenIdle Missing partnStats for instId %d partition %v. Retrying...",
+							method, defnKey, partitionId)
+						missingStatRetry++
+						if missingStatRetry > 50 {
+							if sr.needRetryForDrop(ttid, tt) {
+								break labelselect
+							} else {
+								break loop
+							}
+						}
+						break labelselect
+					}
+					pending += numRequests - numCompletedRequests
+				}
+
+				if pending > 0 {
+					l.Infof("ShardRebalancer::dropShardsWhenIdle Index %v:%v:%v:%v has %v pending scans",
+						method, defn.Bucket, defn.Scope, defn.Collection, defn.Name, pending)
+					break
+				}
+
+				url := "/dropIndex"
+				resp, err := postWithHandleEOF(defn, sr.localaddr, url, method)
+				if err != nil {
+					l.Errorf("ShardRebalancer::dropShardsWhenIdle: Error observed when posting dropIndex request "+
+						" for index: %v", defn)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
+				response := new(IndexResponse)
+				if err := convertResponse(resp, response); err != nil {
+					l.Errorf("ShardRebalancer::dropShardsWhenIdle: Error unmarshal response %v for defn: %v, err: %v",
+						sr.localaddr+url, defn, err)
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+
+				if response.Code == RESP_ERROR {
+					// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
+					if !isMissingBSC(response.Error) {
+						l.Errorf("ShardRebalancer::dropShardsWhenIdle: Error dropping index defn: %v, url: %v, err: %v",
+							sr.localaddr+url, url, response.Error)
+						sr.setTransferTokenError(ttid, tt, response.Error)
+						return
+					}
+					// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
+					l.Infof("ShardRebalancer::dropShardsWhenIdle: Source index already dropped due to bucket/scope/collection dropped. tt %v.", method, tt)
+				}
+				droppedIndexes[inst.InstId] = true
+			}
+		}
+
+		allInstancesDropped := true
+		for _, inst := range tt.IndexInsts {
+			if _, ok := droppedIndexes[inst.InstId]; !ok {
+				// Still some instances need to be dropped
+				allInstancesDropped = false
+				break
+			}
+		}
+
+		if allInstancesDropped {
+			tt.ShardTransferTokenState = c.ShardTokenCommit
+			setTransferTokenInMetakv(ttid, tt)
+
+			sr.updateInMemToken(ttid, tt, "source")
+			return
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+}
+
+// needRetryForDrop is called after multiple unsuccessful attempts to get the stats for an index to be
+// dropped. It determines whether we should keep retrying or assume it was already dropped. It is only
+// assumed already to be dropped if there is no entry for it in the local metadata.
+func (sr *ShardRebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
+	const method = "ShardRebalancer::needRetryForDrop:" // for logging
+
+	localMeta, err := getLocalMeta(sr.localaddr)
+	if err != nil {
+		l.Errorf("ShardRebalancer::needRetryForDrop: Error Fetching Local Meta %v %v", sr.localaddr, err)
+		return true
+	}
+
+	defnIdMap := make(map[uint64]bool)
+	for _, inst := range tt.IndexInsts {
+		defnIdMap[uint64(inst.Defn.DefnId)] = true
+	}
+
+	indexStateMap, errStrMap := sr.getIndexStatusFromMeta(tt, defnIdMap, localMeta)
+
+	for instId, indexState := range indexStateMap {
+		errStr := errStrMap[instId]
+
+		if errStr != "" {
+			l.Errorf("ShardRebalancer::needRetryForDrop: Error Fetching Index Status %v %v", sr.localaddr, errStr)
+			return true
+		}
+
+		if indexState == c.INDEX_STATE_NIL {
+			//if index cannot be found in metadata, most likely its drop has already succeeded.
+			//instead of waiting indefinitely, it is better to assume success and proceed.
+			l.Infof("ShardRebalancer::needRetryForDrop: Missing Metadata for %v. Assume success and abort retry", instId)
+			continue
+		} else {
+			// Index in shard exists in metadata. Do not change the transfer token state yet
+			return false
+		}
+	}
+
+	// Coming here means that none of the indexes in the transfer token have
+	// been found in the local meta. Hence, the indexes are likely dropped
+	// Change the state of the token and proceed further
+	tt.ShardTransferTokenState = c.ShardTokenCommit
+	setTransferTokenInMetakv(ttid, tt)
+
+	sr.updateInMemToken(ttid, tt, "source")
+
+	return true
 }
 
 func (sr *ShardRebalancer) finishRebalance(err error) {
