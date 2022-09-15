@@ -2977,11 +2977,11 @@ func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) 
 	if s.slice.idxStats.useArrItemsCount {
 		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
 	}
-	enableMetering := s.slice.EnableMetering() && !ctx.SkipReadMetering()
+	enableMetering := s.slice.EnableMetering()
 	if enableMetering {
 		bytesScanned := 8
 		ru, _ := s.slice.meteringMgr.RecordReadUnits(s.slice.GetBucketName(),
-			ctx.User(), uint64(bytesScanned))
+			ctx.User(), uint64(bytesScanned), !ctx.SkipReadMetering())
 		ctx.RecordReadUnits(ru)
 	}
 	return uint64(s.MainSnap.Count()), nil
@@ -3177,9 +3177,9 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	var mt MeteringTransaction
 
-	enableMetering := s.slice.EnableMetering() && !ctx.SkipReadMetering()
+	enableMetering := s.slice.EnableMetering()
 	if enableMetering {
-		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User(), true)
+		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User(), !ctx.SkipReadMetering())
 		defer func() {
 			var ru uint64
 			unitSlice, e := mt.Commit()

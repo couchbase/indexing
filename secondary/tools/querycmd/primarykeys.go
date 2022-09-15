@@ -1,10 +1,12 @@
 package main
 
-import "fmt"
-import "log"
+import (
+	"fmt"
+	"log"
 
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import c "github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 // expects `beer-sample` bucket to be created with primary index created.
 func doCurePrimary(cluster string, client *qclient.GsiClient) error {
@@ -66,7 +68,7 @@ func doCuredRange(
 				h = pkeys[ln-1]
 			}
 			return true
-		})
+		}, false)
 	if err != nil {
 		log.Fatal(err)
 	}

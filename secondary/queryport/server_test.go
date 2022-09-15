@@ -174,7 +174,7 @@ func TestScanAll(t *testing.T) {
 				}
 			}
 			return true
-		})
+		}, false)
 
 	count = 0
 	qc.ScanAll(
@@ -186,7 +186,7 @@ func TestScanAll(t *testing.T) {
 				return false
 			}
 			return true
-		})
+		}, false)
 
 	qc.Close()
 	s.Close()
@@ -288,7 +288,7 @@ func BenchmarkRange100(b *testing.B) {
 			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
-			})
+			}, false)
 	}
 	b.StopTimer()
 
@@ -324,7 +324,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return false
-			})
+			}, false)
 	}
 	b.StopTimer()
 
@@ -359,7 +359,7 @@ func BenchmarkScanAll(b *testing.B) {
 			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
-			})
+			}, false)
 	}
 	b.StopTimer()
 

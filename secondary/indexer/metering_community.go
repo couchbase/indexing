@@ -45,7 +45,7 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 	return nil
 }
 
-func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) (uint64, error) {
+func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64, billable bool) (uint64, error) {
 	panic("MeteringManager::RecordReadUnits Not implemented for Community Edition")
 	return 0, nil
 }

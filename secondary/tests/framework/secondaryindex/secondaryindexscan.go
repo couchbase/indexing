@@ -60,7 +60,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 				return true
 			}
 			return false
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -155,7 +155,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 				return true
 			}
 			return false
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -229,7 +229,7 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 				return true
 			}
 			return false
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -321,7 +321,7 @@ func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, l
 				return true
 			}
 			return false
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -465,7 +465,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				return true
 			}
 			return false
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -495,7 +495,7 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 	}
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector)
+	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector, false)
 	if ru != 0 {
 		log.Printf("MultiScanCount: ReadUnits: %v bucket: %v indexName: %v scans: %v distinct: %v", ru,
 			bucketName, indexName, scans, distinct)
@@ -614,7 +614,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				}
 			}
 			return true
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
