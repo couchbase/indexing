@@ -1357,6 +1357,7 @@ func tenantAwarePlannerTests(t *testing.T) {
 
 	tenantAwarePlannerFuncTests(t)
 	tenantAwarePlannerRebalanceTests(t)
+	tenantAwarePlannerReplicaRepairTests(t)
 
 }
 
@@ -1529,7 +1530,7 @@ func tenantAwarePlannerRebalanceTests(t *testing.T) {
 		solution, err := s.RunSingleTestTenantAwareRebal(plan, nil)
 		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
 
-		err = validateTenantAwareRebalanceSolution(t, solution, result)
+		err = validateTenantAwareRebalanceSolution(t, solution, result, false)
 		if err != nil {
 			log.Printf("Actual Solution \n")
 			solution.PrintLayout()
@@ -1541,7 +1542,7 @@ func tenantAwarePlannerRebalanceTests(t *testing.T) {
 }
 
 func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Solution,
-	result *planner.Plan) error {
+	result *planner.Plan, ignoreInstId bool) error {
 
 	if len(solution.Placement) != len(result.Placement) {
 		return errors.New(fmt.Sprintf("Mismatch in indexer node count."+
@@ -1554,7 +1555,7 @@ func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Soluti
 			return err
 		}
 
-		err = compareIndexesOnNodes(indexer, indexer1)
+		err = compareIndexesOnNodes(indexer, indexer1, ignoreInstId)
 		if err != nil {
 			return err
 		}
@@ -1562,7 +1563,8 @@ func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Soluti
 	return nil
 }
 
-func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.IndexerNode) error {
+func compareIndexesOnNodes(indexer *planner.IndexerNode,
+	indexer1 *planner.IndexerNode, ignoreInstId bool) error {
 
 	if len(indexer.Indexes) != len(indexer1.Indexes) {
 		return errors.New(fmt.Sprintf("Mismatch in index count on "+
@@ -1572,7 +1574,7 @@ func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.Index
 
 	for _, index := range indexer.Indexes {
 
-		err := findIndexOnNode(index, indexer1)
+		err := findIndexOnNode(index, indexer1, ignoreInstId)
 		if err != nil {
 			return err
 		}
@@ -1583,13 +1585,13 @@ func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.Index
 
 }
 
-func findIndexOnNode(index *planner.IndexUsage, indexer1 *planner.IndexerNode) error {
+func findIndexOnNode(index *planner.IndexUsage, indexer1 *planner.IndexerNode, ignoreInstId bool) error {
 
 	found := false
 	for _, index1 := range indexer1.Indexes {
 
 		if index.DefnId == index1.DefnId &&
-			index.InstId == index1.InstId &&
+			(index.InstId == index1.InstId || ignoreInstId) &&
 			index.PartnId == index1.PartnId &&
 			index.Name == index1.Name &&
 			index.Bucket == index1.Bucket &&
@@ -1615,4 +1617,57 @@ func findIndexerNodeInResult(result *planner.Plan, indexer *planner.IndexerNode)
 	}
 	return nil, errors.New(fmt.Sprintf("Indexer Node %v not found in expected result.", indexer))
 
+}
+
+var tenantAwarePlannerReplicaRepairFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Replica Repair - 4 SG, Missing Replicas for multiple tenants in SG",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_a.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_a_out.json",
+		"",
+	},
+	{
+		"Replica Repair - 4 SG, Missing Replicas, Buddy Node Failed over",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_b.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_b_out.json",
+		"",
+	},
+	{
+		"Replica Repair - 4 SG, Missing Replicas, Buddy Node Failed over, No replacement",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_c.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_c_out.json",
+		"",
+	},
+	{
+		"Replica Repair - 4 SG, Missing Replicas, one replica missing with pendingDelete true ",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_d.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_d_out.json",
+		"",
+	},
+}
+
+func tenantAwarePlannerReplicaRepairTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerReplicaRepairFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadPlan(testcase.result)
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwareRebal(plan, nil)
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+		err = validateTenantAwareRebalanceSolution(t, solution, result, true)
+		if err != nil {
+			log.Printf("Actual Solution \n")
+			solution.PrintLayout()
+			log.Printf("Expected Result %v\n", result)
+		}
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+	}
 }
