@@ -54,6 +54,10 @@ func getFailoverUrl(serverAddr string) string {
 	return prependHttp(serverAddr) + "/controller/failOver"
 }
 
+func getServerGroupUrl(serverAddr string) string {
+	return prependHttp(serverAddr) + "/pools/default/serverGroups"
+}
+
 func failoverFromRest(serverAddr, username, password string, nodesToRemove []string) ([]byte, error) {
 	log.Printf("Failing over: %v\n", nodesToRemove)
 
@@ -101,6 +105,38 @@ func addNodeFromRest(serverAddr, username, password, hostname, roles string) ([]
 	return makeRequest(username, password, "POST", payload, getAddNodeUrl(serverAddr))
 }
 
+func addNodeWithServerGroupFromRest(serverAddr, username, password, hostname, roles, serverGroup string) ([]byte, error) {
+
+	// Get the server group information from ns_server
+	resp, err := makeRequest(username, password, "GET", strings.NewReader(""), getServerGroupUrl(serverAddr))
+	if err != nil {
+		return nil, err
+	}
+
+	uri := ""
+	var sgs couchbase.ServerGroups
+	json.Unmarshal(resp, &sgs)
+	for _, group := range sgs.Groups {
+		if group.Name == serverGroup {
+			uri = group.AddNodeURI
+			break
+		}
+	}
+	if uri == "" {
+		for _, group := range sgs.Groups {
+			log.Printf("group.name: %v, group.addNodeURI: %v", group.Name, group.AddNodeURI)
+		}
+		return nil, errors.New("server group not found")
+	}
+
+	hostname = getHttpsHostname(hostname)
+	log.Printf("Adding node: %s with role: %s to the cluster with uri: %v\n", hostname, roles, uri)
+
+	payload := strings.NewReader(fmt.Sprintf("hostname=%s&user=%s&password=%s&services=%s",
+		url.QueryEscape(hostname), username, password, url.QueryEscape(roles)))
+	return makeRequest(username, password, "POST", payload, prependHttp(serverAddr)+uri)
+}
+
 func rebalanceFromRest(serverAddr, username, password string, nodesToRemove []string) ([]byte, error) {
 	if len(nodesToRemove) > 0 && nodesToRemove[0] != "" {
 		log.Printf("Removing node(s): %v from the cluster\n", nodesToRemove)
@@ -110,6 +146,14 @@ func rebalanceFromRest(serverAddr, username, password string, nodesToRemove []st
 	payload := strings.NewReader(fmt.Sprintf("knownNodes=%s&ejectedNodes=%s",
 		url.QueryEscape(knownNodes), url.QueryEscape(removeNodes)))
 	return makeRequest(username, password, "POST", payload, getRebalanceUrl(serverAddr))
+}
+
+func addServerGroup(serverAddr, username, password, serverGroup string) ([]byte, error) {
+
+	log.Printf("Adding serverGroup: %s via server: %v\n", serverGroup, serverAddr)
+
+	payload := strings.NewReader(fmt.Sprintf("name=%s", serverGroup))
+	return makeRequest(username, password, "POST", payload, getServerGroupUrl(serverAddr))
 }
 
 func otpNodes(serverAddr, username, password string, removeNodes []string) (string, string) {
@@ -278,6 +322,35 @@ func AddNode(serverAddr, username, password, hostname string, role string) (err 
 		method, hostname, role, response)
 }
 
+func AddNodeWithServerGroup(serverAddr, username, password, hostname, role, serverGroup string) (err error) {
+	method := "AddNodeWithServerGroup" // for logging
+	host := prependHttp(hostname)
+	var res []byte      // raw HTTP response
+	var response string // string form of res
+	for retries := 0; ; retries++ {
+		res, err = addNodeWithServerGroupFromRest(serverAddr, username, password, host, role, serverGroup)
+		if err == nil {
+			response = fmt.Sprintf("%s", res)
+			response = fmt.Sprintf("%s", res)
+			if strings.Contains(response, "{\"otpNode\":") {
+				log.Printf("%v: Successfully added node: %v (role %v, serverGroup: %v), response: %v",
+					method, hostname, role, serverGroup, response)
+				return nil
+			}
+		}
+		if retries >= 30 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("%v: Error while adding node: %v (role: %v, serverGroup: %v), err: %v",
+			method, hostname, role, serverGroup, err)
+	}
+	return fmt.Errorf("%v: Unexpected response body while adding node: %v (role: %v, serverGroup: %v), response: %v",
+		method, hostname, role, serverGroup, response)
+}
+
 // AddNodeAndRebalance adds a node to the cluster and then does a rebalance.
 // Adding the node is delegated to AddNode.
 // Rebalance is done by calling the ns_server /controller/rebalance documented REST endpoint.
@@ -298,6 +371,33 @@ func AddNodeAndRebalance(serverAddr, username, password, hostname string, role s
 		return fmt.Errorf("%v: Error during rebalance, err: %v", method, err)
 	}
 	return nil
+}
+
+func AddServerGroup(serverAddr, username, password, serverGroup string) (err error) {
+	method := "AddServerGroup" // for logging
+	var res []byte             // raw HTTP response
+	var response string        // string form of res
+	for retries := 0; ; retries++ {
+		res, err = addServerGroup(serverAddr, username, password, serverGroup)
+		if err == nil {
+			response = fmt.Sprintf("%s", res)
+			if response == "[]" {
+				log.Printf("%v: Successfully added serverGroup %v, server: %v, response: %v",
+					method, serverAddr, serverGroup, response)
+				return nil
+			}
+		}
+		if retries >= 30 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("%v: Error while adding serverGroup: %v, err: %v",
+			method, serverAddr, serverGroup, err)
+	}
+	return fmt.Errorf("%v: Unexpected response body while adding serverGroup: %v, response: %v",
+		method, serverAddr, serverGroup, response)
 }
 
 func InitClusterServices(serverAddr, username, password, role string) error {
