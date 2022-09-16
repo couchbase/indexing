@@ -192,6 +192,8 @@ type IndexerNode struct {
 	ActualScanRate    uint64  `json:"actualScanRate"`
 	ActualMemMin      uint64  `json:"actualMemMin"`
 	ActualRSS         uint64  `json:"actualRSS"`
+	ActualUnits       uint64  `json:"actualUnits"`
+	MandatoryQuota    uint64  `json:"mandatoryQuota"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
@@ -262,6 +264,7 @@ type IndexUsage struct {
 	ActualDrainRate       uint64 `json:"actualDrainRate"`
 	ActualScanRate        uint64 `json:"actualScanRate"`
 	ActualMemMin          uint64 `json:"actualMemMin"`
+	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
 
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
@@ -435,6 +438,10 @@ type GreedyPlanner struct {
 	Result *Solution
 
 	numNewIndexes int
+}
+
+type TenantAwarePlanner struct {
+	Result *Solution
 }
 
 //////////////////////////////////////////////////////////////
@@ -1854,6 +1861,46 @@ func (s *Solution) removeIndexes(indexes []*IndexUsage) {
 			}
 		}
 	}
+}
+
+//
+// Move a single index from one node to another without constraint check
+//
+func (s *Solution) moveIndex2(source *IndexerNode, idx *IndexUsage, target *IndexerNode) {
+
+	sourceIndex := s.findIndexOffset(source, idx)
+	if sourceIndex == -1 {
+		return
+	}
+
+	// add to new node
+	s.addIndex2(target, idx)
+
+	// remove from old node
+	s.removeIndex2(source, sourceIndex)
+}
+
+//
+// Add index to a node and update usage stats
+//
+func (s *Solution) addIndex2(n *IndexerNode, idx *IndexUsage) {
+	n.Indexes = append(n.Indexes, idx)
+	n.MandatoryQuota += idx.ActualMemUsage
+	n.ActualUnits += idx.ActualUnitsUsage
+}
+
+//
+// Remove index from a node and update usage stats
+//
+func (s *Solution) removeIndex2(n *IndexerNode, i int) {
+	idx := n.Indexes[i]
+	if i+1 < len(n.Indexes) {
+		n.Indexes = append(n.Indexes[:i], n.Indexes[i+1:]...)
+	} else {
+		n.Indexes = n.Indexes[:i]
+	}
+	n.MandatoryQuota -= idx.ActualMemUsage
+	n.ActualUnits -= idx.ActualUnitsUsage
 }
 
 //
@@ -4338,6 +4385,15 @@ func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead ui
 	}
 }
 
+func (o *IndexerNode) AddMemUsage(s *Solution, usage uint64) {
+
+	if s.UseLiveData() {
+		o.ActualMemUsage += usage
+	} else {
+		o.MemUsage += usage
+	}
+}
+
 //
 // Subtract memory
 //
@@ -4350,6 +4406,15 @@ func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhe
 	} else {
 		o.MemUsage -= usage
 		o.MemOverhead -= overhead
+	}
+}
+
+func (o *IndexerNode) SubtractMemUsage(s *Solution, usage uint64) {
+
+	if s.UseLiveData() {
+		o.ActualMemUsage -= usage
+	} else {
+		o.MemUsage -= usage
 	}
 }
 
@@ -4662,6 +4727,20 @@ func (o *IndexerNode) AddIndexes(indexes []*IndexUsage) {
 	for _, index := range indexes {
 		index.initialNode = o
 	}
+}
+
+//
+// Set Indexes to the node without setting the initialNode
+//
+func (o *IndexerNode) SetIndexes2(indexes []*IndexUsage) {
+	o.Indexes = indexes
+}
+
+//
+// Add Indexes to the node without setting the initialNode
+//
+func (o *IndexerNode) AddIndexes2(indexes []*IndexUsage) {
+	o.Indexes = append(o.Indexes, indexes...)
 }
 
 //
@@ -7307,4 +7386,29 @@ func NewPlannerForCommandPlan(config *RunConfig, indexes []*IndexUsage, movedInd
 	}
 
 	return planner, nil
+}
+
+//TenantAwarePlanner Implmentation
+
+func (p *TenantAwarePlanner) Plan(command CommandType, sol *Solution) (*Solution, error) {
+	return nil, nil
+}
+
+func (p *TenantAwarePlanner) GetResult() *Solution {
+	return p.Result
+}
+
+func (p *TenantAwarePlanner) Print() {
+	if p.Result != nil {
+		logging.Infof("Using TenantAwarePlanner")
+		logging.Infof("----------------------------------------")
+		p.Result.PrintLayout()
+	}
+}
+
+func (p *TenantAwarePlanner) PrintCost() {
+}
+
+func (p *TenantAwarePlanner) SetParam(param map[string]interface{}) error {
+	return nil
 }

@@ -386,9 +386,15 @@ func (r *Rebalancer) initRebalAsync() {
 					}
 
 					start := time.Now()
-					r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
-						r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-						minIterPerTemp, maxIterPerTemp)
+
+					if c.IsServerlessDeployment() {
+						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
+							*r.topologyChange, r.nodeUUID)
+					} else {
+						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
+							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
+							minIterPerTemp, maxIterPerTemp)
+					}
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
 						go r.finishRebalance(err)

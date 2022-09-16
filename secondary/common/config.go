@@ -3272,21 +3272,49 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.thresholds.mem_high": ConfigValue{
-		80,
+		70,
 		"Percentage of memory_quota usage above which Indexer node " +
 			"is considered to have maxed out the memory usage and needs " +
 			"additional capacity.",
-		80,
+		70,
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.settings.thresholds.mem_low": ConfigValue{
-		60,
+		50,
 		"Percentage of memory_quota usage above which Indexer node " +
 			"doesn't accept new create index except for existing tenants. " +
 			"The capacity between low and high threshold is for existing tenant growth.",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.settings.thresholds.units_high": ConfigValue{
 		60,
+		"Percentage of units_quota usage above which Indexer node " +
+			"is considered to have maxed out the units usage and needs " +
+			"additional capacity.",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.settings.thresholds.units_low": ConfigValue{
+		40,
+		"Percentage of units_quota usage above which Indexer node " +
+			"doesn't accept new create index except for existing tenants. " +
+			"The capacity between low and high threshold is for existing tenant growth.",
+		40,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.settings.units_quota": ConfigValue{
+		uint64(5000 * 20),
+		"Maximum RU/WU quota for indexer",
+		uint64(5000 * 20),
 		false, // mutable
 		false, // case-insensitive
 	},

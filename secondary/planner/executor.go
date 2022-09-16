@@ -91,7 +91,7 @@ type RunStats struct {
 type SubCluster []*IndexerNode
 
 type Plan struct {
-	// placement of indexes	in nodes
+	// placement of indexes in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
 	MemQuota  uint64         `json:"memQuota,omitempty"`
 	CpuQuota  uint64         `json:"cpuQuota,omitempty"`
@@ -99,7 +99,8 @@ type Plan struct {
 
 	UsedReplicaIdMap map[common.IndexDefnId]map[int]bool
 
-	SubClusters []SubCluster
+	SubClusters    []SubCluster
+	UsageThreshold *UsageThreshold `json:usageThreshold,omitempty"`
 }
 
 type IndexSpec struct {
@@ -140,8 +141,22 @@ type IndexSpec struct {
 
 //Resource Usage Thresholds for serverless model
 type UsageThreshold struct {
-	MemHighThreshold int32
-	MemLowThreshold  int32
+	MemHighThreshold int32 `json:memHighThreshold,omitempty"`
+	MemLowThreshold  int32 `json:memLowThreshold,omitempty"`
+
+	UnitsHighThreshold int32 `json:unitsHighThreshold,omitempty"`
+	UnitsLowThreshold  int32 `json:unitsLowThreshold,omitempty"`
+
+	MemQuota   uint64 `json:memQuota,omitempty"`
+	UnitsQuota uint64 `json:unitsQuota,omitempty"`
+}
+
+type TenantUsage struct {
+	SourceId string
+
+	TenantId    string
+	MemoryUsage uint64
+	UnitsUsage  uint64
 }
 
 //////////////////////////////////////////////////////////////
@@ -1633,7 +1648,7 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 //ExecutePlan2 is the entry point for tenant aware planner
 //for integration with metadata provider.
 func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
-	usageThreshold *UsageThreshold, serverlessIndexLimit uint32) (*Solution, error) {
+	serverlessIndexLimit uint32) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1651,9 +1666,9 @@ func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
 		return nil, err
 	}
 
-	solution, err := executeTenantAwarePlan(plan, indexSpec, usageThreshold)
+	tenantAwarePlanner, err := executeTenantAwarePlan(plan, indexSpec)
 
-	return solution, err
+	return tenantAwarePlanner.GetResult(), err
 
 }
 
@@ -1686,8 +1701,7 @@ func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
 //   lower than HWM(High Watermark Threshold).
 //8. No Index can be placed on a node above HWM(High Watermark Threshold).
 
-func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec,
-	usageThreshold *UsageThreshold) (*Solution, error) {
+func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 
 	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan:"
 
@@ -1705,23 +1719,46 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec,
 
 	logging.Infof("%v Found SubClusters  %v", _executeTenantAwarePlan, subClusters)
 
-	candidates, err := findCandidateSubClustersBasedOnUsage(subClusters,
-		plan.MemQuota, usageThreshold)
+	tenantSubCluster, err := filterCandidateBasedOnTenantAffinity(subClusters, indexSpec)
 	if err != nil {
 		return nil, err
 	}
 
-	logging.Infof("%v Found Candidates %v", _executeTenantAwarePlan, candidates)
+	logging.Infof("%v Found Candidate Based on Tenant Affinity %v", _executeTenantAwarePlan, tenantSubCluster)
 
-	result, err := filterCandidatesBasedOnTenantAffinity(candidates, indexSpec)
-	if err != nil {
-		return nil, err
+	var result SubCluster
+	var errStr string
+	if len(tenantSubCluster) == 0 {
+		//No subCluster found with matching tenant. Choose any subCluster
+		//below LWM.
+		subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
+		if err != nil {
+			return nil, err
+		}
+		if len(subClustersBelowLWM) != 0 {
+			result = findLeastLoadedSubCluster(subClustersBelowLWM)
+		} else {
+			errStr = "No SubCluster Below Low Usage Threshold"
+		}
+	} else {
+		//Found subCluster with matching tenant. Choose this subCluster
+		//if below HWM.
+		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, plan.UsageThreshold)
+		if err != nil {
+			return nil, err
+		}
+		if len(subClusterBelowHWM) != 0 {
+			result = subClusterBelowHWM[0]
+		} else {
+			errStr = "Tenant SubCluster Above High Usage Threshold"
+		}
 	}
 
 	if len(result) == 0 {
 		logging.Infof("%v Found no matching candidate for tenant %v", _executeTenantAwarePlan,
 			indexSpec)
-		return nil, errors.New("Planner not able to find any node for placement")
+		retErr := "Planner not able to find any node for placement - " + errStr
+		return nil, errors.New(retErr)
 	} else {
 		logging.Infof("%v Found Result %v", _executeTenantAwarePlan, result)
 	}
@@ -1736,7 +1773,9 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec,
 		return nil, err
 	}
 
-	return solution, nil
+	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
+
+	return tenantAwarePlanner, nil
 
 }
 
@@ -1750,6 +1789,9 @@ func solutionFromPlan2(plan *Plan) *Solution {
 	}
 
 	for i, indexer := range plan.Placement {
+		for _, index := range indexer.Indexes {
+			index.initialNode = indexer
+		}
 		s.Placement[i] = indexer
 	}
 
@@ -1768,6 +1810,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 
 	for _, node := range indexers {
 		var subcluster SubCluster
+
+		logging.Infof("Planner::executeTenantAwareRebal Index Node %v SG %v Memory %v Units %v", node.NodeId,
+			node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
 
 		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
 			continue
@@ -1827,9 +1872,9 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 	return nil
 }
 
-//filterCandidatesBasedOnTenantAffinity finds candidate sub-cluster
+//filterCandidateBasedOnTenantAffinity finds candidate sub-cluster
 //based on tenant affinity
-func filterCandidatesBasedOnTenantAffinity(subClusters []SubCluster,
+func filterCandidateBasedOnTenantAffinity(subClusters []SubCluster,
 	indexSpec *IndexSpec) (SubCluster, error) {
 
 	var candidates []SubCluster
@@ -1846,17 +1891,10 @@ func filterCandidatesBasedOnTenantAffinity(subClusters []SubCluster,
 	}
 
 	//One or more matching subCluster found. Choose least loaded subCluster
-	//from the matching ones. /For phase 1, there will be only 1 matching
+	//from the matching ones. For phase 1, there will be only 1 matching
 	//sub-cluster as a single tenant's indexes can only be placed on one node.
 	if len(candidates) >= 1 {
 		result = findLeastLoadedSubCluster(candidates)
-		return result, nil
-	}
-
-	//No node found with matching tenant. Choose least loaded subCluster
-	//from all input subClusters.
-	if len(candidates) == 0 {
-		result = findLeastLoadedSubCluster(subClusters)
 		return result, nil
 	}
 
@@ -1877,8 +1915,8 @@ func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 
 	for _, subCluster := range subClusters {
 		for _, indexer := range subCluster {
-			if leastLoad == 0 || indexer.ActualRSS < leastLoad {
-				leastLoad = indexer.ActualRSS
+			if leastLoad == 0 || indexer.MandatoryQuota < leastLoad {
+				leastLoad = indexer.MandatoryQuota
 				result = subCluster
 			}
 			break
@@ -1892,11 +1930,11 @@ func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 //findCandidateSubClustersBasedOnUsage finds candidates sub-clusters for
 //placement based on resource usage. All sub-clusters below High Threshold
 //are potential candidates for index placement.
-func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster, quota uint64,
+func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
-	candidates, err := findSubClusterBelowHighThreshold(subClusters,
-		quota, usageThreshold)
+	candidates, err := findSubClustersBelowHighThreshold(subClusters,
+		usageThreshold)
 	if err != nil {
 		return nil, err
 	}
@@ -1908,20 +1946,29 @@ func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster, quota uint64
 	return candidates, nil
 }
 
-//findSubClusterBelowLowThreshold finds sub-clusters with usage lower than
-//LWT(Low Watermark Threshold).
-func findSubClusterBelowLowThreshold(subClusters []SubCluster, quota uint64,
+//findSubClustersBelowLowThreshold finds sub-clusters with usage lower than
+//LWM(Low Watermark Threshold). A subCluster is considered below LWM if usage for
+//both units and memory is below threshold.
+func findSubClustersBelowLowThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
 	var found bool
 
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
+
 	for _, subCluster := range subClusters {
 		for _, indexNode := range subCluster {
 			//all nodes in the sub-cluster need to satisfy the condition
 			found = true
-			if indexNode.ActualRSS >
-				(uint64(usageThreshold.MemLowThreshold)*quota)/100 {
+			if indexNode.MandatoryQuota >=
+				(uint64(usageThreshold.MemLowThreshold)*memQuota)/100 {
+				found = false
+				break
+			}
+			if indexNode.ActualUnits >=
+				(uint64(usageThreshold.UnitsLowThreshold)*unitsQuota)/100 {
 				found = false
 				break
 			}
@@ -1933,20 +1980,29 @@ func findSubClusterBelowLowThreshold(subClusters []SubCluster, quota uint64,
 	return result, nil
 }
 
-//findSubClusterBelowHighThreshold finds sub-clusters with usage lower than
-//HWT(High Watermark Threshold).
-func findSubClusterBelowHighThreshold(subClusters []SubCluster, quota uint64,
+//findSubClustersBelowHighThreshold finds sub-clusters with usage lower than
+//HWT(High Watermark Threshold). A subCluster is considered below high
+//threhsold if both units and memory usage is below HWM.
+func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
 	var result []SubCluster
 	var found bool
 
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
+
 	for _, subCluster := range subClusters {
 		found = true
 		for _, indexNode := range subCluster {
 			//all nodes in the sub-cluster need to satisfy the condition
-			if indexNode.ActualRSS >
-				(uint64(usageThreshold.MemHighThreshold)*quota)/100 {
+			if indexNode.MandatoryQuota >
+				(uint64(usageThreshold.MemHighThreshold)*memQuota)/100 {
+				found = false
+				break
+			}
+			if indexNode.ActualUnits >
+				(uint64(usageThreshold.UnitsHighThreshold)*unitsQuota)/100 {
 				found = false
 				break
 			}
@@ -1964,8 +2020,6 @@ func findSubClusterBelowHighThreshold(subClusters []SubCluster, quota uint64,
 func findSubClusterForEmptyNode(indexers []*IndexerNode,
 	node *IndexerNode, excludeNodes []SubCluster) (SubCluster, error) {
 
-	//TODO handle the case if a node is failed over/unhealthy in the cluster.
-
 	var subCluster SubCluster
 	for _, indexer := range indexers {
 		if indexer.NodeUUID != node.NodeUUID &&
@@ -1980,7 +2034,15 @@ func findSubClusterForEmptyNode(indexers []*IndexerNode,
 			}
 		}
 	}
-	return nil, nil
+
+	//create a single node subcluster. Such a situation can happen if one
+	//node fails over in a subcluster. Replica will be created via repair
+	//during the next rebalance.
+	if len(subCluster) == 0 {
+		subCluster = append(subCluster, node)
+	}
+
+	return subCluster, nil
 }
 
 //checkIfNodeBelongsToAnySubCluster checks if the given node belongs
@@ -2727,4 +2789,604 @@ func ReadIndexSpecs(specFile string) ([]*IndexSpec, error) {
 	}
 
 	return nil, nil
+}
+
+//ExecuteTenantAwareRebalance is the entry point for tenant aware rebalancer.
+//Given an input cluster url and the requested topology change, it will return
+//the set of transfer tokens for the desired index movements.
+func ExecuteTenantAwareRebalance(clusterUrl string,
+	topologyChange service.TopologyChange,
+	masterId string) (map[string]*common.TransferToken,
+	map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	runtime := time.Now()
+	return ExecuteTenantAwareRebalanceInternal(clusterUrl, topologyChange, masterId, &runtime)
+}
+
+func ExecuteTenantAwareRebalanceInternal(clusterUrl string,
+	topologyChange service.TopologyChange,
+	masterId string, runtime *time.Time) (map[string]*common.TransferToken,
+	map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
+	if err != nil {
+		return nil, nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	nodes := make(map[string]string)
+	for _, node := range plan.Placement {
+		nodes[node.NodeUUID] = node.NodeId
+	}
+
+	deleteNodes := make([]string, len(topologyChange.EjectNodes))
+	for i, node := range topologyChange.EjectNodes {
+		if _, ok := nodes[string(node.NodeID)]; !ok {
+			return nil, nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeID))
+		}
+		deleteNodes[i] = nodes[string(node.NodeID)]
+	}
+
+	// make sure we have all the keep nodes
+	for _, node := range topologyChange.KeepNodes {
+		if _, ok := nodes[string(node.NodeInfo.NodeID)]; !ok {
+			return nil, nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeInfo.NodeID))
+		}
+	}
+
+	p, _, err := executeTenantAwareRebal(CommandRebalance, plan, deleteNodes)
+	if p != nil {
+		logging.Infof("************ Indexer Layout *************")
+		p.Print()
+		logging.Infof("****************************************")
+	}
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	filterSolution(p.Result.Placement)
+
+	transferTokens, err := genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return transferTokens, nil, nil
+}
+
+//executeTenantAwareRebal is the actual implementation of tenant aware rebalancer
+func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []string) (
+	*TenantAwarePlanner, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+
+	const _executeTenantAwareRebal = "Planner::executeTenantAwareRebal"
+
+	solution := solutionFromPlan2(plan)
+
+	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
+
+	allSubClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	logging.Infof("%v Found SubClusters  %v", _executeTenantAwareRebal, allSubClusters)
+
+	subClustersOverHWM, err := findSubClusterAboveHighThreshold(allSubClusters,
+		plan.UsageThreshold)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	logging.Infof("%v Found SubClusters above HWM %v", _executeTenantAwareRebal, subClustersOverHWM)
+
+	//if no subClusters above HWM, no index movement is required
+	if len(subClustersOverHWM) == 0 {
+		return tenantAwarePlanner, nil, nil
+	}
+
+	tenantsToBeMoved := findCandidateTenantsToMoveOut(subClustersOverHWM, plan.UsageThreshold)
+
+	for i, tenants := range tenantsToBeMoved {
+		logging.Infof("%v TenantsToBeMoved from source %v", _executeTenantAwareRebal, subClustersOverHWM[i])
+		for _, tenant := range tenants {
+			logging.Infof("%v %v", _executeTenantAwareRebal, tenant)
+		}
+	}
+	if len(tenantsToBeMoved) == 0 {
+		return tenantAwarePlanner, nil, nil
+	}
+
+	subClustersBelowLWM, err := findSubClustersBelowLowThreshold(allSubClusters,
+		plan.UsageThreshold)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	logging.Infof("%v Found SubClusters Below LWM %v", _executeTenantAwareRebal, subClustersBelowLWM)
+
+	if len(subClustersBelowLWM) == 0 {
+		return tenantAwarePlanner, nil, nil
+	}
+
+	subClustersBelowLWM = sortSubClustersByMemUsage(subClustersBelowLWM)
+
+	moveTenantsToLowUsageSubCluster(solution, tenantsToBeMoved, subClustersBelowLWM,
+		subClustersOverHWM, plan.UsageThreshold)
+
+	//provide stats with the final solution based on the new memory/units usage
+	return tenantAwarePlanner, nil, nil
+}
+
+//findSubClusterAboveHighThreshold finds sub-clusters with usage higher than
+//HWM(High Watermark Threshold). If either memory or units is above HWM, then
+//the subcluster is considered to be above HWM.
+func findSubClusterAboveHighThreshold(subClusters []SubCluster,
+	usageThreshold *UsageThreshold) ([]SubCluster, error) {
+
+	var result []SubCluster
+	var found bool
+
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
+
+	for _, subCluster := range subClusters {
+		for _, indexNode := range subCluster {
+			//if any node in the subCluster is above HWM,
+			//it is considered above HWM
+			found = false
+			if indexNode.MandatoryQuota >
+				(uint64(usageThreshold.MemHighThreshold)*memQuota)/100 {
+				found = true
+				break
+			}
+			if indexNode.ActualUnits >
+				(uint64(usageThreshold.UnitsHighThreshold)*unitsQuota)/100 {
+				found = true
+				break
+			}
+		}
+		if found {
+			result = append(result, subCluster)
+		}
+	}
+	return result, nil
+}
+
+//findCandidateTenantsToMoveOut computes the tenants that
+//can be moved out of the list of input SubClusters to bring down its
+//memory/units usage less than or equal to LWM threshold.
+func findCandidateTenantsToMoveOut(subClusters []SubCluster,
+	usageThreshold *UsageThreshold) [][]*TenantUsage {
+
+	var candidates [][]*TenantUsage
+	for _, subCluster := range subClusters {
+		tenantList := findTenantsToMoveOutFromSubCluster(subCluster, usageThreshold)
+		if len(tenantList) != 0 {
+			candidates = append(candidates, tenantList)
+		}
+	}
+
+	return candidates
+}
+
+//findTenantsToMoveOutFromSubCluster computes the tenants that
+//can be moved out of the input SubCluster to bring down its
+//memory/units usage less than or equal to LWM threshold.
+func findTenantsToMoveOutFromSubCluster(subCluster SubCluster,
+	usageThreshold *UsageThreshold) []*TenantUsage {
+
+	const _findTenantsToMoveOutFromSubCluster = "Planner::findTenantsToMoveOutFromSubCluster"
+
+	var maxMemoryUsage, maxUnitsUsage uint64
+	var lowThresholdMemoryUsage, lowThresholdUnitsUsage uint64
+	var highestUsageNode *IndexerNode
+
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
+
+	//TODO Elixir What if the highestUsageNode doesn't have enough units usage to move
+	//unitsToBeMoved
+	for _, indexNode := range subCluster {
+		if indexNode.MandatoryQuota > maxMemoryUsage {
+			maxMemoryUsage = indexNode.MandatoryQuota
+			highestUsageNode = indexNode
+		}
+		if indexNode.ActualUnits > maxUnitsUsage {
+			maxUnitsUsage = indexNode.ActualUnits
+		}
+
+		if lowThresholdMemoryUsage == 0 {
+			lowThresholdMemoryUsage = (uint64(usageThreshold.MemLowThreshold) * memQuota) / 100
+		}
+
+		if lowThresholdUnitsUsage == 0 {
+			lowThresholdUnitsUsage = (uint64(usageThreshold.UnitsLowThreshold) * unitsQuota) / 100
+		}
+	}
+
+	var memoryToBeMoved, unitsToBeMoved uint64
+	if maxMemoryUsage > lowThresholdMemoryUsage {
+		memoryToBeMoved = maxMemoryUsage - lowThresholdMemoryUsage
+	}
+	if maxUnitsUsage > lowThresholdUnitsUsage {
+		unitsToBeMoved = maxUnitsUsage - lowThresholdUnitsUsage
+	}
+
+	//compute usage by tenant
+	usagePerTenant := computeUsageByTenant(highestUsageNode)
+
+	//sort the usage from lowest to highest
+	usageSortedByMemory := sortTenantUsageByMemory(usagePerTenant)
+	usageSortedByUnits := sortTenantUsageByUnits(usagePerTenant)
+
+	mem_iter := 0
+	units_iter := 0
+
+	processedTenants := make(map[string]bool)
+
+	//last tenant shouldn't be evicted
+	maxEvict := len(usagePerTenant) - 1
+	numEvict := 0
+
+	for (memoryToBeMoved > 0 || unitsToBeMoved > 0) && (numEvict < maxEvict) {
+
+		var memCandidate, unitsCandidate *TenantUsage
+		if memoryToBeMoved > 0 {
+			memCandidate = usageSortedByMemory[mem_iter]
+			if _, found := processedTenants[memCandidate.TenantId]; !found {
+				if memoryToBeMoved > memCandidate.MemoryUsage {
+					memoryToBeMoved -= memCandidate.MemoryUsage
+				} else {
+					memoryToBeMoved = 0
+				}
+				if unitsToBeMoved > memCandidate.UnitsUsage {
+					unitsToBeMoved -= memCandidate.UnitsUsage
+				} else {
+					unitsToBeMoved = 0
+				}
+				processedTenants[memCandidate.TenantId] = true
+				numEvict++
+			}
+			mem_iter++
+		}
+
+		if unitsToBeMoved > 0 && (numEvict < maxEvict) {
+			unitsCandidate = usageSortedByUnits[units_iter]
+			if _, found := processedTenants[unitsCandidate.TenantId]; !found {
+				if unitsToBeMoved > unitsCandidate.UnitsUsage {
+					unitsToBeMoved -= unitsCandidate.UnitsUsage
+				} else {
+					unitsToBeMoved = 0
+				}
+				if memoryToBeMoved > unitsCandidate.MemoryUsage {
+					memoryToBeMoved -= unitsCandidate.MemoryUsage
+				} else {
+					memoryToBeMoved = 0
+				}
+				processedTenants[unitsCandidate.TenantId] = true
+				numEvict++
+			}
+			units_iter++
+		}
+	}
+
+	usageSortedByMemory = usageSortedByMemory[:mem_iter]
+	usageSortedByUnits = usageSortedByUnits[:units_iter]
+
+	//reverse sort from highest to lowest usage. The algorithm
+	//will try to move tenant based on highest usage first so
+	//it has better chances of being able to find a slot on the target.
+	sort.Slice(usageSortedByMemory, func(i, j int) bool {
+		return usageSortedByMemory[i].MemoryUsage > usageSortedByMemory[j].MemoryUsage
+	})
+	sort.Slice(usageSortedByUnits, func(i, j int) bool {
+		return usageSortedByUnits[i].UnitsUsage > usageSortedByUnits[j].UnitsUsage
+	})
+
+	//create combined usage
+	combinedUsage := make([]*TenantUsage, 0)
+	processedTenants = make(map[string]bool)
+
+	maxlen := len(usageSortedByMemory)
+	if maxlen < len(usageSortedByUnits) {
+		maxlen = len(usageSortedByUnits)
+	}
+
+	var candidate *TenantUsage
+	for i := 0; i < maxlen; i++ {
+
+		if i < len(usageSortedByMemory) {
+			candidate = usageSortedByMemory[i]
+			if _, found := processedTenants[candidate.TenantId]; !found {
+				combinedUsage = append(combinedUsage, candidate)
+				processedTenants[candidate.TenantId] = true
+			}
+		}
+
+		if i < len(usageSortedByUnits) {
+			candidate = usageSortedByUnits[i]
+			if _, found := processedTenants[candidate.TenantId]; !found {
+				combinedUsage = append(combinedUsage, candidate)
+				processedTenants[candidate.TenantId] = true
+			}
+		}
+	}
+
+	return combinedUsage
+
+}
+
+//computeUsageByTenant computes the actual memory and units usage
+//per tenant on a given indexer node. Returns a map of TenantUsage
+//indexed by tenantId.
+func computeUsageByTenant(indexerNode *IndexerNode) map[string]*TenantUsage {
+
+	usagePerTenant := make(map[string]*TenantUsage)
+	for _, index := range indexerNode.Indexes {
+
+		if usage, ok := usagePerTenant[index.Bucket]; ok {
+			usage.MemoryUsage += index.ActualMemUsage
+			usage.UnitsUsage += index.ActualUnitsUsage
+		} else {
+			newUsage := &TenantUsage{
+				SourceId:    indexerNode.NodeId,
+				TenantId:    index.Bucket,
+				MemoryUsage: index.ActualMemUsage,
+				UnitsUsage:  index.ActualUnitsUsage,
+			}
+			usagePerTenant[index.Bucket] = newUsage
+		}
+	}
+	return usagePerTenant
+}
+
+//sortTenantUsageByMemory sorts the input map of TenantUsage indexed by tenantId into
+//a slice of TenantUsage sorted by memory in the ascending order.
+func sortTenantUsageByMemory(usagePerTenant map[string]*TenantUsage) []*TenantUsage {
+
+	usageSortedByMemory := make([]*TenantUsage, 0)
+
+	//convert map to slice
+	for _, tenantUsage := range usagePerTenant {
+		usageSortedByMemory = append(usageSortedByMemory, tenantUsage)
+	}
+
+	//sort by memoryUsage ascending
+	sort.Slice(usageSortedByMemory, func(i, j int) bool {
+		return usageSortedByMemory[i].MemoryUsage < usageSortedByMemory[j].MemoryUsage
+	})
+
+	return usageSortedByMemory
+
+}
+
+//sortTenantUsageByUnits sorts the input map of TenantUsage indexed by tenantId into
+//a slice of TenantUsage sorted by units in the ascending order.
+func sortTenantUsageByUnits(usagePerTenant map[string]*TenantUsage) []*TenantUsage {
+
+	usageSortedByUnits := make([]*TenantUsage, 0)
+
+	//convert map to slice
+	for _, tenantUsage := range usagePerTenant {
+		usageSortedByUnits = append(usageSortedByUnits, tenantUsage)
+	}
+
+	//sort by unitsUsage ascending
+	sort.Slice(usageSortedByUnits, func(i, j int) bool {
+		return usageSortedByUnits[i].UnitsUsage < usageSortedByUnits[j].UnitsUsage
+	})
+
+	return usageSortedByUnits
+}
+
+//moveTenantsToLowUsageSubCluster moves the list of input tenants to subClusters below
+//LWM usage threshold.
+func moveTenantsToLowUsageSubCluster(solution *Solution, tenantsToBeMoved [][]*TenantUsage,
+	subClustersBelowLWM []SubCluster, subClustersOverHWM []SubCluster,
+	usageThreshold *UsageThreshold) {
+
+	const _moveTenantsToLowUsageSubCluster = "Planner::moveTenantsToLowUsageSubCluster"
+
+	//pick the highest usage tenant from the list and find destination
+	//round robin for each source subCluster
+
+	maxLen := 0
+	for _, tenantUsageInSubCluster := range tenantsToBeMoved {
+
+		if maxLen < len(tenantUsageInSubCluster) {
+			maxLen = len(tenantUsageInSubCluster)
+		}
+	}
+
+	var candidate *TenantUsage
+	var placed bool
+	for i := 0; i < maxLen; i++ {
+
+		for _, tenantUsageInSubCluster := range tenantsToBeMoved {
+
+			if i < len(tenantUsageInSubCluster) {
+				candidate = tenantUsageInSubCluster[i]
+			}
+			placed = findTenantPlacement(solution, candidate,
+				subClustersBelowLWM, subClustersOverHWM, usageThreshold)
+			if !placed {
+				logging.Infof("%v Unable to place %v on any target", _moveTenantsToLowUsageSubCluster, candidate)
+			}
+		}
+
+	}
+	//TODO Elixir consider building state indexes also during planning
+}
+
+//findTenantPlacement finds the placement for a tenant based on the available resources
+//from the given list of SubClusters below LWM threshold usage. Returns false if no
+//placement can be found.
+func findTenantPlacement(solution *Solution, tenant *TenantUsage, subClustersBelowLWM []SubCluster,
+	subClustersOverHWM []SubCluster, usageThreshold *UsageThreshold) bool {
+
+	const _findTenantPlacement = "Planner::findTenantPlacement"
+
+	//find the first subCluster that can fit the tenant
+	for _, subCluster := range subClustersBelowLWM {
+
+		target := subCluster
+		if checkIfTenantCanBePlacedOnTarget(tenant, target, usageThreshold) {
+			logging.Infof("%v %v can be placed on %v", _findTenantPlacement, tenant, target)
+			source := findSourceForTenant(tenant, subClustersOverHWM)
+			placeTenantOnTarget(solution, tenant, source, target)
+			return true
+		}
+	}
+
+	return false
+}
+
+//checkIfTenantCanBePlacedOnTarget check if input tenant can be placed on the given
+//SubCluster based on its memory/units usage and limit thresholds.
+func checkIfTenantCanBePlacedOnTarget(tenant *TenantUsage, target SubCluster, usageThreshold *UsageThreshold) bool {
+
+	//check if tenant can be placed without exceeding subCluster's memory and units
+	//above LWM
+	memoryToBeAdded := tenant.MemoryUsage
+	unitsToBeAdded := tenant.UnitsUsage
+
+	memQuota := usageThreshold.MemQuota
+	unitsQuota := usageThreshold.UnitsQuota
+
+	for _, indexerNode := range target {
+		lowThresholdMemoryUsage := (uint64(usageThreshold.MemLowThreshold) * memQuota) / 100
+
+		if indexerNode.MandatoryQuota+memoryToBeAdded > lowThresholdMemoryUsage {
+			return false
+		}
+
+		lowThresholdUnitsUsage := (uint64(usageThreshold.UnitsLowThreshold) * unitsQuota) / 100
+
+		if indexerNode.ActualUnits+unitsToBeAdded > lowThresholdUnitsUsage {
+			return false
+		}
+	}
+
+	return true
+
+}
+
+//findSourceForTenant finds the source subCluster for the input tenant from
+//the list of subClusters provided.
+func findSourceForTenant(tenant *TenantUsage, subClustersOverHWM []SubCluster) SubCluster {
+
+	//find source node
+	var source SubCluster
+	for _, subCluster := range subClustersOverHWM {
+		for _, indexerNode := range subCluster {
+			if indexerNode.NodeId == tenant.SourceId {
+				source = subCluster
+			}
+		}
+	}
+	return source
+
+}
+
+//placeTenantOnTarget places the input tenant on target subCluster
+//and removes it from the source subCluster.
+func placeTenantOnTarget(solution *Solution, tenant *TenantUsage,
+	source SubCluster, target SubCluster) {
+
+	const _placeTenantOnTarget = "Planner::placeTenantOnTarget"
+
+	if len(source) != len(target) {
+		logging.Warnf("%v Invariant Violation num "+
+			"source %v is different from num target %v nodes", _placeTenantOnTarget,
+			len(source), len(target))
+	}
+
+	//place indexes
+	for i, indexerNode := range source {
+		indexes := getIndexesForTenant(indexerNode, tenant)
+		for _, index := range indexes {
+			logging.Verbosef("%v Moving index %v from %v to %v", _placeTenantOnTarget,
+				index, indexerNode.NodeId, target[i].NodeId)
+			solution.moveIndex2(indexerNode, index, target[i])
+		}
+	}
+}
+
+//updateTargetSubClusterUsage add the tenantUsage memory/units to input subcluster's
+//node statistics.
+func updateTargetSubClusterUsage(subCluster SubCluster, tenant *TenantUsage) {
+
+	//update the target subCluster statistics
+	for _, indexerNode := range subCluster {
+		indexerNode.MandatoryQuota += tenant.MemoryUsage
+		indexerNode.ActualUnits += tenant.UnitsUsage
+	}
+}
+
+//updateTargetSubClusterUsage subtracts the tenantUsage memory/units from input subcluster's
+//node statistics.
+func updateSourceSubClusterUsage(source SubCluster, tenant *TenantUsage) {
+
+	for _, indexerNode := range source {
+		if tenant.MemoryUsage < indexerNode.MandatoryQuota {
+			indexerNode.MandatoryQuota -= tenant.MemoryUsage
+		} else {
+			indexerNode.MandatoryQuota = 0
+		}
+
+		if tenant.UnitsUsage < indexerNode.ActualUnits {
+			indexerNode.ActualUnits -= tenant.UnitsUsage
+		} else {
+			indexerNode.ActualUnits = 0
+		}
+	}
+}
+
+//sortSubClustersByMemUsage sorts the input slice of subClusters into ascending
+//order based on memory usage and returns the new sorted slice
+func sortSubClustersByMemUsage(subClustersBelowLWM []SubCluster) []SubCluster {
+
+	findMaxMemUsageInSubCluster := func(subCluster SubCluster) uint64 {
+
+		var maxMem uint64
+		for _, indexerNode := range subCluster {
+			if indexerNode.MandatoryQuota > maxMem {
+				maxMem = indexerNode.MandatoryQuota
+			}
+		}
+		return maxMem
+	}
+
+	sort.Slice(subClustersBelowLWM, func(i, j int) bool {
+		return findMaxMemUsageInSubCluster(subClustersBelowLWM[i]) <
+			findMaxMemUsageInSubCluster(subClustersBelowLWM[j])
+	})
+
+	return subClustersBelowLWM
+}
+
+//getIndexesForTenant returns the list of indexes for the specified tenant
+//from the input indexer node.
+func getIndexesForTenant(indexerNode *IndexerNode, tenant *TenantUsage) []*IndexUsage {
+
+	var indexes []*IndexUsage
+
+	for _, index := range indexerNode.Indexes {
+		if index.Bucket == tenant.TenantId {
+			indexes = append(indexes, index)
+		}
+	}
+
+	return indexes
+}
+
+//Stringer from TenantUsage
+func (t *TenantUsage) String() string {
+
+	str := fmt.Sprintf("TenantUsage - ")
+	str += fmt.Sprintf("SourceId %v ", t.SourceId)
+	str += fmt.Sprintf("TenantId %v ", t.TenantId)
+	str += fmt.Sprintf("MemoryUsage %v ", t.MemoryUsage)
+	str += fmt.Sprintf("UnitsUsage %v ", t.UnitsUsage)
+	return str
+
 }

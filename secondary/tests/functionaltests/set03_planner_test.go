@@ -9,14 +9,17 @@
 package functionaltests
 
 import (
+	"errors"
 	"fmt"
+	"log"
+	"math"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
-	"log"
-	"math"
-	"testing"
-	"time"
 )
 
 //////////////////////////////////////////////////////////////
@@ -368,6 +371,15 @@ func TestGreedyPlanner(t *testing.T) {
 	defer logging.SetLogLevel(logging.Warn)
 
 	greedyPlannerTests(t)
+}
+
+func TestTenantAwarePlanner(t *testing.T) {
+	log.Printf("In TestTenantAwarePlanner()")
+
+	logging.SetLogLevel(logging.Info)
+	defer logging.SetLogLevel(logging.Warn)
+
+	tenantAwarePlannerTests(t)
 }
 
 //
@@ -1171,4 +1183,436 @@ func cleanupEstimation(s *planner.Solution) {
 			}
 		}
 	}
+}
+
+type tenantAwarePlannerFuncTestCase struct {
+	comment       string
+	topology      string
+	index         string
+	targetNodes   map[string]bool
+	ignoreReplica bool
+	errStr        string
+}
+
+type tenantAwarePlannerRebalFuncTestCase struct {
+	comment  string
+	topology string
+	result   string
+	errStr   string
+}
+
+var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
+	// Place single index instace
+	{
+		"Place Single Index Instance - 1 empty node - 1 SG",
+		"../testdata/planner/tenantaware/topology/1_empty_node_1_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true},
+		true,
+		"",
+	},
+	{
+		"Place Single Index Instance - 2 empty nodes - 1 SG",
+		"../testdata/planner/tenantaware/topology/2_empty_nodes_1_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		true,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 empty nodes - 2 SG",
+		"../testdata/planner/tenantaware/topology/4_empty_nodes_2_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true, "127.0.0.1:9003": true, "127.0.0.1:9004": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 1 node - 1 SG",
+		"../testdata/planner/tenantaware/topology/1_non_empty_node_1_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true},
+		true,
+		"",
+	},
+	{
+		"Place Single Index Instance - 2 nodes - 1 SG",
+		"../testdata/planner/tenantaware/topology/2_non_empty_node_1_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true},
+		true,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity(a)",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_a.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity(b)",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_b.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9004": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity(c)",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_c.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9004": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 6 nodes - 3 SG - Tenant Affinity Memory Above LWM",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_a.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9002": true, "127.0.0.1:9005": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 6 nodes - 3 SG - Tenant Affinity Units Above LWM",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_b.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9002": true, "127.0.0.1:9005": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 6 nodes - 3 SG - Tenant Affinity New Tenant(a)",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_a.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9006": true, "127.0.0.1:9003": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 6 nodes - 3 SG - Tenant Affinity New Tenant(b)",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_c.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9006": true, "127.0.0.1:9003": true},
+		false,
+		"",
+	},
+	/*
+		{
+			"Place Single Index Instance - 4 nodes - 2 SG - Failed Over Node",
+			"../testdata/planner/tenantaware/topology/4_empty_nodes_2_sg.json",
+			"../testdata/planner/tenantaware/new_index_1.json",
+			map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true, "127.0.0.1:9003": true, "127.0.0.1:9004": true},
+		},
+		{
+			"Place Single Index Instance - 4 nodes - 2 SG - Failed Swap Rebalance",
+			"../testdata/planner/tenantaware/topology/4_empty_nodes_2_sg.json",
+			"../testdata/planner/tenantaware/new_index_1.json",
+			map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true, "127.0.0.1:9003": true, "127.0.0.1:9004": true},
+		},
+	*/
+}
+
+var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
+	{
+		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity Above Memory HWM",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_d.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9004": true},
+		false,
+		"Tenant SubCluster Above High Usage Threshold",
+	},
+	{
+		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity Above Units HWM",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_e.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9004": true},
+		false,
+		"Tenant SubCluster Above High Usage Threshold",
+	},
+	{
+		"Place Single Index Instance - 6 nodes - 3 SG - New Tenant Memory Above LWM",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_d.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9002": true, "127.0.0.1:9005": true},
+		false,
+		"No SubCluster Below Low Usage Threshold",
+	},
+	{
+		"Place Single Index Instance - 6 nodes - 3 SG - New Tenant Units Above LWM",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_e.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9002": true, "127.0.0.1:9005": true},
+		false,
+		"No SubCluster Below Low Usage Threshold",
+	},
+}
+
+//
+// Tenant Aware planner tests
+//
+func tenantAwarePlannerTests(t *testing.T) {
+
+	tenantAwarePlannerFuncTests(t)
+	tenantAwarePlannerRebalanceTests(t)
+
+}
+
+//
+// Tenant Aware planner functional tests.
+// Each test case takes following inputs:
+// 1. Initial topology
+// 2. Set of index specs to be placed
+//
+// During verification, the index placement decided by tenant aware planner is
+// validated against the a pre-defined set of constraints.
+//
+func tenantAwarePlannerFuncTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.index)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		s := planner.NewSimulator()
+		p, err := s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
+		FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+		if _, ok := p.(*planner.TenantAwarePlanner); !ok {
+			t.Fatalf("TenantAware planner was not chosen for index placement.")
+			continue
+		}
+
+		validateTenantAwarePlacement(t, p, indexSpecs[0], testcase.targetNodes, testcase.ignoreReplica)
+	}
+
+	for _, testcase := range tenantAwarePlannerFuncTestCasesNegative {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.index)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		s := planner.NewSimulator()
+		_, err = s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
+		FailTestIfNoError(err, "Error in RunSingleTestPlan", t)
+		if strings.Contains(err.Error(), testcase.errStr) {
+			log.Printf("Expected error %v", err)
+		} else {
+			t.Fatalf("Unexpected error %v. Expected %v\n", err, testcase.errStr)
+		}
+
+	}
+}
+
+func validateTenantAwarePlacement(t *testing.T, p planner.Planner,
+	indexSpec *planner.IndexSpec, targetNodes map[string]bool, ignoreReplica bool) {
+
+	defnId := indexSpec.DefnId
+	count := 0
+
+	targets := make(map[string]bool)
+	for nid, ok := range targetNodes {
+		targets[nid] = ok
+	}
+
+	result := p.GetResult()
+	for _, indexer := range result.Placement {
+		for _, index := range indexer.Indexes {
+			if index.DefnId == defnId {
+				count++
+
+				if _, ok := targets[indexer.NodeId]; !ok {
+					log.Printf("Unexpected index placement by tenant aware planner. Target Nodes = %v", targetNodes)
+					p.Print()
+					t.Fatalf("Unexpected index placement by tenant aware planner %v, %v", targets, indexer.NodeId)
+				}
+
+				delete(targets, indexer.NodeId)
+			}
+		}
+	}
+
+	if ignoreReplica {
+		if count != 1 {
+			p.Print()
+			t.Fatalf("Some indexes are not found in the result")
+		}
+
+	} else {
+		if count != int(indexSpec.Replica) {
+			p.Print()
+			t.Fatalf("Some indexes are not found in the result")
+		}
+	}
+}
+
+var tenantAwarePlannerRebalFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Rebalance - 3 SG, 1 empty, 1 Memory Above HWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_a.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_a_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, 1 empty, 1 Units Above HWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_b.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_b_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, 1 empty, Both Memory/Units Above HWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_c.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_c_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, Multiple tenants to move, single source, multiple destination",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_d.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_d_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, Multiple tenants to move, no nodes below LWM",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_e.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_e_out.json",
+		"",
+	},
+	{
+		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(non-uniform memory/units usage)",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_f.json",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_f_out.json",
+		"",
+	},
+	{
+		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(non-uniform memory/units usage)",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_g.json",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_g_out.json",
+		"",
+	},
+	{
+		"Rebalance - 3 SG, Single Large Tenant, Nothing to move",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_h.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_h_out.json",
+		"",
+	},
+	{
+		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(zero usage tenants)",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_h.json",
+		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_h_out.json",
+		"",
+	},
+}
+
+func tenantAwarePlannerRebalanceTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerRebalFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadPlan(testcase.result)
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwareRebal(plan, nil)
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+		err = validateTenantAwareRebalanceSolution(t, solution, result)
+		if err != nil {
+			log.Printf("Actual Solution \n")
+			solution.PrintLayout()
+			log.Printf("Expected Result %v\n", result)
+		}
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+	}
+}
+
+func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Solution,
+	result *planner.Plan) error {
+
+	if len(solution.Placement) != len(result.Placement) {
+		return errors.New(fmt.Sprintf("Mismatch in indexer node count."+
+			"Solution %v Expected %v", len(solution.Placement), len(result.Placement)))
+	}
+	for _, indexer := range solution.Placement {
+
+		indexer1, err := findIndexerNodeInResult(result, indexer)
+		if err != nil {
+			return err
+		}
+
+		err = compareIndexesOnNodes(indexer, indexer1)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.IndexerNode) error {
+
+	if len(indexer.Indexes) != len(indexer1.Indexes) {
+		return errors.New(fmt.Sprintf("Mismatch in index count on "+
+			"node %v. Solution %v. Expected %v", indexer.NodeUUID,
+			len(indexer.Indexes), len(indexer1.Indexes)))
+	}
+
+	for _, index := range indexer.Indexes {
+
+		err := findIndexOnNode(index, indexer1)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+
+}
+
+func findIndexOnNode(index *planner.IndexUsage, indexer1 *planner.IndexerNode) error {
+
+	found := false
+	for _, index1 := range indexer1.Indexes {
+
+		if index.DefnId == index1.DefnId &&
+			index.InstId == index1.InstId &&
+			index.PartnId == index1.PartnId &&
+			index.Name == index1.Name &&
+			index.Bucket == index1.Bucket &&
+			index.Instance.ReplicaId == index1.Instance.ReplicaId {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return errors.New(fmt.Sprintf("Index %v not found on Node %v in expected result.", index, indexer1.NodeUUID))
+	}
+
+	return nil
+}
+
+func findIndexerNodeInResult(result *planner.Plan, indexer *planner.IndexerNode) (*planner.IndexerNode, error) {
+
+	for _, indexer1 := range result.Placement {
+		if indexer.NodeUUID == indexer1.NodeUUID {
+			return indexer1, nil
+		}
+	}
+	return nil, errors.New(fmt.Sprintf("Indexer Node %v not found in expected result.", indexer))
+
 }

@@ -361,6 +361,11 @@ func (t *simulator) RunSingleTestPlan(config *RunConfig, spec *WorkloadSpec, p *
 	return plan(config, p, indexes)
 }
 
+func (t *simulator) RunSingleTestTenantAwarePlan(p *Plan, indexSpec *IndexSpec) (Planner, error) {
+
+	return executeTenantAwarePlan(p, indexSpec)
+}
+
 func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec) (*SAPlanner, *RunStats, error) {
 
 	var indexes []*IndexUsage
@@ -396,6 +401,12 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 	}
 
 	return nil, nil, nil
+}
+
+func (t *simulator) RunSingleTestTenantAwareRebal(plan *Plan, deletedNodes []string) (*Solution, error) {
+
+	p, _, e := executeTenantAwareRebal(CommandRebalance, plan, deletedNodes)
+	return p.Result, e
 }
 
 //////////////////////////////////////////////////////////////

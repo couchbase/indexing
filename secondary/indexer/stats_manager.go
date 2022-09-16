@@ -722,6 +722,7 @@ type IndexerStats struct {
 	memoryUsedStorage  stats.Int64Val
 	memoryTotalStorage stats.Int64Val
 	memoryUsedQueue    stats.Int64Val
+	memoryUsedActual   stats.Int64Val //mandatory memory for plasma
 	needsRestart       stats.BoolVal
 	statsResponse      stats.TimingStat
 	notFoundError      stats.Int64Val
@@ -769,6 +770,7 @@ func (s *IndexerStats) Init() {
 	s.memoryUsedStorage.Init()
 	s.memoryTotalStorage.Init()
 	s.memoryUsedQueue.Init()
+	s.memoryUsedActual.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()
 	s.indexerState.Init()
@@ -832,6 +834,8 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.memoryUsedStorage.AddFilter(stats.PlannerFilter)
 	s.memoryUsed.AddFilter(stats.PlannerFilter)
 	s.memoryQuota.AddFilter(stats.PlannerFilter)
+	s.memoryRss.AddFilter(stats.PlannerFilter)
+	s.memoryUsedActual.AddFilter(stats.PlannerFilter)
 	s.uptime.AddFilter(stats.PlannerFilter)
 	s.cpuUtilization.AddFilter(stats.PlannerFilter)
 }
@@ -844,6 +848,7 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.memoryTotalStorage.AddFilter(stats.SummaryFilter)
 	s.memoryUsedQueue.AddFilter(stats.SummaryFilter)
 	s.memoryRss.AddFilter(stats.SummaryFilter)
+	s.memoryUsedActual.AddFilter(stats.SummaryFilter)
 
 	s.numCPU.AddFilter(stats.SummaryFilter)
 	s.cpuUtilization.AddFilter(stats.SummaryFilter)
@@ -1045,6 +1050,7 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("memory_used_storage", &is.memoryUsedStorage)
 	statMap.AddStatValueFiltered("memory_total_storage", &is.memoryTotalStorage)
 	statMap.AddStatValueFiltered("memory_used_queue", &is.memoryUsedQueue)
+	statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
 	statMap.AddStatValueFiltered("needs_restart", &is.needsRestart)
 	statMap.AddStatValueFiltered("num_cpu_core", &is.numCPU)
 	statMap.AddStatValueFiltered("avg_resident_percent", &is.avgResidentPercent)
@@ -2872,6 +2878,7 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out := make([]byte, 0, 256)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_quota %v\n", METRICS_PREFIX, is.memoryQuota.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_used_total %v\n", METRICS_PREFIX, is.memoryUsed.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
 
 	w.WriteHeader(200)
 	w.Write([]byte(out))

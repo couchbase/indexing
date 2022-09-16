@@ -1,0 +1,24 @@
+{
+   "placement":[
+      {
+         "nodeId":"127.0.0.1:9001",
+         "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg1",
+         "mandatoryQuota":0
+      },
+      {
+         "nodeId":"127.0.0.1:9002",
+         "nodeUUID":"abc15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg1",
+         "mandatoryQuota":0
+      }
+   ],
+   "isLive":true,
+   "usageThreshold": { "memHighThreshold" : 80,
+	"memLowThreshold" : 60,
+	"unitsHighThreshold" : 60,
+	"unitsLowThreshold" : 40,
+	"memQuota": 1000000000,
+	"unitsQuota" : 10000
+    }
+}

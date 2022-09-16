@@ -164,6 +164,8 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 		return nil, err
 	}
 
+	getUsageThresholds(plan, config)
+
 	// Recalculate the index and indexer memory and cpu usage using the sizing formula.
 	// The stats retrieved from indexer typically has lower memory/cpu utilization than
 	// sizing formula, since sizing formula captures max usage capacity. By recalculating
@@ -500,6 +502,10 @@ func getIndexStats(plan *Plan, config common.Config) error {
 
 		if memRSS, ok := statsMap["memory_rss"]; ok {
 			indexer.ActualRSS = uint64(memRSS.(float64))
+		}
+
+		if mandatoryQuota, ok := statsMap["memory_used_actual"]; ok {
+			indexer.MandatoryQuota = uint64(mandatoryQuota.(float64))
 		}
 
 		// uptime
@@ -1546,6 +1552,22 @@ func getIndexNumReplica(plan *Plan, isRebalance bool) error {
 	}
 
 	return nil
+}
+
+//getUsageThresholds gets the usage thresholds from config and
+//updates it in the plan.UsageThreshold struct.
+func getUsageThresholds(plan *Plan, config common.Config) {
+
+	plan.UsageThreshold = &UsageThreshold{}
+
+	plan.UsageThreshold.MemHighThreshold = int32(config["indexer.settings.thresholds.mem_high"].Int())
+	plan.UsageThreshold.MemLowThreshold = int32(config["indexer.settings.thresholds.mem_low"].Int())
+
+	plan.UsageThreshold.UnitsHighThreshold = int32(config["indexer.settings.thresholds.units_high"].Int())
+	plan.UsageThreshold.UnitsLowThreshold = int32(config["indexer.settings.thresholds.units_low"].Int())
+
+	plan.UsageThreshold.MemQuota = config["indexer.settings.memory_quota"].Uint64()
+	plan.UsageThreshold.UnitsQuota = config["indexer.settings.units_quota"].Uint64()
 }
 
 // rebalanceRemoveFromPlan is called only in the Rebalance case to remove any indexes whose numbers

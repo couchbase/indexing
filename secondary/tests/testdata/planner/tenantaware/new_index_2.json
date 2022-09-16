@@ -1,0 +1,11 @@
+[
+	{
+		"name" 	        : "idx1",
+		"bucket"        : "bucket7",
+		"isPrimary"     : false,
+		"secExprs"      : ["name1"],
+		"isArrayIndex"  : false,
+		"replica"       : 2,
+		"defnId"        : 987654
+	}
+]
