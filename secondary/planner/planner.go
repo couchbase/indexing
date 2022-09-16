@@ -284,7 +284,7 @@ type IndexUsage struct {
 	destNode *IndexerNode
 
 	// input: flag to indicate if the index in delete or create token
-	pendingDelete bool // true if there is a delete token associated with this index
+	PendingDelete bool // true if there is a delete token associated with this index
 	pendingCreate bool // true if there is a create token associated with this index
 	pendingBuild  bool // true if there is a build token associated with this index
 
@@ -1487,7 +1487,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			}
 
 			if index.Instance != nil && missingReplica > 0 &&
-				numReplica < numLiveNode && !index.pendingDelete {
+				numReplica < numLiveNode && !index.PendingDelete {
 
 				targets := s.FindNodesForReplicaRepair(index, missingReplica)
 				if len(targets) == 0 && !indexer.ExcludeAny(s) {
@@ -1568,7 +1568,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 	done := make(map[common.IndexInstId]bool)
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if !index.pendingDelete {
+			if !index.PendingDelete {
 				if index.Instance != nil && index.Instance.Pc != nil {
 					if _, ok := done[index.InstId]; !ok {
 						if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
@@ -2183,7 +2183,7 @@ func (s *Solution) PrintLayout() {
 				index.GetBuildPercent(s.UseLiveData()),
 				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
 				!index.suppressEquivIdxCheck,
-				index.pendingCreate, index.pendingDelete)
+				index.pendingCreate, index.PendingDelete)
 		}
 	}
 }
@@ -5461,7 +5461,7 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly b
 
 	// index to be balanced
 	for i, index := range indexes {
-		if !index.pendingDelete {
+		if !index.PendingDelete {
 			p.indexes[index] = true
 			index.eligible = true
 			p.eligibles[i] = index
