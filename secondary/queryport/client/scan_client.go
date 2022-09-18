@@ -177,7 +177,7 @@ func (c *GsiScanClient) Lookup(
 	rollbackTime int64,
 	partitions []common.PartitionId,
 	dataEncFmt common.DataEncodingFormat,
-	retry bool, skipReadMetering bool) (error, bool) {
+	retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -205,7 +205,8 @@ func (c *GsiScanClient) Lookup(
 		PartitionIds:     partnIds,
 		Sorted:           proto.Bool(true),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -296,7 +297,7 @@ func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -328,7 +329,8 @@ func (c *GsiScanClient) Range(
 		PartitionIds:     partnIds,
 		Sorted:           proto.Bool(true),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -343,7 +345,7 @@ func (c *GsiScanClient) RangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -366,7 +368,8 @@ func (c *GsiScanClient) RangePrimary(
 		PartitionIds:     partnIds,
 		Sorted:           proto.Bool(true),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -381,7 +384,7 @@ func (c *GsiScanClient) ScanAll(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -396,7 +399,8 @@ func (c *GsiScanClient) ScanAll(
 		RollbackTime:     proto.Int64(rollbackTime),
 		PartitionIds:     partnIds,
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -411,7 +415,7 @@ func (c *GsiScanClient) MultiScan(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -497,7 +501,8 @@ func (c *GsiScanClient) MultiScan(
 		PartitionIds:     partnIds,
 		Sorted:           proto.Bool(true),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -512,7 +517,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -603,7 +608,8 @@ func (c *GsiScanClient) MultiScanPrimary(
 		PartitionIds:     partnIds,
 		Sorted:           proto.Bool(true),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -782,7 +788,7 @@ func (c *GsiScanClient) CountRangePrimary(
 func (c *GsiScanClient) MultiScanCount(
 	defnID uint64, requestId string, scans Scans, distinct bool,
 	cons common.Consistency, vector *TsConsistency, rollbackTime int64,
-	partitions []common.PartitionId, retry bool, skipReadMetering bool) (int64, uint64, error) {
+	partitions []common.PartitionId, retry bool, scanParams map[string]interface{}) (int64, uint64, error) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -852,7 +858,8 @@ func (c *GsiScanClient) MultiScanCount(
 		Cons:             proto.Uint32(uint32(cons)),
 		RollbackTime:     proto.Int64(rollbackTime),
 		PartitionIds:     partnIds,
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 
 	if vector != nil {
@@ -875,7 +882,7 @@ func (c *GsiScanClient) MultiScanCount(
 func (c *GsiScanClient) MultiScanCountPrimary(
 	defnID uint64, requestId string, scans Scans, distinct bool,
 	cons common.Consistency, vector *TsConsistency, rollbackTime int64,
-	partitions []common.PartitionId, retry bool, skipReadMetering bool) (int64, uint64, error) {
+	partitions []common.PartitionId, retry bool, scanParams map[string]interface{}) (int64, uint64, error) {
 
 	var what string
 	// serialize scans
@@ -952,7 +959,8 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 		Cons:             proto.Uint32(uint32(cons)),
 		RollbackTime:     proto.Int64(rollbackTime),
 		PartitionIds:     partnIds,
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 
 	if vector != nil {
@@ -978,7 +986,7 @@ func (c *GsiScanClient) Scan3(
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1104,7 +1112,8 @@ func (c *GsiScanClient) Scan3(
 		GroupAggr:        protoGroupAggr,
 		Sorted:           proto.Bool(sorted),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -1120,7 +1129,7 @@ func (c *GsiScanClient) Scan3Primary(
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, skipReadMetering bool) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -1250,7 +1259,8 @@ func (c *GsiScanClient) Scan3Primary(
 		GroupAggr:        protoGroupAggr,
 		Sorted:           proto.Bool(sorted),
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
-		SkipReadMetering: proto.Bool(skipReadMetering),
+		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
+		User:             proto.String(scanParams["user"].(string)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(

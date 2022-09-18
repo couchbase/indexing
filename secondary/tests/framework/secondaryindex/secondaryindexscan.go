@@ -28,6 +28,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	start := time.Now()
 	connErr := client.Range(
 		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
@@ -60,7 +61,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 				return true
 			}
 			return false
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -101,6 +102,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	start := time.Now()
 	connErr := client.Range(
 		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
@@ -155,7 +157,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 				return true
 			}
 			return false
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -197,6 +199,7 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	start := time.Now()
 	connErr := client.Lookup(
 		defnID, "", []c.SecondaryKey{values}, distinct, limit,
@@ -229,7 +232,7 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 				return true
 			}
 			return false
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -275,6 +278,7 @@ func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, l
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	start := time.Now()
 	connErr := client.ScanAll(
 		defnID, "", limit,
@@ -321,7 +325,7 @@ func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, l
 				return true
 			}
 			return false
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -413,6 +417,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	count := 0
 	start := time.Now()
 	connErr := client.MultiScan(
@@ -465,7 +470,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				return true
 			}
 			return false
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
@@ -494,8 +499,9 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 		return 0, e
 	}
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector, false)
+	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector, scanParams)
 	if ru != 0 {
 		log.Printf("MultiScanCount: ReadUnits: %v bucket: %v indexName: %v scans: %v distinct: %v", ru,
 			bucketName, indexName, scans, distinct)
@@ -536,6 +542,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	count := 0
 	start := time.Now()
 	connErr := client.Scan3(
@@ -614,7 +621,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				}
 			}
 			return true
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {

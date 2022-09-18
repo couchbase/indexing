@@ -341,6 +341,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	case *protobuf.CountRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.User = req.GetUser()
 		r.rollbackTime = req.GetRollbackTime()
 		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())

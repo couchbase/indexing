@@ -102,7 +102,7 @@ loop:
 						log.Println(v)
 					}
 					return true
-				}, false)
+				}, scanParams)
 			if err != nil {
 				log.Fatal(err)
 			}

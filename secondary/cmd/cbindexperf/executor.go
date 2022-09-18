@@ -90,26 +90,28 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRang
 
 	startTime := time.Now()
 	uuid := fmt.Sprintf("%d", atomic.AddUint64(&requestCounter, 1))
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+
 	switch spec.Type {
 	case "All":
 		requestID := os.Args[0] + uuid
-		err = client.ScanAll(spec.DefnId, requestID, spec.Limit, cons, nil, callb, false)
+		err = client.ScanAll(spec.DefnId, requestID, spec.Limit, cons, nil, callb, scanParams)
 	case "Range":
 		requestID := os.Args[0] + uuid
 		err = client.Range(spec.DefnId, requestID, scanRange.GetLow(spec), scanRange.GetHigh(spec),
-			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb, false)
+			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb, scanParams)
 	case "Lookup":
 		requestID := os.Args[0] + uuid
 		err = client.Lookup(spec.DefnId, requestID, spec.Lookups, false,
-			spec.Limit, cons, nil, callb, false)
+			spec.Limit, cons, nil, callb, scanParams)
 	case "MultiScan":
 		requestID := os.Args[0] + uuid
 		err = client.MultiScan(spec.DefnId, requestID, spec.Scans, false, false, spec.IndexProjection, 0,
-			spec.Limit, cons, nil, callb, false)
+			spec.Limit, cons, nil, callb, scanParams)
 	case "Scan3":
 		requestID := os.Args[0] + uuid
 		err = client.Scan3(spec.DefnId, requestID, scanRange.GetScans(spec), false, false, spec.IndexProjection,
-			0, spec.Limit, spec.GroupAggr, nil, cons, nil, callb, false)
+			0, spec.Limit, spec.GroupAggr, nil, cons, nil, callb, scanParams)
 	}
 
 	if err != nil {

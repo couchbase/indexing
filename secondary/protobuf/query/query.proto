@@ -111,16 +111,17 @@ message StreamEndResponse {
 
 // Count request to indexer.
 message CountRequest {
-    required uint64        defnID    = 1;
-    required Span          span      = 2;
-    required uint32        cons      = 3;
-    optional TsConsistency vector    = 4;
-    optional string        requestId = 5;
-    optional bool          distinct  = 6;
-    repeated Scan          scans     = 7;
-	optional int64		   rollbackTime    = 8;
-	repeated uint64		   partitionIds     = 9;
-    optional bool          skipReadMetering  = 10;
+    required uint64        defnID           = 1;
+    required Span          span             = 2;
+    required uint32        cons             = 3;
+    optional TsConsistency vector           = 4;
+    optional string        requestId        = 5;
+    optional bool          distinct         = 6;
+    repeated Scan          scans            = 7;
+    optional int64         rollbackTime     = 8;
+    repeated uint64        partitionIds     = 9;
+    optional bool          skipReadMetering = 10;
+    optional string        user             = 11;
 }
 
 // total number of entries in index.
