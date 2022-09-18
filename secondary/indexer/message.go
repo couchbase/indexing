@@ -2597,6 +2597,12 @@ func (m *MsgDestroyLocalShardData) GetRespCh() chan bool {
 	return m.respCh
 }
 
+func (m *MsgDestroyLocalShardData) String() string {
+	str := "\n\tMessage: MsgDestroyLocalShardData"
+	str += fmt.Sprintf("\nShardIds: %v", m.shardIds)
+	return str
+}
+
 type MsgUpdateShardIds struct {
 	partnShardIdMap common.PartnShardIdMap
 }

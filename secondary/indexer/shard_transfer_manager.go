@@ -219,6 +219,25 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	ttid := msg.GetTransferTokenId()
 	respCh := msg.GetRespCh()
 
+	// For cleanup cases where indexer does not have the information about
+	// the shardPaths
+	if len(shardPaths) == 0 {
+		meta := make(map[string]interface{})
+		meta[plasma.GSIRebalanceId] = rebalanceId
+		meta[plasma.GSIRebalanceTransferToken] = ttid
+
+		err := plasma.DoCleanup(destination, meta)
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
+				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
+		}
+
+		logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards")
+		// Notify the caller that cleanup has been initiated for all shards
+		respCh <- true
+		return
+	}
+
 	for shardId, shardPath := range shardPaths {
 		meta := make(map[string]interface{})
 		meta[plasma.GSIRebalanceId] = rebalanceId
@@ -370,6 +389,9 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
 
+	storageDir := stm.config["storage_dir"].String()
+	plasma.SetStorageDir(storageDir)
+
 	msg := cmd.(*MsgDestroyLocalShardData)
 	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage processing command: %v", msg)
 
@@ -383,7 +405,6 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
 		}
 	}
 
-	logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Done clean-up for shards: %v", shardIds)
-
 	respCh <- true
+	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage Done clean-up for shards: %v", shardIds)
 }
