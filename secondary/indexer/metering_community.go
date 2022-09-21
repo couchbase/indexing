@@ -35,7 +35,7 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	return
 }
 
-func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool) error {
+func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool, billable bool) error {
 	panic("MeteringManager::RecordWriteUnits Not implemented for Community Edition")
 	return nil
 }
@@ -84,7 +84,7 @@ func (mt *MeteringTransaction) AddIndexWrite(bytes uint64, update bool) error {
 	return nil
 }
 
-func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string) MeteringTransaction {
+func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string, billable bool) MeteringTransaction {
 	panic("MeteringManager::StartMeteringTxn Not implemented for Community Edition")
 	return MeteringTransaction{}
 }

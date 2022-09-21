@@ -33,7 +33,7 @@ replace github.com/couchbase/query-ee => ../query-ee
 replace github.com/couchbase/regulator => ../regulator
 
 require (
-	github.com/couchbase/cbauth v0.1.2
+	github.com/couchbase/cbauth v0.1.3
 	github.com/couchbase/go-slab v0.0.0-20220303011136-e47646b420b3
 	github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e
 	github.com/couchbase/gometa v0.0.0-20220803182802-05cb6b2e299f

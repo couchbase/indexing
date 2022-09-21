@@ -97,6 +97,7 @@ type plasmaSlice struct {
 	maxRollbacks  int
 	maxDiskSnaps  int
 	numVbuckets   int
+	replicaId     int
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -176,7 +177,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (*plasmaSlice, error) {
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int, replicaId int) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -208,6 +209,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
 	slice.clusterAddr = sysconf["clusterAddr"].String()
 	slice.numVbuckets = numVBuckets
+	slice.replicaId = replicaId
 
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
@@ -901,7 +903,8 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 			if mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
-				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false)
+				billable := mdb.replicaId == 0
+				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
 			}
 		}
 		mdb.isDirty = true
@@ -971,7 +974,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 			bucket := mdb.idxDefn.Bucket
 			// for an update operation deleteSecIndex has already accounted 1 WCU
 			// so we will only count 1 WCU here.
-			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(key)), false)
+			billable := mdb.replicaId == 0
+			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(key)), false, billable)
 		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1086,8 +1090,11 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	nmut = 0
 
 	var mt MeteringTransaction
+	// Replica writes are not metered as billable
+	billable := mdb.replicaId == 0
+
 	if mdb.EnableMetering() {
-		mt = mdb.meteringMgr.StartMeteringTxn(mdb.GetBucketName(), "") // Write metering is not accounted at user level
+		mt = mdb.meteringMgr.StartMeteringTxn(mdb.GetBucketName(), "", billable) // Write metering is not accounted at user level
 		defer func() {
 			if abortErr == nil {
 				mt.Commit()
@@ -1326,7 +1333,8 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 
 			if mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
-				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false)
+				billable := mdb.replicaId == 0
+				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
 			}
 		}
 
@@ -1381,8 +1389,9 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 
 		if meterDelete && mdb.EnableMetering() && itemDeleted == true {
 			bucket := mdb.idxDefn.Bucket
+			billable := mdb.replicaId == 0
 			keylen := getKeyLenFromEntry(entry)
-			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false)
+			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false, billable)
 		}
 	}
 
@@ -1467,7 +1476,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 
 			if meterDelete && mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
-				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false)
+				billable := mdb.replicaId == 0
+				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false, billable)
 			}
 		}
 	}
@@ -3159,7 +3169,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	enableMetering := s.slice.EnableMetering() && !ctx.SkipReadMetering()
 	if enableMetering {
-		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User())
+		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User(), true)
 		defer func() {
 			var ru uint64
 			unitSlice, e := mt.Commit()
