@@ -101,6 +101,8 @@ type Plan struct {
 
 	SubClusters    []SubCluster
 	UsageThreshold *UsageThreshold `json:usageThreshold,omitempty"`
+
+	DeletedNodes []string `json:deletedNodes,omitempty` //used only for unit testing
 }
 
 type IndexSpec struct {
@@ -1703,7 +1705,7 @@ func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
 
 func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 
-	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan:"
+	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan"
 
 	solution := solutionFromPlan2(plan)
 
@@ -1805,19 +1807,27 @@ func solutionFromPlan2(plan *Plan) *Solution {
 //if those belong to a different server group.
 func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, error) {
 
+	const _groupIndexNodesIntoSubClusters = "Planner::groupIndexNodesIntoSubClusters"
+
 	var err error
 	var subClusters []SubCluster
 
 	for _, node := range indexers {
 		var subcluster SubCluster
 
+		if node.IsDeleted() {
+			logging.Infof("%v Skip Ejected Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
+				node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
+			continue
+		}
+
 		//skip empty nodes
 		if len(node.Indexes) == 0 {
 			continue
 		}
 
-		logging.Infof("Planner::executeTenantAwareRebal Index Node %v SG %v Memory %v Units %v", node.NodeId,
-			node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
+		logging.Infof("%v Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
+			node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
 
 		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
 			continue
@@ -1847,8 +1857,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 	//group empty nodes into subCluster
 	for _, node := range indexers {
 
-		logging.Infof("Planner::executeTenantAwareRebal Index Node %v SG %v Memory %v Units %v", node.NodeId,
-			node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
+		if node.IsDeleted() {
+			continue
+		}
 
 		var subcluster SubCluster
 
@@ -1858,11 +1869,14 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 
 		//if there are no indexes on a node
 		if len(node.Indexes) == 0 {
+			logging.Infof("%v Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
+				node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
 			subcluster, err = findSubClusterForEmptyNode(indexers, node, subClusters)
 			if err != nil {
 				return nil, err
 			}
 		}
+
 		subClusters = append(subClusters, subcluster)
 	}
 
@@ -1879,7 +1893,7 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 func validateSubClusterGrouping(subClusters []SubCluster,
 	indexSpec *IndexSpec) error {
 
-	const _validateSubClusterGrouping = "Planner::validateSubClusterGrouping:"
+	const _validateSubClusterGrouping = "Planner::validateSubClusterGrouping"
 
 	for _, subCluster := range subClusters {
 
@@ -2060,6 +2074,9 @@ func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubClus
 
 	node := subCluster[0]
 	for _, indexer := range indexers {
+		if node.IsDeleted() {
+			continue
+		}
 		if indexer.NodeUUID != node.NodeUUID &&
 			indexer.ServerGroup != node.ServerGroup &&
 			len(indexer.Indexes) == 0 {
@@ -2134,6 +2151,9 @@ func findSubClusterForIndex(indexers []*IndexerNode,
 
 	var subCluster SubCluster
 	for _, indexer := range indexers {
+		if indexer.IsDeleted() {
+			continue
+		}
 		for _, checkIdx := range indexer.Indexes {
 			if index.DefnId == checkIdx.DefnId &&
 				index.Instance.Version == checkIdx.Instance.Version &&
@@ -2920,9 +2940,28 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 	const _executeTenantAwareRebal = "Planner::executeTenantAwareRebal"
 
 	solution := solutionFromPlan2(plan)
-
 	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
 
+	// update the number of new and deleted nodes in the solution
+
+	var err error
+	err = solution.markDeletedNodes(deletedNodes)
+	if err != nil {
+		return nil, nil, err
+	}
+	solution.numDeletedNode = solution.findNumDeleteNodes()
+	solution.numNewNode = solution.findNumEmptyNodes()
+	solution.markNewNodes()
+
+	//find placement for indexes of deleted indexer nodes
+	if solution.numDeletedNode > 0 {
+		err = findPlacementForDeletedNodes(solution)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	//group indexer nodes into subclusters
 	allSubClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
 	if err != nil {
 		return nil, nil, err
@@ -2930,6 +2969,7 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 
 	logging.Infof("%v Found SubClusters  %v", _executeTenantAwareRebal, allSubClusters)
 
+	//repair missing replica indexes
 	repairMissingReplica(solution, allSubClusters)
 
 	subClustersOverHWM, err := findSubClusterAboveHighThreshold(allSubClusters,
@@ -3574,4 +3614,210 @@ func findPairNodeUsingIndex(subCluster SubCluster, index int) *IndexerNode {
 		return subCluster[0]
 	}
 
+}
+
+//findPlacementForDeletedNodes finds the placement of indexes which belong to a
+//deleted node. Once the right placement is found, the indexes are moved to the
+//new target node in the input solution. It returns the list of non ejected/deleted
+//nodes remaining in the cluster.
+func findPlacementForDeletedNodes(solution *Solution) error {
+
+	allIndexers := solution.Placement
+
+	deletedNodes := solution.getDeleteNodes()
+	newNodes := solution.getNewNodes()
+
+	err := moveTenantsFromDeletedNodes(deletedNodes, newNodes, solution)
+	if err != nil {
+		return err
+	}
+
+	//remove the deleted nodes from the list
+	nonEjectedNodes := make([]*IndexerNode, 0, len(allIndexers))
+
+	for _, indexer := range allIndexers {
+		if !indexer.IsDeleted() {
+			nonEjectedNodes = append(nonEjectedNodes, indexer)
+		}
+	}
+
+	logging.Infof("%v nonEjectedNodes", nonEjectedNodes)
+
+	solution.Placement = nonEjectedNodes
+	return nil
+}
+
+//moveTenantsFromDeletedNodes moves the tenants from the deleted nodes
+//to remaining nodes in the cluster based on the following rules:
+//1. Ignore empty deleted nodes as nothing needs to be done.
+//2. Find candidate node for deleted node to which indexes of this deleted
+//node can be swapped to. It is important to swap the indexes from
+//deleted nodes entirely to the candidate node to maintain sub-cluster affinity.
+//This will work well if a single or both nodes of the sub-cluster are
+//getting deleted.
+//3. If deleted nodes are equal to new nodes, then swap one for one.
+//4. If deleted nodes are less than new nodes,
+//pick any new nodes which can match the server group constraint.
+func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
+	newNodes []*IndexerNode, solution *Solution) error {
+
+	const _moveTenantsFromDeletedNodes = "Planner::moveTenantsFromDeletedNodes"
+
+	//remove empty deleted nodes
+	var nonEmptyDeletedNodes []*IndexerNode
+	for _, indexer := range deletedNodes {
+		if len(indexer.Indexes) != 0 {
+			nonEmptyDeletedNodes = append(nonEmptyDeletedNodes, indexer)
+		}
+	}
+
+	//if there is no non-empty deleted node, nothing to do
+	if len(nonEmptyDeletedNodes) == 0 {
+		return nil
+	}
+
+	//find pair nodes for all non empty deleted nodes i.e. the node
+	//which pairs up as a sub-cluster with the deleted node. If pair node cannot
+	//be found, it is fine. It is only required to check for server group
+	//mapping constraint(i.e. nodes in a sub-cluster cannot be in the same SG).
+	//If both nodes in the sub-cluster are going out, then both pairs will be
+	//added to the list.
+	var pairForDeletedNodes []*IndexerNode
+	for _, indexer := range nonEmptyDeletedNodes {
+		pairNode := findPairNodeForIndexer(indexer, solution.Placement)
+		pairForDeletedNodes = append(pairForDeletedNodes, pairNode)
+	}
+
+	logging.Infof("pairForDeletedNodes %v", pairForDeletedNodes)
+	if len(nonEmptyDeletedNodes) > len(newNodes) {
+
+		logging.Infof("%v Num deleted nodes %v is more than num new/empty nodes %v", _moveTenantsFromDeletedNodes,
+			len(nonEmptyDeletedNodes), len(newNodes))
+
+		return errors.New("Number of deleted nodes is more than available new nodes.")
+
+	} else {
+
+		//In order to make sure that all chosen swap candidate nodes can satisfy the server group constraints after
+		//forming sub-clusters, generate permutations of candidate nodes and validate server group constraint.
+		//Pick the combination which satisfies the server group constraint.
+		newNodesPermutations := permuteNodes(newNodes)
+		found := false
+		for _, newNodesPerm := range newNodesPermutations {
+			if validateServerGroupForPairNode(nonEmptyDeletedNodes, pairForDeletedNodes, newNodesPerm) {
+				newNodes = newNodesPerm
+				found = true
+				break
+			}
+		}
+		if found {
+			swapTenantsFromDeleteNodes(deletedNodes, newNodes, solution)
+		}
+	}
+
+	return nil
+}
+
+//findPairNodeForIndexer finds the sub-cluster pair for the input indexer node
+//from all the nodes in the cluster. Returns nil if pair node cannot be found.
+func findPairNodeForIndexer(node *IndexerNode, allIndexers []*IndexerNode) *IndexerNode {
+
+	for _, index := range node.Indexes {
+
+		for _, indexer := range allIndexers {
+
+			if indexer.NodeUUID == node.NodeUUID {
+				//skip self
+				continue
+			}
+			for _, checkIdx := range indexer.Indexes {
+				if index.DefnId == checkIdx.DefnId &&
+					index.Instance.Version == checkIdx.Instance.Version &&
+					index.PartnId == checkIdx.PartnId {
+					return indexer
+				}
+			}
+		}
+	}
+	return nil
+}
+
+//swapTenantsFromDeleteNodes swaps the indexes from deletedNodes
+//to newNodes.
+func swapTenantsFromDeleteNodes(deletedNodes []*IndexerNode,
+	newNodes []*IndexerNode, solution *Solution) {
+
+	for i, source := range deletedNodes {
+
+		outIndex := make([]*IndexUsage, len(source.Indexes))
+		copy(outIndex, source.Indexes)
+		for _, index := range outIndex {
+			logging.Infof("Moving index %v from source %v to dest %v", index, source, newNodes[i])
+			solution.moveIndex2(source, index, newNodes[i])
+		}
+	}
+
+}
+
+//validateServerGroupForPairNode validates if nodes in deletedNodes can be paired with nodes
+//in newNodes based on server group mapping. Two nodes can only be paired if both belong
+//to different server group.
+func validateServerGroupForPairNode(deletedNodes []*IndexerNode,
+	pairForDeletedNodes []*IndexerNode, newNodes []*IndexerNode) bool {
+
+	//node with the same index in the slice are considered to be a pair
+	for i, _ := range deletedNodes {
+
+		//if newNodes are less than deletedNodes
+		if i > len(newNodes)-1 {
+			return false
+		}
+
+		pairNode := pairForDeletedNodes[i]
+		if pairNode != nil {
+			//if pair node is also being deleted, then no need to check
+			if pairNode.IsDeleted() {
+				continue
+			}
+
+			if pairNode.ServerGroup == newNodes[i].ServerGroup {
+				return false
+			}
+		}
+	}
+
+	return true
+
+}
+
+//permuteNodes returns all the permutation of the input slice
+//of indexer nodes.
+func permuteNodes(nodes []*IndexerNode) [][]*IndexerNode {
+
+	var perm func([]*IndexerNode, int)
+
+	result := make([][]*IndexerNode, 0)
+
+	perm = func(nodes []*IndexerNode, n int) {
+		if n == 1 {
+			tmp := make([]*IndexerNode, len(nodes))
+			copy(tmp, nodes)
+			result = append(result, tmp)
+		} else {
+			for i := 0; i < n; i++ {
+				perm(nodes, n-1)
+				if n%2 == 1 {
+					tmp := nodes[i]
+					nodes[i] = nodes[n-1]
+					nodes[n-1] = tmp
+				} else {
+					tmp := nodes[0]
+					nodes[0] = nodes[n-1]
+					nodes[n-1] = tmp
+				}
+			}
+		}
+	}
+	perm(nodes, len(nodes))
+	return result
 }

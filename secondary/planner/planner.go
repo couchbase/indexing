@@ -2093,6 +2093,19 @@ func (s *Solution) getDeleteNodes() []*IndexerNode {
 	return result
 }
 
+//find list of new nodes i.e. nodes without any index
+func (s *Solution) getNewNodes() []*IndexerNode {
+
+	result := ([]*IndexerNode)(nil)
+	for _, indexer := range s.Placement {
+		if indexer.isNew {
+			result = append(result, indexer)
+		}
+	}
+
+	return result
+}
+
 //
 // This prints the vital statistics from Solution.
 //
@@ -3074,6 +3087,29 @@ func (s *Solution) hasNewNodes() bool {
 		}
 	}
 	return false
+}
+
+//markDeletedNodes sets isDelete flag as true for deletec nodes
+func (s *Solution) markDeletedNodes(deletedNodes []string) error {
+
+	if len(deletedNodes) != 0 {
+
+		if len(deletedNodes) > len(s.Placement) {
+			return errors.New("The number of node in cluster is smaller than the number of node to be deleted.")
+		}
+
+		for _, nodeId := range deletedNodes {
+
+			candidate := s.findMatchingIndexer(nodeId)
+			if candidate == nil {
+				return errors.New(fmt.Sprintf("Cannot find to-be-deleted indexer in solution: %v", nodeId))
+			}
+
+			candidate.isDelete = true
+		}
+	}
+	return nil
+
 }
 
 //
