@@ -62,7 +62,7 @@ require (
 	github.com/couchbase/gocb/v2 v2.5.3-0.20220915151107-bba7053674ed // indirect
 	github.com/couchbase/gocbcore/v10 v10.1.5-0.20220914162543-e8fb96235d17 // indirect
 	github.com/couchbase/gocbcore/v9 v9.1.8 // indirect
-	github.com/couchbase/gomemcached v0.1.5-0.20220627085811-f29815b6005a // indirect
+	github.com/couchbase/gomemcached v0.1.5-0.20220916124424-884dec4ebb14 // indirect
 	github.com/couchbasedeps/go-curl v0.0.0-20190830233031-f0b2afc926ec // indirect
 	github.com/couchbaselabs/c-forestdb v0.0.0-20160212203508-1b1267468faa // indirect
 	github.com/couchbaselabs/c-snappy v0.0.0-20160212203049-a52f87e8ffc5 // indirect

@@ -66,7 +66,7 @@ type KeyspaceIdRollbackTs map[string]*common.TsVbuuid
 type KeyspaceIdRetryTs map[string]*common.TsVbuuid
 type KeyspaceIdMinMergeTs map[string]*common.TsVbuuid
 
-//mem stats
+// mem stats
 var (
 	gMemstatCache            runtime.MemStats
 	gMemstatCacheLastUpdated time.Time
@@ -1013,9 +1013,11 @@ const MSG_LOOP_MARKER string = "msg_loop"             // to grep for all the fol
 const MSG_PROCESSING_SLOW time.Duration = time.Minute // threshold for warning of slow message processing
 
 // logProcessingTime logs the time it took to process a message. To avoid log flooding, this logs at levels
-//   Warn  -- if time taken is long, regardless of forceLog flag
-//   Info  -- if time taken is short but forceLog flag is true (admin messages = DDL)
-//   Debug -- if time taken is short and forceLog flag is false
+//
+//	Warn  -- if time taken is long, regardless of forceLog flag
+//	Info  -- if time taken is short but forceLog flag is true (admin messages = DDL)
+//	Debug -- if time taken is short and forceLog flag is false
+//
 // classMethod is logging prefix of form "class::method".
 func logProcessingTime(classMethod string, msg Message, channel string, timeTaken time.Duration, forceLog bool) {
 
@@ -1064,7 +1066,7 @@ func logShutdownComplete(classMethod string) {
 		classMethod, MSG_LOOP_MARKER)
 }
 
-//run starts the main loop for the indexer
+// run starts the main loop for the indexer
 func (idx *indexer) run() {
 	const classMethod string = "Indexer::run" // for logging
 
@@ -1523,6 +1525,14 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_DROP_COLLECTION:
 		idx.handleDropCollection(msg)
+
+	case START_SHARD_TRANSFER:
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	case SHARD_TRANSFER_CLEANUP:
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -2098,7 +2108,6 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 // 4) merge is postponed because of other reasons (indxer pause, recovery).
 //
 // For those merge that is postponed, indexer needs to retry when the bucket flush is idle.
-//
 func (idx *indexer) mergePartitionForIdleKeyspaceIds() {
 
 	if len(idx.mergePartitionList) > 0 {
@@ -2163,7 +2172,6 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 	return nil
 }
 
-//
 // This function merge the partitions from a source index instance to a target index instance.
 // Prior to this point, the source index instance has been treated as an independent index instance.
 //
@@ -2179,22 +2187,22 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 //
 // This function has one of the possible outcomes:
 // 1) The source index is successfully merged to the target.
-//    - source instance is still REBAL_MERGED state and it could be deleted
-//    - target instance has the new partition.  It may be in ACTIVE or PENDING state.
-// 2) The merge is skipped (e.g. source index or target is deleted)
-// 3) The merge is delayed (e.g. target index is not ready to merge)
-// 4) An error is returned through respch.   This means that the merge
-//    may be in progress, but it has not yet committed yet.   The
-//    indexer can be in an inconsistent state and needs restart.
-// 3) If there is any transient error during commit or after commit,
-//    the indexer can panic.
+//   - source instance is still REBAL_MERGED state and it could be deleted
+//   - target instance has the new partition.  It may be in ACTIVE or PENDING state.
+//     2. The merge is skipped (e.g. source index or target is deleted)
+//     3. The merge is delayed (e.g. target index is not ready to merge)
+//     4. An error is returned through respch.   This means that the merge
+//     may be in progress, but it has not yet committed yet.   The
+//     indexer can be in an inconsistent state and needs restart.
+//     3. If there is any transient error during commit or after commit,
+//     the indexer can panic.
 //
 // Merge partition updates the indexer's state in 4 phases:
-// 1) update indexer internal data structure
-// 2) move partitions in index snapshot in storage manager
-// 3) update index metadata.  Once metadata is updated, the
-//    merge operation is considered committed.
-// 4) remove the merged inst from bucket stream
+//  1. update indexer internal data structure
+//  2. move partitions in index snapshot in storage manager
+//  3. update index metadata.  Once metadata is updated, the
+//     merge operation is considered committed.
+//  4. remove the merged inst from bucket stream
 //
 // For step (4), stream update is queued and done in batches.
 // If the corresponding stream is closed, all queued stream
@@ -2202,22 +2210,20 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 // cleared when the stream restarted.
 //
 // If recovery starts,
-// 1) bucket stream will be closed during prepare phase.   Any queued
-//    stream update will be dropped
-// 2) For any in-flight stream update that has already started, it can succeed
-//    or fail.  If fail, stream update will abort due to recovery.
-//    Recovery can only start after all in-flight are done (due to stream lock).
-// 3) When bucket stream re-starts for recovery, the bucket stream
-//    will use the latest state of each index inst.  So those merged inst
-//    will not be included in the new bucket stream.
-// 4) New merge operation will be deferred until recovery is done.   So
-//    no new stream update will be queued while there is recovery.
-// 5) After recvovery is done, merge operation will be processed as normal.
+//  1. bucket stream will be closed during prepare phase.   Any queued
+//     stream update will be dropped
+//  2. For any in-flight stream update that has already started, it can succeed
+//     or fail.  If fail, stream update will abort due to recovery.
+//     Recovery can only start after all in-flight are done (due to stream lock).
+//  3. When bucket stream re-starts for recovery, the bucket stream
+//     will use the latest state of each index inst.  So those merged inst
+//     will not be included in the new bucket stream.
+//  4. New merge operation will be deferred until recovery is done.   So
+//     no new stream update will be queued while there is recovery.
+//  5. After recvovery is done, merge operation will be processed as normal.
 //
 // For deferred index, partitions can be merged during recovery.   There is
 // no stream update for deferred index.
-//
-//
 func (idx *indexer) mergePartitions(keyspaceId string, streamId common.StreamId) {
 
 	// Do not merge when indexer is not active
@@ -2600,11 +2606,9 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 	return true
 }
 
-//
 // cleanupIndexAfterMerge cleans up the index instance w/o removing the data.
 // Note that the source instance is already marked as DELETED in metadata
 // (through MsgClustMgrMergePartition).
-//
 func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[common.IndexInstId]common.IndexInst) {
 
 	// remove stream if index is active.  For deferred index, index state would not be active (CREATED).
@@ -2638,9 +2642,7 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 	idx.updateBucketNameNumVBucketsMap(deletedInstBucketNames)
 }
 
-//
 // Prune Partition.
-//
 func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 
 	instId := msg.(*MsgClustMgrPrunePartition).GetInstId()
@@ -2675,7 +2677,6 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 	return
 }
 
-//
 // Prune partition is for updating indexer's state after a partition is
 // removed from an index instance.    When indexer handles this request,
 // the index inst metadata is already updated with the partitioned removed.
@@ -2700,21 +2701,20 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 // cleared when the stream restarted.
 //
 // If recovery starts,
-// 1) bucket stream will be closed during prepare phase.   Any queued
-//    stream update will be dropped
-// 2) For any in-flight stream update that has already started, it can succeed
-//    or fail.  If fail, stream update will abort due to recovery.
-//    Recovery can only start after all in-flight are done (due to stream lock).
-// 3) When bucket stream re-starts for recovery, the bucket stream
-//    will use the latest state of the index inst. So pruned partitions
-//    will not be included in the new bucket stream.
-// 4) New prune partition will be deferred until recovery is done.   So
-//    no new stream update will be queued while there is recovery.
-// 5) After recvovery is done, prune partition will be processed as normal.
+//  1. bucket stream will be closed during prepare phase.   Any queued
+//     stream update will be dropped
+//  2. For any in-flight stream update that has already started, it can succeed
+//     or fail.  If fail, stream update will abort due to recovery.
+//     Recovery can only start after all in-flight are done (due to stream lock).
+//  3. When bucket stream re-starts for recovery, the bucket stream
+//     will use the latest state of the index inst. So pruned partitions
+//     will not be included in the new bucket stream.
+//  4. New prune partition will be deferred until recovery is done.   So
+//     no new stream update will be queued while there is recovery.
+//  5. After recvovery is done, prune partition will be processed as normal.
 //
 // For deferred index, partitions can be pruned during recovery.   There is
 // no stream update for deferred index.
-//
 func (idx *indexer) prunePartitions(keyspaceId string, streamId common.StreamId) {
 
 	// nothing to prune
@@ -2798,12 +2798,10 @@ func (idx *indexer) removePrunedIndexesFromStream(pruned map[common.IndexInstId]
 	}
 }
 
-//
 // Remove partitions from runtime data structure.  This function is idempotent.
 // This function will not remove the slices from the partition.  Those pruned partitions
 // are put into a proxy partition with DELETED state, and they will be periodically clean up
 // asynchronously.
-//
 func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, instId common.IndexInstId, partitions []common.PartitionId,
 	prunedInst map[common.IndexInstId]common.IndexInst) bool {
 
@@ -2944,7 +2942,6 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 // 3) prune is postponed because of other reasons (indxer pause, recovery).
 //
 // For those prune that is postponed, indexer needs to retry when the bucket flush is idle.
-//
 func (idx *indexer) prunePartitionForIdleKeyspaceIds() {
 
 	if len(idx.prunePartitionList) > 0 {
@@ -5023,8 +5020,10 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 // removeIndexesFromStream is called for a list of indexes that are all in the same keyspace and
 // are all assumed to be in DELETED state.
 // o If any active indexes still exist in that keyspace, it removes only the listed indexes from
-//   the stream. Since these are in DELETED state, the active indexes must be other ones, so the
-//   keyspace is kept alive.
+//
+//	the stream. Since these are in DELETED state, the active indexes must be other ones, so the
+//	keyspace is kept alive.
+//
 // o Else the request for DCP records for the entire keyspace is removed from the logical stream.
 func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 	keyspaceId string,
@@ -5425,7 +5424,7 @@ func (idx *indexer) initStreamTopicName() {
 	StreamTopicName[common.INIT_STREAM] = INIT_TOPIC + "_" + idx.id
 }
 
-//checkDuplicateIndex checks if an index with the given indexInstId
+// checkDuplicateIndex checks if an index with the given indexInstId
 // or name already exists
 func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 	respCh MsgChannel) bool {
@@ -5474,8 +5473,8 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 	return true
 }
 
-//checkDuplicateInitialBuildRequest check if any other index on the given collection
-//is already building
+// checkDuplicateInitialBuildRequest check if any other index on the given collection
+// is already building
 func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
@@ -6373,8 +6372,8 @@ func (idx *indexer) checkKeyspaceIdExistsInStream(keyspaceId string, streamId co
 
 }
 
-//checkLastKeyspaceIdInStream returns true if the given keyspaceId is the only keyspaceId
-//active in the given stream, else false
+// checkLastKeyspaceIdInStream returns true if the given keyspaceId is the only keyspaceId
+// active in the given stream, else false
 func (idx *indexer) checkLastKeyspaceIdInStream(keyspaceId string, streamId common.StreamId) bool {
 
 	for _, index := range idx.indexInstMap {
@@ -6391,8 +6390,8 @@ func (idx *indexer) checkLastKeyspaceIdInStream(keyspaceId string, streamId comm
 
 }
 
-//checkStreamEmpty return true if there is no index currently in the
-//give stream, else false
+// checkStreamEmpty return true if there is no index currently in the
+// give stream, else false
 func (idx *indexer) checkStreamEmpty(streamId common.StreamId) bool {
 
 	for _, index := range idx.indexInstMap {
@@ -6425,8 +6424,8 @@ func (idx *indexer) getIndexListForKeyspaceIdAndStream(streamId common.StreamId,
 
 }
 
-//checkCatchupPendingForStream return true if there is any index in INIT_STREAM and catchup
-//state for the input keyspaceId in MAINT_STREAM
+// checkCatchupPendingForStream return true if there is any index in INIT_STREAM and catchup
+// state for the input keyspaceId in MAINT_STREAM
 func (idx *indexer) checkCatchupPendingForStream(streamId common.StreamId,
 	keyspaceId string) bool {
 
@@ -6447,8 +6446,8 @@ func (idx *indexer) checkCatchupPendingForStream(streamId common.StreamId,
 	return false
 }
 
-//checkStreamKeyspaceIdInCatchupPhase returns true if the input streamId/keyspaceId
-//is in Catchup phase i.e. index in INDEX_STATE_CATCHUP
+// checkStreamKeyspaceIdInCatchupPhase returns true if the input streamId/keyspaceId
+// is in Catchup phase i.e. index in INDEX_STATE_CATCHUP
 func (idx *indexer) checkStreamKeyspaceIdInCatchupPhase(streamId common.StreamId,
 	keyspaceId string) bool {
 
@@ -6955,7 +6954,7 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 
 }
 
-//helper function to init streamFlush map for all streams
+// helper function to init streamFlush map for all streams
 func (idx *indexer) initStreamFlushMap() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
@@ -7117,12 +7116,12 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 
 }
 
-//if any index in MAINT_STREAM has nil snapshot, it needs
-//to be reset. Either:
-//1. The index was able to clear its snapshot on rollback
-//but couldn't reset the metadata before crash.
-//2. The index never created a disk snapshot as the disk
-//snapshot happens only at 10mins interval.
+// if any index in MAINT_STREAM has nil snapshot, it needs
+// to be reset. Either:
+// 1. The index was able to clear its snapshot on rollback
+// but couldn't reset the metadata before crash.
+// 2. The index never created a disk snapshot as the disk
+// snapshot happens only at 10mins interval.
 func (idx *indexer) findAndResetEmptySnapshotIndex() common.IndexInstList {
 	updatedInsts := make(common.IndexInstList, 0)
 
@@ -8276,8 +8275,8 @@ func (idx *indexer) getConflictProxies(inst *common.IndexInst) []*common.IndexIn
 	return insts
 }
 
-//force cleanup of index data should only be used when storage manager has not yet
-//been initialized
+// force cleanup of index data should only be used when storage manager has not yet
+// been initialized
 func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
 
 	if inst.RState != common.REBAL_MERGED {
@@ -8330,8 +8329,8 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 	return nil
 }
 
-//force cleanup of index partition data should only be used when storage manager has not yet
-//been initialized
+// force cleanup of index partition data should only be used when storage manager has not yet
+// been initialized
 func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionId common.PartitionId, sliceId SliceId) error {
 
 	storage_dir := idx.config["storage_dir"].String()
@@ -8339,10 +8338,10 @@ func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionI
 	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path)
 }
 
-//On warmup, if an index is found in MAINT_STREAM and state INITIAL
-//it needs to be moved to INIT_STREAM. Post 6.5, initial build of
-//an index never happens using MAINT_STREAM. During upgrade, it is
-//possible for such an index to exist.
+// On warmup, if an index is found in MAINT_STREAM and state INITIAL
+// it needs to be moved to INIT_STREAM. Post 6.5, initial build of
+// an index never happens using MAINT_STREAM. During upgrade, it is
+// possible for such an index to exist.
 func (idx *indexer) checkMaintStreamIndexBuild() {
 
 	var updatedList []common.IndexInstId
@@ -8364,10 +8363,10 @@ func (idx *indexer) checkMaintStreamIndexBuild() {
 
 }
 
-//On recovery, deleted indexes are ignored. There can be
-//a case where the last maint stream index was dropped and
-//indexer crashes while there is an index in Init stream.
-//Such indexes need to be moved to Maint Stream.
+// On recovery, deleted indexes are ignored. There can be
+// a case where the last maint stream index was dropped and
+// indexer crashes while there is an index in Init stream.
+// Such indexes need to be moved to Maint Stream.
 func (idx *indexer) checkMissingMaintBucket() {
 
 	missingBucket := make(map[string]bool)
@@ -9401,9 +9400,9 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 	}
 }
 
-//calculates buildTs for keyspace. This is a blocking call
-//which will keep trying till success as indexer cannot work
-//without a buildts.
+// calculates buildTs for keyspace. This is a blocking call
+// which will keep trying till success as indexer cannot work
+// without a buildts.
 func computeKeyspaceBuildTs(clustAddr string, keyspaceId string,
 	cid string, numVBuckets int) (buildTs Timestamp, err error) {
 
@@ -9503,8 +9502,8 @@ func (idx *indexer) setIndexerState(s common.IndexerState) {
 	idx.state = s
 }
 
-//monitor memory usage, if more than specified quota
-//generate message to pause Indexer
+// monitor memory usage, if more than specified quota
+// generate message to pause Indexer
 func (idx *indexer) monitorMemUsage() {
 
 	logging.Infof("Indexer::monitorMemUsage started...")
@@ -9738,9 +9737,9 @@ func (idx *indexer) updateStatsFromMemStats() {
 	gMemstatLock.RUnlock()
 }
 
-//memoryUsed returns the memory usage reported by
-//golang runtime + memory allocated by cgo
-//components(e.g. fdb buffercache)
+// memoryUsed returns the memory usage reported by
+// golang runtime + memory allocated by cgo
+// components(e.g. fdb buffercache)
 func (idx *indexer) memoryUsed(forceRefresh bool) (uint64, uint64, uint64) {
 
 	var ms runtime.MemStats
@@ -9893,13 +9892,11 @@ func (idx *indexer) canSetStorageMode(sm string) bool {
 	return true
 }
 
-//
 // This function returns the storage mode of the local node.
 // 1) If the node has indexes, return storage mode of indexes
 // 2) If node does not have indexes, return global storage mode (from ns-server / settings)
 // 3) If indexes have mixed storage modes, then return NOT_SET
 // 4) Storage mode is promoted to plasma if it is forestdb
-//
 func (idx *indexer) getLocalStorageMode(config common.Config) common.StorageMode {
 
 	// Find out the storage mode from indexes
@@ -9923,9 +9920,7 @@ func (idx *indexer) getLocalStorageMode(config common.Config) common.StorageMode
 	return storageMode
 }
 
-//
 // This function returns the storage mode based on indexes on local node.
-//
 func (idx *indexer) getIndexStorageMode() common.StorageMode {
 
 	storageMode := common.StorageMode(common.NOT_SET)
@@ -10122,8 +10117,8 @@ func (idx *indexer) loadOrStoreBuildTsLock(streamId common.StreamId, keyspaceId 
 	return mutex
 }
 
-//sessionId helper functions. these functions can only be called from the genserver
-//as no sync mechanism is being used.
+// sessionId helper functions. these functions can only be called from the genserver
+// as no sync mechanism is being used.
 func (idx *indexer) genNextSessionId(
 	streamId common.StreamId,
 	keyspaceId string) uint64 {
@@ -10183,7 +10178,7 @@ func (idx *indexer) injectRandomDelay(max int) {
 	}
 }
 
-//streamkeyspaceIdCurrRequest helper functions
+// streamkeyspaceIdCurrRequest helper functions
 func (idx *indexer) setStreamKeyspaceIdCurrRequest(
 	streamId common.StreamId,
 	keyspaceId string,
@@ -10203,7 +10198,7 @@ func (idx *indexer) setStreamKeyspaceIdCurrRequest(
 
 }
 
-//clear the currRequest
+// clear the currRequest
 func (idx *indexer) deleteStreamKeyspaceIdCurrRequest(
 	streamId common.StreamId,
 	keyspaceId string,
@@ -10590,10 +10585,10 @@ func (idx *indexer) deletePendingReset(instId common.IndexInstId) {
 	delete(idx.pendingReset, instId)
 }
 
-//restartMaintStreamForCatchup starts the MAINT_STREAM for the given bucket using the
-//input restarTs and sets the stream state to STREAM_ACTIVE. It is currently used to
-//restart an inactive MAINT_STREAM if a Catchup state index exists in INIT_STREAM to
-//facilitate stream merge.
+// restartMaintStreamForCatchup starts the MAINT_STREAM for the given bucket using the
+// input restarTs and sets the stream state to STREAM_ACTIVE. It is currently used to
+// restart an inactive MAINT_STREAM if a Catchup state index exists in INIT_STREAM to
+// facilitate stream merge.
 func (idx *indexer) restartMaintStreamForCatchup(bucket string, restartTs *common.TsVbuuid) {
 
 	streamId := common.MAINT_STREAM
@@ -10760,8 +10755,8 @@ func (idx *indexer) deleteFromInstsPerCollMap(indexList []common.IndexInst) {
 	logging.Verbosef("Indexer::deleteFromInstsPerCollMap: %v", idx.instsPerColl)
 }
 
-//useOSOForMagmaStorage checks if the input keyspaceId is of magma storage
-//type and enables OSO only for non-default scope/collection in that case.
+// useOSOForMagmaStorage checks if the input keyspaceId is of magma storage
+// type and enables OSO only for non-default scope/collection in that case.
 func (idx *indexer) useOSOForMagmaStorage(streamId common.StreamId, keyspaceId string) bool {
 
 	const _useOSOForMagmaStorage = "Indexer::useOSOForMagmaStorage:"

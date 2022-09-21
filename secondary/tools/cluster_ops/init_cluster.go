@@ -43,16 +43,23 @@ func InitClusterFromREST() error {
 		if err := cluster.InitDataAndIndexQuota(serverAddr, username, password); err != nil {
 			return err
 		}
+		time.Sleep(100 * time.Millisecond)
 
-		time.Sleep(100 * time.Millisecond)
-		if err := cluster.AddNode(serverAddr, username, password, options.Nodes[1], "index"); err != nil {
+		// ServerGroup "Group 1" already exits by default. Create "Group 2"
+		if err := cluster.AddServerGroup(serverAddr, username, password, "Group 2"); err != nil {
 			return err
 		}
 		time.Sleep(100 * time.Millisecond)
-		if err := cluster.AddNode(serverAddr, username, password, options.Nodes[2], "index"); err != nil {
+
+		if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, options.Nodes[1], "index", "Group 2"); err != nil {
 			return err
 		}
 		time.Sleep(100 * time.Millisecond)
+		if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, options.Nodes[2], "index", "Group 1"); err != nil {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+
 		// Rebalance the cluster
 		if err := cluster.Rebalance(serverAddr, username, password); err != nil {
 			return err

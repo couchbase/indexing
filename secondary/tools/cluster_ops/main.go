@@ -128,8 +128,12 @@ func addNodesIfNotPresent(addNodes strSlice) error {
 	nodeAdded := false
 	for i := 0; i < len(addNodes); i++ {
 		if _, ok := status[addNodes[i]]; !ok {
-			if err := cluster.AddNode(options.Nodes[0], options.username, options.password, addNodes[i], "index"); err != nil {
-				log.Fatalf("Error while adding node: %v to cluster, err: %v", addNodes[i], err)
+			serverGroup := "Group 1"
+			if i%2 == 1 { //All odd nodes go to "Group 2"
+				serverGroup = "Group 2"
+			}
+			if err := cluster.AddNodeWithServerGroup(options.Nodes[0], options.username, options.password, addNodes[i], "index", serverGroup); err != nil {
+				log.Fatalf("Error while adding node: %v (serverGroup: %v) to cluster, err: %v", addNodes[i], serverGroup, err)
 				return err
 			}
 			nodeAdded = true

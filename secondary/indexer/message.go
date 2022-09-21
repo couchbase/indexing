@@ -189,13 +189,17 @@ const (
 
 	INDEXER_DDL_IN_PROGRESS_RESPONSE
 	INDEXER_DROP_COLLECTION
+
+	START_SHARD_TRANSFER
+	SHARD_TRANSFER_RESPONSE
+	SHARD_TRANSFER_CLEANUP
 )
 
 type Message interface {
 	GetMsgType() MsgType
 }
 
-//Generic Message
+// Generic Message
 type MsgGeneral struct {
 	mType MsgType
 }
@@ -204,7 +208,7 @@ func (m *MsgGeneral) GetMsgType() MsgType {
 	return m.mType
 }
 
-//Error Message
+// Error Message
 type MsgError struct {
 	err       Error
 	sessionId uint64
@@ -226,7 +230,7 @@ func (m *MsgError) String() string {
 	return fmt.Sprintf("%v", m.err)
 }
 
-//Success Message
+// Success Message
 type MsgSuccess struct {
 }
 
@@ -234,7 +238,7 @@ func (m *MsgSuccess) GetMsgType() MsgType {
 	return MSG_SUCCESS
 }
 
-//Success Message
+// Success Message
 type MsgSuccessOpenStream struct {
 	activeTs  *common.TsVbuuid
 	pendingTs *common.TsVbuuid
@@ -252,7 +256,7 @@ func (m *MsgSuccessOpenStream) GetPendingTs() *common.TsVbuuid {
 	return m.pendingTs
 }
 
-//Success Message
+// Success Message
 type MsgSuccessDrop struct {
 	streamId   common.StreamId
 	keyspaceId string
@@ -270,7 +274,7 @@ func (m *MsgSuccessDrop) GetKeyspaceId() string {
 	return m.keyspaceId
 }
 
-//Timestamp Message
+// Timestamp Message
 type MsgTimestamp struct {
 	mType MsgType
 	ts    Timestamp
@@ -284,7 +288,7 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 	return m.ts
 }
 
-//Stream Reader Message
+// Stream Reader Message
 type MsgStream struct {
 	mType        MsgType
 	streamId     common.StreamId
@@ -356,7 +360,7 @@ func (m *MsgStream) String() string {
 
 }
 
-//Stream Error Message
+// Stream Error Message
 type MsgStreamError struct {
 	streamId common.StreamId
 	err      Error
@@ -374,8 +378,8 @@ func (m *MsgStreamError) GetError() Error {
 	return m.err
 }
 
-//STREAM_READER_CONN_ERROR
-//STREAM_REQUEST_DONE
+// STREAM_READER_CONN_ERROR
+// STREAM_REQUEST_DONE
 type MsgStreamInfo struct {
 	mType      MsgType
 	streamId   common.StreamId
@@ -435,7 +439,7 @@ func (m *MsgStreamInfo) String() string {
 	return str
 }
 
-//STREAM_READER_UPDATE_QUEUE_MAP
+// STREAM_READER_UPDATE_QUEUE_MAP
 type MsgUpdateKeyspaceIdQueue struct {
 	keyspaceIdQueueMap  KeyspaceIdQueueMap
 	stats               *IndexerStats
@@ -476,15 +480,15 @@ func (m *MsgUpdateKeyspaceIdQueue) String() string {
 
 }
 
-//OPEN_STREAM
-//ADD_INDEX_LIST_TO_STREAM
-//REMOVE_KEYSPACE_FROM_STREAM
-//REMOVE_INDEX_LIST_FROM_STREAM
-//CLOSE_STREAM
-//CLEANUP_STREAM
-//CLEANUP_PRJ_STATS
-//INDEXER_UPDATE_BUILD_TS
-//RESET_STREAM
+// OPEN_STREAM
+// ADD_INDEX_LIST_TO_STREAM
+// REMOVE_KEYSPACE_FROM_STREAM
+// REMOVE_INDEX_LIST_FROM_STREAM
+// CLOSE_STREAM
+// CLEANUP_STREAM
+// CLEANUP_PRJ_STATS
+// INDEXER_UPDATE_BUILD_TS
+// RESET_STREAM
 type MsgStreamUpdate struct {
 	mType        MsgType
 	streamId     common.StreamId
@@ -610,9 +614,9 @@ func (m *MsgStreamUpdate) String() string {
 
 }
 
-//MUT_MGR_PERSIST_MUTATION_QUEUE
-//MUT_MGR_ABORT_PERSIST
-//MUT_MGR_DRAIN_MUTATION_QUEUE
+// MUT_MGR_PERSIST_MUTATION_QUEUE
+// MUT_MGR_ABORT_PERSIST
+// MUT_MGR_DRAIN_MUTATION_QUEUE
 type MsgMutMgrFlushMutationQueue struct {
 	mType      MsgType
 	keyspaceId string
@@ -661,8 +665,8 @@ func (m *MsgMutMgrFlushMutationQueue) String() string {
 
 }
 
-//MUT_MGR_GET_MUTATION_QUEUE_HWT
-//MUT_MGR_GET_MUTATION_QUEUE_LWT
+// MUT_MGR_GET_MUTATION_QUEUE_HWT
+// MUT_MGR_GET_MUTATION_QUEUE_LWT
 type MsgMutMgrGetTimestamp struct {
 	mType      MsgType
 	keyspaceId string
@@ -681,7 +685,7 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-//UPDATE_INDEX_INSTANCE_MAP
+// UPDATE_INDEX_INSTANCE_MAP
 type MsgUpdateInstMap struct {
 	indexInstMap   common.IndexInstMap
 	stats          *IndexerStats
@@ -729,7 +733,7 @@ func (m *MsgUpdateInstMap) String() string {
 	return str
 }
 
-//UPDATE_INDEX_PARTITION_MAP
+// UPDATE_INDEX_PARTITION_MAP
 type MsgUpdatePartnMap struct {
 	indexPartnMap   IndexPartnMap
 	updatedPartnMap PartitionInstMap
@@ -767,7 +771,7 @@ func (m *MsgUpdatePartnMap) String() string {
 	return str
 }
 
-//UPDATE_KEYSPACE_STATS_MAP
+// UPDATE_KEYSPACE_STATS_MAP
 type MsgUpdateKeyspaceStatsMap struct {
 	keyspaceStatsMap KeyspaceStatsMap
 }
@@ -787,7 +791,7 @@ func (m *MsgUpdateKeyspaceStatsMap) String() string {
 	return str
 }
 
-//UPDATE_MAP_WORKER
+// UPDATE_MAP_WORKER
 type MsgUpdateWorker struct {
 	workerCh      MsgChannel
 	workerStr     string
@@ -820,7 +824,7 @@ func (m *MsgUpdateWorker) GetRespCh() chan error {
 	return m.respCh
 }
 
-//ADD_INDEX_INSTANCE
+// ADD_INDEX_INSTANCE
 type MsgAddIndexInst struct {
 	workerCh   MsgChannel
 	workerStr  string
@@ -858,9 +862,9 @@ func (m *MsgAddIndexInst) GetRespCh() chan error {
 	return m.respCh
 }
 
-//MUT_MGR_FLUSH_DONE
-//MUT_MGR_ABORT_DONE
-//STORAGE_SNAP_DONE
+// MUT_MGR_FLUSH_DONE
+// MUT_MGR_ABORT_DONE
+// STORAGE_SNAP_DONE
 type MsgMutMgrFlushDone struct {
 	mType      MsgType
 	ts         *common.TsVbuuid
@@ -905,7 +909,7 @@ func (m *MsgMutMgrFlushDone) String() string {
 
 }
 
-//TK_STABILITY_TIMESTAMP
+// TK_STABILITY_TIMESTAMP
 type MsgTKStabilityTS struct {
 	ts         *common.TsVbuuid
 	streamId   common.StreamId
@@ -953,8 +957,8 @@ func (m *MsgTKStabilityTS) String() string {
 
 }
 
-//TK_MERGE_STREAM
-//TK_MERGE_STREAM_ACK
+// TK_MERGE_STREAM
+// TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
 	mType      MsgType
 	streamId   common.StreamId
@@ -993,8 +997,8 @@ func (m *MsgTKMergeStream) GetSessionId() uint64 {
 	return m.sessionId
 }
 
-//TK_ENABLE_FLUSH
-//TK_DISABLE_FLUSH
+// TK_ENABLE_FLUSH
+// TK_DISABLE_FLUSH
 type MsgTKToggleFlush struct {
 	mType             MsgType
 	streamId          common.StreamId
@@ -1018,8 +1022,8 @@ func (m *MsgTKToggleFlush) GetResetPendingMerge() bool {
 	return m.resetPendingMerge
 }
 
-//CBQ_CREATE_INDEX_DDL
-//CLUST_MGR_CREATE_INDEX_DDL
+// CBQ_CREATE_INDEX_DDL
+// CLUST_MGR_CREATE_INDEX_DDL
 type MsgCreateIndex struct {
 	mType     MsgType
 	indexInst common.IndexInst
@@ -1088,7 +1092,7 @@ func (m *MsgMergePartition) GetString() string {
 	return str
 }
 
-//  INDEXER_CANCEL_MERGE_PARTITION
+// INDEXER_CANCEL_MERGE_PARTITION
 type MsgCancelMergePartition struct {
 	indexStateMap map[common.IndexInstId]common.RebalanceState
 	respCh        chan error
@@ -1257,7 +1261,7 @@ func (m *MsgClustMgrPrunePartition) GetString() string {
 }
 
 // INDEXER_CANCEL_MERGE_PARTITION
-//CLUST_MGR_BUILD_INDEX_DDL
+// CLUST_MGR_BUILD_INDEX_DDL
 type MsgBuildIndex struct {
 	indexInstList []common.IndexInstId
 	bucketList    []string
@@ -1293,7 +1297,7 @@ func (m *MsgBuildIndex) GetString() string {
 	return str
 }
 
-//CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
+// CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
 type MsgBuildIndexResponse struct {
 	errMap map[common.IndexInstId]error
 }
@@ -1314,8 +1318,8 @@ func (m *MsgBuildIndexResponse) GetString() string {
 	return str
 }
 
-//CBQ_DROP_INDEX_DDL
-//CLUST_MGR_DROP_INDEX_DDL
+// CBQ_DROP_INDEX_DDL
+// CLUST_MGR_DROP_INDEX_DDL
 type MsgDropIndex struct {
 	mType       MsgType
 	indexInstId common.IndexInstId
@@ -1352,8 +1356,8 @@ func (m *MsgDropIndex) GetString() string {
 	return str
 }
 
-//TK_GET_KEYSPACE_HWT
-//STREAM_READER_HWT
+// TK_GET_KEYSPACE_HWT
+// STREAM_READER_HWT
 type MsgKeyspaceHWT struct {
 	mType      MsgType
 	streamId   common.StreamId
@@ -1402,7 +1406,7 @@ func (m *MsgKeyspaceHWT) String() string {
 
 }
 
-//KV_SENDER_RESTART_VBUCKETS
+// KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
 	streamId     common.StreamId
 	keyspaceId   string
@@ -1465,7 +1469,7 @@ func (m *MsgRestartVbuckets) String() string {
 	return str
 }
 
-//KV_SENDER_RESTART_VBUCKETS_RESPONSE
+// KV_SENDER_RESTART_VBUCKETS_RESPONSE
 type MsgRestartVbucketsResponse struct {
 	streamId   common.StreamId
 	keyspaceId string
@@ -1508,7 +1512,7 @@ func (m *MsgRestartVbucketsResponse) String() string {
 	return str
 }
 
-//KV_SENDER_REPAIR_ENDPOINTS
+// KV_SENDER_REPAIR_ENDPOINTS
 type MsgRepairEndpoints struct {
 	streamId  common.StreamId
 	endpoints []string
@@ -1533,14 +1537,14 @@ func (m *MsgRepairEndpoints) String() string {
 	return str
 }
 
-//INDEXER_INIT_PREP_RECOVERY
-//INDEXER_PREPARE_RECOVERY
-//INDEXER_PREPARE_DONE
-//INDEXER_INITIATE_RECOVERY
-//INDEXER_RECOVERY_DONE
-//INDEXER_KEYSPACE_NOT_FOUND
-//INDEXER_MTR_FAIL
-//INDEXER_ABORT_RECOVERY
+// INDEXER_INIT_PREP_RECOVERY
+// INDEXER_PREPARE_RECOVERY
+// INDEXER_PREPARE_DONE
+// INDEXER_INITIATE_RECOVERY
+// INDEXER_RECOVERY_DONE
+// INDEXER_KEYSPACE_NOT_FOUND
+// INDEXER_MTR_FAIL
+// INDEXER_ABORT_RECOVERY
 type MsgRecovery struct {
 	mType      MsgType
 	streamId   common.StreamId
@@ -1680,7 +1684,7 @@ func (m *MsgRepairAbort) GetKeyspaceId() string {
 	return m.keyspaceId
 }
 
-//POOL_CHANGE
+// POOL_CHANGE
 type MsgPoolChange struct {
 	mType      MsgType
 	nodes      map[string]bool
@@ -1704,10 +1708,10 @@ func (m *MsgPoolChange) GetKeyspaceId() string {
 	return m.keyspaceId
 }
 
-//TK_INIT_BUILD_DONE
-//TK_INIT_BUILD_DONE_ACK
-//TK_INIT_BUILD_DONE_NO_CATCHUP_ACK
-//TK_ADD_INSTANCE_FAIL
+// TK_INIT_BUILD_DONE
+// TK_INIT_BUILD_DONE_ACK
+// TK_INIT_BUILD_DONE_NO_CATCHUP_ACK
+// TK_ADD_INSTANCE_FAIL
 type MsgTKInitBuildDone struct {
 	mType      MsgType
 	streamId   common.StreamId
@@ -1831,7 +1835,7 @@ func (m *MsgIndexPruneSnapshot) GetPartitions() []common.PartitionId {
 	return m.partitions
 }
 
-//STORAGE_UPDATE_SNAP_MAP
+// STORAGE_UPDATE_SNAP_MAP
 type MsgUpdateSnapMap struct {
 	idxInstId  common.IndexInstId
 	idxInst    common.IndexInst
@@ -1937,7 +1941,7 @@ func (m *MsgIndexCompact) GetMinFrag() int {
 	return m.minFrag
 }
 
-//KV_STREAM_REPAIR
+// KV_STREAM_REPAIR
 type MsgKVStreamRepair struct {
 	streamId   common.StreamId
 	keyspaceId string
@@ -1970,7 +1974,7 @@ func (m *MsgKVStreamRepair) GetSessionId() uint64 {
 	return m.sessionId
 }
 
-//CLUST_MGR_RESET_INDEX_ON_UPGRADE
+// CLUST_MGR_RESET_INDEX_ON_UPGRADE
 type MsgClustMgrResetIndexOnUpgrade struct {
 	inst common.IndexInst
 }
@@ -1987,7 +1991,7 @@ func (m *MsgClustMgrResetIndexOnUpgrade) String() string {
 	return fmt.Sprintf("inst : %v", m.inst)
 }
 
-//CLUST_MGR_RESET_INDEX_ON_ROLLBACK
+// CLUST_MGR_RESET_INDEX_ON_ROLLBACK
 type MsgClustMgrResetIndexOnRollback struct {
 	inst   common.IndexInst
 	respch chan error
@@ -2012,7 +2016,7 @@ func (m *MsgClustMgrResetIndexOnRollback) String() string {
 	return b.String()
 }
 
-//INDEXER_RESET_INDEX_DONE
+// INDEXER_RESET_INDEX_DONE
 type MsgResetIndexDone struct {
 	streamId   common.StreamId
 	keyspaceId string
@@ -2035,7 +2039,7 @@ func (m *MsgResetIndexDone) GetSessionId() uint64 {
 	return m.sessionId
 }
 
-//CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
+// CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
 type MsgClustMgrUpdate struct {
 	mType         MsgType
 	indexList     []common.IndexInst
@@ -2101,7 +2105,7 @@ func (m *MsgClustMgrUpdate) GetRespCh() chan error {
 	return m.respCh
 }
 
-//CLUST_MGR_GET_GLOBAL_TOPOLOGY
+// CLUST_MGR_GET_GLOBAL_TOPOLOGY
 type MsgClustMgrTopology struct {
 	indexInstMap common.IndexInstMap
 }
@@ -2123,9 +2127,9 @@ func (m *MsgClustMgrTopology) String() string {
 	return b.String()
 }
 
-//CLUST_MGR_GET_LOCAL
-//CLUST_MGR_SET_LOCAL
-//CLUST_MGR_DEL_LOCAL
+// CLUST_MGR_GET_LOCAL
+// CLUST_MGR_SET_LOCAL
+// CLUST_MGR_DEL_LOCAL
 type MsgClustMgrLocal struct {
 	mType             MsgType
 	key               string
@@ -2200,12 +2204,12 @@ func (m *MsgSecurityChange) RefreshEncrypt() bool {
 	return m.refreshEncrypt
 }
 
-//STATS_PERSISTER_START
-//STATS_PERSISTER_STOP
-//STATS_PERSISTER_FORCE_PERSIST
-//STATS_PERSISTER_CONFIG_UPDATE
-//STATS_READ_PERSISTED_STATS
-//STATS_LOG_AT_EXIT
+// STATS_PERSISTER_START
+// STATS_PERSISTER_STOP
+// STATS_PERSISTER_FORCE_PERSIST
+// STATS_PERSISTER_CONFIG_UPDATE
+// STATS_READ_PERSISTED_STATS
+// STATS_LOG_AT_EXIT
 type MsgStatsPersister struct {
 	mType  MsgType
 	stats  *IndexerStats
@@ -2224,11 +2228,11 @@ func (m *MsgStatsPersister) GetResponseChannel() chan bool {
 	return m.respCh
 }
 
-//INDEXER_PAUSE
-//INDEXER_RESUME
-//INDEXER_PREPARE_UNPAUSE
-//INDEXER_UNPAUSE
-//INDEXER_BOOTSTRAP
+// INDEXER_PAUSE
+// INDEXER_RESUME
+// INDEXER_PREPARE_UNPAUSE
+// INDEXER_UNPAUSE
+// INDEXER_BOOTSTRAP
 type MsgIndexerState struct {
 	mType         MsgType
 	rollbackTimes map[string]int64
@@ -2337,7 +2341,125 @@ func (m *MsgIndexerDropCollection) GetCollectionId() string {
 	return m.collectionId
 }
 
-//MsgType.String is a helper function to return string for message type.
+type MsgStartShardTransfer struct {
+	shardIds        []uint64
+	rebalanceId     string
+	transferTokenId string
+	destination     string
+
+	// The rebalance cancelCh shared with indexer to indicate
+	// any upstream cancellation of rebalance
+	cancelCh chan struct{}
+
+	progressCh chan *ShardTransferStatistics
+	respCh     chan Message
+}
+
+func (m *MsgStartShardTransfer) GetMsgType() MsgType {
+	return START_SHARD_TRANSFER
+}
+
+func (m *MsgStartShardTransfer) GetShardIds() []uint64 {
+	return m.shardIds
+}
+
+func (m *MsgStartShardTransfer) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgStartShardTransfer) GetTransferTokenId() string {
+	return m.transferTokenId
+}
+
+func (m *MsgStartShardTransfer) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgStartShardTransfer) GetCancelCh() chan struct{} {
+	return m.cancelCh
+}
+
+func (m *MsgStartShardTransfer) GetProgressCh() chan *ShardTransferStatistics {
+	return m.progressCh
+}
+
+func (m *MsgStartShardTransfer) GetRespCh() chan Message {
+	return m.respCh
+}
+
+func (m *MsgStartShardTransfer) String() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " ShardIds: %v ", m.shardIds)
+	fmt.Fprintf(sbp, " RebalanceId: %v ", m.rebalanceId)
+	fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferTokenId)
+	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
+
+	return sbp.String()
+}
+
+type MsgShardTransferResp struct {
+	errMap     map[uint64]error
+	shardPaths map[uint64]string //ShardId -> Location where shard is uploaded
+}
+
+func (m *MsgShardTransferResp) GetMsgType() MsgType {
+	return SHARD_TRANSFER_RESPONSE
+}
+
+func (m *MsgShardTransferResp) GetErrorMap() map[uint64]error {
+	return m.errMap
+}
+
+func (m *MsgShardTransferResp) GetShardPaths() map[uint64]string {
+	return m.shardPaths
+}
+
+type MsgShardTransferCleanup struct {
+	shardPaths      map[uint64]string // shardId -> Location of shard transfer
+	destination     string
+	rebalanceId     string
+	transferTokenId string
+	respCh          chan bool
+}
+
+func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
+	return SHARD_TRANSFER_CLEANUP
+}
+
+func (m *MsgShardTransferCleanup) GetShardPaths() map[uint64]string {
+	return m.shardPaths
+}
+
+func (m *MsgShardTransferCleanup) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgShardTransferCleanup) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgShardTransferCleanup) GetTransferTokenId() string {
+	return m.transferTokenId
+}
+
+func (m *MsgShardTransferCleanup) GetRespCh() chan bool {
+	return m.respCh
+}
+
+func (m *MsgShardTransferCleanup) String() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " ShardPaths: %v ", m.shardPaths)
+	fmt.Fprintf(sbp, " RebalanceId: %v ", m.rebalanceId)
+	fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferTokenId)
+
+	return sbp.String()
+}
+
+// MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
 	switch m {
@@ -2628,6 +2750,13 @@ func (m MsgType) String() string {
 		return "INDEXER_DDL_IN_PROGRESS_RESPONSE"
 	case INDEXER_DROP_COLLECTION:
 		return "INDEXER_DROP_COLLECTION"
+
+	case START_SHARD_TRANSFER:
+		return "START_SHARD_TRANSFER"
+	case SHARD_TRANSFER_RESPONSE:
+		return "SHARD_TRANSFER_RESPONSE"
+	case SHARD_TRANSFER_CLEANUP:
+		return "SHARD_TRANSFER_CLEANUP"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

@@ -28,6 +28,8 @@ type ShardRebalancer struct {
 	// and destination nodes
 	ackedTokens map[string]*c.TransferToken
 
+	transferStats map[string]map[uint64]*ShardTransferStatistics // ttid -> shardId -> stats
+
 	// lock protecting access to maps like transferTokens, sourceTokens etc.
 	mu sync.RWMutex
 
@@ -97,6 +99,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		waitForTokenPublish: make(chan struct{}),
 
 		topologyChange: topologyChange,
+		transferStats:  make(map[string]map[uint64]*ShardTransferStatistics),
 	}
 
 	sr.config.Store(config)
@@ -263,19 +266,47 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.mu.Lock()
 		defer sr.mu.Unlock()
 
-		sr.ackedTokens[ttid] = tt
-		if _, ok := sr.transferTokens[ttid]; ok {
-			sr.transferTokens[ttid] = tt // Update in-memory book-keeping with new state
-		}
+		sr.ackedTokens[ttid] = tt.Clone()
+		sr.transferTokens[ttid] = tt.Clone() // Update in-memory book-keeping with new state
 
 		if sr.allShardTransferTokensAcked() {
-			// TODO: Create batches of transfer tokens
-			// and change the state of those transfer tokens
-			// for further processing
-
-			// Change the state of the batched tokens to
-			// "TransferTokenTransferShard"
+			sr.initiateShardTransfer()
 		}
+		return true
+
+	case c.ShardTokenTransferShard:
+		// Update the in-memory state but do not process the token
+		sr.updateInMemToken(ttid, tt, "master")
+		return false
+
+	case c.ShardTokenCommit:
+		sr.updateInMemToken(ttid, tt, "master")
+
+		tt.ShardTransferTokenState = c.ShardTokenDeleted
+		setTransferTokenInMetakv(ttid, tt)
+		return true
+
+	case c.ShardTokenDeleted:
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Fatalf("ShardRebalancer::processShardTransferTokenAsMaster Unable to set TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			c.CrashOnError(err)
+		}
+
+		sr.updateInMemToken(ttid, tt, "master")
+
+		if sr.checkAllTokensDone() { // rebalance completed
+			if sr.cb.progress != nil {
+				sr.cb.progress(1.0, sr.cancel)
+			}
+			l.Infof("ShardRebalancer::processShardTransferTokenAsMaster No Tokens Found. Mark Done.")
+			sr.cancelMetakv()
+			go sr.finishRebalance(nil)
+		} else {
+			sr.initiateShardTransfer()
+		}
+
 		return true
 
 	default:
@@ -305,13 +336,20 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		// movements during rebalance. This information will be used
 		// for conflict resolution when  DDL and rebalance co-exist
 		// together
-		tt.ShardTransferTokenState = c.ShardTokenScheduledOnSource
 		sr.updateInMemToken(ttid, tt, "source")
+		tt.ShardTransferTokenState = c.ShardTokenScheduledOnSource
 		setTransferTokenInMetakv(ttid, tt)
 
 		// TODO: It is possible for indexer to crash after updating
 		// the transfer token state. Include logic to clean-up rebalance
 		// in such case
+		return true
+
+	case c.ShardTokenTransferShard:
+		sr.updateInMemToken(ttid, tt, "source")
+
+		go sr.startShardTransfer(ttid, tt)
+
 		return true
 
 	default:
@@ -320,6 +358,96 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 	}
 
 	return false
+}
+
+func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) {
+
+	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
+	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
+
+	msg := &MsgStartShardTransfer{
+		shardIds:        tt.ShardIds,
+		rebalanceId:     sr.rebalToken.RebalId,
+		transferTokenId: ttid,
+		destination:     tt.Destination,
+
+		cancelCh:   sr.cancel,
+		respCh:     respCh,
+		progressCh: progressCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	for {
+		select {
+		// Incase rebalance is cancelled upstream, transfer would be
+		// aborted and rebalancer would still get a message on respCh
+		// with errors as sr.cancel is passed on to downstream
+		case respMsg := <-respCh:
+
+			msg := respMsg.(*MsgShardTransferResp)
+			errMap := msg.GetErrorMap()
+			shardPaths := msg.GetShardPaths()
+
+			for shardId, err := range errMap {
+				if err != nil {
+					l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
+						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, shardId, shardPaths, err)
+
+					// Invoke clean-up for all shards even if error is observed for one shard transfer
+					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid)
+					return
+				}
+			}
+
+			// No errors are observed during shard transfer. Change the state of
+			// the transfer token and update metaKV
+			sr.mu.Lock()
+			defer sr.mu.Unlock()
+
+			tt.ShardTransferTokenState = c.ShardTokenRestoreShard
+			setTransferTokenInMetakv(ttid, tt)
+			return
+
+		case stats := <-progressCh:
+			sr.updateTransferStatistics(ttid, stats)
+			l.Infof("ShardRebalancer::startShardTranfser ShardId: %v bytesWritten: %v, totalBytes: %v, transferRate: %v",
+				stats.shardId, stats.bytesWritten, stats.totalBytes, stats.transferRate)
+		}
+	}
+}
+
+func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTransferStatistics) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if _, ok := sr.transferStats[ttid]; !ok {
+		sr.transferStats[ttid] = make(map[uint64]*ShardTransferStatistics)
+	}
+	sr.transferStats[ttid][stats.shardId] = stats
+}
+
+func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]string, destination string, ttid string) {
+
+	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
+		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
+
+	respCh := make(chan bool)
+	msg := &MsgShardTransferCleanup{
+		shardPaths:      shardPaths,
+		destination:     destination,
+		rebalanceId:     sr.rebalToken.RebalId,
+		transferTokenId: ttid,
+		respCh:          respCh,
+	}
+
+	sr.supvMsgch <- msg
+
+	<-respCh // Wait for response of clean-up
+
+	l.Infof("ShardRebalancer::initiateShardTransferCleanup Done clean-up for ttid: %v, "+
+		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
 }
 
 func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.TransferToken) bool {
@@ -342,9 +470,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		// movements during rebalance. This information will be used
 		// for conflict resolution when  DDL and rebalance co-exist
 		// together
-
-		tt.ShardTransferTokenState = c.ShardTokenScheduleAck
 		sr.updateInMemToken(ttid, tt, "dest")
+		tt.ShardTransferTokenState = c.ShardTokenScheduleAck
 		setTransferTokenInMetakv(ttid, tt)
 
 		// TODO: It is possible for destination node to crash
@@ -421,17 +548,11 @@ func (sr *ShardRebalancer) updateInMemToken(ttid string, tt *c.TransferToken, ca
 	defer sr.mu.RUnlock()
 
 	if caller == "master" {
-		if _, ok := sr.transferTokens[ttid]; ok {
-			sr.transferTokens[ttid] = tt
-		}
+		sr.transferTokens[ttid] = tt.Clone()
 	} else if caller == "source" {
-		if _, ok := sr.sourceTokens[ttid]; ok {
-			sr.sourceTokens[ttid] = tt
-		}
+		sr.sourceTokens[ttid] = tt.Clone()
 	} else if caller == "dest" {
-		if _, ok := sr.acceptedTokens[ttid]; ok {
-			sr.acceptedTokens[ttid] = tt
-		}
+		sr.acceptedTokens[ttid] = tt.Clone()
 	}
 }
 
@@ -567,4 +688,52 @@ func (sr *ShardRebalancer) Cancel() {
 	sr.cancelMetakv()
 	close(sr.cancel)
 	sr.wg.Wait()
+}
+
+// called by master to initiate transfer of shards.
+// sr.mu needs to be acquired by the caller of this method
+func (sr *ShardRebalancer) initiateShardTransfer() {
+
+	config := sr.config.Load()
+	batchSize := config["rebalance.transferBatchSize"].Int()
+
+	count := 0
+
+	var publishedIds []string
+
+	// TODO: This logic picks first "transferBatchSize" tokens
+	// from 'transferTokens' map. In future, a more intelligent
+	// algorithm is required to batch a group based on source
+	// node, destination node and group them appropriately
+
+	for ttid, tt := range sr.transferTokens {
+		if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
+			// Used a cloned version so that the master token list
+			// will not be updated until the transfer token with
+			// updated state is persisted in metaKV
+			ttClone := tt.Clone()
+
+			// Change state of transfer token to TransferTokenTransferShard
+			ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
+			setTransferTokenInMetakv(ttid, ttClone)
+			publishedIds = append(publishedIds, ttid)
+			count++
+			if count >= batchSize {
+				break
+			}
+		}
+	}
+	l.Infof("ShardRebalancer::initiateShardTransfer Published transfer token batch: %v", publishedIds)
+}
+
+func (sr *ShardRebalancer) checkAllTokensDone() bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	for _, tt := range sr.transferTokens {
+		if tt.ShardTransferTokenState != c.ShardTokenDeleted {
+			return false
+		}
+	}
+	return true
 }

@@ -305,13 +305,25 @@ type TransferToken struct {
 	// Location on S3 from which destination node can download
 	// the shard data
 	Destination string
+
+	// For shard rebalance, indexes move from one sub-cluster to another
+	// As one transfer token is for one node to another, atleast 2 tokens
+	// are required to move both master and replica indexes. The index
+	// instances in source subcluster can be dropped only when both
+	// master and replica indexes move to destination sub-cluster.  This
+	// variable captures the tokenID of the sibling (For master token,
+	// this will contain token ID of the replica and vice-versa). This
+	// information is used to read the state of the sibling token to take
+	// an action of dropping the indexes in source subcluster
+	SiblingTokenId string
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
 // only one layer deep, this can be done by returning the value receiver as Go already copied it.
-func (tt TransferToken) Clone() TransferToken {
-
-	return tt
+func (tt *TransferToken) Clone() *TransferToken {
+	tt1 := *tt
+	tt2 := tt1
+	return &tt2
 }
 
 // TransferToken.IsUserDeferred returns whether the transfer token represents an index
@@ -360,6 +372,7 @@ func (tt *TransferToken) String() string {
 
 	// If more than one index instance exists, print all of them
 	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
 		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
 		for i := range tt.IndexInsts {
 			fmt.Fprintf(sbp, "InstId: %v ", tt.InstIds[i])

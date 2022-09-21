@@ -188,8 +188,9 @@ type ServerGroups struct {
 }
 
 type ServerGroup struct {
-	Name  string `json:"name"`
-	Nodes []Node `json:"nodes"`
+	Name       string `json:"name"`
+	AddNodeURI string `json:"addNodeURI,omitempty"`
+	Nodes      []Node `json:"nodes"`
 }
 
 // VBServerMap returns the current VBucketServerMap.
@@ -600,7 +601,7 @@ func Connect(baseU string) (Client, error) {
 	return ConnectWithAuth(baseU, basicAuthFromURL(baseU))
 }
 
-//Get SASL buckets
+// Get SASL buckets
 type BucketInfo struct {
 	Name string // name of bucket
 }
@@ -748,7 +749,7 @@ func (c *Client) GetTerseBucket(terseBucketsBase, bucketn string) (retry bool, n
 	return
 }
 
-//This function always uses default pool
+// This function always uses default pool
 // Note: Call this only when cluster version is atleast 7.0
 // It is allowed to query the collections endpoint only if all
 // the nodes in the cluster are upgraded to 7.0 version or later
