@@ -65,8 +65,6 @@ github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e h1:xRaK/0Xonv
 github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e/go.mod h1:QrrCwm7zmrkx0PXqGue29VBMbBo3DAQ3oAGamrrUAkQ=
 github.com/couchbase/logstats v0.0.0-20220303011129-24ba9753289f h1:gPlMn2WJFDREm2cSOpkBzKn4SVAfqKeF2YSHckbFLc0=
 github.com/couchbase/logstats v0.0.0-20220303011129-24ba9753289f/go.mod h1:p/jovd/oa3G6iTHvebYyzTYR1D0j5O7RAj3fxJPWVOI=
-github.com/couchbase/nitro v0.0.0-20220707133503-f65f7a599cdf h1:wcQMfvyT/QIAwUNv9KLk3LaDmRPu7GMwoDjO1ID3YSk=
-github.com/couchbase/nitro v0.0.0-20220707133503-f65f7a599cdf/go.mod h1:fXxxsWFIni3aCcIo155Rlr66vffasDCtRizatvPRdUw=
 github.com/couchbasedeps/go-curl v0.0.0-20190830233031-f0b2afc926ec h1:mVbbrQChG/+citrbPl7gPumTN39U/6isDI7VzShrRIQ=
 github.com/couchbasedeps/go-curl v0.0.0-20190830233031-f0b2afc926ec/go.mod h1:ZLaSGBNRCwL1Kd8Ka/bJ3NspTmFcEeis2mr7vflJS7M=
 github.com/couchbaselabs/c-forestdb v0.0.0-20160212203508-1b1267468faa h1:3fgeiv8YZf/5YmjcnfCCpyKd7uc9nOxK6rnKOOi1UEY=

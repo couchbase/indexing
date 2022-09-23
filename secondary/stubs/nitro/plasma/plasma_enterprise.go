@@ -21,5 +21,5 @@ func MemoryInUse() int64 {
 }
 
 func TenantQuotaNeeded() int64 {
-	return ee.TenantQuotaNeeded()
+	return ee.TenantQuotaMandatory()
 }

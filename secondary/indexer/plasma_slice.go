@@ -385,7 +385,9 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			cfg.MinNumShard = slice.sysconf["plasma.serverless.minNumShard"].Uint64()
 			cfg.DefaultMinRequestQuota = int64(slice.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
 			cfg.TargetRR = slice.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+			cfg.IdleRR = slice.sysconf["plasma.serverless.idleResidentRatio"].Float64()
 			cfg.MutationRateLimit = int64(slice.sysconf["plasma.serverless.mutationRateLimit"].Int())
+			cfg.IdleDurationThreshold = time.Duration(slice.sysconf["plasma.serverless.idleDurationThreshold"].Int()) * time.Second
 		}
 
 		cfg.StorageDir = slice.storageDir
@@ -2675,7 +2677,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.mainstore.MinNumShard = mdb.sysconf["plasma.serverless.minNumShard"].Uint64()
 		mdb.mainstore.DefaultMinRequestQuota = int64(mdb.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
 		mdb.mainstore.TargetRR = mdb.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+		mdb.mainstore.IdleRR = mdb.sysconf["plasma.serverless.idleResidentRatio"].Float64()
 		mdb.mainstore.MutationRateLimit = int64(mdb.sysconf["plasma.serverless.mutationRateLimit"].Int())
+		mdb.mainstore.IdleDurationThreshold = time.Duration(mdb.sysconf["plasma.serverless.idleDurationThreshold"].Int()) * time.Second
 		mdb.mainstore.MaxDeltaChainLen = mdb.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
 		mdb.mainstore.MaxPageItems = mdb.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
 		mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
@@ -2770,7 +2774,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			mdb.backstore.MinNumShard = mdb.sysconf["plasma.serverless.minNumShard"].Uint64()
 			mdb.backstore.DefaultMinRequestQuota = int64(mdb.sysconf["plasma.serverless.recovery.requestQuoteIncrement"].Int())
 			mdb.backstore.TargetRR = mdb.sysconf["plasma.serverless.targetResidentRatio"].Float64()
+			mdb.backstore.IdleRR = mdb.sysconf["plasma.serverless.idleResidentRatio"].Float64()
 			mdb.backstore.MutationRateLimit = int64(mdb.sysconf["plasma.serverless.mutationRateLimit"].Int())
+			mdb.backstore.IdleDurationThreshold = time.Duration(mdb.sysconf["plasma.serverless.idleDurationThreshold"].Int()) * time.Second
 			mdb.backstore.MaxPageItems = mdb.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
 			mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
 		}

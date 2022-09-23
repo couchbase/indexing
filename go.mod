@@ -24,6 +24,8 @@ replace github.com/couchbase/hebrew => ../../../../../hebrew
 
 replace github.com/couchbase/n1fty => ../n1fty
 
+replace github.com/couchbase/nitro => ../nitro
+
 replace github.com/couchbase/plasma => ../plasma
 
 replace github.com/couchbase/query => ../query
