@@ -1095,7 +1095,7 @@ type MsgRecoverIndexResp struct {
 	mType        MsgType
 	indexInst    common.IndexInst
 	partnInstMap PartitionInstMap
-	respCh       MsgChannel
+	err          error
 }
 
 func (m *MsgRecoverIndexResp) GetMsgType() MsgType {
@@ -1110,8 +1110,8 @@ func (m *MsgRecoverIndexResp) GetPartnInstMap() PartitionInstMap {
 	return m.partnInstMap
 }
 
-func (m *MsgRecoverIndexResp) GetRespCh() MsgChannel {
-	return m.respCh
+func (m *MsgRecoverIndexResp) GetError() error {
+	return m.err
 }
 
 func (m *MsgRecoverIndexResp) GetString() string {

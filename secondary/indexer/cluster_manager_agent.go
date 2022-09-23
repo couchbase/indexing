@@ -787,19 +787,19 @@ func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId com
 		switch res.GetMsgType() {
 
 		case MSG_SUCCESS:
-			logging.Infof("clustMgrAgent::OnIndexRecover: Success for "+
-				"Recover Index: instId %v, indexDefn %+v", instId, indexDefn)
+			logging.Infof("clustMgrAgent::OnIndexRecover: Successfully initiated "+
+				"for index recovery: instId %v, indexDefn %+v", instId, indexDefn)
 			return nil
 
 		case MSG_ERROR:
 			err := res.(*MsgError).GetError()
 			logging.Errorf("clustMgrAgent::OnIndexRecover: Error for "+
-				"Recover Index: instId %v, indexDefn %+v. Error: %+v.", instId, indexDefn, err)
+				"index recovery: instId %v, indexDefn %+v. Error: %+v.", instId, indexDefn, err)
 			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
 
 		default:
 			logging.Fatalf("clustMgrAgent::OnIndexRecover: Unknown response received "+
-				"for Recover Index: instId %v, indexDefn %+v. Response: %+v.",
+				"for index recovery: instId %v, indexDefn %+v. Response: %+v.",
 				instId, indexDefn, res)
 			common.CrashOnError(errors.New("Unknown Response"))
 
@@ -807,7 +807,7 @@ func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId com
 
 	} else {
 		logging.Fatalf("clustMgrAgent::OnIndexRecover: Unexpected channel close "+
-			"for recover Index: instId %v, indexDefn %+v", instId, indexDefn)
+			"for index recovery: instId %v, indexDefn %+v", instId, indexDefn)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
 

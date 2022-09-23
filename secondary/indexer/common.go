@@ -66,14 +66,14 @@ type MsgChannel chan Message
 
 type MutationChannel chan *MutationKeys
 
-//IndexMutationQueue comprising of a mutation queue
-//and a slab manager
+// IndexMutationQueue comprising of a mutation queue
+// and a slab manager
 type IndexerMutationQueue struct {
 	queue   MutationQueue
 	slabMgr SlabManager //slab allocator for mutation memory allocation
 }
 
-//IndexQueueMap is a map between IndexId and IndexerMutationQueue
+// IndexQueueMap is a map between IndexId and IndexerMutationQueue
 type IndexQueueMap map[common.IndexInstId]IndexerMutationQueue
 
 type Vbucket uint32
@@ -97,7 +97,7 @@ func (vbuckets Vbuckets) Swap(i, j int) {
 	vbuckets[i], vbuckets[j] = vbuckets[j], vbuckets[i]
 }
 
-//MutationSnapshot represents snapshot information of KV
+// MutationSnapshot represents snapshot information of KV
 type MutationSnapshot struct {
 	snapType uint32
 	start    uint64

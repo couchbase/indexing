@@ -2211,39 +2211,54 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, err := idx.initPartnInstance(indexInst, clientCh, false)
+		partnInstMap, _, err := idx.initPartnInstance(indexInst, nil, false)
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
-		if err == nil {
-			logging.Infof("Indexer::handleRecoverIndex Sending message to indexer "+
-				"on successful recovery of inst: %v", indexInst.InstId)
-			idx.internalRecvCh <- &MsgRecoverIndexResp{
-				mType:        INDEXER_INST_RECOVERY_RESPONSE,
-				indexInst:    indexInst,
-				partnInstMap: partnInstMap,
-				respCh:       clientCh,
-			}
-		} else {
-			logging.Errorf("Indexer::handleRecoverIndex Encountered error during "+
-				"initilization of instance, err: %v", err)
+
+		logging.Infof("Indexer::handleRecoverIndex Sending message to indexer "+
+			"on recovery of inst: %v, err: %v", indexInst.InstId, err)
+		idx.internalRecvCh <- &MsgRecoverIndexResp{
+			mType:        INDEXER_INST_RECOVERY_RESPONSE,
+			indexInst:    indexInst,
+			partnInstMap: partnInstMap,
+			err:          err,
 		}
+
 		return
 	}()
+
+	// Respond on the client channel on successful initiation of
+	// recovery. Once recovery is complete, indexer will initiate
+	// the updation of index state in the topology
+	clientCh <- &MsgSuccess{}
 }
 
 func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	indexInst := msg.(*MsgRecoverIndexResp).GetIndexInst()
 	partnInstMap := msg.(*MsgRecoverIndexResp).GetPartnInstMap()
-	clientCh := msg.(*MsgRecoverIndexResp).GetRespCh()
+	err := msg.(*MsgRecoverIndexResp).GetError()
 
-	logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received for instId: %v", indexInst.InstId)
+	if err != nil {
+		// Index recovery did not succeed. Remove index from topology
+		// Send a message to cluster manager to remove index instance from topology
+		logging.Errorf("Indexer::handleInstRecoveryResponse Error response received during recovery for instId: %v, err: %v", indexInst.InstId, err)
+
+		// If cleanup is not successful, then crash indexer as rebalancer would be waiting for
+		// change of index state. If state has not changed, then rebalance would be stuck
+		if err := idx.cleanupIndexMetadata(indexInst); err != nil {
+			common.CrashOnError(err)
+		}
+		return
+	}
+
+	logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received for instId: %v, err: %v", indexInst.InstId, err)
+
 	// update rollback time for the bucket
 	if _, ok := idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket]; !ok {
 		idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
 	}
 
-	// For in-memory bookkeeping
 	indexInst.State = common.INDEX_STATE_RECOVERED
 
 	//update index maps with this index
@@ -2257,17 +2272,14 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	msgUpdateIndexPartnMap.SetUpdatedPartnMap(partnInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-					severity: FATAL,
-					cause:    err,
-					category: INDEXER}}
-		}
 		common.CrashOnError(err)
 	}
 
-	clientCh <- &MsgSuccess{}
+	// Send a message to cluster manager to update index instance state to topology
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, false, false, nil); err != nil {
+		common.CrashOnError(err)
+	}
+	return
 
 }
 
