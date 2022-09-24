@@ -2411,7 +2411,7 @@ func (m *MsgIndexerDropCollection) GetCollectionId() string {
 }
 
 type MsgStartShardTransfer struct {
-	shardIds        []uint64
+	shardIds        []common.ShardId
 	rebalanceId     string
 	transferTokenId string
 	destination     string
@@ -2428,7 +2428,7 @@ func (m *MsgStartShardTransfer) GetMsgType() MsgType {
 	return START_SHARD_TRANSFER
 }
 
-func (m *MsgStartShardTransfer) GetShardIds() []uint64 {
+func (m *MsgStartShardTransfer) GetShardIds() []common.ShardId {
 	return m.shardIds
 }
 
@@ -2469,24 +2469,24 @@ func (m *MsgStartShardTransfer) String() string {
 }
 
 type MsgShardTransferResp struct {
-	errMap     map[uint64]error
-	shardPaths map[uint64]string //ShardId -> Location where shard is uploaded
+	errMap     map[common.ShardId]error
+	shardPaths map[common.ShardId]string //ShardId -> Location where shard is uploaded
 }
 
 func (m *MsgShardTransferResp) GetMsgType() MsgType {
 	return SHARD_TRANSFER_RESPONSE
 }
 
-func (m *MsgShardTransferResp) GetErrorMap() map[uint64]error {
+func (m *MsgShardTransferResp) GetErrorMap() map[common.ShardId]error {
 	return m.errMap
 }
 
-func (m *MsgShardTransferResp) GetShardPaths() map[uint64]string {
+func (m *MsgShardTransferResp) GetShardPaths() map[common.ShardId]string {
 	return m.shardPaths
 }
 
 type MsgShardTransferCleanup struct {
-	shardPaths      map[uint64]string // shardId -> Location of shard transfer
+	shardPaths      map[common.ShardId]string // shardId -> Location of shard transfer
 	destination     string
 	rebalanceId     string
 	transferTokenId string
@@ -2497,7 +2497,7 @@ func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
 	return SHARD_TRANSFER_CLEANUP
 }
 
-func (m *MsgShardTransferCleanup) GetShardPaths() map[uint64]string {
+func (m *MsgShardTransferCleanup) GetShardPaths() map[common.ShardId]string {
 	return m.shardPaths
 }
 
@@ -2529,7 +2529,7 @@ func (m *MsgShardTransferCleanup) String() string {
 }
 
 type MsgStartShardRestore struct {
-	shardPaths      map[uint64]string
+	shardPaths      map[common.ShardId]string
 	rebalanceId     string
 	transferTokenId string
 	destination     string
@@ -2546,7 +2546,7 @@ func (m *MsgStartShardRestore) GetMsgType() MsgType {
 	return START_SHARD_RESTORE
 }
 
-func (m *MsgStartShardRestore) GetShardPaths() map[uint64]string {
+func (m *MsgStartShardRestore) GetShardPaths() map[common.ShardId]string {
 	return m.shardPaths
 }
 
@@ -2575,7 +2575,7 @@ func (m *MsgStartShardRestore) GetRespCh() chan Message {
 }
 
 type MsgDestroyLocalShardData struct {
-	shardIds []uint64 // shardId -> Location of shard transfer
+	shardIds []common.ShardId // shardId -> Location of shard transfer
 	respCh   chan bool
 }
 
@@ -2583,7 +2583,7 @@ func (m *MsgDestroyLocalShardData) GetMsgType() MsgType {
 	return DESTROY_LOCAL_SHARD
 }
 
-func (m *MsgDestroyLocalShardData) GetShardIds() []uint64 {
+func (m *MsgDestroyLocalShardData) GetShardIds() []common.ShardId {
 	return m.shardIds
 }
 

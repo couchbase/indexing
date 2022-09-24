@@ -2863,6 +2863,16 @@ func (mdb *plasmaSlice) BuildDone() {
 	}
 }
 
+func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
+	out := make([]common.ShardId, 0)
+	out = append(out, common.ShardId(mdb.mainstore.GetShardId()))
+	if !mdb.isPrimary {
+		out = append(out, common.ShardId(mdb.backstore.GetShardId()))
+	}
+
+	return out
+}
+
 func (info *plasmaSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

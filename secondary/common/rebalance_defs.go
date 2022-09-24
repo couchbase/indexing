@@ -300,7 +300,7 @@ type TransferToken struct {
 	// of index instances being moved. Source node may use
 	// this information to initiate transfer of corresponding
 	// shard  to destination node
-	ShardIds []uint64
+	ShardIds []ShardId
 
 	// Location on S3 from which destination node can download
 	// the shard data
@@ -318,7 +318,7 @@ type TransferToken struct {
 	SiblingTokenId string
 	// shardId -> Location on S3 where the shard is uploaded
 	// shardPath is a sub-directory of "destination"
-	ShardPaths map[uint64]string
+	ShardPaths map[ShardId]string
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is

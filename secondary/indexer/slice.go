@@ -45,6 +45,8 @@ type Slice interface {
 
 	RecoveryDone()
 	BuildDone()
+
+	GetShardIds() []common.ShardId
 }
 
 // cursorCtx implements IndexReaderContext and is used

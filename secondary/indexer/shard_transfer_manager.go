@@ -9,7 +9,7 @@ import (
 )
 
 type ShardTransferStatistics struct {
-	shardId      uint64
+	shardId      common.ShardId
 	totalBytes   int64
 	bytesWritten int64
 	transferRate float64
@@ -56,8 +56,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	errMap := make(map[uint64]error)
-	shardPaths := make(map[uint64]string)
+	errMap := make(map[common.ShardId]error)
+	shardPaths := make(map[common.ShardId]string)
 
 	closeCancelCh := func() {
 		mu.Lock()
@@ -76,8 +76,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 
 		logging.Infof("ShardTransferManager::processShardTransferMessage doneCb invoked for shardId: %v, path: %v, err: %v", shardId, shardPath, err)
 
-		errMap[uint64(shardId)] = err
-		shardPaths[uint64(shardId)] = shardPath
+		errMap[common.ShardId(shardId)] = err
+		shardPaths[common.ShardId(shardId)] = shardPath
 
 		if err != nil && !isClosed {
 			isClosed = true
@@ -91,7 +91,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 			totalBytes:   transferStats.TotalBytes,
 			bytesWritten: transferStats.BytesWritten,
 			transferRate: transferStats.AvgXferRate,
-			shardId:      uint64(transferStats.ShardId),
+			shardId:      common.ShardId(transferStats.ShardId),
 		}
 	}
 
@@ -219,7 +219,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	errMap := make(map[uint64]error)
+	errMap := make(map[common.ShardId]error)
 
 	closeCancelCh := func() {
 		mu.Lock()
@@ -238,8 +238,8 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 		logging.Infof("ShardTransferManager::processShardRestoreMessage doneCb invoked for shardId: %v, path: %v, err: %v", shardId, shardPath, err)
 
-		errMap[uint64(shardId)] = err
-		shardPaths[uint64(shardId)] = shardPath
+		errMap[common.ShardId(shardId)] = err
+		shardPaths[common.ShardId(shardId)] = shardPath
 
 		if err != nil && !isClosed {
 			isClosed = true
@@ -253,7 +253,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			totalBytes:   transferStats.TotalBytes,
 			bytesWritten: transferStats.BytesWritten,
 			transferRate: transferStats.AvgXferRate,
-			shardId:      uint64(transferStats.ShardId),
+			shardId:      common.ShardId(transferStats.ShardId),
 		}
 	}
 
@@ -264,7 +264,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			meta := make(map[string]interface{})
 			meta[plasma.GSIRebalanceId] = rebalanceId
 			meta[plasma.GSIRebalanceTransferToken] = ttid
-			meta[plasma.GSIShardID] = shardId
+			meta[plasma.GSIShardID] = uint64(shardId)
 			meta[plasma.GSIShardUploadPath] = shardPath
 			meta[plasma.GSIStorageDir] = stm.config["storage_dir"].String()
 

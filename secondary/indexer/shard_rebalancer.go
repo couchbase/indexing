@@ -32,7 +32,7 @@ type ShardRebalancer struct {
 	// and destination nodes
 	ackedTokens map[string]*c.TransferToken
 
-	transferStats map[string]map[uint64]*ShardTransferStatistics // ttid -> shardId -> stats
+	transferStats map[string]map[common.ShardId]*ShardTransferStatistics // ttid -> shardId -> stats
 
 	// lock protecting access to maps like transferTokens, sourceTokens etc.
 	mu sync.RWMutex
@@ -107,7 +107,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		waitForTokenPublish: make(chan struct{}),
 
 		topologyChange: topologyChange,
-		transferStats:  make(map[string]map[uint64]*ShardTransferStatistics),
+		transferStats:  make(map[string]map[common.ShardId]*ShardTransferStatistics),
 
 		dropQueue:  make(chan string, 10000),
 		dropQueued: make(map[string]bool),
@@ -454,12 +454,12 @@ func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTra
 	defer sr.mu.Unlock()
 
 	if _, ok := sr.transferStats[ttid]; !ok {
-		sr.transferStats[ttid] = make(map[uint64]*ShardTransferStatistics)
+		sr.transferStats[ttid] = make(map[common.ShardId]*ShardTransferStatistics)
 	}
 	sr.transferStats[ttid][stats.shardId] = stats
 }
 
-func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[uint64]string,
+func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.ShardId]string,
 	destination string, ttid string, tt *c.TransferToken, err error) {
 
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
@@ -643,13 +643,13 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 }
 
 // Cleans-up the shard data from local file system
-func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map[uint64]string,
+func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map[common.ShardId]string,
 	tt *c.TransferToken, err error) {
 
 	l.Infof("ShardRebalancer::initiateLocalShardCleanup Initiating clean-up on local file "+
 		"system for ttid: %v, shards: %v ", ttid, shardPaths)
 
-	shardIds := make([]uint64, 0)
+	shardIds := make([]common.ShardId, 0)
 	for shardId, _ := range shardPaths {
 		shardIds = append(shardIds, shardId)
 	}
