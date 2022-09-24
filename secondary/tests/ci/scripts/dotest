@@ -167,9 +167,8 @@ export PATH=$PATH:$GOROOT/bin
 export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include
 export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
 export LD_LIBRARY_PATH=$WORKSPACE/install/lib
-# enable module-aware mode only when a go.mod file is present
-# GOPATH still applies for module caching
-## disabling for now
+#Note: enabling auto tells go get to download modules under godeps/pkg/mod
+#This breaks unit tests which depend on fixed file paths under monster module
 export GO111MODULE=off
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
@@ -202,7 +201,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
   GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GO111MODULE=auto GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
