@@ -169,7 +169,8 @@ export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
 export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 # enable module-aware mode only when a go.mod file is present
 # GOPATH still applies for module caching
-export GO111MODULE=auto
+## disabling for now
+export GO111MODULE=off
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
@@ -187,14 +188,14 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   elif [ "$STORAGE" = "plasma" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GO111MODULE=auto GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma/zstd
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GO111MODULE=auto GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       # unit test logs will be in the Server Log logs-<timestamp>.tar.gz at logs-unit-test.log
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
+      GO111MODULE=auto GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
   fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
