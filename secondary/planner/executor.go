@@ -712,7 +712,15 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 		ustr, _ := common.NewUUID()
 		ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
 		result[ttid] = token
+	}
 
+	var err error
+	result, err = populateSiblingTokenId(solution, result)
+	if err != nil {
+		return nil, err
+	}
+
+	for ttid, token := range result {
 		if len(token.SourceId) != 0 {
 			logging.Infof("Generating Shard Transfer Token (%v) for rebalance (%v)", ttid, token)
 		} else {
@@ -721,6 +729,64 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	}
 
 	return result, nil
+}
+
+func populateSiblingTokenId(solution *Solution, transferTokens map[string]*common.TransferToken) (map[string]*common.TransferToken, error) {
+	// It is ok to ignore the error here as this method is only called
+	// after err == nil is seen the same solution
+	subClusters, _ := groupIndexNodesIntoSubClusters(solution.Placement)
+
+	// Group transfer tokens moving from one sub cluster to another cluster
+	subClusterTokenIdMap := make(map[string][]string)
+	for ttid, token := range transferTokens {
+		if token.TransferMode != common.TokenTransferModeMove { // Ignore for replica repair
+			continue
+		}
+
+		srcSubClusterPos := getSubClusterPosForNode(subClusters, token.SourceId)
+		destSubClusterPos := getSubClusterPosForNode(subClusters, token.DestId)
+		// Group all tokens of a bucket moving from a source subcluster to a
+		// destination subcluster
+		groupKey := fmt.Sprintf("%v %v %v", srcSubClusterPos, destSubClusterPos, token.IndexInsts[0].Defn.Bucket)
+		subClusterTokenIdMap[groupKey] = append(subClusterTokenIdMap[groupKey], ttid)
+	}
+
+	areTokensMatchingAllInsts := func(tid1, tid2 string) bool {
+		token1, _ := transferTokens[tid1]
+		token2, _ := transferTokens[tid2]
+
+		for _, inst1 := range token1.IndexInsts {
+
+			foundInst := false
+			for _, inst2 := range token2.IndexInsts {
+				if inst1.Defn.DefnId == inst2.Defn.DefnId { // Defn ID will be same for replica index instances
+					foundInst = true
+					break
+				}
+			}
+
+			if !foundInst {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, tokens := range subClusterTokenIdMap {
+		for i, _ := range tokens {
+			for j, _ := range tokens {
+				if i != j {
+					if areTokensMatchingAllInsts(tokens[i], tokens[j]) {
+						transferTokens[tokens[i]].SiblingTokenId = tokens[j]
+						transferTokens[tokens[j]].SiblingTokenId = tokens[i]
+						continue
+					}
+				}
+			}
+		}
+	}
+
+	return transferTokens, nil
 }
 
 //////////////////////////////////////////////////////////////
@@ -2348,6 +2414,23 @@ func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
 	}
 
 	return false
+}
+
+// getSubClusterPosForNode returns the position of "node"
+// in the input "subClusters" slice
+func getSubClusterPosForNode(subClusters []SubCluster,
+	nodeId string) int {
+
+	for index, subCluster := range subClusters {
+
+		for _, subNode := range subCluster {
+			if nodeId == subNode.NodeUUID {
+				return index
+			}
+		}
+	}
+
+	return -1
 }
 
 //findSubClusterForIndex finds the sub-cluster for a given index.
