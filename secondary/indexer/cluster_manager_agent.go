@@ -203,6 +203,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedPartitions := []uint64(nil)
 		updatedVersions := []int(nil)
 		updatedInstVersion := -1
+		updatedShardIds := make(common.PartnShardIdMap)
+		partnShardMap := updatedFields.partnShardIdMap
 
 		if updatedFields.state {
 			updatedState = index.State
@@ -218,8 +220,12 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		}
 		if updatedFields.partitions {
 			for _, partition := range index.Pc.GetAllPartitions() {
-				updatedPartitions = append(updatedPartitions, uint64(partition.GetPartitionId()))
+				partnId := partition.GetPartitionId()
+				updatedPartitions = append(updatedPartitions, uint64(partnId))
 				updatedVersions = append(updatedVersions, int(partition.GetVersion()))
+				if len(partnShardMap) > 0 {
+					updatedShardIds[partnId] = partnShardMap[partnId]
+				}
 			}
 		}
 		if updatedFields.version {
@@ -233,13 +239,13 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
-					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion)
+					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
-				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion)
+				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds)
 		}
 		common.CrashOnError(err)
 	}
@@ -474,11 +480,14 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			// create partitions
 			partitions := make([]common.PartitionId, len(inst.Partitions))
 			versions := make([]int, len(inst.Partitions))
+			shardIds := make([][]common.ShardId, len(inst.Partitions))
 			for i, partn := range inst.Partitions {
 				partitions[i] = common.PartitionId(partn.PartId)
 				versions[i] = int(partn.Version)
+				shardIds[i] = []common.ShardId(partn.ShardIds)
 			}
-			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, inst.NumPartitions, idxDefn.PartitionScheme, idxDefn.HashScheme)
+			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, shardIds,
+				inst.NumPartitions, idxDefn.PartitionScheme, idxDefn.HashScheme)
 
 			// create index instance
 			idxInst := common.IndexInst{
@@ -688,14 +697,14 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgen
 
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
 	replicaId int, partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId,
-	reqCtx *common.MetadataRequestContext) error {
+	reqCtx *common.MetadataRequestContext) (common.PartnShardIdMap, error) {
 	const _OnIndexCreate = "clustMgrAgent::OnIndexCreate:"
 
 	logging.Infof("%v Notification received for Create Index:"+
 		" instId %v, indexDefn %+v, reqCtx %+v, partitions %v",
 		_OnIndexCreate, instId, indexDefn, reqCtx, partitions)
 
-	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
+	pc := meta.makeDefaultPartitionContainer(partitions, versions, nil, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
 		Defn:       *indexDefn,
@@ -722,16 +731,17 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 
 		switch res.GetMsgType() {
 
-		case MSG_SUCCESS:
-			logging.Infof("%v Success for Create Index: instId %v, indexDefn %+v",
-				_OnIndexCreate, instId, indexDefn)
-			return nil
+		case UPDATE_SHARDID_MAP:
+			partnShardIdMap := (res).(*MsgUpdateShardIds).GetShardIds()
+			logging.Infof("%v Success for Create Index: instId %v, partnShardIdMap: %v, indexDefn %+v",
+				_OnIndexCreate, instId, partnShardIdMap, indexDefn)
+			return partnShardIdMap, nil
 
 		case MSG_ERROR:
 			err := res.(*MsgError).GetError()
 			logging.Errorf("%v Error for Create Index: instId %v, indexDefn %+v. Error: %+v.",
 				_OnIndexCreate, instId, indexDefn, err)
-			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+			return nil, &common.IndexerError{Reason: err.String(), Code: err.convertError()}
 
 		default:
 			logging.Fatalf("%v Unknown response received for Create Index:"+
@@ -747,7 +757,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
 
-	return nil
+	return nil, nil
 }
 
 func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId common.IndexInstId,
@@ -759,7 +769,9 @@ func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId com
 		"Recover Index: instId %v, indexDefn %+v, reqCtx %+v, partitions %v",
 		instId, indexDefn, reqCtx, partitions)
 
-	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
+	// The shardIds in partition container will be updated after
+	// index is completely recovered into slice
+	pc := meta.makeDefaultPartitionContainer(partitions, versions, nil, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
 		Defn:       *indexDefn,
@@ -1039,7 +1051,8 @@ func (meta *metaNotifier) fetchStats() {
 	}
 }
 
-func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, versions []int, numPartitions uint32,
+func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, versions []int,
+	shardIds [][]common.ShardId, numPartitions uint32,
 	scheme common.PartitionScheme, hash common.HashScheme) common.PartitionContainer {
 
 	pc := common.NewKeyPartitionContainer(int(numPartitions), scheme, hash)
@@ -1049,8 +1062,13 @@ func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.Part
 	endpt := []common.Endpoint{common.Endpoint(addr)}
 
 	for i, partnId := range partitions {
-		partnDefn := common.KeyPartitionDefn{Id: partnId, Version: versions[i], Endpts: endpt}
-		pc.AddPartition(partnId, partnDefn)
+		if shardIds != nil {
+			partnDefn := common.KeyPartitionDefn{Id: partnId, Version: versions[i], ShardIds: shardIds[i], Endpts: endpt}
+			pc.AddPartition(partnId, partnDefn)
+		} else {
+			partnDefn := common.KeyPartitionDefn{Id: partnId, Version: versions[i], Endpts: endpt}
+			pc.AddPartition(partnId, partnDefn)
+		}
 	}
 
 	return pc

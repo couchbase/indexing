@@ -107,7 +107,7 @@ type IndexManager struct {
 //     A) Both index definition and index instance exist.
 //     B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) (common.PartnShardIdMap, error)
 	OnIndexRecover(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
@@ -622,7 +622,7 @@ func (m *IndexManager) HandleBuildRecoveredIndexesRebalance(indexIds client.Inde
 
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
-	partitions []uint64, versions []int, instVersion int) error {
+	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap) error {
 
 	inst := &topologyChange{
 		Bucket:      bucket,
@@ -637,7 +637,8 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 		RState:      uint32(rState),
 		Partitions:  partitions,
 		Versions:    versions,
-		InstVersion: instVersion}
+		InstVersion: instVersion,
+		ShardIdMap:  partnShardIdMap}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -652,7 +653,7 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 
 func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
-	partitions []uint64, versions []int, instVersion int) error {
+	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap) error {
 
 	inst := &topologyChange{
 		Bucket:      bucket,
@@ -667,7 +668,8 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string,
 		RState:      uint32(rState),
 		Partitions:  partitions,
 		Versions:    versions,
-		InstVersion: instVersion}
+		InstVersion: instVersion,
+		ShardIdMap:  partnShardIdMap}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {

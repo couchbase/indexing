@@ -17,9 +17,10 @@ import (
 //KeyPartitionDefn defines a key based partition in terms of topology
 //ie its Id and Indexer Endpoints hosting the partition
 type KeyPartitionDefn struct {
-	Id      PartitionId
-	Version int
-	Endpts  []Endpoint
+	Id       PartitionId
+	Version  int
+	Endpts   []Endpoint
+	ShardIds []ShardId
 }
 
 func (kp KeyPartitionDefn) GetPartitionId() PartitionId {
@@ -32,6 +33,14 @@ func (kp KeyPartitionDefn) GetVersion() int {
 
 func (kp KeyPartitionDefn) Endpoints() []Endpoint {
 	return kp.Endpts
+}
+
+func (kp KeyPartitionDefn) GetShardIds() []ShardId {
+	return kp.ShardIds
+}
+
+func (kp KeyPartitionDefn) AddShardIds(sids []ShardId) {
+	kp.ShardIds = sids
 }
 
 //KeyPartitionContainer implements PartitionContainer interface

@@ -62,6 +62,7 @@ type IndexPartDistribution struct {
 	Version         uint64                      `json:"version,omitempty"`
 	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
 	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
+	ShardIds        []common.ShardId            `json:"shardIds,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {
@@ -284,6 +285,30 @@ func (t *IndexTopology) UpdateStateForIndexInst(defnId common.IndexDefnId, instI
 		}
 	}
 	return false
+}
+
+// Update shardIds on instance
+func (t *IndexTopology) UpdateShardIdsForIndexPartn(defnId common.IndexDefnId, instId common.IndexInstId, partnShardIdMap common.PartnShardIdMap) bool {
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					partitions := t.Definitions[i].Instances[j].Partitions
+					for k, partn := range partitions {
+						partnId := partn.PartId
+						if shardIds, ok := partnShardIdMap[common.PartitionId(partnId)]; ok {
+							t.Definitions[i].Instances[j].Partitions[k].ShardIds = shardIds
+							logging.Debugf("IndexTopology.UpdateShardIdsForIndexPartn(): Update index '%v' inst '%v' partnId '%v' with shardIds '%v'",
+								defnId, t.Definitions[i].Instances[j].InstId, partnId, shardIds)
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+	return changed
 }
 
 //
