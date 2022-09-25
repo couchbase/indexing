@@ -386,11 +386,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		}
 		return true
 	default:
-		l.Infof("VarunLog: In the source code in default ttid: %v", ttid)
 		return false
 	}
-
-	return false
 }
 
 func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) {
@@ -586,8 +583,6 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 	default:
 		return false
 	}
-
-	return false
 }
 
 func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
