@@ -579,7 +579,8 @@ func stopCPUProfile() {
 //
 // Make index usage from definition
 //
-func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId, partnId common.PartitionId, numPartition uint64) *IndexUsage {
+func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId,
+	partnId common.PartitionId, numPartition uint64, shardIds []common.ShardId) *IndexUsage {
 
 	index := &IndexUsage{
 		DefnId:        defn.DefnId,
@@ -589,6 +590,7 @@ func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId, p
 		Bucket:        defn.Bucket,
 		Scope:         defn.Scope,
 		Collection:    defn.Collection,
+		ShardIds:      shardIds,
 		IsPrimary:     defn.IsPrimary,
 		StorageMode:   common.IndexTypeToStorageMode(defn.Using).String(),
 		NumOfDocs:     defn.NumDoc / numPartition,

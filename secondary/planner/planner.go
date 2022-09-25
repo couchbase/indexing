@@ -229,6 +229,7 @@ type IndexUsage struct {
 	Scope      string             `json:"scope"`
 	Collection string             `json:"collection"`
 	Hosts      []string           `json:"host"`
+	ShardIds   []common.ShardId   `json:"shardIds,omitempty"`
 
 	// input: index sizing
 	IsPrimary     bool    `json:"isPrimary,omitempty"`
