@@ -6294,7 +6294,7 @@ func (idx *indexer) checkCatchupPendingForStream(streamId common.StreamId,
 	//check if any index of the given keyspaceId is in the Stream
 	for _, index := range idx.indexInstMap {
 
-		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == common.INIT_STREAM &&
+		if index.Defn.KeyspaceId(streamId) == keyspaceId && index.Stream == common.INIT_STREAM &&
 			index.State == common.INDEX_STATE_CATCHUP {
 			return true
 		}
