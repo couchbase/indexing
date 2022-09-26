@@ -1,8 +1,11 @@
 package indexer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,6 +60,9 @@ type ShardRebalancer struct {
 	config      c.ConfigHolder
 	retErr      error
 
+	// For computing rebalance progress
+	lastKnownProgress map[c.IndexInstId]float64
+
 	// topologyChange is populated in Rebalance and Failover cases only, else nil
 	topologyChange *service.TopologyChange
 
@@ -110,8 +116,9 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		topologyChange: topologyChange,
 		transferStats:  make(map[string]map[common.ShardId]*ShardTransferStatistics),
 
-		dropQueue:  make(chan string, 10000),
-		dropQueued: make(map[string]bool),
+		dropQueue:         make(chan string, 10000),
+		dropQueued:        make(map[string]bool),
+		lastKnownProgress: make(map[c.IndexInstId]float64),
 	}
 
 	sr.config.Store(config)
@@ -207,9 +214,9 @@ func (sr *ShardRebalancer) initRebalAsync() {
 func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 
 	if kve.Path == RebalanceTokenPath || kve.Path == MoveIndexTokenPath {
-		l.Infof("ShardRebalancer::processTokens RebalanceToken %v %s", kve.Path, kve.Value)
+		l.Infof("ShardRebalancer::processShardTokens RebalanceToken %v %s", kve.Path, kve.Value)
 		if kve.Value == nil {
-			l.Infof("ShardRebalancer::processTokens Rebalance Token Deleted. Mark Done.")
+			l.Infof("ShardRebalancer::processShardTokens Rebalance Token Deleted. Mark Done.")
 			sr.cancelMetakv()
 			sr.finishRebalance(nil)
 		}
@@ -217,12 +224,12 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 		if kve.Value != nil {
 			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value)
 			if err != nil {
-				l.Errorf("ShardRebalancer::processTokens Unable to decode transfer token. Ignored.")
+				l.Errorf("ShardRebalancer::processShardTokens Unable to decode transfer token. Ignored.")
 				return nil
 			}
 			sr.processShardTransferToken(ttid, tt)
 		} else {
-			l.Infof("ShardRebalancer::processTokens Received empty or deleted transfer token %v", kve.Path)
+			l.Infof("ShardRebalancer::processShardTokens Received empty or deleted transfer token %v", kve.Path)
 		}
 	}
 
@@ -309,8 +316,12 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		}
 		return true
 
-	case c.ShardTokenTransferShard:
+	case c.ShardTokenTransferShard,
+		c.ShardTokenRestoreShard,
+		c.ShardTokenRecoverShard,
+		c.ShardTokenReady:
 		// Update the in-memory state but do not process the token
+		// This will help to compute the rebalance progress
 		sr.updateInMemToken(ttid, tt, "master")
 		return false
 
@@ -1252,8 +1263,134 @@ func (sr *ShardRebalancer) updateProgress() {
 
 // Shard rebalancer's version of compute progress method
 func (sr *ShardRebalancer) computeProgress() float64 {
-	// TODO: Implement the computation of progress for shard rebalance
-	return 0
+
+	url := "/getIndexStatus?getAll=true"
+	resp, err := getWithAuth(sr.localaddr + url)
+	if err != nil {
+		l.Errorf("ShardRebalancer::computeProgress Error getting local metadata %v %v", sr.localaddr+url, err)
+		return 0
+	}
+
+	defer resp.Body.Close()
+	statusResp := new(IndexStatusResponse)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	if err := json.Unmarshal(bytes, &statusResp); err != nil {
+		l.Errorf("ShardRebalancer::computeProgress Error unmarshal response %v %v", sr.localaddr+url, err)
+		return 0
+	}
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	totTokens := len(sr.transferTokens)
+
+	transferWt := 0.35
+	restoreWt := 0.35
+	recoverWt := 0.3
+
+	var totalProgress float64
+	for _, tt := range sr.transferTokens {
+		state := tt.ShardTransferTokenState
+		// All states not tested in the if-else if are treated as 0% progress
+		if state == c.ShardTokenReady || state == c.ShardTokenMerged ||
+			state == c.ShardTokenCommit || state == c.ShardTokenDeleted {
+			totalProgress += 100.00
+		} else if state == c.ShardTokenTransferShard {
+			// Noop for now.
+			// TOOD: Read transfer stats and accurately estimate the transfer time
+		} else if state == c.ShardTokenRestoreShard {
+			// Transfer is complete. So, add progress related to transfer
+			totalProgress += transferWt * 100
+			// TOOD: Read restore stats and accurately estimate the transfer time
+		} else if state == c.ShardTokenRecoverShard {
+			// If index state is recovered, get build progress
+
+			// TODO: Currently, the progress is only calculated for
+			// indexes in state INITIAL and CATCHUP. Calculate the
+			// progress for indexes in RECOVERED state as well
+			totalProgress += transferWt*100.0 + restoreWt*100.0
+			totalProgress += recoverWt * sr.getBuildProgressFromStatus(statusResp, tt)
+		}
+	}
+
+	progress := (totalProgress / float64(totTokens)) / 100.0
+	l.Infof("ShardRebalancer::computeProgress %v", progress)
+
+	if progress < 0.1 || math.IsNaN(progress) {
+		progress = 0.1
+	} else if progress == 1.0 {
+		progress = 0.99
+	}
+
+	return progress
+}
+
+// getBuildProgressFromStatus is a helper for computeProgress that gets an estimate of index build progress for the
+// given transfer token from the status arg.
+func (sr *ShardRebalancer) getBuildProgressFromStatus(status *IndexStatusResponse, tt *c.TransferToken) float64 {
+
+	totalProgress := 0.0
+	for i, inst := range tt.IndexInsts {
+		instId := tt.InstIds[i]
+		realInstId := tt.RealInstIds[i] // for partitioned indexes
+
+		// A deferred index is completely moved
+		if inst.Defn.Deferred {
+			totalProgress += 100
+			continue
+		}
+
+		// If it is a partitioned index, it is possible that we cannot find progress from instId:
+		// 1) partition is built using realInstId
+		// 2) partition has already been merged to instance with realInstId
+		// In either case, count will be 0 after calling getBuildProgress(instId) and it will find progress
+		// using realInstId instead.
+		realInstProgress, count := sr.getBuildProgress(status, instId, realInstId, inst.Defn, tt.DestId)
+		if count == 0 {
+			realInstProgress, count = sr.getBuildProgress(status, realInstId, realInstId, inst.Defn, tt.DestId)
+		}
+
+		if count > 0 {
+			sr.lastKnownProgress[instId] = realInstProgress / float64(count)
+		}
+
+		if p, ok := sr.lastKnownProgress[instId]; ok {
+			totalProgress += p
+		}
+	}
+	return (totalProgress / float64(len(tt.IndexInsts))) / 100
+}
+
+func (sr *ShardRebalancer) getBuildProgress(status *IndexStatusResponse,
+	instId, realInstId c.IndexInstId, defn c.IndexDefn, destId string) (realInstProgress float64, count int) {
+
+	for _, idx := range status.Status {
+		if idx.InstId == instId {
+			// This function is called for every transfer token before it has becomes COMMITTED or DELETED.
+			// The index may have not be in REAL_PENDING state but the token has not yet moved to COMMITTED/DELETED state.
+			// So we need to return progress even if it is not replicating.
+			// Pre-7.0 nodes will report "Replicating" instead of "Moving" so check for both.
+			if idx.Status == "Moving" || idx.Status == "Replicating" || idx.NodeUUID == destId {
+				progress, ok := sr.lastKnownProgress[instId]
+				if !ok || idx.Progress > 0 {
+					progress = idx.Progress
+				}
+
+				destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
+				l.Infof("ShardRebalancer::getBuildProgress Index: %v:%v:%v:%v"+
+					" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name,
+					progress, instId, realInstId, defn.Partitions, destNode)
+
+				realInstProgress += progress
+				count++
+			} else if idx.Status == "Ready" {
+				realInstProgress += 100
+				count++
+			}
+		}
+	}
+	return realInstProgress, count
 }
 
 func (sr *ShardRebalancer) processDropShards() {
