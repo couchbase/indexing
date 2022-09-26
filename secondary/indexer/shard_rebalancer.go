@@ -16,6 +16,7 @@ import (
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/planner"
 )
 
 // ShardRebalancer embeds Rebalancer struct to reduce code
@@ -177,7 +178,17 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					continue
 				}
 
-				// TODO: Add planner related logic and integrate with planner
+				var err error
+				sr.transferTokens, _, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
+					*sr.topologyChange, sr.nodeUUID)
+
+				// TODO: Add logic to remove duplicate indexes
+
+				if err != nil {
+					l.Errorf("ShardRebalancer::initRebalAsync Planner Error %v", err)
+					go sr.finishRebalance(err)
+					return
+				}
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
