@@ -766,8 +766,8 @@ func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId com
 	const _OnIndexCreate = "clustMgrAgent::OnIndexRecover:"
 
 	logging.Infof("clustMgrAgent::OnIndexRecover Notification received for "+
-		"Recover Index: instId %v, indexDefn %+v, reqCtx %+v, partitions %v",
-		instId, indexDefn, reqCtx, partitions)
+		"Recover Index: instId %v,realInstId: %v, indexDefn %+v, reqCtx %+v, partitions %v",
+		instId, realInstId, indexDefn, reqCtx, partitions)
 
 	// The shardIds in partition container will be updated after
 	// index is completely recovered into slice
