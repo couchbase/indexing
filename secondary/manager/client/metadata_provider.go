@@ -5653,7 +5653,15 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 	raddr := pipe.GetAddr()
 
 	clusterVer := c.GetClusterVersion()
+	if clusterVer < int64(w.provider.GetClusterVersion()) {
+		clusterVer = int64(w.provider.GetClusterVersion())
+	}
 	intVer := c.GetInternalVersion()
+
+	if clusterVer == 0 || intVer.Equals("") {
+		logging.Errorf("watcher:ClientAuth cluster Ver (%v)/Internal Version (%v) not yet initialised", clusterVer, intVer)
+	}
+
 	if clusterVer < c.INDEXER_71_VERSION && intVer.LessThan(c.MIN_VER_SRV_AUTH) {
 		logging.Infof("watcher:ClientAuth skipping auth because of cluster "+
 			"version %v, internal version %v for %v", clusterVer, intVer, raddr)
