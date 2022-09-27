@@ -5455,6 +5455,9 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 	raddr := pipe.GetAddr()
 
 	clusterVer := c.GetClusterVersion()
+	if clusterVer < int64(w.provider.GetClusterVersion()) {
+		clusterVer = int64(w.provider.GetClusterVersion())
+	}
 	intVer := c.GetInternalVersion()
 	if intVer.LessThan(w.provider.internalVersion) {
 		intVer = w.provider.internalVersion
