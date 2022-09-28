@@ -690,7 +690,8 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 						tt.Destination, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateLocalShardCleanup(ttid, shardPaths, tt, err)
+					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
+					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
 				}
 			}
@@ -714,7 +715,7 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 
 // Cleans-up the shard data from local file system
 func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map[common.ShardId]string,
-	tt *c.TransferToken, err error) {
+	tt *c.TransferToken) {
 
 	l.Infof("ShardRebalancer::initiateLocalShardCleanup Initiating clean-up on local file "+
 		"system for ttid: %v, shards: %v ", ttid, shardPaths)
@@ -733,13 +734,9 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 
 	sr.supvMsgch <- msg
 
-	// Wait for response
+	// Wait for response. Cleanup is a best effor call
+	// So, no need to process response
 	<-respCh
-
-	// Update error in transfer token so that rebalance master
-	// will finish the rebalance and clean-up can be invoked for
-	// other transfer tokens in the batch depending on their state
-	sr.setTransferTokenError(ttid, tt, err.Error())
 }
 
 func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) {
@@ -1569,6 +1566,9 @@ loop:
 		}
 
 		if allInstancesDropped {
+
+			sr.initiateLocalShardCleanup(ttid, tt.ShardPaths, tt)
+
 			tt.ShardTransferTokenState = c.ShardTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
 
