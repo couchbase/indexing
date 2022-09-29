@@ -78,6 +78,9 @@ type IndexWriter interface {
 	// Statistics used for compaction trigger
 	Statistics(consumerFilter uint64) (StorageStatistics, error)
 
+	// Get Tenant Disk Size
+	GetTenantDiskSize() (int64, error)
+
 	// Prepare stats for efficient
 	PrepareStats()
 

@@ -85,6 +85,8 @@ const (
 	EMPTY_INDEX_MEMUSAGE = 8
 )
 
+const cSubClusterLen = 2
+
 var ErrNoAvailableIndexer = errors.New("Cannot find any indexer that can add new indexes")
 
 //////////////////////////////////////////////////////////////
@@ -284,7 +286,7 @@ type IndexUsage struct {
 	destNode *IndexerNode
 
 	// input: flag to indicate if the index in delete or create token
-	pendingDelete bool // true if there is a delete token associated with this index
+	PendingDelete bool // true if there is a delete token associated with this index
 	pendingCreate bool // true if there is a create token associated with this index
 	pendingBuild  bool // true if there is a build token associated with this index
 
@@ -1467,7 +1469,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 		return
 	}
 
-	// numLiveNode = newNode + existing node - excluded node
+	// numLiveNode = newNode + existing node - (excluded node + ejected node)
 	numLiveNode := s.findNumAvailLiveNode()
 
 	// Check to see if it is needed to add replica
@@ -1487,7 +1489,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			}
 
 			if index.Instance != nil && missingReplica > 0 &&
-				numReplica < numLiveNode && !index.pendingDelete {
+				numReplica < numLiveNode && !index.PendingDelete {
 
 				targets := s.FindNodesForReplicaRepair(index, missingReplica)
 				if len(targets) == 0 && !indexer.ExcludeAny(s) {
@@ -1568,7 +1570,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 	done := make(map[common.IndexInstId]bool)
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if !index.pendingDelete {
+			if !index.PendingDelete {
 				if index.Instance != nil && index.Instance.Pc != nil {
 					if _, ok := done[index.InstId]; !ok {
 						if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
@@ -2091,6 +2093,19 @@ func (s *Solution) getDeleteNodes() []*IndexerNode {
 	return result
 }
 
+//find list of new nodes i.e. nodes without any index
+func (s *Solution) getNewNodes() []*IndexerNode {
+
+	result := ([]*IndexerNode)(nil)
+	for _, indexer := range s.Placement {
+		if indexer.isNew {
+			result = append(result, indexer)
+		}
+	}
+
+	return result
+}
+
 //
 // This prints the vital statistics from Solution.
 //
@@ -2183,7 +2198,7 @@ func (s *Solution) PrintLayout() {
 				index.GetBuildPercent(s.UseLiveData()),
 				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
 				!index.suppressEquivIdxCheck,
-				index.pendingCreate, index.pendingDelete)
+				index.pendingCreate, index.PendingDelete)
 		}
 	}
 }
@@ -3072,6 +3087,29 @@ func (s *Solution) hasNewNodes() bool {
 		}
 	}
 	return false
+}
+
+//markDeletedNodes sets isDelete flag as true for deletec nodes
+func (s *Solution) markDeletedNodes(deletedNodes []string) error {
+
+	if len(deletedNodes) != 0 {
+
+		if len(deletedNodes) > len(s.Placement) {
+			return errors.New("The number of node in cluster is smaller than the number of node to be deleted.")
+		}
+
+		for _, nodeId := range deletedNodes {
+
+			candidate := s.findMatchingIndexer(nodeId)
+			if candidate == nil {
+				return errors.New(fmt.Sprintf("Cannot find to-be-deleted indexer in solution: %v", nodeId))
+			}
+
+			candidate.isDelete = true
+		}
+	}
+	return nil
+
 }
 
 //
@@ -5461,7 +5499,7 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly b
 
 	// index to be balanced
 	for i, index := range indexes {
-		if !index.pendingDelete {
+		if !index.PendingDelete {
 			p.indexes[index] = true
 			index.eligible = true
 			p.eligibles[i] = index

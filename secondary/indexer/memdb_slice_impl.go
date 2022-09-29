@@ -1846,6 +1846,10 @@ func (mdb *memdbSlice) BuildDone() {
 	// nothing to do
 }
 
+func (mdb *memdbSlice) GetTenantDiskSize() (int64, error) {
+	return int64(0), nil
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

@@ -107,6 +107,8 @@ const (
 	CLUST_MGR_CLEANUP_PARTITION
 	CLUST_MGR_MERGE_PARTITION
 	CLUST_MGR_PRUNE_PARTITION
+	CLUST_MGR_RECOVER_INDEX
+	CLUST_MGR_BUILD_RECOVERED_INDEXES
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -141,6 +143,7 @@ const (
 	INDEXER_SECURITY_CHANGE
 	INDEXER_RESET_INDEX_DONE
 	INDEXER_ACTIVE
+	INDEXER_INST_RECOVERY_RESPONSE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -193,6 +196,8 @@ const (
 	START_SHARD_TRANSFER
 	SHARD_TRANSFER_RESPONSE
 	SHARD_TRANSFER_CLEANUP
+	START_SHARD_RESTORE
+	DESTROY_LOCAL_SHARD
 )
 
 type Message interface {
@@ -1055,6 +1060,68 @@ func (m *MsgCreateIndex) GetString() string {
 	return str
 }
 
+type MsgRecoverIndex struct {
+	mType     MsgType
+	indexInst common.IndexInst
+	respCh    MsgChannel
+	reqCtx    *common.MetadataRequestContext
+}
+
+func (m *MsgRecoverIndex) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgRecoverIndex) GetIndexInst() common.IndexInst {
+	return m.indexInst
+}
+
+func (m *MsgRecoverIndex) GetResponseChannel() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgRecoverIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
+}
+
+func (m *MsgRecoverIndex) GetString() string {
+
+	str := "\n\tMessage: MsgRecoverIndex"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
+	return str
+}
+
+type MsgRecoverIndexResp struct {
+	mType        MsgType
+	indexInst    common.IndexInst
+	partnInstMap PartitionInstMap
+	respCh       MsgChannel
+}
+
+func (m *MsgRecoverIndexResp) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgRecoverIndexResp) GetIndexInst() common.IndexInst {
+	return m.indexInst
+}
+
+func (m *MsgRecoverIndexResp) GetPartnInstMap() PartitionInstMap {
+	return m.partnInstMap
+}
+
+func (m *MsgRecoverIndexResp) GetRespCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgRecoverIndexResp) GetString() string {
+
+	str := "\n\tMessage: MsgRecoverIndex"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
+	return str
+}
+
 // INDEXER_MERGE_PARTITION
 type MsgMergePartition struct {
 	srcInstId  common.IndexInstId
@@ -1262,7 +1329,9 @@ func (m *MsgClustMgrPrunePartition) GetString() string {
 
 // INDEXER_CANCEL_MERGE_PARTITION
 // CLUST_MGR_BUILD_INDEX_DDL
+// CLUST_MGR_BUILD_RECOVERED_INDEXES
 type MsgBuildIndex struct {
+	mType         MsgType
 	indexInstList []common.IndexInstId
 	bucketList    []string
 	respCh        MsgChannel
@@ -1270,7 +1339,7 @@ type MsgBuildIndex struct {
 }
 
 func (m *MsgBuildIndex) GetMsgType() MsgType {
-	return CLUST_MGR_BUILD_INDEX_DDL
+	return m.mType
 }
 
 func (m *MsgBuildIndex) GetIndexList() []common.IndexInstId {
@@ -2459,6 +2528,69 @@ func (m *MsgShardTransferCleanup) String() string {
 	return sbp.String()
 }
 
+type MsgStartShardRestore struct {
+	shardPaths      map[uint64]string
+	rebalanceId     string
+	transferTokenId string
+	destination     string
+
+	// The rebalance cancelCh shared with indexer to indicate
+	// any upstream cancellation of rebalance
+	cancelCh chan struct{}
+
+	progressCh chan *ShardTransferStatistics
+	respCh     chan Message
+}
+
+func (m *MsgStartShardRestore) GetMsgType() MsgType {
+	return START_SHARD_RESTORE
+}
+
+func (m *MsgStartShardRestore) GetShardPaths() map[uint64]string {
+	return m.shardPaths
+}
+
+func (m *MsgStartShardRestore) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgStartShardRestore) GetTransferTokenId() string {
+	return m.transferTokenId
+}
+
+func (m *MsgStartShardRestore) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgStartShardRestore) GetCancelCh() chan struct{} {
+	return m.cancelCh
+}
+
+func (m *MsgStartShardRestore) GetProgressCh() chan *ShardTransferStatistics {
+	return m.progressCh
+}
+
+func (m *MsgStartShardRestore) GetRespCh() chan Message {
+	return m.respCh
+}
+
+type MsgDestroyLocalShardData struct {
+	shardIds []uint64 // shardId -> Location of shard transfer
+	respCh   chan bool
+}
+
+func (m *MsgDestroyLocalShardData) GetMsgType() MsgType {
+	return DESTROY_LOCAL_SHARD
+}
+
+func (m *MsgDestroyLocalShardData) GetShardIds() []uint64 {
+	return m.shardIds
+}
+
+func (m *MsgDestroyLocalShardData) GetRespCh() chan bool {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -2692,6 +2824,10 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_RESET_INDEX_ON_UPGRADE"
 	case CLUST_MGR_RESET_INDEX_ON_ROLLBACK:
 		return "CLUST_MGR_RESET_INDEX_ON_ROLLBACK"
+	case CLUST_MGR_RECOVER_INDEX:
+		return "CLUST_MGR_RECOVER_INDEX"
+	case CLUST_MGR_BUILD_RECOVERED_INDEXES:
+		return "CLUST_MGR_BUILD_RECOVERED_INDEXES"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"
@@ -2757,6 +2893,10 @@ func (m MsgType) String() string {
 		return "SHARD_TRANSFER_RESPONSE"
 	case SHARD_TRANSFER_CLEANUP:
 		return "SHARD_TRANSFER_CLEANUP"
+	case START_SHARD_RESTORE:
+		return "START_SHARD_RESTORE"
+	case DESTROY_LOCAL_SHARD:
+		return "DESTROY_LOCAL_SHARD"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

@@ -2804,6 +2804,10 @@ func (mdb *plasmaSlice) String() string {
 
 }
 
+func (mdb *plasmaSlice) GetTenantDiskSize() (int64, error) {
+	return plasma.GetTenantDiskSize(mdb.idxDefn.Bucket)
+}
+
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 
 	//cleanup the disk directory
@@ -3226,10 +3230,6 @@ loop:
 		itm := it.Key()
 		s.newIndexEntry(itm, &entry)
 
-		if enableMetering {
-			mt.AddIndexRead(uint64(entry.MeteredByteLen()))
-		}
-
 		// Iterator has reached past the high key, no need to scan further
 		if cmpFn(high, entry) <= 0 {
 			break loop
@@ -3238,6 +3238,10 @@ loop:
 		err = callback(entry.Bytes())
 		if err != nil {
 			return err
+		}
+
+		if enableMetering {
+			mt.AddIndexRead(uint64(entry.MeteredByteLen()))
 		}
 
 		it.Next()

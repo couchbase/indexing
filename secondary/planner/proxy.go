@@ -370,13 +370,13 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				// Is the index being deleted by user?   This will read the delete token from metakv.  If unable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).s
 				if delTokens != nil {
-					_, index.pendingDelete = delTokens[defn.DefnId]
+					_, index.PendingDelete = delTokens[defn.DefnId]
 				} else {
 					pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
 					if err != nil {
 						return nil, err
 					}
-					index.pendingDelete = pendingDelete
+					index.PendingDelete = pendingDelete
 				}
 
 				var pendingBuild bool

@@ -102,6 +102,9 @@ const (
 	// Scheduled state: used for the indexes scheduled for creation.
 	// Not a persistent state.
 	INDEX_STATE_SCHEDULED
+	// Recovered state: used for shard rebalance. Index data is recovered
+	// from disk and index is waiting for build command
+	INDEX_STATE_RECOVERED
 )
 
 func (s IndexState) String() string {
@@ -123,6 +126,8 @@ func (s IndexState) String() string {
 		return "INDEX_STATE_ERROR"
 	case INDEX_STATE_SCHEDULED:
 		return "INDEX_STATE_SCHEDULED"
+	case INDEX_STATE_RECOVERED:
+		return "INDEX_STATE_RECOVERED"
 	default:
 		return "INDEX_STATE_UNKNOWN"
 	}
@@ -200,8 +205,8 @@ func (cons Consistency) String() string {
 	}
 }
 
-//IndexDefn represents the index definition as specified
-//during CREATE INDEX
+// IndexDefn represents the index definition as specified
+// during CREATE INDEX
 type IndexDefn struct {
 	// Index Definition
 	DefnId          IndexDefnId     `json:"defnId,omitempty"`
@@ -257,7 +262,7 @@ type IndexDefn struct {
 	RealInstId    IndexInstId `json:"realInstId,omitempty"`
 }
 
-//IndexInst is an instance of an Index(aka replica)
+// IndexInst is an instance of an Index(aka replica)
 type IndexInst struct {
 	InstId         IndexInstId
 	Defn           IndexDefn
@@ -268,14 +273,14 @@ type IndexInst struct {
 	Error          string
 	BuildTs        []uint64
 	Version        int
-	ReplicaId      int `json:"replicaId:omitempty"`
+	ReplicaId      int
 	Scheduled      bool
 	StorageMode    string
 	OldStorageMode string
 	RealInstId     IndexInstId
 }
 
-//IndexInstMap is a map from IndexInstanceId to IndexInstance
+// IndexInstMap is a map from IndexInstanceId to IndexInstance
 type IndexInstMap map[IndexInstId]IndexInst
 
 // IndexInstList is a list of IndexInstances
@@ -671,8 +676,8 @@ func IsPartitioned(scheme PartitionScheme) bool {
 	return len(scheme) != 0 && scheme != SINGLE
 }
 
-//IndexSnapType represents the snapshot type
-//created in indexer storage
+// IndexSnapType represents the snapshot type
+// created in indexer storage
 type IndexSnapType uint16
 
 const (
@@ -711,7 +716,7 @@ func (s IndexSnapType) String() string {
 
 }
 
-//NOTE: This type needs to be in sync with smStrMap
+// NOTE: This type needs to be in sync with smStrMap
 type IndexType string
 
 const (
@@ -784,9 +789,7 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 	return true
 }
 
-//
 // IndexerError - Runtime Error between indexer and other modules
-//
 type IndexerErrCode int
 
 const (
@@ -803,6 +806,7 @@ const (
 	BucketEphemeral
 	MaxParallelCollectionBuilds
 	BucketEphemeralStd
+	ShardRebalanceNotInProgress
 )
 
 type IndexerError struct {
@@ -826,6 +830,7 @@ type DDLRequestSource byte
 const (
 	DDLRequestSourceUser DDLRequestSource = iota
 	DDLRequestSourceRebalance
+	DDLRequestSourceShardRebalance
 )
 
 type MetadataRequestContext struct {
@@ -838,6 +843,10 @@ func NewRebalanceRequestContext() *MetadataRequestContext {
 
 func NewUserRequestContext() *MetadataRequestContext {
 	return &MetadataRequestContext{ReqSource: DDLRequestSourceUser}
+}
+
+func NewShardRebalanceRequestContext() *MetadataRequestContext {
+	return &MetadataRequestContext{ReqSource: DDLRequestSourceShardRebalance}
 }
 
 // Format of the data encoding, when it is being transferred over the wire

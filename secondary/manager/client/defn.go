@@ -27,41 +27,43 @@ import (
 // IMP: Please do not remove these OpCodes. Removal of OpCodes can
 // lead to failures during rolling upgrade.
 const (
-	OPCODE_CREATE_INDEX               common.OpCode = common.OPCODE_CUSTOM + 1
-	OPCODE_DROP_INDEX                               = OPCODE_CREATE_INDEX + 1
-	OPCODE_BUILD_INDEX                              = OPCODE_DROP_INDEX + 1
-	OPCODE_UPDATE_INDEX_INST                        = OPCODE_BUILD_INDEX + 1
-	OPCODE_SERVICE_MAP                              = OPCODE_UPDATE_INDEX_INST + 1
-	OPCODE_DELETE_BUCKET                            = OPCODE_SERVICE_MAP + 1
-	OPCODE_INDEXER_READY                            = OPCODE_DELETE_BUCKET + 1
-	OPCODE_CLEANUP_INDEX                            = OPCODE_INDEXER_READY + 1
-	OPCODE_CLEANUP_DEFER_INDEX                      = OPCODE_CLEANUP_INDEX + 1
-	OPCODE_CREATE_INDEX_REBAL                       = OPCODE_CLEANUP_DEFER_INDEX + 1
-	OPCODE_BUILD_INDEX_REBAL                        = OPCODE_CREATE_INDEX_REBAL + 1
-	OPCODE_DROP_INDEX_REBAL                         = OPCODE_BUILD_INDEX_REBAL + 1
-	OPCODE_BROADCAST_STATS                          = OPCODE_DROP_INDEX_REBAL + 1
-	OPCODE_BUILD_INDEX_RETRY                        = OPCODE_BROADCAST_STATS + 1
-	OPCODE_RESET_INDEX                              = OPCODE_BUILD_INDEX_RETRY + 1
-	OPCODE_CONFIG_UPDATE                            = OPCODE_RESET_INDEX + 1
-	OPCODE_DROP_OR_PRUNE_INSTANCE                   = OPCODE_CONFIG_UPDATE + 1
-	OPCODE_MERGE_PARTITION                          = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
-	OPCODE_PREPARE_CREATE_INDEX                     = OPCODE_MERGE_PARTITION + 1
-	OPCODE_COMMIT_CREATE_INDEX                      = OPCODE_PREPARE_CREATE_INDEX + 1
-	OPCODE_REBALANCE_RUNNING                        = OPCODE_COMMIT_CREATE_INDEX + 1
-	OPCODE_CREATE_INDEX_DEFER_BUILD                 = OPCODE_REBALANCE_RUNNING + 1
-	OPCODE_DROP_OR_PRUNE_INSTANCE_DDL               = OPCODE_CREATE_INDEX_DEFER_BUILD + 1
-	OPCODE_CLEANUP_PARTITION                        = OPCODE_DROP_OR_PRUNE_INSTANCE_DDL + 1
-	OPCODE_DROP_INSTANCE                            = OPCODE_CLEANUP_PARTITION + 1
-	OPCODE_UPDATE_REPLICA_COUNT                     = OPCODE_DROP_INSTANCE + 1
-	OPCODE_GET_REPLICA_COUNT                        = OPCODE_UPDATE_REPLICA_COUNT + 1
-	OPCODE_CHECK_TOKEN_EXIST                        = OPCODE_GET_REPLICA_COUNT + 1
-	OPCODE_RESET_INDEX_ON_ROLLBACK                  = OPCODE_CHECK_TOKEN_EXIST + 1
-	OPCODE_DELETE_COLLECTION                        = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
-	OPCODE_CLIENT_STATS                             = OPCODE_DELETE_COLLECTION + 1
-	OPCODE_INVALID_COLLECTION                       = OPCODE_CLIENT_STATS + 1
-	OPCODE_BOOTSTRAP_STATS_UPDATE                   = OPCODE_INVALID_COLLECTION + 1
-	OPCODE_AUTH_REQUEST                             = OPCODE_BOOTSTRAP_STATS_UPDATE + 1
-	OPCODE_AUTH_RESPONSE                            = OPCODE_AUTH_REQUEST + 1
+	OPCODE_CREATE_INDEX                  common.OpCode = common.OPCODE_CUSTOM + 1
+	OPCODE_DROP_INDEX                                  = OPCODE_CREATE_INDEX + 1
+	OPCODE_BUILD_INDEX                                 = OPCODE_DROP_INDEX + 1
+	OPCODE_UPDATE_INDEX_INST                           = OPCODE_BUILD_INDEX + 1
+	OPCODE_SERVICE_MAP                                 = OPCODE_UPDATE_INDEX_INST + 1
+	OPCODE_DELETE_BUCKET                               = OPCODE_SERVICE_MAP + 1
+	OPCODE_INDEXER_READY                               = OPCODE_DELETE_BUCKET + 1
+	OPCODE_CLEANUP_INDEX                               = OPCODE_INDEXER_READY + 1
+	OPCODE_CLEANUP_DEFER_INDEX                         = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                          = OPCODE_CLEANUP_DEFER_INDEX + 1
+	OPCODE_BUILD_INDEX_REBAL                           = OPCODE_CREATE_INDEX_REBAL + 1
+	OPCODE_DROP_INDEX_REBAL                            = OPCODE_BUILD_INDEX_REBAL + 1
+	OPCODE_BROADCAST_STATS                             = OPCODE_DROP_INDEX_REBAL + 1
+	OPCODE_BUILD_INDEX_RETRY                           = OPCODE_BROADCAST_STATS + 1
+	OPCODE_RESET_INDEX                                 = OPCODE_BUILD_INDEX_RETRY + 1
+	OPCODE_CONFIG_UPDATE                               = OPCODE_RESET_INDEX + 1
+	OPCODE_DROP_OR_PRUNE_INSTANCE                      = OPCODE_CONFIG_UPDATE + 1
+	OPCODE_MERGE_PARTITION                             = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
+	OPCODE_PREPARE_CREATE_INDEX                        = OPCODE_MERGE_PARTITION + 1
+	OPCODE_COMMIT_CREATE_INDEX                         = OPCODE_PREPARE_CREATE_INDEX + 1
+	OPCODE_REBALANCE_RUNNING                           = OPCODE_COMMIT_CREATE_INDEX + 1
+	OPCODE_CREATE_INDEX_DEFER_BUILD                    = OPCODE_REBALANCE_RUNNING + 1
+	OPCODE_DROP_OR_PRUNE_INSTANCE_DDL                  = OPCODE_CREATE_INDEX_DEFER_BUILD + 1
+	OPCODE_CLEANUP_PARTITION                           = OPCODE_DROP_OR_PRUNE_INSTANCE_DDL + 1
+	OPCODE_DROP_INSTANCE                               = OPCODE_CLEANUP_PARTITION + 1
+	OPCODE_UPDATE_REPLICA_COUNT                        = OPCODE_DROP_INSTANCE + 1
+	OPCODE_GET_REPLICA_COUNT                           = OPCODE_UPDATE_REPLICA_COUNT + 1
+	OPCODE_CHECK_TOKEN_EXIST                           = OPCODE_GET_REPLICA_COUNT + 1
+	OPCODE_RESET_INDEX_ON_ROLLBACK                     = OPCODE_CHECK_TOKEN_EXIST + 1
+	OPCODE_DELETE_COLLECTION                           = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
+	OPCODE_CLIENT_STATS                                = OPCODE_DELETE_COLLECTION + 1
+	OPCODE_INVALID_COLLECTION                          = OPCODE_CLIENT_STATS + 1
+	OPCODE_BOOTSTRAP_STATS_UPDATE                      = OPCODE_INVALID_COLLECTION + 1
+	OPCODE_AUTH_REQUEST                                = OPCODE_BOOTSTRAP_STATS_UPDATE + 1
+	OPCODE_AUTH_RESPONSE                               = OPCODE_AUTH_REQUEST + 1
+	OPCODE_CREATE_RECOVER_INDEX_REBAL                  = OPCODE_AUTH_RESPONSE + 1
+	OPCODE_BUILD_RECOVERED_INDEXES_REBAL               = OPCODE_CREATE_RECOVER_INDEX_REBAL + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -136,14 +138,18 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_AUTH_REQUEST"
 	case OPCODE_AUTH_RESPONSE:
 		return "OPCODE_AUTH_RESPONSE"
+	case OPCODE_CREATE_RECOVER_INDEX_REBAL:
+		return "OPCODE_CREATE_RECOVER_INDEX_REBAL"
+	case OPCODE_BUILD_RECOVERED_INDEXES_REBAL:
+		return "OPCODE_BUILD_RECOVERED_INDEXES_REBAL"
 	}
 
 	return fmt.Sprintf("%v", op)
 }
 
-/////////////////////////////////////////////////////////////////////////
+// ///////////////////////////////////////////////////////////////////////
 // Client Response Messages
-/////////////////////////////////////////////////////////////////////////
+// ///////////////////////////////////////////////////////////////////////
 var RespAnotherIndexCreation = "Another index creation is in progress"
 var RespRebalanceRunning = "Rebalance is running"
 var RespDuplicateIndex = "Duplicate index exists"

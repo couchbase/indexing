@@ -66,51 +66,52 @@ type IndexManager struct {
 	isClosed bool
 }
 
-//
 // Index Lifecycle
-// 1) Index Creation
-//   A) When an index is created, the index definition is assigned to a 64 bits UUID (IndexDefnId).
-//   B) IndexManager will persist the index definition.
-//   C) IndexManager will persist the index instance with INDEX_STATE_CREATED status.
-//      Each instance is assigned a 64 bits IndexInstId. For the first instance of an index,
-//      the IndexInstId is equal to the IndexDefnId.
-//   D) IndexManager will invovke MetadataNotifier.OnIndexCreate().
-//   E) IndexManager will update instance to status INDEX_STATE_READY.
-//   F) If there is any error in (1B) - (1E), IndexManager will cleanup by deleting index definition and index instance.
-//      Since there is no atomic transaction, cleanup may not be completed, and the index will be left in an invalid state.
-//      See (5) for conditions where the index is considered valid.
-//   G) If there is any error in (1E), IndexManager will also invoke OnIndexDelete()
-//   H) Any error from (1A) or (1F), the error will be reported back to MetadataProvider.
 //
-// 2) Immediate Index Build (index definition is persisted successfully and deferred build flag is false)
-//   A) MetadataNotifier.OnIndexBuild() is invoked.   OnIndexBuild() is responsible for updating the state of the index
-//      instance (e.g. from READY to INITIAL).
-//   B) If there is an error in (2A), the error will be returned to the MetadataProvider.
-//   C) No cleanup will be perfromed by IndexManager if OnIndexBuild() fails.  In other words, the index can be left in
-//      INDEX_STATE_READY.   The user should be able to kick off index build again using deferred build.
-//   D) OnIndexBuild() can be running on a separate go-rountine.  It can invoke UpdateIndexInstance() at any time during
-//      index build.  This update will be queued serially and apply to the topology specific for that index instance (will
-//      not affect any other index instance).  The new index state will be returned to the MetadataProvider asynchronously.
+//  1. Index Creation
+//     A) When an index is created, the index definition is assigned to a 64 bits UUID (IndexDefnId).
+//     B) IndexManager will persist the index definition.
+//     C) IndexManager will persist the index instance with INDEX_STATE_CREATED status.
+//     Each instance is assigned a 64 bits IndexInstId. For the first instance of an index,
+//     the IndexInstId is equal to the IndexDefnId.
+//     D) IndexManager will invovke MetadataNotifier.OnIndexCreate().
+//     E) IndexManager will update instance to status INDEX_STATE_READY.
+//     F) If there is any error in (1B) - (1E), IndexManager will cleanup by deleting index definition and index instance.
+//     Since there is no atomic transaction, cleanup may not be completed, and the index will be left in an invalid state.
+//     See (5) for conditions where the index is considered valid.
+//     G) If there is any error in (1E), IndexManager will also invoke OnIndexDelete()
+//     H) Any error from (1A) or (1F), the error will be reported back to MetadataProvider.
 //
-// 3) Deferred Index Build
-//    A) For Deferred Index Build, it will follow step (2A) - (2D).
+//  2. Immediate Index Build (index definition is persisted successfully and deferred build flag is false)
+//     A) MetadataNotifier.OnIndexBuild() is invoked.   OnIndexBuild() is responsible for updating the state of the index
+//     instance (e.g. from READY to INITIAL).
+//     B) If there is an error in (2A), the error will be returned to the MetadataProvider.
+//     C) No cleanup will be perfromed by IndexManager if OnIndexBuild() fails.  In other words, the index can be left in
+//     INDEX_STATE_READY.   The user should be able to kick off index build again using deferred build.
+//     D) OnIndexBuild() can be running on a separate go-rountine.  It can invoke UpdateIndexInstance() at any time during
+//     index build.  This update will be queued serially and apply to the topology specific for that index instance (will
+//     not affect any other index instance).  The new index state will be returned to the MetadataProvider asynchronously.
 //
-// 4) Index Deletion
-//    A) When an index is deleted, IndexManager will set the index to INDEX_STATE_DELETED.
-//    B) If (4A) fails, the error will be returned and the index is considered as NOT deleted.
-//    C) IndexManager will then invoke MetadataNotifier.OnIndexDelete().
-//    D) The IndexManager will delete the index definition first before deleting the index instance.  since there is no atomic
-//       transaction, the cleanup may not be completed, and index can be in inconsistent state. See (5) for valid index state.
-//    E) Any error returned from (4C) to (4D) will not be returned to the client (since these are cleanup steps)
+//  3. Deferred Index Build
+//     A) For Deferred Index Build, it will follow step (2A) - (2D).
 //
-// 5) Valid Index States
-//    A) Both index definition and index instance exist.
-//    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
+//  4. Index Deletion
+//     A) When an index is deleted, IndexManager will set the index to INDEX_STATE_DELETED.
+//     B) If (4A) fails, the error will be returned and the index is considered as NOT deleted.
+//     C) IndexManager will then invoke MetadataNotifier.OnIndexDelete().
+//     D) The IndexManager will delete the index definition first before deleting the index instance.  since there is no atomic
+//     transaction, the cleanup may not be completed, and index can be in inconsistent state. See (5) for valid index state.
+//     E) Any error returned from (4C) to (4D) will not be returned to the client (since these are cleanup steps)
 //
+//  5. Valid Index States
+//     A) Both index definition and index instance exist.
+//     B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
+	OnIndexRecover(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
+	OnRecoveredIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
 	OnPartitionPrune(common.IndexInstId, []common.PartitionId, *common.MetadataRequestContext) error
 	OnFetchStats() error
 }
@@ -124,17 +125,13 @@ type RequestServer interface {
 // public function
 ///////////////////////////////////////////////////////
 
-//
 // Create a new IndexManager. It is a singleton owned by the ClustMgrAgent object, which is owned by Indexer.
-//
 func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
 	return NewIndexManagerInternal(config, storageMode)
 }
 
-//
 // Create a new IndexManager singleton that wraps a LocalMetadataRepo (not a RemoteMetadataRepo).
-//
 func NewIndexManagerInternal(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
 	gometaL.Current = &logging.SystemLogger
@@ -391,9 +388,7 @@ func (m *IndexManager) IsClose() bool {
 	return m.isClosed
 }
 
-//
 // Reset Connections
-//
 func (m *IndexManager) ResetConnections(notifier MetadataNotifier) error {
 
 	m.mutex.Lock()
@@ -407,9 +402,7 @@ func (m *IndexManager) ResetConnections(notifier MetadataNotifier) error {
 	return m.repo.ResetConnections()
 }
 
-//
 // Clean up the IndexManager
-//
 func (m *IndexManager) Close() {
 
 	m.mutex.Lock()
@@ -484,69 +477,52 @@ func (m *IndexManager) GetLocalValue(key string) (string, error) {
 	return m.repo.GetLocalValue(key)
 }
 
-//
 // Get an index definiton by id
-//
 func (m *IndexManager) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDefn, error) {
 	return m.repo.GetIndexDefnById(id)
 }
 
-//
 // Get Metadata Iterator for index definition
-//
 func (m *IndexManager) NewIndexDefnIterator() (*MetaIterator, error) {
 	return m.repo.NewIterator()
 }
 
-//
 // Listen to create Index Request
-//
 func (m *IndexManager) StartListenIndexCreate(id string) (<-chan interface{}, error) {
 	return m.eventMgr.register(id, EVENT_CREATE_INDEX)
 }
 
-//
 // Stop Listen to create Index Request
-//
 func (m *IndexManager) StopListenIndexCreate(id string) {
 	m.eventMgr.unregister(id, EVENT_CREATE_INDEX)
 }
 
-//
 // Listen to delete Index Request
-//
 func (m *IndexManager) StartListenIndexDelete(id string) (<-chan interface{}, error) {
 	return m.eventMgr.register(id, EVENT_DROP_INDEX)
 }
 
-//
 // Stop Listen to delete Index Request
-//
 func (m *IndexManager) StopListenIndexDelete(id string) {
 	m.eventMgr.unregister(id, EVENT_DROP_INDEX)
 }
 
-//
 // Listen to update Topology Request
-//
 func (m *IndexManager) StartListenTopologyUpdate(id string) (<-chan interface{}, error) {
 	return m.eventMgr.register(id, EVENT_UPDATE_TOPOLOGY)
 }
 
-//
 // Stop Listen to update Topology Request
-//
 func (m *IndexManager) StopListenTopologyUpdate(id string) {
 	m.eventMgr.unregister(id, EVENT_UPDATE_TOPOLOGY)
 }
 
-//
 // Handle Create Index DDL.  This function will block until
-// 1) The index defn is persisted durably in the dictionary
-// 2) The index defn is applied locally to each "active" indexer
-//    node.  An active node is a running node that is in the same
-//    network partition as the leader.   A leader is always in
-//    the majority partition.
+//  1. The index defn is persisted durably in the dictionary
+//  2. The index defn is applied locally to each "active" indexer
+//     node.  An active node is a running node that is in the same
+//     network partition as the leader.   A leader is always in
+//     the majority partition.
 //
 // This function will return an error if the outcome of the
 // request is not known (e.g. the node is partitioned
@@ -567,7 +543,6 @@ func (m *IndexManager) StopListenTopologyUpdate(id string) {
 //
 // If this node is partitioned from its leader, it can still recieve
 // updates from the dictionary if this node still connects to it.
-//
 func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn, isRebalReq bool) error {
 
 	key := fmt.Sprintf("%d", defn.DefnId)
@@ -592,6 +567,19 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn, isRebalReq b
 	}
 
 	return nil
+}
+
+// Called during rebalance to create and recover index data
+func (m *IndexManager) HandleRecoverIndexDDL(defn *common.IndexDefn) error {
+
+	key := fmt.Sprintf("%d", defn.DefnId)
+	content, err := common.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
+
+	return m.requestServer.MakeRequest(client.OPCODE_CREATE_RECOVER_INDEX_REBAL, key, content)
+
 }
 
 func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
@@ -621,6 +609,15 @@ func (m *IndexManager) HandleBuildIndexRebalDDL(indexIds client.IndexIdList) err
 	//TODO handle err
 
 	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_REBAL, key, content)
+}
+
+func (m *IndexManager) HandleBuildRecoveredIndexesRebalance(indexIds client.IndexIdList) error {
+
+	key := fmt.Sprintf("%d", indexIds.DefnIds[0])
+	content, _ := client.MarshallIndexIdList(&indexIds)
+	//TODO handle err
+
+	return m.requestServer.MakeRequest(client.OPCODE_BUILD_RECOVERED_INDEXES_REBAL, key, content)
 }
 
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
@@ -916,9 +913,7 @@ func (m *IndexManager) GetTopologyByCollection(bucket, scope, collection string)
 	return m.repo.GetTopologyByCollection(bucket, scope, collection)
 }
 
-//
 // Get the global topology
-//
 func (m *IndexManager) GetGlobalTopology() (*GlobalTopology, error) {
 
 	return m.repo.GetGlobalTopology()
@@ -1040,25 +1035,19 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 // package local function
 ///////////////////////////////////////////////////////
 
-//
 // GetMetadataRepo
 // Any caller uses MetadatdaRepo should only for read purpose.
 // Writer operation should go through LifecycleMgr
-//
 func (m *IndexManager) GetMetadataRepo() *MetadataRepo {
 	return m.repo
 }
 
-//
 // Get lifecycle manager
-//
 func (m *IndexManager) getLifecycleMgr() *LifecycleMgr {
 	return m.lifecycleMgr
 }
 
-//
 // Notify new event
-//
 func (m *IndexManager) notify(evtType EventType, obj interface{}) {
 	m.eventMgr.notify(evtType, obj)
 }
@@ -1070,7 +1059,7 @@ func (m *IndexManager) startMasterService() error {
 func (m *IndexManager) stopMasterService() {
 }
 
-//Calculate forestdb  buffer cache from memory quota
+// Calculate forestdb  buffer cache from memory quota
 func (m *IndexManager) calcBufCacheFromMemQuota(config common.Config) uint64 {
 
 	totalQuota := config.GetIndexerMemoryQuota()

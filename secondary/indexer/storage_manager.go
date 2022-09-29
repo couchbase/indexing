@@ -156,7 +156,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	s.stm = NewShardTransferManager()
+	s.stm = NewShardTransferManager(s.config)
 
 	for i := 0; i < len(s.snapshotReqCh); i++ {
 		go s.listenSnapshotReqs(i)
@@ -252,6 +252,12 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case SHARD_TRANSFER_CLEANUP:
 		s.handleTransferCleanup(cmd)
+
+	case START_SHARD_RESTORE:
+		s.handleShardRestore(cmd)
+
+	case DESTROY_LOCAL_SHARD:
+		s.handleDestroyLocalShard(cmd)
 	}
 }
 
@@ -1572,8 +1578,74 @@ func (s *storageMgr) handleStats(cmd Message) {
 			stats.avgResidentPercent.Set(0)
 		}
 
+		// get and set bucket level stats
+
+		if common.IsServerlessDeployment() {
+			s.setBucketStats()
+		}
+
 		replych <- true
 	}()
+}
+
+func (s *storageMgr) setBucketStats() {
+	// TODO: Fix this for non-serveless if required.
+	if !common.IsServerlessDeployment() {
+		return
+	}
+
+	stats := s.stats.Get()
+
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	done := make(map[string]bool)
+
+	for idxInstId, partnMap := range indexPartnMap {
+
+		var inst common.IndexInst
+		var ok bool
+		if inst, ok = indexInstMap[idxInstId]; !ok {
+			continue
+		}
+
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
+		if _, ok := done[inst.Defn.Bucket]; ok {
+			continue
+		}
+
+		bstats := stats.GetBucketStats(inst.Defn.Bucket)
+		if bstats == nil {
+			done[inst.Defn.Bucket] = true
+			continue
+		}
+
+		for _, partnInst := range partnMap {
+			if _, ok := done[inst.Defn.Bucket]; ok {
+				break
+			}
+
+			slices := partnInst.Sc.GetAllSlices()
+			for _, slice := range slices {
+				if _, ok := done[inst.Defn.Bucket]; ok {
+					break
+				}
+
+				sz, err := slice.GetTenantDiskSize()
+				if err != nil {
+					logging.Errorf("StorageManager getBucketStats error (%v) in "+
+						"GetTenantDiskSize for bucket %v", err, inst.Defn.Bucket)
+				}
+
+				bstats.diskUsed.Set(sz)
+				done[inst.Defn.Bucket] = true
+				break
+			}
+		}
+	}
 }
 
 func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
@@ -2341,6 +2413,18 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 
 func (s *storageMgr) handleTransferCleanup(cmd Message) {
 	go s.stm.processTransferCleanupMessage(cmd)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handleShardRestore(cmd Message) {
+	go s.stm.processShardRestoreMessage(cmd)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handleDestroyLocalShard(cmd Message) {
+	go s.stm.processDestroyLocalShardMessage(cmd)
 
 	s.supvCmdch <- &MsgSuccess{}
 }

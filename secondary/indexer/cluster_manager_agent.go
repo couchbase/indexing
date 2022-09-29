@@ -20,7 +20,7 @@ import (
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
-//ClustMgrAgent provides the mechanism to talk to Index Coordinator
+// ClustMgrAgent provides the mechanism to talk to Index Coordinator
 type ClustMgrAgent interface {
 	// Used to register rest apis served by cluster manager.
 	RegisterRestEndpoints()
@@ -88,8 +88,8 @@ func (c *clustMgrAgent) RegisterRestEndpoints() {
 	RegisterRequestHandler(c.mgr, GetHTTPMux(), c.config)
 }
 
-//run starts the clustmgrAgent loop which listens to messages
-//from it supervisor(indexer)
+// run starts the clustmgrAgent loop which listens to messages
+// from it supervisor(indexer)
 func (c *clustMgrAgent) run() {
 
 	//main ClustMgrAgent loop
@@ -639,7 +639,7 @@ func (c *clustMgrAgent) handleRebalanceRunning(cmd Message) {
 	c.supvCmdch <- &MsgSuccess{}
 }
 
-//panicHandler handles the panic from index manager
+// panicHandler handles the panic from index manager
 func (c *clustMgrAgent) panicHandler() {
 
 	//panic recovery
@@ -750,6 +750,70 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 	return nil
 }
 
+func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId common.IndexInstId,
+	replicaId int, partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId,
+	reqCtx *common.MetadataRequestContext) error {
+	const _OnIndexCreate = "clustMgrAgent::OnIndexRecover:"
+
+	logging.Infof("clustMgrAgent::OnIndexRecover Notification received for "+
+		"Recover Index: instId %v, indexDefn %+v, reqCtx %+v, partitions %v",
+		instId, indexDefn, reqCtx, partitions)
+
+	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
+
+	idxInst := common.IndexInst{InstId: instId,
+		Defn:       *indexDefn,
+		State:      common.INDEX_STATE_CREATED,
+		Pc:         pc,
+		ReplicaId:  replicaId,
+		RealInstId: realInstId,
+		Version:    indexDefn.InstVersion,
+	}
+
+	if idxInst.Defn.InstVersion != 0 {
+		idxInst.RState = common.REBAL_PENDING
+	}
+
+	respCh := make(MsgChannel)
+
+	meta.adminCh <- &MsgRecoverIndex{mType: CLUST_MGR_RECOVER_INDEX,
+		indexInst: idxInst,
+		respCh:    respCh,
+		reqCtx:    reqCtx}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			logging.Infof("clustMgrAgent::OnIndexRecover: Success for "+
+				"Recover Index: instId %v, indexDefn %+v", instId, indexDefn)
+			return nil
+
+		case MSG_ERROR:
+			err := res.(*MsgError).GetError()
+			logging.Errorf("clustMgrAgent::OnIndexRecover: Error for "+
+				"Recover Index: instId %v, indexDefn %+v. Error: %+v.", instId, indexDefn, err)
+			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+
+		default:
+			logging.Fatalf("clustMgrAgent::OnIndexRecover: Unknown response received "+
+				"for Recover Index: instId %v, indexDefn %+v. Response: %+v.",
+				instId, indexDefn, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+		logging.Fatalf("clustMgrAgent::OnIndexRecover: Unexpected channel close "+
+			"for recover Index: instId %v, indexDefn %+v", instId, indexDefn)
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+
+	return nil
+}
+
 func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
 	buckets []string, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
 
@@ -758,10 +822,11 @@ func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
 
 	respCh := make(MsgChannel)
 
-	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
-		respCh:     respCh,
-		bucketList: buckets,
-		reqCtx:     reqCtx}
+	meta.adminCh <- &MsgBuildIndex{mType: CLUST_MGR_BUILD_INDEX_DDL,
+		indexInstList: indexInstList,
+		respCh:        respCh,
+		bucketList:    buckets,
+		reqCtx:        reqCtx}
 
 	//wait for response
 	if res, ok := <-respCh; ok {
@@ -795,6 +860,59 @@ func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
 	} else {
 
 		logging.Fatalf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
+			"for Create Index %v", indexInstList)
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+
+	return nil
+}
+
+func (meta *metaNotifier) OnRecoveredIndexBuild(indexInstList []common.IndexInstId,
+	buckets []string, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
+
+	logging.Infof("clustMgrAgent::OnRecoveredIndexBuild Notification "+
+		"Received for Build Index %v %v", indexInstList, reqCtx)
+
+	respCh := make(MsgChannel)
+
+	meta.adminCh <- &MsgBuildIndex{mType: CLUST_MGR_BUILD_RECOVERED_INDEXES,
+		indexInstList: indexInstList,
+		respCh:        respCh,
+		bucketList:    buckets,
+		reqCtx:        reqCtx}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case CLUST_MGR_BUILD_INDEX_DDL_RESPONSE:
+			errMap := res.(*MsgBuildIndexResponse).GetErrorMap()
+			logging.Infof("clustMgrAgent::OnRecoveredIndexBuild returns "+
+				"for Build Index %v", indexInstList)
+			return errMap
+
+		case MSG_ERROR:
+			logging.Errorf("clustMgrAgent::OnRecoveredIndexBuild Error "+
+				"for Build Index %v. Error %v.", indexInstList, res)
+			err := res.(*MsgError).GetError()
+			errMap := make(map[common.IndexInstId]error)
+			for _, instId := range indexInstList {
+				errMap[instId] = &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+			}
+
+			return errMap
+
+		default:
+			logging.Fatalf("clustMgrAgent::OnRecoveredIndexBuild Unknown Response "+
+				"Received for Build Index %v. Response %v", indexInstList, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+
+		logging.Fatalf("clustMgrAgent::OnRecoveredIndexBuild Unexpected Channel Close "+
 			"for Create Index %v", indexInstList)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}

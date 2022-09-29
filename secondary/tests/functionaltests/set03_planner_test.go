@@ -1195,10 +1195,11 @@ type tenantAwarePlannerFuncTestCase struct {
 }
 
 type tenantAwarePlannerRebalFuncTestCase struct {
-	comment  string
-	topology string
-	result   string
-	errStr   string
+	comment      string
+	topology     string
+	result       string
+	errStr       string
+	ignoreInstId bool
 }
 
 var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
@@ -1357,6 +1358,8 @@ func tenantAwarePlannerTests(t *testing.T) {
 
 	tenantAwarePlannerFuncTests(t)
 	tenantAwarePlannerRebalanceTests(t)
+	tenantAwarePlannerReplicaRepairTests(t)
+	tenantAwarePlannerSwapRebalanceTests(t)
 
 }
 
@@ -1464,54 +1467,63 @@ var tenantAwarePlannerRebalFuncTestCases = []tenantAwarePlannerRebalFuncTestCase
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_a.json",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_a_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 3 SG, 1 empty, 1 Units Above HWM",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_b.json",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_b_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 3 SG, 1 empty, Both Memory/Units Above HWM",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_c.json",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_c_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 3 SG, Multiple tenants to move, single source, multiple destination",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_d.json",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_d_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 3 SG, Multiple tenants to move, no nodes below LWM",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_e.json",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_e_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(non-uniform memory/units usage)",
 		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_f.json",
 		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_f_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(non-uniform memory/units usage)",
 		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_g.json",
 		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_g_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 3 SG, Single Large Tenant, Nothing to move",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_h.json",
 		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_h_out.json",
 		"",
+		false,
 	},
 	{
 		"Rebalance - 4 SG, Multiple tenants to move, multiple source, multiple destination(zero usage tenants)",
 		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_h.json",
 		"../testdata/planner/tenantaware/topology/rebalance/8_non_empty_nodes_4_sg_h_out.json",
 		"",
+		false,
 	},
 }
 
@@ -1529,7 +1541,7 @@ func tenantAwarePlannerRebalanceTests(t *testing.T) {
 		solution, err := s.RunSingleTestTenantAwareRebal(plan, nil)
 		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
 
-		err = validateTenantAwareRebalanceSolution(t, solution, result)
+		err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
 		if err != nil {
 			log.Printf("Actual Solution \n")
 			solution.PrintLayout()
@@ -1541,7 +1553,7 @@ func tenantAwarePlannerRebalanceTests(t *testing.T) {
 }
 
 func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Solution,
-	result *planner.Plan) error {
+	result *planner.Plan, deletedNodes []string, ignoreInstId bool) error {
 
 	if len(solution.Placement) != len(result.Placement) {
 		return errors.New(fmt.Sprintf("Mismatch in indexer node count."+
@@ -1549,20 +1561,40 @@ func validateTenantAwareRebalanceSolution(t *testing.T, solution *planner.Soluti
 	}
 	for _, indexer := range solution.Placement {
 
-		indexer1, err := findIndexerNodeInResult(result, indexer)
-		if err != nil {
-			return err
-		}
+		if checkIfDeletedNode(indexer, deletedNodes) {
 
-		err = compareIndexesOnNodes(indexer, indexer1)
-		if err != nil {
-			return err
+			_, err := findIndexerNodeInResult(result, indexer)
+			if err == nil {
+				return errors.New(fmt.Sprintf("Deleted Node Found in Result %v", indexer))
+			}
+
+		} else {
+			indexer1, err := findIndexerNodeInResult(result, indexer)
+			if err != nil {
+				return err
+			}
+
+			err = compareIndexesOnNodes(indexer, indexer1, ignoreInstId)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.IndexerNode) error {
+func checkIfDeletedNode(indexer *planner.IndexerNode, deletedNodes []string) bool {
+
+	for _, nodeuuid := range deletedNodes {
+		if nodeuuid == indexer.NodeUUID {
+			return true
+		}
+	}
+	return false
+}
+
+func compareIndexesOnNodes(indexer *planner.IndexerNode,
+	indexer1 *planner.IndexerNode, ignoreInstId bool) error {
 
 	if len(indexer.Indexes) != len(indexer1.Indexes) {
 		return errors.New(fmt.Sprintf("Mismatch in index count on "+
@@ -1572,7 +1604,7 @@ func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.Index
 
 	for _, index := range indexer.Indexes {
 
-		err := findIndexOnNode(index, indexer1)
+		err := findIndexOnNode(index, indexer1, ignoreInstId)
 		if err != nil {
 			return err
 		}
@@ -1583,13 +1615,13 @@ func compareIndexesOnNodes(indexer *planner.IndexerNode, indexer1 *planner.Index
 
 }
 
-func findIndexOnNode(index *planner.IndexUsage, indexer1 *planner.IndexerNode) error {
+func findIndexOnNode(index *planner.IndexUsage, indexer1 *planner.IndexerNode, ignoreInstId bool) error {
 
 	found := false
 	for _, index1 := range indexer1.Indexes {
 
 		if index.DefnId == index1.DefnId &&
-			index.InstId == index1.InstId &&
+			(index.InstId == index1.InstId || ignoreInstId) &&
 			index.PartnId == index1.PartnId &&
 			index.Name == index1.Name &&
 			index.Bucket == index1.Bucket &&
@@ -1615,4 +1647,125 @@ func findIndexerNodeInResult(result *planner.Plan, indexer *planner.IndexerNode)
 	}
 	return nil, errors.New(fmt.Sprintf("Indexer Node %v not found in expected result.", indexer))
 
+}
+
+var tenantAwarePlannerReplicaRepairFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Replica Repair - 4 SG, Missing Replicas for multiple tenants in SG",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_a.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_a_out.json",
+		"",
+		true,
+	},
+	{
+		"Replica Repair - 4 SG, Missing Replicas, Buddy Node Failed over",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_b.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_b_out.json",
+		"",
+		true,
+	},
+	{
+		"Replica Repair - 4 SG, Missing Replicas, Buddy Node Failed over, No replacement",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_c.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_c_out.json",
+		"",
+		true,
+	},
+	{
+		"Replica Repair - 4 SG, Missing Replicas, one replica missing with pendingDelete true ",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_d.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/8_non_empty_nodes_4_sg_d_out.json",
+		"",
+		true,
+	},
+}
+
+func tenantAwarePlannerReplicaRepairTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerReplicaRepairFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadPlan(testcase.result)
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwareRebal(plan, nil)
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+		err = validateTenantAwareRebalanceSolution(t, solution, result, nil, testcase.ignoreInstId)
+		if err != nil {
+			log.Printf("Actual Solution \n")
+			solution.PrintLayout()
+			log.Printf("Expected Result %v\n", result)
+		}
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+	}
+}
+
+var tenantAwarePlannerSwapRebalFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Swap Rebalance - 4 SG, Swap 1 node each from 2 SG with 2 new nodes",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_a.json",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_a_out.json",
+		"",
+		false,
+	},
+	{
+		"Swap Rebalance - 4 SG, Swap 1 node each from 2 SG with 2 new nodes(different SG)",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_b.json",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_b_out.json",
+		"",
+		false,
+	},
+	{
+		"Swap Rebalance - 4 SG, Swap 1 SG with 2 new nodes",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_c.json",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_c_out.json",
+		"",
+		false,
+	},
+	{
+		"Swap Rebalance - 4 SG, Swap 1 node with 2 new nodes",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_d.json",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_d_out.json",
+		"",
+		false,
+	},
+	{
+		"Swap Rebalance - 4 SG, Swap 1 empty node with 2 new nodes",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_e.json",
+		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_e_out.json",
+		"",
+		true,
+	},
+}
+
+func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerSwapRebalFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadPlan(testcase.result)
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwareRebal(plan, plan.DeletedNodes)
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+		err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
+		if err != nil {
+			log.Printf("Actual Solution \n")
+			solution.PrintLayout()
+			log.Printf("Expected Result %v\n", result)
+		}
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+	}
 }

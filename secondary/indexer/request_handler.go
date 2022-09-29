@@ -200,9 +200,7 @@ type constraints struct {
 	level      string
 }
 
-//
 // requestHandlerContext defines state for the HTTP(S) server created by RegisterRequestHandler.
-//
 type requestHandlerContext struct {
 	initializer sync.Once // HTTP(S) custom initialization at startup
 	finalizer   sync.Once // cleanup at HTTP(S) server shutdown
@@ -265,8 +263,10 @@ func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, confi
 		// Single-indexer endpoints (non-scatter-gather).
 		mux.HandleFunc("/createIndex", handlerContext.createIndexRequest)
 		mux.HandleFunc("/createIndexRebalance", handlerContext.createIndexRequestRebalance)
+		mux.HandleFunc("/recoverIndexRebalance", handlerContext.recoverIndexRequestRebalance)
 		mux.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
 		mux.HandleFunc("/buildIndexRebalance", handlerContext.buildIndexRequestRebalance)
+		mux.HandleFunc("/buildRecoveredIndexesRebalance", handlerContext.buildRecoveredIndexesRebalance)
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
 		mux.HandleFunc( // stripped-down version of getIndexStatus
 			"/getCachedIndexTopology", handlerContext.handleCachedIndexTopologyRequest)
@@ -381,6 +381,70 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// recoverIndexRequestRebalance handles /recoverIndexRebalance REST endpoint. Called by Rebalancer to
+// create & recover index on destination node.
+func (m *requestHandlerContext) recoverIndexRequestRebalance(w http.ResponseWriter, r *http.Request) {
+
+	m.doRecoverIndex(w, r, true)
+
+}
+
+// doRecoverIndex creates an index via REST. It also recovers the index data from disk
+// However, the data recovery from disk is asyncronous to the request and the request
+// would return once creation of index metadata is successful
+func (m *requestHandlerContext) doRecoverIndex(w http.ResponseWriter, r *http.Request, isRebalReq bool) {
+	const method string = "RequestHandler::doRecoverIndex" // for logging
+
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		return
+	}
+
+	// convert request
+	request := m.convertIndexRequest(r)
+	if request == nil {
+		rhSendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for create index")
+		return
+	}
+
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
+	if !isAllowed(creds, []string{permission}, r, w, method) {
+		return
+	}
+
+	indexDefn := request.Index
+
+	if indexDefn.DefnId == 0 {
+		defnId, err := common.NewIndexDefnId()
+		if err != nil {
+			rhSendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("Fail to generate index definition id %v", err))
+			return
+		}
+		indexDefn.DefnId = defnId
+	}
+
+	if len(indexDefn.Using) != 0 && strings.ToLower(string(indexDefn.Using)) != "gsi" {
+		if common.IndexTypeToStorageMode(indexDefn.Using) != common.GetStorageMode() {
+			rhSendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("Storage Mode Mismatch %v", indexDefn.Using))
+			return
+		}
+	}
+
+	// call the index manager to handle the DDL
+	if logging.IsEnabled(logging.Debug) {
+		logging.Debugf(
+			"RequestHandler::doRecoverIndex: calling IndexManager to create index %v:%v:%v:%v",
+			method, indexDefn.Bucket, indexDefn.Scope, indexDefn.Collection, indexDefn.Name)
+	}
+	if err := m.mgr.HandleRecoverIndexDDL(&indexDefn); err == nil {
+		// No error, return success
+		rhSendIndexResponse(w)
+	} else {
+		// report failure
+		rhSendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+	}
+}
+
 // dropIndexRequest handles the /dropIndex REST endpoint.
 func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
 	const method string = "RequestHandler::dropIndexRequest" // for logging
@@ -427,7 +491,6 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	}
 }
 
-//
 // buildIndexRequestRebalance handles the /buildIndexRebalance REST endpoint used only by Rebalancer via
 // local REST call, which can specify multiple indexes to build. The builds happen asynchronously under
 // Indexer.handleBuildIndex, which returns per-instance error information in the form of an error map
@@ -435,30 +498,30 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 // Rebalancer.buildAcceptedIndexes.
 //
 // The full call chain of the request processing is long and hard to deduce from code. At time of writing it was:
-//   rebalancer.go
-//     processTokenAsDest
-//     go buildAcceptedIndexes
-//       REST call POST to /buildIndexRebalance
-//       waitForIndexBuild
-//   request_handler.go
-//     buildIndexRequestRebalance -- this function
-//   manager.go
-//     HandleBuildIndexRebalDDL
-//   gometa/server/embeddedServer.go
-//     MakeRequest -- OPCODE_BUILD_INDEX_REBAL (part of RequestServer interface defined by manager.go that
-//       gometa/server/embeddedServer.go implements)
-//   lifecycle.go
-//     OnNewRequest (impl of a method of gometa/protocol/common.go CustomRequestHandler iface) -- add to incomings queue
-//     go processRequest -- pulls from incomings queue
-//     dispatchRequest -- eventually puts the return message into outgoings queue
-//     handleBuildIndexes
-//     buildIndexesLifecycleMgr
-//   cluster_manager_agent.go
-//     OnIndexBuild -- sends MsgBuildIndex to Indexer
-//   indexer.go
-//     handleAdminMsgs -- receives MsgBuildIndex
-//     handleBuildIndex -- sends MsgBuildIndexResponse containing the error map back to cluster_manager_agent OnIndexBuild
 //
+//	rebalancer.go
+//	  processTokenAsDest
+//	  go buildAcceptedIndexes
+//	    REST call POST to /buildIndexRebalance
+//	    waitForIndexBuild
+//	request_handler.go
+//	  buildIndexRequestRebalance -- this function
+//	manager.go
+//	  HandleBuildIndexRebalDDL
+//	gometa/server/embeddedServer.go
+//	  MakeRequest -- OPCODE_BUILD_INDEX_REBAL (part of RequestServer interface defined by manager.go that
+//	    gometa/server/embeddedServer.go implements)
+//	lifecycle.go
+//	  OnNewRequest (impl of a method of gometa/protocol/common.go CustomRequestHandler iface) -- add to incomings queue
+//	  go processRequest -- pulls from incomings queue
+//	  dispatchRequest -- eventually puts the return message into outgoings queue
+//	  handleBuildIndexes
+//	  buildIndexesLifecycleMgr
+//	cluster_manager_agent.go
+//	  OnIndexBuild -- sends MsgBuildIndex to Indexer
+//	indexer.go
+//	  handleAdminMsgs -- receives MsgBuildIndex
+//	  handleBuildIndex -- sends MsgBuildIndexResponse containing the error map back to cluster_manager_agent OnIndexBuild
 func (m *requestHandlerContext) buildIndexRequestRebalance(w http.ResponseWriter, r *http.Request) {
 	const method string = "RequestHandler::buildIndexRequestRebalance" // for logging
 
@@ -482,6 +545,37 @@ func (m *requestHandlerContext) buildIndexRequestRebalance(w http.ResponseWriter
 	// call the index manager to handle the DDL
 	indexIds := request.IndexIds
 	if err := m.mgr.HandleBuildIndexRebalDDL(indexIds); err == nil {
+		// No error, return success
+		rhSendIndexResponse(w)
+	} else {
+		// report failure
+		rhSendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+	}
+}
+
+func (m *requestHandlerContext) buildRecoveredIndexesRebalance(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::buildRecoveredIndexesRebalance" // for logging
+
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		return
+	}
+
+	// convert request
+	request := m.convertIndexRequest(r)
+	if request == nil {
+		rhSendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for build index")
+		return
+	}
+
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!build", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
+	if !isAllowed(creds, []string{permission}, r, w, method) {
+		return
+	}
+
+	// call the index manager to handle the DDL
+	indexIds := request.IndexIds
+	if err := m.mgr.HandleBuildRecoveredIndexesRebalance(indexIds); err == nil {
 		// No error, return success
 		rhSendIndexResponse(w)
 	} else {
@@ -724,12 +818,14 @@ func (m *requestHandlerContext) IndexStatusErrorf(msg string) {
 // from the cache of whichever responsive node has the newest data cached. Only if no responsive
 // node has a cached value will an unresponsive node's status be omitted. (The caches were only
 // added in common.INDEXER_65_VERSION.) Status consists of two parts:
-//   1. LocalIndexMetadata
-//   2. A subset of IndexStats (currently: buildProgress, completionProgress, lastScanTime)
+//  1. LocalIndexMetadata
+//  2. A subset of IndexStats (currently: buildProgress, completionProgress, lastScanTime)
 //
 // getAll true means preserve per-node information about partitioned indexes; false means
-//   consolidate the statuses of all nodes hosting some partitions/replicas of an instance into a
-//   single entry (whose NodeUUID will be set to "").
+//
+//	consolidate the statuses of all nodes hosting some partitions/replicas of an instance into a
+//	single entry (whose NodeUUID will be set to "").
+//
 // omitScheduled true means do not include information about scheduled indexes.
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *constraints, getAll bool, omitScheduled bool) (
 	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
@@ -2035,14 +2131,13 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 // Restore
 ///////////////////////////////////////////////////////
 
-//
 // Restore semantic:
-// 1) Each index is associated with the <IndexDefnId, IndexerId>.  IndexDefnId is unique for each index defnition,
-//    and IndexerId is unique among the index nodes.  Note that IndexDefnId cannot be reused.
-// 2) Index defn exists for the given <IndexDefnId, IndexerId> in current repository.  No action will be applied during restore.
-// 3) Index defn is deleted or missing in current repository.  Index Defn restored from backup if bucket exists.
-//    - Index defn of the same <bucket, name> exists.   It will rename the index to <index name>_restore_<seqNo>
-//    - Bucket does not exist.   It will restore an index defn with a non-existent bucket.
+//  1. Each index is associated with the <IndexDefnId, IndexerId>.  IndexDefnId is unique for each index defnition,
+//     and IndexerId is unique among the index nodes.  Note that IndexDefnId cannot be reused.
+//  2. Index defn exists for the given <IndexDefnId, IndexerId> in current repository.  No action will be applied during restore.
+//  3. Index defn is deleted or missing in current repository.  Index Defn restored from backup if bucket exists.
+//     - Index defn of the same <bucket, name> exists.   It will rename the index to <index name>_restore_<seqNo>
+//     - Bucket does not exist.   It will restore an index defn with a non-existent bucket.
 //
 // TODO (Collections): Any changes necessary will be handled as part of Backup-Restore task
 func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
@@ -3017,7 +3112,6 @@ func (m *requestHandlerContext) validateStorageMode(defn *common.IndexDefn) erro
 
 // This function returns an error if it cannot connect for fetching bucket info.
 // It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
-//
 func (m *requestHandlerContext) getBucketUUID(bucket string) (string, error) {
 	count := 0
 RETRY:
@@ -3038,7 +3132,6 @@ RETRY:
 // This function returns an error if it cannot connect for fetching manifest info.
 // It returns SCOPE_ID_NIL, COLLECTION_ID_NIL (err == nil) if scope, collection does
 // not exist.
-//
 func (m *requestHandlerContext) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
 	count := 0
 RETRY:
@@ -3073,9 +3166,7 @@ func (m *requestHandlerContext) processScheduleCreateRequest(req *client.Schedul
 	return nil
 }
 
-//
 // Handle restore of a bucket.
-//
 func (m *requestHandlerContext) bucketRestoreHandler(bucket, include, exclude string, r *http.Request) (int, string) {
 
 	filters, filterType, err := getFilters(r, bucket)
@@ -3111,10 +3202,8 @@ func (m *requestHandlerContext) bucketRestoreHandler(bucket, include, exclude st
 	return http.StatusOK, ""
 }
 
-//
 // Handle backup of a bucket.
 // Note that this function does not verify auths or RBAC
-//
 func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude string,
 	r *http.Request) (*manager.ClusterIndexMetadata, error) {
 
@@ -3396,9 +3485,7 @@ func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.
 	}
 }
 
-//
 // Returns intenal version of local indexer node
-//
 func (m *requestHandlerContext) handleInternalVersionRequest(w http.ResponseWriter, r *http.Request) {
 
 	const method string = "RequestHandler::handleInternalVersionRequest" // for logging
@@ -3421,9 +3508,7 @@ func (m *requestHandlerContext) handleInternalVersionRequest(w http.ResponseWrit
 	w.Write(data)
 }
 
-//
 // Handler for /api/v1/bucket/<bucket-name>/<function-name>
-//
 func BucketRequestHandler(w http.ResponseWriter, r *http.Request, creds cbauth.Creds) {
 	handlerContext.bucketReqHandler(w, r, creds)
 }

@@ -12,7 +12,8 @@ build_indexer(){
 
     echo "Building Indexer..."
     cd cmd/indexer/
-    go build -o indexer
+    # tag added for nitro/mm
+    GO111MODULE=auto go build -tags=jemalloc -mod=mod -o indexer
     cp indexer ../../bin/
     cd ../..
     echo "Done"
