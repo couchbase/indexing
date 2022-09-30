@@ -459,6 +459,19 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	}
 
+	if c.IsServerlessDeployment() {
+		if err := c.CheckIngressLockdown(bucket); err != nil {
+			index := fmt.Sprintf("%v:%v:%v:%v", bucket, scope, collection, name)
+			errMsg := fmt.Sprintf("Fails to create index (%v) due to error %v", index, err)
+			logging.Errorf("%v", errMsg)
+			if err.Error() == c.ErrNoIngress.Error() {
+				return c.IndexDefnId(0), errors.New(c.ErrDiskLimitReached.Error()), false
+			}
+
+			return c.IndexDefnId(0), errors.New(err.Error()), false
+		}
+	}
+
 	if clusterVersion < c.INDEXER_70_VERSION {
 		if collection != c.DEFAULT_COLLECTION || scope != c.DEFAULT_SCOPE {
 			err := errors.New("Fails to create index.  Creation of an index on non-default collection" +
@@ -1297,6 +1310,19 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 	if o.GetClusterVersion() < c.INDEXER_71_VERSION {
 		enforceLimits = false
+	}
+
+	if c.IsServerlessDeployment() {
+		if err := c.CheckIngressLockdown(idxDefn.Bucket); err != nil {
+			index := fmt.Sprintf("%v:%v:%v:%v", idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+			errMsg := fmt.Sprintf("Fails to create index (%v) due to error %v", index, err)
+			logging.Errorf("%v", errMsg)
+			if err.Error() == c.ErrNoIngress.Error() {
+				return c.ErrDiskLimitReached
+			}
+
+			return err
+		}
 	}
 
 	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() {
@@ -3204,6 +3230,7 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	watcherIndexMap := make(map[c.IndexerId][]c.IndexDefnId)
 	watcherNodeMap := make(map[c.IndexerId]string)
 	defnList := ([]c.IndexDefnId)(nil)
+	buckets := make(map[string]bool)
 
 	for _, id := range defnIDs {
 
@@ -3253,6 +3280,8 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 			if !checkState(meta.State) {
 				continue
 			}
+
+			buckets[meta.Definition.Bucket] = true
 		}
 
 		// find watcher -- This method does not check index status (return the watcher even
@@ -3279,6 +3308,20 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 			if !found {
 				watcherIndexMap[indexerId] = append(watcherIndexMap[indexerId], id)
 				watcherNodeMap[indexerId] = watcher.getNodeAddr()
+			}
+		}
+	}
+
+	if c.IsServerlessDeployment() {
+		for bucket, _ := range buckets {
+			if err := c.CheckIngressLockdown(bucket); err != nil {
+				errMsg := fmt.Sprintf("Fail to Build index due to error %v for %v", err, defnIDs)
+				logging.Errorf("%v", errMsg)
+				if err.Error() == c.ErrNoIngress.Error() {
+					return c.ErrDiskLimitReached
+				}
+
+				return err
 			}
 		}
 	}
@@ -3679,6 +3722,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 
 	if int(curCount) < count {
 		// add replica
+		// TODO Elixir: Check for ingress lockdown for serverless.
 		if err := o.addReplica(&defn, watcherMap, *numReplica, count-int(curCount), plan); err != nil {
 			return fmt.Errorf("Fail to alter index: %v", err)
 		}

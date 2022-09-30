@@ -511,6 +511,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
 	//when Rebalancing manager receives ns_server rebalancing callback.
+	//Please ensure that the Metering Manager is initialised before DDL Service manager.
 	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
