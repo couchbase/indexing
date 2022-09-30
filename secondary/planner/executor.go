@@ -2174,7 +2174,7 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 		var subcluster SubCluster
 
 		if node.IsDeleted() {
-			logging.Infof("%v Skip Ejected Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
+			logging.Infof("%v Skip Deleted Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
 				node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
 			continue
 		}
@@ -2238,7 +2238,7 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 		subClusters = append(subClusters, subcluster)
 	}
 
-	//TODO It is possible to have a server group assignment which fails to pair all nodes
+	//DEEPK It is possible to have a server group assignment which fails to pair all nodes
 	//e.g. n1[sg1], n2[sg2]. CP adds n3[sg2], n4[sg3]. This can be paired as (n1, n3) and
 	//(n2, n4). But if n1 gets paired with n4 first i.e. (n1, n4), then (n2, n3) cannot happen
 	//as both belong to the same server group sg2.
@@ -2280,7 +2280,7 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 }
 
 //filterCandidateBasedOnTenantAffinity finds candidate sub-cluster
-//based on tenant affinity
+//on which input index can be placed based on tenant affinity
 func filterCandidateBasedOnTenantAffinity(subClusters []SubCluster,
 	indexSpec *IndexSpec) (SubCluster, error) {
 
@@ -2367,6 +2367,13 @@ func findSubClustersBelowLowThreshold(subClusters []SubCluster,
 
 	for _, subCluster := range subClusters {
 		for _, indexNode := range subCluster {
+
+			//exclude deleted nodes
+			if indexNode.IsDeleted() {
+				found = false
+				break
+			}
+
 			//all nodes in the sub-cluster need to satisfy the condition
 			found = true
 			if indexNode.MandatoryQuota >=
@@ -2402,6 +2409,13 @@ func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 	for _, subCluster := range subClusters {
 		found = true
 		for _, indexNode := range subCluster {
+
+			//exclude deleted nodes
+			if indexNode.IsDeleted() {
+				found = false
+				break
+			}
+
 			//all nodes in the sub-cluster need to satisfy the condition
 			if indexNode.MandatoryQuota >
 				(uint64(usageThreshold.MemHighThreshold)*memQuota)/100 {
@@ -3331,7 +3345,7 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 
 	//find placement for indexes of deleted indexer nodes
 	if solution.numDeletedNode > 0 {
-		err = findPlacementForDeletedNodes(solution)
+		err = findPlacementForDeletedNodes(solution, plan.UsageThreshold)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -3656,11 +3670,11 @@ func sortTenantUsageByUnits(usagePerTenant map[string]*TenantUsage) []*TenantUsa
 	return usageSortedByUnits
 }
 
-//moveTenantsToLowUsageSubCluster moves the list of input tenants to subClusters below
-//LWM usage threshold.
+//moveTenantsToLowUsageSubCluster moves the list of input tenants from source subclusters
+//to the target subClusters.
 func moveTenantsToLowUsageSubCluster(solution *Solution, tenantsToBeMoved [][]*TenantUsage,
-	subClustersBelowLWM []SubCluster, subClustersOverHWM []SubCluster,
-	usageThreshold *UsageThreshold) {
+	targetSubClusters []SubCluster, sourceSubClusters []SubCluster,
+	usageThreshold *UsageThreshold) bool {
 
 	const _moveTenantsToLowUsageSubCluster = "Planner::moveTenantsToLowUsageSubCluster"
 
@@ -3677,6 +3691,8 @@ func moveTenantsToLowUsageSubCluster(solution *Solution, tenantsToBeMoved [][]*T
 
 	var candidate *TenantUsage
 	var placed bool
+
+	allTenantsPlaced := true
 	for i := 0; i < maxLen; i++ {
 
 		for _, tenantUsageInSubCluster := range tenantsToBeMoved {
@@ -3685,31 +3701,33 @@ func moveTenantsToLowUsageSubCluster(solution *Solution, tenantsToBeMoved [][]*T
 				candidate = tenantUsageInSubCluster[i]
 			}
 			placed = findTenantPlacement(solution, candidate,
-				subClustersBelowLWM, subClustersOverHWM, usageThreshold)
+				targetSubClusters, sourceSubClusters, usageThreshold)
 			if !placed {
+				allTenantsPlaced = false
 				logging.Infof("%v Unable to place %v on any target", _moveTenantsToLowUsageSubCluster, candidate)
 			}
 		}
 
 	}
+	return allTenantsPlaced
 	//TODO Elixir consider building state indexes also during planning
 }
 
 //findTenantPlacement finds the placement for a tenant based on the available resources
 //from the given list of SubClusters below LWM threshold usage. Returns false if no
 //placement can be found.
-func findTenantPlacement(solution *Solution, tenant *TenantUsage, subClustersBelowLWM []SubCluster,
-	subClustersOverHWM []SubCluster, usageThreshold *UsageThreshold) bool {
+func findTenantPlacement(solution *Solution, tenant *TenantUsage, targetSubClusters []SubCluster,
+	sourceSubClusters []SubCluster, usageThreshold *UsageThreshold) bool {
 
 	const _findTenantPlacement = "Planner::findTenantPlacement"
 
 	//find the first subCluster that can fit the tenant
-	for _, subCluster := range subClustersBelowLWM {
+	for _, subCluster := range targetSubClusters {
 
 		target := subCluster
 		if checkIfTenantCanBePlacedOnTarget(tenant, target, usageThreshold) {
 			logging.Infof("%v %v can be placed on %v", _findTenantPlacement, tenant, target)
-			source := findSourceForTenant(tenant, subClustersOverHWM)
+			source := findSourceForTenant(tenant, sourceSubClusters)
 			placeTenantOnTarget(solution, tenant, source, target)
 			return true
 		}
@@ -3821,7 +3839,7 @@ func updateSourceSubClusterUsage(source SubCluster, tenant *TenantUsage) {
 
 //sortSubClustersByMemUsage sorts the input slice of subClusters into ascending
 //order based on memory usage and returns the new sorted slice
-func sortSubClustersByMemUsage(subClustersBelowLWM []SubCluster) []SubCluster {
+func sortSubClustersByMemUsage(subClusters []SubCluster) []SubCluster {
 
 	findMaxMemUsageInSubCluster := func(subCluster SubCluster) uint64 {
 
@@ -3834,12 +3852,12 @@ func sortSubClustersByMemUsage(subClustersBelowLWM []SubCluster) []SubCluster {
 		return maxMem
 	}
 
-	sort.Slice(subClustersBelowLWM, func(i, j int) bool {
-		return findMaxMemUsageInSubCluster(subClustersBelowLWM[i]) <
-			findMaxMemUsageInSubCluster(subClustersBelowLWM[j])
+	sort.Slice(subClusters, func(i, j int) bool {
+		return findMaxMemUsageInSubCluster(subClusters[i]) <
+			findMaxMemUsageInSubCluster(subClusters[j])
 	})
 
-	return subClustersBelowLWM
+	return subClusters
 }
 
 //getIndexesForTenant returns the list of indexes for the specified tenant
@@ -3996,14 +4014,15 @@ func findPairNodeUsingIndex(subCluster SubCluster, index int) *IndexerNode {
 //deleted node. Once the right placement is found, the indexes are moved to the
 //new target node in the input solution. It returns the list of non ejected/deleted
 //nodes remaining in the cluster.
-func findPlacementForDeletedNodes(solution *Solution) error {
+func findPlacementForDeletedNodes(solution *Solution, usageThreshold *UsageThreshold) error {
 
+	const _findPlacementForDeletedNodes = "Planner::findPlacementForDeletedNodes"
 	allIndexers := solution.Placement
 
 	deletedNodes := solution.getDeleteNodes()
 	newNodes := solution.getNewNodes()
 
-	err := moveTenantsFromDeletedNodes(deletedNodes, newNodes, solution)
+	err := moveTenantsFromDeletedNodes(deletedNodes, newNodes, solution, usageThreshold)
 	if err != nil {
 		return err
 	}
@@ -4014,10 +4033,11 @@ func findPlacementForDeletedNodes(solution *Solution) error {
 	for _, indexer := range allIndexers {
 		if !indexer.IsDeleted() {
 			nonEjectedNodes = append(nonEjectedNodes, indexer)
+		} else {
+			logging.Infof("%v Remove Deleted Node from solution %v SG %v Memory %v Units %v", _findPlacementForDeletedNodes,
+				indexer.NodeId, indexer.ServerGroup, indexer.MandatoryQuota, indexer.ActualUnits)
 		}
 	}
-
-	logging.Infof("%v nonEjectedNodes", nonEjectedNodes)
 
 	solution.Placement = nonEjectedNodes
 	return nil
@@ -4034,8 +4054,13 @@ func findPlacementForDeletedNodes(solution *Solution) error {
 //3. If deleted nodes are equal to new nodes, then swap one for one.
 //4. If deleted nodes are less than new nodes,
 //pick any new nodes which can match the server group constraint.
+//5. If deleted nodes are more than new nodes, then:
+//5a. If new nodes are non-zero, return error as planner cannot determine
+//which nodes to place the indexes on.
+//5b. If new nodes are zero, it is treated as a case of failed swap rebalance.
+//Indexes from deleted nodes are placed to maintain tenant affinity in subcluster.
 func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
-	newNodes []*IndexerNode, solution *Solution) error {
+	newNodes []*IndexerNode, solution *Solution, usageThreshold *UsageThreshold) error {
 
 	const _moveTenantsFromDeletedNodes = "Planner::moveTenantsFromDeletedNodes"
 
@@ -4049,6 +4074,7 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 
 	//if there is no non-empty deleted node, nothing to do
 	if len(nonEmptyDeletedNodes) == 0 {
+		logging.Infof("%v No non-empty deleted nodes found.", _moveTenantsFromDeletedNodes)
 		return nil
 	}
 
@@ -4070,7 +4096,135 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 		logging.Infof("%v Num deleted nodes %v is more than num new/empty nodes %v", _moveTenantsFromDeletedNodes,
 			len(nonEmptyDeletedNodes), len(newNodes))
 
-		return errors.New("Number of deleted nodes is more than available new nodes.")
+		//if number of outgoing nodes is more than nodes coming in, planner cannot decide which
+		//ones need to be used for swap.
+		if len(newNodes) != 0 {
+			errStr := fmt.Sprintf("Planner - Number of non-empty deleted nodes cannot be greater than number of added nodes.")
+			logging.Errorf(errStr)
+			return errors.New(errStr)
+		}
+
+		var outSubClusters []SubCluster
+		dedup := make(map[string]bool)
+		for i, delNode := range nonEmptyDeletedNodes {
+
+			//check if this delNode has already been processed as a pairNode
+			if _, ok := dedup[delNode.NodeUUID]; ok {
+				continue
+			}
+
+			pairNode := pairForDeletedNodes[i]
+
+			var isPairBeingDeleted bool
+			if pairNode != nil {
+				dedup[pairNode.NodeUUID] = true
+				isPairBeingDeleted = pairNode.IsDeleted()
+			}
+
+			if isPairBeingDeleted {
+				//Both nodes of the subcluster are being deleted.
+				//This can be a case of failed swap rebalance of a subcluster or
+				//a subcluster being removed from the cluster.
+				//In both cases, attempt to move indexes to remaining nodes
+				//in the cluster.
+				var subCluster SubCluster
+				subCluster = append(subCluster, delNode)
+				subCluster = append(subCluster, pairNode)
+
+				outSubClusters = append(outSubClusters, subCluster)
+				tenantsToBeMoved := getTenantUsageForSubClusters(outSubClusters)
+
+				for i, tenants := range tenantsToBeMoved {
+					logging.Infof("%v TenantsToBeMoved from source %v", _moveTenantsFromDeletedNodes, outSubClusters[i])
+					for _, tenant := range tenants {
+						logging.Infof("%v %v", _moveTenantsFromDeletedNodes, tenant)
+					}
+				}
+				if len(tenantsToBeMoved) == 0 {
+					return nil
+				}
+
+				//consider all subclusters below LWM as candidates for index placement
+				nonEjectedSubClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
+				if err != nil {
+					return err
+				}
+				subClustersBelowLWM, err := findSubClustersBelowLowThreshold(nonEjectedSubClusters, usageThreshold)
+				if err != nil {
+					return err
+				}
+
+				logging.Infof("%v Found SubClusters Below LWM %v", _moveTenantsFromDeletedNodes, subClustersBelowLWM)
+
+				if len(subClustersBelowLWM) == 0 {
+					errStr := "Planner - Not enough capacity to place indexes of deleted nodes."
+					logging.Errorf(errStr)
+					return errors.New(errStr)
+				}
+
+				subClustersBelowLWM = sortSubClustersByMemUsage(subClustersBelowLWM)
+
+				allTenantsPlaced := moveTenantsToLowUsageSubCluster(solution, tenantsToBeMoved, subClustersBelowLWM,
+					outSubClusters, usageThreshold)
+				if !allTenantsPlaced {
+					errStr := "Planner - Not enough capacity to place indexes of deleted nodes."
+					logging.Errorf(errStr)
+					return errors.New(errStr)
+				}
+			} else {
+
+				if pairNode == nil {
+					logging.Infof("%v Pair node not found for deleted node %v.", _moveTenantsFromDeletedNodes,
+						delNode)
+
+					errStr := fmt.Sprintf("Planner - Pair node for %v not found. "+
+						"Provide additional node as replacement.", delNode.NodeId)
+					logging.Errorf(errStr)
+					return errors.New(errStr)
+
+				}
+
+				//Identify if the single node moving out is part of a failed swap rebalance.
+				//In that case, move indexes to maintain subcluster affinity.
+				//Else fail the request as moving out single node without replacement is not allowed.
+				nonEjectedSubClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
+				if err != nil {
+					return err
+				}
+
+				var targetNode *IndexerNode
+				for _, subCluster := range nonEjectedSubClusters {
+
+					for i, node := range subCluster {
+						if len(subCluster) != cSubClusterLen {
+							continue
+						}
+						if node.NodeUUID == pairNode.NodeUUID && !node.IsDeleted() {
+							targetNode = findPairNodeUsingIndex(subCluster, i)
+							if targetNode.IsDeleted() {
+								targetNode = nil
+							}
+						}
+					}
+				}
+
+				if targetNode == nil {
+					logging.Infof("%v No replacement node found for deleted node %v.", _moveTenantsFromDeletedNodes,
+						delNode)
+
+					errStr := fmt.Sprintf("Planner - Removing node %v will result in losing indexes. "+
+						"Provide additional node as replacement.", delNode.NodeId)
+					logging.Errorf(errStr)
+					return errors.New(errStr)
+				} else {
+					//move indexes from deleted node to target node
+					logging.Infof("%v Considering %v as replacement node found deleted node %v.", _moveTenantsFromDeletedNodes,
+						targetNode, delNode)
+					swapTenantsFromDeleteNodes([]*IndexerNode{delNode}, []*IndexerNode{targetNode}, solution)
+				}
+
+			}
+		}
 
 	} else {
 
@@ -4088,6 +4242,9 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 		}
 		if found {
 			swapTenantsFromDeleteNodes(deletedNodes, newNodes, solution)
+		} else {
+			return errors.New("Planner - Unable to satisfy server group constraint while replacing " +
+				"removed nodes with new nodes.")
 		}
 	}
 
@@ -4196,4 +4353,97 @@ func permuteNodes(nodes []*IndexerNode) [][]*IndexerNode {
 	}
 	perm(nodes, len(nodes))
 	return result
+}
+
+//findCandidateTenantsToMoveOut computes the tenants that
+//can be moved out of the list of input SubClusters to bring down its
+//memory/units usage less than or equal to LWM threshold.
+func getTenantUsageForSubClusters(subClusters []SubCluster) [][]*TenantUsage {
+
+	var tenantUsage [][]*TenantUsage
+	for _, subCluster := range subClusters {
+		tenantList := getTenantUsageForSubCluster(subCluster)
+		if len(tenantList) != 0 {
+			tenantUsage = append(tenantUsage, tenantList)
+		}
+	}
+
+	return tenantUsage
+}
+
+//findTenantsToMoveOutFromSubCluster computes the tenants that
+//can be moved out of the input SubCluster to bring down its
+//memory/units usage less than or equal to LWM threshold.
+func getTenantUsageForSubCluster(subCluster SubCluster) []*TenantUsage {
+
+	const _getTenantUsageForSubCluster = "Planner::getTenantUsageForSubCluster"
+
+	var maxMemoryUsage, maxUnitsUsage uint64
+	var highestUsageNode *IndexerNode
+
+	for _, indexNode := range subCluster {
+
+		//pairNode can be nil in case it is already removed from cluster
+		if indexNode == nil {
+			continue
+		}
+
+		if indexNode.MandatoryQuota > maxMemoryUsage {
+			maxMemoryUsage = indexNode.MandatoryQuota
+			highestUsageNode = indexNode
+		}
+		if indexNode.ActualUnits > maxUnitsUsage {
+			maxUnitsUsage = indexNode.ActualUnits
+		}
+
+	}
+
+	//compute usage by tenant
+	usagePerTenant := computeUsageByTenant(highestUsageNode)
+
+	//sort the usage from lowest to highest
+	usageSortedByMemory := sortTenantUsageByMemory(usagePerTenant)
+	usageSortedByUnits := sortTenantUsageByUnits(usagePerTenant)
+
+	//reverse sort from highest to lowest usage. The algorithm
+	//will try to move tenant based on highest usage first so
+	//it has better chances of being able to find a slot on the target.
+	sort.Slice(usageSortedByMemory, func(i, j int) bool {
+		return usageSortedByMemory[i].MemoryUsage > usageSortedByMemory[j].MemoryUsage
+	})
+	sort.Slice(usageSortedByUnits, func(i, j int) bool {
+		return usageSortedByUnits[i].UnitsUsage > usageSortedByUnits[j].UnitsUsage
+	})
+
+	//create combined usage
+	combinedUsage := make([]*TenantUsage, 0)
+	processedTenants := make(map[string]bool)
+
+	maxlen := len(usageSortedByMemory)
+	if maxlen < len(usageSortedByUnits) {
+		maxlen = len(usageSortedByUnits)
+	}
+
+	var candidate *TenantUsage
+	for i := 0; i < maxlen; i++ {
+
+		if i < len(usageSortedByMemory) {
+			candidate = usageSortedByMemory[i]
+			if _, found := processedTenants[candidate.TenantId]; !found {
+				combinedUsage = append(combinedUsage, candidate)
+				processedTenants[candidate.TenantId] = true
+			}
+		}
+
+		if i < len(usageSortedByUnits) {
+			candidate = usageSortedByUnits[i]
+			if _, found := processedTenants[candidate.TenantId]; !found {
+				combinedUsage = append(combinedUsage, candidate)
+				processedTenants[candidate.TenantId] = true
+			}
+		}
+	}
+
+	return combinedUsage
+
 }
