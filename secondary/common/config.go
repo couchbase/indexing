@@ -3326,7 +3326,32 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
+	"indexer.settings.rebalance.blob_storage_scheme": ConfigValue{
+		"",
+		"Scheme to use for data transfser between source and destination. " +
+			"For S3, this is expected to be 's3://'. For local setup like " +
+			"cluster_run, the value is empty",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.rebalance.blob_storage_bucket": ConfigValue{
+		"",
+		"Destination bucket to which the data will be written to " +
+			"or read from. For local storage, this can be something like '/tmp'",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.rebalance.blob_storage_prefix": ConfigValue{
+		"",
+		"Service specific prefix provided by control plane. The final path " +
+			"at which data will be written to is " +
+			"'blob_storage_scheme' + 'blob_storage_bucket' + 'blob_storage_prefix'",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.serverless.maxInstancePerShard": ConfigValue{
 		uint64(400),
 		"Maximum number of instances per shard for serverless",
