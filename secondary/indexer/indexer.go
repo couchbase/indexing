@@ -3683,6 +3683,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
 		indexInst.State == common.INDEX_STATE_READY ||
+		indexInst.State == common.INDEX_STATE_RECOVERED ||
 		indexInst.State == common.INDEX_STATE_DELETED {
 
 		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
