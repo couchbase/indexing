@@ -132,13 +132,17 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	return CheckResultError, time.Duration(0), err
 }
 
-func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64) (uint64, error) {
+func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64, billable bool) (uint64, error) {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
 	units, err := metering.IndexReadToRU(bytes)
 	if err == nil {
 		ctx := getCtx(bucket, user)
-		return units.Whole(), regulator.RecordUnits(ctx, units)
+		if billable {
+			return units.Whole(), regulator.RecordUnits(ctx, units)
+		} else {
+			return units.Whole(), regulator.RecordUnbillableUnits(ctx, units)
+		}
 	}
 	return 0, err
 }

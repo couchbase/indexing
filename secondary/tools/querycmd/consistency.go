@@ -1,14 +1,16 @@
 package main
 
-import "fmt"
-import "log"
-import "os"
-import "time"
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
 
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/indexing/secondary/querycmd"
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/go-couchbase"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/querycmd"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 var docid = "docCons"
 var constDocValue1 = map[string]interface{}{"city": "bangalore"}
@@ -139,7 +141,7 @@ func queryConsistency(
 					}
 				}
 				return true
-			})
+			}, false)
 		fmt.Println("Scan: QueryConsistency ... ok\n")
 		synch <- true
 	}()
@@ -165,7 +167,7 @@ func sessionConsistency(
 					}
 				}
 				return true
-			})
+			}, false)
 		fmt.Println("Scan: SessionConsistency ... ok\n")
 		synch <- true
 	}()
@@ -189,7 +191,7 @@ func anyConsistency(
 				}
 			}
 			return true
-		})
+		}, false)
 	fmt.Println("Scan: AnyConsistency ... ok\n")
 }
 

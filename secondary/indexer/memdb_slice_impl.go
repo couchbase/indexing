@@ -1850,6 +1850,10 @@ func (mdb *memdbSlice) GetTenantDiskSize() (int64, error) {
 	return int64(0), nil
 }
 
+func (mdb *memdbSlice) GetShardIds() []common.ShardId {
+	return nil // nothing to do
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

@@ -1103,6 +1103,7 @@ func (si *secondaryIndex) Scan(
 	conn *datastore.IndexConnection) {
 
 	sender := conn.Sender()
+	skipReadMetering := conn.SkipMetering()
 	var backfillSync int64
 
 	var waitGroup sync.WaitGroup
@@ -1131,7 +1132,7 @@ func (si *secondaryIndex) Scan(
 		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 		err := client.LookupInternal(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
-			n1ql2GsiConsistency[cons], vector2ts(vector), broker)
+			n1ql2GsiConsistency[cons], vector2ts(vector), broker, skipReadMetering)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 		}
@@ -1141,7 +1142,7 @@ func (si *secondaryIndex) Scan(
 		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 		err := client.RangeInternal(
 			si.defnID, requestId, low, high, incl, distinct, limit,
-			n1ql2GsiConsistency[cons], vector2ts(vector), broker)
+			n1ql2GsiConsistency[cons], vector2ts(vector), broker, skipReadMetering)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 		}
@@ -1156,6 +1157,7 @@ func (si *secondaryIndex) ScanEntries(
 	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
 	sender := conn.Sender()
+	skipReadMetering := conn.SkipMetering()
 	var backfillSync int64
 
 	var waitGroup sync.WaitGroup
@@ -1182,7 +1184,7 @@ func (si *secondaryIndex) ScanEntries(
 	broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
-		n1ql2GsiConsistency[cons], vector2ts(vector), broker)
+		n1ql2GsiConsistency[cons], vector2ts(vector), broker, skipReadMetering)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -1219,6 +1221,7 @@ func (si *secondaryIndex2) Scan2(
 	conn *datastore.IndexConnection) {
 
 	sender := conn.Sender()
+	skipReadMetering := conn.SkipMetering()
 	var backfillSync int64
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
@@ -1254,7 +1257,7 @@ func (si *secondaryIndex2) Scan2(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		broker)
+		broker, skipReadMetering)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -1313,9 +1316,12 @@ func (si *secondaryIndex2) countInternal(requestId string, spans datastore.Spans
 	}
 
 	gsiscans := n1qlspanstogsi(spans)
-
+	skipReadMetering := false
+	if conn != nil {
+		skipReadMetering = conn.SkipMetering()
+	}
 	count, readUnits, e := client.MultiScanCount(si.defnID, requestId, gsiscans, distinct,
-		n1ql2GsiConsistency[cons], vector2ts(vector))
+		n1ql2GsiConsistency[cons], vector2ts(vector), skipReadMetering)
 	if e != nil {
 		return 0, n1qlError(client, e)
 	}
@@ -1420,6 +1426,7 @@ func (si *secondaryIndex3) Scan3(
 	conn *datastore.IndexConnection) {
 
 	sender := conn.Sender()
+	skipReadMetering := conn.SkipMetering()
 	var backfillSync int64
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
@@ -1457,7 +1464,7 @@ func (si *secondaryIndex3) Scan3(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		broker)
+		broker, skipReadMetering)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}

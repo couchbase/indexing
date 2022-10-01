@@ -77,6 +77,7 @@ message ScanRequest {
     optional bool               sorted          = 15;
     optional uint32             dataEncFmt      = 16;
     optional string             user            = 17;
+    optional bool               skipReadMetering    = 18;
 }
 
 // Full table scan request from indexer.
@@ -90,6 +91,7 @@ message ScanAllRequest {
 	repeated uint64		   partitionIds  = 7;
 	optional uint32        dataEncFmt    = 8;
     optional string        user          = 9;
+    optional bool          skipReadMetering  = 10;
 }
 
 // Request by client to stop streaming the query results.
@@ -118,6 +120,7 @@ message CountRequest {
     repeated Scan          scans     = 7;
 	optional int64		   rollbackTime    = 8;
 	repeated uint64		   partitionIds     = 9;
+    optional bool          skipReadMetering  = 10;
 }
 
 // total number of entries in index.

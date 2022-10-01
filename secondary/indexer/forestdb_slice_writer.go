@@ -1859,3 +1859,7 @@ func (fdb *fdbSlice) BuildDone() {
 func (fdb *fdbSlice) GetTenantDiskSize() (int64, error) {
 	return int64(0), nil
 }
+
+func (fdb *fdbSlice) GetShardIds() []common.ShardId {
+	return nil // nothing to do
+}

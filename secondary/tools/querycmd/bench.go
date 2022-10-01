@@ -1,16 +1,20 @@
 package main
 
-import "time"
-import "log"
-import "fmt"
-import "net"
-import "reflect"
+import (
+	"fmt"
+	"log"
+	"net"
+	"reflect"
+	"time"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/indexing/secondary/queryport"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/golang/protobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/indexing/secondary/queryport"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/golang/protobuf/proto"
+)
 
 var mock_duration = 10
 
@@ -98,7 +102,7 @@ loop:
 						log.Println(v)
 					}
 					return true
-				})
+				}, false)
 			if err != nil {
 				log.Fatal(err)
 			}

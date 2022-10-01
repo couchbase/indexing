@@ -115,7 +115,8 @@ type ScanRequest struct {
 	dataEncFmt common.DataEncodingFormat
 	keySzCfg   keySizeConfig
 
-	User string // For read metering
+	User             string // For read metering
+	SkipReadMetering bool
 }
 
 type Projection struct {
@@ -347,6 +348,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Sorted = true
+		r.SkipReadMetering = req.GetSkipReadMetering()
 
 		if err = r.setIndexParams(); err != nil {
 			return
@@ -393,6 +395,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			r.Distinct = req.GetDistinct()
 		}
 		r.Offset = req.GetOffset()
+		r.SkipReadMetering = req.GetSkipReadMetering()
 
 		if err = r.setIndexParams(); err != nil {
 			return
@@ -448,6 +451,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.Scans[0].ScanType = AllReq
 		r.Sorted = true
 		r.dataEncFmt = common.DataEncodingFormat(req.GetDataEncFmt())
+		r.SkipReadMetering = req.GetSkipReadMetering()
 
 		if err = r.setIndexParams(); err != nil {
 			return
@@ -1196,14 +1200,6 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 	return
 }
 
-// Skip metering for CBO Queries
-func (r *ScanRequest) SkipReadMetering() bool {
-	if r.RequestId == "advise_retriever" {
-		return true
-	}
-	return false
-}
-
 func (r *ScanRequest) setIndexParams() (localErr error) {
 	r.sco.mu.RLock()
 	defer r.sco.mu.RUnlock()
@@ -1212,7 +1208,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 
 	stats := r.sco.stats.Get()
 	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID,
-		r.PartitionIds, r.User, r.SkipReadMetering())
+		r.PartitionIds, r.User, r.SkipReadMetering)
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket

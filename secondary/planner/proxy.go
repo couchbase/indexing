@@ -348,7 +348,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 			for _, partn := range inst.Partitions {
 
 				// create an index usage object
-				index := makeIndexUsageFromDefn(defn, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), uint64(inst.NumPartitions))
+				index := makeIndexUsageFromDefn(defn, common.IndexInstId(inst.InstId),
+					common.PartitionId(partn.PartId), uint64(inst.NumPartitions), partn.ShardIds)
 
 				// Copy the index state from the instance to IndexUsage.
 				index.state = state
@@ -1175,8 +1176,8 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 			return false
 		}
 
-		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId) *IndexUsage {
-			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions))
+		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId, shardIds []common.ShardId) *IndexUsage {
+			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions), shardIds)
 
 			pc := common.NewKeyPartitionContainer(int(defn.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
@@ -1229,7 +1230,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 
 					for _, partition := range defn.Partitions {
 						if !findPartition(defn.InstId, partition) {
-							if addIndex(indexerId, makeIndexUsage(&defn, partition)) {
+							if addIndex(indexerId, makeIndexUsage(&defn, partition, nil)) {
 								logging.Infof("Planner::processCreateToken: Add index (%v, %v, %v)", defn.DefnId, defn.InstId, partition)
 							}
 						}

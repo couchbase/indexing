@@ -75,7 +75,7 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 				return true
 			}
 			return false
-		})
+		}, false)
 	elapsed := time.Since(start)
 
 	if connErr != nil {

@@ -1499,29 +1499,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// Update Index State
 	/////////////////////////////////////////////////////
 
-	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
-		// Move index state to INDEX_STATE_RECOVERED. If indexer were to crash before making this state
-		// change, then bootstrap will cleanup the index instance as the index will be in state CREATED
-		// with RState as REBAL_PENDING. If indexer crashes after changing the state, then bootstrap will
-		// cleanup the index as rebalance will have failed due to indexer crash and the index movement
-		// is no longer valid
-
-		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_RECOVERED); err != nil {
-			logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
-			m.DeleteIndex(defn.DefnId, true, false, reqCtx)
-			return err
-		}
-
-		instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
-		if instState != common.INDEX_STATE_RECOVERED {
-			logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_RECOVERED. Instance: %v (%v, %v, %v, %v). "+
-				"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
-			err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
-				defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_RECOVERED)
-			return err
-		}
-
-	} else {
+	// For indexes created during shard rebalance, the state of the index instance will be
+	// updated once index is completely recovered
+	if reqCtx.ReqSource != common.DDLRequestSourceShardRebalance {
 		// If cannot move the index to READY state, then abort create index by cleaning up the metadata.
 		// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
 		// the index definition from repository. If drop index is not successful during cleanup,
@@ -2356,7 +2336,8 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	if err := m.UpdateIndexInstance(change.Bucket, change.Scope, change.Collection,
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
 		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
-		change.BuildTime, change.RState, change.Partitions, change.Versions, change.InstVersion); err != nil {
+		change.BuildTime, change.RState, change.Partitions, change.Versions,
+		change.InstVersion); err != nil {
 		return err
 	}
 
