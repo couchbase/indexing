@@ -199,6 +199,19 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
+				} else {
+					destination, err := getDestinationFromConfig(sr.config.Load())
+					if err != nil {
+						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
+						go sr.finishRebalance(err)
+						return
+					}
+					// Populate destination in transfer tokens
+					for _, token := range sr.transferTokens {
+						token.Destination = destination
+					}
+					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v in all transfer tokens", destination)
+
 				}
 
 				break loop
@@ -207,6 +220,18 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	}
 
 	go sr.doRebalance()
+}
+
+func getDestinationFromConfig(cfg c.Config) (string, error) {
+	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
+	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
+	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
+
+	destination := blobStorageScheme + blobStorageBucket + blobStoragePrefix
+	if len(destination) == 0 {
+		return "", errors.New("Empty destination for shard rebalancer")
+	}
+	return destination, nil
 }
 
 // processTokens is invoked by observeRebalance() method

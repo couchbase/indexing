@@ -3297,7 +3297,8 @@ func ExecuteTenantAwareRebalanceInternal(clusterUrl string,
 
 	filterSolution(p.Result.Placement)
 
-	transferTokens, err := genShardTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	transferTokens, err := genShardTransferToken(p.Result, masterId,
+		topologyChange, deleteNodes)
 	if err != nil {
 		return nil, nil, err
 	}
