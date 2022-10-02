@@ -157,6 +157,7 @@ const (
 	UPDATE_KEYSPACE_STATS_MAP
 	UPDATE_MAP_WORKER
 	ADD_INDEX_INSTANCE
+	UPDATE_SHARDID_MAP
 
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
@@ -1092,10 +1093,11 @@ func (m *MsgRecoverIndex) GetString() string {
 }
 
 type MsgRecoverIndexResp struct {
-	mType        MsgType
-	indexInst    common.IndexInst
-	partnInstMap PartitionInstMap
-	err          error
+	mType           MsgType
+	indexInst       common.IndexInst
+	partnInstMap    PartitionInstMap
+	partnShardIdMap common.PartnShardIdMap
+	err             error
 }
 
 func (m *MsgRecoverIndexResp) GetMsgType() MsgType {
@@ -1108,6 +1110,10 @@ func (m *MsgRecoverIndexResp) GetIndexInst() common.IndexInst {
 
 func (m *MsgRecoverIndexResp) GetPartnInstMap() PartitionInstMap {
 	return m.partnInstMap
+}
+
+func (m *MsgRecoverIndexResp) GetPartnShardIdMap() common.PartnShardIdMap {
+	return m.partnShardIdMap
 }
 
 func (m *MsgRecoverIndexResp) GetError() error {
@@ -2589,6 +2595,18 @@ func (m *MsgDestroyLocalShardData) GetShardIds() []common.ShardId {
 
 func (m *MsgDestroyLocalShardData) GetRespCh() chan bool {
 	return m.respCh
+}
+
+type MsgUpdateShardIds struct {
+	partnShardIdMap common.PartnShardIdMap
+}
+
+func (m *MsgUpdateShardIds) GetMsgType() MsgType {
+	return UPDATE_SHARDID_MAP
+}
+
+func (m *MsgUpdateShardIds) GetShardIds() common.PartnShardIdMap {
+	return m.partnShardIdMap
 }
 
 // MsgType.String is a helper function to return string for message type.

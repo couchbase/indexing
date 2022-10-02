@@ -1959,7 +1959,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//allocate partition/slice
-	partnInstMap, _, err := idx.initPartnInstance(indexInst, clientCh, false)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -1995,7 +1995,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	if idx.enableManager {
-		clientCh <- &MsgSuccess{}
+		clientCh <- &MsgUpdateShardIds{partnShardIdMap: partnShardIdMap}
 	} else {
 		//for cbq bridge, simulate build index
 		idx.handleBuildIndex(
@@ -2211,18 +2211,19 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, err := idx.initPartnInstance(indexInst, nil, false)
+		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, false)
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
 
 		logging.Infof("Indexer::handleRecoverIndex Sending message to indexer "+
-			"on recovery of inst: %v, err: %v", indexInst.InstId, err)
+			"on recovery of inst: %v, shardIdMap: %verr: %v", indexInst.InstId, partnShardIdMap, err)
 		idx.internalRecvCh <- &MsgRecoverIndexResp{
-			mType:        INDEXER_INST_RECOVERY_RESPONSE,
-			indexInst:    indexInst,
-			partnInstMap: partnInstMap,
-			err:          err,
+			mType:           INDEXER_INST_RECOVERY_RESPONSE,
+			indexInst:       indexInst,
+			partnInstMap:    partnInstMap,
+			partnShardIdMap: partnShardIdMap,
+			err:             err,
 		}
 
 		return
@@ -2237,6 +2238,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	indexInst := msg.(*MsgRecoverIndexResp).GetIndexInst()
 	partnInstMap := msg.(*MsgRecoverIndexResp).GetPartnInstMap()
+	partnShardIdMap := msg.(*MsgRecoverIndexResp).GetPartnShardIdMap()
 	err := msg.(*MsgRecoverIndexResp).GetError()
 
 	if err != nil {
@@ -2252,7 +2254,8 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		return
 	}
 
-	logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received for instId: %v, err: %v", indexInst.InstId, err)
+	logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received for "+
+		"instId: %v, partnShardIdMap: %v, err: %v", indexInst.InstId, partnShardIdMap, err)
 
 	// update rollback time for the bucket
 	if _, ok := idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket]; !ok {
@@ -2276,7 +2279,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	}
 
 	// Send a message to cluster manager to update index instance state to topology
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, false, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, nil); err != nil {
 		common.CrashOnError(err)
 	}
 	return
@@ -2343,7 +2346,7 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			idx.indexInstMap[tgtInstId] = inst
 
 			instIds := []common.IndexInstId{tgtInstId}
-			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, respch)
+			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, respch)
 
 			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
@@ -3415,7 +3418,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil); err != nil {
+				true, false, true, true, false, false, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -3597,7 +3600,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil); err != nil {
+				true, false, true, true, false, false, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -5621,11 +5624,12 @@ func (idx *indexer) sendBucketNameNumVBucketsMap() {
 }
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
-	respCh MsgChannel, bootstrapPhase bool) (PartitionInstMap, PartitionInstMap, error) {
+	respCh MsgChannel, bootstrapPhase bool) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
 	var failedPartnInstances PartitionInstMap
+	partnShardIdMap := make(common.PartnShardIdMap)
 
 	//get all partitions for this index
 	partnDefnList := indexInst.Pc.GetAllPartitions()
@@ -5677,7 +5681,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						cause:    err1,
 						category: INDEXER}}
 			}
-			return nil, nil, err1
+			return nil, nil, nil, err1
 		}
 
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
@@ -5701,17 +5705,23 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						cause:    err1,
 						category: INDEXER}}
 			}
-			return nil, nil, err1
+			return nil, nil, nil, err1
 		}
 
 		partnInst.Sc.AddSlice(0, slice)
+		if len(slice.GetShardIds()) > 0 {
+			partnInst.Defn.AddShardIds(slice.GetShardIds())
+		}
 		logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 			indexInst.InstId, slice)
 
 		partnInstMap[partnDefn.GetPartitionId()] = partnInst
+		if len(slice.GetShardIds()) > 0 {
+			partnShardIdMap[partnDefn.GetPartitionId()] = slice.GetShardIds()
+		}
 	}
 
-	return partnInstMap, failedPartnInstances, nil
+	return partnInstMap, failedPartnInstances, partnShardIdMap, nil
 }
 
 func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
@@ -6048,7 +6058,7 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	idx.indexInstMap[instId] = inst
 
 	instIds := []common.IndexInstId{instId}
-	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, respCh); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, respCh); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -6206,7 +6216,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	}
 
 	//update index state in metadata
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -6407,7 +6417,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	}
 
 	//update index state in metadata
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -6679,7 +6689,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		}
 
 		if err := idx.updateMetaInfoForIndexList(instIdList, true, true,
-			false, false, true, false, false, false, nil); err != nil {
+			false, false, true, false, false, false, nil, nil); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -8050,8 +8060,9 @@ func (idx *indexer) initFromPersistedState() error {
 		//allocate partition/slice
 		var partnInstMap PartitionInstMap
 		var failedPartnInstances PartitionInstMap
+		var partnShardIdMap common.PartnShardIdMap
 		var err error
-		if partnInstMap, failedPartnInstances, err = idx.initPartnInstance(inst, nil, true); err != nil {
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true); err != nil {
 			return err
 		}
 
@@ -8078,6 +8089,8 @@ func (idx *indexer) initFromPersistedState() error {
 			idx.updateBucketNameNumVBucketsMap([]string{inst.Defn.Bucket})
 			continue
 		}
+
+		idx.updateTopologyOnShardIdChange(&inst, partnShardIdMap)
 
 		idx.indexInstMap[inst.InstId] = inst
 		idx.indexPartnMap[inst.InstId] = partnInstMap
@@ -8345,6 +8358,52 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 	}
 }
 
+func (idx *indexer) updateTopologyOnShardIdChange(indexInst *common.IndexInst, partnShardIdMap common.PartnShardIdMap) {
+
+	areShardIdsSame := func(src, dst []common.ShardId) bool {
+		if len(src) != len(dst) {
+			return false
+		}
+
+		for i, _ := range src {
+			found := false
+			for j, _ := range dst {
+				if src[i] == dst[j] {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	}
+
+	changed := false
+	persistedShardIdMap := make(common.PartnShardIdMap)
+	for _, partn := range indexInst.Pc.GetAllPartitions() {
+		partnId := partn.GetPartitionId()
+		persistedShardIds := partn.GetShardIds()
+		persistedShardIdMap[partnId] = persistedShardIds
+		currShardIds := partnShardIdMap[partnId]
+		if areShardIdsSame(persistedShardIds, currShardIds) {
+			continue
+		}
+		changed = true
+	}
+
+	if changed {
+		// Update metadata with new ShardIds
+		logging.Warnf("Indexer::updateTopologyOnShardIdChange. Persisted  shardIds: %v are "+
+			"different from currShardIds: %v for index inst: %v. Updating topology with new shardIds",
+			persistedShardIdMap, partnShardIdMap, indexInst.InstId)
+
+		respCh := make(chan error)
+		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, respCh)
+	}
+}
+
 func (idx *indexer) recoverIndexInstMap() error {
 
 	if idx.enableManager {
@@ -8565,7 +8624,7 @@ func (idx *indexer) validateIndexInstMap() {
 					idx.indexInstMap[instId] = index
 
 					instIds := []common.IndexInstId{index.InstId}
-					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil); err != nil {
+					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil, nil); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -8790,7 +8849,7 @@ func (idx *indexer) checkMaintStreamIndexBuild() {
 
 	if idx.enableManager {
 		if err := idx.updateMetaInfoForIndexList(updatedList,
-			true, true, false, false, true, false, false, false, nil); err != nil {
+			true, true, false, false, true, false, false, false, nil, nil); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -8839,7 +8898,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false, true, false, false, false, nil); err != nil {
+				true, true, false, false, true, false, false, false, nil, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -9025,7 +9084,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil)
+			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil, nil)
 	} else {
 		return nil
 	}
@@ -9035,7 +9094,8 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	updateState bool, updateStream bool, updateError bool,
 	updateBuildTs bool, updateRState bool, syncUpdate bool,
-	updatePartitions bool, updateVersion bool, respCh chan error) error {
+	updatePartitions bool, updateVersion bool,
+	partnShardIdMap common.PartnShardIdMap, respCh chan error) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -9043,13 +9103,14 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	}
 
 	updatedFields := MetaUpdateFields{
-		state:      updateState,
-		stream:     updateStream,
-		err:        updateError,
-		buildTs:    updateBuildTs,
-		rstate:     updateRState,
-		partitions: updatePartitions,
-		version:    updateVersion,
+		state:           updateState,
+		stream:          updateStream,
+		err:             updateError,
+		buildTs:         updateBuildTs,
+		rstate:          updateRState,
+		partitions:      updatePartitions,
+		version:         updateVersion,
+		partnShardIdMap: partnShardIdMap,
 	}
 
 	msg := &MsgClustMgrUpdate{

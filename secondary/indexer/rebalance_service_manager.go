@@ -728,10 +728,9 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	m.rebalanceCtx = ctx
 	m.updateRebalanceProgressLOCKED(0)
 
-	// TODO: Add a cluster version check
 	isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
 
-	if isShardAwareRebalance {
+	if c.IsServerlessDeployment() && isShardAwareRebalance {
 		m.rebalancer = NewShardRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
 			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
@@ -2354,11 +2353,10 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 				return
 			}
 
-			// TODO: Add a cluster version check
 			cfg := m.config.Load()
 			isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
 
-			if isShardAwareRebalance {
+			if c.IsServerlessDeployment() && isShardAwareRebalance {
 				m.rebalancerF = NewShardRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 					m.localhttp, m.config.Load(), nil, false, &m.p,

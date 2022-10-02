@@ -197,13 +197,14 @@ func (v VbStatus) String() string {
 }
 
 type MetaUpdateFields struct {
-	state      bool
-	stream     bool
-	err        bool
-	buildTs    bool
-	rstate     bool
-	partitions bool
-	version    bool
+	state           bool
+	stream          bool
+	err             bool
+	buildTs         bool
+	rstate          bool
+	partitions      bool
+	version         bool
+	partnShardIdMap common.PartnShardIdMap
 }
 
 type EncodeCompatMode int

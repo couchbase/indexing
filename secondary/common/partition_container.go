@@ -42,4 +42,6 @@ type PartitionDefn interface {
 	GetPartitionId() PartitionId
 	GetVersion() int
 	Endpoints() []Endpoint
+	GetShardIds() []ShardId
+	AddShardIds([]ShardId)
 }

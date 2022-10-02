@@ -47,6 +47,7 @@ type IndexStatistics interface {
 type IndexDefnId uint64
 type IndexInstId uint64
 type ShardId uint64
+type PartnShardIdMap map[PartitionId][]ShardId
 
 type ExprType string
 

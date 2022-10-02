@@ -119,6 +119,8 @@ type topologyChange struct {
 	Partitions  []uint64 `json:"partitions,omitempty"`
 	Versions    []int    `json:"versions,omitempty"`
 	InstVersion int      `json:"instVersion,omitempty"`
+
+	ShardIdMap common.PartnShardIdMap `json:"partnShardIdMap,omitempty"`
 }
 
 type dropInstance struct {
@@ -1479,6 +1481,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// index metadata and spawn an asyncronous go-routine to recover the data from disk.
 	// Once the data recovery is done, then the state of the index instance will be
 	// updated to INDEX_STATE_RECOVERED
+	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
@@ -1487,7 +1490,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 				return err
 			}
 		} else {
-			if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
+			var err error
+			partnShardIdMap, err = m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx)
+			if err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 				m.DeleteIndex(defn.DefnId, false, false, nil)
 				return err
@@ -1506,7 +1511,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
 		// the index definition from repository. If drop index is not successful during cleanup,
 		// the index will be repaired upon bootstrap or cleanup by janitor.
-		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
+		if err := m.updateIndexStateAndShardIds(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY, partnShardIdMap); err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 			m.DeleteIndex(defn.DefnId, true, false, reqCtx)
 			return err
@@ -2083,7 +2088,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 			// Reset any previous error
 			m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
-				inst.RState, nil, nil, -1)
+				inst.RState, nil, nil, -1, nil)
 
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
 			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
@@ -2134,7 +2139,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
 					}
 					m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1)
+						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1, nil)
 				} else {
 					logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist, error in index instance (%v, %v, %v, %v, %v).",
 						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
@@ -2337,7 +2342,7 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
 		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
 		change.BuildTime, change.RState, change.Partitions, change.Versions,
-		change.InstVersion); err != nil {
+		change.InstVersion, change.ShardIdMap); err != nil {
 		return err
 	}
 
@@ -3150,8 +3155,11 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	// 1) Index Definition is not deleted due to error from metadata repository.   The index will be repaired
 	//    during indexer bootstrap or implicit dropIndex.
 	// 2) Index definition is deleted.  This effectively "delete index".
+	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
+		var err error
+		partnShardIdMap, err = m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx)
+		if err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 			m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 			return err
@@ -3166,7 +3174,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
 	// the index definition from repository. If drop index is not successful during cleanup,
 	// the index will be repaired upon bootstrap or cleanup by janitor.
-	if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
+	if err := m.updateIndexStateAndShardIds(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY, partnShardIdMap); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 		m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 		return err
@@ -3741,7 +3749,7 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 
 func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
-	partitions []uint64, versions []int, version int) error {
+	partitions []uint64, versions []int, version int, partnShardIdMap common.PartnShardIdMap) error {
 
 	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
@@ -3801,6 +3809,10 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, def
 
 	if version != -1 {
 		changed = topology.UpdateVersionForIndexInst(defnId, instId, uint64(version)) || changed
+	}
+
+	if len(partnShardIdMap) > 0 {
+		changed = topology.UpdateShardIdsForIndexPartn(defnId, instId, partnShardIdMap) || changed
 	}
 
 	if changed {
@@ -3886,6 +3898,36 @@ func (m *LifecycleMgr) updateIndexState(bucket, scope, collection string, defnId
 	}
 
 	changed := topology.UpdateStateForIndexInst(defnId, instId, state)
+	if changed {
+		if err := m.repo.SetTopologyByCollection(bucket, scope, collection, topology); err != nil {
+			// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.
+			logging.Errorf("LifecycleMgr.updateIndexState() : fail to update state of index instance.  Reason = %v", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) updateIndexStateAndShardIds(bucket, scope, collection string,
+	defnId common.IndexDefnId, instId common.IndexInstId,
+	state common.IndexState, shardIdMap common.PartnShardIdMap) error {
+
+	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.updateIndexState() : fails to find index instance. Reason = %v", err)
+		return err
+	}
+	if topology == nil {
+		logging.Warnf("LifecycleMgr.updateIndexState() : fails to find index instance. Skip update for %v to %v.", defnId, state)
+		return nil
+	}
+
+	changed := topology.UpdateStateForIndexInst(defnId, instId, state)
+	if len(shardIdMap) > 0 {
+		changed = topology.UpdateShardIdsForIndexPartn(defnId, instId, shardIdMap) || changed
+	}
+
 	if changed {
 		if err := m.repo.SetTopologyByCollection(bucket, scope, collection, topology); err != nil {
 			// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.

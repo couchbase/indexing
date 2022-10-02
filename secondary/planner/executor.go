@@ -512,6 +512,283 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 	return result, nil
 }
 
+func genShardTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange,
+	deleteNodes []string) (map[string]*common.TransferToken, error) {
+
+	getInstIds := func(index *IndexUsage) (common.IndexInstId /* instId*/, common.IndexInstId /*realInstId*/, error) {
+
+		if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+			instId, err := common.NewIndexInstId()
+			if err != nil {
+				return 0, 0, fmt.Errorf("Fail to generate transfer token.  Reason: %v", err)
+			}
+
+			return instId, index.InstId, nil
+		}
+		return index.InstId, 0, nil
+	}
+
+	initInstInToken := func(token *common.TransferToken, index *IndexUsage) error {
+
+		token.IndexInsts = append(token.IndexInsts, *index.Instance)
+
+		instId, realInstId, err := getInstIds(index)
+		if err != nil {
+			return err
+		}
+		token.InstIds = append(token.InstIds, instId)
+		token.RealInstIds = append(token.RealInstIds, realInstId)
+		return nil
+	}
+
+	tokens := make(map[string]*common.TransferToken)
+
+	initToken := func(index *IndexUsage) (*common.TransferToken, error) {
+
+		token := &common.TransferToken{
+			MasterId:                masterId,
+			DestId:                  index.destNode.NodeUUID,
+			RebalId:                 topologyChange.ID,
+			ShardTransferTokenState: common.ShardTokenCreated,
+			TransferMode:            common.TokenTransferModeMove,
+			DestHost:                index.destNode.NodeId,
+			Version:                 common.MULTI_INST_SHARD_TRANSFER,
+			ShardIds:                index.ShardIds,
+		}
+
+		if index.initialNode != nil {
+			token.SourceHost = index.initialNode.NodeId
+			token.SourceId = index.initialNode.NodeUUID
+		}
+
+		if err := initInstInToken(token, index); err != nil {
+			return nil, err
+		}
+		return token, nil
+	}
+
+	addIndexToToken := func(tokenKey string, index *IndexUsage, indexer *IndexerNode) error {
+		token, ok := tokens[tokenKey]
+		if !ok {
+			var err error
+			if token, err = initToken(index); err != nil {
+				return err
+			}
+			tokens[tokenKey] = token
+		}
+
+		if token != nil {
+			sliceIndex := len(token.InstIds) - 1
+			found := false
+			instIds := token.InstIds
+			if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+				// For partitioned index, use realInstIds. If it is the first
+				// time this partition index is being processed, it will be
+				// added due to !found becoming true
+				instIds = token.RealInstIds
+			}
+
+			for i, instId := range instIds {
+				if instId == index.InstId {
+					sliceIndex = i
+					found = true
+					break
+				}
+			}
+
+			if !found { // Instance not already appended to list. Add now
+				if err := initInstInToken(token, index); err != nil {
+					return err
+				}
+
+				sliceIndex = len(token.InstIds) - 1
+			}
+
+			token.IndexInsts[sliceIndex].Defn.InstVersion = token.IndexInst.Version + 1
+			token.IndexInsts[sliceIndex].Defn.ReplicaId = token.IndexInsts[sliceIndex].ReplicaId
+			token.IndexInsts[sliceIndex].Defn.Using = common.IndexType(indexer.StorageMode)
+			if token.IndexInsts[sliceIndex].Pc != nil {
+				token.IndexInsts[sliceIndex].Defn.NumPartitions = uint32(token.IndexInsts[sliceIndex].Pc.GetNumPartitions())
+			}
+			token.IndexInsts[sliceIndex].Pc = nil
+
+			// Token exist for the same index replica between the same source and target.   Add partition to token.
+			token.IndexInsts[sliceIndex].Defn.Partitions = append(token.IndexInsts[sliceIndex].Defn.Partitions, index.PartnId)
+			token.IndexInsts[sliceIndex].Defn.Versions = append(token.IndexInsts[sliceIndex].Defn.Versions, index.Instance.Version+1)
+
+			if token.IndexInsts[sliceIndex].Defn.InstVersion < index.Instance.Version+1 {
+				token.IndexInsts[sliceIndex].Defn.InstVersion = index.Instance.Version + 1
+			}
+		}
+		return nil
+	}
+
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+
+			// Primary index contians only one shard. Process primary
+			// index shard after all secondary index tokens are generated
+			// so that it can be added to one of the existing token for
+			// the shard
+			if len(index.ShardIds) == 1 {
+				continue
+			}
+
+			// one token for every pair of shard movements of a bucket between
+			// a specific source and destination
+			sort.Slice(index.ShardIds, func(i, j int) bool {
+				return index.ShardIds[i] < index.ShardIds[j]
+			})
+
+			// one token for every pair of shard movements of a bucket between
+			// a specific source and destination
+			var tokenKey string
+			if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId && !index.pendingCreate {
+				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
+			} else if index.initialNode == nil || index.pendingCreate {
+				// There is no source node (index is added during rebalance).
+				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, "N/A", index.destNode.NodeUUID)
+			}
+			if err := addIndexToToken(tokenKey, index, indexer); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Process primary indexes only
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+
+			if len(index.ShardIds) != 1 {
+				continue
+			}
+
+			// Find a token key that contains the shard of this index
+			// Note: Since tokens are grouped based on shardId's, it is
+			// expected to have only one token matching the shardId of
+			// primary index
+			found := false
+			for tokenKey, token := range tokens {
+
+				if index.Bucket != token.IndexInsts[0].Defn.Bucket {
+					continue
+				}
+
+				if index.destNode.NodeUUID != token.DestId {
+					continue
+				}
+
+				if index.initialNode == nil && token.SourceId != "" {
+					continue
+				}
+
+				if index.initialNode != nil && index.initialNode.NodeUUID != token.SourceId {
+					continue
+				}
+
+				for _, shardId := range token.ShardIds {
+					if index.ShardIds[0] == shardId {
+						// Add index to this token
+						addIndexToToken(tokenKey, index, indexer)
+						found = true
+						break
+					}
+
+				}
+			}
+			// Could be only primary indexes in this shard
+			// Generate a new token and add it to the group
+			if !found {
+				tokenKey := fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
+				if err := addIndexToToken(tokenKey, index, indexer); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	result := make(map[string]*common.TransferToken)
+	for _, token := range tokens {
+		ustr, _ := common.NewUUID()
+		ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
+		result[ttid] = token
+	}
+
+	var err error
+	result, err = populateSiblingTokenId(solution, result)
+	if err != nil {
+		return nil, err
+	}
+
+	for ttid, token := range result {
+		if len(token.SourceId) != 0 {
+			logging.Infof("Generating Shard Transfer Token (%v) for rebalance (%v)", ttid, token)
+		} else {
+			logging.Infof("Generating Shard Transfer Token (%v) for rebuilding lost replica (%v)", ttid, token)
+		}
+	}
+
+	return result, nil
+}
+
+func populateSiblingTokenId(solution *Solution, transferTokens map[string]*common.TransferToken) (map[string]*common.TransferToken, error) {
+	// It is ok to ignore the error here as this method is only called
+	// after err == nil is seen the same solution
+	subClusters, _ := groupIndexNodesIntoSubClusters(solution.Placement)
+
+	// Group transfer tokens moving from one sub cluster to another cluster
+	subClusterTokenIdMap := make(map[string][]string)
+	for ttid, token := range transferTokens {
+		if token.TransferMode != common.TokenTransferModeMove { // Ignore for replica repair
+			continue
+		}
+
+		srcSubClusterPos := getSubClusterPosForNode(subClusters, token.SourceId)
+		destSubClusterPos := getSubClusterPosForNode(subClusters, token.DestId)
+		// Group all tokens of a bucket moving from a source subcluster to a
+		// destination subcluster
+		groupKey := fmt.Sprintf("%v %v %v", srcSubClusterPos, destSubClusterPos, token.IndexInsts[0].Defn.Bucket)
+		subClusterTokenIdMap[groupKey] = append(subClusterTokenIdMap[groupKey], ttid)
+	}
+
+	areTokensMatchingAllInsts := func(tid1, tid2 string) bool {
+		token1, _ := transferTokens[tid1]
+		token2, _ := transferTokens[tid2]
+
+		for _, inst1 := range token1.IndexInsts {
+
+			foundInst := false
+			for _, inst2 := range token2.IndexInsts {
+				if inst1.Defn.DefnId == inst2.Defn.DefnId { // Defn ID will be same for replica index instances
+					foundInst = true
+					break
+				}
+			}
+
+			if !foundInst {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, tokens := range subClusterTokenIdMap {
+		for i, _ := range tokens {
+			for j, _ := range tokens {
+				if i != j {
+					if areTokensMatchingAllInsts(tokens[i], tokens[j]) {
+						transferTokens[tokens[i]].SiblingTokenId = tokens[j]
+						transferTokens[tokens[j]].SiblingTokenId = tokens[i]
+						continue
+					}
+				}
+			}
+		}
+	}
+
+	return transferTokens, nil
+}
+
 //////////////////////////////////////////////////////////////
 // Integration with Metadata Provider
 /////////////////////////////////////////////////////////////
@@ -2139,6 +2416,23 @@ func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
 	return false
 }
 
+// getSubClusterPosForNode returns the position of "node"
+// in the input "subClusters" slice
+func getSubClusterPosForNode(subClusters []SubCluster,
+	nodeId string) int {
+
+	for index, subCluster := range subClusters {
+
+		for _, subNode := range subCluster {
+			if nodeId == subNode.NodeUUID {
+				return index
+			}
+		}
+	}
+
+	return -1
+}
+
 //findSubClusterForIndex finds the sub-cluster for a given index.
 //Nodes are considered to be part of a sub-cluster if
 //those are hosting replicas of the same index.
@@ -2925,7 +3219,7 @@ func ExecuteTenantAwareRebalanceInternal(clusterUrl string,
 
 	filterSolution(p.Result.Placement)
 
-	transferTokens, err := genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	transferTokens, err := genShardTransferToken(p.Result, masterId, topologyChange, deleteNodes)
 	if err != nil {
 		return nil, nil, err
 	}
