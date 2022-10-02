@@ -2998,6 +2998,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.serverless.transferBatchSize": ConfigValue{
+		4,
+		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching." +
+			"Keep this even as both tokens of a subcluster must move in same batch",
+		4,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.rebalance.redistribute_indexes": ConfigValue{
 		false, // keep in sync with index_settings_manager.erl
 		"redistribute indexes for optimal placement during rebalance." +
