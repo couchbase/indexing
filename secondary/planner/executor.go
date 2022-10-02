@@ -550,15 +550,18 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			DestId:                  index.destNode.NodeUUID,
 			RebalId:                 topologyChange.ID,
 			ShardTransferTokenState: common.ShardTokenCreated,
-			TransferMode:            common.TokenTransferModeMove,
 			DestHost:                index.destNode.NodeId,
 			Version:                 common.MULTI_INST_SHARD_TRANSFER,
 			ShardIds:                index.ShardIds,
 		}
 
-		if index.initialNode != nil {
+		if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId && !index.pendingCreate {
 			token.SourceHost = index.initialNode.NodeId
 			token.SourceId = index.initialNode.NodeUUID
+			token.TransferMode = common.TokenTransferModeMove
+		} else if index.initialNode == nil || index.pendingCreate { // Replica repair case
+			token.SourceId = ""
+			token.TransferMode = common.TokenTransferModeCopy
 		}
 
 		if err := initInstInToken(token, index); err != nil {
