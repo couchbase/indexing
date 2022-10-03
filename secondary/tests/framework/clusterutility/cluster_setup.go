@@ -88,10 +88,10 @@ func initWebCredsFromRest(serverAddr, username, password string) ([]byte, error)
 	return makeRequest("", "", "POST", payload, getWebCredsUrl(serverAddr))
 }
 
-func setQuotaUsingRest(serverAddr, username, password string) ([]byte, error) {
-	log.Printf("Setting data quota of 1500M and Index quota of 1500M\n")
+func setQuotaUsingRest(serverAddr, username, password, dataQuota, indexQuota string) ([]byte, error) {
+	log.Printf("Setting data quota of %vM and Index quota of %vM\n", dataQuota, indexQuota)
 
-	payload := strings.NewReader(fmt.Sprintf("memoryQuota=1500&indexMemoryQuota=1500"))
+	payload := strings.NewReader(fmt.Sprintf("memoryQuota=%v&indexMemoryQuota=%v", dataQuota, indexQuota))
 	return makeRequest(username, password, "POST", payload, getQuotaSetUrl(serverAddr))
 }
 
@@ -423,8 +423,8 @@ func InitWebCreds(serverAddr, username, password string) error {
 	return nil
 }
 
-func InitDataAndIndexQuota(serverAddr, username, password string) error {
-	if res, err := setQuotaUsingRest(serverAddr, username, password); err != nil {
+func InitDataAndIndexQuota(serverAddr, username, password, dataQuota, indexQuota string) error {
+	if res, err := setQuotaUsingRest(serverAddr, username, password, dataQuota, indexQuota); err != nil {
 		return fmt.Errorf("Error while setting index and data quota using REST, err: %v", err)
 	} else {
 		response := fmt.Sprintf("%s", res)
