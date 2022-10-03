@@ -696,30 +696,6 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 
 func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) {
 
-	for _, inst := range tt.IndexInsts {
-		if inst.Defn.Deferred {
-
-			select {
-			case <-sr.cancel:
-				l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
-				return // return for now. Cleanup will take care of dropping the index instances
-
-			case <-sr.done:
-				l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
-				return // return for now. Cleanup will take care of dropping the index instances
-
-			default:
-
-				if err := sr.postCreateDeferredIndexReq(inst.Defn, inst.InstId, inst.RealInstId, ttid, tt); err != nil {
-					sr.setTransferTokenError(ttid, tt, err.Error()) // Set transfer token error and return
-					return
-				}
-
-				sr.destTokenToMergeOrReady(inst.InstId, inst.RealInstId, ttid, tt)
-			}
-		}
-	}
-
 	// All deferred indexes are created now. Create and recover non-deferred indexes
 	indexInsts := tt.IndexInsts
 	groupedDefns := groupInstsPerColl(indexInsts)
@@ -730,8 +706,6 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// of this collection. Once all indexes are recovered, they can be
 		// built in a batch
 		for _, defn := range defns {
-			defn.Deferred = true
-
 			select {
 			case <-sr.cancel:
 				l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
@@ -747,13 +721,25 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
 				}
-				// On a successful request, update book-keeping and process
-				// the next definition
-				buildDefnIdList.DefnIds = append(buildDefnIdList.DefnIds, uint64(defn.DefnId))
 
-				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, buildDefnIdList, ttid, tt); err != nil {
-					sr.setTransferTokenError(ttid, tt, err.Error())
-					return
+				if defn.Deferred {
+					var deferredDefnIdList client.IndexIdList
+					deferredDefnIdList.DefnIds = append(deferredDefnIdList.DefnIds, uint64(defn.DefnId))
+					if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredDefnIdList, ttid, tt); err != nil {
+						sr.setTransferTokenError(ttid, tt, err.Error())
+						return
+					}
+
+					sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt)
+				} else {
+					// On a successful request, update book-keeping and process
+					// the next definition
+					buildDefnIdList.DefnIds = append(buildDefnIdList.DefnIds, uint64(defn.DefnId))
+
+					if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, buildDefnIdList, ttid, tt); err != nil {
+						sr.setTransferTokenError(ttid, tt, err.Error())
+						return
+					}
 				}
 			}
 		}
@@ -793,14 +779,10 @@ func groupInstsPerColl(indexInsts []common.IndexInst) map[string][]common.IndexD
 	out := make(map[string][]common.IndexDefn)
 
 	for _, inst := range indexInsts {
-		if inst.Defn.Deferred {
-			continue // Ignore deferred indexes as they are already built
-		}
 
 		defn := inst.Defn
 		defn.SetCollectionDefaults()
 
-		defn.Deferred = true
 		defn.Nodes = nil
 		defn.InstId = inst.InstId
 		defn.RealInstId = inst.RealInstId
@@ -810,36 +792,6 @@ func groupInstsPerColl(indexInsts []common.IndexInst) map[string][]common.IndexD
 	}
 
 	return out
-}
-
-// ShardRebalancer uses this endpoint only for deferred indexes
-// For non-deferred indexes, ShardRebalancer uses /recoverIndexRebalance
-func (sr *ShardRebalancer) postCreateDeferredIndexReq(indexDefn common.IndexDefn,
-	instId, realInstId c.IndexInstId, ttid string, tt *common.TransferToken) error {
-
-	indexDefn.SetCollectionDefaults()
-	indexDefn.Nodes = nil
-	indexDefn.InstId = instId
-	indexDefn.RealInstId = realInstId
-
-	url := "/createIndexRebalance"
-	resp, err := postWithHandleEOF(indexDefn, sr.localaddr, url, "ShardRebalancer::postCreateIndexRebalanceReq")
-	if err != nil {
-		logging.Errorf("ShardRebalancer::postCreateIndexRebalanceReq Error observed when posting request, err: %v", err)
-		return err
-	}
-
-	response := new(IndexResponse)
-	if err := convertResponse(resp, response); err != nil {
-		l.Errorf("ShardRebalancer::postCreateIndexRebalanceReq Error unmarshal response %v %v", sr.localaddr+url, err)
-		return err
-	}
-
-	if response.Error != "" {
-		l.Errorf("ShardRebalancer::postCreateIndexRebalanceReq Error received, err: %v", response.Error)
-		return errors.New(response.Error)
-	}
-	return nil
 }
 
 func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) error {
@@ -977,11 +929,11 @@ loop:
 			}
 
 			switch expectedState {
-			case common.INDEX_STATE_RECOVERED:
+			case common.INDEX_STATE_READY, common.INDEX_STATE_RECOVERED:
 				// Check if all index instances have reached this state
 				allReachedState := true
 				for _, indexState := range indexStateMap {
-					if indexState != common.INDEX_STATE_RECOVERED {
+					if indexState != expectedState {
 						allReachedState = false
 						break
 					}

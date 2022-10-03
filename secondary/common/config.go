@@ -1280,16 +1280,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.compression": ConfigValue{
-		"snappy",
+		"zstd1",
 		"Compression algorithm",
-		"snappy",
+		"zstd1",
 		false, // mutable
 		true,  // case-sensitive
 	},
 	"indexer.plasma.inMemoryCompression": ConfigValue{
-		"zstd",
+		"zstd1",
 		"Compression algorithm for in memory compression",
-		"zstd",
+		"zstd1",
 		false, // mutable
 		true,  // case-sensitive
 	},

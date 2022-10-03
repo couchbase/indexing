@@ -720,15 +720,51 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 		return nil, err
 	}
 
-	for ttid, token := range result {
-		if len(token.SourceId) != 0 {
-			logging.Infof("Generating Shard Transfer Token (%v) for rebalance (%v)", ttid, token)
-		} else {
-			logging.Infof("Generating Shard Transfer Token (%v) for rebuilding lost replica (%v)", ttid, token)
+	logTransferTokens := func(logErr bool) {
+		for ttid, token := range result {
+			if len(token.SourceId) != 0 {
+				if logErr {
+					logging.Errorf("Generating Shard Transfer Token (%v) for rebalance (%v)", ttid, token)
+				} else {
+					logging.Infof("Generating Shard Transfer Token (%v) for rebalance (%v)", ttid, token)
+				}
+			} else {
+				if logErr {
+					logging.Errorf("Generating Shard Transfer Token (%v) for rebuilding lost replica (%v)", ttid, token)
+				} else {
+					logging.Infof("Generating Shard Transfer Token (%v) for rebalance (%v)", ttid, token)
+				}
+			}
 		}
 	}
 
+	if err := validateSiblingTokenId(result); err != nil {
+		logging.Errorf(err.Error())
+		logTransferTokens(true)
+		return nil, err
+	}
+
+	logTransferTokens(false)
+
 	return result, nil
+}
+
+func validateSiblingTokenId(transferTokens map[string]*common.TransferToken) error {
+	for ttid, token := range transferTokens {
+		if token.TransferMode != common.TokenTransferModeMove {
+			continue
+		}
+
+		if token.SiblingTokenId == "" {
+			return fmt.Errorf("validateSiblingTokenId: Sibling tokenId empty for ttid: %v, token: %v", ttid, token)
+		}
+		if sibling, ok := transferTokens[token.SiblingTokenId]; !ok {
+			return fmt.Errorf("validateSiblingTokenId: Sibling token not found in list for ttid: %v, token: %v", ttid, token)
+		} else if sibling.SiblingTokenId != ttid {
+			return fmt.Errorf("validateSiblingTokenId: Invalid token Id for sibling. ttid: %v, siblingTokenId: %v, token: %v, siblingToken: %v", ttid, sibling.SiblingTokenId, token, sibling)
+		}
+	}
+	return nil
 }
 
 func populateSiblingTokenId(solution *Solution, transferTokens map[string]*common.TransferToken) (map[string]*common.TransferToken, error) {
@@ -751,16 +787,48 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 		subClusterTokenIdMap[groupKey] = append(subClusterTokenIdMap[groupKey], ttid)
 	}
 
+	allPartitionsMatch := func(inst1, inst2 []common.PartitionId) bool {
+
+		if len(inst1) != len(inst2) {
+			return false
+		}
+
+		sort.Slice(inst1, func(i, j int) bool {
+			return inst1[i] < inst1[j]
+		})
+
+		sort.Slice(inst2, func(i, j int) bool {
+			return inst2[i] < inst2[j]
+		})
+
+		for i := range inst1 {
+			if inst1[i] != inst2[i] {
+				return false
+			}
+		}
+		return true
+	}
+
 	areTokensMatchingAllInsts := func(tid1, tid2 string) bool {
 		token1, _ := transferTokens[tid1]
 		token2, _ := transferTokens[tid2]
 
-		for _, inst1 := range token1.IndexInsts {
+		for i, inst1 := range token1.IndexInsts {
 
 			foundInst := false
-			for _, inst2 := range token2.IndexInsts {
+			for j, inst2 := range token2.IndexInsts {
 				if inst1.Defn.DefnId == inst2.Defn.DefnId { // Defn ID will be same for replica index instances
-					foundInst = true
+
+					// As partitions can be spread across multiple nodes, they share the same defnId and instId
+					// Do not compare partitions belonging to same instances. Only compare partitions
+					// of replicas
+					if common.IsPartitioned(inst1.Defn.PartitionScheme) && token1.RealInstIds[i] == token2.RealInstIds[j] {
+						continue
+					}
+
+					inst1Partns := inst1.Defn.Partitions
+					inst2Partns := inst2.Defn.Partitions
+					foundInst = allPartitionsMatch(inst1Partns, inst2Partns)
 					break
 				}
 			}

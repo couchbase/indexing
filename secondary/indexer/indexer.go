@@ -2211,7 +2211,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, false)
+		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true)
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
@@ -2262,7 +2262,11 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
 	}
 
-	indexInst.State = common.INDEX_STATE_RECOVERED
+	if indexInst.Defn.Deferred {
+		indexInst.State = common.INDEX_STATE_READY
+	} else {
+		indexInst.State = common.INDEX_STATE_RECOVERED
+	}
 
 	//update index maps with this index
 	idx.indexInstMap[indexInst.InstId] = indexInst
@@ -3679,6 +3683,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
 		indexInst.State == common.INDEX_STATE_READY ||
+		indexInst.State == common.INDEX_STATE_RECOVERED ||
 		indexInst.State == common.INDEX_STATE_DELETED {
 
 		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)

@@ -1531,7 +1531,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	/////////////////////////////////////////////////////
 
 	// Run index build
-	if !defn.Deferred && scheduled && !asyncCreate {
+	if !defn.Deferred && scheduled && !asyncCreate && (reqCtx.ReqSource != common.DDLRequestSourceShardRebalance) {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndex() : start Index Build")
 
