@@ -649,8 +649,10 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				// There is no source node (index is added during rebalance).
 				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, "N/A", index.destNode.NodeUUID)
 			}
-			if err := addIndexToToken(tokenKey, index, indexer); err != nil {
-				return nil, err
+			if len(tokenKey) > 0 {
+				if err := addIndexToToken(tokenKey, index, indexer); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -699,9 +701,17 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			// Could be only primary indexes in this shard
 			// Generate a new token and add it to the group
 			if !found {
-				tokenKey := fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
-				if err := addIndexToToken(tokenKey, index, indexer); err != nil {
-					return nil, err
+				var tokenKey string
+				if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId && !index.pendingCreate {
+					tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
+				} else if index.initialNode == nil || index.pendingCreate {
+					// There is no source node (index is added during rebalance).
+					tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, "N/A", index.destNode.NodeUUID)
+				}
+				if len(tokenKey) > 0 {
+					if err := addIndexToToken(tokenKey, index, indexer); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
