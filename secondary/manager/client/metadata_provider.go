@@ -206,6 +206,19 @@ var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
+func (im *IndexMetadata) Clone() *IndexMetadata {
+	return &IndexMetadata{
+		Definition:       im.Definition,
+		Instances:        im.Instances,
+		InstsInRebalance: im.InstsInRebalance,
+		// Immutable fields
+		State:          im.State,
+		Error:          im.Error,
+		Scheduled:      im.Scheduled,
+		ScheduleFailed: im.ScheduleFailed,
+	}
+}
+
 ///////////////////////////////////////////////////////
 // Public function : MetadataProvider
 ///////////////////////////////////////////////////////
