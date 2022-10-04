@@ -439,6 +439,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 
 func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) {
 
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
+
 	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
 
@@ -633,6 +638,12 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 }
 
 func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
+
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
+
 	respCh := make(chan Message)                            // Carries final response of shard restore to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard restore to indexer
 
@@ -720,6 +731,11 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 }
 
 func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) {
+
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
 
 	// All deferred indexes are created now. Create and recover non-deferred indexes
 	indexInsts := tt.IndexInsts
