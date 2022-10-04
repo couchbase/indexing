@@ -3056,12 +3056,15 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 					// avoid log flooding
 					forceLog := false
 					now := uint64(time.Now().UnixNano())
+
+					tk.lock.Lock()
 					sinceLastLog := now - tk.ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId]
 
 					if sinceLastLog > uint64(300*time.Second) {
 						forceLog = true
 						tk.ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId] = now
 					}
+					tk.lock.Unlock()
 
 					if forceLog || logging.IsEnabled(logging.Verbose) {
 						if err != nil {
