@@ -298,7 +298,7 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 		processed = sr.processShardTransferTokenAsMaster(ttid, tt)
 	}
 
-	if (tt.SourceId == sr.nodeUUID && !processed) || (tt.ShardTransferTokenState == c.ShardTokenReady) {
+	if (tt.SourceId == sr.nodeUUID && !processed) || (tt.ShardTransferTokenState == c.ShardTokenDropOnSource) {
 		processed = sr.processShardTransferTokenAsSource(ttid, tt)
 	}
 
@@ -350,15 +350,37 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 
 	case c.ShardTokenTransferShard,
 		c.ShardTokenRestoreShard,
-		c.ShardTokenRecoverShard,
-		c.ShardTokenReady:
+		c.ShardTokenRecoverShard:
 		// Update the in-memory state but do not process the token
 		// This will help to compute the rebalance progress
 		sr.updateInMemToken(ttid, tt, "master")
 		return false
 
+	case c.ShardTokenReady:
+		sr.updateInMemToken(ttid, tt, "master")
+
+		if sr.getSiblingState(tt) == c.ShardTokenReady {
+			dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
+			setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+		}
+		return true
+
+	case c.ShardTokenDropOnSource:
+		// Just update in-mem book keeping
+		sr.updateInMemToken(ttid, tt, "master")
+		return false
+
 	case c.ShardTokenCommit:
 		sr.updateInMemToken(ttid, tt, "master")
+		siblingState := sr.getSiblingState(tt)
+
+		if siblingState == c.ShardTokenCommit || siblingState == c.ShardTokenDeleted {
+			dropOnSourceTokenId, dropOnSourceToken := sr.getDropOnSourceTokenAndId(ttid, tt.SiblingTokenId)
+			if dropOnSourceToken != nil {
+				dropOnSourceToken.ShardTransferTokenState = c.ShardTokenDeleted
+				setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+			}
+		}
 
 		tt.ShardTransferTokenState = c.ShardTokenDeleted
 		setTransferTokenInMetakv(ttid, tt)
@@ -434,16 +456,26 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 
 		return true
 
-	case c.ShardTokenReady:
+	case c.ShardTokenRestoreShard:
+		// Update in-mem book keeping and do not process the token
 		sr.updateInMemToken(ttid, tt, "source")
+		return false
 
-		if sr.isSiblingTokenReady(tt) {
-			sourceTokenId, sourceTT := sr.getSourceTokenId(ttid, tt)
-			if sourceTT.SourceId == sr.nodeUUID {
-				sr.queueDropShardRequests(sourceTokenId)
-			}
+	case c.ShardTokenDropOnSource:
+
+		// For this token type, compare the sourceId of the corresponding
+		// tokens with ID's as tt.TokenId or tt.SIblingTokenId.
+		//
+		// If either of them match, drop index instances on source node
+		if sr.getSourceIdForTokenId(tt.SourceTokenId) == sr.nodeUUID {
+			l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", tt.SourceTokenId)
+			sr.queueDropShardRequests(tt.SourceTokenId)
+		} else if sr.getSourceIdForTokenId(tt.SiblingTokenId) == sr.nodeUUID {
+			l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", tt.SiblingTokenId)
+			sr.queueDropShardRequests(tt.SiblingTokenId)
 		}
 		return true
+
 	default:
 		return false
 	}
@@ -552,28 +584,39 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 
 }
 
-func (sr *ShardRebalancer) isSiblingTokenReady(tt *c.TransferToken) bool {
+func (sr *ShardRebalancer) getDropOnSourceTokenAndId(ttid, siblingId string) (string, *c.TransferToken) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	if siblingToken, ok := sr.sourceTokens[tt.SiblingTokenId]; ok && siblingToken != nil {
-		if tt.ShardTransferTokenState == c.ShardTokenReady &&
-			siblingToken.ShardTransferTokenState == c.ShardTokenReady {
-			return true
+	for dropOnSourceTokenId, dropOnSourceToken := range sr.transferTokens {
+		if dropOnSourceToken.ShardTransferTokenState == c.ShardTokenDropOnSource {
+			if (dropOnSourceToken.SourceTokenId == ttid && dropOnSourceToken.SiblingTokenId == siblingId) ||
+				(dropOnSourceToken.SourceTokenId == siblingId && dropOnSourceToken.SiblingTokenId == ttid) {
+				return dropOnSourceTokenId, dropOnSourceToken
+			}
 		}
 	}
-	return false
+	return "", nil
 }
 
-func (sr *ShardRebalancer) getSourceTokenId(ttid string, tt *c.TransferToken) (string, *c.TransferToken) {
+func (sr *ShardRebalancer) getSiblingState(tt *c.TransferToken) c.ShardTokenState {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	if tt.SourceId == sr.nodeUUID {
-		return ttid, tt
-	} else {
-		return tt.SiblingTokenId, sr.sourceTokens[tt.SiblingTokenId]
+	if siblingToken, ok := sr.transferTokens[tt.SiblingTokenId]; ok && siblingToken != nil {
+		return siblingToken.ShardTransferTokenState
 	}
+	return c.ShardTokenError // Return error as the default state
+}
+
+func (sr *ShardRebalancer) getSourceIdForTokenId(ttid string) string {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if tt, ok := sr.sourceTokens[ttid]; ok {
+		return tt.SourceId
+	}
+	return ""
 }
 
 func (sr *ShardRebalancer) queueDropShardRequests(ttid string) {
@@ -1431,17 +1474,12 @@ func (sr *ShardRebalancer) processDropShards() {
 				continue
 			}
 
-			if tt.ShardTransferTokenState == c.ShardTokenReady {
-				if sr.addToWaitGroup() {
-					notifych <- true
-					go sr.dropShardsWhenIdle(ttid, tt.Clone(), notifych)
-				} else {
-					logging.Warnf("ShardRebalancer::processDropShards Skip processing drop shards request for ttid: %v "+
-						"as rebalancer can not add to wait group", tt)
-				}
+			if sr.addToWaitGroup() {
+				notifych <- true
+				go sr.dropShardsWhenIdle(ttid, tt.Clone(), notifych)
 			} else {
-				logging.Warnf("ShardRebalancer::processDropShards Skipping drop shard request for tt: %v "+
-					"as state: %v != ShardTokenReady", ttid, tt.ShardTransferTokenState.String())
+				logging.Warnf("ShardRebalancer::processDropShards Skip processing drop shards request for ttid: %v "+
+					"as rebalancer can not add to wait group", tt)
 			}
 		}
 	}
@@ -1770,10 +1808,26 @@ func (sr *ShardRebalancer) checkAllTokensDone() bool {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	for _, tt := range sr.transferTokens {
+	for ttid, tt := range sr.transferTokens {
 		if tt.ShardTransferTokenState != c.ShardTokenDeleted {
+			l.Infof("ShardRebalancer::checkAllTokensDone Tranfser token: %v is in state: %v", ttid, tt.ShardTransferTokenState)
 			return false
 		}
 	}
 	return true
+}
+
+func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (string, *c.TransferToken) {
+	ustr, _ := common.NewUUID()
+	dropOnSourceTokenId := fmt.Sprintf("TransferToken%s", ustr.Str())
+
+	dropOnSourceToken := &c.TransferToken{
+		ShardTransferTokenState: c.ShardTokenDropOnSource,
+		Version:                 c.MULTI_INST_SHARD_TRANSFER,
+		RebalId:                 rebalId,
+		SourceTokenId:           sourceTokenId,
+		SiblingTokenId:          siblingTokenId,
+	}
+
+	return dropOnSourceTokenId, dropOnSourceToken
 }

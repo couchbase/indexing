@@ -137,14 +137,22 @@ const (
 	// any errors during restore/recovery, index movements belonging to this
 	// shard will be cancelled and rebalance would fail.
 	//
-	// For non-partitioned indexes, source node on seeing this state change
-	// will drop the shard and move the state to "ShardTokenCommit". For
-	// partitioned indexes, source node would wait for the state to move to
-	// "ShardTokenMerged" after which the shard would be dropped
+	// Source node on seeing this state change will drop the shard and move
+	// the state to "ShardTokenCommit".
 	//
 	// A metaKV token in this state means that all indexes belonging to the
 	// shard have successfully caught up with KV.
 	ShardTokenReady
+
+	// After transfer token and its sibling move to ShardTokenReady state,
+	// rebalance master will generate a new token with this state and post
+	// it to metaKV. The new token will contian the transfer token ID's of
+	// both the sibling.
+	//
+	// A metaKV token in this state means that index instances on source
+	// nodes can be dropped as the destination indexes have successfully
+	// caught up with KV nodes
+	ShardTokenDropOnSource
 
 	// Placeholder for partitioned indexes where in the proxy instance can
 	// be merged to real instance after the state of the transfer token is
@@ -183,6 +191,8 @@ func (sts ShardTokenState) String() string {
 		return "ShardTokenRecoverShard"
 	case ShardTokenReady:
 		return "ShardTokenReady"
+	case ShardTokenDropOnSource:
+		return "ShardTokenDropOnSource"
 	case ShardTokenMerged:
 		return "ShardTokenMerged"
 	case ShardTokenCommit:
@@ -306,6 +316,10 @@ type TransferToken struct {
 	// the shard data
 	Destination string
 
+	// TokenId of the source node on which drop index instances
+	// has to be initiated
+	SourceTokenId string
+
 	// For shard rebalance, indexes move from one sub-cluster to another
 	// As one transfer token is for one node to another, atleast 2 tokens
 	// are required to move both master and replica indexes. The index
@@ -316,6 +330,7 @@ type TransferToken struct {
 	// information is used to read the state of the sibling token to take
 	// an action of dropping the indexes in source subcluster
 	SiblingTokenId string
+
 	// shardId -> Location on S3 where the shard is uploaded
 	// shardPath is a sub-directory of "destination"
 	ShardPaths map[ShardId]string
@@ -373,6 +388,9 @@ func (tt *TransferToken) String() string {
 		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
 	}
 
+	if tt.SourceTokenId != "" { // Used only for ShardTokenDropOnSource state
+		fmt.Fprintf(sbp, "SourceTokenId: %v ", tt.SourceTokenId)
+	}
 	// If more than one index instance exists, print all of them
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
