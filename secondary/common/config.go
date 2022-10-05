@@ -3361,9 +3361,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.serverless.maxInstancePerShard": ConfigValue{
-		uint64(400),
+		uint64(math.MaxInt64),
 		"Maximum number of instances per shard for serverless",
-		uint64(400),
+		uint64(math.MaxInt64),
 		false,
 		false,
 	},
