@@ -233,6 +233,13 @@ func getDestinationFromConfig(cfg c.Config) (string, error) {
 	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
 	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
 
+	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageBucket, "://") {
+		blobStorageScheme += "://"
+	}
+	if blobStorageBucket != "" && !strings.HasSuffix(blobStorageBucket, "/") {
+		blobStorageBucket += "/"
+	}
+
 	destination := blobStorageScheme + blobStorageBucket + blobStoragePrefix
 	if len(destination) == 0 {
 		return "", errors.New("Empty destination for shard rebalancer")
