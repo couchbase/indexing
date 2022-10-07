@@ -40,6 +40,23 @@ func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, up
 	return 0, nil
 }
 
+func (m *MeteringThrottlingMgr) IndexWriteToWU(bytes uint64) (uint64, error) {
+	panic("MeteringManager::RecordWriteUnits Not implemented for Community Edition")
+	return 0, nil
+}
+
+func (m *MeteringThrottlingMgr) RecordWriteUnitsComputed(bucket string,
+	writeUnits uint64, billable bool) error {
+	panic("MeteringManager::RecordWriteUnits Not implemented for Community Edition")
+	return nil
+}
+
+func (m *MeteringThrottlingMgr) RefundWriteUnitsComputed(bucket string,
+	writeUnits uint64) error {
+	panic("MeteringManager::RecordWriteUnits Not implemented for Community Edition")
+	return nil
+}
+
 func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) error {
 	panic("MeteringManager::RefundWriteUnits Not implemented for Community Edition")
 	return nil

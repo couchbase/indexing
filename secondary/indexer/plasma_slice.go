@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
+	"github.com/couchbase/regulator"
 )
 
 // Note - CE builds do not pull in plasma_slice.go
@@ -56,6 +57,7 @@ type meteringStats struct {
 	diskSnap2MaxReadUsage  int64 //max write usage stored in disk snapshot2
 	diskSnap2MaxWriteUsage int64 //max read usage stored in disk snapshot2
 
+	writeUnits uint64 //total billed write units needed to build the slice
 }
 
 type plasmaSlice struct {
@@ -646,6 +648,38 @@ func (s *plasmaSlice) EnableMetering() bool {
 		(s.GetScopeName() != common.SYSTEM_SCOPE) // Don't meter CBO Scans
 }
 
+func (s *plasmaSlice) GetWriteUnits() uint64 {
+	wu := atomic.LoadUint64(&s.meteringStats.writeUnits)
+	return wu
+}
+
+func (s *plasmaSlice) RecordWriteUnits(bytes uint64) {
+	if !s.EnableMetering() {
+		return
+	}
+
+	var err error
+	var wu uint64
+	billable := (s.replicaId == 0)
+	if billable {
+		// If billable fetch the number of WUs and add to local counter
+		// before recording in regulator so that we can refund if there
+		// is a restart. Its fine to refund more.
+		wu, err = s.meteringMgr.IndexWriteToWU(bytes)
+		if err == nil {
+			atomic.AddUint64(&s.meteringStats.writeUnits, wu)
+			err = s.meteringMgr.RecordWriteUnitsComputed(s.idxDefn.Bucket, wu, true, false)
+			s.meteringStats.recordWriteUsageStats(wu)
+		}
+	} else {
+		wu, err = s.meteringMgr.RecordWriteUnits(s.idxDefn.Bucket, bytes, false, false)
+		s.meteringStats.recordWriteUsageStats(wu)
+	}
+	if err != nil {
+		// TODO: Handle error graciously
+	}
+}
+
 type plasmaReaderCtx struct {
 	ch               chan *plasma.Reader
 	r                *plasma.Reader
@@ -964,12 +998,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		if err == nil {
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
-			if mdb.EnableMetering() {
-				bucket := mdb.idxDefn.Bucket
-				billable := mdb.replicaId == 0
-				writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
-				mdb.meteringStats.recordWriteUsageStats(writeUnits)
-			}
+			mdb.RecordWriteUnits(uint64(len(docid)))
 		}
 		mdb.isDirty = true
 		return 1
@@ -989,8 +1018,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 
 	// The docid does not exist if the doc is initialized for the first time
 	if !init {
-		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId,
-			false); !changed {
+		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId, false); !changed {
 			return 0
 		}
 	}
@@ -1037,13 +1065,10 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 			itemInserted = true
 		}
 
-		if mdb.EnableMetering() && itemInserted == true {
-			bucket := mdb.idxDefn.Bucket
+		if itemInserted == true {
 			// for an update operation deleteSecIndex has already accounted 1 WCU
 			// so we will only count 1 WCU here.
-			billable := mdb.replicaId == 0
-			writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(key)), false, billable)
-			mdb.meteringStats.recordWriteUsageStats(writeUnits)
+			mdb.RecordWriteUnits(uint64(len(docid) + len(key)))
 		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1168,7 +1193,17 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, false)
 		defer func() {
 			if abortErr == nil {
-				writeUnits, _ := ar.Commit()
+				// If billable fetch the WUs before committing and increment local counter
+				// to refund if there is a indexer restart. Its ok to refund more.
+				if billable {
+					_, pendingWU, _ := ar.State()
+					atomic.AddUint64(&mdb.meteringStats.writeUnits, pendingWU.Whole())
+				}
+				writeUnits, e := ar.Commit()
+				if e != nil {
+					// TODO: Add logging without flooding
+					return
+				}
 				mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole())
 			} else {
 				ar.Abort()
@@ -1402,13 +1437,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 		if err1 == nil {
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
-
-			if mdb.EnableMetering() {
-				bucket := mdb.idxDefn.Bucket
-				billable := mdb.replicaId == 0
-				writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
-				mdb.meteringStats.recordWriteUsageStats(writeUnits)
-			}
+			mdb.RecordWriteUnits(uint64(len(docid)))
 		}
 
 		mdb.isDirty = true
@@ -1465,12 +1494,9 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 			itemDeleted = true
 		}
 
-		if meterDelete && mdb.EnableMetering() && itemDeleted == true {
-			bucket := mdb.idxDefn.Bucket
-			billable := mdb.replicaId == 0
+		if meterDelete && itemDeleted == true {
 			keylen := getKeyLenFromEntry(entry)
-			writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false, billable)
-			mdb.meteringStats.recordWriteUsageStats(writeUnits)
+			mdb.RecordWriteUnits(uint64(len(docid) + keylen))
 		}
 	}
 
@@ -1556,11 +1582,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 
-			if meterDelete && mdb.EnableMetering() {
-				bucket := mdb.idxDefn.Bucket
-				billable := mdb.replicaId == 0
-				writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false, billable)
-				mdb.meteringStats.recordWriteUsageStats(writeUnits)
+			if meterDelete {
+				mdb.RecordWriteUnits(uint64(len(docid) + keyDelSz))
 			}
 		}
 	}
@@ -1710,6 +1733,7 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		snapshotStats[SNAP_STATS_MAX_WRITE_UNITS_USAGE] = mdb.idxStats.currMaxWriteUsage.Value()
 		snapshotStats[SNAP_STATS_MAX_READ_UNITS_USAGE] = mdb.idxStats.currMaxReadUsage.Value()
 		snapshotStats[SNAP_STATS_AVG_UNITS_USAGE] = mdb.idxStats.avgUnitsUsage.Value()
+		snapshotStats[SNAP_STATS_WRITE_UNITS_COUNT] = atomic.LoadUint64(&mdb.meteringStats.writeUnits)
 		s.info.IndexStats = snapshotStats
 
 		go func() {
@@ -2101,6 +2125,7 @@ func (mdb *plasmaSlice) resetStats() {
 
 	mdb.resetUsageStatsOnRollback()
 
+	mdb.meteringStats.writeUnits = 0
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
@@ -2199,6 +2224,7 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 		mdb.idxStats.arrItemsCount.Set(safeGetInt64(stats[SNAP_STATS_ARR_ITEMS_COUNT]))
 
 		mdb.updateUsageStatsFromSnapshotMeta(stats)
+		mdb.meteringStats.writeUnits = uint64(safeGetInt64(stats[SNAP_STATS_WRITE_UNITS_COUNT]))
 	} else {
 		// Since stats are not available, update keySizeStatsSince to current time
 		// to indicate we start tracking the stat since now.
@@ -2985,6 +3011,17 @@ func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
 
 func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64) {
 	atomic.AddInt64(&ms.currMeteredWU, int64(writeUnits))
+}
+
+func (ms *meteringStats) recordWriteUsageStatsTxn(writeUnits []regulator.Units) uint64 {
+
+	var totalUnits uint64
+	for _, units := range writeUnits {
+		totalUnits += units.Whole()
+	}
+
+	atomic.AddInt64(&ms.currMeteredWU, int64(totalUnits))
+	return totalUnits
 }
 
 func (ms *meteringStats) recordReadUsageStats(readUnits uint64) {

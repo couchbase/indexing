@@ -1870,6 +1870,10 @@ func (mdb *memdbSlice) ClearRebalRunning() {
 	// nothing to do
 }
 
+func (mdb *memdbSlice) GetWriteUnits() uint64 {
+	return 0
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

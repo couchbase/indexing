@@ -2921,7 +2921,9 @@ func NewStatsManager(supvCmdch MsgChannel,
 	s.config.Store(config)
 	statsDir := path.Join(config["storage_dir"].String(), STATS_DATA_DIR)
 	chunkSz := config["statsPersistenceChunkSize"].Int()
-	s.statsPersister = NewFlatFilePersister(statsDir, chunkSz)
+	fileName := "stats"
+	newFileName := "stats_new"
+	s.statsPersister = NewFlatFilePersister(statsDir, chunkSz, fileName, newFileName)
 
 	go s.run()
 	go s.runStatsDumpLogger()
@@ -4095,10 +4097,10 @@ type FlatFileStatsPersister struct {
 	config map[string]interface{}
 }
 
-func NewFlatFilePersister(dir string, chunksz int) *FlatFileStatsPersister {
+func NewFlatFilePersister(dir string, chunksz int, fileName, newFileName string) *FlatFileStatsPersister {
 	iowrap.Os_MkdirAll(dir, 0755)
-	file := path.Join(dir, "stats")
-	newfile := path.Join(dir, "stats_new")
+	file := path.Join(dir, fileName)
+	newfile := path.Join(dir, newFileName)
 	fp := FlatFileStatsPersister{
 		statsDir:    dir,
 		filePath:    file,

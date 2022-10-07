@@ -496,10 +496,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// indexer is now ready to take security change
 	close(idx.enableSecurityChange)
 
-	//bootstrap phase 1
-	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
+	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
+	idx.genIndexerId()
 
-	// we need to initialize metering manager after the bootstrap1 as we need to get indexerId.
+	// we need to initialize metering manager after the genIndexerId as we need to get indexerId.
 	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
 		idx.meteringMgr, res = NewMeteringManager(idx.id, idx.config, idx.meteringMgrCmdCh)
 		if res.GetMsgType() != MSG_SUCCESS {
@@ -510,8 +510,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		idx.scanCoord.SetMeteringMgr(idx.meteringMgr)
 		idx.statsMgr.SetMeteringMgr(idx.meteringMgr)
 		idx.meteringMgr.RegisterRestEndpoints()
+
 		idx.prMgrCmdCh = make(MsgChannel)
+
+	} else {
+		close(idx.meteringMgrCmdCh)
 	}
+
+	//bootstrap phase 1
+	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
 
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
@@ -1747,7 +1754,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.ddlSrvMgrCmdCh
 	idx.schedIdxCreatorCmdCh <- msg
 	<-idx.schedIdxCreatorCmdCh
-	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
+	if idx.meteringMgr != nil {
 		idx.meteringMgrCmdCh <- msg
 		<-idx.meteringMgrCmdCh
 
@@ -5852,6 +5859,14 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 	msgUpdateIndexPartnMap Message) error {
 
+	//update index map in metering manager
+	if idx.meteringMgr != nil {
+		if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+			idx.meteringMgrCmdCh, "MeteringMgr"); err != nil {
+			return err
+		}
+	}
+
 	//update index map in storage manager
 	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.storageMgrCmdCh,
 		"StorageMgr"); err != nil {
@@ -7650,9 +7665,6 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 
 func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotReqCh []MsgChannel) error {
 
-	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
-	idx.genIndexerId()
-
 	idx.recoverRebalanceState()
 
 	start := time.Now()
@@ -7981,6 +7993,16 @@ func (idx *indexer) bootstrap2() error {
 
 	// ready to process DDL
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
+
+	// send Ready to metering manager so that refund happens if any
+	if idx.meteringMgr != nil {
+		if resp := idx.sendStreamUpdateToWorker(msg, idx.meteringMgrCmdCh,
+			"MeteringThrottlingMgr"); resp.GetMsgType() != MSG_SUCCESS {
+			return resp.(*MsgError).GetError().cause
+		}
+	}
+
+	// ready to process DDL
 	if err := idx.sendMsgToClustMgrAndProcessResponse(msg); err != nil {
 		return err
 	}
