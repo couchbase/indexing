@@ -83,6 +83,7 @@ type MetadataProvider struct {
 	settings           Settings
 	indexerVersion     uint64
 	clusterVersion     uint64
+	internalVersion    c.InternalVersion
 	statsNotifyCh      chan map[c.IndexInstId]map[c.PartitionId]c.Statistics
 }
 
@@ -231,6 +232,7 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 		return nil, err
 	}
 	s.clusterVersion = cinfo.GetClusterVersion()
+	s.internalVersion, _ = c.GetInternalClusterVersion(cinfo, true)
 
 	return s, nil
 }
@@ -5454,6 +5456,14 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 
 	clusterVer := c.GetClusterVersion()
 	intVer := c.GetInternalVersion()
+	if intVer.LessThan(w.provider.internalVersion) {
+		intVer = w.provider.internalVersion
+	}
+
+	if clusterVer == 0 || intVer.Equals("") {
+		logging.Warnf("watcher:ClientAuth cluster Ver (%v)/Internal Version (%v) not yet initialised", clusterVer, intVer)
+	}
+
 	if clusterVer < c.INDEXER_71_VERSION && intVer.LessThan(c.MIN_VER_SRV_AUTH) {
 		logging.Infof("watcher:ClientAuth skipping auth because of cluster "+
 			"version %v, internal version %v for %v", clusterVer, intVer, raddr)
