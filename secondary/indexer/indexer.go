@@ -722,6 +722,9 @@ func (idx *indexer) initFromConfig() {
 	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Int())
 	plasma.SetLogReclaimBlockSize(reclaimBlockSize)
 
+	unitsQuota := int64((idx.config["settings.units_quota"]).Uint64())
+	idx.stats.unitsQuota.Set(unitsQuota)
+
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
 	idx.initServiceAddressMap()
