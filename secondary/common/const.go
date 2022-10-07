@@ -85,6 +85,7 @@ var ErrPlannerMaxResourceUsageLimit = errors.New("Max Node Resource Usage Limit 
 var ErrPlannerConstraintViolation = errors.New("Planner Constraint Violation.")
 var ErrIndexBucketLimitReached = errors.New("Limit for number of indexes that can be created per bucket has been reached.")
 var ErrServerBusy = errors.New("Server is busy.")
+var ErrDiskLimitReached = errors.New("Bucket's disk size limit has been reached.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
@@ -97,6 +98,8 @@ var NonRetryableErrorsInCreate = []error{
 	ErrScopeIdChanged,
 	ErrCollectionIdChanged,
 	ErrIndexScopeLimitReached,
+	ErrIndexBucketLimitReached,
+	ErrDiskLimitReached,
 }
 
 var RetryableErrorsInCreate = []error{
@@ -164,3 +167,6 @@ func init() {
 // Audit event IDs
 const AUDIT_UNAUTHORIZED = uint32(49152) // HTTP_STATUS_UNAUTHORIZED
 const AUDIT_FORBIDDEN = uint32(49153)    // HTTP_STATUS_FORBIDDEN
+
+// Ingress lockdown error
+var ErrNoIngress = errors.New("AccessNoIngress")

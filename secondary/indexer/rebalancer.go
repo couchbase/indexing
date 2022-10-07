@@ -388,8 +388,10 @@ func (r *Rebalancer) initRebalAsync() {
 					start := time.Now()
 
 					if c.IsServerlessDeployment() {
+
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
 							*r.topologyChange, r.nodeUUID)
+
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
@@ -406,6 +408,18 @@ func (r *Rebalancer) initRebalAsync() {
 					}
 					if len(r.transferTokens) == 0 {
 						r.transferTokens = nil
+					} else if c.IsServerlessDeployment() {
+						destination, err := getDestinationFromConfig(r.config.Load())
+						if err != nil {
+							l.Errorf("Rebalancer::initRebalAsync err: %v", err)
+							go r.finishRebalance(err)
+							return
+						}
+						// Populate destination in transfer tokens
+						for _, token := range r.transferTokens {
+							token.Destination = destination
+						}
+						l.Infof("Rebalancer::initRebalAsync Populated destination: %v in all transfer tokens", destination)
 					}
 
 					elapsed := time.Since(start)

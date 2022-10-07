@@ -40,7 +40,7 @@ func InitClusterFromREST() error {
 		}
 
 		time.Sleep(100 * time.Millisecond)
-		if err := cluster.InitDataAndIndexQuota(serverAddr, username, password); err != nil {
+		if err := cluster.InitDataAndIndexQuota(serverAddr, username, password, "1500", "256"); err != nil {
 			return err
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -119,6 +119,7 @@ func setStorageModeAndShardAwareRebalance(storageMode, username, password string
 	jbody := make(map[string]interface{})
 	jbody["indexer.settings.storage_mode"] = storageMode
 	jbody["indexer.rebalance.shard_aware_rebalance"] = true
+	jbody["indexer.settings.rebalance.blob_storage_bucket"] = "/tmp/"
 	pbody, err := json.Marshal(jbody)
 	if err != nil {
 		return err

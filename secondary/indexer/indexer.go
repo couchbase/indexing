@@ -511,6 +511,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
 	//when Rebalancing manager receives ns_server rebalancing callback.
+	//Please ensure that the Metering Manager is initialised before DDL Service manager.
 	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
@@ -3548,7 +3549,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 
 		// Set the state of indexes to catchup as the indexed data is already
 		// recovered from disk
-		var buildState common.IndexState = common.INDEX_STATE_CATCHUP
+		var buildState common.IndexState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
 		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
@@ -3579,8 +3580,8 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 
 		if restartTs, ok := allRestartTs[keyspaceId]; ok {
 			sessionId := idx.genNextSessionId(common.INIT_STREAM, keyspaceId)
-			idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, restartTs, nil, allNilSnaps,
-				false, false, sessionId)
+			idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, restartTs, nil, restartTs.Seqnos,
+				allNilSnaps, false, false, sessionId)
 			idx.setStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId, STREAM_ACTIVE)
 		} else {
 			allKeyspaceIds := make([]string, 0)
@@ -3976,12 +3977,12 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			logging.Infof("Indexer::handleInitRecovery StreamId %v KeyspaceId %v Using RetryTs %v",
 				streamId, keyspaceId, rts)
 			idx.streamKeyspaceIdRetryTs[streamId][keyspaceId] = nil
-			idx.startKeyspaceIdStream(streamId, keyspaceId, rts, nil, nil, false, false, sessionId)
+			idx.startKeyspaceIdStream(streamId, keyspaceId, rts, nil, nil, nil, false, false, sessionId)
 		} else {
 			idx.processRollback(streamId, keyspaceId, ts, sessionId)
 		}
 	} else {
-		idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, retryTs, nil, false, false, sessionId)
+		idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, retryTs, nil, nil, false, false, sessionId)
 	}
 
 }
@@ -4047,7 +4048,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		return
 	}
 
-	idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, false, false, sessionId)
+	idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, nil, false, false, sessionId)
 	go idx.collectProgressStats(true)
 
 }
@@ -4426,7 +4427,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	if idx.checkStreamRequestPending(streamId, keyspaceId) == false {
 		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v KeyspaceId %v "+
 			"StreamId %v", streamId, keyspaceId, sessionId)
-		idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, true, async, sessionId)
+		idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, nil, true, async, sessionId)
 	} else {
 		logging.Infof("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
 			"%v KeyspaceId %v. Request In Progress.", streamId, keyspaceId)
@@ -4478,7 +4479,7 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
 
 		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
-		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, false, false, sid)
+		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, nil, false, false, sid)
 	}
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
@@ -6524,7 +6525,7 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 	sessionId := idx.genNextSessionId(newStream, bucket)
 
 	idx.setStreamKeyspaceIdState(newStream, bucket, STREAM_ACTIVE)
-	idx.startKeyspaceIdStream(newStream, bucket, flushTs, nil, nil, false, false, sessionId)
+	idx.startKeyspaceIdStream(newStream, bucket, flushTs, nil, nil, nil, false, false, sessionId)
 }
 
 func (idx *indexer) handleMergeStream(msg Message) {
@@ -7011,8 +7012,8 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 // case of an index build, where this is done by sendStreamUpdateForBuildIndex instead).
 // Used during recovery.
 func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId string,
-	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool,
-	inRepair bool, async bool, sessionId uint64) {
+	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, buildTs Timestamp,
+	allNilSnapsOnWarmup map[string]bool, inRepair bool, async bool, sessionId uint64) {
 
 	logging.Infof("Indexer::startKeyspaceIdStream Stream: %v KeyspaceId: %v SessionId %v RestartTS %v",
 		streamId, keyspaceId, sessionId, restartTs)
@@ -7153,6 +7154,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		keyspaceId:         keyspaceId,
 		indexList:          indexList,
 		restartTs:          restartTs,
+		buildTs:            buildTs,
 		respCh:             respCh,
 		stopCh:             stopCh,
 		allowMarkFirstSnap: allowMarkFirstSnap,
@@ -8937,7 +8939,7 @@ func (idx *indexer) startStreams() bool {
 	for keyspaceId, ts := range restartTs {
 		idx.keyspaceIdRollbackTimes[keyspaceId] = time.Now().UnixNano()
 		sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
-		idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, ts, nil, allNilSnaps,
+		idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, ts, nil, nil, allNilSnaps,
 			false, false, sessionId)
 		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
 	}
@@ -8949,7 +8951,7 @@ func (idx *indexer) startStreams() bool {
 
 	for keyspaceId, ts := range restartTs {
 		sessionId := idx.genNextSessionId(common.INIT_STREAM, keyspaceId)
-		idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, ts, nil, allNilSnaps,
+		idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, ts, nil, nil, allNilSnaps,
 			false, false, sessionId)
 		idx.setStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId, STREAM_ACTIVE)
 	}
@@ -11107,7 +11109,7 @@ func (idx *indexer) restartMaintStreamForCatchup(bucket string, restartTs *commo
 	idx.prepareStreamKeyspaceIdForFreshStart(streamId, bucket)
 	idx.setStreamKeyspaceIdState(streamId, bucket, STREAM_ACTIVE)
 	maintSessionId := idx.genNextSessionId(streamId, bucket)
-	idx.startKeyspaceIdStream(streamId, bucket, restartTs, nil, nil, false, false, maintSessionId)
+	idx.startKeyspaceIdStream(streamId, bucket, restartTs, nil, nil, nil, false, false, maintSessionId)
 }
 
 func getLocalHttpAddr(cfg common.Config) string {

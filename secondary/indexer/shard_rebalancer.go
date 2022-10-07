@@ -32,6 +32,10 @@ type ShardRebalancer struct {
 	sourceTokens   map[string]*c.TransferToken // as maintained by source
 	acceptedTokens map[string]*c.TransferToken // as maintained by destination
 
+	// Group sibling transfer tokens. Both siblings gets published
+	// in the same batch
+	batchedTokens []map[string]*c.TransferToken
+
 	// List of all tokens that have been acknowledge by both source
 	// and destination nodes
 	ackedTokens map[string]*c.TransferToken
@@ -107,6 +111,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		acceptedTokens: make(map[string]*c.TransferToken),
 		sourceTokens:   make(map[string]*c.TransferToken),
 		ackedTokens:    make(map[string]*c.TransferToken),
+
+		batchedTokens: make([]map[string]*c.TransferToken, 0),
 
 		cancel:              make(chan struct{}),
 		done:                make(chan struct{}),
@@ -199,6 +205,19 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
+				} else {
+					destination, err := getDestinationFromConfig(sr.config.Load())
+					if err != nil {
+						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
+						go sr.finishRebalance(err)
+						return
+					}
+					// Populate destination in transfer tokens
+					for _, token := range sr.transferTokens {
+						token.Destination = destination
+					}
+					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v in all transfer tokens", destination)
+
 				}
 
 				break loop
@@ -207,6 +226,18 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	}
 
 	go sr.doRebalance()
+}
+
+func getDestinationFromConfig(cfg c.Config) (string, error) {
+	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
+	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
+	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
+
+	destination := blobStorageScheme + blobStorageBucket + blobStoragePrefix
+	if len(destination) == 0 {
+		return "", errors.New("Empty destination for shard rebalancer")
+	}
+	return destination, nil
 }
 
 // processTokens is invoked by observeRebalance() method
@@ -312,7 +343,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.transferTokens[ttid] = tt.Clone() // Update in-memory book-keeping with new state
 
 		if sr.allShardTransferTokensAcked() {
-			sr.initiateShardTransfer()
+			sr.batchTransferTokens()
+			sr.initiateShardTransferAsMaster()
 		}
 		return true
 
@@ -350,7 +382,12 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			sr.cancelMetakv()
 			go sr.finishRebalance(nil)
 		} else {
-			sr.initiateShardTransfer()
+			func() {
+				sr.mu.Lock()
+				defer sr.mu.Unlock()
+
+				sr.initiateShardTransferAsMaster()
+			}()
 		}
 
 		return true
@@ -413,6 +450,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 }
 
 func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) {
+
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
 
 	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
@@ -608,6 +650,12 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 }
 
 func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
+
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
+
 	respCh := make(chan Message)                            // Carries final response of shard restore to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard restore to indexer
 
@@ -642,7 +690,8 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 						tt.Destination, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateLocalShardCleanup(ttid, shardPaths, tt, err)
+					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
+					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
 				}
 			}
@@ -666,7 +715,7 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 
 // Cleans-up the shard data from local file system
 func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map[common.ShardId]string,
-	tt *c.TransferToken, err error) {
+	tt *c.TransferToken) {
 
 	l.Infof("ShardRebalancer::initiateLocalShardCleanup Initiating clean-up on local file "+
 		"system for ttid: %v, shards: %v ", ttid, shardPaths)
@@ -685,16 +734,17 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 
 	sr.supvMsgch <- msg
 
-	// Wait for response
+	// Wait for response. Cleanup is a best effor call
+	// So, no need to process response
 	<-respCh
-
-	// Update error in transfer token so that rebalance master
-	// will finish the rebalance and clean-up can be invoked for
-	// other transfer tokens in the batch depending on their state
-	sr.setTransferTokenError(ttid, tt, err.Error())
 }
 
 func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) {
+
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
 
 	// All deferred indexes are created now. Create and recover non-deferred indexes
 	indexInsts := tt.IndexInsts
@@ -1516,6 +1566,9 @@ loop:
 		}
 
 		if allInstancesDropped {
+
+			sr.initiateLocalShardCleanup(ttid, tt.ShardPaths, tt)
+
 			tt.ShardTransferTokenState = c.ShardTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
 
@@ -1631,40 +1684,86 @@ func (sr *ShardRebalancer) Cancel() {
 	sr.wg.Wait()
 }
 
+// This function batches a group of transfer tokens
+// according to the following rules:
+//
+// All tokens of a bucket moving from one subcluster
+// to another will be in the same batch. E.g.,
+// if bucket_1 has indexes on subcluster_1:indexer_1 and
+// subcluster_1:indexer_2 - There will be 2 transfer tokens
+// for this bucket movement. Both these transfer tokens will
+// remain in same batch.
+//
+// As indexer source node can drop index instances only after
+// both tokens move to READY state, publishing them in different
+// batches can lead to a deadlock where after finishing the first
+// batch, tokens would wait for sibling to come to Ready but sibling
+// would wait for initial token to move to Deleted state.
+func (sr *ShardRebalancer) batchTransferTokens() {
+	tokenBatched := make(map[string]bool)
+
+	for ttid, token := range sr.transferTokens {
+
+		if token.TransferMode != common.TokenTransferModeMove {
+			continue
+		}
+
+		if _, ok := tokenBatched[ttid]; !ok {
+			tokenMap := make(map[string]*c.TransferToken)
+			tokenMap[ttid] = token
+			tokenMap[token.SiblingTokenId] = sr.transferTokens[token.SiblingTokenId]
+			sr.batchedTokens = append(sr.batchedTokens, tokenMap)
+
+			tokenBatched[ttid] = true
+			tokenBatched[token.SiblingTokenId] = true
+		}
+	}
+}
+
 // called by master to initiate transfer of shards.
 // sr.mu needs to be acquired by the caller of this method
-func (sr *ShardRebalancer) initiateShardTransfer() {
+func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 
 	config := sr.config.Load()
-	batchSize := config["rebalance.transferBatchSize"].Int()
+	batchSize := config["rebalance.serverless.transferBatchSize"].Int()
+
+	publishAllTokens := false
+	if batchSize == 0 { // Disable batching and publish all tokens
+		publishAllTokens = true
+	}
 
 	count := 0
 
 	var publishedIds []string
 
-	// TODO: This logic picks first "transferBatchSize" tokens
-	// from 'transferTokens' map. In future, a more intelligent
-	// algorithm is required to batch a group based on source
-	// node, destination node and group them appropriately
+	// TODO: Publish tokens related to replica repair.
+	// Prioritise replica repair over rebalance
 
-	for ttid, tt := range sr.transferTokens {
-		if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
-			// Used a cloned version so that the master token list
-			// will not be updated until the transfer token with
-			// updated state is persisted in metaKV
-			ttClone := tt.Clone()
+	for i, groupedTokens := range sr.batchedTokens {
+		for ttid, tt := range groupedTokens {
+			if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
+				// Used a cloned version so that the master token list
+				// will not be updated until the transfer token with
+				// updated state is persisted in metaKV
+				ttClone := tt.Clone()
 
-			// Change state of transfer token to TransferTokenTransferShard
-			ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
-			setTransferTokenInMetakv(ttid, ttClone)
-			publishedIds = append(publishedIds, ttid)
-			count++
-			if count >= batchSize {
-				break
+				// Change state of transfer token to TransferTokenTransferShard
+				ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
+				setTransferTokenInMetakv(ttid, ttClone)
+				publishedIds = append(publishedIds, ttid)
+				count++
 			}
 		}
+
+		sr.batchedTokens[i] = nil // Deleted published tokens from batch list
+
+		if !publishAllTokens && count >= batchSize {
+			break
+		}
 	}
-	l.Infof("ShardRebalancer::initiateShardTransfer Published transfer token batch: %v", publishedIds)
+	if len(publishedIds) > 0 {
+		l.Infof("ShardRebalancer::initiateShardTransferAsMaster Published transfer token batch: %v", publishedIds)
+	}
 }
 
 func (sr *ShardRebalancer) checkAllTokensDone() bool {
