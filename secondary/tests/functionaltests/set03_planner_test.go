@@ -1360,6 +1360,7 @@ func tenantAwarePlannerTests(t *testing.T) {
 	tenantAwarePlannerRebalanceTests(t)
 	tenantAwarePlannerReplicaRepairTests(t)
 	tenantAwarePlannerSwapRebalanceTests(t)
+	tenantAwarePlannerScaleDownTests(t)
 
 }
 
@@ -1766,6 +1767,108 @@ func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
 			log.Printf("Expected Result %v\n", result)
 		}
 		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+	}
+}
+
+var tenantAwarePlannerScaleDownFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, Enough Capacity",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_a.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_a_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, Not Enough Capacity",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_b.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_b_out.json",
+		"Planner - Not enough capacity to place indexes of deleted nodes.",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 node, Pair node not deleted(Failed swap rebalance of 1 node)",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_c.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_c_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 node, Pair node already deleted",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_d.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_d_out.json",
+		"Provide additional node as replacement.",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, empty nodes",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_e.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_e_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, Deleted Nodes more than added nodes",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_f.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_f_out.json",
+		"Planner - Number of non-empty deleted nodes cannot be greater than number of added nodes.",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 node, Add 1 node in, server group mismatch",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_g.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_g_out.json",
+		"Planner - Unable to satisfy server group constraint while replacing removed nodes with new nodes.",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 node, Pair node exists",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_h.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_h_out.json",
+		"Provide additional node as replacement.",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, No nodes under LWM",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_i.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_i_out.json",
+		"Planner - Not enough capacity to place indexes of deleted nodes.",
+		false,
+	},
+}
+
+func tenantAwarePlannerScaleDownTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerScaleDownFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadPlan(testcase.result)
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwareRebal(plan, plan.DeletedNodes)
+
+		if testcase.errStr == "" {
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+			err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
+			if err != nil {
+				log.Printf("Actual Solution \n")
+				solution.PrintLayout()
+				log.Printf("Expected Result %v\n", result)
+			}
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+		} else {
+
+			FailTestIfNoError(err, "Error in RunSingleTestPlan", t)
+			if strings.Contains(err.Error(), testcase.errStr) {
+				log.Printf("Expected error %v", err)
+			} else {
+				t.Fatalf("Unexpected error %v. Expected %v\n", err, testcase.errStr)
+			}
+		}
 
 	}
 }

@@ -406,7 +406,11 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 func (t *simulator) RunSingleTestTenantAwareRebal(plan *Plan, deletedNodes []string) (*Solution, error) {
 
 	p, _, e := executeTenantAwareRebal(CommandRebalance, plan, deletedNodes)
-	return p.Result, e
+	if e == nil {
+		return p.Result, nil
+	} else {
+		return nil, e
+	}
 }
 
 //////////////////////////////////////////////////////////////

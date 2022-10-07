@@ -1,3 +1,6 @@
+//go:build !community
+// +build !community
+
 package indexer
 
 import (
@@ -8,20 +11,62 @@ import (
 	"github.com/couchbase/plasma"
 )
 
-type ShardTransferStatistics struct {
-	shardId      common.ShardId
-	totalBytes   int64
-	bytesWritten int64
-	transferRate float64
-}
-
 type ShardTransferManager struct {
 	config common.Config
+	cmdCh  chan Message
 }
 
 func NewShardTransferManager(config common.Config) *ShardTransferManager {
-	return &ShardTransferManager{
+	stm := &ShardTransferManager{
 		config: config,
+		cmdCh:  make(chan Message),
+	}
+
+	go stm.run()
+	return stm
+}
+
+func (stm *ShardTransferManager) run() {
+	//main Storage Manager loop
+loop:
+	for {
+		select {
+
+		case cmd, ok := <-stm.cmdCh:
+			if ok {
+				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
+					logging.Infof("ShardTransferManager::run Storage manager shutting Down. Close ShardTransfer Manager as well")
+					break loop
+				}
+				stm.handleStorageMgrCommands(cmd)
+			} else {
+				//supervisor channel closed. exit
+				break loop
+			}
+
+		}
+	}
+}
+
+func (stm *ShardTransferManager) ProcessCommand(cmd Message) {
+	stm.cmdCh <- cmd
+}
+
+func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
+
+	switch cmd.GetMsgType() {
+
+	case START_SHARD_TRANSFER:
+		go stm.processShardTransferMessage(cmd)
+
+	case SHARD_TRANSFER_CLEANUP:
+		go stm.processTransferCleanupMessage(cmd)
+
+	case START_SHARD_RESTORE:
+		go stm.processShardRestoreMessage(cmd)
+
+	case DESTROY_LOCAL_SHARD:
+		go stm.processDestroyLocalShardMessage(cmd)
 	}
 }
 

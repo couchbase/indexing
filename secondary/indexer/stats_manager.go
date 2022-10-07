@@ -412,6 +412,13 @@ func (n *NodeToHostMapHolder) Get() map[string]string {
 	}
 }
 
+type ShardTransferStatistics struct {
+	shardId      common.ShardId
+	totalBytes   int64
+	bytesWritten int64
+	transferRate float64
+}
+
 func (s *IndexStats) Init() {
 	s.indexState.Init()
 	s.scanDuration.Init()

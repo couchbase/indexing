@@ -185,6 +185,9 @@ loop:
 					for i := 0; i < len(s.snapshotNotifych); i++ {
 						close(s.snapshotNotifych[i])
 					}
+					if s.stm != nil {
+						s.stm.ProcessCommand(cmd) // Shutdown storage manager cmdCh
+					}
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -250,14 +253,14 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case START_SHARD_TRANSFER:
 		s.handleShardTransfer(cmd)
 
-	case SHARD_TRANSFER_CLEANUP:
-		s.handleTransferCleanup(cmd)
+	case SHARD_TRANSFER_CLEANUP,
+		START_SHARD_RESTORE,
+		DESTROY_LOCAL_SHARD:
+		if s.stm != nil {
+			s.stm.ProcessCommand(cmd)
+		}
+		s.supvCmdch <- &MsgSuccess{}
 
-	case START_SHARD_RESTORE:
-		s.handleShardRestore(cmd)
-
-	case DESTROY_LOCAL_SHARD:
-		s.handleDestroyLocalShard(cmd)
 	}
 }
 
@@ -2406,25 +2409,8 @@ func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
 func (s *storageMgr) handleShardTransfer(cmd Message) {
 	// TODO: Add a configurable setting to enable or disable disk snapshotting
 	// of shards that are in transfesr
-	go s.stm.processShardTransferMessage(cmd)
-
-	s.supvCmdch <- &MsgSuccess{}
-}
-
-func (s *storageMgr) handleTransferCleanup(cmd Message) {
-	go s.stm.processTransferCleanupMessage(cmd)
-
-	s.supvCmdch <- &MsgSuccess{}
-}
-
-func (s *storageMgr) handleShardRestore(cmd Message) {
-	go s.stm.processShardRestoreMessage(cmd)
-
-	s.supvCmdch <- &MsgSuccess{}
-}
-
-func (s *storageMgr) handleDestroyLocalShard(cmd Message) {
-	go s.stm.processDestroyLocalShardMessage(cmd)
-
+	if s.stm != nil {
+		s.stm.ProcessCommand(cmd)
+	}
 	s.supvCmdch <- &MsgSuccess{}
 }
