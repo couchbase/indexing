@@ -509,6 +509,10 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			indexer.MandatoryQuota = uint64(mandatoryQuota.(float64))
 		}
 
+		if unitsActual, ok := statsMap["units_used_actual"]; ok {
+			indexer.ActualUnits = uint64(unitsActual.(float64))
+		}
+
 		// uptime
 		var elapsed uint64
 		if uptimeStat, ok := statsMap["uptime"]; ok {
