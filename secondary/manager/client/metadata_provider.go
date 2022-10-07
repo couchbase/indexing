@@ -87,6 +87,7 @@ type MetadataProvider struct {
 	settings           Settings
 	indexerVersion     uint64
 	clusterVersion     uint64
+	internalVersion    c.InternalVersion
 	statsNotifyCh      chan map[c.IndexInstId]map[c.PartitionId]c.Statistics
 	limitsCfg          *c.LimitsCache
 }
@@ -253,6 +254,7 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 	}
 	cinfo.FetchNodesAndSvsInfoWithLock()
 	s.clusterVersion = cinfo.GetClusterVersion()
+	s.internalVersion, _ = c.GetInternalClusterVersion(c.NodesInfoProvider(cinfo), true)
 
 	lc, err1 := c.NewLimitsCache()
 	if err1 != nil {
@@ -5822,9 +5824,12 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 		clusterVer = int64(w.provider.GetClusterVersion())
 	}
 	intVer := c.GetInternalVersion()
+	if intVer.LessThan(w.provider.internalVersion) {
+		intVer = w.provider.internalVersion
+	}
 
 	if clusterVer == 0 || intVer.Equals("") {
-		logging.Errorf("watcher:ClientAuth cluster Ver (%v)/Internal Version (%v) not yet initialised", clusterVer, intVer)
+		logging.Warnf("watcher:ClientAuth cluster Ver (%v)/Internal Version (%v) not yet initialised", clusterVer, intVer)
 	}
 
 	if clusterVer < c.INDEXER_71_VERSION && intVer.LessThan(c.MIN_VER_SRV_AUTH) {
