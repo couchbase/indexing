@@ -751,6 +751,10 @@ type IndexerStats struct {
 	needsRestart       stats.BoolVal
 	statsResponse      stats.TimingStat
 	notFoundError      stats.Int64Val
+	numTenants         stats.Int64Val
+
+	unitsQuota      stats.Int64Val //RU/WU units quota for serverless model
+	unitsUsedActual stats.Int64Val //RU/WU units used for serverless model
 
 	indexerState  stats.Int64Val
 	prjLatencyMap *LatencyMapHolder
@@ -803,6 +807,10 @@ func (s *IndexerStats) Init() {
 	s.notFoundError.Init()
 	s.prjLatencyMap = &LatencyMapHolder{}
 	s.prjLatencyMap.Init()
+
+	s.numTenants.Init()
+	s.unitsQuota.Init()
+	s.unitsUsedActual.Init()
 
 	s.nodeToHostMap = &NodeToHostMapHolder{}
 	s.nodeToHostMap.Init()
@@ -864,6 +872,8 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.memoryUsedActual.AddFilter(stats.PlannerFilter)
 	s.uptime.AddFilter(stats.PlannerFilter)
 	s.cpuUtilization.AddFilter(stats.PlannerFilter)
+	s.unitsQuota.AddFilter(stats.PlannerFilter)
+	s.unitsUsedActual.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexerStats) SetSummaryFilters() {
@@ -874,7 +884,13 @@ func (s *IndexerStats) SetSummaryFilters() {
 	s.memoryTotalStorage.AddFilter(stats.SummaryFilter)
 	s.memoryUsedQueue.AddFilter(stats.SummaryFilter)
 	s.memoryRss.AddFilter(stats.SummaryFilter)
-	s.memoryUsedActual.AddFilter(stats.SummaryFilter)
+
+	if common.IsServerlessDeployment() {
+		s.memoryUsedActual.AddFilter(stats.SummaryFilter)
+		s.unitsQuota.AddFilter(stats.SummaryFilter)
+		s.unitsUsedActual.AddFilter(stats.SummaryFilter)
+		s.numTenants.AddFilter(stats.SummaryFilter)
+	}
 
 	s.numCPU.AddFilter(stats.SummaryFilter)
 	s.cpuUtilization.AddFilter(stats.SummaryFilter)
@@ -947,6 +963,8 @@ func (s *IndexerStats) addBucketStats(bucket string) {
 		bstats.Init()
 		s.buckets[bucket] = bstats
 	}
+
+	s.setNumTenants()
 }
 
 func (s *IndexerStats) removeBucketStats(bucket string) {
@@ -966,6 +984,8 @@ func (s *IndexerStats) removeBucketStats(bucket string) {
 	if canRemove {
 		delete(s.buckets, bucket)
 	}
+
+	s.setNumTenants()
 }
 
 func (s *IndexerStats) GetBucketStats(bucket string) *BucketStats {
@@ -977,6 +997,10 @@ func (s *IndexerStats) GetBucketStats(bucket string) *BucketStats {
 	}
 
 	return nil
+}
+
+func (s *IndexerStats) setNumTenants() {
+	s.numTenants.Set(int64(len(s.buckets)))
 }
 
 // AddKeyspaceStats adds or reinitializes an entry to the per-keyspace stats map
@@ -1137,7 +1161,6 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("memory_used_storage", &is.memoryUsedStorage)
 	statMap.AddStatValueFiltered("memory_total_storage", &is.memoryTotalStorage)
 	statMap.AddStatValueFiltered("memory_used_queue", &is.memoryUsedQueue)
-	statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
 	statMap.AddStatValueFiltered("needs_restart", &is.needsRestart)
 	statMap.AddStatValueFiltered("num_cpu_core", &is.numCPU)
 	statMap.AddStatValueFiltered("avg_resident_percent", &is.avgResidentPercent)
@@ -1148,6 +1171,13 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_disk_size", &is.totalDiskSize)
 	statMap.AddStatValueFiltered("num_storage_instances", &is.numStorageInstances)
 	statMap.AddStatValueFiltered("num_indexes", &is.numIndexes)
+
+	if common.IsServerlessDeployment() {
+		statMap.AddStatValueFiltered("memory_used_actual", &is.memoryUsedActual)
+		statMap.AddStatValueFiltered("units_quota", &is.unitsQuota)
+		statMap.AddStatValueFiltered("units_used_actual", &is.unitsUsedActual)
+		statMap.AddStatValueFiltered("num_tenants", &is.numTenants)
+	}
 
 	is.numGoroutine.Set(int64(runtime.NumGoroutine()))
 	statMap.AddStatValueFiltered("num_goroutine", &is.numGoroutine)
@@ -3011,7 +3041,13 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out := make([]byte, 0, 256)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_quota %v\n", METRICS_PREFIX, is.memoryQuota.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_used_total %v\n", METRICS_PREFIX, is.memoryUsed.Value()))...)
-	out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
+
+	if common.IsServerlessDeployment() {
+		out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
+		out = append(out, []byte(fmt.Sprintf("%vunits_quota%v\n", METRICS_PREFIX, is.unitsQuota.Value()))...)
+		out = append(out, []byte(fmt.Sprintf("%vunits_used_actual%v\n", METRICS_PREFIX, is.unitsUsedActual.Value()))...)
+		out = append(out, []byte(fmt.Sprintf("%vnum_tenants%v\n", METRICS_PREFIX, is.numTenants.Value()))...)
+	}
 
 	w.WriteHeader(200)
 	w.Write([]byte(out))
