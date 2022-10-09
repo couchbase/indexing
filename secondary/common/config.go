@@ -2912,9 +2912,9 @@ var SystemConfig = Config{
 		false, // case-interface
 	},
 	"indexer.rebalance.shard_aware_rebalance": ConfigValue{
-		false,
+		true,
 		"use shard aware rebalance algorithm",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
