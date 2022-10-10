@@ -31,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -1128,22 +1129,40 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 
 	ttList = append(ttList, ttListRealInst...)
 
+	tokenMap := make(map[string]*c.TransferToken)
+	for _, t := range ttList {
+		tokenMap[t.ttid] = t.tt
+	}
+
 	// cleanup transfer token
 	for _, t := range ttList {
 
-		l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
-
-		if t.tt.MasterId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForMaster(t.ttid, t.tt)
+		if t.tt.IsShardTransferToken() {
+			l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
+			if t.tt.MasterId == string(m.nodeInfo.NodeID) {
+				m.cleanupShardTokenForMaster(t.ttid, t.tt)
+			}
+			if t.tt.SourceId == string(m.nodeInfo.NodeID) {
+				m.cleanupShardTokenForSource(t.ttid, t.tt, tokenMap)
+			}
+			if t.tt.DestId == string(m.nodeInfo.NodeID) {
+				m.cleanupShardTokenForDest(t.ttid, t.tt, tokenMap)
+			}
+		} else {
+			l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
+			if t.tt.MasterId == string(m.nodeInfo.NodeID) {
+				m.cleanupTransferTokensForMaster(t.ttid, t.tt)
+			}
+			if t.tt.SourceId == string(m.nodeInfo.NodeID) {
+				m.cleanupTransferTokensForSource(t.ttid, t.tt)
+			}
+			if t.tt.DestId == string(m.nodeInfo.NodeID) {
+				m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
+			}
 		}
-		if t.tt.SourceId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForSource(t.ttid, t.tt)
-		}
-		if t.tt.DestId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
-		}
-
 	}
+
+	m.cleanupAllDropOnSourceTokens()
 
 	return nil
 }
@@ -1262,6 +1281,268 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 	}
 
 	return nil
+}
+
+func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.TransferToken) error {
+
+	switch tt.ShardTransferTokenState {
+	case c.ShardTokenCreated, c.ShardTokenCommit, c.ShardTokenDeleted:
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt)
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupShardTokenForMaster Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken) error {
+
+	switch tt.ShardTransferTokenState {
+	case c.ShardTokenScheduledOnSource:
+
+		// TODO: Node may have updated in-memory booking for DDL
+		// during rebalance support. Clean that
+
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
+
+	case c.ShardTokenTransferShard:
+		// Source node might be uploading the data to destination and crashed
+
+		//TODO: Source node may have updated the in-memory book-keeping
+		// to allow DDL during rebalance. Clear the in-memory booking
+
+		// Initiate cleanup on S3 due to broken transfer
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Initiating clean-up for ttid: %v, "+
+			"shardIds: %v, destination: %v", ttid, tt.ShardIds, tt.Destination)
+
+		respCh := make(chan bool)
+		msg := &MsgShardTransferCleanup{
+			shardPaths:      nil,
+			destination:     tt.Destination,
+			rebalanceId:     tt.RebalId,
+			transferTokenId: ttid,
+			respCh:          respCh,
+		}
+
+		m.supvMsgch <- msg
+
+		// Wait for response of clean-up.
+		// Note that cleanup happens asyncronously in the back-ground.
+		// Getting a response here only means that cleanup has been
+		// initiated by plasma
+		<-respCh
+
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Done clean-up for ttid: %v, "+
+			"shardIds: %v, destination: %v", ttid, tt.ShardIds, tt.Destination)
+
+		// Delete transfer token from metakv
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
+
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Deleted ttid: %v, "+
+			"from metakv", ttid)
+
+	case c.ShardTokenReady:
+		// If this token is in Ready state, check for the presence of
+		// a tranfser token with ShardTokenDropOnSource state. If it
+		// exists then the index instances on source node can be dropped.
+		// Otherwise index instances on destination node will be dropped
+		dropOnSource := false
+		for _, tt := range tokenMap {
+			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
+				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
+					dropOnSource = true
+					break
+				}
+			}
+		}
+
+		if dropOnSource {
+			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
+				"as ShardTokenDropOnSource is posted for this token", ttid)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
+		} else { // Else, cleanup will be invoked on destination node
+			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
+				"as ShardTokenDropOnSource is not posted for this token", ttid)
+		}
+	}
+	return nil
+}
+
+func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken) error {
+
+	// TODO: Node may have updated in-memory booking for DDL
+	// during rebalance support. Clean that
+
+	switch tt.ShardTransferTokenState {
+	case c.ShardTokenScheduleAck:
+
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
+
+	case c.ShardTokenRestoreShard:
+		// Destination node might have crashed while download is in progress
+		// Cleanup data on S3
+
+		respCh := make(chan bool)
+		msg := &MsgShardTransferCleanup{
+			shardPaths:      nil,
+			destination:     tt.Destination,
+			rebalanceId:     tt.RebalId,
+			transferTokenId: ttid,
+			respCh:          respCh,
+		}
+
+		m.supvMsgch <- msg
+
+		// Wait for response of clean-up.
+		// Note that cleanup happens asyncronously in the back-ground.
+		// Getting a response here only means that cleanup has been
+		// initiated by plasma
+		<-respCh
+
+		// Clean up local index instances
+		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, false)
+
+	case c.ShardTokenRecoverShard:
+		// In this state, shard is successfully restored
+		// Cleanup data on S3
+
+		respCh := make(chan bool)
+		msg := &MsgShardTransferCleanup{
+			shardPaths:      nil,
+			destination:     tt.Destination,
+			rebalanceId:     tt.RebalId,
+			transferTokenId: ttid,
+			respCh:          respCh,
+		}
+
+		m.supvMsgch <- msg
+
+		// Wait for response of clean-up.
+		// Note that cleanup happens asyncronously in the back-ground.
+		// Getting a response here only means that cleanup has been
+		// initiated by plasma
+		<-respCh
+
+		// Drop all indexes on destination and cleanup the data locally
+		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
+
+	case c.ShardTokenReady:
+
+		dropOnDest := true
+		for _, tt := range tokenMap {
+			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
+				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
+					// There exists a dropOnSource token implies that both destination
+					// nodes have reached the Ready state. So, the instances will be
+					// dropped on source.
+					dropOnDest = false
+					break
+				}
+			}
+		}
+
+		if dropOnDest {
+			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
+				"as ShardTokenDropOnSource is not posted for this token", ttid)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
+		} else { // Else, cleanup on source will be triggered
+			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
+				"as ShardTokenDropOnSource is posted for this token", ttid)
+		}
+	}
+	return nil
+}
+
+func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
+	rtokens, err := m.getCurrRebalTokens()
+	if err != nil {
+		l.Errorf("RebalanceServiceManager::cleanupAllDropOnSourceTokens Error Fetching Metakv Tokens %v", err)
+		c.CrashOnError(err)
+	}
+
+	if rtokens != nil {
+		ttMap := rtokens.TT
+		for ttid, tt := range ttMap {
+			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
+				_, ok1 := ttMap[tt.SourceTokenId]
+				_, ok2 := ttMap[tt.SiblingTokenId]
+
+				if !ok1 && !ok2 {
+					// Both tokens deleted from metaKV. Clear all tokens with state
+					// ShardTokenDropOnSource
+					err = c.MetakvDel(RebalanceMetakvDir + ttid)
+					if err != nil {
+						l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+							"Meta Storage. %v. Err %v", tt, err)
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid string, tt *c.TransferToken, dropIndexes bool) error {
+
+	logging.Infof("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Cleaning up for "+
+		"ttid: %v, dropIndexes: %v", ttid, dropIndexes)
+
+	var err error
+	if dropIndexes {
+		for _, inst := range tt.IndexInsts {
+			err1 := m.cleanupIndex(inst.Defn)
+			if err1 != nil {
+				err = err1
+			}
+		}
+	}
+
+	// Destroy the local index data
+	respCh := make(chan bool)
+
+	msg := &MsgDestroyLocalShardData{
+		shardIds: tt.ShardIds,
+		respCh:   respCh,
+	}
+
+	m.supvMsgch <- msg
+
+	// Wait for response. Cleanup is a best effor call
+	// So, no need to process response
+	<-respCh
+
+	// TODO: What happens when index is in RECOVERED state and not
+	// recovered after bootstrap. Will drop index thrown an error
+	// In that case, we should go-ahead and delete metaKV token
+	// irrespective of "IndexNotFound error"
+	if err == nil {
+		err = c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
+	}
+	return err
 }
 
 func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {

@@ -78,6 +78,8 @@ type ShardRebalancer struct {
 	dropQueue  chan string     // ttids of source indexes waiting to be submitted for drop
 	dropQueued map[string]bool // set of ttids already added to dropQueue, as metakv can send duplicate notifications
 
+	destination string // Tranfser destination for rebalance
+
 	runPlanner bool
 
 	runParams *runParams // For DDL during rebalance
@@ -216,6 +218,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					for _, token := range sr.transferTokens {
 						token.Destination = destination
 					}
+					sr.destination = destination
 					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v in all transfer tokens", destination)
 
 				}
@@ -232,6 +235,13 @@ func getDestinationFromConfig(cfg c.Config) (string, error) {
 	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
 	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
 	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
+
+	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageBucket, "://") {
+		blobStorageScheme += "://"
+	}
+	if blobStorageBucket != "" && !strings.HasSuffix(blobStorageBucket, "/") {
+		blobStorageBucket += "/"
+	}
 
 	destination := blobStorageScheme + blobStorageBucket + blobStoragePrefix
 	if len(destination) == 0 {
@@ -1668,7 +1678,6 @@ func (sr *ShardRebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bo
 }
 
 func (sr *ShardRebalancer) finishRebalance(err error) {
-	// TODO: Add logic to clean-up transfer tokens
 	sr.retErr = err
 	sr.cleanupOnce.Do(sr.doFinish)
 }
