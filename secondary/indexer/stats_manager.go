@@ -3039,13 +3039,23 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]byte, 0, 256)
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_quota gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_quota %v\n", METRICS_PREFIX, is.memoryQuota.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_total gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_used_total %v\n", METRICS_PREFIX, is.memoryUsed.Value()))...)
 
 	if common.IsServerlessDeployment() {
+		out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_actual gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
+
+		out = append(out, []byte(fmt.Sprintf("# TYPE %vunits_quota gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vunits_quota %v\n", METRICS_PREFIX, is.unitsQuota.Value()))...)
+
+		out = append(out, []byte(fmt.Sprintf("# TYPE %vunits_used_actual gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vunits_used_actual %v\n", METRICS_PREFIX, is.unitsUsedActual.Value()))...)
+
+		out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_tenants gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vnum_tenants %v\n", METRICS_PREFIX, is.numTenants.Value()))...)
 	}
 
