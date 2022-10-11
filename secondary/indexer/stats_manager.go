@@ -3044,9 +3044,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	if common.IsServerlessDeployment() {
 		out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
-		out = append(out, []byte(fmt.Sprintf("%vunits_quota%v\n", METRICS_PREFIX, is.unitsQuota.Value()))...)
-		out = append(out, []byte(fmt.Sprintf("%vunits_used_actual%v\n", METRICS_PREFIX, is.unitsUsedActual.Value()))...)
-		out = append(out, []byte(fmt.Sprintf("%vnum_tenants%v\n", METRICS_PREFIX, is.numTenants.Value()))...)
+		out = append(out, []byte(fmt.Sprintf("%vunits_quota %v\n", METRICS_PREFIX, is.unitsQuota.Value()))...)
+		out = append(out, []byte(fmt.Sprintf("%vunits_used_actual %v\n", METRICS_PREFIX, is.unitsUsedActual.Value()))...)
+		out = append(out, []byte(fmt.Sprintf("%vnum_tenants %v\n", METRICS_PREFIX, is.numTenants.Value()))...)
 	}
 
 	w.WriteHeader(200)
