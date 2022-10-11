@@ -1464,7 +1464,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		for _, tt := range tokenMap {
 			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
 				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
-					// There exists a dropOnSource token implies that both destination
+					// There exists a dropOnSource token implies that destination
 					// nodes have reached the Ready state. So, the instances will be
 					// dropped on source.
 					dropOnDest = false

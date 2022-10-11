@@ -369,10 +369,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 	case c.ShardTokenReady:
 		sr.updateInMemToken(ttid, tt, "master")
 
-		if sr.getSiblingState(tt) == c.ShardTokenReady {
-			dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
+		if tt.SiblingExists() {
+			if sr.getSiblingState(tt) == c.ShardTokenReady {
+				dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
+				setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+			}
+		} else {
+			// If sibling does not exist, this could be replica repair or swap rebalance.
+			// Go-ahead and post dropOnSource token signalling completion of movements
+			dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, "")
 			setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
 		}
+
 		return true
 
 	case c.ShardTokenDropOnSource:
@@ -384,8 +392,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.updateInMemToken(ttid, tt, "master")
 		siblingState := sr.getSiblingState(tt)
 
-		if siblingState == c.ShardTokenCommit || siblingState == c.ShardTokenDeleted {
-			dropOnSourceTokenId, dropOnSourceToken := sr.getDropOnSourceTokenAndId(ttid, tt.SiblingTokenId)
+		if tt.SiblingExists() {
+			if siblingState == c.ShardTokenCommit || siblingState == c.ShardTokenDeleted {
+				dropOnSourceTokenId, dropOnSourceToken := sr.getDropOnSourceTokenAndId(ttid, tt.SiblingTokenId)
+				if dropOnSourceToken != nil {
+					dropOnSourceToken.ShardTransferTokenState = c.ShardTokenDeleted
+					setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+				}
+			}
+		} else {
+			// If sibling does not exist, this could be replica repair or swap rebalance.
+			// Go-ahead and delete dropOnSource token signalling completion of movements
+			dropOnSourceTokenId, dropOnSourceToken := sr.getDropOnSourceTokenAndId(ttid, "")
 			if dropOnSourceToken != nil {
 				dropOnSourceToken.ShardTransferTokenState = c.ShardTokenDeleted
 				setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
@@ -1749,6 +1767,14 @@ func (sr *ShardRebalancer) Cancel() {
 func (sr *ShardRebalancer) batchTransferTokens() {
 	tokenBatched := make(map[string]bool)
 
+	// The transfer tokens will be batched in the following order of priority
+	// a. All replica repair tokens will be processed first
+	// b. Swap rebalance tokens will be processed next
+	// c. Index movements across subclusters will be processed next
+
+	// TODO: Add support for batching tranfser tokens for replica repair
+	// Also add priority to batching tranfser tokens. Current code considers
+	// tokens of only swap rebalance and index movements across subclusters
 	for ttid, token := range sr.transferTokens {
 
 		if token.TransferMode != common.TokenTransferModeMove {
@@ -1758,11 +1784,15 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 		if _, ok := tokenBatched[ttid]; !ok {
 			tokenMap := make(map[string]*c.TransferToken)
 			tokenMap[ttid] = token
-			tokenMap[token.SiblingTokenId] = sr.transferTokens[token.SiblingTokenId]
+			if token.SiblingExists() {
+				tokenMap[token.SiblingTokenId] = sr.transferTokens[token.SiblingTokenId]
+			}
 			sr.batchedTokens = append(sr.batchedTokens, tokenMap)
 
 			tokenBatched[ttid] = true
-			tokenBatched[token.SiblingTokenId] = true
+			if token.SiblingExists() {
+				tokenBatched[token.SiblingTokenId] = true
+			}
 		}
 	}
 }
@@ -1802,6 +1832,10 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 			}
 		}
 
+		// TODO: With swap rebalance, replica repair and index movements in the list of
+		// transfer tokens, the transerBatchSize becomes a soft limit i.e. if there are
+		// 2 index movement tokens belonging to a bucket and 3 other swap rebalance tokens
+		// all 5 will be processed in same batch. This needs to be fixed
 		sr.batchedTokens[i] = nil // Deleted published tokens from batch list
 
 		if !publishAllTokens && count >= batchSize {

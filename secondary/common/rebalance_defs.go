@@ -416,3 +416,7 @@ func (tt *TransferToken) String() string {
 func (tt *TransferToken) IsShardTransferToken() bool {
 	return (tt.Version == MULTI_INST_SHARD_TRANSFER)
 }
+
+func (tt *TransferToken) SiblingExists() bool {
+	return tt.SiblingTokenId != ""
+}

@@ -751,12 +751,6 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 		}
 	}
 
-	if err := validateSiblingTokenId(result); err != nil {
-		logging.Errorf(err.Error())
-		logTransferTokens(true)
-		return nil, err
-	}
-
 	logTransferTokens(false)
 
 	return result, nil
