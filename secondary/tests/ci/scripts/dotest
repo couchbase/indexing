@@ -63,6 +63,48 @@ start_cluster() {
   sleep 60
 }
 
+start_cluster_serverless() {
+  for a in {1..3}; do
+    echo "Starting server: attempt $a"
+    stop_cluster
+    cd $WORKSPACE/ns_server
+    ./cluster_run -n7 --serverless 1>$WORKSPACE/run.log 2>&1 &
+    disown
+    for i in {1..120}; do
+      grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_1/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_2/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_3/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_4/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_5/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_6/info.log && \
+          wget -qO- http://localhost:9000/ &>/dev/null &&
+            wget -qO- http://localhost:9001/ &>/dev/null &&
+            wget -qO- http://localhost:9002/ &>/dev/null &&
+            wget -qO- http://localhost:9003/ &>/dev/null &&
+            wget -qO- http://localhost:9004/ &>/dev/null &&
+            wget -qO- http://localhost:9005/ &>/dev/null &&
+            wget -qO- http://localhost:9006/ &>/dev/null &&
+              ok_run=1 && break
+      sleep 3
+    done
+    test "$ok_run" || continue
+#    sleep 180
+#    ./cluster_connect -n2 -s 1500 -I 1500 -T n0:kv+n1ql,n1:kv+index >$WORKSPACE/run.log 2>&1 &
+#    for i in {1..120}; do
+#      grep -qs 'Bucket "default" marked as warmed' logs/n_0/info.log && \
+#        grep -qs 'Bucket "default" marked as warmed' logs/n_1/info.log && \
+#          ok_connect=1 && break
+#      sleep 3
+#    done
+#    test "$ok_connect" || continue
+    break
+  done
+  test "$ok_run" || error_exit "Server startup failed even after 3 tries"
+#  test "$ok_connect" || error_exit "Server connect failed even after 3 tries"
+  sleep 60
+}
+
 stop_cluster() {
   killall -ABRT indexer 1>/dev/null 2>&1
   killall -ABRT projector 1>/dev/null 2>&1
@@ -227,6 +269,27 @@ if [[ "$MODE" == *"$phase"* ]]; then
   curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_largedata_pprof.log
   collect_logs
   stop_cluster
+fi
+
+export phase=serverless
+if [[ "$MODE" == *"$phase"* ]]; then
+  if [ "$STORAGE" = "plasma" ]; then
+    stop_cluster
+    start_cluster_serverless
+    setUsernamePassword
+    export CBAUTH_REVRPC_URL="http://$Username:$Password@127.0.0.1:9000/query"
+    echo "</pre><h4>Serverless tests</h4><pre>"
+    cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/serverless
+
+    go test -timeout 4h -v -cbconfig ../config/buildtest_plasma.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
+    echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_serverless_pprof.log"
+    curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_serverless_pprof.log
+    echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_2/indexer_serverless_pprof.log"
+    curl http://$Username:$Password@127.0.0.1:9114/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_2/indexer_serverless_pprof.log
+
+    collect_logs
+    stop_cluster
+  fi
 fi
 
 export phase=performance

@@ -270,6 +270,7 @@ func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
 
 	rows, err := bucket.ExecuteN1qlQuery(query, []interface{}{})
 	if err != nil {
+		log.Printf("Error in executing N1QL query, err: %v", err)
 		return nil, err
 	}
 
