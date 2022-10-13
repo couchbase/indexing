@@ -3459,6 +3459,36 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.serverless.shardCopy.dbg": ConfigValue{
+		false,
+		"Enable debug during shard transfer and restore",
+		false,
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.shardCopy.s3dbg": ConfigValue{
+		0,
+		"Enable debug S3 requests and responses during shard transfer and restore," +
+			"0 : disable 1 : s3 request/response 2 : s3 http body (dev only)",
+		0,
+		false,
+		false,
+	},
+	"indexer.plasma.serverless.shardCopy.s3PartSize": ConfigValue{
+		5 * 1024 * 1024,
+		"Partition Size to be used for multipart upload and download (5MiB is min, 5GiB max)," +
+			"It is NOT recommended to alter the setting in production as it is an s3 object level setting",
+		5 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.serverless.shardCopy.s3MaxRetries": ConfigValue{
+		3,
+		"Maximum HTTP level retry attempts for an S3 request. This is aws sdk default as well.",
+		3,
+		false,
+		false,
+	},
 }
 
 // NewConfig from another
