@@ -64,6 +64,11 @@ type ShardRebalancer struct {
 	config      c.ConfigHolder
 	retErr      error
 
+	// Maintained by master. Represents the number of transfer tokens
+	// that are currently being processed after all tokens have reached
+	// ShardTokenScheduleAck state
+	currBatchSize int
+
 	// For computing rebalance progress
 	lastKnownProgress map[c.IndexInstId]float64
 
@@ -435,6 +440,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			func() {
 				sr.mu.Lock()
 				defer sr.mu.Unlock()
+				// Decrement the batchSize as token has finished processing
+				sr.currBatchSize--
 
 				sr.initiateShardTransferAsMaster()
 			}()
@@ -1827,7 +1834,11 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 		publishAllTokens = true
 	}
 
-	count := 0
+	if !publishAllTokens && sr.currBatchSize >= batchSize {
+		l.Infof("ShardRebalancer::initiateShardTransferAsMaster Returning as currBatchSize(%v) >= batchSize(%v)",
+			sr.currBatchSize, batchSize)
+		return
+	}
 
 	var publishedIds []string
 
@@ -1846,7 +1857,7 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 				ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
 				setTransferTokenInMetakv(ttid, ttClone)
 				publishedIds = append(publishedIds, ttid)
-				count++
+				sr.currBatchSize++
 			}
 		}
 
@@ -1856,12 +1867,13 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 		// all 5 will be processed in same batch. This needs to be fixed
 		sr.batchedTokens[i] = nil // Deleted published tokens from batch list
 
-		if !publishAllTokens && count >= batchSize {
+		if !publishAllTokens && sr.currBatchSize >= batchSize {
 			break
 		}
 	}
 	if len(publishedIds) > 0 {
-		l.Infof("ShardRebalancer::initiateShardTransferAsMaster Published transfer token batch: %v", publishedIds)
+		l.Infof("ShardRebalancer::initiateShardTransferAsMaster Published transfer token batch: %v, "+
+			"currBatchSize: %v", publishedIds, sr.currBatchSize)
 	}
 }
 
