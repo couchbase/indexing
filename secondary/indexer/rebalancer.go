@@ -2295,7 +2295,12 @@ func decodeTransferToken(path string, value []byte) (string, *c.TransferToken, e
 		return "", nil, err
 	}
 
-	l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt)
+	// Skip logging entire index instance for every transfer token state change as it can flood logs
+	if tt.IsShardTransferToken() && tt.ShardTransferTokenState != c.ShardTokenCreated {
+		l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt.LessVerboseString())
+	} else {
+		l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt)
+	}
 
 	return ttid, tt, nil
 
