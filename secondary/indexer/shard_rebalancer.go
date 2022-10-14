@@ -516,6 +516,8 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
+	start := time.Now()
+
 	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
 
@@ -538,6 +540,10 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 		// aborted and rebalancer would still get a message on respCh
 		// with errors as sr.cancel is passed on to downstream
 		case respMsg := <-respCh:
+
+			elapsed := time.Since(start).Seconds()
+			l.Infof("ShardRebalancer::startShardTransfer Received response for transfer of "+
+				"shards: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
 
 			msg := respMsg.(*MsgShardTransferResp)
 			errMap := msg.GetErrorMap()
@@ -589,6 +595,7 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
 		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
 
+	start := time.Now()
 	respCh := make(chan bool)
 	msg := &MsgShardTransferCleanup{
 		shardPaths:      shardPaths,
@@ -602,8 +609,9 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 
 	<-respCh // Wait for response of clean-up
 
+	elapsed := time.Since(start).Seconds()
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Done clean-up for ttid: %v, "+
-		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
+		"shard paths: %v, destination: %v, elapsed(sec): %v", ttid, shardPaths, destination, elapsed)
 
 	// Update error in transfer token so that rebalance master
 	// will finish the rebalance and clean-up can be invoked for
@@ -727,6 +735,8 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 	}
 	defer sr.wg.Done()
 
+	start := time.Now()
+
 	respCh := make(chan Message)                            // Carries final response of shard restore to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard restore to indexer
 
@@ -746,6 +756,10 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 	for {
 		select {
 		case respMsg := <-respCh:
+
+			elapsed := time.Since(start).Seconds()
+			l.Infof("ShardRebalancer::startRestoreShard Received response for restore of "+
+				"shardIds: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
 
 			msg := respMsg.(*MsgShardTransferResp)
 			errMap := msg.GetErrorMap()
@@ -816,6 +830,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		return
 	}
 	defer sr.wg.Done()
+
+	start := time.Now()
 
 	// All deferred indexes are created now. Create and recover non-deferred indexes
 	indexInsts := tt.IndexInsts
@@ -890,6 +906,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		}
 	}
 
+	elapsed := time.Since(start).Seconds()
+	l.Infof("ShardRebalancer::startShardRecovery Finished recovery of all indexes in ttid: %v, elapsed(sec): %v", ttid, elapsed)
 	// Coming here means that all indexes are actively build without any error
 	// Move the transfer token state to Ready
 	tt.ShardTransferTokenState = c.ShardTokenReady
