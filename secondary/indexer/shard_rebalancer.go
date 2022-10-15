@@ -22,6 +22,9 @@ import (
 	"github.com/couchbase/indexing/secondary/planner"
 )
 
+var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
+var ErrRebalanceDone = errors.New("Shard rebalance done received")
+
 // ShardRebalancer embeds Rebalancer struct to reduce code
 // duplication across common functions
 type ShardRebalancer struct {
@@ -840,6 +843,12 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
+	setErrInTransferToken := func(err error) {
+		if err != ErrRebalanceCancel && err != ErrRebalanceDone {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+		}
+	}
+
 	start := time.Now()
 
 	// All deferred indexes are created now. Create and recover non-deferred indexes
@@ -852,67 +861,47 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// of this collection. Once all indexes are recovered, they can be
 		// built in a batch
 		for _, defn := range defns {
-			select {
-			case <-sr.cancel:
-				l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
-				return // return for now. Cleanup will take care of dropping the index instances
 
-			case <-sr.done:
-				l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
-				return // return for now. Cleanup will take care of dropping the index instances
+			if err := sr.postRecoverIndexReq(defn, ttid, tt); err != nil {
+				setErrInTransferToken(err)
+				return
+			}
 
-			default:
-				if err := sr.postRecoverIndexReq(defn, ttid, tt); err != nil {
-					// Set transfer token error and return
-					sr.setTransferTokenError(ttid, tt, err.Error())
+			if defn.Deferred {
+				var deferredDefnIdList client.IndexIdList
+				deferredDefnIdList.DefnIds = append(deferredDefnIdList.DefnIds, uint64(defn.DefnId))
+				if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredDefnIdList, ttid, tt); err != nil {
+					setErrInTransferToken(err)
 					return
 				}
 
-				if defn.Deferred {
-					var deferredDefnIdList client.IndexIdList
-					deferredDefnIdList.DefnIds = append(deferredDefnIdList.DefnIds, uint64(defn.DefnId))
-					if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredDefnIdList, ttid, tt); err != nil {
-						sr.setTransferTokenError(ttid, tt, err.Error())
-						return
-					}
+				sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt)
+			} else {
+				// On a successful request, update book-keeping and process
+				// the next definition
+				buildDefnIdList.DefnIds = append(buildDefnIdList.DefnIds, uint64(defn.DefnId))
 
-					sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt)
-				} else {
-					// On a successful request, update book-keeping and process
-					// the next definition
-					buildDefnIdList.DefnIds = append(buildDefnIdList.DefnIds, uint64(defn.DefnId))
-
-					if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, buildDefnIdList, ttid, tt); err != nil {
-						sr.setTransferTokenError(ttid, tt, err.Error())
-						return
-					}
+				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, buildDefnIdList, ttid, tt); err != nil {
+					setErrInTransferToken(err)
+					return
 				}
 			}
+
 		}
 		logging.Infof("ShardRebalancer::startShardRecovery Successfully posted "+
 			"recoveryIndexRebalance requests for defnIds: %v belonging to collectionId: %v, ttid: %v. "+
 			"Initiating build", buildDefnIdList.DefnIds, cid, ttid)
 
-		select {
-		case <-sr.cancel:
-			l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
-			return // return for now. Cleanup will take care of dropping the index instances
-
-		case <-sr.done:
-			l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
-			return // return for now. Cleanup will take care of dropping the index instances
-
-		default:
-			if err := sr.postBuildIndexesReq(buildDefnIdList, ttid, tt); err != nil {
-				sr.setTransferTokenError(ttid, tt, err.Error())
-				return
-			}
-
-			if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, buildDefnIdList, ttid, tt); err != nil {
-				sr.setTransferTokenError(ttid, tt, err.Error())
-				return
-			}
+		if err := sr.postBuildIndexesReq(buildDefnIdList, ttid, tt); err != nil {
+			setErrInTransferToken(err)
+			return
 		}
+
+		if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, buildDefnIdList, ttid, tt); err != nil {
+			setErrInTransferToken(err)
+			return
+		}
+
 	}
 
 	elapsed := time.Since(start).Seconds()
@@ -943,45 +932,67 @@ func groupInstsPerColl(indexInsts []common.IndexInst) map[string][]common.IndexD
 }
 
 func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) error {
-	url := "/recoverIndexRebalance"
+	select {
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
+		return ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
-	resp, err := postWithHandleEOF(indexDefn, sr.localaddr, url, "ShardRebalancer::postRecoverIndexReq")
-	if err != nil {
-		logging.Errorf("ShardRebalancer::postRecoverIndexReq Error observed when posting recover index request, err: %v", err)
-		return err
-	}
+	case <-sr.done:
+		l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
+		return ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
-	response := new(IndexResponse)
-	if err := convertResponse(resp, response); err != nil {
-		l.Errorf("ShardRebalancer::postRecoverIndexReq Error unmarshal response %v %v", sr.localaddr+url, err)
-		return err
-	}
+	default:
+		url := "/recoverIndexRebalance"
 
-	if response.Error != "" {
-		l.Errorf("ShardRebalancer::postRecoverIndexReq Error received, err: %v", response.Error)
-		return errors.New(response.Error)
+		resp, err := postWithHandleEOF(indexDefn, sr.localaddr, url, "ShardRebalancer::postRecoverIndexReq")
+		if err != nil {
+			logging.Errorf("ShardRebalancer::postRecoverIndexReq Error observed when posting recover index request, err: %v", err)
+			return err
+		}
+
+		response := new(IndexResponse)
+		if err := convertResponse(resp, response); err != nil {
+			l.Errorf("ShardRebalancer::postRecoverIndexReq Error unmarshal response %v %v", sr.localaddr+url, err)
+			return err
+		}
+
+		if response.Error != "" {
+			l.Errorf("ShardRebalancer::postRecoverIndexReq Error received, err: %v", response.Error)
+			return errors.New(response.Error)
+		}
 	}
 	return nil
 }
 
 func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) error {
-	url := "/buildRecoveredIndexesRebalance"
+	select {
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
+		return ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
-	resp, err := postWithHandleEOF(defnIdList, sr.localaddr, url, "ShardRebalancer::postBuildIndexesReq")
-	if err != nil {
-		logging.Errorf("ShardRebalancer::postBuildIndexesReq Error observed when posting build indexes request, err: %v", err)
-		return err
-	}
+	case <-sr.done:
+		l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
+		return ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
-	response := new(IndexResponse)
-	if err := convertResponse(resp, response); err != nil {
-		l.Errorf("ShardRebalancer::postBuildIndexesReq Error unmarshal response %v %v", sr.localaddr+url, err)
-		return err
-	}
+	default:
+		url := "/buildRecoveredIndexesRebalance"
 
-	if response.Error != "" {
-		l.Errorf("ShardRebalancer::postBuildIndexesReq Error received, err: %v", response.Error)
-		return errors.New(response.Error)
+		resp, err := postWithHandleEOF(defnIdList, sr.localaddr, url, "ShardRebalancer::postBuildIndexesReq")
+		if err != nil {
+			logging.Errorf("ShardRebalancer::postBuildIndexesReq Error observed when posting build indexes request, err: %v", err)
+			return err
+		}
+
+		response := new(IndexResponse)
+		if err := convertResponse(resp, response); err != nil {
+			l.Errorf("ShardRebalancer::postBuildIndexesReq Error unmarshal response %v %v", sr.localaddr+url, err)
+			return err
+		}
+
+		if response.Error != "" {
+			l.Errorf("ShardRebalancer::postBuildIndexesReq Error received, err: %v", response.Error)
+			return errors.New(response.Error)
+		}
 	}
 	return nil
 }
@@ -1008,10 +1019,10 @@ loop:
 		select {
 		case <-sr.cancel:
 			l.Infof("ShardRebalancer::waitForIndexState Cancel Received")
-			break loop
+			return ErrRebalanceCancel
 		case <-sr.done:
 			l.Infof("ShardRebalancer::waitForIndexState Done Received")
-			break loop
+			return ErrRebalanceDone
 
 		default:
 			allStats := sr.statsMgr.stats.Get()
