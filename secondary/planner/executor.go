@@ -2022,7 +2022,11 @@ func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
 
 	tenantAwarePlanner, err := executeTenantAwarePlan(plan, indexSpec)
 
-	return tenantAwarePlanner.GetResult(), err
+	if tenantAwarePlanner != nil {
+		return tenantAwarePlanner.GetResult(), nil
+	} else {
+		return nil, err
+	}
 
 }
 
@@ -2109,8 +2113,8 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 	}
 
 	if len(result) == 0 {
-		logging.Infof("%v Found no matching candidate for tenant %v", _executeTenantAwarePlan,
-			indexSpec)
+		logging.Infof("%v Found no matching candidate for tenant %v. Error - %v", _executeTenantAwarePlan,
+			indexSpec, errStr)
 		retErr := "Planner not able to find any node for placement - " + errStr
 		return nil, errors.New(retErr)
 	} else {
