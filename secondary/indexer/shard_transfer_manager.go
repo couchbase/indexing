@@ -82,6 +82,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	rebalCancelCh := msg.GetCancelCh()
+	rebalDoneCh := msg.GetDoneCh()
 	destination := msg.GetDestination()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
@@ -92,7 +93,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	meta[plasma.GSIRebalanceTransferToken] = ttid
 
 	// Closed when all shards are done processing
-	doneCh := make(chan bool)
+	transferDoneCh := make(chan bool)
 
 	// cancelCh is shared between both mainStore and backStore
 	// transfer shard routines. As transfer happens asyncronously,
@@ -175,7 +176,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		}
 
 		wg.Wait() // Wait for all transfer shard go-routines to complete execution
-		close(doneCh)
+		close(transferDoneCh)
 	}()
 
 	sendResponse := func() {
@@ -195,18 +196,19 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
 		closeCancelCh()
 
-	case <-doneCh: // All shards are done processing
+	case <-rebalDoneCh:
+		closeCancelCh()
+
+	case <-transferDoneCh: // All shards are done processing
 		sendResponse()
 		return
 	}
 
-	// Incase rebalCancelCh is closed first, then wait for all
-	// transfers to invoke doneCb with the uploaded paths so
-	// that rebalancer can initiate cleanup. If doneCh is invoked
-	// first in the above select, then this code will not be
-	// executed
+	// Incase rebalCancelCh or rebalDoneCh is closed first, then
+	// wait for plasma to finish processing and then send response
+	// to caller
 	select {
-	case <-doneCh:
+	case <-transferDoneCh:
 		sendResponse()
 		return
 	}
@@ -276,11 +278,12 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	ttid := msg.GetTransferTokenId()
 	destination := msg.GetDestination()
 	rebalCancelCh := msg.GetCancelCh()
+	rebalDoneCh := msg.GetDoneCh()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
 
 	// Closed when all shards are done processing
-	doneCh := make(chan bool)
+	restoreDoneCh := make(chan bool)
 
 	// cancelCh is shared between both mainStore and backStore
 	// transfer shard routines. As transfer happens asyncronously,
@@ -360,7 +363,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 		}
 
 		wg.Wait() // Wait for all transfer shard go-routines to complete execution
-		close(doneCh)
+		close(restoreDoneCh)
 	}()
 
 	sendResponse := func() {
@@ -380,18 +383,19 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
 		closeCancelCh()
 
-	case <-doneCh: // All shards are done processing
+	case <-rebalDoneCh:
+		closeCancelCh()
+
+	case <-restoreDoneCh: // All shards are done processing
 		sendResponse()
 		return
 	}
 
-	// Incase rebalCancelCh is closed first, then wait for all
-	// transfers to invoke doneCb with the uploaded paths so
-	// that rebalancer can initiate cleanup. If doneCh is invoked
-	// first in the above select, then this code will not be
-	// executed
+	// Incase rebalCancelCh or rebalDoneCh is closed first, then
+	// wait for plasma to finish processing and then send response
+	// to caller
 	select {
-	case <-doneCh:
+	case <-restoreDoneCh:
 		sendResponse()
 		return
 	}

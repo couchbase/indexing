@@ -535,6 +535,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 		destination:     tt.Destination,
 
 		cancelCh:   sr.cancel,
+		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
 	}
@@ -719,7 +720,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 	case c.ShardTokenRestoreShard:
 		sr.updateInMemToken(ttid, tt, "dest")
 
-		go sr.startRestoreShard(ttid, tt)
+		go sr.startShardRestore(ttid, tt)
 
 		return true
 
@@ -735,7 +736,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 	}
 }
 
-func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
+func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 
 	if !sr.addToWaitGroup() {
 		return
@@ -754,6 +755,7 @@ func (sr *ShardRebalancer) startRestoreShard(ttid string, tt *c.TransferToken) {
 		destination:     tt.Destination,
 
 		cancelCh:   sr.cancel,
+		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
 	}
