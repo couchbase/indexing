@@ -867,7 +867,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				return
 			}
 
-			if defn.Deferred {
+			// For deferred indexes, build command is not required
+			if defn.Deferred &&
+				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+					defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 
 				var partnMergeWaitGroup sync.WaitGroup
 				deferredInsts := make(map[common.IndexInstId]bool)

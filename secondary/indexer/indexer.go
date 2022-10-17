@@ -2266,7 +2266,9 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
 	}
 
-	if indexInst.Defn.Deferred {
+	if indexInst.Defn.Deferred &&
+		(indexInst.Defn.InstStateAtRebal == common.INDEX_STATE_CREATED ||
+			indexInst.Defn.InstStateAtRebal == common.INDEX_STATE_READY) {
 		indexInst.State = common.INDEX_STATE_READY
 	} else {
 		indexInst.State = common.INDEX_STATE_RECOVERED

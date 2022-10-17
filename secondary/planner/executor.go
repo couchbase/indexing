@@ -607,7 +607,8 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				sliceIndex = len(token.InstIds) - 1
 			}
 
-			token.IndexInsts[sliceIndex].Defn.InstVersion = token.IndexInst.Version + 1
+			token.IndexInsts[sliceIndex].Defn.InstStateAtRebal = token.IndexInsts[sliceIndex].State
+			token.IndexInsts[sliceIndex].Defn.InstVersion = token.IndexInsts[sliceIndex].Version + 1
 			token.IndexInsts[sliceIndex].Defn.ReplicaId = token.IndexInsts[sliceIndex].ReplicaId
 			token.IndexInsts[sliceIndex].Defn.Using = common.IndexType(indexer.StorageMode)
 			if token.IndexInsts[sliceIndex].Pc != nil {
