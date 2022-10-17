@@ -3585,8 +3585,13 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 
 		if restartTs, ok := allRestartTs[keyspaceId]; ok {
 			sessionId := idx.genNextSessionId(common.INIT_STREAM, keyspaceId)
-			idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, restartTs, nil, restartTs.Seqnos,
-				allNilSnaps, false, false, sessionId)
+			if restartTs != nil {
+				idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, restartTs, nil, restartTs.Seqnos,
+					allNilSnaps, false, false, sessionId)
+			} else {
+				idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, nil, nil, nil,
+					allNilSnaps, false, false, sessionId)
+			}
 			idx.setStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId, STREAM_ACTIVE)
 		} else {
 			allKeyspaceIds := make([]string, 0)

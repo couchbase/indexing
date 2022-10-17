@@ -606,6 +606,18 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 
 				sliceIndex = len(token.InstIds) - 1
 			}
+			// If there is a build token for the definition, set index STATE to INITIAL so the
+			// index will be built as part of rebalancing. It is not a good idea to build this
+			// index with other indexes of the keyspace as they may have a non-zero timestamp.
+			// If all the indexes are built in same batch, then indexer will compute the minimum
+			// restartable timestamp & build for all indexes will start at "0" seqno. Hence, all
+			// indexes with INITIAL state are built separately during recovery
+			if index.pendingBuild && !index.PendingDelete {
+				if token.IndexInsts[sliceIndex].State == common.INDEX_STATE_CREATED ||
+					token.IndexInsts[sliceIndex].State == common.INDEX_STATE_READY {
+					token.IndexInsts[sliceIndex].State = common.INDEX_STATE_INITIAL
+				}
+			}
 
 			token.IndexInsts[sliceIndex].Defn.InstStateAtRebal = token.IndexInsts[sliceIndex].State
 			token.IndexInsts[sliceIndex].Defn.InstVersion = token.IndexInsts[sliceIndex].Version + 1
