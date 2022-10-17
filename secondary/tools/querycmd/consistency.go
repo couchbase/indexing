@@ -25,6 +25,8 @@ var constEqualLookup3 = []byte(`["delhi"]`)
 var constEqualLookup4 = []byte(`["kolkata"]`)
 var constEqualLookup5 = []byte(`["madras"]`)
 
+var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+
 func doConsistency(
 	cluster string, maxvb int, client *qclient.GsiClient) (err error) {
 
@@ -141,7 +143,7 @@ func queryConsistency(
 					}
 				}
 				return true
-			}, false)
+			}, scanParams)
 		fmt.Println("Scan: QueryConsistency ... ok\n")
 		synch <- true
 	}()
@@ -167,7 +169,7 @@ func sessionConsistency(
 					}
 				}
 				return true
-			}, false)
+			}, scanParams)
 		fmt.Println("Scan: SessionConsistency ... ok\n")
 		synch <- true
 	}()
@@ -191,7 +193,7 @@ func anyConsistency(
 				}
 			}
 			return true
-		}, false)
+		}, scanParams)
 	fmt.Println("Scan: AnyConsistency ... ok\n")
 }
 

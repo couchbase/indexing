@@ -391,10 +391,16 @@ func (tt *TransferToken) String() string {
 	if tt.SourceTokenId != "" { // Used only for ShardTokenDropOnSource state
 		fmt.Fprintf(sbp, "SourceTokenId: %v ", tt.SourceTokenId)
 	}
+
 	// If more than one index instance exists, print all of them
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
 		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
+
+		if tt.Destination != "" {
+			fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
+		}
+
 		for i := range tt.IndexInsts {
 			fmt.Fprintf(sbp, "InstId: %v ", tt.InstIds[i])
 			fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstIds[i])
@@ -413,6 +419,68 @@ func (tt *TransferToken) String() string {
 	return sb.String()
 }
 
+func (tt *TransferToken) LessVerboseString() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " MasterId: %v ", tt.MasterId)
+	fmt.Fprintf(sbp, "SourceId: %v ", tt.SourceId)
+	if len(tt.SourceHost) != 0 {
+		fmt.Fprintf(sbp, "(%v) ", tt.SourceHost)
+	}
+	fmt.Fprintf(sbp, "DestId: %v ", tt.DestId)
+	if len(tt.DestHost) != 0 {
+		fmt.Fprintf(sbp, "(%v) ", tt.DestHost)
+	}
+	fmt.Fprintf(sbp, "RebalId: %v ", tt.RebalId)
+
+	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
+	}
+
+	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
+	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
+	if tt.Error != "" {
+		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
+	}
+
+	if tt.SourceTokenId != "" { // Used only for ShardTokenDropOnSource state
+		fmt.Fprintf(sbp, "SourceTokenId: %v ", tt.SourceTokenId)
+	}
+	// If more than one index instance exists, print all of them
+	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
+		fmt.Fprintf(sbp, "Shards: %v ", tt.ShardIds)
+		if tt.Destination != "" {
+			fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
+		}
+		for i := range tt.IndexInsts {
+			fmt.Fprintf(sbp, "\tInstId: %v ", tt.InstIds[i])
+			fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstIds[i])
+			fmt.Fprintf(sbp, "Name: %v Bucket: %v ScopeId: %v/%v Collection/Id: %v/%v ",
+				tt.IndexInsts[i].Defn.Name, tt.IndexInsts[i].Defn.Bucket,
+				tt.IndexInsts[i].Defn.Scope, tt.IndexInsts[i].Defn.ScopeId,
+				tt.IndexInsts[i].Defn.Collection, tt.IndexInsts[i].Defn.CollectionId)
+			fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInsts[i].Defn.Partitions)
+			fmt.Fprintf(sbp, "Versions: %v\n", tt.IndexInsts[i].Defn.Versions)
+		}
+	} else {
+		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
+		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
+		fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
+		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
+		fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
+	}
+
+	return sb.String()
+}
+
 func (tt *TransferToken) IsShardTransferToken() bool {
 	return (tt.Version == MULTI_INST_SHARD_TRANSFER)
+}
+
+func (tt *TransferToken) SiblingExists() bool {
+	return tt.SiblingTokenId != ""
 }

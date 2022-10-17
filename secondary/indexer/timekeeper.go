@@ -2878,25 +2878,44 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		}
 	}
 
-	//For INIT_STREAM, if there is no new/pending TS, check for stream merge.
-	//fetchKVSeq is set to true here to allow merge to fetch latest bucket/collection seqnos
-	//for the check. This is an expensive operation and is only done if there is no
-	//flush activity.
+	// For INIT_STREAM, if there is no new/pending TS, check for stream merge.
+	// Merge is checked every 1 second so that if INIT_STREAM is already caught up
+	// with MAINT_STREAM but there is no flush activity, then timekeeper need not
+	// wait for 5 seconds to decide no merge. When checkInitStreamReadyToMerge fails,
+	// it logs a reason for failure. Doing this check more frequently can lead to log
+	// flooding.
+	//
+	// Also, fetchKVSeq is set to true every 5 seconds here to allow merge to fetch latest
+	// bucket/collection seqnos for the check. This is an expensive operation and is only done
+	// if there is no flush activity.
 	if streamId == common.INIT_STREAM {
 		if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
 			!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
 
 			lastKVSeqFetchTime := tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId]
+			lastMergeCheckTime := tk.ss.streamKeyspaceIdLastMergeCheckTime[streamId][keyspaceId]
+			fetchKVSeq := false
 
 			//if there is no flush activity, check for stream merge every 5 seconds by
 			//fetching the KV Seqnums(expensive check)
 			if time.Since(lastKVSeqFetchTime) > time.Duration(5*time.Second) {
+				fetchKVSeq = true
+			}
+
+			if time.Since(lastMergeCheckTime) > time.Duration(1*time.Second) {
 				lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
+
 				logging.Infof("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge.", streamId, keyspaceId)
 				logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Check pending stream merge. lastFlushedTs %v",
 					streamId, keyspaceId, lastFlushedTs)
-				tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, true /*fetchKVSeq*/)
-				tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = time.Now()
+
+				tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs, fetchKVSeq)
+
+				currTime := time.Now()
+				if fetchKVSeq {
+					tk.ss.streamKeyspaceIdLastKVSeqFetch[streamId][keyspaceId] = currTime
+				}
+				tk.ss.streamKeyspaceIdLastMergeCheckTime[streamId][keyspaceId] = currTime
 			}
 		}
 	}

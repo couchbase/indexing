@@ -268,6 +268,7 @@ func HandleCommand(
 	}
 
 	dataEncFmt := client.GetDataEncodingFormat()
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 
 	var tmpbuf *[]byte
 	var tmpbufPoolIdx uint32
@@ -492,11 +493,11 @@ func HandleCommand(
 			equals := []c.SecondaryKey{cmd.Equal}
 			client.Lookup(
 				uint64(defnID), "", equals, distinct, limit,
-				cons, nil, callb, false)
+				cons, nil, callb, scanParams)
 		} else {
 			err = client.Range(
 				uint64(defnID), "", low, high, incl, distinct, limit,
-				cons, nil, callb, false)
+				cons, nil, callb, scanParams)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -525,7 +526,7 @@ func HandleCommand(
 			fmt.Fprintf(w, "Index state: {%v, %v} \n", state, err)
 		} else {
 			err = client.ScanAll(
-				uint64(defnID), "", limit, cons, nil, callb, false)
+				uint64(defnID), "", limit, cons, nil, callb, scanParams)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)

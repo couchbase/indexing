@@ -51,6 +51,7 @@ func doCuredRange(
 	var l, h []byte
 	var count int
 	count, l, h = 0, nil, nil
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	err := client.Range(
 		defnID, "1", low, high, 3, false, 10000000,
 		c.AnyConsistency, nil,
@@ -68,7 +69,7 @@ func doCuredRange(
 				h = pkeys[ln-1]
 			}
 			return true
-		}, false)
+		}, scanParams)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1500,32 +1500,34 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		}
 	}
 
+	// For indexes created during shard rebalance, the state & shardIds of the index
+	// instance will be updated once index is completely recovered
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		return nil
+	}
 	/////////////////////////////////////////////////////
 	// Update Index State
 	/////////////////////////////////////////////////////
 
-	// For indexes created during shard rebalance, the state of the index instance will be
-	// updated once index is completely recovered
-	if reqCtx.ReqSource != common.DDLRequestSourceShardRebalance {
-		// If cannot move the index to READY state, then abort create index by cleaning up the metadata.
-		// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
-		// the index definition from repository. If drop index is not successful during cleanup,
-		// the index will be repaired upon bootstrap or cleanup by janitor.
-		if err := m.updateIndexStateAndShardIds(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY, partnShardIdMap); err != nil {
-			logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
-			m.DeleteIndex(defn.DefnId, true, false, reqCtx)
-			return err
-		}
-
-		instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
-		if instState != common.INDEX_STATE_READY {
-			logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
-				"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
-			err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
-				defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_READY)
-			return err
-		}
+	// If cannot move the index to READY state, then abort create index by cleaning up the metadata.
+	// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
+	// the index definition from repository. If drop index is not successful during cleanup,
+	// the index will be repaired upon bootstrap or cleanup by janitor.
+	if err := m.updateIndexStateAndShardIds(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY, partnShardIdMap); err != nil {
+		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
+		m.DeleteIndex(defn.DefnId, true, false, reqCtx)
+		return err
 	}
+
+	instState := m.getInstStateFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId)
+	if instState != common.INDEX_STATE_READY {
+		logging.Fatalf("LifecycleMgr.CreateIndex(): Instance state is not INDEX_STATE_READY. Instance: %v (%v, %v, %v, %v). "+
+			"Instance state in topology: %v", instId, defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instState)
+		err := fmt.Errorf("Unexpected Instance State %v for Index (%v, %v, %v, %v). Expected %v.", instState,
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.INDEX_STATE_READY)
+		return err
+	}
+
 	/////////////////////////////////////////////////////
 	// Build Index
 	/////////////////////////////////////////////////////
@@ -3157,13 +3159,27 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	// 2) Index definition is deleted.  This effectively "delete index".
 	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
-		var err error
-		partnShardIdMap, err = m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx)
-		if err != nil {
-			logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
-			m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
-			return err
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
+				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
+				m.DeleteIndex(defn.DefnId, false, false, nil)
+				return err
+			}
+		} else {
+			var err error
+			partnShardIdMap, err = m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx)
+			if err != nil {
+				logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
+				m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
+				return err
+			}
 		}
+	}
+
+	// For indexes created during shard rebalance, the state & shardIds of the index
+	// instance will be updated once index is completely recovered
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		return nil
 	}
 
 	/////////////////////////////////////////////////////
@@ -3191,7 +3207,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	/////////////////////////////////////////////////////
 
 	// Run index build
-	if !defn.Deferred && scheduled && !asyncCreate {
+	if !defn.Deferred && scheduled && !asyncCreate && (reqCtx.ReqSource != common.DDLRequestSourceShardRebalance) {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndexInstance() : start Index Build")
 

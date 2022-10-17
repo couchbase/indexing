@@ -264,54 +264,54 @@ type GsiAccessor interface {
 		defnID uint64, requestId string, values []common.SecondaryKey,
 		distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		callb ResponseHandler, skipReadMetering bool) error
+		callb ResponseHandler, scanParams map[string]interface{}) error
 
 	// Lookup scan index between low and high.
 	LookupInternal(
 		defnID uint64, requestId string, values []common.SecondaryKey,
 		distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker, skipReadMetering bool) error
+		broker *RequestBroker, scanParams map[string]interface{}) error
 
 	// Range scan index between low and high.
 	Range(
 		defnID uint64, requestId string, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		callb ResponseHandler, skipReadMetering bool) error
+		callb ResponseHandler, scanParams map[string]interface{}) error
 
 	// Range scan index between low and high.
 	RangeInternal(
 		defnID uint64, requestId string, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker, skipReadMetering bool) error
+		broker *RequestBroker, scanParams map[string]interface{}) error
 
 	// ScanAll for full table scan.
 	ScanAll(
 		defnID uint64, requestId string, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		callb ResponseHandler, skipReadMetering bool) error
+		callb ResponseHandler, scanParams map[string]interface{}) error
 
 	// ScanAll for full table scan.
 	ScanAllInternal(
 		defnID uint64, requestId string, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker, skipReadMetering bool) error
+		broker *RequestBroker, scanParams map[string]interface{}) error
 
 	// Multiple scans with composite index filters
 	MultiScan(
 		defnID uint64, requestId string, scans Scans,
 		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		callb ResponseHandler, skipReadMetering bool) error
+		callb ResponseHandler, scanParams map[string]interface{}) error
 
 	// Multiple scans with composite index filters
 	MultiScanInternal(
 		defnID uint64, requestId string, scans Scans,
 		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker, skipReadMetering bool) error
+		broker *RequestBroker, scanParams map[string]interface{}) error
 
 	// CountLookup of all entries in index.
 	CountLookup(
@@ -341,14 +341,14 @@ type GsiAccessor interface {
 	MultiScanCount(
 		defnID uint64, requestId string,
 		scans Scans, distinct bool,
-		cons common.Consistency, vector *TsConsistency, skipReadMetering bool) (int64, uint64, error)
+		cons common.Consistency, vector *TsConsistency, scanParams map[string]interface{}) (int64, uint64, error)
 
 	// Count using MultiScan
 	MultiScanCountInternal(
 		defnID uint64, requestId string,
 		scans Scans, distinct bool,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker, skipReadMetering bool) (int64, uint64, error)
+		broker *RequestBroker, scanParams map[string]interface{}) (int64, uint64, error)
 
 	// Scan API3 with grouping and aggregates support
 	Scan3(
@@ -356,7 +356,7 @@ type GsiAccessor interface {
 		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 		groupAggr *GroupAggr,
 		cons common.Consistency, vector *TsConsistency,
-		callb ResponseHandler, skipReadMetering bool) error
+		callb ResponseHandler, scanParams map[string]interface{}) error
 
 	// Scan API3 with grouping and aggregates support
 	Scan3Internal(
@@ -364,7 +364,7 @@ type GsiAccessor interface {
 		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 		groupAggr *GroupAggr,
 		cons common.Consistency, vector *TsConsistency,
-		broker *RequestBroker, skipReadMetering bool) error
+		broker *RequestBroker, scanParams map[string]interface{}) error
 
 	// StorageStatistics API4 for getting per partition storage stats.
 	// Return value is a slice of maps, each map is storage stats per partition
@@ -661,11 +661,11 @@ func (c *GsiClient) Lookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, skipReadMetering bool) (err error) {
+	callb ResponseHandler, scanParams map[string]interface{}) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.LookupInternal(defnID, requestId, values, distinct, limit, cons, vector, broker, skipReadMetering)
+	return c.LookupInternal(defnID, requestId, values, distinct, limit, cons, vector, broker, scanParams)
 }
 
 // Lookup scan index between low and high.
@@ -673,7 +673,7 @@ func (c *GsiClient) LookupInternal(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker, skipReadMetering bool) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -698,7 +698,7 @@ func (c *GsiClient) LookupInternal(
 		}
 		return qc.Lookup(
 			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
-			vector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+			vector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -719,11 +719,11 @@ func (c *GsiClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion, distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, skipReadMetering bool) (err error) {
+	callb ResponseHandler, scanParams map[string]interface{}) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.RangeInternal(defnID, requestId, low, high, inclusion, distinct, limit, cons, vector, broker, skipReadMetering)
+	return c.RangeInternal(defnID, requestId, low, high, inclusion, distinct, limit, cons, vector, broker, scanParams)
 }
 
 // Range scan index between low and high.
@@ -731,7 +731,7 @@ func (c *GsiClient) RangeInternal(
 	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion, distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker, skipReadMetering bool) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -771,13 +771,13 @@ func (c *GsiClient) RangeInternal(
 			return qc.RangePrimary(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
 				broker.GetLimit(), cons, vector, handler, rollbackTime,
-				partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+				partitions, dataEncFmt, broker.DoRetry(), scanParams)
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
 			broker.GetLimit(), cons, vector, handler, rollbackTime, partitions,
-			dataEncFmt, broker.DoRetry(), skipReadMetering)
+			dataEncFmt, broker.DoRetry(), scanParams)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -797,18 +797,18 @@ func (c *GsiClient) RangeInternal(
 func (c *GsiClient) ScanAll(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, skipReadMetering bool) (err error) {
+	callb ResponseHandler, scanParams map[string]interface{}) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.ScanAllInternal(defnID, requestId, limit, cons, vector, broker, skipReadMetering)
+	return c.ScanAllInternal(defnID, requestId, limit, cons, vector, broker, scanParams)
 }
 
 // ScanAll for full table scan.
 func (c *GsiClient) ScanAllInternal(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker, skipReadMetering bool) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -832,7 +832,7 @@ func (c *GsiClient) ScanAllInternal(
 			return err, false
 		}
 		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(),
-			cons, vector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+			cons, vector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -852,18 +852,18 @@ func (c *GsiClient) MultiScan(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, skipReadMetering bool) (err error) {
+	callb ResponseHandler, scanParams map[string]interface{}) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.MultiScanInternal(defnID, requestId, scans, reverse, distinct, projection, offset, limit, cons, vector, broker, skipReadMetering)
+	return c.MultiScanInternal(defnID, requestId, scans, reverse, distinct, projection, offset, limit, cons, vector, broker, scanParams)
 }
 
 func (c *GsiClient) MultiScanInternal(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker, skipReadMetering bool) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -891,13 +891,13 @@ func (c *GsiClient) MultiScanInternal(
 			return qc.MultiScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), cons,
-				vector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+				vector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), cons, vector,
-			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry(), scanParams)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1050,19 +1050,19 @@ func (c *GsiClient) CountRangeInternal(
 }
 
 func (c *GsiClient) MultiScanCount(defnID uint64, requestId string, scans Scans,
-	distinct bool, cons common.Consistency, vector *TsConsistency, skipReadMetering bool) (
+	distinct bool, cons common.Consistency, vector *TsConsistency, scanParams map[string]interface{}) (
 	count int64, readUnits uint64, err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(nil, dataEncFmt)
-	return c.MultiScanCountInternal(defnID, requestId, scans, distinct, cons, vector, broker, skipReadMetering)
+	return c.MultiScanCountInternal(defnID, requestId, scans, distinct, cons, vector, broker, scanParams)
 }
 
 func (c *GsiClient) MultiScanCountInternal(
 	defnID uint64, requestId string,
 	scans Scans, distinct bool,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker, skipReadMetering bool) (
+	broker *RequestBroker, scanParams map[string]interface{}) (
 	count int64, readUnits uint64, err error) {
 
 	if c.bridge == nil {
@@ -1086,13 +1086,13 @@ func (c *GsiClient) MultiScanCountInternal(
 		}
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			count, ru, err = qc.MultiScanCountPrimary(
-				uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry(), skipReadMetering)
+				uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry(), scanParams)
 			atomic.AddUint64(&readUnits, ru)
 			return count, err, false
 		}
 
 		count, ru, err = qc.MultiScanCount(uint64(index.DefnId), requestId,
-			scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry(), skipReadMetering)
+			scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry(), scanParams)
 		atomic.AddUint64(&readUnits, ru)
 		return count, err, false
 	}
@@ -1111,12 +1111,12 @@ func (c *GsiClient) Scan3(
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, skipReadMetering bool) (err error) {
+	callb ResponseHandler, scanParams map[string]interface{}) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
-		projection, offset, limit, groupAggr, indexOrder, cons, vector, broker, skipReadMetering)
+		projection, offset, limit, groupAggr, indexOrder, cons, vector, broker, scanParams)
 }
 
 func (c *GsiClient) Scan3Internal(
@@ -1124,7 +1124,7 @@ func (c *GsiClient) Scan3Internal(
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, vector *TsConsistency,
-	broker *RequestBroker, skipReadMetering bool) (err error) {
+	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -1153,14 +1153,14 @@ func (c *GsiClient) Scan3Internal(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, vector, handler, rollbackTime,
-				partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+				partitions, dataEncFmt, broker.DoRetry(), scanParams)
 		}
 
 		return qc.Scan3(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, vector, handler, rollbackTime,
-			partitions, dataEncFmt, broker.DoRetry(), skipReadMetering)
+			partitions, dataEncFmt, broker.DoRetry(), scanParams)
 	}
 
 	broker.SetScanRequestHandler(handler)

@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package queryport
@@ -157,6 +158,7 @@ func TestScanAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 
 	count := 0
 	qc.ScanAll(
@@ -174,7 +176,7 @@ func TestScanAll(t *testing.T) {
 				}
 			}
 			return true
-		}, false)
+		}, scanParams)
 
 	count = 0
 	qc.ScanAll(
@@ -186,7 +188,7 @@ func TestScanAll(t *testing.T) {
 				return false
 			}
 			return true
-		}, false)
+		}, scanParams)
 
 	qc.Close()
 	s.Close()
@@ -280,6 +282,7 @@ func BenchmarkRange100(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	b.ResetTimer()
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
@@ -288,7 +291,7 @@ func BenchmarkRange100(b *testing.B) {
 			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
-			}, false)
+			}, scanParams)
 	}
 	b.StopTimer()
 
@@ -316,6 +319,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -324,7 +328,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return false
-			}, false)
+			}, scanParams)
 	}
 	b.StopTimer()
 
@@ -352,6 +356,7 @@ func BenchmarkScanAll(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		qc.ScanAll(
@@ -359,7 +364,7 @@ func BenchmarkScanAll(b *testing.B) {
 			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
-			}, false)
+			}, scanParams)
 	}
 	b.StopTimer()
 

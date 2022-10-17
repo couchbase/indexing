@@ -2426,6 +2426,10 @@ type MsgStartShardTransfer struct {
 	// any upstream cancellation of rebalance
 	cancelCh chan struct{}
 
+	// If rebalance on this node fails due to any error, doneCh
+	// is closed first. In that case, abort the transfer
+	doneCh chan struct{}
+
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
 }
@@ -2452,6 +2456,10 @@ func (m *MsgStartShardTransfer) GetDestination() string {
 
 func (m *MsgStartShardTransfer) GetCancelCh() chan struct{} {
 	return m.cancelCh
+}
+
+func (m *MsgStartShardTransfer) GetDoneCh() chan struct{} {
+	return m.doneCh
 }
 
 func (m *MsgStartShardTransfer) GetProgressCh() chan *ShardTransferStatistics {
@@ -2544,6 +2552,10 @@ type MsgStartShardRestore struct {
 	// any upstream cancellation of rebalance
 	cancelCh chan struct{}
 
+	// If rebalance on this node fails due to any error, doneCh
+	// is closed first. In that case, abort the restore process
+	doneCh chan struct{}
+
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
 }
@@ -2570,6 +2582,10 @@ func (m *MsgStartShardRestore) GetDestination() string {
 
 func (m *MsgStartShardRestore) GetCancelCh() chan struct{} {
 	return m.cancelCh
+}
+
+func (m *MsgStartShardRestore) GetDoneCh() chan struct{} {
+	return m.doneCh
 }
 
 func (m *MsgStartShardRestore) GetProgressCh() chan *ShardTransferStatistics {

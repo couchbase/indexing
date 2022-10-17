@@ -5,6 +5,7 @@ package indexer
 
 import (
 	"sync"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -75,10 +76,13 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	msg := cmd.(*MsgStartShardTransfer)
 	logging.Infof("ShardTransferManager::processShardTransferMessage Initiating command: %v", msg)
 
+	start := time.Now()
+
 	shardIds := msg.GetShardIds()
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	rebalCancelCh := msg.GetCancelCh()
+	rebalDoneCh := msg.GetDoneCh()
 	destination := msg.GetDestination()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
@@ -89,7 +93,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	meta[plasma.GSIRebalanceTransferToken] = ttid
 
 	// Closed when all shards are done processing
-	doneCh := make(chan bool)
+	transferDoneCh := make(chan bool)
 
 	// cancelCh is shared between both mainStore and backStore
 	// transfer shard routines. As transfer happens asyncronously,
@@ -119,7 +123,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		logging.Infof("ShardTransferManager::processShardTransferMessage doneCb invoked for shardId: %v, path: %v, err: %v", shardId, shardPath, err)
+		elapsed := time.Since(start).Seconds()
+		logging.Infof("ShardTransferManager::processShardTransferMessage doneCb invoked for shardId: %v, path: %v, err: %v, elapsed(sec): %v", shardId, shardPath, err, elapsed)
 
 		errMap[common.ShardId(shardId)] = err
 		shardPaths[common.ShardId(shardId)] = shardPath
@@ -171,12 +176,13 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		}
 
 		wg.Wait() // Wait for all transfer shard go-routines to complete execution
-		close(doneCh)
+		close(transferDoneCh)
 	}()
 
 	sendResponse := func() {
+		elapsed := time.Since(start).Seconds()
 		logging.Infof("ShardTransferManager::processShardTransferMessage All shards processing done. Sending response "+
-			"errMap: %v, shardPaths: %v, destination: %v", errMap, shardPaths, destination)
+			"errMap: %v, shardPaths: %v, destination: %v, elapsed(sec): %v", errMap, shardPaths, destination, elapsed)
 
 		respMsg := &MsgShardTransferResp{
 			errMap:     errMap,
@@ -190,18 +196,19 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
 		closeCancelCh()
 
-	case <-doneCh: // All shards are done processing
+	case <-rebalDoneCh:
+		closeCancelCh()
+
+	case <-transferDoneCh: // All shards are done processing
 		sendResponse()
 		return
 	}
 
-	// Incase rebalCancelCh is closed first, then wait for all
-	// transfers to invoke doneCb with the uploaded paths so
-	// that rebalancer can initiate cleanup. If doneCh is invoked
-	// first in the above select, then this code will not be
-	// executed
+	// Incase rebalCancelCh or rebalDoneCh is closed first, then
+	// wait for plasma to finish processing and then send response
+	// to caller
 	select {
-	case <-doneCh:
+	case <-transferDoneCh:
 		sendResponse()
 		return
 	}
@@ -212,6 +219,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 
 	msg := cmd.(*MsgShardTransferCleanup)
 	logging.Infof("ShardTransferManager::processTransferCleanupMessage Initiating command: %v", msg)
+	start := time.Now()
 
 	shardPaths := msg.GetShardPaths()
 	destination := msg.GetDestination()
@@ -232,7 +240,8 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
 		}
 
-		logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards")
+		elapsed := time.Since(start).Seconds()
+		logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards, elapsed(sec): %v", elapsed)
 		// Notify the caller that cleanup has been initiated for all shards
 		respCh <- true
 		return
@@ -253,7 +262,8 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		}
 	}
 
-	logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards")
+	elapsed := time.Since(start).Seconds()
+	logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards, elapsed(sec): %v", elapsed)
 	// Notify the caller that cleanup has been initiated for all shards
 	respCh <- true
 }
@@ -262,16 +272,18 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	msg := cmd.(*MsgStartShardRestore)
 	logging.Infof("ShardTransferManager::processShardRestoreMessage Initiating command: %v", msg)
 
+	start := time.Now()
 	shardPaths := msg.GetShardPaths()
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	destination := msg.GetDestination()
 	rebalCancelCh := msg.GetCancelCh()
+	rebalDoneCh := msg.GetDoneCh()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
 
 	// Closed when all shards are done processing
-	doneCh := make(chan bool)
+	restoreDoneCh := make(chan bool)
 
 	// cancelCh is shared between both mainStore and backStore
 	// transfer shard routines. As transfer happens asyncronously,
@@ -300,7 +312,8 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		logging.Infof("ShardTransferManager::processShardRestoreMessage doneCb invoked for shardId: %v, path: %v, err: %v", shardId, shardPath, err)
+		elapsed := time.Since(start).Seconds()
+		logging.Infof("ShardTransferManager::processShardRestoreMessage doneCb invoked for shardId: %v, path: %v, err: %v, elapsed(sec): %v", shardId, shardPath, err, elapsed)
 
 		errMap[common.ShardId(shardId)] = err
 		shardPaths[common.ShardId(shardId)] = shardPath
@@ -350,12 +363,13 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 		}
 
 		wg.Wait() // Wait for all transfer shard go-routines to complete execution
-		close(doneCh)
+		close(restoreDoneCh)
 	}()
 
 	sendResponse := func() {
+		elapsed := time.Since(start).Seconds()
 		logging.Infof("ShardTransferManager::processShardRestoreMessage All shards are restored. Sending response "+
-			"errMap: %v, shardPaths: %v, destination: %v", errMap, shardPaths, destination)
+			"errMap: %v, shardPaths: %v, destination: %v, elapsed(sec): %v", errMap, shardPaths, destination, elapsed)
 
 		respMsg := &MsgShardTransferResp{
 			errMap:     errMap,
@@ -369,18 +383,19 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
 		closeCancelCh()
 
-	case <-doneCh: // All shards are done processing
+	case <-rebalDoneCh:
+		closeCancelCh()
+
+	case <-restoreDoneCh: // All shards are done processing
 		sendResponse()
 		return
 	}
 
-	// Incase rebalCancelCh is closed first, then wait for all
-	// transfers to invoke doneCb with the uploaded paths so
-	// that rebalancer can initiate cleanup. If doneCh is invoked
-	// first in the above select, then this code will not be
-	// executed
+	// Incase rebalCancelCh or rebalDoneCh is closed first, then
+	// wait for plasma to finish processing and then send response
+	// to caller
 	select {
-	case <-doneCh:
+	case <-restoreDoneCh:
 		sendResponse()
 		return
 	}
@@ -388,6 +403,8 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 }
 
 func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
+
+	start := time.Now()
 
 	storageDir := stm.config["storage_dir"].String()
 	plasma.SetStorageDir(storageDir)
@@ -405,6 +422,7 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
 		}
 	}
 
+	elapsed := time.Since(start).Seconds()
+	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage Done clean-up for shards: %v, elapsed(sec): %v", shardIds, elapsed)
 	respCh <- true
-	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage Done clean-up for shards: %v", shardIds)
 }

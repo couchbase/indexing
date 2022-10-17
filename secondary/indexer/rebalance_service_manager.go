@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/ioutil"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"errors"
@@ -69,7 +70,7 @@ type RebalanceServiceManager struct {
 
 	localhttp string // local indexer host:port for HTTP, e.g. "127.0.0.1:9102", 9108,...
 
-	cleanupPending   bool // prior rebalance or move did not finish and will be cleaned up
+	cleanupPending   int32 // prior rebalance or move did not finish and will be cleaned up. "1" => cleanup is pending, "0" otherwise
 	indexerReady     bool
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
@@ -177,16 +178,28 @@ func NewRebalanceServiceManager(genericMgr *GenericServiceManager, httpAddr stri
 	mgr.localhttp = httpAddr
 
 	if rebalanceToken != nil {
-		mgr.cleanupPending = true
+		mgr.setCleanupPending(true)
 		if rebalanceToken.Source == RebalSourceClusterOp { // rebalance, not move
 			mgr.state.isBalanced = false
 		}
 	}
 
 	go mgr.run()
-	go mgr.initService(mgr.cleanupPending)
+	go mgr.initService(mgr.isCleanupPending())
 
 	return mgr
+}
+
+func (m *RebalanceServiceManager) isCleanupPending() bool {
+	return atomic.LoadInt32(&m.cleanupPending) == 1
+}
+
+func (m *RebalanceServiceManager) setCleanupPending(val bool) {
+	if val {
+		atomic.StoreInt32(&m.cleanupPending, 1)
+	} else {
+		atomic.StoreInt32(&m.cleanupPending, 0)
+	}
 }
 
 func (m *RebalanceServiceManager) initService(cleanupPending bool) {
@@ -207,6 +220,7 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/moveIndex", m.handleMoveIndex)
 	mux.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
 	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
+	mux.HandleFunc("/rebalanceCleanupStatus", m.handleRebalanceCleanupStatus)
 }
 
 // updateNodeList initializes RebalanceServiceManager.state.servers node list on start or restart.
@@ -519,7 +533,7 @@ func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange
 	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	var err error
-	if m.cleanupPending {
+	if m.isCleanupPending() {
 		m.setStateIsBalanced(false)
 		err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 			"failed/aborted rebalance/failover/move index. please retry the request later.")
@@ -1450,7 +1464,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		for _, tt := range tokenMap {
 			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
 				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
-					// There exists a dropOnSource token implies that both destination
+					// There exists a dropOnSource token implies that destination
 					// nodes have reached the Ready state. So, the instances will be
 					// dropped on source.
 					dropOnDest = false
@@ -2060,7 +2074,7 @@ func (m *RebalanceServiceManager) onRebalanceDoneLOCKED(err error, forceUnbalanc
 			}
 		}
 
-		if !m.cleanupPending && m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
+		if !m.isCleanupPending() && m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
 			isBalancedNew = false
 		}
 
@@ -2329,9 +2343,8 @@ func (m *RebalanceServiceManager) recoverRebalance() {
 
 	m.indexerReady = true
 
-	if m.cleanupPending {
+	if m.isCleanupPending() {
 		l.Infof("%v Init Pending Cleanup", method)
-
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
 			l.Errorf("%v Error Fetching Metakv Tokens %v", method, err)
@@ -2352,7 +2365,7 @@ func (m *RebalanceServiceManager) recoverRebalance() {
 		}
 	}
 
-	m.cleanupPending = false
+	m.setCleanupPending(false)
 
 	go m.listenMoveIndex()
 	go m.rebalanceJanitor()
@@ -2547,6 +2560,26 @@ func (m *RebalanceServiceManager) handleNodeuuid(w http.ResponseWriter, r *http.
 	if r.Method == "GET" || r.Method == "POST" {
 		l.Infof("RebalanceServiceManager::handleNodeuuid Processing Request req: %v", c.GetHTTPReqInfo(r))
 		m.writeBytes(w, []byte(m.nodeInfo.NodeID))
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
+}
+
+func (m *RebalanceServiceManager) handleRebalanceCleanupStatus(w http.ResponseWriter, r *http.Request) {
+
+	_, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleRebalanceCleanupStatus Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if r.Method == "GET" {
+		l.Infof("RebalanceServiceManager::handleRebalanceCleanupStatus Processing Request req: %v", c.GetHTTPReqInfo(r))
+		if m.isCleanupPending() {
+			m.writeBytes(w, []byte("progress"))
+		} else {
+			m.writeBytes(w, []byte("done"))
+		}
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))
 	}

@@ -156,7 +156,11 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	s.stm = NewShardTransferManager(s.config)
+	if common.IsServerlessDeployment() {
+		s.stm = NewShardTransferManager(s.config)
+	} else {
+		s.stm = nil
+	}
 
 	for i := 0; i < len(s.snapshotReqCh); i++ {
 		go s.listenSnapshotReqs(i)

@@ -30,6 +30,7 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
+	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
 	start := time.Now()
 	connErr := client.Range(
 		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
@@ -75,7 +76,7 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 				return true
 			}
 			return false
-		}, false)
+		}, scanParams)
 	elapsed := time.Since(start)
 
 	if connErr != nil {
