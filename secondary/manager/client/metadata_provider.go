@@ -827,26 +827,31 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		return nil
 	}
 
-	// As metaKV is eventually consistent, it might take some time for
-	// the createToken to propagate to all indexer nodes. Hence, check
-	// periodically for upto 10 seconds.
-	ticker := time.NewTicker(100 * time.Millisecond)
-	retryCount := 0
-loop:
-	for {
-		select {
-		case <-ticker.C:
-			retryCount++
-			exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
-			if exist {
-				if createErr != nil {
-					return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+	// asyncCreate operation will retry the operation again. Hence, no
+	// need to check for the presence of CreateCommandToken if asyncCreate
+	// is true and createErr != nil
+	if !asyncCreate || createErr == nil {
+		// As metaKV is eventually consistent, it might take some time for
+		// the createToken to propagate to all indexer nodes. Hence, check
+		// periodically for upto 10 seconds.
+		ticker := time.NewTicker(1 * time.Second)
+		retryCount := 0
+	loop:
+		for {
+			select {
+			case <-ticker.C:
+				retryCount++
+				exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
+				if exist {
+					if createErr != nil {
+						return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+					}
+					return nil
 				}
-				return nil
-			}
 
-			if retryCount > 100 {
-				break loop
+				if retryCount > 10 {
+					break loop
+				}
 			}
 		}
 	}
