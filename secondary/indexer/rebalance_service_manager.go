@@ -1522,8 +1522,11 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 
 	var err error
 	if dropIndexes {
-		for _, inst := range tt.IndexInsts {
-			err1 := m.cleanupIndex(inst.Defn)
+		for i, inst := range tt.IndexInsts {
+			defn := inst.Defn
+			defn.InstId = tt.InstIds[i]
+			defn.RealInstId = tt.RealInstIds[i]
+			err1 := m.cleanupIndex(defn)
 			if err1 != nil {
 				err = err1
 			}

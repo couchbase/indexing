@@ -1215,7 +1215,7 @@ loop:
 						remainingBuildTime = 0
 					}
 
-					indexState := indexStateMap[inst.InstId]
+					indexState := indexStateMap[instId]
 
 					now := time.Now()
 					if now.Sub(lastLogTime) > 30*time.Second {
