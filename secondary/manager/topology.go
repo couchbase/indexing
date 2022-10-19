@@ -204,7 +204,7 @@ func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint
 	}
 }
 
-func (t *IndexTopology) RemoveIndexDefinitionById(id common.IndexDefnId) {
+func (t *IndexTopology) RemoveIndexDefinitionById(id common.IndexDefnId) (cleanTopology bool) {
 
 	for i, defnRef := range t.Definitions {
 		if common.IndexDefnId(defnRef.DefnId) == id {
@@ -213,9 +213,10 @@ func (t *IndexTopology) RemoveIndexDefinitionById(id common.IndexDefnId) {
 			} else {
 				t.Definitions = append(t.Definitions[0:i], t.Definitions[i+1:]...)
 			}
-			return
 		}
 	}
+
+	return len(t.Definitions) == 0
 }
 
 //

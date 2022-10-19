@@ -262,6 +262,18 @@ type IndexDefn struct {
 	Versions      []int       `json:"versions,omitempty"`
 	NumPartitions uint32      `json:"numPartitions,omitempty"`
 	RealInstId    IndexInstId `json:"realInstId,omitempty"`
+
+	// This variable captures the instance state at rebalance.
+	// Used for shard rebalance so that indexer can decide whether
+	// to recover index as deferred index or non-deferred index.
+	//
+	// Use "Deferred" flag alone is not sufficient for this purpose
+	// as this flag can be true for indexes created with
+	// "defer_build":true but the index can be built later.
+	// If this variable is in INDEX_STATE_CREATED or INDEX_STATE_READY,
+	// indexer would recover the index as INDEX_STATE_READY.
+	// Otherwise, index would recover as INDEX_STATE_RECOVERED
+	InstStateAtRebal IndexState `json:"instStateAtRebal,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)

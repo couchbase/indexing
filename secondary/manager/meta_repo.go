@@ -455,6 +455,33 @@ func (c *MetadataRepo) SetTopologyByCollection(bucket, scope, collection string,
 	return nil
 }
 
+func (c *MetadataRepo) DeleteTopologyByCollection(bucket, scope, collection string) error {
+	lookupName := indexTopologyKey(bucket, scope, collection)
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	//Delete the topology from globalTopo
+	if c.globalTopo != nil {
+		c.globalTopo.RemoveTopologyKey(lookupName)
+
+		data, err := marshallGlobalTopology(c.globalTopo)
+		if err != nil {
+			return err
+		}
+
+		globalTopoName := globalTopologyKey()
+		if err := c.setMeta(globalTopoName, data); err != nil {
+			return err
+		}
+	}
+
+	// Remove the topology from topoCache
+	delete(c.topoCache, lookupName)
+
+	return nil
+}
+
 func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -1428,10 +1455,16 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket, scope, collection string,
 		return nil
 	}
 
-	topology.RemoveIndexDefinitionById(id)
+	cleanupTopology := topology.RemoveIndexDefinitionById(id)
 
-	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
-		return err
+	if cleanupTopology {
+		if err = m.DeleteTopologyByCollection(topology.Bucket, scope, collection); err != nil {
+			return err
+		}
+	} else {
+		if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
+			return err
+		}
 	}
 
 	return nil

@@ -849,14 +849,45 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		}
 	}
 
+	// During shard rebalance, all active instances are built in one
+	// batch and all initial instances are built in one batch. Initial
+	// instances are those instances for which a built command is posted
+	// but build is not yet initialised. For such instances, as build
+	// has to start from zero-seqno, they are built in a separate batch.
+	// Active instances can start from non-zero seqno. and catch up with KV
+	const ACTIVE_INSTS int = 0
+	const INITIAL_INSTS int = 1
+
 	start := time.Now()
 
 	// All deferred indexes are created now. Create and recover non-deferred indexes
 	groupedDefns := groupInstsPerColl(tt)
 
+	populateInstsAndDefnIds := func(nonDeferredInsts []map[c.IndexInstId]bool,
+		buildDefnIdList []client.IndexIdList, defn c.IndexDefn) ([]map[c.IndexInstId]bool, []client.IndexIdList, int) {
+
+		currIndex := ACTIVE_INSTS
+		if defn.InstStateAtRebal == common.INDEX_STATE_INITIAL {
+			currIndex = INITIAL_INSTS
+		}
+
+		if len(nonDeferredInsts[currIndex]) == 0 {
+			nonDeferredInsts[currIndex] = make(map[c.IndexInstId]bool)
+		}
+		if defn.RealInstId != 0 {
+			nonDeferredInsts[currIndex][defn.RealInstId] = true
+		} else {
+			nonDeferredInsts[currIndex][defn.InstId] = true
+		}
+
+		buildDefnIdList[currIndex].DefnIds = append(buildDefnIdList[currIndex].DefnIds, uint64(defn.DefnId))
+
+		return nonDeferredInsts, buildDefnIdList, currIndex
+	}
+
 	for cid, defns := range groupedDefns {
-		var buildDefnIdList client.IndexIdList
-		nonDeferredInsts := make(map[c.IndexInstId]bool)
+		buildDefnIdList := make([]client.IndexIdList, 2)
+		nonDeferredInsts := make([]map[c.IndexInstId]bool, 2)
 		// Post recover index request for all non-deferred definitions
 		// of this collection. Once all indexes are recovered, they can be
 		// built in a batch
@@ -867,7 +898,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				return
 			}
 
-			if defn.Deferred {
+			// For deferred indexes, build command is not required
+			if defn.Deferred &&
+				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+					defn.InstStateAtRebal == c.INDEX_STATE_READY) {
 
 				var partnMergeWaitGroup sync.WaitGroup
 				deferredInsts := make(map[common.IndexInstId]bool)
@@ -887,17 +921,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				// This is essentially a no-op for non-partitioned indexes
 				partnMergeWaitGroup.Wait()
 			} else {
-				if defn.RealInstId != 0 {
-					nonDeferredInsts[defn.RealInstId] = true
-				} else {
-					nonDeferredInsts[defn.InstId] = true
-				}
+				var currIndex int
+				nonDeferredInsts, buildDefnIdList, currIndex = populateInstsAndDefnIds(nonDeferredInsts, buildDefnIdList, defn)
 
-				// On a successful request, update book-keeping and process
-				// the next definition
-				buildDefnIdList.DefnIds = append(buildDefnIdList.DefnIds, uint64(defn.DefnId))
-
-				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts, ttid, tt); err != nil {
+				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts[currIndex], ttid, tt); err != nil {
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
 				}
@@ -905,20 +932,28 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 			}
 
 		}
-		logging.Infof("ShardRebalancer::startShardRecovery Successfully posted "+
-			"recoveryIndexRebalance requests for defnIds: %v belonging to collectionId: %v, ttid: %v. "+
-			"Initiating build", buildDefnIdList.DefnIds, cid, ttid)
 
-		if err := sr.postBuildIndexesReq(buildDefnIdList, ttid, tt); err != nil {
-			setErrInTransferToken(err)
-			return
+		for i := range buildDefnIdList {
+			if len(buildDefnIdList[i].DefnIds) > 0 {
+				currInsts := "active insts"
+				if i == INITIAL_INSTS {
+					currInsts = "initial insts"
+				}
+				logging.Infof("ShardRebalancer::startShardRecovery Successfully posted "+
+					"recoveryIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
+					"Initiating build", currInsts, buildDefnIdList[i].DefnIds, cid, ttid)
+
+				if err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt); err != nil {
+					setErrInTransferToken(err)
+					return
+				}
+
+				if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts[i], ttid, tt); err != nil {
+					setErrInTransferToken(err)
+					return
+				}
+			}
 		}
-
-		if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts, ttid, tt); err != nil {
-			setErrInTransferToken(err)
-			return
-		}
-
 	}
 
 	elapsed := time.Since(start).Seconds()
@@ -1180,7 +1215,7 @@ loop:
 						remainingBuildTime = 0
 					}
 
-					indexState := indexStateMap[inst.InstId]
+					indexState := indexStateMap[instId]
 
 					now := time.Now()
 					if now.Sub(lastLogTime) > 30*time.Second {
