@@ -2310,12 +2310,12 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.timekeeper.monitor_flush": ConfigValue{
-		true,
+	"indexer.timekeeper.monitor_flush_interval": ConfigValue{
+		5,
 		"Debug option to enable monitoring flush in timekeeper." +
-			"If a flush doesn't complete for 60secs, additional debug info " +
-			"will be logged",
-		true,
+			"If a flush doesn't complete for the interval specified(in seconds), additional debug info " +
+			"will be logged. 0 disables flush monitoring.",
+		5,
 		false, // mutable
 		false, // case-insensitive
 	},
