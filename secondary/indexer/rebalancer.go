@@ -2400,8 +2400,8 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 func (rp *runParams) checkDDLRunning(caller string) (bool, error) {
 
 	if rp != nil && rp.ddlRunning {
-		l.Errorf("%v::doRebalance Found index build running. Cannot process rebalance.")
-		fmtMsg := "indexer rebalance failure - index build is in progress for indexes: %v."
+		l.Errorf("%v::doRebalance Found index build running. Cannot process rebalance.", caller)
+		fmtMsg := "%v indexer rebalance failure - index build is in progress for indexes: %v."
 		err := errors.New(fmt.Sprintf(fmtMsg, caller, rp.ddlRunningIndexNames))
 		return true, err
 	}
