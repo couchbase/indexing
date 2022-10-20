@@ -87,6 +87,7 @@ type MetadataProvider struct {
 	settings           Settings
 	indexerVersion     uint64
 	clusterVersion     uint64
+	internalVersion    c.InternalVersion
 	statsNotifyCh      chan map[c.IndexInstId]map[c.PartitionId]c.Statistics
 	limitsCfg          *c.LimitsCache
 }
@@ -253,6 +254,7 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 	}
 	cinfo.FetchNodesAndSvsInfoWithLock()
 	s.clusterVersion = cinfo.GetClusterVersion()
+	s.internalVersion, _ = c.GetInternalClusterVersion(c.NodesInfoProvider(cinfo), true)
 
 	lc, err1 := c.NewLimitsCache()
 	if err1 != nil {
@@ -825,26 +827,31 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		return nil
 	}
 
-	// As metaKV is eventually consistent, it might take some time for
-	// the createToken to propagate to all indexer nodes. Hence, check
-	// periodically for upto 10 seconds.
-	ticker := time.NewTicker(100 * time.Millisecond)
-	retryCount := 0
-loop:
-	for {
-		select {
-		case <-ticker.C:
-			retryCount++
-			exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
-			if exist {
-				if createErr != nil {
-					return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+	// asyncCreate operation will retry the operation again. Hence, no
+	// need to check for the presence of CreateCommandToken if asyncCreate
+	// is true and createErr != nil
+	if !asyncCreate || createErr == nil {
+		// As metaKV is eventually consistent, it might take some time for
+		// the createToken to propagate to all indexer nodes. Hence, check
+		// periodically for upto 10 seconds.
+		ticker := time.NewTicker(1 * time.Second)
+		retryCount := 0
+	loop:
+		for {
+			select {
+			case <-ticker.C:
+				retryCount++
+				exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
+				if exist {
+					if createErr != nil {
+						return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+					}
+					return nil
 				}
-				return nil
-			}
 
-			if retryCount > 100 {
-				break loop
+				if retryCount > 10 {
+					break loop
+				}
 			}
 		}
 	}
@@ -5822,9 +5829,12 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 		clusterVer = int64(w.provider.GetClusterVersion())
 	}
 	intVer := c.GetInternalVersion()
+	if intVer.LessThan(w.provider.internalVersion) {
+		intVer = w.provider.internalVersion
+	}
 
 	if clusterVer == 0 || intVer.Equals("") {
-		logging.Errorf("watcher:ClientAuth cluster Ver (%v)/Internal Version (%v) not yet initialised", clusterVer, intVer)
+		logging.Warnf("watcher:ClientAuth cluster Ver (%v)/Internal Version (%v) not yet initialised", clusterVer, intVer)
 	}
 
 	if clusterVer < c.INDEXER_71_VERSION && intVer.LessThan(c.MIN_VER_SRV_AUTH) {

@@ -454,6 +454,7 @@ func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) (bool,
 			// TODO: The value of this backoff should be a function of
 			//       network latency and number of indexer nodes.
 
+			rand.Seed(time.Now().UnixNano())
 			diff := RANDOM_BACKOFF_END - RANDOM_BACKOFF_START
 			b := rand.Intn(diff) + RANDOM_BACKOFF_START
 			m.backoff = int64(b * 1000 * 1000)
