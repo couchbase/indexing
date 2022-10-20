@@ -37,7 +37,7 @@ func (b *endpointBuffers) addKeyVersions(
 	endpoint *RouterEndpoint) {
 
 	if kv != nil && kv.Length() > 0 {
-		uuid := c.StreamID(keyspaceId, vbno)
+		uuid := c.StreamID(keyspaceId, vbno, opaque2)
 		if _, ok := b.vbs[uuid]; !ok {
 			nMuts := 16 // to avoid reallocs.
 			b.vbs[uuid] = c.NewVbKeyVersions(keyspaceId, vbno,
