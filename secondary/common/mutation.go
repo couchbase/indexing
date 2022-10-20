@@ -79,8 +79,8 @@ type Payload struct {
 }
 
 // StreamID is unique id for a vbucket across buckets.
-func StreamID(keyspaceId string, vbno uint16) string {
-	return keyspaceId + fmt.Sprintf("#%v", vbno)
+func StreamID(keyspaceId string, vbno uint16, opaque2 uint64) string {
+	return keyspaceId + fmt.Sprintf("#%v#%v", vbno, opaque2)
 }
 
 // NewStreamPayload returns a reference to payload, `nVb` provides the maximum
@@ -176,7 +176,7 @@ func NewVbKeyVersions(keyspaceId string, vbno uint16,
 	vb := &VbKeyVersions{KeyspaceId: keyspaceId, Vbucket: vbno,
 		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_7_0_0}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
-	vb.Uuid = StreamID(keyspaceId, vbno)
+	vb.Uuid = StreamID(keyspaceId, vbno, opaque2)
 	return vb
 }
 

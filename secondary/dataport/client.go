@@ -31,15 +31,17 @@
 
 package dataport
 
-import "errors"
-import "fmt"
-import "net"
-import "time"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/transport"
-import "github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/transport"
+)
 
 // ErrorClientEmptyKeys
 var ErrorClientEmptyKeys = errors.New("dataport.clientEmptyKeys")
@@ -261,7 +263,7 @@ func (c *Client) sendVbmap(
 	// connection channels.
 	idxMap := make(map[int][]uint16)
 	for i, vbno := range vbmap.Vbuckets {
-		uuid := common.StreamID(vbmap.KeyspaceId, vbno)
+		uuid := common.StreamID(vbmap.KeyspaceId, vbno, 0)
 		vbChans[uuid], idx = c.addVbucket(uuid)
 		vbmaps[idx].Vbuckets = append(vbmaps[idx].Vbuckets, vbno)
 		vbmaps[idx].Vbuuids = append(vbmaps[idx].Vbuuids, vbmap.Vbuuids[i])
