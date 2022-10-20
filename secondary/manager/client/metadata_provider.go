@@ -502,7 +502,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	} else {
 		scheduleOnFailure := o.settings.AllowScheduleCreate()
-		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false, 0, false); err != nil {
+		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false, time.Now().UnixNano(), false); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
 	}
