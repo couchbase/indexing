@@ -36,6 +36,7 @@ replace github.com/couchbase/regulator => ../regulator
 
 require (
 	github.com/couchbase/cbauth v0.1.3
+	github.com/couchbase/go-couchbase v0.1.1
 	github.com/couchbase/go-slab v0.0.0-20220303011136-e47646b420b3
 	github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e
 	github.com/couchbase/gometa v0.0.0-20220803182802-05cb6b2e299f
@@ -60,7 +61,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/couchbase/clog v0.1.0 // indirect
-	github.com/couchbase/go-couchbase v0.1.1 // indirect
 	github.com/couchbase/go_json v0.0.0-20220330123059-4473a21887c8 // indirect
 	github.com/couchbase/gocb/v2 v2.5.3-0.20220915151107-bba7053674ed // indirect
 	github.com/couchbase/gocbcore/v10 v10.1.5-0.20220914162543-e8fb96235d17 // indirect
@@ -86,7 +86,7 @@ require (
 	github.com/stretchr/objx v0.4.0 // indirect
 	github.com/stretchr/testify v1.8.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20201027041543-1326539a0a0a // indirect
-	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa // indirect
+	golang.org/x/crypto v0.0.0-20220924013350-4ba4fb4dd9e7 // indirect
 	golang.org/x/exp v0.0.0-20220713135740-79cabaa25d75 // indirect
 	golang.org/x/net v0.0.0-20220805013720-a33c5aa5df48 // indirect
 	golang.org/x/sys v0.0.0-20220804214406-8e32c043e418 // indirect
