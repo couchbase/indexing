@@ -3961,9 +3961,11 @@ func placeMissingReplicaOnTarget(index *IndexUsage, target *IndexerNode, solutio
 		cloned := index.clone()
 		cloned.Instance.ReplicaId = newReplicaId
 		cloned.initialNode = nil
+		cloned.siblingIndex = index
 
 		instId, err := common.NewIndexInstId()
 		if err != nil {
+			logging.Errorf("%v Error while generating instId, err: %v", _placeMissingReplicaOnTarget, err)
 			return
 		}
 		cloned.InstId = instId
