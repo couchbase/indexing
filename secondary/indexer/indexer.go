@@ -123,6 +123,8 @@ type indexer struct {
 	streamKeyspaceIdPendStart          map[common.StreamId]map[string]bool
 	streamKeyspaceIdPendCollectionDrop map[common.StreamId]map[string][]common.IndexInstId
 
+	streamOpenTimeBarrier map[common.StreamId]time.Time
+
 	bucketNameNumVBucketsMap map[string]int
 
 	keyspaceIdRollbackTimes map[string]int64
@@ -321,6 +323,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdRollbackTimes:            make(map[string]int64),
 		keyspaceIdCreateClientChMap:        make(map[string]MsgChannel),
 		bucketNameNumVBucketsMap:           make(map[string]int),
+		streamOpenTimeBarrier:              make(map[common.StreamId]time.Time),
 
 		activeKVNodes: make(map[string]bool),
 
@@ -5241,6 +5244,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO,
 		numVBuckets:        numVBuckets,
+		timeBarrier:        idx.streamOpenTimeBarrier[buildStream],
 	}
 
 	// Create the corresponding KeyspaceStats object before starting the stream
@@ -5435,8 +5439,11 @@ func (idx *indexer) sendStreamUpdateToWorker(cmd Message, workerCmdCh MsgChannel
 
 	//send message to worker
 	workerCmdCh <- cmd
-	if resp, ok := <-workerCmdCh; ok {
-		if resp.GetMsgType() != MSG_SUCCESS {
+
+	var resp Message
+	var ok bool
+	if resp, ok = <-workerCmdCh; ok {
+		if resp.GetMsgType() != MSG_SUCCESS && resp.GetMsgType() != MUT_MGR_STREAM_CLOSE {
 
 			logging.Errorf("Indexer::sendStreamUpdateToWorker - Error received from %v "+
 				"processing Msg %v Err %v. Aborted.", workerStr, cmd, resp)
@@ -5457,7 +5464,7 @@ func (idx *indexer) sendStreamUpdateToWorker(cmd Message, workerCmdCh MsgChannel
 				cause:    ErrFatalComm,
 				category: INDEXER}}
 	}
-	return &MsgSuccess{}
+	return resp
 }
 
 func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
@@ -5543,11 +5550,15 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		//send stream update to mutation manager
 		if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
 			"MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
-			if clientCh != nil {
-				clientCh <- resp
+			if resp.GetMsgType() == MUT_MGR_STREAM_CLOSE {
+				idx.setStreamOpenTimeBarrier(streamId)
+			} else {
+				if clientCh != nil {
+					clientCh <- resp
+				}
+				respErr := resp.(*MsgError).GetError()
+				common.CrashOnError(respErr.cause)
 			}
-			respErr := resp.(*MsgError).GetError()
-			common.CrashOnError(respErr.cause)
 		}
 
 		//send stream update to timekeeper
@@ -6461,8 +6472,12 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
-		respErr := resp.(*MsgError).GetError()
-		common.CrashOnError(respErr.cause)
+		if resp.GetMsgType() == MUT_MGR_STREAM_CLOSE {
+			idx.setStreamOpenTimeBarrier(streamId)
+		} else {
+			respErr := resp.(*MsgError).GetError()
+			common.CrashOnError(respErr.cause)
+		}
 	}
 
 	//at this point, the stream is inactive in all sub-components, so the status
@@ -6670,8 +6685,12 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
-		respErr := resp.(*MsgError).GetError()
-		common.CrashOnError(respErr.cause)
+		if resp.GetMsgType() == MUT_MGR_STREAM_CLOSE {
+			idx.setStreamOpenTimeBarrier(streamId)
+		} else {
+			respErr := resp.(*MsgError).GetError()
+			common.CrashOnError(respErr.cause)
+		}
 	}
 
 	//at this point, the stream is inactive in all sub-components, so the status
@@ -6962,8 +6981,12 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
 		"MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
-		respErr := resp.(*MsgError).GetError()
-		common.CrashOnError(respErr.cause)
+		if resp.GetMsgType() == MUT_MGR_STREAM_CLOSE {
+			idx.setStreamOpenTimeBarrier(streamId)
+		} else {
+			respErr := resp.(*MsgError).GetError()
+			common.CrashOnError(respErr.cause)
+		}
 	}
 
 	//send stream update to timekeeper
@@ -7176,6 +7199,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO,
 		numVBuckets:        numVBuckets,
+		timeBarrier:        idx.streamOpenTimeBarrier[streamId],
 	}
 
 	//For recovery of INIT_STREAM, send the stored mergeTs to timekeeper.
@@ -10842,7 +10866,10 @@ func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 	<-idx.tkCmdCh
 
 	idx.mutMgrCmdCh <- cmd
-	<-idx.mutMgrCmdCh
+	resp := <-idx.mutMgrCmdCh
+	if resp.GetMsgType() == MUT_MGR_STREAM_CLOSE {
+		idx.setStreamOpenTimeBarrier(streamId)
+	}
 
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 	idx.distributeKeyspaceStatsMapsToWorkers()
@@ -11310,4 +11337,16 @@ func (idx *indexer) useOSOForMagmaStorage(streamId common.StreamId, keyspaceId s
 
 	return useOSO
 
+}
+
+//setStreamOpenTimeBarrier set the minimum time delay required for initiating
+//the next stream request to projector, once the dataport has been
+//shutdown. This is a workaround to allow projector endpoint to detect
+//dataport shutdown and finish cleanup. Otherwise there can be race conditions
+//due to async endpoint cleanup at projector (see MB-54101).
+func (idx *indexer) setStreamOpenTimeBarrier(streamId common.StreamId) {
+	if streamId == common.INIT_STREAM {
+		t0 := time.Now()
+		idx.streamOpenTimeBarrier[streamId] = t0.Add(DEFAULT_TIME_BARRIER * time.Second)
+	}
 }

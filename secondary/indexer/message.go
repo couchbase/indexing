@@ -50,6 +50,7 @@ const (
 	MUT_MGR_SHUTDOWN
 	MUT_MGR_FLUSH_DONE
 	MUT_MGR_ABORT_DONE
+	MUT_MGR_STREAM_CLOSE
 
 	//TIMEKEEPER
 	TK_SHUTDOWN
@@ -278,6 +279,15 @@ func (m *MsgSuccessDrop) GetStreamId() common.StreamId {
 
 func (m *MsgSuccessDrop) GetKeyspaceId() string {
 	return m.keyspaceId
+}
+
+//MUT_MGR_STREAM_CLOSE
+type MsgSuccessMutMgr struct {
+	mType MsgType
+}
+
+func (m *MsgSuccessMutMgr) GetMsgType() MsgType {
+	return m.mType
 }
 
 // Timestamp Message
@@ -517,6 +527,8 @@ type MsgStreamUpdate struct {
 	collectionAware    bool
 	enableOSO          bool
 	ignoreOSOException bool
+
+	timeBarrier time.Time
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -597,6 +609,10 @@ func (m *MsgStreamUpdate) GetMergeTs() *common.TsVbuuid {
 
 func (m *MsgStreamUpdate) GetNumVBuckets() int {
 	return m.numVBuckets
+}
+
+func (m *MsgStreamUpdate) GetTimeBarrier() time.Time {
+	return m.timeBarrier
 }
 
 func (m *MsgStreamUpdate) String() string {
@@ -2682,6 +2698,8 @@ func (m MsgType) String() string {
 		return "MUT_MGR_FLUSH_DONE"
 	case MUT_MGR_ABORT_DONE:
 		return "MUT_MGR_ABORT_DONE"
+	case MUT_MGR_STREAM_CLOSE:
+		return "MUT_MGR_STREAM_CLOSE"
 
 	case TK_SHUTDOWN:
 		return "TK_SHUTDOWN"

@@ -183,6 +183,7 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 	collectionAware := cmd.(*MsgStreamUpdate).CollectionAware()
 	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
+	timeBarrier := cmd.(*MsgStreamUpdate).GetTimeBarrier()
 
 	logging.LazyDebug(func() string {
 		return fmt.Sprintf("KVSender::handleOpenStream %v %v %v",
@@ -191,7 +192,7 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 
 	go k.openMutationStream(streamId, keyspaceId, collectionId,
 		indexInstList, restartTs, async, sessionId, collectionAware, enableOSO,
-		respCh, stopCh)
+		respCh, stopCh, timeBarrier)
 
 	k.supvCmdch <- &MsgSuccess{}
 
@@ -293,12 +294,20 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 	collectionId string, indexInstList []c.IndexInst, restartTs *c.TsVbuuid,
 	async bool, sessionId uint64, collectionAware bool, enableOSO bool,
-	respCh MsgChannel, stopCh StopChannel) {
+	respCh MsgChannel, stopCh StopChannel, timeBarrier time.Time) {
 
 	if len(indexInstList) == 0 {
 		logging.Warnf("KVSender::openMutationStream Empty IndexList. Nothing to do.")
 		respCh <- &MsgSuccess{}
 		return
+	}
+
+	for {
+		if time.Now().Before(timeBarrier) {
+			time.Sleep(time.Second)
+		} else {
+			break
+		}
 	}
 
 	k.cinfoProviderLock.RLock()

@@ -783,7 +783,7 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 
 		m.cleanupStream(streamId)
 
-		m.supvCmdch <- &MsgSuccess{}
+		m.supvCmdch <- &MsgGeneral{mType: MUT_MGR_STREAM_CLOSE}
 	} else if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
 			m.newUpdateKeyspaceIdQueuesMsg(
