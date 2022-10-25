@@ -275,12 +275,13 @@ export phase=serverless
 export STORAGE=plasma
 if [[ "$MODE" == *"$phase"* ]]; then
   if [ "$STORAGE" = "plasma" ]; then
+    echo "</pre><h4>Serverless tests</h4><pre>"
     stop_cluster
     start_cluster_serverless
     setUsernamePassword
     export CBAUTH_REVRPC_URL="http://$Username:$Password@127.0.0.1:9000/query"
     echo "</pre><h4>Serverless tests</h4><pre>"
-    cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/serverless
+    cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/serverlesstests
 
     go test -timeout 4h -v -cbconfig ../config/buildtest_plasma.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
     echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_serverless_pprof.log"
