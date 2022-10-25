@@ -272,6 +272,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
 fi
 
 export phase=serverless
+currStorage=$STORAGE
 export STORAGE=plasma
 if [[ "$MODE" == *"$phase"* ]]; then
   if [ "$STORAGE" = "plasma" ]; then
@@ -293,6 +294,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
     stop_cluster
   fi
 fi
+export STORAGE=$currStorage
 
 export phase=performance
 if [[ "$MODE" == *"$phase"* ]]; then
