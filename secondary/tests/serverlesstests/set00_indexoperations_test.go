@@ -2,6 +2,7 @@ package serverlesstests
 
 import (
 	"fmt"
+	"log"
 	"testing"
 
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -21,8 +22,9 @@ func TestIndexPlacement(t *testing.T) {
 	kvutility.CreateBucket(bucket, "sasl", "", clusterconfig.Username, clusterconfig.Password, clusterconfig.KVAddress, "256", "11213")
 	kvutility.WaitForBucketCreation(bucket, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0], clusterconfig.Nodes[1], clusterconfig.Nodes[2]})
 
-	kvutility.CreateCollection(bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, clusterconfig.KVAddress)
-	cid := kvutility.WaitForCollectionCreation(bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0], clusterconfig.Nodes[1], clusterconfig.Nodes[2]})
+	manifest := kvutility.CreateCollection(bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, clusterconfig.KVAddress)
+	log.Printf("TestIndexPlacement: Manifest for bucket: %v, scope: %v, collection: %v is: %v", bucket, scope, collection, manifest)
+	cid := kvutility.WaitForCollectionCreation(bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0], clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, manifest)
 
 	CreateDocsForCollection(bucket, cid, 1000)
 

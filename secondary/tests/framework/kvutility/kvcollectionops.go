@@ -121,7 +121,7 @@ func createScope(bucketName, scopeName, serverUserName, serverPassword, hostaddr
 
 }
 
-func createCollection(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) {
+func createCollection(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) map[string]interface{} {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName + "/collections"
 	data := url.Values{"name": {collectionName}}
@@ -141,11 +141,17 @@ func createCollection(bucketName, scopeName, collectionName, serverUserName, ser
 	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 
-	log.Printf("Created collection succeeded for bucket: %v, scope: %v, collection: %v, body: %s", bucketName, scopeName, collectionName, body)
+	manifest := make(map[string]interface{})
+	err = json.Unmarshal(body, &manifest)
+	if err != nil {
+		tc.HandleError(err, "createCollection - Error unmarshalling response")
+	}
 
+	log.Printf("Created collection succeeded for bucket: %v, scope: %v, collection: %v, body: %s", bucketName, scopeName, collectionName, body)
+	return manifest
 }
 
-func CreateCollection(bucketName, scope, collection, serverUsername, serverPassword, hostaddress string) {
+func CreateCollection(bucketName, scope, collection, serverUsername, serverPassword, hostaddress string) map[string]interface{} {
 	// 1. get scopes for the bucket
 	scopes := GetScopes(bucketName, serverUsername, serverPassword, hostaddress)
 	present := false
@@ -160,7 +166,7 @@ func CreateCollection(bucketName, scope, collection, serverUsername, serverPassw
 		log.Printf("Creating scope: %v for bucket: %v as it does not exist", scope, bucketName)
 		createScope(bucketName, scope, serverUsername, serverPassword, hostaddress)
 	}
-	createCollection(bucketName, scope, collection, serverUsername, serverPassword, hostaddress)
+	return createCollection(bucketName, scope, collection, serverUsername, serverPassword, hostaddress)
 }
 
 func DropScope(bucketName, scopeName, serverUserName, serverPassword, hostaddress string) {
@@ -248,8 +254,36 @@ func DropAllScopesAndCollections(bucketName, serverUserName, serverPassword, hos
 	}
 }
 
+func ensureManifest(bucket, serverUserName, serverPassword, hostaddress string, manifest map[string]interface{}) {
+	if _, ok := manifest["uid"]; ok {
+		uid := manifest["uid"].(string)
+		client := &http.Client{}
+		for i := 0; i < 30; i++ {
+			address := "http://" + hostaddress + "/pools/default/buckets/" + bucket + "/scopes/@ensureManifest/" + uid
+			req, _ := http.NewRequest("POST", address, nil)
+			req.SetBasicAuth(serverUserName, serverPassword)
+			req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			resp, err := client.Do(req)
+			if resp.StatusCode != http.StatusOK {
+				log.Printf(address)
+				log.Printf("%v", req)
+				log.Printf("%v", resp)
+				log.Printf("Ensure manifest, response is NOT OK bucket: %v, uid: %v \n", bucket, uid)
+				time.Sleep(1 * time.Second)
+			} else {
+				// todo : error out if response is error
+				tc.HandleError(err, "ensure manifest "+address)
+				log.Printf("Received OK response from ensureManifest, bucket: %v, uid: %v", bucket, uid)
+				defer resp.Body.Close()
+				ioutil.ReadAll(resp.Body)
+				return
+			}
+		}
+	}
+}
+
 // Checks all ns_server nodes if the collection is populated or not
-func WaitForCollectionCreation(bucketName, scopeName, collectionName, serverUserName, serverPassword string, hostaddresses []string) string {
+func WaitForCollectionCreation(bucketName, scopeName, collectionName, serverUserName, serverPassword string, hostaddresses []string, manifest map[string]interface{}) string {
 	cids := make([]string, len(hostaddresses))
 	for i, hostaddress := range hostaddresses {
 		log.Printf("WaitForCollectionCreation: Checking collection creation for host: %v, bucket: %v, scope: %v, collection: %v", hostaddress, bucketName, scopeName, collectionName)
@@ -263,5 +297,6 @@ func WaitForCollectionCreation(bucketName, scopeName, collectionName, serverUser
 			}
 		}
 	}
+	ensureManifest(bucketName, serverUserName, serverPassword, hostaddresses[0], manifest)
 	return cids[0]
 }
