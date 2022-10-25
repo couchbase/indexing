@@ -404,6 +404,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			cfg.MutationRateLimit = int64(slice.sysconf["plasma.serverless.mutationRateLimit"].Int())
 			cfg.IdleDurationThreshold = time.Duration(slice.sysconf["plasma.serverless.idleDurationThreshold"].Int()) * time.Second
 
+			cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.serverless.LSSSegmentFileSize"].Int())
+
 			cfg.CPdbg = slice.sysconf["plasma.serverless.shardCopy.dbg"].Bool()
 			cfg.S3HttpDbg = int64(slice.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
 			cfg.S3PartSize = int64(slice.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
