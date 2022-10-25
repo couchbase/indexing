@@ -3043,9 +3043,9 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	var stopCh StopChannel
 	var doneCh DoneChannel
 
-	monitor_ts := tk.config["timekeeper.monitor_flush"].Bool()
+	monitor_ts_interval := tk.config["timekeeper.monitor_flush_interval"].Int()
 
-	if monitor_ts {
+	if monitor_ts_interval != 0 {
 		stopCh = tk.ss.streamKeyspaceIdTimerStopCh[streamId][keyspaceId]
 		doneCh = make(DoneChannel)
 		tk.ss.streamKeyspaceIdFlushDone[streamId][keyspaceId] = doneCh
@@ -3104,10 +3104,10 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 			countVec:   countVec,
 		}
 
-		if monitor_ts {
+		if monitor_ts_interval != 0 {
 
 			var totalWait int
-			ticker := time.NewTicker(time.Second * 10)
+			ticker := time.NewTicker(time.Second * 1)
 			defer ticker.Stop()
 
 			for {
@@ -3124,15 +3124,23 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 					tk.lock.Lock()
 					flushInProgress := tk.ss.streamKeyspaceIdFlushInProgressTsMap[streamId][keyspaceId]
 					if flushTs.Equal(flushInProgress) {
-						totalWait += 10
+						totalWait += 1
 
-						if totalWait > 60 {
+						if totalWait > monitor_ts_interval {
 							lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
 							hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 							logging.Warnf("Timekeeper::flushMonitor Waiting for flush "+
 								"to finish for %v seconds. Stream %v KeyspaceId %v.", totalWait, streamId, keyspaceId)
 							logging.Verbosef("Timekeeper::flushMonitor FlushTs %v \n LastFlushTs %v \n HWT %v", flushTs,
 								lastFlushedTs, hwt)
+
+							//avoid log flooding
+							if monitor_ts_interval < 300 {
+								monitor_ts_interval = monitor_ts_interval * 2
+							} else {
+								//once every 5 min
+								monitor_ts_interval += 300
+							}
 						}
 					} else {
 						tk.lock.Unlock()

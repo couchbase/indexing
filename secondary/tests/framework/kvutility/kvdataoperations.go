@@ -279,3 +279,52 @@ func GetItemCountInBucket(bucketName, bucketPassword, serverUserName, serverPass
 	itemcount = basicstats["itemCount"].(float64)
 	return int(itemcount)
 }
+
+func WaitForBucketCreation(bucketName, serverUserName, serverPassword string, hostaddresses []string) {
+
+	for _, hostaddress := range hostaddresses {
+		log.Printf("WaitForBucketCreation: Checking bucket creation for host: %v", hostaddress)
+		created := false
+		for j := 0; j < 30; j++ {
+			client := &http.Client{}
+			address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+
+			req, _ := http.NewRequest("GET", address, nil)
+			req.SetBasicAuth(serverUserName, serverPassword)
+			req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			resp, err := client.Do(req)
+			if resp.StatusCode != http.StatusOK || err != nil {
+				func() {
+					log.Printf(address)
+					log.Printf("%v", req)
+					log.Printf("%v", resp)
+					log.Printf("Waiting for bucket creation %v, err: %v \n", bucketName, err)
+
+					defer resp.Body.Close()
+					ioutil.ReadAll(resp.Body)
+
+				}()
+			} else { // Bucket creation is successful
+				func() {
+					defer resp.Body.Close()
+					body, _ := ioutil.ReadAll(resp.Body)
+
+					response := make(map[string]interface{})
+					err = json.Unmarshal(body, &response)
+					if err != nil {
+						tc.HandleError(err, "Get Bucket :: Unmarshal of response body")
+					}
+					vBucketServerMap := response["vBucketServerMap"].(map[string]interface{})
+					numVBuckets := response["numVBuckets"].(float64)
+					vBucketMap := vBucketServerMap["vBucketMap"].([]interface{})
+					if numVBuckets == float64(len(vBucketMap)) {
+						created = true
+					}
+				}()
+				if created {
+					break
+				}
+			}
+		}
+	}
+}

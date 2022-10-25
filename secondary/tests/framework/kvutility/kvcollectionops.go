@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	common "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
@@ -245,4 +246,22 @@ func DropAllScopesAndCollections(bucketName, serverUserName, serverPassword, hos
 			}
 		}
 	}
+}
+
+// Checks all ns_server nodes if the collection is populated or not
+func WaitForCollectionCreation(bucketName, scopeName, collectionName, serverUserName, serverPassword string, hostaddresses []string) string {
+	cids := make([]string, len(hostaddresses))
+	for i, hostaddress := range hostaddresses {
+		log.Printf("WaitForCollectionCreation: Checking collection creation for host: %v, bucket: %v, scope: %v, collection: %v", hostaddress, bucketName, scopeName, collectionName)
+		for j := 0; j < 30; j++ {
+			cid := GetCollectionID(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress)
+			if cid == "" {
+				time.Sleep(1 * time.Second)
+			} else {
+				cids[i] = cid
+				break
+			}
+		}
+	}
+	return cids[0]
 }

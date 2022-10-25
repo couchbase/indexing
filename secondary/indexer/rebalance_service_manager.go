@@ -2273,7 +2273,9 @@ func (m *RebalanceServiceManager) cancelRebalanceTaskLOCKED(task *service.Task) 
 // cancelRunningRebalanceTaskLOCKED cancels a currently running rebalance.
 // Caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) cancelRunningRebalanceTaskLOCKED() error {
-	m.rebalancer.Cancel()
+	if m.rebalancer != nil {
+		m.rebalancer.Cancel()
+	}
 	m.onRebalanceDoneLOCKED(nil, true)
 	return nil
 }

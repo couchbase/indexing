@@ -94,3 +94,5 @@ const (
 	CheckResultReject
 	CheckResultError
 )
+
+const DEFAULT_TIME_BARRIER = 2
