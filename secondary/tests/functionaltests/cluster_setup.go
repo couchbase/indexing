@@ -53,6 +53,17 @@ func removeNode(hostname string, t *testing.T) {
 	}
 }
 
+// removeNode performs a rebalance out (ejection) of the specified node.
+func removeNodes(hostnames []string, t *testing.T) {
+	serverAddr := clusterconfig.KVAddress
+	username := clusterconfig.Username
+	password := clusterconfig.Password
+
+	if err := cluster.RemoveNodes(serverAddr, username, password, hostnames); err != nil {
+		t.Fatalf(err.Error())
+	}
+}
+
 func failoverNode(hostname string, t *testing.T) {
 	serverAddr := clusterconfig.KVAddress
 	username := clusterconfig.Username

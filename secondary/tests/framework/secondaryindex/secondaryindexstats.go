@@ -148,6 +148,34 @@ func GetPerPartnStats(serverUserName, serverPassword, hostaddress string) map[st
 	return indexStats
 }
 
+func ResetAllIndexerStats(serverUserName, serverPassword, hostaddress string) {
+	indexNodes, _ := GetIndexerNodesHttpAddresses(hostaddress)
+
+	for _, indexNode := range indexNodes {
+		ResetIndexerStats(indexNode, serverUserName, serverPassword)
+	}
+}
+
+func ResetIndexerStats(indexerHttpAddr, serverUserName, serverPassword string) {
+	client := &http.Client{}
+	address := "http://" + indexerHttpAddr + "/stats/reset"
+
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("Reset stats failed\n")
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Reset Stats")
+	defer resp.Body.Close()
+}
+
 // Accumulate all stats of type float64 for partitioned indexes
 func accumulate(indexStats, stats map[string]interface{}, statKey string) {
 	if val, ok := indexStats[statKey]; ok {

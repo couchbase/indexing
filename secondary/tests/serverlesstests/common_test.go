@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -105,10 +106,10 @@ func TestMain(m *testing.M) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.blob_storage_scheme", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_scheme")
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.blob_storage_bucket", "/tmp", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_bucket")
+	err = secondaryindex.ChangeIndexerSettings("indexer.plasma.serverless.shardCopy.dbg", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_prefix")
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.blob_storage_prefix", "serverless_rebalance", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err = secondaryindex.ChangeIndexerSettings("indexer.rebalance.serverless.transferBatchSize", 2, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_prefix")
 
 	if clusterconfig.IndexUsing != "" {
@@ -143,6 +144,8 @@ func TestMain(m *testing.M) {
 			kvutility.DeleteBucket(buckets[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		}
 		time.Sleep(bucketOpWaitDur * time.Second)
+
+		cleanupStorageDir(&testing.T{})
 	}
 
 	os.Exit(m.Run())
@@ -413,17 +416,19 @@ func verifyDeletedPath(Pth string) error {
 	return nil
 }
 
-func verifyPathExists(Pth string) (bool, error) {
-	_, errStat := os.Stat(Pth)
-	if errStat == nil {
-		return true, nil
-	}
+func verifyAtleastOnePathExists(paths []string) bool {
+	out := false
+	for _, path := range paths {
+		_, errStat := os.Stat(path)
+		if errStat == nil {
+			return true
+		}
 
-	if os.IsNotExist(errStat) {
-		return false, nil
+		if os.IsNotExist(errStat) {
+			out = out || false
+		}
 	}
-
-	return false, errStat
+	return out
 }
 
 func forceKillMemcacheD() {
@@ -659,6 +664,42 @@ func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int
 	}
 }
 
+func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
+	if indexerAddr == "" {
+		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	}
+
+	for i := 0; i < 30; i++ {
+		client := &http.Client{}
+		address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
+
+		req, _ := http.NewRequest("GET", address, nil)
+		req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+		resp, err := client.Do(req)
+		// todo : error out if response is error
+		tc.HandleError(err, "Get RebalanceCleanupStatus")
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+			log.Printf(address)
+			log.Printf("%v", req)
+			log.Printf("%v", resp)
+			log.Printf("rebalanceCleanupStatus failed")
+		}
+
+		body, _ := ioutil.ReadAll(resp.Body)
+		if string(body) == "done" {
+			return
+		}
+		if i%5 == 0 {
+			log.Printf("Waiting for rebalance cleanup to finish on node: %v", nodeAddr)
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
 // Return shardID's for each bucket on this node
 func getShardIds(nodeAddr string, t *testing.T) map[string]map[string]bool {
 	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
@@ -747,16 +788,29 @@ func getShardIds(nodeAddr string, t *testing.T) map[string]map[string]bool {
 
 func getIndexStorageDirOnNode(nodeAddr string, t *testing.T) string {
 
-	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
-	if indexerAddr == "" {
-		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	var strIndexStorageDir string
+	workspace := os.Getenv("WORKSPACE")
+	if workspace == "" {
+		workspace = "../../../../../../../../"
+	}
+	switch nodeAddr {
+	case clusterconfig.Nodes[0]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_0/data/@2i/"
+	case clusterconfig.Nodes[1]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_1/data/@2i/"
+	case clusterconfig.Nodes[2]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_2/data/@2i/"
+	case clusterconfig.Nodes[3]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_3/data/@2i/"
+	case clusterconfig.Nodes[4]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_4/data/@2i/"
+	case clusterconfig.Nodes[5]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_5/data/@2i/"
+	case clusterconfig.Nodes[6]:
+		strIndexStorageDir = workspace + "ns_server" + "/data/n_6/data/@2i/"
+
 	}
 
-	indexStorageDir, errGetSetting := tc.GetIndexerSetting(indexerAddr, "indexer.storage_dir",
-		clusterconfig.Username, clusterconfig.Password)
-	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
-
-	strIndexStorageDir := indexStorageDir.(string)
 	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
 	FailTestIfError(err1, "Error while finding absolute path", t)
 	return absIndexStorageDir
@@ -779,6 +833,29 @@ func getFileList(path string) []string {
 		out = append(out, file.Name())
 	}
 	return out
+}
+
+// This function is called after rebalance to see if there are any
+// stray files in SHARD_REBALANCE_DIR remaining. There should be no
+// shard files remaining (Although there can be some directories with
+// RebalanceToken & TransferToken names
+func verifyStorageDirContents(t *testing.T) {
+	files, err := ioutil.ReadDir(absRebalStorageDirPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	r, _ := regexp.Compile("^plasma_storage($|/Rebalance($|/([0-9a-f]+)($|/TransferToken($|/TransferToken([0-9a-f]{1,2}:){7}([0-9a-f]{1,2})$))))")
+	for _, file := range files {
+		if !file.IsDir() {
+			t.Fatalf("verifyStorageDirContents: Non directory file: %v found. All files are expected to be directories", file)
+		}
+
+		dirName := file.Name()
+		rebalanceStoragePath := strings.Split(dirName, absRebalStorageDirPath)[0]
+		if !r.MatchString(rebalanceStoragePath) {
+			t.Fatalf("verifyStorageDirContents: Invalid directory path: %v seen", dirName)
+		}
+	}
 }
 
 // For each bucket, there should only be 2 shards - One for main index
@@ -812,6 +889,33 @@ func validateShardIdMapping(node string, t *testing.T) {
 	}
 }
 
+func validateShardFiles(node string, t *testing.T) {
+	// All indexes are created now. Get the shardId's for each node
+	shardFiles := getShardFiles(node, t)
+	if len(shardFiles) > 0 {
+		t.Fatalf("Expected empty shard directory for node: %v, but it has files: %v", node, shardFiles)
+	}
+}
+
+func validateIndexPlacement(nodes []string, t *testing.T) {
+	// Validate placement after rebalance
+	allIndexNodes, err := getIndexPlacement()
+	if err != nil {
+		t.Fatalf("Error while querying getIndexStatus endpoint, err: %v", err)
+	}
+
+	if len(allIndexNodes) != 2 {
+		t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+			nodes, allIndexNodes)
+	}
+	for _, node := range nodes {
+		if _, ok := allIndexNodes[node]; !ok {
+			t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+				nodes, allIndexNodes)
+		}
+	}
+}
+
 // Indexer life cycle manager broadcasts stats every 5 seconds.
 // After the index is built, there exists a possibility
 // that GSI/N1QL client has received stats from some indexer nodes but yet
@@ -823,4 +927,60 @@ func validateShardIdMapping(node string, t *testing.T) {
 // so that the client has updated stats from all indexer nodes.
 func waitForStatsUpdate() {
 	time.Sleep(10100 * time.Millisecond)
+}
+
+func getIndexStatusFromIndexer() (*tc.IndexStatusResponse, error) {
+	url, err := makeurl("/getIndexStatus?getAll=true")
+	if err != nil {
+		return nil, err
+	}
+
+	var resp *http.Response
+	resp, err = http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var respbody []byte
+	respbody, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var st tc.IndexStatusResponse
+	err = json.Unmarshal(respbody, &st)
+	if err != nil {
+		return nil, err
+	}
+
+	return &st, nil
+}
+
+func getIndexPlacement() (map[string]bool, error) {
+	status, err := getIndexStatusFromIndexer()
+	if err != nil {
+		return nil, err
+	}
+
+	allHosts := make(map[string]bool)
+	for _, indexStatus := range status.Status {
+		for _, host := range indexStatus.Hosts {
+			allHosts[host] = true
+		}
+
+	}
+	return allHosts, nil
+}
+
+func cleanupStorageDir(t *testing.T) {
+	cwd, err := filepath.Abs(".")
+	FailTestIfError(err, "Error while finding absolute path", t)
+
+	absRebalStorageDirPath := cwd + "/" + SHARD_REBALANCE_DIR
+	log.Printf("cleanupStorageDir: Cleaning up %v", absRebalStorageDirPath)
+
+	err = os.RemoveAll(absRebalStorageDirPath)
+	if err != nil {
+		t.Fatalf("Error removing rebal storage dir: %v, err: %v", absRebalStorageDirPath, err)
+	}
 }
