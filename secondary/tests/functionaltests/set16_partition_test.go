@@ -30,7 +30,7 @@ func TestPartitionDistributionWithReplica(t *testing.T) {
 	log.Printf("This test will create a paritioned index with replica and checks the parition distribution")
 	log.Printf("Parititions with same ID beloning to both replica and source index should not be on the same node")
 
-	if err := validateServers(clusterconfig.Nodes); err != nil {
+	if err := validateServers(clusterconfig.Nodes[0:3]); err != nil {
 		log.Printf("Error while validating cluster, err: %v", err)
 		log.Printf("Considering the test successful")
 		return

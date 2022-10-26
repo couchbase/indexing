@@ -19,7 +19,7 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	log.Printf("In TestAlterIndexIncrReplica()")
 	log.Printf("This test creates an index with one replica and then increments replica count to 2")
 
-	if err := validateServers(clusterconfig.Nodes); err != nil {
+	if err := validateServers(clusterconfig.Nodes[0:3]); err != nil {
 		t.Fatalf("Error while validating cluster, err: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestAlterIndexDecrReplica(t *testing.T) {
 	log.Printf("In TestAlterIndexDecrReplica()")
 	log.Printf("This test creates an index with two replicas and then decrements replica count to 1")
 
-	if err := validateServers(clusterconfig.Nodes); err != nil {
+	if err := validateServers(clusterconfig.Nodes[0:3]); err != nil {
 		t.Fatalf("Error while validating cluster, err: %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestAlterIndexDropReplica(t *testing.T) {
 	log.Printf("In TestAlterIndexDropReplica()")
 	log.Printf("This test creates an index with two replicas and then drops one replica from cluster")
 
-	if err := validateServers(clusterconfig.Nodes); err != nil {
+	if err := validateServers(clusterconfig.Nodes[0:3]); err != nil {
 		t.Fatalf("Error while validating cluster, err: %v", err)
 	}
 

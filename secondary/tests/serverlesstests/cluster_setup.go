@@ -186,8 +186,7 @@ func initClusterFromREST() error {
 		time.Sleep(5 * time.Second)
 		status = getClusterStatus()
 		log.Printf("Cluster status: %v", status)
-		if cluster.IsNodeKV(status, clusterconfig.Nodes[0]) &&
-			cluster.IsNodeIndex(status, clusterconfig.Nodes[1]) &&
+		if cluster.IsNodeIndex(status, clusterconfig.Nodes[1]) &&
 			cluster.IsNodeIndex(status, clusterconfig.Nodes[2]) {
 			// The IP address of Nodes[0] can get renamed. Until we figure out
 			// how to disable the re-naming (like --dont-rename in cluster_connect)
@@ -207,14 +206,14 @@ func initClusterFromREST() error {
 					}
 				}
 				if kv == false || n1ql == false {
-					return fmt.Errorf("Error while initialising cluster. Check cluster status")
+					return fmt.Errorf("Error while initialising cluster as KV & n1ql services are not found. Check cluster status")
 				}
 			} else {
-				return fmt.Errorf("Error while initialising cluster. Check cluster status")
+				return fmt.Errorf("Error while initialising cluster as there are more nodes in status than expected. Check cluster status")
 			}
 			log.Printf("Successfully initialised cluster")
 		} else {
-			return fmt.Errorf("Error while initialising cluster. Check cluster status")
+			return fmt.Errorf("Error while initialising cluster as one of Nodes[1], Nodes[2] is not index. Check cluster status")
 		}
 	}
 	status = getClusterStatus()
