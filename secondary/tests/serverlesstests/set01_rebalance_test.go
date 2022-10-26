@@ -107,3 +107,25 @@ func performSwapRebalance(addNodes []string, removeNodes []string, t *testing.T)
 
 	verifyStorageDirContents(t)
 }
+
+// Prior to this test, indexes are only on Nodes[3], Nodes[4]
+// Nodes[3] is in server group "Group 2" & Nodes [4] is in
+// server group "Group 1". Indexer will remove Nodes[4], add
+// Nodes[2] (which will be in "Group 1") and initiate rebalance.
+// After rebalance, all indexes should exist on Nodes[2] & Nodes[3]
+func TestSingleNodeSwapRebalance(t *testing.T) {
+	log.Printf("In TestSingleNodeSwapRebalance")
+
+	performSwapRebalance([]string{clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[4]}, t)
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				partns := indexPartnIds[i]
+				if i%2 == 0 { // scan all non-deferred indexes
+					scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+				}
+			}
+		}
+	}
+}
