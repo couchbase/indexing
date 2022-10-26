@@ -277,6 +277,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	destination := msg.GetDestination()
+	instRenameMap := msg.GetInstRenameMap()
 	rebalCancelCh := msg.GetCancelCh()
 	rebalDoneCh := msg.GetDoneCh()
 	respCh := msg.GetRespCh()
@@ -344,6 +345,9 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			meta[plasma.GSIShardID] = uint64(shardId)
 			meta[plasma.GSIShardUploadPath] = shardPath
 			meta[plasma.GSIStorageDir] = stm.config["storage_dir"].String()
+			if instRenameMap != nil && len(instRenameMap[shardId]) > 0 {
+				meta[plasma.GSIReplicaRepair] = instRenameMap[shardId]
+			}
 
 			if err := plasma.RestoreShard(destination, doneCb, progressCb, cancelCh, meta); err != nil {
 

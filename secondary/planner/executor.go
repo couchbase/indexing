@@ -542,6 +542,35 @@ func groupIndexInstances(index *IndexUsage, defnIdToInstIdMap map[common.IndexDe
 	}
 }
 
+func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, sliceIndex int) {
+	if index.initialNode != nil {
+		return
+	}
+
+	currPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId)
+
+	newInstId := token.RealInstIds[sliceIndex]
+	if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+		newInstId = token.RealInstIds[sliceIndex]
+	}
+	newPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, newInstId, index.PartnId)
+
+	if token.InstRenameMap == nil {
+		token.InstRenameMap = make(map[common.ShardId]map[string]string)
+	}
+
+	for i, shardId := range index.ShardIds {
+		if _, ok := token.InstRenameMap[shardId]; !ok {
+			token.InstRenameMap[shardId] = make(map[string]string)
+		}
+		if i == 0 { // Main index only
+			token.InstRenameMap[shardId][currPathInMeta+"/mainIndex"] = newPathInMeta + "/mainIndex"
+		} else { // Back index only
+			token.InstRenameMap[shardId][currPathInMeta+"/docIndex"] = newPathInMeta + "/docIndex"
+		}
+	}
+}
+
 func genShardTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange,
 	deleteNodes []string) (map[string]*common.TransferToken, error) {
 
@@ -646,6 +675,11 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 
 				sliceIndex = len(token.InstIds) - 1
 			}
+
+			if index.initialNode == nil {
+				addToInstRenamePath(token, index, sliceIndex)
+			}
+
 			// If there is a build token for the definition, set index STATE to INITIAL so the
 			// index will be built as part of rebalancing. It is not a good idea to build this
 			// index with other indexes of the keyspace as they may have a non-zero timestamp.
@@ -840,9 +874,6 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 	// Group transfer tokens moving from one sub cluster to another cluster
 	subClusterTokenIdMap := make(map[string][]string)
 	for ttid, token := range transferTokens {
-		if token.TransferMode != common.TokenTransferModeMove { // Ignore for replica repair
-			continue
-		}
 
 		srcSubClusterPos := getSubClusterPosForNode(subClusters, token.SourceId)
 		destSubClusterPos := getSubClusterPosForNode(subClusters, token.DestId)

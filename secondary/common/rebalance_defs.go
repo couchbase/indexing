@@ -334,6 +334,11 @@ type TransferToken struct {
 	// shardId -> Location on S3 where the shard is uploaded
 	// shardPath is a sub-directory of "destination"
 	ShardPaths map[ShardId]string
+
+	// Used by shard rebalancer during replica repair. Contains
+	// the paths which plasma has to repair in shard.json file
+	// during replica repair
+	InstRenameMap map[ShardId]map[string]string
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
@@ -396,9 +401,10 @@ func (tt *TransferToken) String() string {
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
 		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
+		fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
 
-		if tt.Destination != "" {
-			fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
+		if len(tt.InstRenameMap) > 0 {
+			fmt.Fprintf(sbp, "InstRenameMap: %v\n", tt.InstRenameMap)
 		}
 
 		for i := range tt.IndexInsts {

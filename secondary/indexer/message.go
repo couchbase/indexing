@@ -2572,6 +2572,9 @@ type MsgStartShardRestore struct {
 	// is closed first. In that case, abort the restore process
 	doneCh chan struct{}
 
+	// used by shard rebalancer during replica repair
+	instRenameMap map[common.ShardId]map[string]string
+
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
 }
@@ -2594,6 +2597,10 @@ func (m *MsgStartShardRestore) GetTransferTokenId() string {
 
 func (m *MsgStartShardRestore) GetDestination() string {
 	return m.destination
+}
+
+func (m *MsgStartShardRestore) GetInstRenameMap() map[common.ShardId]map[string]string {
+	return m.instRenameMap
 }
 
 func (m *MsgStartShardRestore) GetCancelCh() chan struct{} {

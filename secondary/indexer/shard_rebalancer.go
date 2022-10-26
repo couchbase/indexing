@@ -756,6 +756,7 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		rebalanceId:     sr.rebalToken.RebalId,
 		transferTokenId: ttid,
 		destination:     tt.Destination,
+		instRenameMap:   tt.InstRenameMap,
 
 		cancelCh:   sr.cancel,
 		doneCh:     sr.done,
@@ -1944,19 +1945,7 @@ func (sr *ShardRebalancer) Cancel() {
 func (sr *ShardRebalancer) batchTransferTokens() {
 	tokenBatched := make(map[string]bool)
 
-	// The transfer tokens will be batched in the following order of priority
-	// a. All replica repair tokens will be processed first
-	// b. Swap rebalance tokens will be processed next
-	// c. Index movements across subclusters will be processed next
-
-	// TODO: Add support for batching tranfser tokens for replica repair
-	// Also add priority to batching tranfser tokens. Current code considers
-	// tokens of only swap rebalance and index movements across subclusters
 	for ttid, token := range sr.transferTokens {
-
-		if token.TransferMode != common.TokenTransferModeMove {
-			continue
-		}
 
 		if _, ok := tokenBatched[ttid]; !ok {
 			tokenMap := make(map[string]*c.TransferToken)
