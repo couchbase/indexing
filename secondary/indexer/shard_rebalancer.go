@@ -384,9 +384,16 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			}
 		} else {
 			// If sibling does not exist, this could be replica repair or swap rebalance.
-			// Go-ahead and post dropOnSource token signalling completion of movements
-			dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, "")
-			setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+			if tt.TransferMode == common.TokenTransferModeMove { // single node swap rebalance
+				// Go-ahead and post dropOnSource token signalling completion of movements
+				dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, "")
+				setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+			} else { // replica repair
+				// Replica repair case. Go-ahead and move the token to Commit phase as
+				// we should not drop indexes on source node during replica repair
+				tt.ShardTransferTokenState = common.ShardTokenCommit
+				setTransferTokenInMetakv(ttid, tt)
+			}
 		}
 
 		return true
@@ -502,21 +509,57 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 	case c.ShardTokenDropOnSource:
 
 		// For this token type, compare the sourceId of the corresponding
-		// tokens with ID's as tt.TokenId or tt.SIblingTokenId.
+		// tokens with ID's as tt.TokenId or tt.SiblingTokenId.
 		//
-		// If either of them match, drop index instances on source node
+		// If either of them match, drop index instances on source node.
+		// When there is replica repair and swap rebalance happening in
+		// same rebalance, the swap rebalance token is queued for drop
+		// and replica repair token is moved to Commit phase
 		if sr.getSourceIdForTokenId(tt.SourceTokenId) == sr.nodeUUID {
-			l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", tt.SourceTokenId)
-			sr.queueDropShardRequests(tt.SourceTokenId)
-		} else if sr.getSourceIdForTokenId(tt.SiblingTokenId) == sr.nodeUUID {
-			l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", tt.SiblingTokenId)
-			sr.queueDropShardRequests(tt.SiblingTokenId)
+			retVal := sr.checkAndQueueTokenForDrop(tt, tt.SourceTokenId, tt.SiblingTokenId)
+			if retVal {
+				return true
+			}
+		}
+		if sr.getSourceIdForTokenId(tt.SiblingTokenId) == sr.nodeUUID {
+			retVal := sr.checkAndQueueTokenForDrop(tt, tt.SiblingTokenId, tt.SourceTokenId)
+			if retVal {
+				return true
+			}
 		}
 		return true
 
 	default:
 		return false
 	}
+}
+
+func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sourceId, siblingId string) bool {
+	sourceToken := sr.getTokenById(sourceId)
+	if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeMove {
+		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", sourceId)
+		sr.queueDropShardRequests(sourceId)
+
+		siblingToken := sr.getTokenById(siblingId)
+		if siblingToken != nil && siblingToken.TransferMode == common.TokenTransferModeCopy && siblingToken.SourceId == sr.nodeUUID {
+			siblingToken.ShardTransferTokenState = common.ShardTokenCommit
+			setTransferTokenInMetakv(siblingId, siblingToken)
+		}
+		return true
+	} else {
+		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Skipping token: %v for drop", sourceId)
+	}
+	return false
+}
+
+func (sr *ShardRebalancer) getTokenById(ttid string) *c.TransferToken {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if siblingToken, ok := sr.sourceTokens[ttid]; ok && siblingToken != nil {
+		return siblingToken
+	}
+	return nil // Return error as the default state
 }
 
 func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) {
