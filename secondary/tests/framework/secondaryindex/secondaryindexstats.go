@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -162,6 +163,9 @@ func accumulate(indexStats, stats map[string]interface{}, statKey string) {
 
 func ChangeIndexerSettings(configKey string, configValue interface{}, serverUserName, serverPassword, hostaddress string) error {
 
+	// Wait for some time to prevent the possibility of golang
+	// re-using a connection which is about to close
+	time.Sleep(100 * time.Millisecond)
 	qpclient, err := GetOrCreateClient(hostaddress, "2i_settings")
 	if err != nil {
 		return err
