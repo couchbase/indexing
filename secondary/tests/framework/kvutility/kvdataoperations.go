@@ -283,7 +283,7 @@ func GetItemCountInBucket(bucketName, bucketPassword, serverUserName, serverPass
 func WaitForBucketCreation(bucketName, serverUserName, serverPassword string, hostaddresses []string) {
 
 	for _, hostaddress := range hostaddresses {
-		log.Printf("WaitForBucketCreation: Checking bucket creation for host: %v", hostaddress)
+		log.Printf("WaitForBucketCreation: Checking bucket(%v) creation for host: %v", bucketName, hostaddress)
 		created := false
 		for j := 0; j < 30; j++ {
 			client := &http.Client{}
@@ -321,10 +321,11 @@ func WaitForBucketCreation(bucketName, serverUserName, serverPassword string, ho
 						created = true
 					}
 				}()
-				if created {
-					break
-				}
 			}
+			if created {
+				break
+			}
+			time.Sleep(1 * time.Second)
 		}
 	}
 }

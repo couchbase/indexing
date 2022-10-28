@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
@@ -290,9 +291,15 @@ func GetIndexStatus(serverUserName, serverPassword, hostaddress string) (map[str
 	return response, nil
 }
 
-func GetIndexHttpPort(indexHostAddress, serverUserName, serverPassword, hostaddress string) string {
+func GetIndexHttpAddrOnNode(serverUserName, serverPassword, hostaddress string) string {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/nodeServices"
+
+	// Get host, port of the hostaddr
+	host, port, err := net.SplitHostPort(hostaddress)
+	if err != nil {
+		return ""
+	}
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -317,6 +324,14 @@ func GetIndexHttpPort(indexHostAddress, serverUserName, serverPassword, hostaddr
 		return ""
 	}
 
-	log.Printf("%v", response)
+	nodesExt := response["nodesExt"].([]interface{})
+	for _, node := range nodesExt {
+		nodeExt := node.(map[string]interface{})
+		services := nodeExt["services"].(map[string]interface{})
+		if fmt.Sprintf("%v", services["mgmt"].(float64)) == port {
+			return fmt.Sprintf("%v:%v", host, services["indexHttp"].(float64))
+		}
+	}
+
 	return ""
 }

@@ -28,6 +28,7 @@ import (
 	parsec "github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
+	"gopkg.in/couchbase/gocb.v1"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -138,6 +139,10 @@ func TestMain(m *testing.M) {
 
 		log.Printf("Emptying the default bucket")
 		kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		for i := range buckets {
+			kvutility.DeleteBucket(buckets[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		}
+		time.Sleep(bucketOpWaitDur * time.Second)
 	}
 
 	os.Exit(m.Run())
@@ -524,7 +529,7 @@ func doHttpRequestReturnBody(req *http.Request) (resp *http.Response, respbody [
 	return resp, respbody, err
 }
 
-func waitForIndexActive(bucket, index string, t *testing.T) {
+func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t *testing.T) {
 	for {
 		select {
 		case <-time.After(time.Duration(3 * time.Minute)):
@@ -537,12 +542,16 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 				for _, indexEntry := range indexes {
 					entry := indexEntry.(map[string]interface{})
 
+					if bucket != entry["bucket"].(string) ||
+						scope != entry["scope"].(string) ||
+						collection != entry["collection"].(string) {
+						continue
+					}
+
 					if index == entry["index"].(string) {
-						if bucket == entry["bucket"].(string) {
-							if "Ready" == entry["status"].(string) {
-								log.Printf("Index status is: Ready for index: %v", index)
-								return
-							}
+						if strings.ToLower(indexStatus) == strings.ToLower(entry["status"].(string)) {
+							log.Printf("Index status is: %v for index: %v", indexStatus, index)
+							return
 						}
 					}
 				}
@@ -553,6 +562,16 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 			time.Sleep(1 * time.Second)
 		}
 	}
+}
+
+func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, status string, t *testing.T) {
+	// Create a partitioned index with defer_build:true
+	tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket,
+		n1qlStatement, false, gocb.RequestPlus)
+
+	// Wait for index created
+	waitForIndexStatus(bucket, scope, collection, index, status, t)
+	waitForIndexStatus(bucket, scope, collection, index+" (replica 1)", status, t)
 }
 
 // scanIndexReplicas scan's the index and validates if all the replicas of the index are retruning
@@ -600,6 +619,9 @@ func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int
 	for i := 0; i < len(replicas); i++ {
 		for j := startPartn; j < endPartn; j++ {
 			indexName := fmt.Sprintf("%s:%s:%s:%s %v%s", bucket, scope, collection, index, j, replicas[i])
+			if collection == "_default" {
+				indexName = fmt.Sprintf("%s:%s %v%s", bucket, index, j, replicas[i])
+			}
 			num_requests[i][j] = stats[indexName+":num_requests"].(float64)
 			num_scan_errors += stats[indexName+":num_scan_errors"].(float64)
 			num_scan_timeouts += stats[indexName+":num_scan_timeouts"].(float64)
@@ -634,6 +656,159 @@ func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int
 			logStats()
 			t.Fatalf("Total scan requests for all partitions does not match the total scans. Expected: %v, actual: %v, partitionID: %v", numScans, total_scan_requests, j)
 		}
+	}
+}
+
+// Return shardID's for each bucket on this node
+func getShardIds(nodeAddr string, t *testing.T) map[string]map[string]bool {
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
+	if indexerAddr == "" {
+		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	}
+
+	client := &http.Client{}
+	address := "http://" + indexerAddr + "/getLocalIndexMetadata"
+
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	// todo : error out if response is error
+	tc.HandleError(err, "Get getLocalIndexMetadata")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("getLocalIndexMetadata failed")
+	}
+
+	response := make(map[string]interface{})
+	body, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(body, &response)
+
+	if _, ok := response["topologies"]; !ok {
+		return nil
+	}
+
+	out := make(map[string]map[string]bool)
+
+	for _, topology := range response["topologies"].([]interface{}) {
+		topo := topology.(map[string]interface{})
+		if _, ok := topo["definitions"]; !ok {
+			continue
+		}
+		definitions := topo["definitions"].([]interface{})
+
+		for _, definition := range definitions {
+			defn := definition.(map[string]interface{})
+			if _, ok := defn["bucket"]; !ok {
+				continue
+			}
+			bucket := defn["bucket"].(string)
+
+			if _, ok := defn["instances"]; !ok {
+				continue
+			}
+			instances := defn["instances"].([]interface{})
+
+			for _, instance := range instances {
+				inst := instance.(map[string]interface{})
+				if _, ok := inst["partitions"]; !ok {
+					continue
+				}
+				partitions := inst["partitions"].([]interface{})
+
+				for _, partition := range partitions {
+					partn := partition.(map[string]interface{})
+					if _, ok := partn["shardIds"]; !ok {
+						continue
+					}
+					shardIds := partn["shardIds"].([]interface{})
+
+					if _, ok := out[bucket]; !ok {
+						out[bucket] = make(map[string]bool)
+					}
+					for _, shardId := range shardIds {
+						switch shardId.(type) {
+						case int64:
+							out[bucket][fmt.Sprintf("%v", shardId.(int64))] = true
+						case float64:
+							out[bucket][fmt.Sprintf("%v", uint64(shardId.(float64)))] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func getIndexStorageDirOnNode(nodeAddr string, t *testing.T) string {
+
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
+	if indexerAddr == "" {
+		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	}
+
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(indexerAddr, "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
+	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
+
+	strIndexStorageDir := indexStorageDir.(string)
+	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
+	FailTestIfError(err1, "Error while finding absolute path", t)
+	return absIndexStorageDir
+}
+
+func getShardFiles(nodeAddr string, t *testing.T) []string {
+	storageDir := getIndexStorageDirOnNode(nodeAddr, t)
+
+	shardPath := storageDir + "/shards"
+	return getFileList(shardPath)
+}
+
+func getFileList(path string) []string {
+	files, err := ioutil.ReadDir(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	out := make([]string, 0)
+	for _, file := range files {
+		out = append(out, file.Name())
+	}
+	return out
+}
+
+// For each bucket, there should only be 2 shards - One for main index
+// and one for back index. Having more than 2 shards is a bug (Until
+// multiple shards per tenant are supported)
+//
+// Also, the shardId should be unique to a bucket. If two buckets share
+// a shard, it is a bug
+func isValidShardMapping(shardMapping map[string]map[string]bool) bool {
+	shardToBucketMap := make(map[string]string)
+	for bucket, shardMap := range shardMapping {
+		if len(shardMap) != 2 {
+			return false
+		}
+		for _, shardId := range shardToBucketMap {
+			if _, ok := shardToBucketMap[shardId]; !ok {
+				shardToBucketMap[shardId] = bucket
+			} else {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validateShardIdMapping(node string, t *testing.T) {
+	// All indexes are created now. Get the shardId's for each node
+	shardIds := getShardIds(node, t)
+	if isValidShardMapping(shardIds) == false {
+		t.Fatalf("Invalid shard mapping: %v on node: %v", shardIds, node)
 	}
 }
 
