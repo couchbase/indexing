@@ -2208,11 +2208,17 @@ func newSchedTokenMonitor(metaClient *metadataClient) *schedTokenMonitor {
 }
 
 func (s *schedTokenMonitor) makeIndexMetadata(token *mc.ScheduleCreateToken) *mclient.IndexMetadata {
+
+	tmp := &mclient.IndexStatsHolder{
+		StatsMap: map[string]interface{}{"last_known_scan_time": float64(0)},
+	}
+
 	return &mclient.IndexMetadata{
 		Definition: &token.Definition,
 		State:      common.INDEX_STATE_SCHEDULED,
 		Error:      "",
 		Scheduled:  true,
+		Stats:      tmp,
 	}
 }
 
