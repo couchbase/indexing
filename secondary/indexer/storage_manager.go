@@ -302,7 +302,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid_copy := tsVbuuid.Copy()
 	stats := s.stats.Get()
 
-	s.assertOnNonAlignedDiskCommit(streamId, bucket, indexInstMap, tsVbuuid)
+	s.assertOnNonAlignedDiskCommit(streamId, keyspaceId, tsVbuuid)
 
 	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
 		numVbuckets, indexInstMap, indexPartnMap, instIdList, instsPerWorker, stats, flushWasAborted, hasAllSB)
