@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
+	"github.com/couchbase/regulator"
 )
 
 // Note - CE builds do not pull in plasma_slice.go
@@ -45,6 +46,18 @@ const (
 	MAIN_INDEX plasma.InstanceGroup = iota + 1
 	BACK_INDEX
 )
+
+type meteringStats struct {
+	currMeteredWU int64 //cumulative write units since last disk snapshot
+	currMeteredRU int64 //cumulative read units since last disk snapshot
+
+	diskSnap1MaxReadUsage  int64 //max write usage stored in disk snapshot1
+	diskSnap1MaxWriteUsage int64 //max read usage stored in disk snapshot1
+
+	diskSnap2MaxReadUsage  int64 //max write usage stored in disk snapshot2
+	diskSnap2MaxWriteUsage int64 //max read usage stored in disk snapshot2
+
+}
 
 type plasmaSlice struct {
 	newBorn                               bool
@@ -169,7 +182,8 @@ type plasmaSlice struct {
 	//The count is reset when messages are logged to console
 	numKeysSkipped int32
 
-	meteringMgr *MeteringThrottlingMgr
+	meteringMgr   *MeteringThrottlingMgr
+	meteringStats *meteringStats
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
@@ -190,6 +204,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.idxStats = idxStats
 	slice.indexerStats = indexerStats
 	slice.meteringMgr = meteringMgr
+	slice.meteringStats = &meteringStats{}
 
 	slice.get_bytes = 0
 	slice.insert_bytes = 0
@@ -911,7 +926,8 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 			if mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
 				billable := mdb.replicaId == 0
-				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
+				writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
+				mdb.meteringStats.recordWriteUsageStats(writeUnits)
 			}
 		}
 		mdb.isDirty = true
@@ -982,7 +998,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 			// for an update operation deleteSecIndex has already accounted 1 WCU
 			// so we will only count 1 WCU here.
 			billable := mdb.replicaId == 0
-			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(key)), false, billable)
+			writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+len(key)), false, billable)
+			mdb.meteringStats.recordWriteUsageStats(writeUnits)
 		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1104,7 +1121,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		mt = mdb.meteringMgr.StartMeteringTxn(mdb.GetBucketName(), "", billable) // Write metering is not accounted at user level
 		defer func() {
 			if abortErr == nil {
-				mt.Commit()
+				writeUnits, _ := mt.Commit()
+				mdb.meteringStats.recordWriteUsageStatsTxn(writeUnits)
 			} else {
 				mt.Abort()
 			}
@@ -1341,7 +1359,8 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 			if mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
 				billable := mdb.replicaId == 0
-				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
+				writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)), false, billable)
+				mdb.meteringStats.recordWriteUsageStats(writeUnits)
 			}
 		}
 
@@ -1398,7 +1417,8 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 			bucket := mdb.idxDefn.Bucket
 			billable := mdb.replicaId == 0
 			keylen := getKeyLenFromEntry(entry)
-			mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false, billable)
+			writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keylen), false, billable)
+			mdb.meteringStats.recordWriteUsageStats(writeUnits)
 		}
 	}
 
@@ -1484,7 +1504,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 			if meterDelete && mdb.EnableMetering() {
 				bucket := mdb.idxDefn.Bucket
 				billable := mdb.replicaId == 0
-				mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false, billable)
+				writeUnits, _ := mdb.meteringMgr.RecordWriteUnits(bucket, uint64(len(docid)+keyDelSz), false, billable)
+				mdb.meteringStats.recordWriteUsageStats(writeUnits)
 			}
 		}
 	}
@@ -1584,6 +1605,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	if s.committed && mdb.hasPersistence {
 		mdb.doPersistSnapshot(s)
+		mdb.updateUsageStatsOnCommit()
 	}
 
 	if info.IsCommitted() {
@@ -1630,6 +1652,9 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		if mdb.idxStats.useArrItemsCount {
 			snapshotStats[SNAP_STATS_ARR_ITEMS_COUNT] = mdb.idxStats.arrItemsCount.Value()
 		}
+		snapshotStats[SNAP_STATS_MAX_WRITE_UNITS_USAGE] = mdb.idxStats.currMaxWriteUsage.Value()
+		snapshotStats[SNAP_STATS_MAX_READ_UNITS_USAGE] = mdb.idxStats.currMaxReadUsage.Value()
+		snapshotStats[SNAP_STATS_AVG_UNITS_USAGE] = mdb.idxStats.avgUnitsUsage.Value()
 		s.info.IndexStats = snapshotStats
 
 		go func() {
@@ -1995,7 +2020,6 @@ func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 	mdb.setCommittedCount()
 
 	mdb.resetStats()
-
 	return nil
 }
 
@@ -2019,6 +2043,8 @@ func (mdb *plasmaSlice) resetStats() {
 	mdb.idxStats.lastNumDocsIndexed.Set(0)
 	mdb.idxStats.lastNumFlushQueued.Set(0)
 	mdb.idxStats.lastMutateGatherTime.Set(0)
+
+	mdb.resetUsageStatsOnRollback()
 
 }
 
@@ -2116,6 +2142,8 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 
 		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
 		mdb.idxStats.arrItemsCount.Set(safeGetInt64(stats[SNAP_STATS_ARR_ITEMS_COUNT]))
+
+		mdb.updateUsageStatsFromSnapshotMeta(stats)
 	} else {
 		// Since stats are not available, update keySizeStatsSince to current time
 		// to indicate we start tracking the stat since now.
@@ -2515,6 +2543,8 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		sts.DiskSize += checkpointFileSize
 	}
 
+	mdb.updateUsageStats()
+
 	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
@@ -2888,6 +2918,165 @@ func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
 	return out
 }
 
+func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64) {
+	atomic.AddInt64(&ms.currMeteredWU, int64(writeUnits))
+}
+
+func (ms *meteringStats) recordWriteUsageStatsTxn(writeUnits []regulator.Units) {
+
+	var totalUnits uint64
+	for _, units := range writeUnits {
+		totalUnits += units.Whole()
+	}
+
+	atomic.AddInt64(&ms.currMeteredWU, int64(totalUnits))
+}
+
+func (ms *meteringStats) recordReadUsageStats(readUnits uint64) {
+	atomic.AddInt64(&ms.currMeteredRU, int64(readUnits))
+}
+
+func (mdb *plasmaSlice) updateUsageStats() {
+
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	ms := mdb.meteringStats
+	idxStats := mdb.idxStats
+
+	last := idxStats.lastUnitsStatTime.Value()
+
+	var sinceLastStat int64
+	if last == 0 { //first iteration
+		sinceLastStat = 1
+	} else {
+		lastTime := time.Unix(0, last)
+		sinceLastStat = int64(time.Since(lastTime).Seconds())
+	}
+
+	if sinceLastStat >= 1 { //atleast 1 second
+
+		var newRUs, newWUs int64
+		lastMeteredWU := idxStats.lastMeteredWU.Value()
+		lastMeteredRU := idxStats.lastMeteredRU.Value()
+
+		currMeteredWU := atomic.LoadInt64(&ms.currMeteredWU)
+		currMeteredRU := atomic.LoadInt64(&ms.currMeteredRU)
+		if currMeteredWU > lastMeteredWU {
+			newWUs = (currMeteredWU - lastMeteredWU) / sinceLastStat
+			idxStats.lastMeteredWU.Set(currMeteredWU)
+		}
+		if currMeteredRU > lastMeteredRU {
+			newRUs = (currMeteredRU - lastMeteredRU) / sinceLastStat
+			idxStats.lastMeteredRU.Set(currMeteredRU)
+		}
+		currMaxWU := idxStats.currMaxWriteUsage.Value()
+		if newWUs > currMaxWU {
+			idxStats.currMaxWriteUsage.Set(newWUs)
+		}
+		currMaxRU := idxStats.currMaxReadUsage.Value()
+		if newRUs > currMaxRU {
+			idxStats.currMaxReadUsage.Set(newRUs)
+		}
+
+		currUnitsUsage := newWUs + (newRUs / cReadUnitNormalizationFactor)
+		max20minUnitsUsage := idxStats.max20minUnitsUsage.Value()
+		if currUnitsUsage > max20minUnitsUsage {
+			idxStats.max20minUnitsUsage.Set(currUnitsUsage)
+		}
+
+		lastAvgUnitsUsage := idxStats.avgUnitsUsage.Value()
+		avgUnitsUsage := (lastAvgUnitsUsage + currUnitsUsage) / 2
+
+		idxStats.avgUnitsUsage.Set(avgUnitsUsage)
+		idxStats.lastUnitsStatTime.Set(int64(time.Now().UnixNano()))
+	}
+}
+
+func (mdb *plasmaSlice) updateUsageStatsOnCommit() {
+
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	ms := mdb.meteringStats
+	idxStats := mdb.idxStats
+
+	diskSnap2MaxWriteUsage := atomic.LoadInt64(&ms.diskSnap1MaxWriteUsage)
+	diskSnap2MaxReadUsage := atomic.LoadInt64(&ms.diskSnap1MaxReadUsage)
+	atomic.StoreInt64(&ms.diskSnap2MaxWriteUsage, diskSnap2MaxWriteUsage)
+	atomic.StoreInt64(&ms.diskSnap2MaxReadUsage, diskSnap2MaxReadUsage)
+
+	diskSnap1MaxWriteUsage := idxStats.currMaxWriteUsage.Value()
+	diskSnap1MaxReadUsage := idxStats.currMaxReadUsage.Value()
+	atomic.StoreInt64(&ms.diskSnap1MaxWriteUsage, diskSnap1MaxWriteUsage)
+	atomic.StoreInt64(&ms.diskSnap1MaxReadUsage, diskSnap1MaxReadUsage)
+
+	diskSnap2MaxUsage := diskSnap2MaxWriteUsage + (diskSnap2MaxReadUsage / cReadUnitNormalizationFactor)
+	diskSnap1MaxUsage := diskSnap1MaxWriteUsage + (diskSnap1MaxReadUsage / cReadUnitNormalizationFactor)
+
+	if diskSnap1MaxUsage > diskSnap2MaxUsage {
+		idxStats.max20minUnitsUsage.Set(diskSnap1MaxUsage)
+	} else {
+		idxStats.max20minUnitsUsage.Set(diskSnap2MaxUsage)
+	}
+
+	mdb.idxStats.currMaxWriteUsage.Set(0)
+	mdb.idxStats.currMaxReadUsage.Set(0)
+
+}
+
+func (mdb *plasmaSlice) updateUsageStatsFromSnapshotMeta(stats map[string]interface{}) {
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	mdb.resetUsageStats()
+
+	diskSnapMaxWriteUsage := safeGetInt64(stats[SNAP_STATS_MAX_WRITE_UNITS_USAGE])
+	diskSnapMaxReadUsage := safeGetInt64(stats[SNAP_STATS_MAX_READ_UNITS_USAGE])
+	mdb.idxStats.currMaxWriteUsage.Set(diskSnapMaxWriteUsage)
+	mdb.idxStats.currMaxReadUsage.Set(diskSnapMaxReadUsage)
+
+	diskSnapMaxUsage := diskSnapMaxWriteUsage + (diskSnapMaxReadUsage / cReadUnitNormalizationFactor)
+	mdb.idxStats.max20minUnitsUsage.Set(diskSnapMaxUsage)
+
+	avgUnitsUsage := safeGetInt64(stats[SNAP_STATS_AVG_UNITS_USAGE])
+	mdb.idxStats.avgUnitsUsage.Set(avgUnitsUsage)
+}
+
+func (mdb *plasmaSlice) resetUsageStats() {
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	mdb.idxStats.lastMeteredWU.Set(0)
+	mdb.idxStats.lastMeteredRU.Set(0)
+	mdb.idxStats.currMaxWriteUsage.Set(0)
+	mdb.idxStats.currMaxReadUsage.Set(0)
+	mdb.idxStats.lastUnitsStatTime.Set(int64(time.Now().UnixNano()))
+
+	ms := mdb.meteringStats
+	atomic.StoreInt64(&ms.currMeteredWU, 0)
+	atomic.StoreInt64(&ms.currMeteredRU, 0)
+
+}
+
+func (mdb *plasmaSlice) resetUsageStatsOnRollback() {
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	mdb.resetUsageStats()
+
+	idxStats := mdb.idxStats
+	if idxStats != nil {
+		idxStats.avgUnitsUsage.Set(0)
+		idxStats.max20minUnitsUsage.Set(0)
+	}
+}
+
 func (info *plasmaSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }
@@ -3008,6 +3197,7 @@ func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) 
 		ru, _ := s.slice.meteringMgr.RecordReadUnits(s.slice.GetBucketName(),
 			ctx.User(), uint64(bytesScanned), !ctx.SkipReadMetering())
 		ctx.RecordReadUnits(ru)
+		s.slice.meteringStats.recordReadUsageStats(ru)
 	}
 	return uint64(s.MainSnap.Count()), nil
 }
@@ -3216,6 +3406,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 				ru += u.Whole()
 			}
 			ctx.RecordReadUnits(ru)
+			s.slice.meteringStats.recordReadUsageStats(ru)
 		}()
 	}
 

@@ -606,6 +606,10 @@ func getIndexStats(plan *Plan, config common.Config) error {
 				totalIndexMemUsed += index.ActualMemUsage
 			}
 
+			if unitsUsed, ok := GetIndexStat(index, "avg_units_usage", statsMap, true, clusterVersion); ok {
+				index.ActualUnitsUsage = uint64(unitsUsed.(float64))
+			}
+
 			// disk usage per index
 			if diskUsed, ok := GetIndexStat(index, "avg_disk_bps", statsMap, true, clusterVersion); ok {
 				index.ActualDiskUsage = uint64(diskUsed.(float64))

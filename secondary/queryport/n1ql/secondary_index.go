@@ -856,6 +856,8 @@ type secondaryIndex struct {
 	schedFail bool
 
 	indexMissingLeadingKey bool
+
+	indexStatsHolder *mclient.IndexStatsHolder
 }
 
 // for metadata-provider.
@@ -874,7 +876,6 @@ func newSecondaryIndexFromMetaData(
 	defnID := uint64(indexDefn.DefnId)
 	indexInfo := make(map[string]interface{})
 	indexInfo["num_replica"] = indexDefn.GetNumReplica()
-	indexInfo["stats"] = imd.Stats
 	si = &secondaryIndex{
 		gsi:                    gsi,
 		bucketn:                indexDefn.Bucket,
@@ -890,6 +891,7 @@ func newSecondaryIndexFromMetaData(
 		scheduled:              imd.Scheduled,
 		schedFail:              imd.ScheduleFailed,
 		indexMissingLeadingKey: indexDefn.IndexMissingLeadingKey,
+		indexStatsHolder:       imd.Stats,
 	}
 
 	if indexDefn.SecExprs != nil {
@@ -991,6 +993,14 @@ func (si *secondaryIndex) IsPrimary() bool {
 }
 
 func (si *secondaryIndex) IndexMetadata() map[string]interface{} {
+	si.indexStatsHolder.Rwlock.RLock()
+	defer si.indexStatsHolder.Rwlock.RUnlock()
+
+	statsCopy := make(map[string]interface{})
+	for k, v := range si.indexStatsHolder.StatsMap {
+		statsCopy[k] = v
+	}
+	si.indexInfo["stats"] = statsCopy
 	return si.indexInfo
 }
 

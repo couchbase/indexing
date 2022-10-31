@@ -282,6 +282,10 @@ type IndexUsage struct {
 	// for new indexes to be placed on an existing topology (e.g. live cluster), this must not be set.
 	initialNode *IndexerNode
 
+	// For replica repair, the index from which indexer will transfer
+	// the data to destination node (Used only in shard rebalancer)
+	siblingIndex *IndexUsage
+
 	// The node to which planner moves this index from initialNode
 	// Equals "initialNode" if planner does not move the index
 	destNode *IndexerNode

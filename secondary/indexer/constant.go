@@ -83,6 +83,9 @@ const SNAP_STATS_KEY_SIZES_SINCE = "key_size_stats_since"
 const SNAP_STATS_RAW_DATA_SIZE = "raw_data_size"
 const SNAP_STATS_BACKSTORE_RAW_DATA_SIZE = "backstore_raw_data_size"
 const SNAP_STATS_ARR_ITEMS_COUNT = "arr_items_count"
+const SNAP_STATS_MAX_WRITE_UNITS_USAGE = "max_write_units_usage"
+const SNAP_STATS_MAX_READ_UNITS_USAGE = "max_read_units_usage"
+const SNAP_STATS_AVG_UNITS_USAGE = "avg_units_usage"
 
 // redefine regulator constants
 // so that we dont need to import regulator module elsewhere
@@ -96,3 +99,5 @@ const (
 )
 
 const DEFAULT_TIME_BARRIER = 2
+
+const cReadUnitNormalizationFactor = 100

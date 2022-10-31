@@ -168,7 +168,12 @@ type IndexMetadata struct {
 	Error            string
 	Scheduled        bool
 	ScheduleFailed   bool
-	Stats            map[string]interface{}
+	Stats            *IndexStatsHolder
+}
+
+type IndexStatsHolder struct {
+	StatsMap map[string]interface{}
+	Rwlock   sync.RWMutex
 }
 
 type InstanceDefn struct {
@@ -5318,13 +5323,16 @@ func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte, indexerId c.I
 
 func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 
+	tmp := &IndexStatsHolder{
+		StatsMap: map[string]interface{}{"last_known_scan_time": float64(0)},
+	}
 	return &IndexMetadata{
 		Definition:       defn,
 		Instances:        nil,
 		InstsInRebalance: nil,
 		State:            c.INDEX_STATE_NIL,
 		Error:            "",
-		Stats:            map[string]interface{}{},
+		Stats:            tmp,
 	}
 }
 
@@ -5591,13 +5599,11 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 						}
 					}
 					if perIndexStats != nil {
-						if val, ok := meta.Stats["last_known_scan_time"]; ok {
-							if val.(float64) < dedupedIndexStats.Indexes[indexName].LastScanTime {
-								meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
-							}
-						} else {
-							meta.Stats["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
+						meta.Stats.Rwlock.Lock()
+						if meta.Stats.StatsMap["last_known_scan_time"].(float64) < dedupedIndexStats.Indexes[indexName].LastScanTime {
+							meta.Stats.StatsMap["last_known_scan_time"] = dedupedIndexStats.Indexes[indexName].LastScanTime
 						}
+						meta.Stats.Rwlock.Unlock()
 					}
 				}
 			}

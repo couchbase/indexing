@@ -294,6 +294,15 @@ type IndexStats struct {
 	scanReqWaitLatDist stats.Histogram
 	scanReqLatDist     stats.Histogram
 	snapGenLatDist     stats.Histogram
+
+	//serverless stats
+	lastMeteredWU      stats.Int64Val //Updated every stats interval with cumulative metered WU. Reset every disk snapshot.
+	lastMeteredRU      stats.Int64Val //Updated every stats interval with cumulative metered RU. Reset every disk snapshot.
+	currMaxReadUsage   stats.Int64Val //max read usage since last disk snapshot. persisted with disk snapshot.
+	currMaxWriteUsage  stats.Int64Val //max write usage since last disk snapshot. persisted with disk snapshot.
+	avgUnitsUsage      stats.Int64Val //units usage moving average
+	max20minUnitsUsage stats.Int64Val //max units usage in the last 20mins(highest among current usage vs both disk snapshots max)
+	lastUnitsStatTime  stats.Int64Val //last time when units usage stats were calculated
 }
 
 type IndexerStatsHolder struct {
@@ -544,6 +553,14 @@ func (s *IndexStats) Init() {
 	s.snapGenLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
+
+	s.lastMeteredWU.Init()
+	s.lastMeteredRU.Init()
+	s.currMaxReadUsage.Init()
+	s.currMaxWriteUsage.Init()
+	s.avgUnitsUsage.Init()
+	s.max20minUnitsUsage.Init()
+	s.lastUnitsStatTime.Init()
 
 	// Set filters
 	// Note that the filters will be set on both: instance level stats and
@@ -1940,6 +1957,19 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		},
 		&s.numRecsOnDisk, s.partnInt64Stats)
 
+	if common.IsServerlessDeployment() {
+		statMap.AddAggrStatFiltered("avg_units_usage",
+			func(ss *IndexStats) int64 {
+				return ss.avgUnitsUsage.Value()
+			},
+			&s.avgUnitsUsage, s.partnInt64Stats)
+
+		statMap.AddAggrStatFiltered("max_units_usage",
+			func(ss *IndexStats) int64 {
+				return ss.max20minUnitsUsage.Value()
+			},
+			&s.max20minUnitsUsage, s.partnInt64Stats)
+	}
 	// -------------------------------
 	// All partition and index stats
 	// -------------------------------
