@@ -37,7 +37,7 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 
 func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool, billable bool) (uint64, error) {
 	panic("MeteringManager::RecordWriteUnits Not implemented for Community Edition")
-	return nil
+	return 0, nil
 }
 
 func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) error {
