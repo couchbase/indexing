@@ -486,9 +486,13 @@ func (ivc *internalVersionChecker) getVerFailNodes(nodes *nodeList) []InternalVe
 
 	// Get versions for failed indexers
 	for _, node := range nodes.fidxs {
-		ver := ivc.cache.Get(node.NodeUUID)
-		logging.Verbosef("internalVersionChecker:getVerFailNodes using cached "+
-			"version for failed node %v, ver %v", node.NodeUUID, ver)
+		var ver = InternalVersion("")
+		if ivc.cache != nil {
+			ver = ivc.cache.Get(node.NodeUUID)
+			logging.Verbosef("internalVersionChecker:getVerFailNodes using cached "+
+				"version for failed node %v, ver %v", node.NodeUUID, ver)
+		}
+
 		versions = append(versions, ver)
 	}
 
@@ -498,9 +502,13 @@ func (ivc *internalVersionChecker) getVerFailNodes(nodes *nodeList) []InternalVe
 			continue
 		}
 
-		ver := ivc.cache.Get(node.NodeUUID)
-		logging.Verbosef("internalVersionChecker:getVerFailNodes using cached "+
-			"version for failed node %v, ver %v", node.NodeUUID, ver)
+		var ver = InternalVersion("")
+		if ivc.cache != nil {
+			ver = ivc.cache.Get(node.NodeUUID)
+			logging.Verbosef("internalVersionChecker:getVerFailNodes using cached "+
+				"version for failed node %v, ver %v", node.NodeUUID, ver)
+		}
+
 		versions = append(versions, ver)
 	}
 
@@ -514,10 +522,14 @@ func (ivc *internalVersionChecker) getVerFailNodes(nodes *nodeList) []InternalVe
 			continue
 		}
 
-		ver := ivc.cache.Get(node.NodeUUID)
-		logging.Verbosef("internalVersionChecker:getVerFailNodes using cached "+
-			"version for failed node %v, ver %v", node.NodeUUID, ver)
+		var ver = InternalVersion("")
+		if ivc.cache != nil {
+			ver = ivc.cache.Get(node.NodeUUID)
+			logging.Verbosef("internalVersionChecker:getVerFailNodes using cached "+
+				"version for failed node %v, ver %v", node.NodeUUID, ver)
+		}
 		versions = append(versions, ver)
+
 	}
 
 	return versions
