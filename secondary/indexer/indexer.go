@@ -1261,6 +1261,27 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			len(instIdList) != 0 {
 			logging.Infof("Indexer::StorageSnapDone Cleaning up index data for stream: %v, keyspaceId: %v, instIdList: %v",
 				streamId, keyspaceId, instIdList)
+
+			//if there is any observer for flush done, notify before cleaning up keyspace
+			skipInstId := idx.notifyFlushObserver(msg)
+
+			// If there is a flush observer waiting to drop index, that means
+			// client is waiting for response. So, process the index-cleanup via
+			// flush observer and skip the index cleanup through
+			// cleanupIndexDataForCollectionDrop. If the index-cleanup is triggered
+			// via flush observer and also through cleanupIndexDataForCollectionDrop
+			// then slice.Close() will be invoked twice & it can lead to indexer panic.
+			// Hence, skipping drop from cleanupIndexDataForCollectionDrop should solve
+			// the issue
+			for i, instId := range instIdList {
+				if instId == skipInstId {
+					instIdList[i] = instIdList[len(instIdList)-1]
+					instIdList = instIdList[:len(instIdList)-1]
+					logging.Infof("Indexer::StorageSnapDone Skipping cleanup of index instance: %v "+
+						"as flush observer has triggered cleanup", skipInstId)
+				}
+			}
+
 			idx.cleanupIndexDataForCollectionDrop(streamId, keyspaceId, instIdList)
 			delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
 		}
@@ -6605,7 +6626,7 @@ func (idx *indexer) initStreamCollectionIdMap() {
 	}
 }
 
-func (idx *indexer) notifyFlushObserver(msg Message) {
+func (idx *indexer) notifyFlushObserver(msg Message) common.IndexInstId {
 
 	//if there is any observer for flush, notify
 	keyspaceId := msg.(*MsgMutMgrFlushDone).GetKeyspaceId()
@@ -6616,7 +6637,9 @@ func (idx *indexer) notifyFlushObserver(msg Message) {
 			notifyCh <- msg
 			//wait for a sync response that cleanup is done.
 			//notification is sent one by one as there is no lock
-			<-notifyCh
+			resp := <-notifyCh
+			instId := resp.(*MsgDropIndex).GetIndexInstId()
+			return instId
 		}
 	}
 
@@ -6629,7 +6652,7 @@ func (idx *indexer) notifyFlushObserver(msg Message) {
 			}
 		}
 	}
-	return
+	return 0
 }
 
 func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
@@ -6645,7 +6668,7 @@ func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
 	idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId] = nil
 
 	//indicate done
-	close(notifyCh)
+	notifyCh <- &MsgDropIndex{indexInstId: indexInst.InstId}
 }
 
 func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
