@@ -67,7 +67,7 @@ const MIN_VER_MISSING_LEADING_KEY = "7.1.2"
 
 const ENABLE_INT_VER_TICKER = false
 
-const INT_VER_TICKER_INTERVAL = 5 * 60 // Seconds
+const INT_VER_TICKER_INTERVAL = 30 // Seconds
 
 //------------------------------------------------------------
 // Types
