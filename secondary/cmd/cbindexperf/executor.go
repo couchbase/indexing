@@ -90,7 +90,7 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRang
 
 	startTime := time.Now()
 	uuid := fmt.Sprintf("%d", atomic.AddUint64(&requestCounter, 1))
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	switch spec.Type {
 	case "All":

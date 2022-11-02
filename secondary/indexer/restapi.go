@@ -675,7 +675,7 @@ func (api *testServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	empty := true
 	err = nil
 	dataEncFmt := api.client.GetDataEncodingFormat()
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,
@@ -831,7 +831,7 @@ func (api *testServer) doRange(w http.ResponseWriter, request *http.Request) {
 	empty := true
 	err = nil
 	dataEncFmt := api.client.GetDataEncodingFormat()
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	e := api.client.Range(
 		uint64(index.Definition.DefnId), "", low, high,
@@ -991,7 +991,7 @@ func (api *testServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	w.WriteHeader(http.StatusOK)
 
 	dataEncFmt := api.client.GetDataEncodingFormat()
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	empty := true
 	err = nil
@@ -1106,7 +1106,7 @@ func (api *testServer) doMultiScanCount(w http.ResponseWriter, request *http.Req
 	}
 
 	w.WriteHeader(http.StatusOK)
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	count, _, err := api.client.MultiScanCount(
 		uint64(index.Definition.DefnId), "", scans,
@@ -1187,7 +1187,7 @@ func (api *testServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	dataEncFmt := api.client.GetDataEncodingFormat()
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	empty := true
 	err = nil

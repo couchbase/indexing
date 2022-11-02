@@ -28,7 +28,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	start := time.Now()
 	connErr := client.Range(
 		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
@@ -102,7 +102,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	start := time.Now()
 	connErr := client.Range(
 		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
@@ -199,7 +199,7 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	start := time.Now()
 	connErr := client.Lookup(
 		defnID, "", []c.SecondaryKey{values}, distinct, limit,
@@ -278,7 +278,7 @@ func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, l
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	start := time.Now()
 	connErr := client.ScanAll(
 		defnID, "", limit,
@@ -417,7 +417,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	count := 0
 	start := time.Now()
 	connErr := client.MultiScan(
@@ -499,7 +499,7 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 		return 0, e
 	}
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, ru, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector, scanParams)
 	if ru != 0 {
@@ -542,7 +542,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	count := 0
 	start := time.Now()
 	connErr := client.Scan3(

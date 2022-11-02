@@ -25,7 +25,7 @@ var constEqualLookup3 = []byte(`["delhi"]`)
 var constEqualLookup4 = []byte(`["kolkata"]`)
 var constEqualLookup5 = []byte(`["madras"]`)
 
-var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 func doConsistency(
 	cluster string, maxvb int, client *qclient.GsiClient) (err error) {
