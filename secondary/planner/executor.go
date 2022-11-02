@@ -512,8 +512,70 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 	return result, nil
 }
 
+func getDefnIdToInstIdMap(solution *Solution) map[common.IndexDefnId]map[int]common.IndexInstId {
+	defnIdToInstIdMap := make(map[common.IndexDefnId]map[int]common.IndexInstId)
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.initialNode == nil { // Ignore all replica instances
+				continue
+			}
+			if _, ok := defnIdToInstIdMap[index.DefnId]; !ok {
+				defnIdToInstIdMap[index.DefnId] = make(map[int]common.IndexInstId)
+			}
+			defnIdToInstIdMap[index.DefnId][index.Instance.ReplicaId] = index.InstId
+		}
+	}
+	return defnIdToInstIdMap
+}
+
+func groupIndexInstances(index *IndexUsage, defnIdToInstIdMap map[common.IndexDefnId]map[int]common.IndexInstId) {
+	if index.initialNode == nil {
+		if newInstId, ok := defnIdToInstIdMap[index.DefnId][index.Instance.ReplicaId]; ok {
+			index.InstId = newInstId
+			index.Instance.InstId = newInstId
+		} else { // Update existing map with new instance
+			if _, ok := defnIdToInstIdMap[index.DefnId]; !ok {
+				defnIdToInstIdMap[index.DefnId] = make(map[int]common.IndexInstId)
+			}
+			defnIdToInstIdMap[index.DefnId][index.Instance.ReplicaId] = index.InstId
+		}
+	}
+}
+
+func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, sliceIndex int) {
+	if index.initialNode != nil {
+		return
+	}
+
+	currPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId)
+
+	newInstId := token.RealInstIds[sliceIndex]
+	if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+		newInstId = token.RealInstIds[sliceIndex]
+	}
+	newPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, newInstId, index.PartnId)
+
+	if token.InstRenameMap == nil {
+		token.InstRenameMap = make(map[common.ShardId]map[string]string)
+	}
+
+	for i, shardId := range index.ShardIds {
+		if _, ok := token.InstRenameMap[shardId]; !ok {
+			token.InstRenameMap[shardId] = make(map[string]string)
+		}
+		if i == 0 { // Main index only
+			token.InstRenameMap[shardId][currPathInMeta+"/mainIndex"] = newPathInMeta + "/mainIndex"
+		} else { // Back index only
+			token.InstRenameMap[shardId][currPathInMeta+"/docIndex"] = newPathInMeta + "/docIndex"
+		}
+	}
+}
+
 func genShardTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange,
 	deleteNodes []string) (map[string]*common.TransferToken, error) {
+
+	// Generate a mapping between defnId -> replicaId -> instanceId.
+	defnIdToInstIdMap := getDefnIdToInstIdMap(solution)
 
 	getInstIds := func(index *IndexUsage) (common.IndexInstId /* instId*/, common.IndexInstId /*realInstId*/, error) {
 
@@ -559,8 +621,9 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			token.SourceHost = index.initialNode.NodeId
 			token.SourceId = index.initialNode.NodeUUID
 			token.TransferMode = common.TokenTransferModeMove
-		} else if index.initialNode == nil || index.pendingCreate { // Replica repair case
-			token.SourceId = ""
+		} else if index.initialNode == nil && !index.pendingCreate { // Replica repair case
+			token.SourceId = index.siblingIndex.initialNode.NodeUUID
+			token.SourceHost = index.siblingIndex.initialNode.NodeId
 			token.TransferMode = common.TokenTransferModeCopy
 		}
 
@@ -571,6 +634,12 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	}
 
 	addIndexToToken := func(tokenKey string, index *IndexUsage, indexer *IndexerNode) error {
+
+		// Currently, planner is generating a new index instance per partition.
+		// This method will group all partitions of an index residing on a node
+		// into a single index instance
+		groupIndexInstances(index, defnIdToInstIdMap)
+
 		token, ok := tokens[tokenKey]
 		if !ok {
 			var err error
@@ -606,6 +675,11 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 
 				sliceIndex = len(token.InstIds) - 1
 			}
+
+			if index.initialNode == nil {
+				addToInstRenamePath(token, index, sliceIndex)
+			}
+
 			// If there is a build token for the definition, set index STATE to INITIAL so the
 			// index will be built as part of rebalancing. It is not a good idea to build this
 			// index with other indexes of the keyspace as they may have a non-zero timestamp.
@@ -650,20 +724,24 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				continue
 			}
 
+			shardIds := make([]common.ShardId, len(index.ShardIds))
+			copy(shardIds, index.ShardIds)
+
 			// one token for every pair of shard movements of a bucket between
 			// a specific source and destination
-			sort.Slice(index.ShardIds, func(i, j int) bool {
-				return index.ShardIds[i] < index.ShardIds[j]
+			sort.Slice(shardIds, func(i, j int) bool {
+				return shardIds[i] < shardIds[j]
 			})
 
 			// one token for every pair of shard movements of a bucket between
 			// a specific source and destination
 			var tokenKey string
 			if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId && !index.pendingCreate {
-				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
-			} else if index.initialNode == nil || index.pendingCreate {
+				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, shardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
+			} else if index.initialNode == nil && !index.pendingCreate {
 				// There is no source node (index is added during rebalance).
-				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, "N/A", index.destNode.NodeUUID)
+				tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, shardIds,
+					"replica_repair_"+index.siblingIndex.initialNode.NodeUUID, index.destNode.NodeUUID)
 			}
 			if len(tokenKey) > 0 {
 				if err := addIndexToToken(tokenKey, index, indexer); err != nil {
@@ -696,7 +774,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 					continue
 				}
 
-				if index.initialNode == nil && token.SourceId != "" {
+				if index.initialNode == nil && index.siblingIndex.initialNode.NodeUUID != token.SourceId {
 					continue
 				}
 
@@ -720,9 +798,10 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				var tokenKey string
 				if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId && !index.pendingCreate {
 					tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
-				} else if index.initialNode == nil || index.pendingCreate {
+				} else if index.initialNode == nil && !index.pendingCreate {
 					// There is no source node (index is added during rebalance).
-					tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds, "N/A", index.destNode.NodeUUID)
+					tokenKey = fmt.Sprintf("%v %v %v %v", index.Bucket, index.ShardIds,
+						"replica_repair_"+index.siblingIndex.initialNode.NodeUUID, index.destNode.NodeUUID)
 				}
 				if len(tokenKey) > 0 {
 					if err := addIndexToToken(tokenKey, index, indexer); err != nil {
@@ -795,9 +874,6 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 	// Group transfer tokens moving from one sub cluster to another cluster
 	subClusterTokenIdMap := make(map[string][]string)
 	for ttid, token := range transferTokens {
-		if token.TransferMode != common.TokenTransferModeMove { // Ignore for replica repair
-			continue
-		}
 
 		srcSubClusterPos := getSubClusterPosForNode(subClusters, token.SourceId)
 		destSubClusterPos := getSubClusterPosForNode(subClusters, token.DestId)
