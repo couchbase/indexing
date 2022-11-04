@@ -3201,6 +3201,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 			// Soft delete the slice
 			for _, partnInst := range pruned {
 				//close all the slices
+				idx.sendMonitorSliceMsg(partnInst.Sc.GetAllSlices())
 				for _, slice := range partnInst.Sc.GetAllSlices() {
 					go func(partnInst PartitionInst, slice Slice) {
 						slice.Close()
@@ -5004,6 +5005,8 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 			for _, partnInst := range idxPartnInfoMap[indexInst.InstId] {
 				sc := partnInst.Sc
 				pid := partnInst.Defn.GetPartitionId()
+
+				idx.sendMonitorSliceMsg(sc.GetAllSlices())
 				//close all the slices
 				for _, slice := range sc.GetAllSlices() {
 					go func() {
@@ -5021,6 +5024,24 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 	}
 
 	idx.updateBucketNameNumVBucketsMap(deletedInstBucketNames)
+}
+
+// This method sends a MsgMonitorSliceStatus to storage manager
+// and waits for response. Storage manager would send this to
+// ShardTransferManager and acknowledges the receipt. Shard tranfer
+// manager would asynchronously update it's book-keeping
+func (idx *indexer) sendMonitorSliceMsg(sliceList []Slice) {
+	// Process this only for serverless deployments
+	if common.GetBuildMode() != common.ENTERPRISE || common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
+		return
+	}
+
+	msg := &MsgMonitorSliceStatus{
+		sliceList: sliceList,
+	}
+
+	idx.storageMgrCmdCh <- msg
+	<-idx.storageMgrCmdCh
 }
 
 func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []string) {
