@@ -428,6 +428,20 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 	return index.(datastore.PrimaryIndex), nil
 }
 
+// CreatePrimaryIndex5 implements datastore.Indexer5{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreatePrimaryIndex5(
+	requestId, name string, indexPartition *datastore.IndexPartition,
+	with value.Value, conn *datastore.IndexConnection) (pi datastore.PrimaryIndex, retErr errors.Error) {
+
+	keyspace := fmt.Sprintf("%s:%s:%s", gsi.bucket, gsi.scope, gsi.keyspace)
+	if isAllowed, err := IsOperationAllowed(with, conn, keyspace, "CreatePrimaryIndex5"); isAllowed {
+		return gsi.CreatePrimaryIndex3(requestId, name, indexPartition, with)
+	} else {
+		return nil, err
+	}
+}
+
 // CreateIndex implements datastore.Indexer{} interface. Create a secondary
 // index on this keyspace
 func (gsi *gsiKeyspace) CreateIndex(
@@ -604,6 +618,71 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		return nil, err
 	}
 	return gsi.IndexById(defnID2String(defnID))
+}
+
+// CreateIndex5 implements datastore.Indexer5{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex5(
+	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
+	where expression.Expression, with value.Value, conn *datastore.IndexConnection) (si datastore.Index, retErr errors.Error) {
+
+	keyspace := fmt.Sprintf("%s:%s:%s", gsi.bucket, gsi.scope, gsi.keyspace)
+	if isAllowed, err := IsOperationAllowed(with, conn, keyspace, "CreateIndex5"); isAllowed {
+		return gsi.CreateIndex3(requestId, name, rangeKey, indexPartition, where, with)
+	} else {
+		return nil, err
+	}
+}
+
+func IsOperationAllowed(with value.Value, conn *datastore.IndexConnection, keyspace string, method string) (bool, errors.Error) {
+
+	if common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT && with != nil {
+		var withJSON []byte
+		var err error
+		if withJSON, err = with.MarshalJSON(); err != nil {
+			return false, errors.NewError(err, "GSI error marshalling WITH clause.")
+		}
+		plan := make(map[string]interface{})
+		if withJSON != nil && len(withJSON) > 0 {
+			err := json.Unmarshal(withJSON, &plan)
+			if err != nil {
+				return false, errors.NewError(err, "GSI error Unmarshalling WITH clause.")
+			}
+			if IsParameterAllowed(plan) {
+				l.Debugf("%s: The WITH clause parameters are allowed in Serverless mode.", method)
+				return true, nil
+			} else {
+				l.Debugf("%s: The WITH clause parameters are not allowed in Serverless mode.", method)
+				http := conn.Context().Credentials().HttpRequest
+				auth, valid, err := c.IsAuthValid(http)
+				if valid {
+					permission := fmt.Sprintf("cluster.collection[%s].n1ql.index.parameterized!create", keyspace)
+					if isPermitted, err := auth.IsAllowed(permission); isPermitted {
+						return true, nil
+					} else {
+						l.Errorf("%s: The user does not have permission to use these parameters in WITH clause of CREATE PRIMARY INDEX/CREATE INDEX. WITH = %v", method, plan)
+						return false, errors.NewError(err, "User does not permission to perform this operation.")
+					}
+				} else {
+					l.Errorf("%s: The user credential are Invalid.", method)
+					return false, errors.NewError(err, "Invalid credentials.")
+				}
+			}
+		}
+	}
+	return true, nil
+}
+
+func IsParameterAllowed(plan map[string]interface{}) bool {
+
+	allowedParams := map[string]bool{"defer_build": true, "retain_deleted_xattr": true}
+
+	for attr, _ := range plan {
+		if _, ok := allowedParams[attr]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func partitionKey(partitionType datastore.PartitionType) c.PartitionScheme {
