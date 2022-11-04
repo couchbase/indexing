@@ -100,6 +100,8 @@ type plasmaSlice struct {
 	numPartitions int
 	isCompacting  bool
 
+	shardIds []common.ShardId
+
 	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
 
@@ -261,6 +263,11 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 			destroyPlasmaSlice(storage_dir, path)
 		}
 		return nil, err
+	}
+
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
+	if !slice.isPrimary {
+		slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
 	}
 
 	// Array related initialization
@@ -2911,13 +2918,7 @@ func (mdb *plasmaSlice) BuildDone() {
 }
 
 func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
-	out := make([]common.ShardId, 0)
-	out = append(out, common.ShardId(mdb.mainstore.GetShardId()))
-	if !mdb.isPrimary {
-		out = append(out, common.ShardId(mdb.backstore.GetShardId()))
-	}
-
-	return out
+	return mdb.shardIds
 }
 
 func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64) {
