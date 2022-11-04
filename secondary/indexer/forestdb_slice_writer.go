@@ -235,6 +235,7 @@ type fdbSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 	isClosed      bool
+	isDeleted     bool
 	isCompacting  bool
 
 	cmdCh  chan interface{} //internal channel to buffer commands
@@ -296,6 +297,7 @@ func (fdb *fdbSlice) DecrRef() {
 			tryCloseFdbSlice(fdb)
 		}
 		if fdb.isSoftDeleted {
+			fdb.isDeleted = true
 			tryDeleteFdbSlice(fdb)
 		}
 	}
@@ -1318,6 +1320,7 @@ func (fdb *fdbSlice) Destroy() {
 			"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 		fdb.isSoftDeleted = true
 	} else {
+		fdb.isDeleted = true
 		tryDeleteFdbSlice(fdb)
 	}
 }
@@ -1330,6 +1333,15 @@ func (fdb *fdbSlice) Id() SliceId {
 // FilePath returns the filepath for this Slice
 func (fdb *fdbSlice) Path() string {
 	return fdb.path
+}
+
+// IsCleanupDone if the slice is deleted (i.e. slice is
+// closed & destroyed
+func (fdb *fdbSlice) IsCleanupDone() bool {
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
+
+	return fdb.isClosed && fdb.isDeleted
 }
 
 //IsActive returns if the slice is active

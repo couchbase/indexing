@@ -138,6 +138,7 @@ type memdbSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 	isClosed      bool
+	isDeleted     bool
 
 	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
@@ -386,6 +387,7 @@ func (mdb *memdbSlice) DecrRef() {
 			go tryClosememdbSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
+			mdb.isDeleted = true
 			tryDeletememdbSlice(mdb)
 		}
 	}
@@ -1620,6 +1622,7 @@ func (mdb *memdbSlice) Destroy() {
 			mdb.idxDefnId, mdb.refCount, openSnaps)
 		mdb.isSoftDeleted = true
 	} else {
+		mdb.isDeleted = true
 		tryDeletememdbSlice(mdb)
 	}
 }
@@ -1642,6 +1645,15 @@ func (mdb *memdbSlice) IsActive() bool {
 //SetActive sets the active state of this slice
 func (mdb *memdbSlice) SetActive(isActive bool) {
 	mdb.isActive = isActive
+}
+
+// IsCleanupDone if the slice is deleted (i.e. slice is
+// closed & destroyed
+func (mdb *memdbSlice) IsCleanupDone() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+
+	return mdb.isClosed && mdb.isDeleted
 }
 
 //Status returns the status for this slice

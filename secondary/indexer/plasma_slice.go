@@ -97,6 +97,7 @@ type plasmaSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 	isClosed      bool
+	isDeleted     bool
 	numPartitions int
 	isCompacting  bool
 
@@ -721,6 +722,7 @@ func (mdb *plasmaSlice) DecrRef() {
 			tryCloseplasmaSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
+			mdb.isDeleted = true
 			tryDeleteplasmaSlice(mdb)
 		}
 	}
@@ -2302,6 +2304,7 @@ func (mdb *plasmaSlice) Destroy() {
 			mdb.idxDefnId, mdb.refCount, openSnaps)
 		mdb.isSoftDeleted = true
 	} else {
+		mdb.isDeleted = true
 		tryDeleteplasmaSlice(mdb)
 	}
 }
@@ -2324,6 +2327,15 @@ func (mdb *plasmaSlice) IsActive() bool {
 //SetActive sets the active state of this slice
 func (mdb *plasmaSlice) SetActive(isActive bool) {
 	mdb.isActive = isActive
+}
+
+// IsDeleted if the slice is deleted (i.e. slice is
+// closed & destroyed
+func (mdb *plasmaSlice) IsCleanupDone() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+
+	return mdb.isClosed && mdb.isDeleted
 }
 
 //Status returns the status for this slice
