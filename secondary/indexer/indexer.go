@@ -8314,7 +8314,7 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	// Marshall stats to byte slice
 	spec := NewStatsSpec(false, false, false, false, false, nil)
 	spec.OverrideFilter("gsiClient")
-	notifyStats := stats.GetStats(spec)
+	notifyStats := stats.GetStats(spec, nil)
 	if val, ok := notifyStats.(map[string]interface{}); ok {
 		idx.internalRecvCh <- &MsgStatsRequest{
 			mType: INDEX_STATS_BROADCAST,

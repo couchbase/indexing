@@ -371,7 +371,7 @@ func (c *clustMgrAgent) handleStatsInternal() {
 	if stats != nil {
 		spec := NewStatsSpec(false, false, false, false, false, nil)
 		spec.OverrideFilter("gsiClient") // Get only the stats related to GSI client
-		filteredStats := stats.GetStats(spec)
+		filteredStats := stats.GetStats(spec, nil)
 		if val, ok := filteredStats.(map[string]interface{}); ok {
 			c.mgr.NotifyStats(val)
 		} else {

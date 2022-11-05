@@ -28,6 +28,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	commonjson "github.com/couchbase/indexing/secondary/common/json"
@@ -1256,19 +1257,27 @@ func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
 	}
 }
 
-func (is *IndexerStats) PopulateBucketStats(statMap *StatsMap) {
+func (is *IndexerStats) PopulateBucketStats(statMap *StatsMap, creds cbauth.Creds) {
 
 	is.bslock.RLock()
 	defer is.bslock.RUnlock()
 
+	permissionCache := common.NewSessionPermissionsCache(creds)
+
 	for bucket, bstats := range is.buckets {
+		if creds != nil {
+			allowed := permissionCache.IsAllowed(bucket, "", "", "list")
+			if !allowed {
+				continue
+			}
+		}
 		statMap.SetPrefix(bucket + ":")
 		bstats.addBucketStatsToMap(statMap)
 	}
 	statMap.SetPrefix("")
 }
 
-func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
+func (is *IndexerStats) GetStats(spec *statsSpec, creds cbauth.Creds) interface{} {
 	var prefix string
 	var instId string
 
@@ -1276,9 +1285,11 @@ func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 
 	is.PopulateIndexerStats(statMap)
 
-	is.PopulateBucketStats(statMap)
+	is.PopulateBucketStats(statMap, creds)
 
 	is.PopulateProjectorLatencyStats(statMap)
+
+	permissionCache := common.NewSessionPermissionsCache(creds)
 
 	addStatsForIndexInst := func(inst common.IndexInstId, s *IndexStats) {
 		var ok bool
@@ -1289,7 +1300,12 @@ func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 				return
 			}
 		}
-
+		if creds != nil {
+			allowed := permissionCache.IsAllowed(s.bucket, s.scope, s.collection, "list")
+			if !allowed {
+				return
+			}
+		}
 		// Add consolidated stats for the whole index
 		prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection, s.name,
 			s.replicaId, 0, false)
@@ -1328,6 +1344,12 @@ func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 
 	for streamId, ksStats := range is.GetKeyspaceStatsMap() {
 		for keyspaceId, ks := range ksStats {
+			if creds != nil {
+				allowed := permissionCache.IsAllowed(keyspaceId, "", "", "list")
+				if !allowed {
+					continue
+				}
+			}
 			prefix = fmt.Sprintf("%s:%s:", streamId, keyspaceId)
 			statMap.SetPrefix(prefix)
 			ks.addKeyspaceStatsToStatsMap(statMap)
@@ -2385,8 +2407,8 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 
 // MarshalJSON reworks the layout of the stats in child call GetStats, then marshals the result to a
 // byte slice.
-func (is *IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
-	stats := is.GetStats(spec)
+func (is *IndexerStats) MarshalJSON(spec *statsSpec, creds cbauth.Creds) ([]byte, error) {
+	stats := is.GetStats(spec, creds)
 
 	if spec.pretty {
 		if val, ok := stats.(map[string]interface{}); ok {
@@ -2799,7 +2821,7 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 	if l.enableStatsLog {
 		l.writeIndexerStats(stats, spec)
 	} else {
-		sbytes, _ = stats.MarshalJSON(spec)
+		sbytes, _ = stats.MarshalJSON(spec, nil)
 		logSbytes = true
 	}
 
@@ -2968,7 +2990,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3038,7 +3060,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP && sync == true {
 			s.tryUpdateStats(sync)
 		}
-		bytes, _ := stats.MarshalJSON(spec)
+		bytes, _ := stats.MarshalJSON(spec, creds)
 		w.WriteHeader(200)
 		w.Write(bytes)
 		stats.statsResponse.Put(time.Since(t0))
