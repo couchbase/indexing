@@ -129,3 +129,50 @@ func TestSingleNodeSwapRebalance(t *testing.T) {
 		}
 	}
 }
+
+// Prior to this, the indexes existed on Nodes[2] & Nodes[3].
+// In this test, the indexer on Nodes[3] will be failed over
+// initiating a replica repair code path. Nodes[1] will be
+// added to the cluster & the indexes should be re-built on
+// Nodes[1]. Final index placement would be on Nodes[1] & Nodes[2]
+func TestReplicaRepair(t *testing.T) {
+	log.Printf("In TestReplicaRepair")
+
+	// Failover Nodes[3]
+	if err := cluster.FailoverNode(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3]); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while failing over nodes: %v from cluster", clusterconfig.Nodes[3]), t)
+	}
+
+	rebalance(t)
+
+	// Now, add Nodes[1] to the cluster
+	if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1], "index", "Group 2"); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: Group 2", clusterconfig.Nodes[1]), t)
+	}
+	rebalance(t)
+
+	// Reset all indexer stats
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	// This sleep will ensure that the stats are propagated to client
+	// Also, any pending rebalance cleanup is expected to be done during
+	// this time - so that validateShardFiles can see cleaned up directories
+	waitForStatsUpdate()
+
+	validateIndexPlacement([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
+	validateShardIdMapping(clusterconfig.Nodes[1], t)
+	validateShardIdMapping(clusterconfig.Nodes[2], t)
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				partns := indexPartnIds[i]
+				if i%2 == 0 { // Scan all non-deferred indexes
+					scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+				}
+			}
+		}
+	}
+
+	verifyStorageDirContents(t)
+}
