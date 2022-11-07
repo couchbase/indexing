@@ -538,10 +538,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
 		idx.rebalanceToken, idx.statsMgr)
 
+	serverlessMgr := NewServerlessManager(httpAddr)
+
 	// Register service managers with ns_server for RCP callbacks. This returns a single
 	// MasterServiceManager object that implements all the interfaces we want callbacks for via
 	// delegation to the API-specific objects passed to it.
-	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, genericMgr, pauseMgr, rebalMgr)
+	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, genericMgr, pauseMgr, rebalMgr, serverlessMgr)
 
 	go idx.monitorKVNodes()
 

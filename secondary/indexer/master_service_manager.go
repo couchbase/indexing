@@ -30,11 +30,14 @@ import (
 //     GSI: GenericServiceManager (generic_service_manager.go)
 //       GSI: PauseServiceManager (pause_service_manager.go)
 //       GSI: RebalanceServiceManager (rebalance_service_manager.go)
+//   ServerlessManager
+//   GSI: ServerlessManager (serverless_manager.go)
 type MasterServiceManager struct {
-	autofailMgr *AutofailoverServiceManager
-	genericMgr  *GenericServiceManager
-	pauseMgr    *PauseServiceManager
-	rebalMgr    *RebalanceServiceManager
+	autofailMgr   *AutofailoverServiceManager
+	genericMgr    *GenericServiceManager
+	pauseMgr      *PauseServiceManager
+	rebalMgr      *RebalanceServiceManager
+	serverlessMgr *ServerlessManager
 }
 
 // NewMasterServiceManager is the constructor for the MasterServiceManager class. The service
@@ -44,12 +47,14 @@ func NewMasterServiceManager(
 	genericMgr *GenericServiceManager,
 	pauseMgr *PauseServiceManager,
 	rebalMgr *RebalanceServiceManager,
+	serverlessMgr *ServerlessManager,
 ) *MasterServiceManager {
 	this := &MasterServiceManager{
-		autofailMgr: autofailMgr,
-		genericMgr:  genericMgr,
-		pauseMgr:    pauseMgr,
-		rebalMgr:    rebalMgr,
+		autofailMgr:   autofailMgr,
+		genericMgr:    genericMgr,
+		pauseMgr:      pauseMgr,
+		rebalMgr:      rebalMgr,
+		serverlessMgr: serverlessMgr,
 	}
 	go this.registerWithServer() // register for ns_server RPC calls from cbauth
 	return this
@@ -63,8 +68,9 @@ func (this *MasterServiceManager) registerWithServer() {
 
 	// Ensure this class implements the interfaces we intend. The type assertions will panic if not.
 	var iface interface{} = this
-	logging.Infof("%v %T implements service.AutofailoverManager; %T implements service.Manager",
-		method, iface.(service.AutofailoverManager), iface.(service.Manager))
+	logging.Infof("%v %T implements service.AutofailoverManager; %T implements service.Manager; "+
+		"%T implements service.ServerlessManager", method, iface.(service.AutofailoverManager),
+		iface.(service.Manager), iface.(service.ServerlessManager))
 
 	// Unless it returns an error, RegisterManager will actually run forever instead of returning
 	err := service.RegisterManager(this, nil)
@@ -145,4 +151,12 @@ func (this *MasterServiceManager) PrepareTopologyChange(change service.TopologyC
 
 func (this *MasterServiceManager) StartTopologyChange(change service.TopologyChange) error {
 	return this.rebalMgr.StartTopologyChange(change)
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ns_server ServerlessManager interface methods
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (this *MasterServiceManager) GetDefragmentedUtilization() (*service.DefragmentedUtilizationInfo, error) {
+	return this.serverlessManager.GetDefragmentedUtilization()
 }
