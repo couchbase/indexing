@@ -2312,6 +2312,15 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	// Update index snapshot map for this index
+	idx.internalRecvCh <- &MsgUpdateSnapMap{
+		idxInstId:  indexInst.InstId,
+		idxInst:    indexInst,
+		partnMap:   partnInstMap,
+		streamId:   common.ALL_STREAMS,
+		keyspaceId: "",
+	}
+
 	// Send a message to cluster manager to update index instance state to topology
 	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, nil); err != nil {
 		common.CrashOnError(err)
