@@ -176,3 +176,57 @@ func TestReplicaRepair(t *testing.T) {
 
 	verifyStorageDirContents(t)
 }
+
+// Prior to this, the indexes existed on Nodes[1] & Nodes[2].
+// In this test, the indexer on Nodes[2] will be failed over
+// and Nodes[1] will be swap rebalanced out initiating both
+// replica repair & swap rebalance at same time. Final index
+// placement would be on Nodes[3] & Nodes[4]
+func TestReplicaRepairAndSwapRebalance(t *testing.T) {
+	log.Printf("In TestReplicaRepairAndSwapRebalance")
+
+	// Failover Nodes[2]
+	if err := cluster.FailoverNode(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[2]); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while failing over nodes: %v from cluster", clusterconfig.Nodes[2]), t)
+	}
+
+	// Now, add Nodes[3] to the cluster
+	if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[3], "index", "Group 2"); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: Group 2", clusterconfig.Nodes[3]), t)
+	}
+
+	// Now, add Nodes[4] to the cluster
+	if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[4], "index", "Group 1"); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: Group 2", clusterconfig.Nodes[4]), t)
+	}
+
+	// Remove nodes also performs rebalance
+	if err := cluster.RemoveNodes(kvaddress, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[1]}); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", clusterconfig.Nodes[1]), t)
+	}
+
+	// Reset all indexer stats
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	// This sleep will ensure that the stats are propagated to client
+	// Also, any pending rebalance cleanup is expected to be done during
+	// this time - so that validateShardFiles can see cleaned up directories
+	waitForStatsUpdate()
+
+	validateIndexPlacement([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, t)
+	validateShardIdMapping(clusterconfig.Nodes[3], t)
+	validateShardIdMapping(clusterconfig.Nodes[4], t)
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				partns := indexPartnIds[i]
+				if i%2 == 0 { // Scan all non-deferred indexes
+					scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+				}
+			}
+		}
+	}
+
+	verifyStorageDirContents(t)
+}
