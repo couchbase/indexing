@@ -3496,6 +3496,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.serverless.scan.throttle.queued_threshold": ConfigValue{
+		500,
+		"Pause scan if queued mutation exceed threshold per bucket",
+		500,
+		false,
+		false,
+	},
+	"indexer.serverless.scan.throttle.pause_duration": ConfigValue{
+		2,
+		"pause interval when queued mutation exceeds threshold",
+		2,
+		false,
+		false,
+	},
 }
 
 // NewConfig from another
