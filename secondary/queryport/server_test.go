@@ -158,7 +158,7 @@ func TestScanAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	count := 0
 	qc.ScanAll(
@@ -282,7 +282,7 @@ func BenchmarkRange100(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	b.ResetTimer()
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
@@ -319,7 +319,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -356,7 +356,7 @@ func BenchmarkScanAll(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		qc.ScanAll(

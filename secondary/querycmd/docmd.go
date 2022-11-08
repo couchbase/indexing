@@ -268,7 +268,7 @@ func HandleCommand(
 	}
 
 	dataEncFmt := client.GetDataEncodingFormat()
-	var scanParams = map[string]interface{}{"skipReadMetering": false, "user": ""}
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
 
 	var tmpbuf *[]byte
 	var tmpbufPoolIdx uint32
