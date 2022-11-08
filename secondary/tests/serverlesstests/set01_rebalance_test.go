@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	c "github.com/couchbase/indexing/secondary/common"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -229,4 +231,150 @@ func TestReplicaRepairAndSwapRebalance(t *testing.T) {
 	}
 
 	verifyStorageDirContents(t)
+}
+
+func TestBuildDeferredIndexesAfterRebalance(t *testing.T) {
+	log.Printf("In TestBuildDeferredIndexesAfterRebalance")
+	index := indexes[1]
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			err := secondaryindex.BuildIndexes2([]string{index}, bucket, scope, collection, indexManagementAddress, defaultIndexActiveTimeout)
+			if err != nil {
+				t.Fatalf("Error observed while building indexes: %v", index)
+			}
+		}
+	}
+	// Reset all indexer stats
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	waitForStatsUpdate()
+	validateShardIdMapping(clusterconfig.Nodes[3], t)
+	validateShardIdMapping(clusterconfig.Nodes[4], t)
+
+	partns := indexPartnIds[1]
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+		}
+	}
+
+}
+
+// Prior to this test, indexes exist on nodes[3] & nodes[4]
+// Indexer tries to drop an index and verifies if the index
+// is properly dropped or not
+func TestDropIndexAfterRebalance(t *testing.T) {
+	log.Printf("In TestDropIndexAfterRebalance")
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				if i == 0 || i == 1 { // Drop only 0th and 1st index in the list
+					err := secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
+					if err != nil {
+						t.Fatalf("Error while dropping index: %v, err: %v", index, err)
+					}
+				}
+			}
+		}
+	}
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				if i == 0 || i == 1 { // Drop only 0th and 1st index in the list
+					waitForReplicaDrop(index, bucket, scope, collection, 0, t) // wait for replica drop-0
+					waitForReplicaDrop(index, bucket, scope, collection, 1, t) // wait for replica drop-1
+				}
+			}
+		}
+	}
+	// Reset all indexer stats
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	waitForStatsUpdate()
+
+	validateShardIdMapping(clusterconfig.Nodes[3], t)
+	validateShardIdMapping(clusterconfig.Nodes[4], t)
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				if i == 0 || i == 1 { // Scan only 0th and 1st index in the list
+					scanResults, e := secondaryindex.ScanAll2(index, bucket, scope, collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+					if e == nil {
+						t.Fatalf("Error excpected when scanning for dropped index but scan didnt fail. index: %v, bucket: %v, scope: %v, collection: %v\n", index, bucket, scope, collection)
+						log.Printf("Length of scanResults = %v", len(scanResults))
+					} else {
+						log.Printf("Scan failed as expected with error: %v, index: %v, bucket: %v, scope: %v, collection: %v\n", e, index, bucket, scope, collection)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestCreateIndexsAfterRebalance(t *testing.T) {
+	log.Printf("In TestCreateIndexesAfterRebalance")
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			// Create a normal index
+			n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
+			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
+			// Create an index with defer_build
+			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age) with {\"defer_build\":true}", indexes[1], bucket, scope, collection)
+			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[1], "Created", t)
+		}
+	}
+	// Reset all indexer stats
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	waitForStatsUpdate()
+	validateShardIdMapping(clusterconfig.Nodes[3], t)
+	validateShardIdMapping(clusterconfig.Nodes[4], t)
+
+	index := indexes[0]
+	partns := indexPartnIds[0]
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			// Scan only the newly created index
+			scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+		}
+	}
+}
+
+// Helper function that can be used to verify whether an index is dropped or not
+// for alter index decrement replica count, alter index drop
+func waitForReplicaDrop(index, bucket, scope, collection string, replicaId int, t *testing.T) {
+	ticker := time.NewTicker(5 * time.Second)
+	indexName := index
+	if replicaId != 0 {
+		indexName = fmt.Sprintf("%v (replica %v)", index, replicaId)
+	}
+	// Wait for 2 minutes max for the replica to get dropped
+	for {
+		select {
+		case <-ticker.C:
+			stats := secondaryindex.GetIndexStats2(indexName, bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
+			if stats != nil {
+				if collection != "_default" {
+					if _, ok := stats[bucket+":"+scope+":"+collection+":"+indexName+":items_count"]; ok {
+						continue
+					}
+				} else {
+					if _, ok := stats[bucket+":"+indexName+":items_count"]; ok {
+						continue
+					}
+				}
+				return
+			} else {
+				log.Printf("waitForReplicaDrop:: Unable to retrieve index stats for index: %v", indexName)
+				return
+			}
+
+		case <-time.After(2 * time.Minute):
+			t.Fatalf("waitForReplicaDrop:: Index replica %v exists even after 2 minutes", indexName)
+			return
+		}
+	}
+	return
 }
