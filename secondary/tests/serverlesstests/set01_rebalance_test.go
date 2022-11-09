@@ -11,6 +11,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
@@ -410,4 +411,47 @@ func waitForReplicaDrop(index, bucket, scope, collection string, replicaId int, 
 		}
 	}
 	return
+}
+
+// Prior to this test, all indexes existed on nodes[1] & nodes[2].
+// In this test, indexer would drop the C1 & C2 collections of each
+// bucket and initiates a rebalance. Rebalance is performed by removing
+// nodes[1], nodes[2] from the cluster and adding nodes[3], nodes[4].
+//  After rebalance, only the indexes on default collection are expected
+// to exist on nodes[3] & nodes[4]
+
+func TestRebalanceAfterDroppedCollections(t *testing.T) {
+	log.Printf("In TestRebalanceAfterDroppedCollections")
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			if collection != "_default" {
+				kvutility.DropCollection(bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
+			}
+		}
+	}
+
+	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				partns := indexPartnIds[i]
+				if collection == "_default" {
+					if i%2 == 0 {
+						scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+					}
+				} else { // Scan on all non-default collections should fail
+					if i%2 == 0 { // Scan on all other non-deferred indexes should fail due to keyspace drop
+						scanResults, e := secondaryindex.ScanAll2(index, bucket, scope, collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+						if e == nil {
+							t.Fatalf("Error excpected when scanning for dropped index but scan didnt fail. index: %v, bucket: %v, scope: %v, collection: %v\n", index, bucket, scope, collection)
+							log.Printf("Length of scanResults = %v", len(scanResults))
+						} else {
+							log.Printf("Scan failed as expected with error: %v, index: %v, bucket: %v, scope: %v, collection: %v\n", e, index, bucket, scope, collection)
+						}
+					}
+				}
+			}
+		}
+	}
 }
