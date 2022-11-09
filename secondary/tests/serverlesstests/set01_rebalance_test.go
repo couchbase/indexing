@@ -312,6 +312,39 @@ func TestDropIndexAfterRebalance(t *testing.T) {
 	}
 }
 
+// Prior to this, indexes existed on nodes[3] & nodes[4].
+// The earlier test has dropped the indexes[0], indexes[1]
+// This test will do a swap rebalance by removing nodes[3],
+// nodes[4], adds nodes[1] & nodes[2]. After rebalance,
+// destination should contain only indexes[2:5]
+func TestRebalanceAfterDropIndexes(t *testing.T) {
+	log.Printf("In TestRebalanceAfterDropIndexes")
+
+	performSwapRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, t)
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				partns := indexPartnIds[i]
+				if i%2 == 0 && i > 1 { // indexes[0] & indexes[1] are dropped in earlier tests
+					scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+				} else if i == 0 || i == 1 { // Scan only 0th and 1st index in the list
+					scanResults, e := secondaryindex.ScanAll2(index, bucket, scope, collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+					if e == nil {
+						t.Fatalf("Error excpected when scanning for dropped index but scan didnt fail. index: %v, bucket: %v, scope: %v, collection: %v\n", index, bucket, scope, collection)
+						log.Printf("Length of scanResults = %v", len(scanResults))
+					} else {
+						log.Printf("Scan failed as expected with error: %v, index: %v, bucket: %v, scope: %v, collection: %v\n", e, index, bucket, scope, collection)
+					}
+				}
+			}
+		}
+	}
+}
+
+// Prior to this test, the indexes[0], indexes[1] are dropped on
+// all collections. This test will re-create them. All indexes
+// exist on nodes[1] and nodes[2] due to prior test
 func TestCreateIndexsAfterRebalance(t *testing.T) {
 	log.Printf("In TestCreateIndexesAfterRebalance")
 
@@ -329,8 +362,8 @@ func TestCreateIndexsAfterRebalance(t *testing.T) {
 	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
-	validateShardIdMapping(clusterconfig.Nodes[3], t)
-	validateShardIdMapping(clusterconfig.Nodes[4], t)
+	validateShardIdMapping(clusterconfig.Nodes[1], t)
+	validateShardIdMapping(clusterconfig.Nodes[2], t)
 
 	index := indexes[0]
 	partns := indexPartnIds[0]
