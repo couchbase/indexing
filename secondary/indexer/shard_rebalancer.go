@@ -20,6 +20,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/testcode"
 )
 
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
@@ -359,6 +360,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 
 		sr.ackedTokens[ttid] = tt.Clone()
 		sr.transferTokens[ttid] = tt.Clone() // Update in-memory book-keeping with new state
+
+		////////////// Testing code - Not used in production //////////////
+		testcode.CancelOrPanicAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_SCHEDULEACK, sr.cancel)
+		///////////////////////////////////////////////////////////////////
 
 		if sr.allShardTransferTokensAcked() {
 			sr.batchTransferTokens()

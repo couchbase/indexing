@@ -81,17 +81,27 @@ func resetCluster(t *testing.T) {
 	username := clusterconfig.Username
 	password := clusterconfig.Password
 
-	dropNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2], clusterconfig.Nodes[3]}
-	keepNodes := make(map[string]string)
-	keepNodes[clusterconfig.Nodes[1]] = "index"
+	dropNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2], clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
 
-	if err := cluster.ResetCluster(serverAddr, username, password, dropNodes, keepNodes); err != nil {
+	if err := cluster.ResetCluster(serverAddr, username, password, dropNodes, nil); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, clusterconfig.Nodes[1], "index", "Group 2"); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, clusterconfig.Nodes[2], "index", "Group 1"); err != nil {
+		t.Fatalf(err.Error())
+	}
+	// Rebalance the cluster
+	if err := cluster.Rebalance(serverAddr, username, password); err != nil {
 		t.Fatalf(err.Error())
 	}
 
 	// Verify that the cluster was reset successfully
 	status := getClusterStatus()
-	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
+	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) || !isNodeIndex(status, clusterconfig.Nodes[2]) {
 		t.Fatalf("Unable to resest the cluster, current cluster state: %v", status)
 	}
 }
