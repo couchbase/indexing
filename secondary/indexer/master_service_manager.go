@@ -158,5 +158,5 @@ func (this *MasterServiceManager) StartTopologyChange(change service.TopologyCha
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (this *MasterServiceManager) GetDefragmentedUtilization() (*service.DefragmentedUtilizationInfo, error) {
-	return this.serverlessManager.GetDefragmentedUtilization()
+	return this.serverlessMgr.GetDefragmentedUtilization()
 }

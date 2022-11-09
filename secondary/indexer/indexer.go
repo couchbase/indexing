@@ -538,7 +538,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
 		idx.rebalanceToken, idx.statsMgr)
 
-	serverlessMgr := NewServerlessManager(httpAddr)
+	serverlessMgr := NewServerlessManager(clusterAddr)
 
 	// Register service managers with ns_server for RCP callbacks. This returns a single
 	// MasterServiceManager object that implements all the interfaces we want callbacks for via

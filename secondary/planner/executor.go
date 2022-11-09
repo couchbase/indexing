@@ -4536,3 +4536,60 @@ func getTenantUsageForSubCluster(subCluster SubCluster) []*TenantUsage {
 	return combinedUsage
 
 }
+
+//GetDefragmentedUtilization is the entry method for planner to compute the utilization
+//stats in the given cluster after rebalance.
+func GetDefragmentedUtilization(clusterUrl string) (map[string]map[string]interface{}, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+	return getDefragmentedUtilization(plan)
+}
+
+//getDefragmentedUtilization runs the actual rebalance algorithm to generate the new placement
+//plan and compute the utilization stats from it.
+func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, error) {
+
+	p, _, err := executeTenantAwareRebal(CommandRebalance, plan, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	defragUtilStats := genDefragUtilStats(p.Result.Placement)
+	return defragUtilStats, nil
+}
+
+//getDefragmentedUtilization computes the utilization stats from the new placement plan generated
+//by the planner after executing the rebalance algorithm.
+//Following per-node stats are returned currently:
+//1. "memory_used_actual"
+//2. "units_used_actual"
+//3. "num_tenants"
+func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interface{} {
+
+	defragUtilStats := make(map[string]map[string]interface{})
+	for _, indexerNode := range placement {
+		nodeUsageStats := make(map[string]interface{})
+		nodeUsageStats["memory_used_actual"] = indexerNode.MandatoryQuota
+		nodeUsageStats["units_used_actual"] = indexerNode.ActualUnits
+		nodeUsageStats["num_tenants"] = getNumTenantsForNode(indexerNode)
+
+		defragUtilStats[indexerNode.NodeUUID] = nodeUsageStats
+	}
+
+	return defragUtilStats
+}
+
+//getNumTenantsForNode computes the number of tenants on an indexer node
+func getNumTenantsForNode(indexerNode *IndexerNode) int64 {
+
+	numTenants := make(map[string]bool)
+	for _, index := range indexerNode.Indexes {
+		if _, ok := numTenants[index.Bucket]; !ok {
+			numTenants[index.Bucket] = true
+		}
+	}
+	return int64(len(numTenants))
+}

@@ -9,6 +9,8 @@ package indexer
 
 import (
 	"github.com/couchbase/cbauth/service"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/planner"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -18,14 +20,13 @@ import (
 // ServerlessManager provides the implementation of the ns_server RPC interface
 // ServerlessManager(defined in cbauth/service/interface.go).
 type ServerlessManager struct {
-	httpAddr string
+	clusterAddr string
 }
 
 // NewServerlessManager is the constructor for the ServerlessManager class.
-// httpAddr gives the host:port of the local node for Index Service HTTP calls.
-func NewServerlessManager(httpAddr string) *ServerlessManager {
+func NewServerlessManager(clusterAddr string) *ServerlessManager {
 	m := &ServerlessManager{
-		httpAddr: httpAddr,
+		clusterAddr: clusterAddr,
 	}
 	return m
 }
@@ -37,7 +38,29 @@ func NewServerlessManager(httpAddr string) *ServerlessManager {
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+//GetDefragmentedUtilization computes the per-node utilization of each indexer node after running
+//the rebalance algorithm and returns the stats in the format specified by service.DefragmentedUtilizationInfo.
+//Following format is used for returned stats:
+//{
+//         "127.0.0.1:9001" : {
+//             "memory_used_actual": 600000000,
+//             "units_used_actual": 6000,
+//             "num_tenants" :2
+//         },
+//         "127.0.0.1:9003" : {
+//             "memory_used_actual": 300000000,
+//             "units_used_actual": 3000,
+//             "num_tenants" : 1
+//         },
+//}
 func (m *ServerlessManager) GetDefragmentedUtilization() (*service.DefragmentedUtilizationInfo, error) {
-	return nil, nil
+
+	if c.IsServerlessDeployment() {
+		defragStats, err := planner.GetDefragmentedUtilization(m.clusterAddr)
+		retVal := service.DefragmentedUtilizationInfo(defragStats)
+		return &retVal, err
+	} else {
+		return nil, nil
+	}
 
 }
