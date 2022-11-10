@@ -793,6 +793,11 @@ func getIndexStorageDirOnNode(nodeAddr string, t *testing.T) string {
 	if workspace == "" {
 		workspace = "../../../../../../../../"
 	}
+
+	if strings.HasSuffix(workspace, "/") == false {
+		workspace += "/"
+	}
+
 	switch nodeAddr {
 	case clusterconfig.Nodes[0]:
 		strIndexStorageDir = workspace + "ns_server" + "/data/n_0/data/@2i/"

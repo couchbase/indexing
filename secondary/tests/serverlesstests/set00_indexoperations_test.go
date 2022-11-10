@@ -74,7 +74,7 @@ func TestShardIdMapping(t *testing.T) {
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
 
 			// Create an index with defer_build
-			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age) with {\"defer_build\":true}", indexes[1], bucket, scope, collection)
+			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(company) with {\"defer_build\":true}", indexes[1], bucket, scope, collection)
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[1], "Created", t)
 
 			// Create a primary index
@@ -86,11 +86,11 @@ func TestShardIdMapping(t *testing.T) {
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[3], "Created", t)
 
 			// Create a partitioned index
-			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
+			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emalid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[4], "Ready", t)
 
 			// Create a partitioned index with defer_build:true
-			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
+			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(balance) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[5], "Created", t)
 		}
 	}
