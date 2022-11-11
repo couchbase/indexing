@@ -44,9 +44,10 @@ type Pauser struct {
 
 // RunPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
 // task.pauser (visible to pauseMgr parent) and launches a goroutine for the work.
-//   pauseMgr - parent object (singleton)
-//   task - the task_PAUSE task this object will execute
-//   master - true iff this node is the master
+//
+//	pauseMgr - parent object (singleton)
+//	task - the task_PAUSE task this object will execute
+//	master - true iff this node is the master
 func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool) {
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
@@ -69,7 +70,7 @@ func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool) {
 // self-loopback to get the index metadata for the current node and the task's bucket (tenant). This
 // verifies it can be unmarshaled, but it returns a checksummed and optionally compressed byte slice
 // version of the data rather than the unmarshaled object.
-func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, error) {
+func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *manager.LocalIndexMetadata, error) {
 	const _restGetLocalIndexMetadataBinary = "Pauser::restGetLocalIndexMetadataBinary:"
 
 	url := fmt.Sprintf("%v/getLocalIndexMetadata?useETag=false&bucket=%v",
@@ -77,14 +78,14 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, erro
 	resp, err := getWithAuth(url)
 	if err != nil {
 		this.failPause(_restGetLocalIndexMetadataBinary, fmt.Sprintf("getWithAuth(%v)", url), err)
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	byteSlice, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		this.failPause(_restGetLocalIndexMetadataBinary, "ReadAll(resp.Body)", err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Verify response can be unmarshaled
@@ -92,14 +93,14 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, erro
 	err = json.Unmarshal(byteSlice, metadata)
 	if err != nil {
 		this.failPause(_restGetLocalIndexMetadataBinary, "Unmarshal localMeta", err)
-		return nil, err
+		return nil, nil, err
 	}
 	if len(metadata.IndexDefinitions) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Return checksummed and optionally compressed byte slice, not the unmarshaled object
-	return common.ChecksumAndCompress(byteSlice, compress), nil
+	return common.ChecksumAndCompress(byteSlice, compress), metadata, nil
 }
 
 // failPause logs an error using the caller's logPrefix and a provided context string and aborts the
@@ -116,7 +117,8 @@ func (this *Pauser) failPause(logPrefix string, context string, error error) {
 }
 
 // run is a goroutine for the main body of Pause work for this.task.
-//   master - true iff this node is the master
+//
+//	master - true iff this node is the master
 func (this *Pauser) run(master bool) {
 	const _run = "Pauser::run:"
 
@@ -153,7 +155,7 @@ func (this *Pauser) run(master bool) {
 	nodePath := this.task.archivePath + this.nodeDir
 
 	// Get the index metadata from all nodes and write it as a single file to the archive
-	byteSlice, err = this.restGetLocalIndexMetadataBinary(true)
+	byteSlice, indexMetadata, err := this.restGetLocalIndexMetadataBinary(true)
 	if err != nil {
 		this.failPause(_run, "getLocalInstanceMetadata", err)
 		return
@@ -170,10 +172,21 @@ func (this *Pauser) run(master bool) {
 		return
 	}
 
+	getIndexInstanceIds := func(indexMetadata manager.LocalIndexMetadata) []common.IndexInstId {
+		res := make([]common.IndexInstId, 0, len(indexMetadata.IndexDefinitions))
+		for _, topology := range indexMetadata.IndexTopologies {
+			for _, indexDefn := range topology.Definitions {
+				res = append(res, common.IndexInstId(indexDefn.Instances[0].InstId))
+			}
+		}
+		logging.Tracef("Pauser::getIndexInstanceId index instance ids: %v for bucket %v", res, this.task.bucket)
+		return res
+	}
+
 	// Write the persistent stats to the archive
-	byteSlice, err = this.pauseMgr.genericMgr.statsMgr.GetStatsToBePersistedBinary(true)
+	byteSlice, err = this.pauseMgr.genericMgr.statsMgr.GetStatsForIndexesToBePersisted(getIndexInstanceIds(*indexMetadata), true)
 	if err != nil {
-		this.failPause(_run, "GetStatsToBePersistedBinary", err)
+		this.failPause(_run, "GetStatsForIndexesToBePersisted", err)
 		return
 	}
 	reader.Reset(byteSlice)

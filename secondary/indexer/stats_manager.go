@@ -2669,9 +2669,9 @@ func (st *StatsMap) AddFloat64StatFiltered(k string, stat stats.StatVal) {
 	st.AddStat(k, math.Float64frombits(uint64(val)))
 }
 
-//--------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 // statsSpec can be used to specify which set of stats are to be returned.
-//--------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 type statsSpec struct {
 	indexSpec          *common.StatsIndexSpec
 	partition          bool
@@ -3778,6 +3778,16 @@ const num_rollbacks = "nrb"
 const num_rollbacks_to_zero = "nrbz"
 const chunkSz = "chunkSz"
 const STREAM_PREFIX = "stream"
+
+func (s *statsManager) GetStatsForIndexesToBePersisted(indexInstances []common.IndexInstId, compress bool) ([]byte, error) {
+	stats := s.stats.Get()
+	statsSlice, ok := stats.GetStats(NewStatsSpec(true, false, false, false, true, &common.StatsIndexSpec{Instances: indexInstances}), nil).([]byte)
+
+	if !ok || statsSlice == nil {
+		return nil, errors.New("error in reading stats in bytes")
+	}
+	return common.ChecksumAndCompress(statsSlice, compress), nil
+}
 
 // GetStatsToBePersistedBinary is the external statsManager class member API to get the same binary
 // stats image as internal getStatsToBePersistedBinary(getStatsToBePersistedMap(IndexerStats)) in a
