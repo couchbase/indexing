@@ -88,10 +88,14 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, erro
 	}
 
 	// Verify response can be unmarshaled
-	err = json.Unmarshal(byteSlice, new(manager.LocalIndexMetadata))
+	metadata := new(manager.LocalIndexMetadata)
+	err = json.Unmarshal(byteSlice, metadata)
 	if err != nil {
 		this.failPause(_restGetLocalIndexMetadataBinary, "Unmarshal localMeta", err)
 		return nil, err
+	}
+	if len(metadata.IndexDefinitions) == 0 {
+		return nil, nil
 	}
 
 	// Return checksummed and optionally compressed byte slice, not the unmarshaled object
@@ -152,6 +156,11 @@ func (this *Pauser) run(master bool) {
 	byteSlice, err = this.restGetLocalIndexMetadataBinary(true)
 	if err != nil {
 		this.failPause(_run, "getLocalInstanceMetadata", err)
+		return
+	}
+	if byteSlice == nil {
+		// there are no indexes on this node for bucket. pause is a no-op
+		logging.Infof("Pauser::run pause is a no-op for bucket %v-%v", this.task.bucket, this.task.bucketUuid)
 		return
 	}
 	reader.Reset(byteSlice)
