@@ -97,8 +97,11 @@ type plasmaSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 	isClosed      bool
+	isDeleted     bool
 	numPartitions int
 	isCompacting  bool
+
+	shardIds []common.ShardId
 
 	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
@@ -261,6 +264,11 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 			destroyPlasmaSlice(storage_dir, path)
 		}
 		return nil, err
+	}
+
+	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
+	if !slice.isPrimary {
+		slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
 	}
 
 	// Array related initialization
@@ -714,6 +722,7 @@ func (mdb *plasmaSlice) DecrRef() {
 			tryCloseplasmaSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
+			mdb.isDeleted = true
 			tryDeleteplasmaSlice(mdb)
 		}
 	}
@@ -2295,6 +2304,7 @@ func (mdb *plasmaSlice) Destroy() {
 			mdb.idxDefnId, mdb.refCount, openSnaps)
 		mdb.isSoftDeleted = true
 	} else {
+		mdb.isDeleted = true
 		tryDeleteplasmaSlice(mdb)
 	}
 }
@@ -2317,6 +2327,15 @@ func (mdb *plasmaSlice) IsActive() bool {
 //SetActive sets the active state of this slice
 func (mdb *plasmaSlice) SetActive(isActive bool) {
 	mdb.isActive = isActive
+}
+
+// IsDeleted if the slice is deleted (i.e. slice is
+// closed & destroyed
+func (mdb *plasmaSlice) IsCleanupDone() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+
+	return mdb.isClosed && mdb.isDeleted
 }
 
 //Status returns the status for this slice
@@ -2911,13 +2930,7 @@ func (mdb *plasmaSlice) BuildDone() {
 }
 
 func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
-	out := make([]common.ShardId, 0)
-	out = append(out, common.ShardId(mdb.mainstore.GetShardId()))
-	if !mdb.isPrimary {
-		out = append(out, common.ShardId(mdb.backstore.GetShardId()))
-	}
-
-	return out
+	return mdb.shardIds
 }
 
 func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64) {

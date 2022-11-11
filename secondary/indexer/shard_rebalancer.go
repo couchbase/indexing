@@ -1153,7 +1153,6 @@ loop:
 				time.Sleep(retryInterval * time.Second)
 				goto loop
 			}
-			retryCount = 0 // reset retryCount as err is nil
 
 			if tt.ShardTransferTokenState != c.ShardTokenRecoverShard {
 				err := fmt.Errorf("Transfer token in: %v state. Expected state: %v", tt.ShardTransferTokenState, c.ShardTokenRecoverShard)

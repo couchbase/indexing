@@ -1987,7 +1987,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, false)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -2239,7 +2239,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true)
+		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true)
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
@@ -2310,6 +2310,15 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
+	}
+
+	// Update index snapshot map for this index
+	idx.internalRecvCh <- &MsgUpdateSnapMap{
+		idxInstId:  indexInst.InstId,
+		idxInst:    indexInst,
+		partnMap:   partnInstMap,
+		streamId:   common.ALL_STREAMS,
+		keyspaceId: "",
 	}
 
 	// Send a message to cluster manager to update index instance state to topology
@@ -5672,7 +5681,7 @@ func (idx *indexer) sendBucketNameNumVBucketsMap() {
 }
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
-	respCh MsgChannel, bootstrapPhase bool) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
+	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
@@ -5735,7 +5744,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
 			idx.meteringMgr, numVBuckets)
 		if err != nil {
-			if bootstrapPhase && err == errStorageCorrupted {
+			// Propagate the error back to caller for shard rebalance
+			if (bootstrapPhase && err == errStorageCorrupted) && !shardRebalance {
 				errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
 				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
 				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
@@ -8126,7 +8136,7 @@ func (idx *indexer) initFromPersistedState() error {
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
 		var err error
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true); err != nil {
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false); err != nil {
 			return err
 		}
 
@@ -8314,7 +8324,7 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	// Marshall stats to byte slice
 	spec := NewStatsSpec(false, false, false, false, false, nil)
 	spec.OverrideFilter("gsiClient")
-	notifyStats := stats.GetStats(spec)
+	notifyStats := stats.GetStats(spec, nil)
 	if val, ok := notifyStats.(map[string]interface{}); ok {
 		idx.internalRecvCh <- &MsgStatsRequest{
 			mType: INDEX_STATS_BROADCAST,

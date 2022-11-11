@@ -549,7 +549,7 @@ func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, sliceIn
 
 	currPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId)
 
-	newInstId := token.RealInstIds[sliceIndex]
+	newInstId := token.InstIds[sliceIndex]
 	if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
 		newInstId = token.RealInstIds[sliceIndex]
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
@@ -145,6 +146,34 @@ func GetPerPartnStats(serverUserName, serverPassword, hostaddress string) map[st
 		}
 	}
 	return indexStats
+}
+
+func ResetAllIndexerStats(serverUserName, serverPassword, hostaddress string) {
+	indexNodes, _ := GetIndexerNodesHttpAddresses(hostaddress)
+
+	for _, indexNode := range indexNodes {
+		ResetIndexerStats(indexNode, serverUserName, serverPassword)
+	}
+}
+
+func ResetIndexerStats(indexerHttpAddr, serverUserName, serverPassword string) {
+	client := &http.Client{}
+	address := "http://" + indexerHttpAddr + "/stats/reset"
+
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("Reset stats failed\n")
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Reset Stats")
+	defer resp.Body.Close()
 }
 
 // Accumulate all stats of type float64 for partitioned indexes
@@ -290,9 +319,15 @@ func GetIndexStatus(serverUserName, serverPassword, hostaddress string) (map[str
 	return response, nil
 }
 
-func GetIndexHttpPort(indexHostAddress, serverUserName, serverPassword, hostaddress string) string {
+func GetIndexHttpAddrOnNode(serverUserName, serverPassword, hostaddress string) string {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/nodeServices"
+
+	// Get host, port of the hostaddr
+	host, port, err := net.SplitHostPort(hostaddress)
+	if err != nil {
+		return ""
+	}
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -317,6 +352,14 @@ func GetIndexHttpPort(indexHostAddress, serverUserName, serverPassword, hostaddr
 		return ""
 	}
 
-	log.Printf("%v", response)
+	nodesExt := response["nodesExt"].([]interface{})
+	for _, node := range nodesExt {
+		nodeExt := node.(map[string]interface{})
+		services := nodeExt["services"].(map[string]interface{})
+		if fmt.Sprintf("%v", services["mgmt"].(float64)) == port {
+			return fmt.Sprintf("%v:%v", host, services["indexHttp"].(float64))
+		}
+	}
+
 	return ""
 }

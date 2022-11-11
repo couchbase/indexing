@@ -463,6 +463,28 @@ func RemoveNode(serverAddr, username, password, hostname string) error {
 	return nil
 }
 
+// RemoveNodes performs a rebalance out (ejection) of the specified node.
+// This is done by calling the ns_server /controller/rebalance documented REST endpoint.
+func RemoveNodes(serverAddr, username, password string, hostnames []string) error {
+	if res, err := rebalanceFromRest(serverAddr, username, password, hostnames); err != nil {
+		return fmt.Errorf("RemoveNodes: Error while removing node and rebalance, hostnames: %v, err: %v", hostnames, err)
+	} else if err == nil && res == nil {
+		return fmt.Errorf("RemoveNodes: Error removing node and rebalancing, rebalanceFromRest response: %s", res)
+	} else if res != nil {
+		// unmarshall response
+		resp := make(map[string]interface{})
+		json.Unmarshal(res, &resp)
+		if _, ok := resp["rebalance_id"]; !ok {
+			return fmt.Errorf("RemoveNodes: Error while rebalancing, rebalanceFromRest response: %s", res)
+		}
+	}
+
+	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+		return fmt.Errorf("RemoveNodes: Error during rebalance, err: %v", err)
+	}
+	return nil
+}
+
 func FailoverNode(serverAddr, username, password, hostname string) error {
 	if res, err := failoverFromRest(serverAddr, username, password, []string{hostname}); err != nil {
 		return fmt.Errorf("Error while failing over, hostname: %v, err: %v", hostname, err)
