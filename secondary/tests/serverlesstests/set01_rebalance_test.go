@@ -87,6 +87,8 @@ func performSwapRebalance(addNodes []string, removeNodes []string, t *testing.T)
 		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", removeNodes), t)
 	}
 
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
 	// This sleep will ensure that the stats are propagated to client
 	// Also, any pending rebalance cleanup is expected to be done during
 	// this time - so that validateShardFiles can see cleaned up directories
@@ -102,8 +104,6 @@ func performSwapRebalance(addNodes []string, removeNodes []string, t *testing.T)
 	for _, addedNode := range addNodes {
 		validateShardIdMapping(addedNode, t)
 	}
-
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	verifyStorageDirContents(t)
 }
