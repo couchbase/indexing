@@ -3347,6 +3347,31 @@ func ReadIndexSpecs(specFile string) ([]*IndexSpec, error) {
 	return nil, nil
 }
 
+//////////////////////////////////////////////////////////////
+// IndexSpec
+/////////////////////////////////////////////////////////////
+
+func ReadDefragUtilStats(statsFile string) (map[string]map[string]interface{}, error) {
+
+	if statsFile != "" {
+
+		var stats map[string]map[string]interface{}
+
+		buf, err := iowrap.Ioutil_ReadFile(statsFile)
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Unable to read index spec from %v. err = %s", statsFile, err))
+		}
+
+		if err := json.Unmarshal(buf, &stats); err != nil {
+			return nil, errors.New(fmt.Sprintf("Unable to parse index spec from %v. err = %s", statsFile, err))
+		}
+
+		return stats, nil
+	}
+
+	return nil, nil
+}
+
 //ExecuteTenantAwareRebalance is the entry point for tenant aware rebalancer.
 //Given an input cluster url and the requested topology change, it will return
 //the set of transfer tokens for the desired index movements.
@@ -4576,14 +4601,14 @@ func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interfac
 		nodeUsageStats["units_used_actual"] = indexerNode.ActualUnits
 		nodeUsageStats["num_tenants"] = getNumTenantsForNode(indexerNode)
 
-		defragUtilStats[indexerNode.NodeUUID] = nodeUsageStats
+		defragUtilStats[indexerNode.NodeId] = nodeUsageStats
 	}
 
 	return defragUtilStats
 }
 
 //getNumTenantsForNode computes the number of tenants on an indexer node
-func getNumTenantsForNode(indexerNode *IndexerNode) int64 {
+func getNumTenantsForNode(indexerNode *IndexerNode) uint64 {
 
 	numTenants := make(map[string]bool)
 	for _, index := range indexerNode.Indexes {
@@ -4591,5 +4616,5 @@ func getNumTenantsForNode(indexerNode *IndexerNode) int64 {
 			numTenants[index.Bucket] = true
 		}
 	}
-	return int64(len(numTenants))
+	return uint64(len(numTenants))
 }
