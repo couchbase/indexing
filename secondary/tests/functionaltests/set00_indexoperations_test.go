@@ -2,6 +2,7 @@ package functionaltests
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -482,6 +483,106 @@ func TestRetainDeleteXATTRBinaryDocs(t *testing.T) {
 		err = errors.New("resulsts are incorrect for index " + indexname_xattr)
 		FailTestIfError(err, "Error in TestRetainDeleteXATTRBinaryDocs", t)
 	}
+
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete*/
+}
+
+// This test will create multiple xattr fields and indexes them
+// Compares the index results with primary index scan.
+// Run this test only for plasma & memdb as FDB does not support
+// large keys
+func TestIndexingOnXATTRs(t *testing.T) {
+	log.Printf("In TestIndexingOnXATTRs()")
+	if secondaryindex.IndexUsing == "forestdb" {
+		log.Printf("Skipping test TestIndexingOnXATTRs() for forestdb")
+		return
+	}
+
+	bucket1 := "default"
+	bucket2 := "bucket_xattrs"
+	numDocs := 100
+	xattrs := map[string]string{"_sync.rev": randSpecialString(10),
+		"_sync.channels": randSpecialString(10000),
+		"_sync.sequence": randSpecialString(1000),
+		"_sync.history":  randSpecialString(100000)}
+
+	index_sync_rev := "index_sync_rev"
+	index_sync_channels := "index_sync_channels"
+	index_sync_sequence := "index_sync_sequence"
+
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
+	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(bucketOpWaitDur * time.Second)
+
+	docs := GenerateDocsWithXATTRS(numDocs, bucket2, "", "http://"+kvaddress, clusterconfig.Username, clusterconfig.Password, xattrs)
+
+	err := secondaryindex.CreateSecondaryIndex(index_sync_rev, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync.rev"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+index_sync_rev+" on xattr docs", t)
+
+	err = secondaryindex.CreateSecondaryIndex(index_sync_channels, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync.channels"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+index_sync_channels+" on xattr docs", t)
+
+	err = secondaryindex.CreateSecondaryIndex(index_sync_sequence, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync.sequence"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+index_sync_sequence+" on xattr docs", t)
+
+	time.Sleep(5 * time.Second)
+
+	validateItemsCount := func(indexName string) {
+		stats := secondaryindex.GetIndexStats(indexName, bucket2, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		itemsCount := stats[bucket2+":"+indexName+":items_count"].(float64)
+		log.Printf("items_count stat is %v for index %v", itemsCount, indexName)
+
+		if itemsCount != float64(len(docs)) {
+			log.Printf("Expected number items count = %v, actual items_count stat returned = %v", len(docs), itemsCount)
+			err = errors.New("items_count is incorrect for index " + indexName)
+			FailTestIfError(err, "Error in TestIndexingOnXATTRs", t)
+		}
+	}
+
+	validateItemsCount(index_sync_rev)
+	validateItemsCount(index_sync_channels)
+	validateItemsCount(index_sync_sequence)
+
+	validateScanResultsAndDropIndex := func(indexName string) {
+		results, err := secondaryindex.ScanAll(indexName, bucket2, indexManagementAddress, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error while scanning index_sync_rev", t)
+
+		if len(results) != len(docs) {
+			t.Fatalf("The number of entries in index do not match total docs. Index: %v, len(results): %v, len(docs): %v", indexName, len(results), len(docs))
+		}
+
+		for docId, _ := range docs {
+			if val, ok := results[docId]; !ok {
+				t.Fatalf("DocID: %v present in input docs but not in result. indexName: %v", docId, indexName)
+			} else {
+				var xattrVal string
+				switch indexName {
+				case index_sync_rev:
+					xattrVal = xattrs["_sync.rev"]
+				case index_sync_channels:
+					xattrVal = xattrs["_sync.channels"]
+				case index_sync_sequence:
+					xattrVal = xattrs["_sync.sequence"]
+				}
+
+				if len(val) > 1 {
+					t.Fatalf("Expected only one entry in results for index: %v, docId: %v, expected: %v, actual: %v", indexName, docId, xattrVal, val)
+				}
+				if val[0].ToString() != xattrVal {
+					t.Fatalf("Incorrect xattrVal seen for index: %v, docId: %v, expected: %v, actual: %v", indexName, docId, xattrVal, val[0].ToString())
+				}
+			}
+		}
+		err = secondaryindex.DropSecondaryIndex(indexName, bucket2, kvaddress)
+		FailTestIfError(err, fmt.Sprintf("Error dropping index: %v", indexName), t)
+	}
+
+	validateScanResultsAndDropIndex(index_sync_rev)
+	validateScanResultsAndDropIndex(index_sync_channels)
+	validateScanResultsAndDropIndex(index_sync_sequence)
 
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)

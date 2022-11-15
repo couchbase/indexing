@@ -69,6 +69,24 @@ func SetBinaryValuesWithXattrs(keyValues tc.KeyValues, bucketName string, passwo
 	}
 }
 
+func SetValuesWithXattrs(keyValues tc.KeyValues, bucketName string, password string, hostaddress, serverUsername, serverPassword string, xattrs map[string]string) {
+	cluster, _ := gocb.Connect(hostaddress)
+	cluster.Authenticate(gocb.PasswordAuthenticator{
+		Username: serverUsername,
+		Password: serverPassword,
+	})
+
+	bucket, err := cluster.OpenBucket(bucketName, "")
+	tc.HandleError(err, "Error while opening bucket")
+
+	for key, value := range keyValues {
+		bucket.Insert(key, value, 0)
+		for xattr, xattrVal := range xattrs {
+			bucket.MutateIn(key, 0, 0).UpsertEx(xattr, xattrVal, gocb.SubdocFlagXattr|gocb.SubdocFlagCreatePath).Execute()
+		}
+	}
+}
+
 func SetBinaryValues(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
 	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
