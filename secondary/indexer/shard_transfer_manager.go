@@ -15,12 +15,16 @@ import (
 type ShardTransferManager struct {
 	config common.Config
 	cmdCh  chan Message
+
+	sliceList          []Slice
+	sliceCloseNotifier map[common.ShardId]MsgChannel
 }
 
 func NewShardTransferManager(config common.Config) *ShardTransferManager {
 	stm := &ShardTransferManager{
-		config: config,
-		cmdCh:  make(chan Message),
+		config:             config,
+		cmdCh:              make(chan Message),
+		sliceCloseNotifier: make(map[common.ShardId]MsgChannel),
 	}
 
 	go stm.run()
@@ -28,7 +32,8 @@ func NewShardTransferManager(config common.Config) *ShardTransferManager {
 }
 
 func (stm *ShardTransferManager) run() {
-	//main Storage Manager loop
+	//main ShardTransferManager loop
+	ticker := time.NewTicker(time.Duration(1 * time.Second))
 loop:
 	for {
 		select {
@@ -45,6 +50,8 @@ loop:
 				break loop
 			}
 
+		case <-ticker.C:
+			stm.updateSliceStatus()
 		}
 	}
 }
@@ -67,7 +74,21 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 		go stm.processShardRestoreMessage(cmd)
 
 	case DESTROY_LOCAL_SHARD:
-		go stm.processDestroyLocalShardMessage(cmd)
+		// Indexer guarantees that all indexs of a shard will be dropped before
+		// destroying a shard. Therefore, it is safe to assume that all the slices
+		// have gone through MONITOR_SLICE_STATUS message before reaching here
+		shardIds := cmd.(*MsgDestroyLocalShardData).GetShardIds()
+		notifyChMap := make(map[common.ShardId]MsgChannel)
+		for _, shardId := range shardIds {
+			notifyCh := make(MsgChannel)
+			stm.sliceCloseNotifier[shardId] = notifyCh
+			notifyChMap[shardId] = notifyCh
+		}
+
+		go stm.processDestroyLocalShardMessage(cmd, notifyChMap)
+
+	case MONITOR_SLICE_STATUS:
+		stm.handleMonitorSliceStatusCommand(cmd)
 	}
 }
 
@@ -406,7 +427,21 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 }
 
-func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
+func (stm *ShardTransferManager) waitForSliceClose(shardId common.ShardId, notifyCh MsgChannel, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ticker := time.NewTicker(time.Duration(30 * time.Second))
+	for {
+		select {
+		case <-notifyCh:
+			logging.Infof("ShardTranferManager::waitForSliceClose - Exiting wait as all slices are closed for shard: %v", shardId)
+			return
+		case <-ticker.C:
+			logging.Infof("ShardTranferManager::waitForSliceClose - Waiting for all slices to be closed on shard: %v to be closed", shardId)
+		}
+	}
+}
+
+func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message, notifyChMap map[common.ShardId]MsgChannel) {
 
 	start := time.Now()
 
@@ -419,6 +454,14 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
 	shardIds := msg.GetShardIds()
 	respCh := msg.GetRespCh()
 
+	var wg sync.WaitGroup
+	for shardId, notifyCh := range notifyChMap {
+		wg.Add(1)
+		go stm.waitForSliceClose(shardId, notifyCh, &wg)
+	}
+	wg.Wait()
+	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage All slices closed. Initiating shard destroy for shards: %v, elapsed: %v", shardIds, time.Since(start))
+
 	for _, shardId := range shardIds {
 		if err := plasma.DestroyShardID(plasma.ShardId(shardId)); err != nil {
 			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v from "+
@@ -429,4 +472,46 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message) {
 	elapsed := time.Since(start).Seconds()
 	logging.Infof("ShardTransferManager::processDestroyLocalShardMessage Done clean-up for shards: %v, elapsed(sec): %v", shardIds, elapsed)
 	respCh <- true
+}
+
+// Update shard transfer manager's book-keeping with the new slices that
+// are about to be closed
+func (stm *ShardTransferManager) handleMonitorSliceStatusCommand(cmd Message) {
+	sliceList := cmd.(*MsgMonitorSliceStatus).GetSliceList()
+
+	stm.sliceList = append(stm.sliceList, sliceList...)
+}
+
+func (stm *ShardTransferManager) updateSliceStatus() {
+	newSliceList := make([]Slice, 0)
+	pendingSliceCloseMap := make(map[common.ShardId]bool)
+
+	for i, slice := range stm.sliceList {
+		if slice != nil && slice.IsCleanupDone() {
+			stm.sliceList[i] = nil
+		} else if slice != nil {
+			newSliceList = append(newSliceList, slice)
+			shardIds := slice.GetShardIds()
+			for _, shardId := range shardIds {
+				pendingSliceCloseMap[shardId] = true
+			}
+		}
+	}
+
+	// If all slices of a shard are closed and book-keeping is updated
+	// before DestroyShardId message is sent, then the shardId will not
+	// be found in pendingSliceCloseMap list. In that case, close any pending
+	// notifier and update the book-keeping
+	for shardId, notifyCh := range stm.sliceCloseNotifier {
+		if _, ok := pendingSliceCloseMap[shardId]; !ok {
+
+			if notifyCh != nil {
+				close(notifyCh)
+			}
+			logging.Infof("ShardTransferManager::updateSliceStatus Closing the notifyCh for shardId: %v", shardId)
+			delete(stm.sliceCloseNotifier, shardId)
+		}
+	}
+
+	stm.sliceList = newSliceList
 }

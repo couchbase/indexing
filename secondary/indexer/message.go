@@ -200,6 +200,7 @@ const (
 	SHARD_TRANSFER_CLEANUP
 	START_SHARD_RESTORE
 	DESTROY_LOCAL_SHARD
+	MONITOR_SLICE_STATUS
 )
 
 type Message interface {
@@ -2654,6 +2655,18 @@ func (m *MsgUpdateShardIds) GetShardIds() common.PartnShardIdMap {
 	return m.partnShardIdMap
 }
 
+type MsgMonitorSliceStatus struct {
+	sliceList []Slice
+}
+
+func (m *MsgMonitorSliceStatus) GetMsgType() MsgType {
+	return MONITOR_SLICE_STATUS
+}
+
+func (m *MsgMonitorSliceStatus) GetSliceList() []Slice {
+	return m.sliceList
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -2962,6 +2975,8 @@ func (m MsgType) String() string {
 		return "START_SHARD_RESTORE"
 	case DESTROY_LOCAL_SHARD:
 		return "DESTROY_LOCAL_SHARD"
+	case MONITOR_SLICE_STATUS:
+		return "MONITOR_SLICE_STATUS"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

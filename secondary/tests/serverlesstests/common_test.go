@@ -582,9 +582,15 @@ func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, s
 // scanIndexReplicas scan's the index and validates if all the replicas of the index are retruning
 // valid results
 func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int, numScans, numDocs, numPartitions int, t *testing.T) {
+	log.Printf("scanIndexReplicas: Scanning all for index: %v, bucket: %v, scope: %v, collection: %v", index, bucket, scope, collection)
 	// Scan the index num_scans times
 	for i := 0; i < numScans; i++ {
 		scanResults, err := secondaryindex.ScanAll2(index, bucket, scope, collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		if err != nil {
+			errStr := fmt.Sprintf("Observed error: %v while scanning index: %v, bucket: %v, scope: %v, collection: %v, scanResults: %v",
+				numDocs, index, bucket, scope, collection, len(scanResults))
+			FailTestIfError(err, errStr, t)
+		}
 		if len(scanResults) != numDocs {
 			errStr := fmt.Sprintf("Error in ScanAll. Expected len(scanResults): %v, actual: %v", numDocs, len(scanResults))
 			FailTestIfError(err, errStr, t)

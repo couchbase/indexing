@@ -93,6 +93,27 @@ func GetIndexStats(indexName, bucketName, serverUserName, serverPassword, hostad
 	return indexStats
 }
 
+func GetIndexStats2(indexName, bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) map[string]interface{} {
+	indexNodes, _ := GetIndexerNodesHttpAddresses(hostaddress)
+	indexStats := make(map[string]interface{})
+
+	for _, indexNode := range indexNodes {
+		stats := GetStatsForIndexerHttpAddress(indexNode, serverUserName, serverPassword)
+		for statKey := range stats {
+			if collectionName == "_default" {
+				if strings.Contains(statKey, bucketName+":"+indexName) {
+					accumulate(indexStats, stats, statKey)
+				}
+			} else {
+				if strings.Contains(statKey, bucketName+":"+scopeName+":"+collectionName+":"+indexName) {
+					accumulate(indexStats, stats, statKey)
+				}
+			}
+		}
+	}
+	return indexStats
+}
+
 func GetStats(serverUserName, serverPassword, hostaddress string) map[string]interface{} {
 	indexNodes, _ := GetIndexerNodesHttpAddresses(hostaddress)
 	indexStats := make(map[string]interface{})

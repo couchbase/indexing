@@ -297,7 +297,8 @@ func BuildIndexes2(indexNames []string, bucketName, scopeName, collectionName, s
 		defnIds[i], _ = GetDefnID2(client, bucketName, scopeName, collectionName, indexNames[i])
 	}
 	err := client.BuildIndexes(defnIds)
-	log.Printf("Build command issued for the deferred indexes %v", indexNames)
+	log.Printf("Build command issued for the deferred indexes %v, bucket: %v, scope: %v, coll: %v",
+		indexNames, bucketName, scopeName, collectionName)
 
 	if err == nil {
 		for i := range indexNames {
