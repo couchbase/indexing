@@ -173,6 +173,9 @@ git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BR
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version indexing $WORKSPACE/goproj/src/github.com/couchbase/indexing
 
+# Add 2ici_test to tag to compile "testcode" package for CI
+sed -i 's/SET (TAGS "jemalloc")/SET (TAGS "jemalloc 2ici_test")/' $WORKSPACE/goproj/src/github.com/couchbase/indexing/CMakeLists.txt
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
 echo "Switching plasma to $BRANCH"
 git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BRANCH"
