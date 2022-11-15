@@ -1369,7 +1369,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 		event.Opcode == transport.DCP_DELETION) && event.HasXATTR() {
 		xattrLen := int(binary.BigEndian.Uint32(rq.Body))
 		xattrData := rq.Body[4 : 4+xattrLen]
-		event.RawXATTR = make(map[string][]byte, xattrLen)
+		event.RawXATTR = make(map[string][]byte)
 		for len(xattrData) > 0 {
 			pairLen := binary.BigEndian.Uint32(xattrData[0:])
 			xattrData = xattrData[4:]
