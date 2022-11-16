@@ -9,10 +9,10 @@ import (
 // BEGIN FILTERS ===================================================================================
 // List of filters for stats values
 const (
-	AllStatsFilter    = 0x1
-	PlannerFilter     = 0x2
-	IndexStatusFilter = 0x4
-	// RebalancerFilter = 0x8 // no longer used
+	AllStatsFilter         = 0x1
+	PlannerFilter          = 0x2
+	IndexStatusFilter      = 0x4
+	RebalancerFilter       = 0x8 // used in shard rebalance to get progress
 	GSIClientFilter        = 0x10
 	N1QLStorageStatsFilter = 0x20 // only used for storage stats
 	SummaryFilter          = 0x40
