@@ -4582,6 +4582,8 @@ func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, 
 		return nil, err
 	}
 
+	p.Result = evaluateSolutionForScaleIn(p.Result, plan.UsageThreshold)
+
 	defragUtilStats := genDefragUtilStats(p.Result.Placement)
 	return defragUtilStats, nil
 }
@@ -4617,4 +4619,93 @@ func getNumTenantsForNode(indexerNode *IndexerNode) uint64 {
 		}
 	}
 	return uint64(len(numTenants))
+}
+
+//evaluateSolutionForScaleIn checks if there is enough excess capacity to allow some
+//nodes to be removed from the cluster based on usage thresholds.
+func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThreshold) *Solution {
+
+	const _evaluateSolutionForScaleIn = "Planner::evaluateSolutionForScaleIn"
+
+	//If there are already empty nodes in the cluster, there is no need for
+	//further evaluation. CP can remove the empty nodes for scale in.
+	numNewNode := solution.findNumEmptyNodes()
+	if numNewNode > 0 {
+		return solution
+	}
+
+	//clone the original solution
+	cloneSolution := solution.clone()
+
+	//reset any new node flag in the cloned solution
+	cloneSolution.resetNewNodes()
+
+	//group indexer nodes into subclusters
+	allSubClusters, err := groupIndexNodesIntoSubClusters(cloneSolution.Placement)
+	if err != nil {
+		logging.Errorf("%v Error group into subclusters %v", _evaluateSolutionForScaleIn, err)
+		return solution
+	}
+
+	logging.Infof("%v Found SubClusters  %v", _evaluateSolutionForScaleIn, allSubClusters)
+
+	subClustersBelowLWM, err := findSubClustersBelowLowThreshold(allSubClusters,
+		usageThreshold)
+
+	logging.Infof("%v Found SubClusters below LWM %v", _evaluateSolutionForScaleIn, subClustersBelowLWM)
+
+	//if number of subclusters below LWM are less than 2, nothing to be done
+	//minimum 2 subClusters are required below LWM to allow one subcluster to be removed.
+	if len(subClustersBelowLWM) < 2 {
+		return solution
+	}
+
+	leastLoadedSubCluster := findLeastLoadedSubCluster(subClustersBelowLWM)
+
+	//mark the nodes of least loaded subcluster as deleted
+	var deletedNodes []string
+	for _, indexerNode := range leastLoadedSubCluster {
+		deletedNodes = append(deletedNodes, indexerNode.NodeId)
+	}
+
+	err = cloneSolution.markDeletedNodes(deletedNodes)
+	if err != nil {
+		logging.Errorf("%v Error marking deleted nodes %v", _evaluateSolutionForScaleIn, err)
+		return solution
+	}
+
+	cloneSolution.numDeletedNode = cloneSolution.findNumDeleteNodes()
+
+	//adjust the usage threshold for scale-in
+	usageThresholdScaleIn := computeUsageThresholdForScaleIn(usageThreshold)
+
+	err = findPlacementForDeletedNodes(cloneSolution, usageThresholdScaleIn)
+	if err != nil {
+		//Return the original solution as there is not enough capacity for scale-in
+		return solution
+	} else {
+		//If there is no error, it means the indexes from deleted nodes can fit
+		//in on remaining nodes under LWM with reduced scale-in thresholds.
+		//The new solution can be accepted.
+		return cloneSolution
+	}
+
+}
+
+func computeUsageThresholdForScaleIn(usageThreshold *UsageThreshold) *UsageThreshold {
+
+	scaleInMemThreshold := (usageThreshold.MemLowThreshold * (100 - cScaleInUsageThreshold)) / 100
+	scaleInUnitsThreshold := (usageThreshold.UnitsLowThreshold * (100 - cScaleInUsageThreshold)) / 100
+
+	return &UsageThreshold{
+		MemHighThreshold: usageThreshold.MemHighThreshold,
+		MemLowThreshold:  scaleInMemThreshold,
+
+		UnitsHighThreshold: usageThreshold.UnitsHighThreshold,
+		UnitsLowThreshold:  scaleInUnitsThreshold,
+
+		MemQuota:   usageThreshold.MemQuota,
+		UnitsQuota: usageThreshold.UnitsQuota,
+	}
+
 }
