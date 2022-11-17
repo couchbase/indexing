@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/build"
 	"io"
 	"io/ioutil"
 	"log"
@@ -187,17 +188,14 @@ func GetClusterConfFromFile(filepath string) ClusterConfiguration {
 // Returns paths of Prod and Bags dir
 func FetchMonsterToolPath() (string, string) {
 	// Resolve monster bags and prods paths
-	gopath := os.Getenv("GOPATH")
-	for _, dir := range strings.Split(gopath, ":") {
-		file := filepath.Join(dir, "src/github.com/prataprc/monster")
-		if FileExists(file) {
-			proddir := filepath.Join(file, "prods")
-			bagdir := filepath.Join(file, "bags")
-			return proddir, bagdir
-		}
+	wd, _ := os.Getwd()
+	monster, err := build.Import("github.com/prataprc/monster", wd, build.FindOnly)
+	if err != nil {
+		fmt.Printf("Err in import: %v\n", err)
+		return "", ""
 	}
+	return filepath.Join(monster.Dir, "prods"), filepath.Join(monster.Dir, "bags")
 
-	return "", ""
 }
 
 func ClearMap(docs KeyValues) {

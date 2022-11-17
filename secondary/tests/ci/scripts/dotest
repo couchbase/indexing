@@ -211,7 +211,7 @@ export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
 export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 #Note: enabling auto tells go get to download modules under godeps/pkg/mod
 #This breaks unit tests which depend on fixed file paths under monster module
-export GO111MODULE=off
+export GO111MODULE=auto
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
@@ -229,21 +229,21 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   elif [ "$STORAGE" = "plasma" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
-      GO111MODULE=auto GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma/zstd
-      GO111MODULE=auto GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       # unit test logs will be in the Server Log logs-<timestamp>.tar.gz at logs-unit-test.log
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GO111MODULE=auto GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
   fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
   GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GO111MODULE=auto GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
