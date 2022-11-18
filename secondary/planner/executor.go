@@ -3347,6 +3347,31 @@ func ReadIndexSpecs(specFile string) ([]*IndexSpec, error) {
 	return nil, nil
 }
 
+//////////////////////////////////////////////////////////////
+// IndexSpec
+/////////////////////////////////////////////////////////////
+
+func ReadDefragUtilStats(statsFile string) (map[string]map[string]interface{}, error) {
+
+	if statsFile != "" {
+
+		var stats map[string]map[string]interface{}
+
+		buf, err := iowrap.Ioutil_ReadFile(statsFile)
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("Unable to read index spec from %v. err = %s", statsFile, err))
+		}
+
+		if err := json.Unmarshal(buf, &stats); err != nil {
+			return nil, errors.New(fmt.Sprintf("Unable to parse index spec from %v. err = %s", statsFile, err))
+		}
+
+		return stats, nil
+	}
+
+	return nil, nil
+}
+
 //ExecuteTenantAwareRebalance is the entry point for tenant aware rebalancer.
 //Given an input cluster url and the requested topology change, it will return
 //the set of transfer tokens for the desired index movements.
@@ -4535,4 +4560,61 @@ func getTenantUsageForSubCluster(subCluster SubCluster) []*TenantUsage {
 
 	return combinedUsage
 
+}
+
+//GetDefragmentedUtilization is the entry method for planner to compute the utilization
+//stats in the given cluster after rebalance.
+func GetDefragmentedUtilization(clusterUrl string) (map[string]map[string]interface{}, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+	return getDefragmentedUtilization(plan)
+}
+
+//getDefragmentedUtilization runs the actual rebalance algorithm to generate the new placement
+//plan and compute the utilization stats from it.
+func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, error) {
+
+	p, _, err := executeTenantAwareRebal(CommandRebalance, plan, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	defragUtilStats := genDefragUtilStats(p.Result.Placement)
+	return defragUtilStats, nil
+}
+
+//getDefragmentedUtilization computes the utilization stats from the new placement plan generated
+//by the planner after executing the rebalance algorithm.
+//Following per-node stats are returned currently:
+//1. "memory_used_actual"
+//2. "units_used_actual"
+//3. "num_tenants"
+func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interface{} {
+
+	defragUtilStats := make(map[string]map[string]interface{})
+	for _, indexerNode := range placement {
+		nodeUsageStats := make(map[string]interface{})
+		nodeUsageStats["memory_used_actual"] = indexerNode.MandatoryQuota
+		nodeUsageStats["units_used_actual"] = indexerNode.ActualUnits
+		nodeUsageStats["num_tenants"] = getNumTenantsForNode(indexerNode)
+
+		defragUtilStats[indexerNode.NodeId] = nodeUsageStats
+	}
+
+	return defragUtilStats
+}
+
+//getNumTenantsForNode computes the number of tenants on an indexer node
+func getNumTenantsForNode(indexerNode *IndexerNode) uint64 {
+
+	numTenants := make(map[string]bool)
+	for _, index := range indexerNode.Indexes {
+		if _, ok := numTenants[index.Bucket]; !ok {
+			numTenants[index.Bucket] = true
+		}
+	}
+	return uint64(len(numTenants))
 }

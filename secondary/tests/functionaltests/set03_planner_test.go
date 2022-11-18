@@ -1361,6 +1361,7 @@ func tenantAwarePlannerTests(t *testing.T) {
 	tenantAwarePlannerReplicaRepairTests(t)
 	tenantAwarePlannerSwapRebalanceTests(t)
 	tenantAwarePlannerScaleDownTests(t)
+	tenantAwarePlannerDefragTests(t)
 
 }
 
@@ -1871,4 +1872,109 @@ func tenantAwarePlannerScaleDownTests(t *testing.T) {
 		}
 
 	}
+}
+
+var tenantAwarePlannerDefragFuncTestCases = []tenantAwarePlannerRebalFuncTestCase{
+
+	{
+		"Rebalance - 2 Subclusters, 1 empty, 1 Above HWM",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_a.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_a_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 2 Subclusters, 1 below LWM, 1 above HWM",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_b.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_b_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 3 Subclusters, 1 empty, 1 Above HWM, 1 below LWM",
+		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_c.json",
+		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_c_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 2 Subclusters, 1 above LWM/below HWM, 1 empty",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_d.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_d_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 2 Subclusters, Both above LWM/below HWM",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_e.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_e_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 2 Subclusters, 1 empty, 1 Above HWM (partial replica repair)",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_f.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_f_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 2 Subclusters, 1 empty, 1 Above HWM(full replica repair)",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_g.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_g_out.json",
+		"",
+		false,
+	},
+}
+
+func tenantAwarePlannerDefragTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerDefragFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		result, err := planner.ReadDefragUtilStats(testcase.result)
+		s := planner.NewSimulator()
+		defragUtilStats, err := s.RunSingleTestDefragUtil(plan)
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+
+		err = validateDefragUtilStats(t, defragUtilStats, result)
+		if err != nil {
+			log.Printf("Actual Stats %v\n", defragUtilStats)
+			log.Printf("Expected Stats %v\n", result)
+		}
+		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+	}
+}
+
+func validateDefragUtilStats(t *testing.T, defragUtilStats map[string]map[string]interface{},
+	result map[string]map[string]interface{}) error {
+
+	if len(defragUtilStats) != len(result) {
+		return errors.New(fmt.Sprintf("Mismatch in indexer node count."+
+			"Solution %v Expected %v", len(defragUtilStats), len(result)))
+	}
+
+	for node, stats := range defragUtilStats {
+
+		var rstats map[string]interface{}
+		var ok bool
+		if rstats, ok = result[node]; !ok {
+			return errors.New(fmt.Sprintf("Missing node %v stats in result", node))
+		}
+		for sname, sval := range stats {
+			var rval interface{}
+			if rval, ok = rstats[sname]; !ok {
+				return errors.New(fmt.Sprintf("Missing stat %v for node %v in result", sname, node))
+			}
+			if int64(sval.(uint64)) != int64(rval.(float64)) {
+				return errors.New(fmt.Sprintf("Mismatch in node %v stat %v. Expected %v. Actual %v", node, sname, rval, sval))
+			}
+		}
+	}
+	return nil
+
 }

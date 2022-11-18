@@ -9,7 +9,6 @@ import (
 	"github.com/couchbase/indexing/secondary/stats"
 
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/json"
 	qu "github.com/couchbase/indexing/secondary/common/queryutil"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -583,16 +582,8 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, docval qvalue.AnnotatedV
 	}
 	for _, xattr := range ie.xattrs {
 		if _, ok := m.ParsedXATTR[xattr]; !ok {
-			var val interface{}
 			if len(m.RawXATTR[xattr]) != 0 {
-				if err := json.Unmarshal(m.RawXATTR[xattr], &val); err != nil {
-					arg1 := logging.TagStrUD(xattr)
-					arg2 := logging.TagStrUD(m.Key)
-					logging.Errorf("Error parsing XATTR %s for %s: %v",
-						arg1, arg2, err)
-				} else {
-					m.ParsedXATTR[xattr] = val
-				}
+				m.ParsedXATTR[xattr] = qvalue.NewParsedValueWithOptions(m.RawXATTR[xattr], true, true)
 			}
 		}
 	}

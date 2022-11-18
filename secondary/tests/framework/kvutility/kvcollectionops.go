@@ -25,7 +25,14 @@ func SetKeyValuesForCollection(keyValues tc.KeyValues, bucketName, collectionID,
 	for key, value := range keyValues {
 		// The vb mapping for a key is independent of collections.
 		// Pass key and collectionID separately for correct vb:key mapping
-		err = b.SetC(key, collectionID, 0, value)
+		for i := 0; i < 5; i++ {
+			err = b.SetC(key, collectionID, 0, value)
+			if err == nil {
+				break
+			}
+			log.Printf("Retrying to set key: %v, collectionId: %v", key, collectionID)
+			time.Sleep(1 * time.Second)
+		}
 		tc.HandleError(err, "set")
 	}
 }

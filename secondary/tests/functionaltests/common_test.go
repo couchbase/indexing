@@ -250,6 +250,12 @@ func GenerateBinaryDocsWithXATTRS(numDocs int, bucketName, bucketPassword, hosta
 	return docsToCreate
 }
 
+func GenerateDocsWithXATTRS(numDocs int, bucketName, bucketPassword, hostaddress, serverUsername, serverPassword string, xattrs map[string]string) tc.KeyValues {
+	docsToCreate := generateDocs(numDocs, "users.prod")
+	kvutility.SetValuesWithXattrs(docsToCreate, bucketName, bucketPassword, hostaddress, serverUsername, serverPassword, xattrs)
+	return docsToCreate
+}
+
 func compile(s parsec.Scanner) parsec.ParsecNode {
 	defer func() {
 		if r := recover(); r != nil {

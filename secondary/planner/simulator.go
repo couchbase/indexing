@@ -413,6 +413,12 @@ func (t *simulator) RunSingleTestTenantAwareRebal(plan *Plan, deletedNodes []str
 	}
 }
 
+func (t *simulator) RunSingleTestDefragUtil(plan *Plan) (map[string]map[string]interface{}, error) {
+
+	stats, err := getDefragmentedUtilization(plan)
+	return stats, err
+}
+
 //////////////////////////////////////////////////////////////
 // Topology Change
 /////////////////////////////////////////////////////////////

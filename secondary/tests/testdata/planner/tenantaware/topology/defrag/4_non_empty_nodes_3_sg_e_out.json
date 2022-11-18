@@ -1,0 +1,24 @@
+{
+
+
+         "127.0.0.1:9001" : {
+	     "memory_used_actual": 700000000,
+	     "units_used_actual": 5000,
+	     "num_tenants" : 3
+	 },
+         "127.0.0.1:9003" : {
+	     "memory_used_actual": 650000000,
+	     "units_used_actual": 4500,
+	     "num_tenants" : 3
+	 },
+         "127.0.0.1:9004" : {
+	     "memory_used_actual": 700000000,
+	     "units_used_actual": 5000,
+	     "num_tenants" : 3
+	 },
+         "127.0.0.1:9006" : {
+	     "memory_used_actual": 650000000,
+	     "units_used_actual": 4500,
+	     "num_tenants" : 3
+	 }
+}
