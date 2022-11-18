@@ -147,6 +147,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		go sr.observeRebalance()
 	}
 	go sr.processDropShards()
+	go sr.updateTransferProgress()
 
 	return sr
 }
@@ -2103,4 +2104,51 @@ func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (s
 	}
 
 	return dropOnSourceTokenId, dropOnSourceToken
+}
+
+func (sr *ShardRebalancer) updateTransferProgress() {
+	ticker := time.NewTicker(5 * time.Second)
+
+	resetTransferStats := func() {
+		indexerStats := sr.statsMgr.stats.Get()
+		indexerStats.RebalanceTransferProgress.Reset()
+	}
+
+	for {
+		select {
+		case <-sr.cancel:
+			resetTransferStats()
+
+		case <-sr.done:
+			resetTransferStats()
+
+		case <-ticker.C:
+
+			func() {
+				sr.mu.RLock()
+				defer sr.mu.RUnlock()
+
+				transferProgressMap := make(map[string]interface{})
+				for ttid, perTokenStats := range sr.transferStats {
+					progress := 0.0
+					for _, stats := range perTokenStats {
+						if stats.totalBytes > 0 {
+							progress += ((float64)(stats.bytesWritten) * 100.0) / ((float64)(stats.totalBytes))
+						} else {
+							progress = 100.0
+						}
+					}
+					if len(perTokenStats) == 1 { // Token contains only one shard
+						transferProgressMap[ttid] = progress
+					} else {
+						transferProgressMap[ttid] = progress / 2.0 // Average on both shards
+					}
+				}
+
+				indexerStats := sr.statsMgr.stats.Get()
+				indexerStats.RebalanceTransferProgress.Set(transferProgressMap)
+			}()
+		}
+	}
+
 }

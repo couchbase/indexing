@@ -819,6 +819,8 @@ type IndexerStats struct {
 	TotalRequests     stats.Int64Val
 	TotalRowsReturned stats.Int64Val
 	TotalRowsScanned  stats.Int64Val
+
+	RebalanceTransferProgress *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -880,6 +882,10 @@ func (s *IndexerStats) Init() {
 	s.TotalRequests.Init()
 	s.TotalRowsReturned.Init()
 	s.TotalRowsScanned.Init()
+
+	s.RebalanceTransferProgress = &MapHolder{}
+	s.RebalanceTransferProgress.Init()
+	s.RebalanceTransferProgress.AddFilter(stats.IndexStatusFilter) // Retrieved via getIndexStatus using rebalance
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1252,6 +1258,8 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_requests", &is.TotalRequests)
 	statMap.AddStatValueFiltered("total_rows_returned", &is.TotalRowsReturned)
 	statMap.AddStatValueFiltered("total_rows_scanned", &is.TotalRowsScanned)
+
+	statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
 }
 
 func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
