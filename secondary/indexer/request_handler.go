@@ -93,11 +93,12 @@ type RestoreResponse struct {
 //
 
 type IndexStatusResponse struct {
-	Version     uint64        `json:"version,omitempty"`
-	Code        string        `json:"code,omitempty"`
-	Error       string        `json:"error,omitempty"`
-	FailedNodes []string      `json:"failedNodes,omitempty"`
-	Status      []IndexStatus `json:"status,omitempty"`
+	Version               uint64                 `json:"version,omitempty"`
+	Code                  string                 `json:"code,omitempty"`
+	Error                 string                 `json:"error,omitempty"`
+	FailedNodes           []string               `json:"failedNodes,omitempty"`
+	Status                []IndexStatus          `json:"status,omitempty"`
+	RebalTransferProgress map[string]interface{} `json:"rebalance_transfer_progress,omitempty"`
 }
 
 type IndexStatus struct {
@@ -660,7 +661,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		omitScheduled = true
 	}
 
-	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, constraints, getAll, omitScheduled)
+	indexStatuses, failedNodes, transferProgress, eTagResponse, err := m.getIndexStatus(creds, constraints, getAll, omitScheduled)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(indexStatuses))
 		eTagRequest := getETagFromHttpHeader(r)
@@ -669,6 +670,9 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 			sendNotModified(w, eTagRequest)
 		} else {
 			resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: indexStatuses}
+			if getAll {
+				resp.RebalTransferProgress = transferProgress
+			}
 			sendWithETag(http.StatusOK, w, resp, eTagResponse)
 		}
 		atomic.StoreUint64(&m.stReqFailCount, 0)
@@ -828,7 +832,8 @@ func (m *requestHandlerContext) IndexStatusErrorf(msg string) {
 //
 // omitScheduled true means do not include information about scheduled indexes.
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *constraints, getAll bool, omitScheduled bool) (
-	indexStatuses []IndexStatus, failedNodes []string, eTagResponse uint64, err error) {
+	indexStatuses []IndexStatus, failedNodes []string,
+	rebalanceTransferProgress map[string]interface{}, eTagResponse uint64, err error) {
 
 	m.mgr.CinfoProviderLockReqHandler.RLock()
 	defer m.mgr.CinfoProviderLockReqHandler.RUnlock()
@@ -838,7 +843,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 		errMsg := "RequestHandler::getIndexStatus ClusterInfoCache unavailable in IndexManager"
 		logging.Errorf(errMsg)
 		err = errors.New(errMsg)
-		return nil, nil, common.HTTP_VAL_ETAG_INVALID, err
+		return nil, nil, nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
 
 	ninfo.RLock()
@@ -862,7 +867,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 	isInstanceDeferred := make(map[common.IndexInstId]bool)
 	permissionCache := common.NewSessionPermissionsCache(creds)
 
-	keepKeys := make([]string, 0, len(nids)) // memory cache keys of current indexer nodes
+	keepKeys := make([]string, 0, len(nids))                 // memory cache keys of current indexer nodes
+	rebalanceTransferProgress = make(map[string]interface{}) // nodeId -> transfer progress map
 	for _, nid := range nids {
 		nodeMetaFromLocalCache := true  // is localMeta for current node from local cache?
 		nodeStatsFromLocalCache := true // is stats for current node from local cache?
@@ -944,6 +950,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 			nodeStatsFromLocalCache = false
 		}
 		statsAcrossHosts[hostKey] = stats
+
+		rebalanceTransferProgress[mgmtAddr] = stats.Get("rebalance_transfer_progress")
 
 		//
 		// Process all the data for current host
@@ -1137,12 +1145,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 		} else {
 			eTagResponse, err = m.setETagGetIndexStatus(metaAcrossHosts, statsAcrossHosts)
 			if err != nil {
-				return nil, nil, common.HTTP_VAL_ETAG_INVALID, err
+				return nil, nil, nil, common.HTTP_VAL_ETAG_INVALID, err
 			}
 		}
 	}
 
-	return indexStatuses, failedNodes, eTagResponse, nil
+	return indexStatuses, failedNodes, rebalanceTransferProgress, eTagResponse, nil
 }
 
 // getCachedIndexTopology is a stripped-down version of getIndexStatus that reads entirely from the
@@ -1476,7 +1484,7 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, constraints *constraints) (
 	statements []string, eTagResponse uint64, err error) {
 
-	indexStatuses, failedNodes, eTagResponse, err := m.getIndexStatus(creds, constraints, false, false)
+	indexStatuses, failedNodes, _, eTagResponse, err := m.getIndexStatus(creds, constraints, false, false)
 	if err != nil {
 		return nil, common.HTTP_VAL_ETAG_INVALID, err
 	}
