@@ -4594,6 +4594,7 @@ func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, 
 //1. "memory_used_actual"
 //2. "units_used_actual"
 //3. "num_tenants"
+//4. "num_index_repaired"
 func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interface{} {
 
 	defragUtilStats := make(map[string]map[string]interface{})
@@ -4602,6 +4603,7 @@ func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interfac
 		nodeUsageStats["memory_used_actual"] = indexerNode.MandatoryQuota
 		nodeUsageStats["units_used_actual"] = indexerNode.ActualUnits
 		nodeUsageStats["num_tenants"] = getNumTenantsForNode(indexerNode)
+		nodeUsageStats["num_index_repaired"] = getNumIndexRepaired(indexerNode)
 
 		defragUtilStats[indexerNode.NodeId] = nodeUsageStats
 	}
@@ -4708,4 +4710,16 @@ func computeUsageThresholdForScaleIn(usageThreshold *UsageThreshold) *UsageThres
 		UnitsQuota: usageThreshold.UnitsQuota,
 	}
 
+}
+
+//getNumIndexRepaired returns the count of repaired replicas for the given indexer node
+func getNumIndexRepaired(indexerNode *IndexerNode) uint64 {
+
+	var numIndexRepaired uint64
+	for _, index := range indexerNode.Indexes {
+		if index.initialNode == nil && !index.pendingCreate {
+			numIndexRepaired++
+		}
+	}
+	return numIndexRepaired
 }
