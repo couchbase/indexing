@@ -1567,6 +1567,31 @@ func (sr *ShardRebalancer) updateProgress() {
 		}
 	}
 }
+func getProgressForToken(statusResp *IndexStatusResponse, ttid string, token *c.TransferToken) float64 {
+	var node string
+	if token.ShardTransferTokenState == c.ShardTokenTransferShard {
+		node = token.SourceHost
+	} else if token.ShardTransferTokenState == c.ShardTokenRestoreShard {
+		node = token.DestHost
+	}
+
+	nodeLevelProgress, ok := statusResp.RebalTransferProgress[node]
+	if !ok || nodeLevelProgress == nil {
+		return 0.0
+	}
+
+	switch nodeLevelProgress.(type) {
+	case map[string]interface{}:
+		progress := nodeLevelProgress.(map[string]interface{})
+		if val, ok := progress[ttid]; !ok || val == nil {
+			return 0.0
+		} else {
+			return val.(float64)
+		}
+	default:
+		return 0.0
+	}
+}
 
 // Shard rebalancer's version of compute progress method
 func (sr *ShardRebalancer) computeProgress() float64 {
@@ -1586,35 +1611,40 @@ func (sr *ShardRebalancer) computeProgress() float64 {
 		return 0
 	}
 
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
+	// Make a shallow copy of the transfer token map
+	getTransferTokenMap := func() map[string]*c.TransferToken {
+		out := make(map[string]*c.TransferToken)
 
-	totTokens := len(sr.transferTokens)
+		sr.mu.Lock()
+		defer sr.mu.Unlock()
+
+		for ttid, token := range sr.transferTokens {
+			out[ttid] = token
+		}
+		return out
+	}
+
+	tokens := getTransferTokenMap()
+	totTokens := len(tokens)
 
 	transferWt := 0.35
 	restoreWt := 0.35
 	recoverWt := 0.3
 
 	var totalProgress float64
-	for _, tt := range sr.transferTokens {
+	for ttid, tt := range tokens {
 		state := tt.ShardTransferTokenState
 		// All states not tested in the if-else if are treated as 0% progress
 		if state == c.ShardTokenReady || state == c.ShardTokenMerged ||
 			state == c.ShardTokenCommit || state == c.ShardTokenDeleted {
 			totalProgress += 100.00
 		} else if state == c.ShardTokenTransferShard {
-			// Noop for now.
-			// TOOD: Read transfer stats and accurately estimate the transfer time
+			totalProgress += transferWt * getProgressForToken(statusResp, ttid, tt)
 		} else if state == c.ShardTokenRestoreShard {
 			// Transfer is complete. So, add progress related to transfer
-			totalProgress += transferWt * 100
-			// TOOD: Read restore stats and accurately estimate the transfer time
+			totalProgress += transferWt*100 + restoreWt*getProgressForToken(statusResp, ttid, tt)
 		} else if state == c.ShardTokenRecoverShard {
 			// If index state is recovered, get build progress
-
-			// TODO: Currently, the progress is only calculated for
-			// indexes in state INITIAL and CATCHUP. Calculate the
-			// progress for indexes in RECOVERED state as well
 			totalProgress += transferWt*100.0 + restoreWt*100.0
 			totalProgress += recoverWt * sr.getBuildProgressFromStatus(statusResp, tt)
 		}
@@ -2133,7 +2163,7 @@ func (sr *ShardRebalancer) updateTransferProgress() {
 					progress := 0.0
 					for _, stats := range perTokenStats {
 						if stats.totalBytes > 0 {
-							progress += ((float64)(stats.bytesWritten) * 100.0) / ((float64)(stats.totalBytes))
+							progress += (((float64)(stats.bytesWritten) * 100.0) / ((float64)(stats.totalBytes)))
 						} else {
 							progress = 100.0
 						}
