@@ -954,7 +954,11 @@ func newSecondaryIndexFromMetaData(
 	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
 	indexInfo := make(map[string]interface{})
-	indexInfo["num_replica"] = indexDefn.GetNumReplica()
+
+	// Do not expose num_replica in Serverless Deployment.
+	if common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
+		indexInfo["num_replica"] = indexDefn.GetNumReplica()
+	}
 	si = &secondaryIndex{
 		gsi:                    gsi,
 		bucketn:                indexDefn.Bucket,
