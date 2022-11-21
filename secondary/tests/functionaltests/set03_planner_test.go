@@ -1925,6 +1925,34 @@ var tenantAwarePlannerDefragFuncTestCases = []tenantAwarePlannerRebalFuncTestCas
 		"",
 		false,
 	},
+	{
+		"ScaleIn- 2 Subclusters, Both below LWM, Positive Case",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_h.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_h_out.json",
+		"",
+		false,
+	},
+	{
+		"ScaleIn- 2 Subclusters, One below LWM/ 1 Empty",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_i.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_i_out.json",
+		"",
+		false,
+	},
+	{
+		"ScaleIn- 3 Subclusters, One above HWM, one below LWM and 1 Empty. No ScaleIn.",
+		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_j.json",
+		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_j_out.json",
+		"",
+		false,
+	},
+	{
+		"ScaleIn- 3 Subclusters, One above HWM, one below LWM and 1 Empty. ScaleIn. ",
+		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_k.json",
+		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_k_out.json",
+		"",
+		false,
+	},
 }
 
 func tenantAwarePlannerDefragTests(t *testing.T) {

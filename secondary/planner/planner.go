@@ -86,6 +86,7 @@ const (
 )
 
 const cSubClusterLen = 2
+const cScaleInUsageThreshold = 20
 
 var ErrNoAvailableIndexer = errors.New("Cannot find any indexer that can add new indexes")
 
@@ -3094,6 +3095,16 @@ func (s *Solution) hasNewNodes() bool {
 	return false
 }
 
+//
+// Reset the new node flag
+//
+func (s *Solution) resetNewNodes() {
+
+	for _, indexer := range s.Placement {
+		indexer.isNew = false
+	}
+}
+
 //markDeletedNodes sets isDelete flag as true for deletec nodes
 func (s *Solution) markDeletedNodes(deletedNodes []string) error {
 
@@ -4291,6 +4302,8 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.ActualDiskUsage = o.ActualDiskUsage
 	r.ActualDrainRate = o.ActualDrainRate
 	r.ActualScanRate = o.ActualScanRate
+	r.MandatoryQuota = o.MandatoryQuota
+	r.ActualUnits = o.ActualUnits
 	r.meetConstraint = o.meetConstraint
 	r.numEmptyIndex = o.numEmptyIndex
 	r.hasEligible = o.hasEligible
