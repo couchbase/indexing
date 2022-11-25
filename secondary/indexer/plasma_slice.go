@@ -976,9 +976,12 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 	}
 
 	if len(key) > 0 {
-		mdb.main[workerId].Begin()
+		mdb.main[workerId].TryThrottle()
+		mdb.back[workerId].TryThrottle()
+
+		mdb.main[workerId].BeginNoThrottle()
 		defer mdb.main[workerId].End()
-		mdb.back[workerId].Begin()
+		mdb.back[workerId].BeginNoThrottle()
 		defer mdb.back[workerId].End()
 
 		// track if either of the backindex or mainindex InsertKV call is successful
@@ -1039,9 +1042,12 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		return 0
 	}
 
-	mdb.main[workerId].Begin()
+	mdb.main[workerId].TryThrottle()
+	mdb.back[workerId].TryThrottle()
+
+	mdb.main[workerId].BeginNoThrottle()
 	defer mdb.main[workerId].End()
-	mdb.back[workerId].Begin()
+	mdb.back[workerId].BeginNoThrottle()
 	defer mdb.back[workerId].End()
 
 	// The docid does not exist if the doc is initialized for the first time
@@ -1385,8 +1391,11 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 	workerId int, meterDelete bool) (ndel int, changed bool) {
 
+	mdb.back[workerId].TryThrottle()
+	mdb.main[workerId].TryThrottle()
+
 	// Delete entry from back and main index if present
-	mdb.back[workerId].Begin()
+	mdb.back[workerId].BeginNoThrottle()
 	defer mdb.back[workerId].End()
 
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
@@ -1404,8 +1413,10 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 
 		t0 := time.Now()
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
-		mdb.main[workerId].Begin()
+
+		mdb.main[workerId].BeginNoThrottle()
 		defer mdb.main[workerId].End()
+
 		err = mdb.back[workerId].DeleteKV(docid)
 		if err == nil {
 			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
@@ -1439,10 +1450,13 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 
 func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int, meterDelete bool) (nmut int) {
 
-	mdb.back[workerId].Begin()
+	mdb.back[workerId].TryThrottle()
+	mdb.main[workerId].TryThrottle()
+
+	mdb.back[workerId].BeginNoThrottle()
 	defer mdb.back[workerId].End()
 
-	mdb.main[workerId].Begin()
+	mdb.main[workerId].BeginNoThrottle()
 	defer mdb.main[workerId].End()
 
 	return mdb.deleteSecArrayIndexNoTx(docid, workerId, meterDelete)
