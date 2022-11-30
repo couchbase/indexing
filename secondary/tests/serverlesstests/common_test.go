@@ -112,6 +112,9 @@ func TestMain(m *testing.M) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.rebalance.serverless.transferBatchSize", 2, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_prefix")
 
+	err = secondaryindex.ChangeIndexerSettings("indexer.client_stats_refresh_interval", 500, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.client_stats_refresh_interval")
+
 	if clusterconfig.IndexUsing != "" {
 		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
 		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
@@ -949,16 +952,17 @@ func validateIndexPlacement(nodes []string, t *testing.T) {
 }
 
 // Indexer life cycle manager broadcasts stats every 5 seconds.
+// For the purse of testing, this has been changed to 500ms - ONLY FOR SERVERLESS tests
 // After the index is built, there exists a possibility
 // that GSI/N1QL client has received stats from some indexer nodes but yet
 // to receive from some other indexer nodes. In such a case, only the index
 // for which stats have been received will be picked up for scan and the
 // test fails with zero scan requests for other replicas.
 //
-// To avoid such a failure, sleep for 10 seconds after the index is built
-// so that the client has updated stats from all indexer nodes.
+// To avoid such a failure, sleep for 1010 milli seconds after the index
+// is built so that the client has updated stats from all indexer nodes.
 func waitForStatsUpdate() {
-	time.Sleep(10100 * time.Millisecond)
+	time.Sleep(1010 * time.Millisecond)
 }
 
 func getIndexStatusFromIndexer() (*tc.IndexStatusResponse, error) {
