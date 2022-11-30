@@ -1475,6 +1475,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.LSSFragMinFileSize": ConfigValue{
+		16 * 1024 * 1024,
+		"Min File Size to trigger log cleaning",
+		16 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePeriodicEvict": ConfigValue{
 		true,
 		"Enable Periodic Eviction",
@@ -1645,6 +1652,13 @@ var SystemConfig = Config{
 		80,
 		"Desired max LSS fragmentation percent",
 		80,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.LSSFragMinFileSize": ConfigValue{
+		16 * 1024 * 1024,
+		"Min File Size to trigger log cleaning",
+		16 * 1024 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},
