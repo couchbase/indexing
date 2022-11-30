@@ -67,10 +67,11 @@ type VbucketWorker struct {
 	runDoneCh       chan bool // Once run() method exits, this channel will be closed
 	runFinished     bool
 	// config params
-	logPrefix   string
-	mutChanSize int
-	opaque2     uint64 //client opaque
-	osoSnapshot bool
+	logPrefix        string
+	mutChanSize      int
+	opaque2          uint64 //client opaque
+	osoSnapshot      bool
+	collectionsAware bool
 
 	// For resizing encodeBuf periodically
 	lastBufferSizeCheckTime        time.Time
@@ -103,7 +104,8 @@ func (stats *WorkerStats) IsClosed() bool {
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
 func NewVbucketWorker(
 	id int, feed *Feed, bucket, keyspaceId string,
-	opaque uint16, config c.Config, opaque2 uint64) *VbucketWorker {
+	opaque uint16, config c.Config, opaque2 uint64,
+	collectionsAware bool) *VbucketWorker {
 
 	mutChanSize := config["mutationChanSize"].Int()
 	encodeBufSize := config["encodeBufSize"].Int()
@@ -130,6 +132,7 @@ func NewVbucketWorker(
 		configuredEncodeBufSize: encodeBufSize,
 		stats:                   &WorkerStats{},
 		opaque2:                 opaque2,
+		collectionsAware:        collectionsAware,
 	}
 	worker.stats.Init()
 	worker.stats.datach = worker.datach
@@ -626,6 +629,12 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 
 		isTxn := (m.Opcode == mcd.DCP_MUTATION) && !m.IsJSON() && m.HasXATTR() && bytes.HasPrefix(m.Key, transactionMutationPrefix)
+
+		//The optimization to exclude transaction records can only be done
+		//if the indexer is collection aware(>= 7.0) so that/it can
+		//understand/process UpdateSeqno message. A 6.x indexer will ignore
+		//UpdateSeqno message and can lead to index build hang.
+		isTxn = isTxn && worker.collectionsAware
 		if isTxn {
 			worker.stats.txnSystemMut.Add(1)
 		}
