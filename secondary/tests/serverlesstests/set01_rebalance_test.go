@@ -43,6 +43,7 @@ func TestTwoNodeSwapRebalance(t *testing.T) {
 			}
 		}
 	}
+	testDDLAfterRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[3]}, t)
 }
 
 // Prior to this test, indexes are only on Nodes[3], Nodes[4]
@@ -65,6 +66,7 @@ func TestSingleNodeSwapRebalance(t *testing.T) {
 			}
 		}
 	}
+	testDDLAfterRebalance([]string{clusterconfig.Nodes[2], clusterconfig.Nodes[3]}, t)
 }
 
 // Prior to this, the indexes existed on Nodes[2] & Nodes[3].
@@ -112,6 +114,7 @@ func TestReplicaRepair(t *testing.T) {
 	}
 
 	verifyStorageDirContents(t)
+	testDDLAfterRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
 }
 
 // Prior to this, the indexes existed on Nodes[1] & Nodes[2].
@@ -166,6 +169,7 @@ func TestReplicaRepairAndSwapRebalance(t *testing.T) {
 	}
 
 	verifyStorageDirContents(t)
+	testDDLAfterRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, t)
 }
 
 func TestBuildDeferredIndexesAfterRebalance(t *testing.T) {
