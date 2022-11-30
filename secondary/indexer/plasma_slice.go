@@ -531,7 +531,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New4(slice.idxDefn.Bucket, *mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX, isInitialBuild)
+		tenant := fmt.Sprintf("%v_%v", slice.idxDefn.Bucket, slice.idxDefn.BucketUUID)
+		slice.mainstore, mErr = plasma.New4(tenant, *mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX, isInitialBuild)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -543,7 +544,9 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New4(slice.idxDefn.Bucket, *bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX, isInitialBuild)
+
+			tenant := fmt.Sprintf("%v_%v", slice.idxDefn.Bucket, slice.idxDefn.BucketUUID)
+			slice.backstore, bErr = plasma.New4(tenant, *bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX, isInitialBuild)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
