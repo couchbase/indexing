@@ -91,29 +91,46 @@ func TestShardIdMapping(t *testing.T) {
 
 func createAllIndexes(bucket, scope, collection string, t *testing.T) {
 	// Create a variety of indexes on each bucket
-	// Create a normal index
-	n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
-	execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
 
-	// Create an index with defer_build
-	n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(company) with {\"defer_build\":true}", indexes[1], bucket, scope, collection)
-	execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[1], "Created", t)
+	// For local testing, if only a few indexes are required in the test (say only indexes[0:2]),
+	// then these "if" conditions based on length checks will help to filter the unused indexes
+	// from creation. Note that the order of "indexes" should not change for this code to work
+	// Otherwise, indexes will be created with wrong names
+	if len(indexes) > 0 {
+		// Create a normal index
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
+	}
 
-	// Create a primary index
-	n1qlStatement = fmt.Sprintf("create primary index `%v` on `%v`.`%v`.`%v`", indexes[2], bucket, scope, collection)
-	execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[2], "Ready", t)
+	if len(indexes) > 1 {
+		// Create an index with defer_build
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(company) with {\"defer_build\":true}", indexes[1], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[1], "Created", t)
+	}
 
-	// Create a primary index with defer_build:true
-	n1qlStatement = fmt.Sprintf("create primary index `%v` on `%v`.`%v`.`%v` with {\"defer_build\":true}", indexes[3], bucket, scope, collection)
-	execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[3], "Created", t)
+	if len(indexes) > 2 {
+		// Create a primary index
+		n1qlStatement := fmt.Sprintf("create primary index `%v` on `%v`.`%v`.`%v`", indexes[2], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[2], "Ready", t)
+	}
 
-	// Create a partitioned index
-	n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emalid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
-	execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[4], "Ready", t)
+	if len(indexes) > 3 {
+		// Create a primary index with defer_build:true
+		n1qlStatement := fmt.Sprintf("create primary index `%v` on `%v`.`%v`.`%v` with {\"defer_build\":true}", indexes[3], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[3], "Created", t)
+	}
 
-	// Create a partitioned index with defer_build:true
-	n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(balance) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
-	execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[5], "Created", t)
+	if len(indexes) > 4 {
+		// Create a partitioned index
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emalid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[4], "Ready", t)
+	}
+
+	if len(indexes) > 5 {
+		// Create a partitioned index with defer_build:true
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(balance) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[5], "Created", t)
+	}
 }
 
 // Helper function that can be used to verify whether an index is dropped or not
