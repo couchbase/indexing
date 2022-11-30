@@ -22,6 +22,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
+	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -1038,4 +1039,105 @@ func cleanupStorageDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error removing rebal storage dir: %v, err: %v", absRebalStorageDirPath, err)
 	}
+}
+
+func getServerGroupForNode(node string) string {
+	group_1 := "Group 1"
+	group_2 := "Group 2"
+	switch node {
+	case clusterconfig.Nodes[0], clusterconfig.Nodes[2], clusterconfig.Nodes[4]:
+		return group_1
+	case clusterconfig.Nodes[1], clusterconfig.Nodes[3], clusterconfig.Nodes[5]:
+		return group_2
+	default:
+		return ""
+	}
+}
+
+func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation bool, t *testing.T) {
+
+	for _, node := range addNodes {
+		serverGroup := getServerGroupForNode(node)
+		if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, node, "index", serverGroup); err != nil {
+			FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: %v", node, serverGroup), t)
+		}
+	}
+
+	err := cluster.RemoveNodes(kvaddress, clusterconfig.Username, clusterconfig.Password, removeNodes)
+	if skipValidation { // Some crash tests have their own validation. Hence, skip the validation here
+		if err != nil && strings.Contains(err.Error(), "Rebalance failed") {
+			return
+		} else if err == nil {
+			t.Fatalf("Expected rebalance failure, but rebalance passed")
+		} else {
+			FailTestIfError(err, fmt.Sprintf("Observed error: %v during rebalabce", err), t)
+		}
+	}
+
+	if err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", removeNodes), t)
+	}
+
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	// This sleep will ensure that the stats are propagated to client
+	// Also, any pending rebalance cleanup is expected to be done during
+	// this time - so that validateShardFiles can see cleaned up directories
+	waitForStatsUpdate()
+
+	validateIndexPlacement(addNodes, t)
+	// Validate the data files on nodes that have been rebalanced out
+	for _, removedNode := range removeNodes {
+		validateShardFiles(removedNode, t)
+	}
+
+	// All indexes are created now. Get the shardId's for each node
+	for _, addedNode := range addNodes {
+		validateShardIdMapping(addedNode, t)
+	}
+
+	verifyStorageDirContents(t)
+}
+
+// Due to shard locking, if there is a bug in shard
+// locking management, then index DDL operations after a
+// failed rebalance can be caught using this test
+func testDDLAfterRebalance(t *testing.T) {
+	// Drop indexes[0]
+	index := indexes[0]
+	collection := "c1"
+	for _, bucket := range buckets {
+
+		err := secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
+		FailTestIfError(err, "Error while dropping index", t)
+
+	}
+
+	for _, bucket := range buckets {
+
+		waitForReplicaDrop(index, bucket, scope, collection, 0, t) // wait for replica drop-0
+		waitForReplicaDrop(index, bucket, scope, collection, 1, t) // wait for replica drop-1
+
+	}
+
+	// Recreate the index again
+	for _, bucket := range buckets {
+
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
+
+	}
+	// Reset all indexer stats
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	waitForStatsUpdate()
+
+	partns := indexPartnIds[0]
+	for _, bucket := range buckets {
+		// Scan only the newly created index
+		scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+	}
+
+	validateIndexPlacement([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
+	validateShardIdMapping(clusterconfig.Nodes[1], t)
+	validateShardIdMapping(clusterconfig.Nodes[2], t)
 }
