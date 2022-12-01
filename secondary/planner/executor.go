@@ -2632,7 +2632,6 @@ func findSubClusterForIndex(indexers []*IndexerNode,
 		}
 		for _, checkIdx := range indexer.Indexes {
 			if index.DefnId == checkIdx.DefnId &&
-				index.Instance.Version == checkIdx.Instance.Version &&
 				index.PartnId == checkIdx.PartnId {
 				subCluster = append(subCluster, indexer)
 			}
@@ -4379,7 +4378,6 @@ func findPairNodeForIndexer(node *IndexerNode, allIndexers []*IndexerNode) *Inde
 			}
 			for _, checkIdx := range indexer.Indexes {
 				if index.DefnId == checkIdx.DefnId &&
-					index.Instance.Version == checkIdx.Instance.Version &&
 					index.PartnId == checkIdx.PartnId {
 					return indexer
 				}
