@@ -75,6 +75,7 @@ type KeyspaceStats struct {
 	avgDcpSnapSize     stats.Uint64Val
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
+	numMaintDocsQueued stats.Int64Val
 	numNonAlignTS      stats.Int64Val
 	numRollbacks       stats.Int64Val
 	numRollbacksToZero stats.Int64Val
@@ -92,6 +93,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.numRollbacksToZero.Init()
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
+	s.numMaintDocsQueued.Init()
 	s.tsQueueSize.Init()
 	s.numNonAlignTS.Init()
 	s.avgDcpSnapSize.Init()
@@ -106,6 +108,7 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_rollbacks_to_zero", &s.numRollbacksToZero)
 	statMap.AddStatValueFiltered("mutation_queue_size", &s.mutationQueueSize)
 	statMap.AddStatValueFiltered("num_mutations_queued", &s.numMutationsQueued)
+	statMap.AddStatValueFiltered("num_maint_docs_queued", &s.numMaintDocsQueued)
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
 	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
 	statMap.AddStatValueFiltered("avg_dcp_snap_size", &s.avgDcpSnapSize)

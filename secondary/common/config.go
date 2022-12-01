@@ -3013,6 +3013,30 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.shardRebalance.cancelOrPanic": ConfigValue{
+		"none",
+		"Option to cancel rebalance or panic indexer. Used only for CI testing. Not a production setting",
+		"none",
+		false, // mutabale
+		false, // case-insensitive
+	},
+	"indexer.shardRebalance.cancelOrPanicTag": ConfigValue{
+		"none",
+		"The tag at which indexer will cancel rebalance or panics. Tags are defined " +
+			" based on the code location in the shard_rebalancer.go code. " +
+			"Used only for CI testing. Not a production setting",
+		"none",
+		false, // mutabale
+		false, // case-insensitive
+	},
+	"indexer.shardRebalance.cancelOrPanicNode": ConfigValue{
+		"none",
+		"The node on which rebalance cancel or panic is invoked. Used for source " +
+			" and destination node processing. Used only for CI testing. Not a production setting",
+		"none",
+		false, // mutabale
+		false, // case-insensitive
+	},
 	"indexer.settings.rebalance.redistribute_indexes": ConfigValue{
 		false, // keep in sync with index_settings_manager.erl
 		"redistribute indexes for optimal placement during rebalance." +
@@ -3493,6 +3517,20 @@ var SystemConfig = Config{
 		3,
 		"Maximum HTTP level retry attempts for an S3 request. This is aws sdk default as well.",
 		3,
+		false,
+		false,
+	},
+	"indexer.serverless.scan.throttle.queued_threshold": ConfigValue{
+		500,
+		"Pause scan if queued mutation exceed threshold per bucket",
+		500,
+		false,
+		false,
+	},
+	"indexer.serverless.scan.throttle.pause_duration": ConfigValue{
+		2,
+		"pause interval when queued mutation exceeds threshold",
+		2,
 		false,
 		false,
 	},

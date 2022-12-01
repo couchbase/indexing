@@ -574,6 +574,7 @@ func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, s
 	tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket,
 		n1qlStatement, false, gocb.RequestPlus)
 
+	log.Printf("Executed N1ql statement: %v", n1qlStatement)
 	// Wait for index created
 	waitForIndexStatus(bucket, scope, collection, index, status, t)
 	waitForIndexStatus(bucket, scope, collection, index+" (replica 1)", status, t)
@@ -676,6 +677,8 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
 	}
 
+	var finalErr error
+
 	for i := 0; i < 30; i++ {
 		client := &http.Client{}
 		address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
@@ -684,9 +687,16 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 		req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 		resp, err := client.Do(req)
-		// todo : error out if response is error
-		tc.HandleError(err, "Get RebalanceCleanupStatus")
-		defer resp.Body.Close()
+		if resp != nil {
+			defer resp.Body.Close()
+		}
+		if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
+			finalErr = err
+			time.Sleep(1 * time.Second)
+			continue
+		} else {
+			finalErr = nil
+		}
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 			log.Printf(address)
@@ -704,6 +714,8 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 		}
 		time.Sleep(1 * time.Second)
 	}
+	// todo : error out if response is error
+	tc.HandleError(finalErr, "Get RebalanceCleanupStatus")
 }
 
 // Return shardID's for each bucket on this node
@@ -837,6 +849,9 @@ func getShardFiles(nodeAddr string, t *testing.T) []string {
 func getFileList(path string) []string {
 	files, err := ioutil.ReadDir(path)
 	if err != nil {
+		if strings.Contains(err.Error(), "no such file or directory") {
+			return nil
+		}
 		log.Fatal(err)
 	}
 	out := make([]string, 0)
@@ -853,6 +868,9 @@ func getFileList(path string) []string {
 func verifyStorageDirContents(t *testing.T) {
 	files, err := ioutil.ReadDir(absRebalStorageDirPath)
 	if err != nil {
+		if strings.Contains(err.Error(), "no such file or directory") {
+			return
+		}
 		log.Fatal(err)
 	}
 	r, _ := regexp.Compile("^plasma_storage($|/Rebalance($|/([0-9a-f]+)($|/TransferToken($|/TransferToken([0-9a-f]{1,2}:){7}([0-9a-f]{1,2})$))))")
@@ -981,6 +999,25 @@ func getIndexPlacement() (map[string]bool, error) {
 
 	}
 	return allHosts, nil
+}
+
+func makeStorageDir(t *testing.T) {
+	err := os.Mkdir(SHARD_REBALANCE_DIR, 0755)
+	if err != nil {
+		t.Fatalf("Error while creating rebalance dir: %v", err)
+	}
+
+	cwd, err := filepath.Abs(".")
+	FailTestIfError(err, "Error while finding absolute path", t)
+	log.Printf("TestShardRebalanceSetup: Using %v as storage dir for rebalance", absRebalStorageDirPath)
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.blob_storage_bucket", cwd, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_bucket")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.blob_storage_prefix", SHARD_REBALANCE_DIR, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_bucket")
+
+	absRebalStorageDirPath = cwd + "/" + SHARD_REBALANCE_DIR
 }
 
 func cleanupStorageDir(t *testing.T) {

@@ -102,6 +102,9 @@ type StreamState struct {
 	//only used to log debug information for throttle error and avoid log flooding
 	streamKeyspaceIdThrottleDebugLogTime map[common.StreamId]KeyspaceIdThrottleDebugLogTime
 
+	// throttling duration
+	streamKeyspaceIdThrottleDuration map[common.StreamId]KeyspaceIdThrottleDuration
+
 	//used to save numVBuckets
 	streamKeyspaceIdNumVBuckets map[common.StreamId]KeyspaceIdNumVBucketsMap
 }
@@ -158,6 +161,7 @@ type KeyspaceIdLastKVSeqFetch map[string]time.Time
 type KeyspaceIdLastMergeCheckTime map[string]time.Time
 type KeyspaceIdBlockMergeForRecovery map[string]bool
 type KeyspaceIdThrottleDebugLogTime map[string]uint64
+type KeyspaceIdThrottleDuration map[string]int64
 
 type KeyspaceIdNumVBucketsMap map[string]int
 
@@ -232,6 +236,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdLastMergeCheckTime:     make(map[common.StreamId]KeyspaceIdLastMergeCheckTime),
 		streamKeyspaceIdBlockMergeForRecovery:  make(map[common.StreamId]KeyspaceIdBlockMergeForRecovery),
 		streamKeyspaceIdThrottleDebugLogTime:   make(map[common.StreamId]KeyspaceIdThrottleDebugLogTime),
+		streamKeyspaceIdThrottleDuration:       make(map[common.StreamId]KeyspaceIdThrottleDuration),
 		streamKeyspaceIdNumVBuckets:            make(map[common.StreamId]KeyspaceIdNumVBucketsMap),
 	}
 
@@ -383,6 +388,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdThrottleDebugLogTime := make(KeyspaceIdThrottleDebugLogTime)
 	ss.streamKeyspaceIdThrottleDebugLogTime[streamId] = keyspaceIdThrottleDebugLogTime
 
+	keyspaceIdThrottleDuration := make(KeyspaceIdThrottleDuration)
+	ss.streamKeyspaceIdThrottleDuration[streamId] = keyspaceIdThrottleDuration
+
 	keyspaceIdNumVBucketsMap := make(KeyspaceIdNumVBucketsMap)
 	ss.streamKeyspaceIdNumVBuckets[streamId] = keyspaceIdNumVBucketsMap
 
@@ -440,6 +448,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdLastMergeCheckTime[streamId][keyspaceId] = time.Time{}
 	ss.streamKeyspaceIdBlockMergeForRecovery[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId] = uint64(time.Now().UnixNano())
+	ss.streamKeyspaceIdThrottleDuration[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdNumVBuckets[streamId][keyspaceId] = numVBuckets
 
 	if streamId == common.INIT_STREAM {
@@ -516,6 +525,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdForceRecovery[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdBlockMergeForRecovery[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdThrottleDebugLogTime[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdThrottleDuration[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdNumVBuckets[streamId], keyspaceId)
 
 	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {
@@ -575,6 +585,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdLastMergeCheckTime, streamId)
 	delete(ss.streamKeyspaceIdBlockMergeForRecovery, streamId)
 	delete(ss.streamKeyspaceIdThrottleDebugLogTime, streamId)
+	delete(ss.streamKeyspaceIdThrottleDuration, streamId)
 	delete(ss.streamKeyspaceIdNumVBuckets, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE

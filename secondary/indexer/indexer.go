@@ -4879,8 +4879,8 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 		return
 	}
 
+	var scope, collection string
 	//get the collection name from index inst map(this may already be gone from manifest)
-	var collection, scope string
 	for _, index := range idx.indexInstMap {
 		if index.Defn.CollectionId == collectionId &&
 			index.Stream == streamId &&
@@ -4893,6 +4893,18 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 			bucketUUID = index.Defn.BucketUUID
 			break
 		}
+	}
+
+	// If this if condition is true, then it means that there are no instances
+	// in the index instance map with the collectionId received along with
+	// processCollectionDrop. This can happen if the collectionDrop message
+	// is received twice and indexer could not remove indexes of the collection
+	// during first message due to flush in progress. In such a case, return from
+	// this function as there are no eligible index instances for deletion
+	if collection == "" {
+		logging.Verbosef("Indexer::processCollectionDrop No Index Found for Stream %v Collection Id %v.",
+			streamId, collectionId)
+		return
 	}
 
 	// delete index inst on the keyspace from metadata repository and

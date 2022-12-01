@@ -73,6 +73,9 @@ type scanCoordinator struct {
 	meteringMgr     *MeteringThrottlingMgr
 
 	bucketNameNumVBucketsMapHolder common.BucketNameNumVBucketsMapHolder
+
+	totalMaintDocsQueued int64
+	numKeyspaces         int64
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -140,6 +143,9 @@ func (s *scanCoordinator) SetMeteringMgr(mtMgr *MeteringThrottlingMgr) {
 }
 
 func (s *scanCoordinator) run() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
 loop:
 	for {
 		select {
@@ -159,6 +165,8 @@ loop:
 				//supervisor channel closed. exit
 				break loop
 			}
+		case <-ticker.C:
+			s.gatherStats()
 		}
 	}
 }
@@ -247,6 +255,29 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 				category: SCAN_COORD}}
 	}
 
+}
+
+func (s *scanCoordinator) gatherStats() {
+
+	stats := s.stats.Get()
+
+	// update number of mutations queued in maint stream
+	if stats != nil {
+		totalQueued := int64(0)
+		numKeyspaces := int64(0)
+		for streamId, statsMap := range stats.GetKeyspaceStatsMap() {
+			if streamId == common.MAINT_STREAM {
+				for _, keyspaceStats := range statsMap {
+					if keyspaceStats != nil {
+						totalQueued += keyspaceStats.numMaintDocsQueued.Value()
+					}
+					numKeyspaces++
+				}
+			}
+		}
+		atomic.StoreInt64(&s.totalMaintDocsQueued, totalQueued)
+		atomic.StoreInt64(&s.numKeyspaces, numKeyspaces)
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -343,6 +374,17 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	cpuThrottleDelayMs := s.cpuThrottle.GetActiveThrottleDelayMs()
 	if cpuThrottleDelayMs > 0 {
 		time.Sleep(time.Duration(cpuThrottleDelayMs) * time.Millisecond)
+	}
+
+	// Pause the scan request if there are too many pending mutation
+	if common.IsServerlessDeployment() {
+		if cfg := s.config.Load(); cfg != nil {
+			threshold := int64(cfg["serverless.scan.throttle.queued_threshold"].Int()) * atomic.LoadInt64(&s.numKeyspaces)
+			totalQueued := atomic.LoadInt64(&s.totalMaintDocsQueued)
+			if threshold > 0 && totalQueued > threshold {
+				time.Sleep(time.Millisecond * time.Duration(cfg["serverless.scan.throttle.pause_duration"].Int()))
+			}
+		}
 	}
 
 	// Pre-scan checks passed, so get a snapshot for the scan
@@ -1107,6 +1149,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 				}
 			}
 		}
+
 		replych <- true
 	}()
 }

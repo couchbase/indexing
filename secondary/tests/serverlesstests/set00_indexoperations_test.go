@@ -68,7 +68,28 @@ func TestShardIdMapping(t *testing.T) {
 			}
 			CreateDocsForCollection(bucket, cid, numDocs)
 
-			// Create a variety of indexes on each bucket
+			createAllIndexes(bucket, scope, collection, t)
+		}
+	}
+
+	validateShardIdMapping(clusterconfig.Nodes[1], t)
+	validateShardIdMapping(clusterconfig.Nodes[2], t)
+	waitForStatsUpdate()
+
+	for _, bucket := range buckets {
+		for _, collection := range collections {
+			for i, index := range indexes {
+				partns := indexPartnIds[i]
+				if i%2 == 0 { // Scan all non-deferred indexes
+					scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+				}
+			}
+		}
+	}
+}
+
+func createAllIndexes(bucket, scope, collection string, t *testing.T) {
+	// Create a variety of indexes on each bucket
 			// Create a normal index
 			n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
@@ -92,21 +113,4 @@ func TestShardIdMapping(t *testing.T) {
 			// Create a partitioned index with defer_build:true
 			n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(balance) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[5], "Created", t)
-		}
-	}
-
-	validateShardIdMapping(clusterconfig.Nodes[1], t)
-	validateShardIdMapping(clusterconfig.Nodes[2], t)
-	waitForStatsUpdate()
-
-	for _, bucket := range buckets {
-		for _, collection := range collections {
-			for i, index := range indexes {
-				partns := indexPartnIds[i]
-				if i%2 == 0 { // Scan all non-deferred indexes
-					scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
-				}
-			}
-		}
-	}
 }

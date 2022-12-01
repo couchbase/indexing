@@ -58,6 +58,8 @@ type timekeeper struct {
 	cinfoProviderLock *sync.RWMutex
 
 	meteringMgr *MeteringThrottlingMgr
+
+	lastStatsTime int64
 }
 
 type InitialBuildInfo struct {
@@ -3069,6 +3071,11 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 				res, sleepDuration, err := tk.meteringMgr.CheckWriteThrottle(bucket)
 
 				if err == nil && res == CheckResultThrottle {
+					// Remember the time spent in throttling
+					tk.lock.Lock()
+					tk.ss.streamKeyspaceIdThrottleDuration[streamId][keyspaceId] += int64(sleepDuration)
+					tk.lock.Unlock()
+
 					logging.Debugf("Timekeeper::sendNewStabilityTs: Flusher observed write throttles for keyspaceid %v streamId %v duration %v", keyspaceId, streamId, sleepDuration)
 					time.Sleep(sleepDuration)
 				} else {
@@ -4308,6 +4315,47 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.progressStatTime.Set(progressStatTime)
 			}
 		}
+
+		if common.IsServerlessDeployment() {
+			for stream, keyspaceQueuedMap := range queuedMap {
+				for keyspaceId, queued := range keyspaceQueuedMap {
+					// For maint stream, keep track of the mutations being queued.  This stat is used to determine
+					// if scan coordinator has to scale back on scan in order to give mutation some time to catch up.
+					// Mutation cannot catch up could be due to CPU saturation, IO saturation, or golang scheduler is
+					// not able to give enough CPU time to mutation goroutines.
+					tk.lock.Lock()
+					throttleDuration := tk.ss.streamKeyspaceIdThrottleDuration[stream][keyspaceId]
+					tk.ss.streamKeyspaceIdThrottleDuration[stream][keyspaceId] = 0
+					tk.lock.Unlock()
+
+					if stream == common.MAINT_STREAM {
+						if stats := tk.stats.Get(); stats != nil {
+							if keyspaceStats := stats.GetKeyspaceStats(stream, keyspaceId); keyspaceStats != nil {
+
+								if tk.lastStatsTime > 0 {
+									// mutation can be queued due to throttling.  Calibrate the number of queued mutation
+									// based on the time when keyspace is not being throttled.
+									elapsed := time.Now().UnixNano() - tk.lastStatsTime
+									if throttleDuration > elapsed {
+										throttleDuration = elapsed
+									}
+
+									adjust := 1.0
+									if elapsed > 0 {
+										adjust = float64(elapsed-throttleDuration) / float64(elapsed)
+									}
+
+									adjustedQueued := int64(float64(queued) * adjust)
+									keyspaceStats.numMaintDocsQueued.Set(adjustedQueued)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		tk.lastStatsTime = time.Now().UnixNano()
 
 		replych <- true
 	}()
