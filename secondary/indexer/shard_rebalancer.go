@@ -602,7 +602,9 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 	if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeCopy && siblingId == "" { // only replica repair case
 		// Since this is replica repair, do not drop the shard data. Only cleanup the transferred data
 		// and unlock the shards
-		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Initiating cleanup of transfer & shard unlocking for token: %v", sourceId)
+		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
+
+		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
 		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
 
 		sourceToken.ShardTransferTokenState = common.ShardTokenCommit
@@ -613,6 +615,12 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 
 		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", sourceId)
 		sr.queueDropShardRequests(sourceId)
+
+		// Skip unlocking shards as the shards are going to be destroyed
+		// Clean-up any transferred data - Currently, plasma cleans up transferred data on a successful
+		// restore. This is only a safety operation from indexer. Coming to this code means that restore
+		// is successful and this operation becomes a no-op
+		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
 
 		siblingToken := sr.getTokenById(siblingId)
 		if siblingToken != nil && siblingToken.TransferMode == common.TokenTransferModeCopy && siblingToken.SourceId == sr.nodeUUID {
@@ -645,6 +653,19 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	defer sr.wg.Done()
 
 	start := time.Now()
+
+	// Lock shard to prevent any index instance mapping while transfer is in progress
+	// Unlock of the shard happens:
+	// (a) after shard transfer is successful & destination node has recovered the shard
+	// (b) If any error is encountered, clean-up from indexer will unlock the shards
+	err := lockShards(tt.ShardIds, sr.supvMsgch)
+	if err != nil {
+		logging.Errorf("ShardRebalancer::startShardTransfer Observed error: %v when locking shards: %v", err, tt.ShardIds)
+
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
 
 	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
@@ -685,6 +706,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
 						tt.Destination, shardId, shardPaths, err)
 
+					unlockShards(tt.ShardIds, sr.supvMsgch)
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
 					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid, tt, err)
 					return
@@ -862,6 +884,9 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		// If nodes sees a commit token, then DDL can be allowed on
 		// the bucket
 		sr.updateInMemToken(ttid, tt, "dest")
+		// Unlock the shards that are locked before initiating recovery
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+
 		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
 
 		tt.ShardTransferTokenState = c.ShardTokenDeleted
@@ -977,6 +1002,14 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		return
 	}
 	defer sr.wg.Done()
+
+	if err := lockShards(tt.ShardIds, sr.supvMsgch); err != nil {
+		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
+
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
 
 	setErrInTransferToken := func(err error) {
 		if err != ErrRebalanceCancel && err != ErrRebalanceDone {
@@ -2398,4 +2431,46 @@ func isIndexDeletedDuringRebal(errMsg string) bool {
 
 func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
+}
+
+func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
+
+	respCh := make(chan map[common.ShardId]error)
+	msg := &MsgLockUnlockShards{
+		mType:    LOCK_SHARDS,
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	supvMsgch <- msg
+
+	errMap := <-respCh
+	for _, err := range errMap { // Return on the first error seen
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func unlockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
+
+	respCh := make(chan map[common.ShardId]error)
+	msg := &MsgLockUnlockShards{
+		mType:    UNLOCK_SHARDS,
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	supvMsgch <- msg
+
+	errMap := <-respCh
+	for _, err := range errMap { // Return on the first error seen
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

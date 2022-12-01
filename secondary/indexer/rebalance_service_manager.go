@@ -1340,6 +1340,8 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Initiating clean-up for ttid: %v, "+
 			"shardIds: %v, destination: %v", ttid, tt.ShardIds, tt.Destination)
 
+		unlockShards(tt.ShardIds, m.supvMsgch)
+
 		respCh := make(chan bool)
 		msg := &MsgShardTransferCleanup{
 			shardPaths:      nil,
@@ -1371,6 +1373,9 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Deleted ttid: %v, "+
 			"from metakv", ttid)
 
+	case c.ShardTokenRestoreShard, c.ShardTokenRecoverShard:
+		unlockShards(tt.ShardIds, m.supvMsgch)
+
 	case c.ShardTokenReady:
 		// If this token is in Ready state, check for the presence of
 		// a tranfser token with ShardTokenDropOnSource state. If it
@@ -1390,7 +1395,9 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup will be invoked on destination node
+		} else { // Else, cleanup will be invoked on destination node. Unlock shards on source
+			unlockShards(tt.ShardIds, m.supvMsgch)
+
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 		}
@@ -1480,10 +1487,17 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup on source will be triggered
+		} else { // Else, cleanup on source will be triggered as rebalance is complete for this tenant
+			unlockShards(tt.ShardIds, m.supvMsgch)
+
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 		}
+
+	case c.ShardTokenCommit:
+
+		// Unlock the shards that are locked before initiating recovery
+		unlockShards(tt.ShardIds, m.supvMsgch)
 	}
 	return nil
 }

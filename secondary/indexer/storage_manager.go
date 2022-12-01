@@ -260,7 +260,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case SHARD_TRANSFER_CLEANUP,
 		START_SHARD_RESTORE,
 		DESTROY_LOCAL_SHARD,
-		MONITOR_SLICE_STATUS:
+		MONITOR_SLICE_STATUS,
+		LOCK_SHARDS,
+		UNLOCK_SHARDS:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		}
