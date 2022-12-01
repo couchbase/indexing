@@ -209,7 +209,11 @@ func N1QLScanAll(indexName, bucketName, scopeName, collectionName, server string
 		return nil, err
 	}
 
-	logging.SetLogLevel(logging.Error)
+	if logLevel == logging.LogLevel(logging.Fatal) {
+		logging.SetLogLevel(logging.Fatal)
+	} else {
+		logging.SetLogLevel(logging.Error)
+	}
 
 	tctx := &testContext{}
 	conn, err := datastore.NewSizedIndexConnection(100000, tctx)

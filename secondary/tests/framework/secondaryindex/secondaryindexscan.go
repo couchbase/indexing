@@ -7,6 +7,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
@@ -15,6 +16,11 @@ import (
 var CheckCollation = false
 var UseClient = "gsi"
 var DescCollation = false
+var logLevel logging.LogLevel = logging.Error
+
+func SetLogLevel(level logging.LogLevel) {
+	logLevel = level
+}
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency, client *qc.GsiClient) (tc.ScanResponseActual, error) {
@@ -257,7 +263,9 @@ func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, l
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	if UseClient == "n1ql" {
-		log.Printf("Using n1ql client")
+		if logLevel != logging.Fatal {
+			log.Printf("Using n1ql client")
+		}
 		return N1QLScanAll(indexName, bucketName, scopeName, collectionName, server, limit, consistency, vector)
 	}
 

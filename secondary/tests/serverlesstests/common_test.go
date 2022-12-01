@@ -148,6 +148,9 @@ func TestMain(m *testing.M) {
 		cleanupStorageDir(&testing.T{})
 	}
 
+	// For serverless tests, set fatal log-level to control logging
+	secondaryindex.SetLogLevel(logging.Fatal)
+
 	os.Exit(m.Run())
 }
 
