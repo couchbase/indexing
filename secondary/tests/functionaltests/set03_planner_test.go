@@ -1745,6 +1745,13 @@ var tenantAwarePlannerSwapRebalFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"",
 		true,
 	},
+	{
+		"Swap Rebalance - 1 SG, Swap 1 node - Failed swap rebalance",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_f.json",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_f_out.json",
+		"",
+		false,
+	},
 }
 
 func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
