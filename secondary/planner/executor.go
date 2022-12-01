@@ -4135,6 +4135,8 @@ func findPlacementForDeletedNodes(solution *Solution, usageThreshold *UsageThres
 	deletedNodes := solution.getDeleteNodes()
 	newNodes := solution.getNewNodes()
 
+	logging.Infof("%v Deleted Nodes %v", _findPlacementForDeletedNodes, deletedNodes)
+
 	err := moveTenantsFromDeletedNodes(deletedNodes, newNodes, solution, usageThreshold)
 	if err != nil {
 		return err
@@ -4203,7 +4205,7 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 		pairForDeletedNodes = append(pairForDeletedNodes, pairNode)
 	}
 
-	logging.Infof("pairForDeletedNodes %v", pairForDeletedNodes)
+	logging.Infof("%v pairForDeletedNodes %v", _moveTenantsFromDeletedNodes, pairForDeletedNodes)
 	if len(nonEmptyDeletedNodes) > len(newNodes) {
 
 		logging.Infof("%v Num deleted nodes %v is more than num new/empty nodes %v", _moveTenantsFromDeletedNodes,
@@ -4331,7 +4333,7 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 					return errors.New(errStr)
 				} else {
 					//move indexes from deleted node to target node
-					logging.Infof("%v Considering %v as replacement node found deleted node %v.", _moveTenantsFromDeletedNodes,
+					logging.Infof("%v Considering %v as replacement node for deleted node %v.", _moveTenantsFromDeletedNodes,
 						targetNode, delNode)
 					swapTenantsFromDeleteNodes([]*IndexerNode{delNode}, []*IndexerNode{targetNode}, solution)
 				}
