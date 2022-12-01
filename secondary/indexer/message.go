@@ -205,6 +205,7 @@ const (
 	UPDATE_REBALANCE_PHASE
 	LOCK_SHARDS
 	UNLOCK_SHARDS
+	RESTORE_SHARD_DONE
 )
 
 type Message interface {
@@ -2760,6 +2761,23 @@ func (m *MsgLockUnlockShards) GetRespCh() chan map[common.ShardId]error {
 	return m.respCh
 }
 
+type MsgRestoreShardDone struct {
+	shardIds []common.ShardId
+	respCh   chan bool
+}
+
+func (m *MsgRestoreShardDone) GetMsgType() MsgType {
+	return RESTORE_SHARD_DONE
+}
+
+func (m *MsgRestoreShardDone) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgRestoreShardDone) GetRespCh() chan bool {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3076,6 +3094,8 @@ func (m MsgType) String() string {
 		return "LOCK_SHARDS"
 	case UNLOCK_SHARDS:
 		return "UNLOCK_SHARDS"
+	case RESTORE_SHARD_DONE:
+		return "RESTORE_SHARD_DONE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

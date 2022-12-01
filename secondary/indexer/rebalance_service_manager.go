@@ -1496,6 +1496,11 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 	case c.ShardTokenCommit:
 
+		// Destination will call RestoreShardDone for the shardId involved in the
+		// rebalance as coming here means that rebalance is successful for the
+		// tenant. After RestoreShardDone, the shards will be unlocked
+		restoreShardDone(tt.ShardIds, m.supvMsgch)
+
 		// Unlock the shards that are locked before initiating recovery
 		unlockShards(tt.ShardIds, m.supvMsgch)
 	}

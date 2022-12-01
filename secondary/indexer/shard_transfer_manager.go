@@ -95,6 +95,9 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 
 	case UNLOCK_SHARDS:
 		stm.handleUnlockShardsCommand(cmd)
+
+	case RESTORE_SHARD_DONE:
+		stm.handleRestoreShardDone(cmd)
 	}
 }
 
@@ -569,4 +572,18 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 	logging.Infof("ShardTransferManager::handleUnlockShardCommands Done with shard unlock for shardIds: %v, errMap: %v, elapsed: %v", shardIds, errMap, time.Since(start))
 
 	respCh <- errMap
+}
+
+func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
+	restoreShardDoneMsg := cmd.(*MsgRestoreShardDone)
+	shardIds := restoreShardDoneMsg.GetShardIds()
+	respCh := restoreShardDoneMsg.GetRespCh()
+
+	logging.Infof("ShardTransferManager::handleRestoreShardDone Initiating RestoreShardDone for shards: %v", shardIds)
+	start := time.Now()
+	for _, shardId := range shardIds {
+		plasma.RestoreShardDone(plasma.ShardId(shardId))
+	}
+	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v, elapsed: %v", shardIds, time.Since(start))
+	respCh <- true
 }

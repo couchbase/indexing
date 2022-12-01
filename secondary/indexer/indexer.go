@@ -1561,7 +1561,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		START_SHARD_RESTORE,
 		DESTROY_LOCAL_SHARD,
 		LOCK_SHARDS,
-		UNLOCK_SHARDS:
+		UNLOCK_SHARDS,
+		RESTORE_SHARD_DONE:
 
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh

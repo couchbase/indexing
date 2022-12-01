@@ -881,12 +881,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		return true
 
 	case c.ShardTokenCommit:
-		// If nodes sees a commit token, then DDL can be allowed on
-		// the bucket
 		sr.updateInMemToken(ttid, tt, "dest")
+
+		// Destination will call RestoreShardDone for the shardId involved in the
+		// rebalance as coming here means that rebalance is successful for the
+		// tenant. After RestoreShardDone, the shards will be unlocked
+		restoreShardDone(tt.ShardIds, sr.supvMsgch)
+
 		// Unlock the shards that are locked before initiating recovery
 		unlockShards(tt.ShardIds, sr.supvMsgch)
 
+		// If nodes sees a commit token, then DDL can be allowed on
+		// the bucket
 		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
 
 		tt.ShardTransferTokenState = c.ShardTokenDeleted
@@ -2473,4 +2479,16 @@ func unlockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
 	}
 
 	return nil
+}
+
+func restoreShardDone(shardIds []common.ShardId, supvMsgch MsgChannel) {
+	respCh := make(chan bool)
+	msg := &MsgRestoreShardDone{
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	supvMsgch <- msg
+
+	<-respCh
 }
