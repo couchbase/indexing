@@ -643,10 +643,11 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
 
 	msg := &MsgStartShardTransfer{
-		shardIds:        tt.ShardIds,
-		rebalanceId:     sr.rebalToken.RebalId,
-		transferTokenId: ttid,
-		destination:     tt.Destination,
+		shardIds:    tt.ShardIds,
+		taskId:      sr.rebalToken.RebalId,
+		transferId:  ttid,
+		taskType:    common.RebalanceTask,
+		destination: tt.Destination,
 
 		cancelCh:   sr.cancel,
 		doneCh:     sr.done,

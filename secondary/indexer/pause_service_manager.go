@@ -49,14 +49,17 @@ type PauseServiceManager struct {
 
 	// tasksMu protects tasks
 	tasksMu sync.RWMutex
+
+	supvMsgch MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
 // GenericServiceManager constructs a singleton at boot.
-//   genericMgr - pointer to our parent
-//   mux - Indexer's HTTP server
-//   httpAddr - host:port of the local node for Index Service HTTP calls
-func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux,
+//
+//	genericMgr - pointer to our parent
+//	mux - Indexer's HTTP server
+//	httpAddr - host:port of the local node for Index Service HTTP calls
+func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvMsgch MsgChannel,
 	httpAddr string) *PauseServiceManager {
 
 	m := &PauseServiceManager{
@@ -65,6 +68,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 
 		bucketStates: make(map[string]bucketStateEnum),
 		tasks:        make(map[string]*taskObj),
+
+		supvMsgch: supvMsgch,
 	}
 
 	// Save the singleton
@@ -330,26 +335,27 @@ func NewTaskObj(taskType taskEnum, taskId, bucket, bucketUuid, remotePath string
 //
 // Phase 2. ns_server will poll progress on leader only via GetTaskList.
 //
-//   3. All: PreparePause - Create PreparePause tasks on all nodes.
+//  3. All: PreparePause - Create PreparePause tasks on all nodes.
 //
-//   4. Leader: Pause - Create Pause task on leader. Orchestrate Index pause.
+//  4. Leader: Pause - Create Pause task on leader. Orchestrate Index pause.
 //
-//      On Pause success:
-//        o Leader: Remove Pause and PreparePause tasks from ITSELF ONLY.
-//        o Followers: ns_server will call CancelTask(PreparePause) on all followers, which then
-//          remove their own PreparePause tasks.
+//     On Pause success:
+//     o Leader: Remove Pause and PreparePause tasks from ITSELF ONLY.
+//     o Followers: ns_server will call CancelTask(PreparePause) on all followers, which then
+//     remove their own PreparePause tasks.
 //
-//      On Pause failure:
-//        o Leader: Change its own service.Task.Status to TaskStatusFailed and add failure info to
-//          service.Task.ErrorMessage.
-//        o All: ns_server will call CancelTask for Pause on leader and PreparePause on all nodes
-//          and abort the Pause. Index nodes should remove their respective tasks.
+//     On Pause failure:
+//     o Leader: Change its own service.Task.Status to TaskStatusFailed and add failure info to
+//     service.Task.ErrorMessage.
+//     o All: ns_server will call CancelTask for Pause on leader and PreparePause on all nodes
+//     and abort the Pause. Index nodes should remove their respective tasks.
 //
 // Method arguments
-//   taskId - opaque ns_server unique ID for this task
-//   bucket - name of the bucket to operate on
-//   bucketUuid - UUID of the bucket to operate on
-//   remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
+//
+//	taskId - opaque ns_server unique ID for this task
+//	bucket - name of the bucket to operate on
+//	bucketUuid - UUID of the bucket to operate on
+//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
 func (m *PauseServiceManager) PreparePause(taskId, bucket, bucketUuid, remotePath string,
 ) (err error) {
 	const _PreparePause = "PauseServiceManager::PreparePause:"
@@ -371,10 +377,11 @@ func (m *PauseServiceManager) PreparePause(taskId, bucket, bucketUuid, remotePat
 
 // Pause is an external API called by ns_server (via cbauth) only on the GSI master node to initiate
 // a pause (formerly hibernate) of a bucket in the serverless offering.
-//   taskId - opaque ns_server unique ID for this task
-//   bucket - name of the bucket to operate on
-//   bucketUuid - UUID of the bucket to operate on
-//   remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
+//
+//	taskId - opaque ns_server unique ID for this task
+//	bucket - name of the bucket to operate on
+//	bucketUuid - UUID of the bucket to operate on
+//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
 func (m *PauseServiceManager) Pause(taskId, bucket, bucketUuid, remotePath string) (err error) {
 	const _Pause = "PauseServiceManager::Pause:"
 
@@ -410,50 +417,51 @@ func (m *PauseServiceManager) Pause(taskId, bucket, bucketUuid, remotePath strin
 //
 // Phase 1. ns_server will poll progress on leader only via GetTaskList.
 //
-//   1. All: PrepareResume(dryRun: true) - Create dry run PrepareResume tasks on all nodes.
+//  1. All: PrepareResume(dryRun: true) - Create dry run PrepareResume tasks on all nodes.
 //
-//   2. Leader: Resume(dryRun: true) - Create dry run Resume task on leader, do dry run
-//        computations (est # of addl nodes needed to fit on this cluster; may be 0)
+//  2. Leader: Resume(dryRun: true) - Create dry run Resume task on leader, do dry run
+//     computations (est # of addl nodes needed to fit on this cluster; may be 0)
 //
-//      If dry run determines Resume is possible:
-//        o Leader: Remove Resume and PrepareResume tasks from ITSELF ONLY.
-//        o Followers: ns_server will call CancelTask(PrepareResume) on all followers, which then
-//          remove their own PrepareResume tasks.
+//     If dry run determines Resume is possible:
+//     o Leader: Remove Resume and PrepareResume tasks from ITSELF ONLY.
+//     o Followers: ns_server will call CancelTask(PrepareResume) on all followers, which then
+//     remove their own PrepareResume tasks.
 //
-//      If dry run determines Resume is not possible:
-//        o Leader: Change its own service.Task.Status to TaskStatusCannotResume and optionally set
-//          service.Task.Extra["additionalNodesNeeded"] = <int>
-//        o All: ns_server will call CancelTask for Resume on leader and PrepareResume on all nodes
-//          and abort the Resume. Index nodes should remove their respective tasks.
+//     If dry run determines Resume is not possible:
+//     o Leader: Change its own service.Task.Status to TaskStatusCannotResume and optionally set
+//     service.Task.Extra["additionalNodesNeeded"] = <int>
+//     o All: ns_server will call CancelTask for Resume on leader and PrepareResume on all nodes
+//     and abort the Resume. Index nodes should remove their respective tasks.
 //
-//      On dry run failure:
-//        o Leader: Change its own service.Task.Status to TaskStatusFailed and add failure info to
-//          service.Task.ErrorMessage.
-//        o All: ns_server will call CancelTask for Resume on leader and PrepareResume on all nodes
-//          and abort the Resume. Index nodes should remove their respective tasks.
+//     On dry run failure:
+//     o Leader: Change its own service.Task.Status to TaskStatusFailed and add failure info to
+//     service.Task.ErrorMessage.
+//     o All: ns_server will call CancelTask for Resume on leader and PrepareResume on all nodes
+//     and abort the Resume. Index nodes should remove their respective tasks.
 //
 // Phase 2. ns_server will poll progress on leader only via GetTaskList.
 //
-//   3. All: PrepareResume(dryRun: false) - Create real PrepareResume tasks on all nodes.
+//  3. All: PrepareResume(dryRun: false) - Create real PrepareResume tasks on all nodes.
 //
-//   4. Leader: Resume(dryRun: false) - Create real Resume task on leader. Orchestrate Index resume.
+//  4. Leader: Resume(dryRun: false) - Create real Resume task on leader. Orchestrate Index resume.
 //
-//      On Resume success:
-//        o Leader: Remove Resume and PrepareResume tasks from ITSELF ONLY.
-//        o Followers: ns_server will call CancelTask(PrepareResume) on all followers, which then
-//          remove their own PrepareResume tasks.
+//     On Resume success:
+//     o Leader: Remove Resume and PrepareResume tasks from ITSELF ONLY.
+//     o Followers: ns_server will call CancelTask(PrepareResume) on all followers, which then
+//     remove their own PrepareResume tasks.
 //
-//      On Resume failure:
-//        o Leader: Change its own service.Task.Status to TaskStatusFailed and add failure info to
-//          service.Task.ErrorMessage.
-//        o All: ns_server will call CancelTask for Resume on leader and PrepareResume on all nodes
-//          and abort the Resume. Index nodes should remove their respective tasks.
+//     On Resume failure:
+//     o Leader: Change its own service.Task.Status to TaskStatusFailed and add failure info to
+//     service.Task.ErrorMessage.
+//     o All: ns_server will call CancelTask for Resume on leader and PrepareResume on all nodes
+//     and abort the Resume. Index nodes should remove their respective tasks.
 //
 // Method arguments
-//   taskId - opaque ns_server unique ID for this task
-//   bucket - name of the bucket to operate on
-//   remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
-//   dryRun - whether this call is for a dry run or real Resume
+//
+//	taskId - opaque ns_server unique ID for this task
+//	bucket - name of the bucket to operate on
+//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
+//	dryRun - whether this call is for a dry run or real Resume
 func (m *PauseServiceManager) PrepareResume(taskId, bucket, remotePath string, dryRun bool,
 ) (err error) {
 	const _PrepareResume = "PauseServiceManager::PrepareResume:"
@@ -475,10 +483,11 @@ func (m *PauseServiceManager) PrepareResume(taskId, bucket, remotePath string, d
 
 // Resume is an external API called by ns_server (via cbauth) only on the GSI master node to
 // initiate a resume (formerly unhibernate or rehydrate) of a bucket in the serverless offering.
-//   taskId - opaque ns_server unique ID for this task
-//   bucket - name of the bucket to operate on
-//   remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
-//   dryRun - whether this call is for a dry run or real Resume
+//
+//	taskId - opaque ns_server unique ID for this task
+//	bucket - name of the bucket to operate on
+//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
+//	dryRun - whether this call is for a dry run or real Resume
 func (m *PauseServiceManager) Resume(taskId, bucket, remotePath string, dryRun bool) (err error) {
 	const _Resume = "PauseServiceManager::Resume:"
 

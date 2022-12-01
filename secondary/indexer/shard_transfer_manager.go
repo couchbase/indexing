@@ -100,18 +100,26 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	start := time.Now()
 
 	shardIds := msg.GetShardIds()
-	rebalanceId := msg.GetRebalanceId()
-	ttid := msg.GetTransferTokenId()
-	rebalCancelCh := msg.GetCancelCh()
-	rebalDoneCh := msg.GetDoneCh()
+	taskType := msg.GetTaskType()
+	taskCancelCh := msg.GetCancelCh()
+	taskDoneCh := msg.GetDoneCh()
 	destination := msg.GetDestination()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
 
 	// Used by plasma to construct a path on S3
 	meta := make(map[string]interface{})
-	meta[plasma.GSIRebalanceId] = rebalanceId
-	meta[plasma.GSIRebalanceTransferToken] = ttid
+
+	switch taskType {
+	case common.RebalanceTask:
+		rebalanceId := msg.GetRebalanceId()
+		ttid := msg.GetTransferTokenId()
+		meta[plasma.GSIRebalanceId] = rebalanceId
+		meta[plasma.GSIRebalanceTransferToken] = ttid
+	case common.PauseResumeTask:
+		bucketUUID := msg.GetBucketUUID()
+		meta[plasma.GSIPauseResume] = bucketUUID
+	}
 
 	// Closed when all shards are done processing
 	transferDoneCh := make(chan bool)
@@ -157,12 +165,14 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	}
 
 	progressCb := func(transferStats plasma.ShardTransferStatistics) {
-		// Send the progress to rebalancer
-		progressCh <- &ShardTransferStatistics{
-			totalBytes:   transferStats.TotalBytes,
-			bytesWritten: transferStats.BytesWritten,
-			transferRate: transferStats.AvgXferRate,
-			shardId:      common.ShardId(transferStats.ShardId),
+		if progressCh != nil {
+			// Send the progress to rebalancer
+			progressCh <- &ShardTransferStatistics{
+				totalBytes:   transferStats.TotalBytes,
+				bytesWritten: transferStats.BytesWritten,
+				transferRate: transferStats.AvgXferRate,
+				shardId:      common.ShardId(transferStats.ShardId),
+			}
 		}
 	}
 
@@ -214,10 +224,10 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	}
 
 	select {
-	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
+	case <-taskCancelCh: // This cancel channel is sent by orchestrator task
 		closeCancelCh()
 
-	case <-rebalDoneCh:
+	case <-taskDoneCh:
 		closeCancelCh()
 
 	case <-transferDoneCh: // All shards are done processing
@@ -225,7 +235,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		return
 	}
 
-	// Incase rebalCancelCh or rebalDoneCh is closed first, then
+	// Incase taskCancelCh or taskDoneCh is closed first, then
 	// wait for plasma to finish processing and then send response
 	// to caller
 	select {

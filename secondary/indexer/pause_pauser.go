@@ -10,9 +10,12 @@ package indexer
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"strings"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -120,7 +123,6 @@ func (this *Pauser) failPause(logPrefix string, context string, error error) {
 //
 //	master - true iff this node is the master
 func (this *Pauser) run(master bool) {
-	const _run = "Pauser::run:"
 
 	// Get the list of Index node host:port addresses EXCLUDING this one
 	this.otherIndexAddrs = this.pauseMgr.GetIndexerNodeAddresses(this.pauseMgr.httpAddr)
@@ -139,9 +141,11 @@ func (this *Pauser) run(master bool) {
 		reader.Reset(byteSlice)
 		err = Upload(this.task.archivePath, FILENAME_VERSION, reader)
 		if err != nil {
-			this.failPause(_run, "Upload "+FILENAME_VERSION, err)
+			this.failPause("Pauser::run:", "Upload "+FILENAME_VERSION, err)
 			return
 		}
+
+		logging.Tracef("Pauser::run: indexer version successfully uploaded to %v%v for taskId %v", this.task.archivePath, FILENAME_VERSION, this.task.taskId)
 
 		// Notify the followers to start working on this task
 		this.pauseMgr.RestNotifyPause(this.otherIndexAddrs, this.task)
@@ -153,48 +157,119 @@ func (this *Pauser) run(master bool) {
 
 	// nodePath is the path to the node-specific archive subdirectory for the current node
 	nodePath := this.task.archivePath + this.nodeDir
+	dbg := true // TODO: use system config here
 
 	// Get the index metadata from all nodes and write it as a single file to the archive
-	byteSlice, indexMetadata, err := this.restGetLocalIndexMetadataBinary(true)
+	byteSlice, indexMetadata, err := this.restGetLocalIndexMetadataBinary(!dbg)
 	if err != nil {
-		this.failPause(_run, "getLocalInstanceMetadata", err)
+		this.failPause("Pauser::run:", "getLocalInstanceMetadata", err)
 		return
 	}
 	if byteSlice == nil {
 		// there are no indexes on this node for bucket. pause is a no-op
-		logging.Infof("Pauser::run pause is a no-op for bucket %v-%v", this.task.bucket, this.task.bucketUuid)
+		logging.Infof("Pauser::run: pause is a no-op for bucket %v-%v", this.task.bucket, this.task.bucketUuid)
 		return
 	}
 	reader.Reset(byteSlice)
 	err = Upload(nodePath, FILENAME_METADATA, reader)
 	if err != nil {
-		this.failPause(_run, "Upload "+FILENAME_METADATA, err)
+		this.failPause("Pauser::run:", "Upload "+FILENAME_METADATA, err)
 		return
 	}
+	logging.Infof("Pauser::run: metadata successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_METADATA, this.task.taskId)
 
-	getIndexInstanceIds := func(indexMetadata manager.LocalIndexMetadata) []common.IndexInstId {
+	getIndexInstanceIds := func() []common.IndexInstId {
 		res := make([]common.IndexInstId, 0, len(indexMetadata.IndexDefinitions))
 		for _, topology := range indexMetadata.IndexTopologies {
 			for _, indexDefn := range topology.Definitions {
 				res = append(res, common.IndexInstId(indexDefn.Instances[0].InstId))
 			}
 		}
-		logging.Tracef("Pauser::getIndexInstanceId index instance ids: %v for bucket %v", res, this.task.bucket)
+		logging.Tracef("Pauser::run::getIndexInstanceId: index instance ids: %v for bucket %v-%v", res, this.task.bucket, this.task.bucketUuid)
 		return res
 	}
 
 	// Write the persistent stats to the archive
-	byteSlice, err = this.pauseMgr.genericMgr.statsMgr.GetStatsForIndexesToBePersisted(getIndexInstanceIds(*indexMetadata), true)
+	byteSlice, err = this.pauseMgr.genericMgr.statsMgr.GetStatsForIndexesToBePersisted(getIndexInstanceIds(), !dbg)
 	if err != nil {
-		this.failPause(_run, "GetStatsForIndexesToBePersisted", err)
+		this.failPause("Pauser::run:", "GetStatsForIndexesToBePersisted", err)
 		return
 	}
 	reader.Reset(byteSlice)
 	err = Upload(nodePath, FILENAME_STATS, reader)
 	if err != nil {
-		this.failPause(_run, "Upload "+FILENAME_STATS, err)
+		this.failPause("Pauser::run:", "Upload "+FILENAME_STATS, err)
 		return
 	}
 
-	// kjc implement Pause
+	logging.Infof("Pauser::run: stats successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_STATS, this.task.taskId)
+
+	getShardIds := func() []common.ShardId {
+		uniqueShardIds := make(map[common.ShardId]bool)
+		for _, topology := range indexMetadata.IndexTopologies {
+			for _, indexDefn := range topology.Definitions {
+				for _, instance := range indexDefn.Instances {
+					for _, partition := range instance.Partitions {
+						for _, shard := range partition.ShardIds {
+							uniqueShardIds[shard] = true
+						}
+					}
+
+				}
+			}
+		}
+
+		shardIds := make([]common.ShardId, 0, len(uniqueShardIds))
+		for shardId, _ := range uniqueShardIds {
+			shardIds = append(shardIds, shardId)
+		}
+		logging.Tracef("Pauser::run::getShardIds: found shard Ids %v for bucket %v-%v", shardIds, this.task.bucket, this.task.bucketUuid)
+
+		return shardIds
+	}
+
+	// TODO: add contextWithCancel to task and reuse it here
+	ctx := context.Background()
+	closeCh := ctx.Done()
+	respCh := make(chan Message)
+	// progressCh := make(chan *ShardTransferStatistics, 1000) TODO: progress reporting
+
+	msg := &MsgStartShardTransfer{
+		shardIds:    getShardIds(),
+		taskId:      this.task.taskId,
+		transferId:  this.task.bucketUuid,
+		taskType:    common.PauseResumeTask,
+		destination: nodePath,
+
+		cancelCh:   closeCh,
+		doneCh:     closeCh,
+		respCh:     respCh,
+		progressCh: nil,
+	}
+
+	this.pauseMgr.supvMsgch <- msg
+
+	resp, ok := (<-respCh).(*MsgShardTransferResp)
+	if !ok || resp == nil {
+		err := fmt.Errorf("couldn't get a valid response from ShardTransferManager")
+		this.failPause("Pauser::run", "Upload plasma shards", err)
+		logging.Errorf("Pauser::run %v for taskId %v", err, this.task.taskId)
+		return
+	}
+	errMap := resp.GetErrorMap()
+	var errMsg strings.Builder
+	for shard, err := range errMap {
+		if err != nil {
+			fmt.Fprintf(&errMsg, "Error in shardId %v upload: %v\n", shard, err)
+		}
+	}
+	if errMsg.Len() != 0 {
+		err = errors.New(errMsg.String())
+		this.failPause("Pauser::run", "Upload plasma shards", err)
+		logging.Errorf("Pauser::run shard uploads failed: %v for taskId %v", err, this.task.taskId)
+		return
+	}
+
+	// TODO: return shard paths back to master
+	logging.Infof("Pauser::run Shards saved at: %v for bucket %v-%v", resp.GetShardPaths(), this.task.bucket, this.task.bucketUuid)
 }
