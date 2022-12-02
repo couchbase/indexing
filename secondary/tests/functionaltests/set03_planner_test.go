@@ -1681,6 +1681,13 @@ var tenantAwarePlannerReplicaRepairFuncTestCases = []tenantAwarePlannerRebalFunc
 		"",
 		true,
 	},
+	{
+		"Replica Repair - 2 SG, Missing Replicas with Nodes over HWM",
+		"../testdata/planner/tenantaware/topology/replica_repair/4_non_empty_nodes_2_sg_e.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/4_non_empty_nodes_2_sg_e_out.json",
+		"",
+		true,
+	},
 }
 
 func tenantAwarePlannerReplicaRepairTests(t *testing.T) {
