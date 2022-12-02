@@ -3504,6 +3504,8 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 		return nil, nil, err
 	}
 
+	subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
+
 	logging.Infof("%v Found SubClusters Below LWM %v", _executeTenantAwareRebal, subClustersBelowLWM)
 
 	if len(subClustersBelowLWM) == 0 {
@@ -4722,4 +4724,15 @@ func getNumIndexRepaired(indexerNode *IndexerNode) uint64 {
 		}
 	}
 	return numIndexRepaired
+}
+
+func filterPartialSubClusters(subClusters []SubCluster) []SubCluster {
+
+	for i := len(subClusters) - 1; i >= 0; i-- {
+		if len(subClusters[i]) != cSubClusterLen {
+			logging.Infof("Planner::filterPartialSubClusters Filter partial subcluster %v", subClusters[i])
+			subClusters = append(subClusters[:i], subClusters[i+1:]...)
+		}
+	}
+	return subClusters
 }
