@@ -100,6 +100,7 @@ func (h *Histogram) Map(bitmap uint64) bool {
 
 func (h *Histogram) GetValue() interface{} {
 	out := make(map[string]interface{})
+	maxLen := len(h.humanizeFn(h.buckets[len(h.buckets)-2])) //used to decide number of leading zeroes to pad. Padding zeroes opens the possibility of sorting on keys
 	for i := 0; i < len(h.buckets)-1; i++ {
 
 		low := h.humanizeFn(h.buckets[i])
@@ -107,11 +108,11 @@ func (h *Histogram) GetValue() interface{} {
 
 		var key string
 		if h.buckets[i] == math.MinInt64 {
-			key = fmt.Sprintf("(-Inf-%v)", hi)
+			key = fmt.Sprintf("(-Inf-%0*v)", maxLen, hi)
 		} else if h.buckets[i+1] == math.MaxInt64 {
-			key = fmt.Sprintf("(%v-Inf)", low)
+			key = fmt.Sprintf("(%0*v-Inf)", maxLen, low)
 		} else {
-			key = fmt.Sprintf("(%v-%v)", low, hi)
+			key = fmt.Sprintf("(%0*v-%0*v)", maxLen, low, maxLen, hi)
 		}
 		out[key] = h.vals[i]
 	}
