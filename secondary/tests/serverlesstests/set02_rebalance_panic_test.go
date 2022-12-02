@@ -29,6 +29,8 @@ func TestRebalancePanicTestsSetup(t *testing.T) {
 	//b. Remove all nodes from the cluster & keep only nodes[1], nodes[2]
 	resetCluster(t)
 
+	cleanupShardDir(t)
+
 	// c. For each bucket, create indexes on c1 collection -> Just one collection
 	// is sufficient for these tests as the goal is to validate rebalance failure
 	// scenarios. Use partitioned index

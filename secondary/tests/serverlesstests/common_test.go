@@ -148,6 +148,7 @@ func TestMain(m *testing.M) {
 			kvutility.DeleteBucket(buckets[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		}
 		time.Sleep(bucketOpWaitDur * time.Second)
+		cleanupShardDir(&testing.T{})
 
 		cleanupStorageDir(&testing.T{})
 	}
@@ -1039,6 +1040,22 @@ func cleanupStorageDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error removing rebal storage dir: %v, err: %v", absRebalStorageDirPath, err)
 	}
+}
+
+// Called only after bucket deletion to remove the shard files belonging to
+// a bucket so that other rebalance tests can validate the presence of
+// shard files on disk
+func cleanupShardDir(t *testing.T) {
+	for _, node := range clusterconfig.Nodes {
+		storageDir := getIndexStorageDirOnNode(node, t)
+
+		shardPath := storageDir + "/shards"
+		err := os.RemoveAll(shardPath)
+		if err != nil {
+			t.Fatalf("Error removing shard dir dir: %v, err: %v", shardPath, err)
+		}
+	}
+
 }
 
 func getServerGroupForNode(node string) string {
