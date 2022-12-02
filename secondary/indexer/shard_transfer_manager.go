@@ -272,7 +272,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		meta := make(map[string]interface{})
 		meta[plasma.GSIRebalanceId] = rebalanceId
 		meta[plasma.GSIRebalanceTransferToken] = ttid
-		meta[plasma.GSIShardID] = int64(shardId)
+		meta[plasma.GSIShardID] = uint64(shardId)
 		meta[plasma.GSIShardUploadPath] = shardPath
 
 		plasma.UnlockShard(plasma.ShardId(shardId))

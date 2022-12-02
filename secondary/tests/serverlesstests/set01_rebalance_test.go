@@ -3,9 +3,7 @@ package serverlesstests
 import (
 	"fmt"
 	"log"
-	"strings"
 	"testing"
-	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
@@ -45,64 +43,6 @@ func TestTwoNodeSwapRebalance(t *testing.T) {
 			}
 		}
 	}
-}
-
-func getServerGroupForNode(node string) string {
-	group_1 := "Group 1"
-	group_2 := "Group 2"
-	switch node {
-	case clusterconfig.Nodes[0], clusterconfig.Nodes[2], clusterconfig.Nodes[4]:
-		return group_1
-	case clusterconfig.Nodes[1], clusterconfig.Nodes[3], clusterconfig.Nodes[5]:
-		return group_2
-	default:
-		return ""
-	}
-}
-
-func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation bool, t *testing.T) {
-
-	for _, node := range addNodes {
-		serverGroup := getServerGroupForNode(node)
-		if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, node, "index", serverGroup); err != nil {
-			FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: %v", node, serverGroup), t)
-		}
-	}
-
-	err := cluster.RemoveNodes(kvaddress, clusterconfig.Username, clusterconfig.Password, removeNodes)
-	if skipValidation { // Some crash tests have their own validation. Hence, skip the validation here
-		if err != nil && strings.Contains(err.Error(), "Rebalance failed") {
-			return
-		} else if err == nil {
-			t.Fatalf("Expected rebalance failure, but rebalance passed")
-		} else {
-			FailTestIfError(err, fmt.Sprintf("Observed error: %v during rebalabce", err), t)
-		}
-	}
-
-	if err != nil {
-		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", removeNodes), t)
-	}
-
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
-
-	// This sleep will ensure that the stats are propagated to client
-	// Also, any pending rebalance cleanup is expected to be done during
-	// this time - so that validateShardFiles can see cleaned up directories
-	waitForStatsUpdate()
-
-	validateIndexPlacement(addNodes, t)
-	// Validate the data files on nodes that have been rebalanced out
-	for _, removedNode := range removeNodes {
-		validateShardFiles(removedNode, t)
-	}
-
-	// All indexes are created now. Get the shardId's for each node
-	for _, addedNode := range addNodes {
-		validateShardIdMapping(addedNode, t)
-	}
-
-	verifyStorageDirContents(t)
 }
 
 // Prior to this test, indexes are only on Nodes[3], Nodes[4]
@@ -368,43 +308,6 @@ func TestCreateIndexsAfterRebalance(t *testing.T) {
 			scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
 		}
 	}
-}
-
-// Helper function that can be used to verify whether an index is dropped or not
-// for alter index decrement replica count, alter index drop
-func waitForReplicaDrop(index, bucket, scope, collection string, replicaId int, t *testing.T) {
-	ticker := time.NewTicker(5 * time.Second)
-	indexName := index
-	if replicaId != 0 {
-		indexName = fmt.Sprintf("%v (replica %v)", index, replicaId)
-	}
-	// Wait for 2 minutes max for the replica to get dropped
-	for {
-		select {
-		case <-ticker.C:
-			stats := secondaryindex.GetIndexStats2(indexName, bucket, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
-			if stats != nil {
-				if collection != "_default" {
-					if _, ok := stats[bucket+":"+scope+":"+collection+":"+indexName+":items_count"]; ok {
-						continue
-					}
-				} else {
-					if _, ok := stats[bucket+":"+indexName+":items_count"]; ok {
-						continue
-					}
-				}
-				return
-			} else {
-				log.Printf("waitForReplicaDrop:: Unable to retrieve index stats for index: %v", indexName)
-				return
-			}
-
-		case <-time.After(2 * time.Minute):
-			t.Fatalf("waitForReplicaDrop:: Index replica %v exists even after 2 minutes", indexName)
-			return
-		}
-	}
-	return
 }
 
 // Prior to this test, all indexes existed on nodes[1] & nodes[2].
