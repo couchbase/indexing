@@ -2320,9 +2320,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 			if err != nil {
 				return nil, err
 			}
+			subClusters = append(subClusters, subcluster)
 		}
 
-		subClusters = append(subClusters, subcluster)
 	}
 
 	//DEEPK It is possible to have a server group assignment which fails to pair all nodes
