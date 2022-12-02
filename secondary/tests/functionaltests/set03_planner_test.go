@@ -1527,6 +1527,13 @@ var tenantAwarePlannerRebalFuncTestCases = []tenantAwarePlannerRebalFuncTestCase
 		"",
 		false,
 	},
+	{
+		"Rebalance - 3 SG, 1 Partial Subcluster",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_i.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_i_out.json",
+		"",
+		false,
+	},
 }
 
 func tenantAwarePlannerRebalanceTests(t *testing.T) {
