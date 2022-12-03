@@ -73,6 +73,9 @@ type LifecycleMgr struct {
 	accIgnoredIds       map[common.IndexDefnId]bool
 
 	configHolder common.ConfigHolder
+
+	rebalancePhase      common.RebalancePhase
+	bucketTransferPhase map[string]common.RebalancePhase
 }
 
 type requestHolder struct {
@@ -539,6 +542,10 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleCommit(content)
 	case client.OPCODE_REBALANCE_RUNNING:
 		err = m.handleRebalanceRunning(content)
+	case client.OPCODE_UPDATE_REBALANCE_PHASE:
+		err = m.handleUpdateRebalancePhase(content)
+	case client.OPCODE_REBALANCE_DONE:
+		err = m.handleRebalanceDone(content)
 	case client.OPCODE_CREATE_INDEX_DEFER_BUILD:
 		err = m.handleCreateIndexDeferBuild(key, content, common.NewUserRequestContext())
 	case client.OPCODE_DROP_INSTANCE:
@@ -947,7 +954,34 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 		logging.Infof("LifecycleMgr.handleRebalanceRunning() : releasing token %v", m.prepareLock.DefnId)
 	}
 
+	m.rebalancePhase = common.RebalanceInitated
+	m.bucketTransferPhase = make(map[string]common.RebalancePhase)
 	m.prepareLock = nil
+	return nil
+}
+
+func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
+
+	req := &common.RebalancePhaseRequest{}
+	err := json.Unmarshal(context, req)
+	if err != nil {
+		return err
+	}
+
+	m.rebalancePhase = req.GlobalRebalPhase
+	for bucket, bucketTransferPhase := range req.BucketTransferPhase {
+		m.bucketTransferPhase[bucket] = bucketTransferPhase
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) handleRebalanceDone(content []byte) error {
+	logging.Infof("LifecycleMgr::handleRebalanceDone Clearing rebalance phase")
+
+	m.rebalancePhase = common.RebalanceNotRunning
+	m.bucketTransferPhase = nil
+
 	return nil
 }
 

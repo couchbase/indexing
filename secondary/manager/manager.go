@@ -802,6 +802,23 @@ func (m *IndexManager) RebalanceRunning() error {
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_REBALANCE_RUNNING, "", []byte{})
 }
 
+func (m *IndexManager) UpdateRebalancePhase(globalRebalPhase common.RebalancePhase, bucketTranfserPhase map[string]common.RebalancePhase) error {
+
+	logging.Infof("IndexManager.UpdateRebalancePhase(): making request for updating rebalance phase, global: %v, bucketTransfer: %v", globalRebalPhase, bucketTranfserPhase)
+	req := &common.RebalancePhaseRequest{
+		GlobalRebalPhase:    globalRebalPhase,
+		BucketTransferPhase: bucketTranfserPhase,
+	}
+	content, _ := json.Marshal(req)
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_REBALANCE_PHASE, "", content)
+}
+
+func (m *IndexManager) RebalanceDone() error {
+
+	logging.Infof("IndexManager.RebalanceDone(): making request for rebalance done")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_REBALANCE_DONE, "", []byte{})
+}
+
 func (m *IndexManager) NotifyStats(stats common.Statistics) error {
 
 	logging.Debugf("IndexManager.NotifyStats(): making request for new stats")

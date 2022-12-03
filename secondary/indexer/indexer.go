@@ -1567,6 +1567,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INST_RECOVERY_RESPONSE:
 		idx.handleInstRecoveryResponse(msg)
 
+	case UPDATE_REBALANCE_PHASE:
+		idx.sendMsgToClustMgr(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))

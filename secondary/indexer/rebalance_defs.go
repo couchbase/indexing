@@ -11,7 +11,9 @@ package indexer
 
 import (
 	"encoding/binary"
+
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
@@ -48,6 +50,10 @@ type RebalanceToken struct {
 	Source   RebalSource
 	Error    string
 	MasterIP string // real IP address of master node, not 127.0.0.1, so followers can reach it
+
+	// Only used for DDL during rebalance
+	Version    common.DDLDuringRebalanceVersion
+	RebalPhase common.RebalancePhase
 }
 
 type RebalTokens struct {

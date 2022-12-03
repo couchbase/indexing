@@ -180,6 +180,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case INDEXER_SECURITY_CHANGE:
 		c.handleSecurityChange(cmd)
 
+	case UPDATE_REBALANCE_PHASE:
+		c.handleUpdateRebalancePhase(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -587,6 +590,10 @@ func (c *clustMgrAgent) handleDelLocalValue(cmd Message) {
 
 	logging.Infof("ClustMgr:handleDelLocalValue Key %v", key)
 
+	if key == RebalanceRunning { // Indicate that rebalance is done at lifecycle manager
+		c.mgr.RebalanceDone()
+	}
+
 	err := c.mgr.DeleteLocalValue(key)
 
 	c.supvCmdch <- &MsgClustMgrLocal{
@@ -645,6 +652,16 @@ func (c *clustMgrAgent) handleRebalanceRunning(cmd Message) {
 	logging.Infof("ClustMgr:handleRebalanceRunning %v", cmd)
 
 	c.mgr.RebalanceRunning()
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleUpdateRebalancePhase(cmd Message) {
+	logging.Infof("ClustMgr:handleUpdateRebalancePhase %v", cmd)
+
+	globalRebalPhase := cmd.(*MsgUpdateRebalancePhase).GetGlobalRebalancePhase()
+	bucketTransferPhase := cmd.(*MsgUpdateRebalancePhase).GetBucketTransferPhase()
+
+	c.mgr.UpdateRebalancePhase(globalRebalPhase, bucketTransferPhase)
 	c.supvCmdch <- &MsgSuccess{}
 }
 

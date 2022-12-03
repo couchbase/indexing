@@ -201,6 +201,7 @@ const (
 	START_SHARD_RESTORE
 	DESTROY_LOCAL_SHARD
 	MONITOR_SLICE_STATUS
+	UPDATE_REBALANCE_PHASE
 )
 
 type Message interface {
@@ -2665,6 +2666,23 @@ func (m *MsgMonitorSliceStatus) GetMsgType() MsgType {
 
 func (m *MsgMonitorSliceStatus) GetSliceList() []Slice {
 	return m.sliceList
+}
+
+type MsgUpdateRebalancePhase struct {
+	GlobalRebalancePhase common.RebalancePhase
+	BucketTransferPhase  map[string]common.RebalancePhase
+}
+
+func (m *MsgUpdateRebalancePhase) GetMsgType() MsgType {
+	return UPDATE_REBALANCE_PHASE
+}
+
+func (m *MsgUpdateRebalancePhase) GetGlobalRebalancePhase() common.RebalancePhase {
+	return m.GlobalRebalancePhase
+}
+
+func (m *MsgUpdateRebalancePhase) GetBucketTransferPhase() map[string]common.RebalancePhase {
+	return m.BucketTransferPhase
 }
 
 // MsgType.String is a helper function to return string for message type.
