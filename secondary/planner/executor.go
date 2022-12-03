@@ -4271,6 +4271,8 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 					return err
 				}
 
+				subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
+
 				logging.Infof("%v Found SubClusters Below LWM %v", _moveTenantsFromDeletedNodes, subClustersBelowLWM)
 
 				if len(subClustersBelowLWM) == 0 {
