@@ -1858,6 +1858,13 @@ var tenantAwarePlannerScaleDownFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"Planner - Not enough capacity to place indexes of deleted nodes.",
 		false,
 	},
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, Not Enough Capacity, Partial Subcluster",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_j.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_j_out.json",
+		"Planner - Not enough capacity to place indexes of deleted nodes.",
+		false,
+	},
 }
 
 func tenantAwarePlannerScaleDownTests(t *testing.T) {
