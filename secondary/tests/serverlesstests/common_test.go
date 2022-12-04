@@ -113,7 +113,7 @@ func TestMain(m *testing.M) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.rebalance.serverless.transferBatchSize", 2, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_prefix")
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.client_stats_refresh_interval", 500, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err = secondaryindex.ChangeIndexerSettings("indexer.client_stats_refresh_interval", 1000, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.client_stats_refresh_interval")
 
 	if clusterconfig.IndexUsing != "" {
@@ -961,10 +961,10 @@ func validateIndexPlacement(nodes []string, t *testing.T) {
 // for which stats have been received will be picked up for scan and the
 // test fails with zero scan requests for other replicas.
 //
-// To avoid such a failure, sleep for 1010 milli seconds after the index
+// To avoid such a failure, sleep for 2500 milli seconds after the index
 // is built so that the client has updated stats from all indexer nodes.
 func waitForStatsUpdate() {
-	time.Sleep(1010 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 }
 
 func getIndexStatusFromIndexer() (*tc.IndexStatusResponse, error) {
