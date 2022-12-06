@@ -314,7 +314,8 @@ type CommitCreateRequest struct {
 }
 
 type CommitCreateResponse struct {
-	Accept bool `json:"accept,omitempty"`
+	Accept bool   `json:"accept,omitempty"`
+	Msg    string `json:"reason,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////

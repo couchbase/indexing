@@ -737,9 +737,18 @@ func (m *LifecycleMgr) handleCommit(content []byte) ([]byte, error) {
 func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitCreateRequest) ([]byte, error) {
 
 	if m.prepareLock == nil {
-		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
-		response := &client.CommitCreateResponse{Accept: false}
-		return client.MarshallCommitCreateResponse(response)
+		// Rebalance can reset prepareLock to nil
+		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance is running", commitCreateIndex.DefnId)
+			response := &client.CommitCreateResponse{
+				Accept: false,
+				Msg:    client.RespRebalanceRunning}
+			return client.MarshallCommitCreateResponse(response)
+		} else {
+			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
+			response := &client.CommitCreateResponse{Accept: false}
+			return client.MarshallCommitCreateResponse(response)
+		}
 	}
 
 	if m.prepareLock.RequesterId != commitCreateIndex.RequesterId ||
@@ -752,8 +761,10 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 
 	if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
-		response := &client.PrepareCreateResponse{Accept: false}
-		return client.MarshallPrepareCreateResponse(response)
+		response := &client.CommitCreateResponse{
+			Accept: false,
+			Msg:    client.RespRebalanceRunning}
+		return client.MarshallCommitCreateResponse(response)
 	}
 
 	// Verify and release the indexNames lock.

@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
 
 	"github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
@@ -39,8 +41,6 @@ import (
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/transport"
-	"github.com/couchbase/query/expression"
-	"github.com/couchbase/query/expression/parser"
 )
 
 // TODO:
@@ -730,7 +730,7 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defnId c.IndexDefnId, watch
 // This function makes a call to create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxDefn *c.IndexDefn, requestId uint64,
-	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int, asyncCreate bool) error {
+	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int, asyncCreate bool) (bool, error) {
 
 	request := &CommitCreateRequest{
 		Op:          op,
@@ -743,13 +743,14 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 
 	requestMsg, err := MarshallCommitCreateRequest(request)
 	if err != nil {
-		return fmt.Errorf("Unable to send commit request.  Reason: %v", err)
+		return false, fmt.Errorf("Unable to marshall commit request.  Reason: %v", err)
 	}
 
 	var mutex sync.Mutex
 	var cond *sync.Cond = sync.NewCond(&mutex)
 	var accept bool
 	var count int32
+	var rebalanceRunning bool
 
 	errorMap := make(map[string]bool)
 
@@ -790,9 +791,15 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				logging.Errorf("Encountered error during create index.  Error: %v", err)
 			}
 
+			rebalRunning := false
+			if response.Msg == RespRebalanceRunning {
+				rebalRunning = true
+			}
+
 			mutex.Lock()
 			if response != nil {
 				accept = response.Accept || accept
+				rebalanceRunning = rebalanceRunning || rebalRunning
 			}
 			mutex.Unlock()
 		}(w)
@@ -827,9 +834,16 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	//result is ready
 	if success {
 		if createErr != nil {
-			return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+			return false, fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
 		}
-		return nil
+		return false, nil
+	}
+
+	// If this operation is not successful due to rebalacnce running, then
+	// schedule the index for creation.
+	if !asyncCreate && rebalanceRunning && o.settings.AllowScheduleCreateRebal() {
+		logging.Warnf("makeCommitIndexRequest: Scheduling index for background creation due to commit failure on rebalance. DefnId: %v", idxDefn.DefnId)
+		return true, nil
 	}
 
 	// asyncCreate operation will retry the operation again. Hence, no
@@ -849,9 +863,9 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
 				if exist {
 					if createErr != nil {
-						return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+						return false, fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
 					}
-					return nil
+					return false, nil
 				}
 
 				if retryCount > 10 {
@@ -867,7 +881,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		createErr = errors.New(errStr)
 	}
 
-	return createErr
+	return false, createErr
 }
 
 func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) error {
@@ -1400,10 +1414,46 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	// The first indexer that responds with success will create a token so that it can roll forward even if this
 	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
 	//
-	err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate)
+	// In serverless deployments, when DDL operations during rebalance are supported, and if commit
+	// request of an index failes due to rebalance, then the index is scheduled for background creation
+	schedIndex := false
+	schedIndex, err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate)
 	if err != nil {
 		logging.Errorf("Fail to create index: %v", err)
 		return err
+	}
+
+	if c.IsServerlessDeployment() && schedIndex {
+
+		// Cancel the previously sent prepare request
+		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+
+		scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
+		if scheduleErr == nil {
+			if o.settings.WaitForScheduledIndex() {
+				err := o.waitForScheduledIndex(idxDefn)
+				if err != nil {
+					logging.Errorf("Error in waitForScheduledIndex %v", err)
+					return err
+				}
+
+				return nil
+			}
+
+			message := "The index is scheduled for background creation."
+			logging.Warnf("%v", message)
+			return c.ErrServerBusy
+		} else {
+			var msg string
+			if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
+				msg = fmt.Sprintf("Scheduling of index creation was attempted. Please check for index status later.")
+			} else {
+				msg += fmt.Sprintf(" Could not schedule index creation. Reason: %v", scheduleErr)
+				logging.Errorf("%v", msg)
+			}
+			logging.Errorf("%v", msg)
+			return fmt.Errorf("%v", msg)
+		}
 	}
 
 	//
@@ -3823,7 +3873,7 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		return err
 	}
-	err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap, false)
+	_, err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap, false)
 	if err != nil {
 		logging.Errorf("Fail to alter index: %v", err)
 		return err
@@ -3884,7 +3934,7 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 	// The first indexer that responds with success will create a token so that it can roll forward even if this
 	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
 	//
-	err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap, false)
+	_, err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap, false)
 	if err != nil {
 		logging.Errorf("Fail to alter index: %v", err)
 		return err
