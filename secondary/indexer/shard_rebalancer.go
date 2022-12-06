@@ -470,9 +470,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			}
 		}
 
-		tt.ShardTransferTokenState = c.ShardTokenDeleted
-		setTransferTokenInMetakv(ttid, tt)
-		return true
+		// Return false so that if master is also destination node,
+		// it will update the book-keeping at lifecycle manager about
+		// completion of rebalance for this bucket
+		return false
 
 	case c.ShardTokenDeleted:
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
@@ -571,6 +572,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 			}
 		}
 		return true
+
+	case c.ShardTokenCommit:
+		// If node sees a commit token, then DDL can be allowed on
+		// the bucket. It is necessary for source to update its
+		// book-keeping. Otherwise, source will reject prepare create
+		// request thinking that the rebalance of bucket is not done.
+		// During the plan phase (which happens after prepare phase),
+		// planner will decide which node the index will land-on
+		sr.updateInMemToken(ttid, tt, "source")
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
+
+		return false // Return false as this is source node. Destination node should also process the token
 
 	default:
 		return false
@@ -832,10 +845,13 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		return true
 
 	case c.ShardTokenCommit:
-		// If destination sees a commit token, then DDL can be allowed on
+		// If nodes sees a commit token, then DDL can be allowed on
 		// the bucket
 		sr.updateInMemToken(ttid, tt, "dest")
 		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
+
+		tt.ShardTransferTokenState = c.ShardTokenDeleted
+		setTransferTokenInMetakv(ttid, tt)
 		return true
 
 	default:
@@ -1944,8 +1960,6 @@ loop:
 
 			tt.ShardTransferTokenState = c.ShardTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
-
-			sr.updateInMemToken(ttid, tt, "source")
 			return
 		}
 
