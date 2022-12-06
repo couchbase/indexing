@@ -819,40 +819,42 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 		withExpr += " \"retain_deleted_xattr\":true"
 	}
 
-	if printNodes && len(def.Nodes) != 0 {
-		if len(withExpr) != 0 {
-			withExpr += ","
-		}
-		withExpr += " \"nodes\":[ "
-
-		for i, node := range def.Nodes {
-			withExpr += "\"" + node + "\""
-			if i < len(def.Nodes)-1 {
+	if GetDeploymentModel() != SERVERLESS_DEPLOYMENT {
+		if printNodes && len(def.Nodes) != 0 {
+			if len(withExpr) != 0 {
 				withExpr += ","
 			}
+			withExpr += " \"nodes\":[ "
+
+			for i, node := range def.Nodes {
+				withExpr += "\"" + node + "\""
+				if i < len(def.Nodes)-1 {
+					withExpr += ","
+				}
+			}
+
+			withExpr += " ]"
 		}
 
-		withExpr += " ]"
-	}
-
-	if numReplica == -1 {
-		numReplica = def.GetNumReplica()
-	}
-
-	if numReplica != 0 {
-		if len(withExpr) != 0 {
-			withExpr += ","
+		if numReplica == -1 {
+			numReplica = def.GetNumReplica()
 		}
 
-		withExpr += fmt.Sprintf(" \"num_replica\":%v", numReplica)
-	}
+		if numReplica != 0 {
+			if len(withExpr) != 0 {
+				withExpr += ","
+			}
 
-	if IsPartitioned(def.PartitionScheme) {
-		if len(withExpr) != 0 {
-			withExpr += ","
+			withExpr += fmt.Sprintf(" \"num_replica\":%v", numReplica)
 		}
 
-		withExpr += fmt.Sprintf(" \"num_partition\":%v", numPartitions)
+		if IsPartitioned(def.PartitionScheme) {
+			if len(withExpr) != 0 {
+				withExpr += ","
+			}
+
+			withExpr += fmt.Sprintf(" \"num_partition\":%v", numPartitions)
+		}
 	}
 
 	if len(withExpr) != 0 {

@@ -1527,6 +1527,13 @@ var tenantAwarePlannerRebalFuncTestCases = []tenantAwarePlannerRebalFuncTestCase
 		"",
 		false,
 	},
+	{
+		"Rebalance - 3 SG, 1 Partial Subcluster",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_i.json",
+		"../testdata/planner/tenantaware/topology/rebalance/6_non_empty_nodes_3_sg_i_out.json",
+		"",
+		false,
+	},
 }
 
 func tenantAwarePlannerRebalanceTests(t *testing.T) {
@@ -1681,6 +1688,13 @@ var tenantAwarePlannerReplicaRepairFuncTestCases = []tenantAwarePlannerRebalFunc
 		"",
 		true,
 	},
+	{
+		"Replica Repair - 2 SG, Missing Replicas with Nodes over HWM",
+		"../testdata/planner/tenantaware/topology/replica_repair/4_non_empty_nodes_2_sg_e.json",
+		"../testdata/planner/tenantaware/topology/replica_repair/4_non_empty_nodes_2_sg_e_out.json",
+		"",
+		true,
+	},
 }
 
 func tenantAwarePlannerReplicaRepairTests(t *testing.T) {
@@ -1744,6 +1758,13 @@ var tenantAwarePlannerSwapRebalFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"../testdata/planner/tenantaware/topology/swap/8_non_empty_nodes_4_sg_e_out.json",
 		"",
 		true,
+	},
+	{
+		"Swap Rebalance - 1 SG, Swap 1 node - Failed swap rebalance",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_f.json",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_f_out.json",
+		"",
+		false,
 	},
 }
 
@@ -1834,6 +1855,13 @@ var tenantAwarePlannerScaleDownFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"Rebalance - 4 SG, Move out 1 subcluster, No nodes under LWM",
 		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_i.json",
 		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_i_out.json",
+		"Planner - Not enough capacity to place indexes of deleted nodes.",
+		false,
+	},
+	{
+		"Rebalance - 4 SG, Move out 1 subcluster, Not Enough Capacity, Partial Subcluster",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_j.json",
+		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_j_out.json",
 		"Planner - Not enough capacity to place indexes of deleted nodes.",
 		false,
 	},

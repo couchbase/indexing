@@ -1461,10 +1461,10 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket, scope, collection string,
 		if err = m.DeleteTopologyByCollection(topology.Bucket, scope, collection); err != nil {
 			return err
 		}
-	} else {
-		if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
-			return err
-		}
+
+	}
+	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
+		return err
 	}
 
 	return nil

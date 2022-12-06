@@ -1898,7 +1898,7 @@ func (feed *Feed) startDataPath(
 		engs, ends := feed.engines[keyspaceId], feed.endpoints
 		kvdata, err = NewKVData(
 			feed, bucketn, keyspaceId, collectionId, opaque, ts, engs, ends, mutch,
-			feed.kvaddr, feed.config, feed.async, opaque2)
+			feed.kvaddr, feed.config, feed.async, opaque2, feed.collectionsAware)
 	}
 	return kvdata, err
 }

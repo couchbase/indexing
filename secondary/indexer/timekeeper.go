@@ -4126,6 +4126,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	tk.lock.Unlock()
 
 	indexInstMap := tk.indexInstMap.Get()
+	indexPartnMap := tk.indexPartnMap.Get()
 
 	go func() {
 
@@ -4301,6 +4302,18 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					v = float64(flushedCount) * 100.00 / float64(totalToBeflushed)
 				} else {
 					v = 100.00
+				}
+			case common.INDEX_STATE_RECOVERED:
+				totalToBeflushed := totalTobeFlushedMap[stream][keyspaceId]
+				snapTs := getSnapshotTimestampForInst(instId, indexPartnMap)
+				if snapTs != nil {
+					snapSum := uint64(0)
+					for _, seqno := range snapTs.Seqnos {
+						snapSum += seqno
+					}
+					v = float64(snapSum) * 100.00 / float64(totalToBeflushed)
+				} else {
+					v = 0
 				}
 			}
 
@@ -4856,4 +4869,37 @@ func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
 		return true
 	}
 	return false
+}
+
+func getSnapshotTimestampForInst(instId common.IndexInstId, indexPartnMap IndexPartnMap) *common.TsVbuuid {
+	partnMap, ok := indexPartnMap[instId]
+	if !ok {
+		return nil
+	}
+
+	var minTs *common.TsVbuuid
+	for _, partnInst := range partnMap {
+		sc := partnInst.Sc
+
+		//there is only one slice for now
+		slice := sc.GetSliceById(0)
+
+		infos, err := slice.GetSnapshots()
+		if err != nil { // Ignore the error as this is only for stats calculation
+			return nil
+		}
+
+		s := NewSnapshotInfoContainer(infos)
+		latestSnapInfo := s.GetLatest()
+
+		//There may not be a valid snapshot info if no flush
+		//happened for this index
+		if latestSnapInfo != nil {
+			ts := latestSnapInfo.Timestamp()
+			if ts.AsRecentTs(minTs) == false {
+				minTs = ts
+			}
+		}
+	}
+	return minTs
 }

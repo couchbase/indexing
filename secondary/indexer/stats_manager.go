@@ -371,19 +371,25 @@ func (h *KeyspaceStatsMapHolder) Set(s KeyspaceStatsMap) {
 	atomic.StorePointer(&h.ptr, unsafe.Pointer(&s))
 }
 
-type LatencyMapHolder struct {
-	ptr *unsafe.Pointer
+type MapHolder struct {
+	ptr    *unsafe.Pointer
+	bitmap uint64 // bitmap to decide stat filter
 }
 
-func (p *LatencyMapHolder) Init() {
+func (p *MapHolder) Init() {
 	p.ptr = new(unsafe.Pointer)
 }
 
-func (p *LatencyMapHolder) Set(prjLatencyMap map[string]interface{}) {
-	atomic.StorePointer(p.ptr, unsafe.Pointer(&prjLatencyMap))
+func (p *MapHolder) Set(inMap map[string]interface{}) {
+	atomic.StorePointer(p.ptr, unsafe.Pointer(&inMap))
 }
 
-func (p *LatencyMapHolder) Get() map[string]interface{} {
+func (p *MapHolder) Reset() {
+	resetMap := make(map[string]interface{})
+	atomic.StorePointer(p.ptr, unsafe.Pointer(&resetMap))
+}
+
+func (p *MapHolder) Get() map[string]interface{} {
 	if ptr := atomic.LoadPointer(p.ptr); ptr != nil {
 		return *(*map[string]interface{})(ptr)
 	} else {
@@ -391,7 +397,7 @@ func (p *LatencyMapHolder) Get() map[string]interface{} {
 	}
 }
 
-func (p *LatencyMapHolder) Clone() map[string]interface{} {
+func (p *MapHolder) Clone() map[string]interface{} {
 	if ptr := atomic.LoadPointer(p.ptr); ptr != nil {
 		currMap := *(*map[string]interface{})(ptr)
 		clone := make(map[string]interface{})
@@ -402,6 +408,10 @@ func (p *LatencyMapHolder) Clone() map[string]interface{} {
 	} else {
 		return make(map[string]interface{})
 	}
+}
+
+func (p *MapHolder) AddFilter(filter uint64) {
+	p.bitmap |= filter
 }
 
 // Contains the mapping between nodeUUID to hostname of a KV node
@@ -778,7 +788,7 @@ type IndexerStats struct {
 	unitsUsedActual stats.Int64Val //RU/WU units used for serverless model
 
 	indexerState  stats.Int64Val
-	prjLatencyMap *LatencyMapHolder
+	prjLatencyMap *MapHolder
 	nodeToHostMap *NodeToHostMapHolder
 
 	timestamp      stats.StringVal
@@ -809,6 +819,8 @@ type IndexerStats struct {
 	TotalRequests     stats.Int64Val
 	TotalRowsReturned stats.Int64Val
 	TotalRowsScanned  stats.Int64Val
+
+	RebalanceTransferProgress *MapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -826,7 +838,7 @@ func (s *IndexerStats) Init() {
 	s.statsResponse.Init()
 	s.indexerState.Init()
 	s.notFoundError.Init()
-	s.prjLatencyMap = &LatencyMapHolder{}
+	s.prjLatencyMap = &MapHolder{}
 	s.prjLatencyMap.Init()
 
 	s.numTenants.Init()
@@ -870,6 +882,10 @@ func (s *IndexerStats) Init() {
 	s.TotalRequests.Init()
 	s.TotalRowsReturned.Init()
 	s.TotalRowsScanned.Init()
+
+	s.RebalanceTransferProgress = &MapHolder{}
+	s.RebalanceTransferProgress.Init()
+	s.RebalanceTransferProgress.AddFilter(stats.IndexStatusFilter) // Retrieved via getIndexStatus using rebalance
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -1242,6 +1258,8 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_requests", &is.TotalRequests)
 	statMap.AddStatValueFiltered("total_rows_returned", &is.TotalRowsReturned)
 	statMap.AddStatValueFiltered("total_rows_scanned", &is.TotalRowsScanned)
+
+	statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
 }
 
 func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
@@ -2557,11 +2575,15 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 		mapSlice := make([]byte, 0)
 		mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":", mapKey))...)
 		mapSlice = append(mapSlice, '{')
-		for key, val := range mapVal {
-			mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":%v,", key, val))...)
-		}
-		if len(mapSlice) > 1 {
-			mapSlice[len(mapSlice)-1] = '}'
+		if len(mapVal) > 0 {
+			for key, val := range mapVal {
+				mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":%v,", key, val))...)
+			}
+			if len(mapSlice) > 1 {
+				mapSlice[len(mapSlice)-1] = '}'
+			}
+		} else {
+			mapSlice = append(mapSlice, '}') // Empty map would mean empty JSON
 		}
 		mapSlice = append(mapSlice, ',')
 		st.byteSlice = append(st.byteSlice, mapSlice...)
@@ -2709,7 +2731,7 @@ func (spec *statsSpec) OverrideFilter(filt string) {
 var statsFilterMap = map[string]uint64{
 	"planner":     stats.PlannerFilter,
 	"indexStatus": stats.IndexStatusFilter,
-	// "rebalancer":    stats.RebalancerFilter, // no longer used
+	//"rebalancer":       stats.RebalancerFilter, // no longer used
 	"gsiClient":        stats.GSIClientFilter,
 	"n1qlStorageStats": stats.N1QLStorageStatsFilter,
 	"summary":          stats.SummaryFilter,

@@ -129,7 +129,7 @@ func GetStats(serverUserName, serverPassword, hostaddress string) map[string]int
 
 func GetPerPartnStatsForIndexerHttpAddress(indexerHttpAddr, serverUserName, serverPassword string) map[string]interface{} {
 	client := &http.Client{}
-	address := "http://" + indexerHttpAddr + "/stats?partition=true"
+	address := "http://" + indexerHttpAddr + "/stats?partition=true&sync=true"
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)

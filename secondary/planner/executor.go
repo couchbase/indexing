@@ -2320,9 +2320,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 			if err != nil {
 				return nil, err
 			}
+			subClusters = append(subClusters, subcluster)
 		}
 
-		subClusters = append(subClusters, subcluster)
 	}
 
 	//DEEPK It is possible to have a server group assignment which fails to pair all nodes
@@ -2632,7 +2632,6 @@ func findSubClusterForIndex(indexers []*IndexerNode,
 		}
 		for _, checkIdx := range indexer.Indexes {
 			if index.DefnId == checkIdx.DefnId &&
-				index.Instance.Version == checkIdx.Instance.Version &&
 				index.PartnId == checkIdx.PartnId {
 				subCluster = append(subCluster, indexer)
 			}
@@ -3505,6 +3504,8 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 		return nil, nil, err
 	}
 
+	subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
+
 	logging.Infof("%v Found SubClusters Below LWM %v", _executeTenantAwareRebal, subClustersBelowLWM)
 
 	if len(subClustersBelowLWM) == 0 {
@@ -4136,6 +4137,8 @@ func findPlacementForDeletedNodes(solution *Solution, usageThreshold *UsageThres
 	deletedNodes := solution.getDeleteNodes()
 	newNodes := solution.getNewNodes()
 
+	logging.Infof("%v Deleted Nodes %v", _findPlacementForDeletedNodes, deletedNodes)
+
 	err := moveTenantsFromDeletedNodes(deletedNodes, newNodes, solution, usageThreshold)
 	if err != nil {
 		return err
@@ -4204,7 +4207,7 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 		pairForDeletedNodes = append(pairForDeletedNodes, pairNode)
 	}
 
-	logging.Infof("pairForDeletedNodes %v", pairForDeletedNodes)
+	logging.Infof("%v pairForDeletedNodes %v", _moveTenantsFromDeletedNodes, pairForDeletedNodes)
 	if len(nonEmptyDeletedNodes) > len(newNodes) {
 
 		logging.Infof("%v Num deleted nodes %v is more than num new/empty nodes %v", _moveTenantsFromDeletedNodes,
@@ -4267,6 +4270,8 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 				if err != nil {
 					return err
 				}
+
+				subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
 
 				logging.Infof("%v Found SubClusters Below LWM %v", _moveTenantsFromDeletedNodes, subClustersBelowLWM)
 
@@ -4332,7 +4337,7 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 					return errors.New(errStr)
 				} else {
 					//move indexes from deleted node to target node
-					logging.Infof("%v Considering %v as replacement node found deleted node %v.", _moveTenantsFromDeletedNodes,
+					logging.Infof("%v Considering %v as replacement node for deleted node %v.", _moveTenantsFromDeletedNodes,
 						targetNode, delNode)
 					swapTenantsFromDeleteNodes([]*IndexerNode{delNode}, []*IndexerNode{targetNode}, solution)
 				}
@@ -4379,7 +4384,6 @@ func findPairNodeForIndexer(node *IndexerNode, allIndexers []*IndexerNode) *Inde
 			}
 			for _, checkIdx := range indexer.Indexes {
 				if index.DefnId == checkIdx.DefnId &&
-					index.Instance.Version == checkIdx.Instance.Version &&
 					index.PartnId == checkIdx.PartnId {
 					return indexer
 				}
@@ -4722,4 +4726,15 @@ func getNumIndexRepaired(indexerNode *IndexerNode) uint64 {
 		}
 	}
 	return numIndexRepaired
+}
+
+func filterPartialSubClusters(subClusters []SubCluster) []SubCluster {
+
+	for i := len(subClusters) - 1; i >= 0; i-- {
+		if len(subClusters[i]) != cSubClusterLen {
+			logging.Infof("Planner::filterPartialSubClusters Filter partial subcluster %v", subClusters[i])
+			subClusters = append(subClusters[:i], subClusters[i+1:]...)
+		}
+	}
+	return subClusters
 }

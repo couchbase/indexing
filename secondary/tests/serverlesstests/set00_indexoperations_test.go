@@ -48,6 +48,8 @@ func TestIndexPlacement(t *testing.T) {
 	scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, 1, t)
 	kvutility.DeleteBucket(bucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(bucketOpWaitDur * time.Second)
+
+	cleanupShardDir(t)
 }
 
 // This test creates a variety of indexes on 2 buckets, 3 collections per bucket
