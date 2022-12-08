@@ -1766,6 +1766,13 @@ var tenantAwarePlannerSwapRebalFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"",
 		false,
 	},
+	{
+		"Swap Rebalance - 1 SG, Swap 2 node - server group mismatch",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_g.json",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_g_out.json",
+		"Planner - Unable to satisfy server group constraint while replacing removed nodes with new nodes.",
+		false,
+	},
 }
 
 func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
@@ -1780,16 +1787,25 @@ func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
 		result, err := planner.ReadPlan(testcase.result)
 		s := planner.NewSimulator()
 		solution, err := s.RunSingleTestTenantAwareRebal(plan, plan.DeletedNodes)
-		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
 
-		err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
-		if err != nil {
-			log.Printf("Actual Solution \n")
-			solution.PrintLayout()
-			log.Printf("Expected Result %v\n", result)
+		if testcase.errStr == "" {
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+			err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
+			if err != nil {
+				log.Printf("Actual Solution \n")
+				solution.PrintLayout()
+				log.Printf("Expected Result %v\n", result)
+			}
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+		} else {
+
+			FailTestIfNoError(err, "Error in RunSingleTestRebalance", t)
+			if strings.Contains(err.Error(), testcase.errStr) {
+				log.Printf("Expected error %v", err)
+			} else {
+				t.Fatalf("Unexpected error %v. Expected %v\n", err, testcase.errStr)
+			}
 		}
-		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
-
 	}
 }
 
