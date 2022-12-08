@@ -1,0 +1,16 @@
+{
+
+
+         "127.0.0.1:9001" : {
+	     "memory_used_actual": 500000000,
+	     "units_used_actual": 800,
+	     "num_tenants" :3,
+             "num_index_repaired": 0 
+	 },
+         "127.0.0.1:9004" : {
+	     "memory_used_actual": 500000000,
+	     "units_used_actual": 800,
+	     "num_tenants" :3,
+             "num_index_repaired": 2
+	 }
+}

@@ -1988,6 +1988,13 @@ var tenantAwarePlannerDefragFuncTestCases = []tenantAwarePlannerRebalFuncTestCas
 		"",
 		false,
 	},
+	{
+		"Rebalance - 1 Subcluster, Below HWM (partial replica repair)",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_l.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_l_out.json",
+		"",
+		false,
+	},
 }
 
 func tenantAwarePlannerDefragTests(t *testing.T) {
