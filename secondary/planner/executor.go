@@ -4420,6 +4420,11 @@ func swapTenantsFromDeleteNodes(deletedNodes []*IndexerNode,
 func validateServerGroupForPairNode(deletedNodes []*IndexerNode,
 	pairForDeletedNodes []*IndexerNode, newNodes []*IndexerNode) bool {
 
+	const _validateServerGroupForPairNode = "Planner::validateServerGroupForPairNode"
+
+	logging.Verbosef("%v DeletedNodes %v PairNodes %v NewNodes %v", _validateServerGroupForPairNode,
+		deletedNodes, pairForDeletedNodes, newNodes)
+
 	//node with the same index in the slice are considered to be a pair
 	for i, _ := range deletedNodes {
 
@@ -4430,12 +4435,29 @@ func validateServerGroupForPairNode(deletedNodes []*IndexerNode,
 
 		pairNode := pairForDeletedNodes[i]
 		if pairNode != nil {
-			//if pair node is also being deleted, then no need to check
+			//if pair node is also being deleted, then make sure the
+			//swap candidates for deleted node and its pair do not
+			//belong to the same server group.
 			if pairNode.IsDeleted() {
+				//find index of pairNode in the deletedNode
+				delIndex := 0
+				for j, delNode := range deletedNodes {
+					if pairNode.NodeUUID == delNode.NodeUUID {
+						delIndex = j
+					}
+				}
+				//validate server group
+				if pairNode.ServerGroup == newNodes[delIndex].ServerGroup {
+					logging.Verbosef("%v SG Mismatch for deleted pairNode %v newNode %v",
+						_validateServerGroupForPairNode, pairNode, newNodes[delIndex])
+					return false
+				}
 				continue
 			}
 
 			if pairNode.ServerGroup == newNodes[i].ServerGroup {
+				logging.Verbosef("%v SG Mismatch pairNode %v newNode %v",
+					_validateServerGroupForPairNode, pairNode, newNodes[i])
 				return false
 			}
 		}
