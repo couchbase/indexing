@@ -1213,14 +1213,6 @@ var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
 		"",
 	},
 	{
-		"Place Single Index Instance - 2 empty nodes - 1 SG",
-		"../testdata/planner/tenantaware/topology/2_empty_nodes_1_sg.json",
-		"../testdata/planner/tenantaware/new_index_1.json",
-		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
-		true,
-		"",
-	},
-	{
 		"Place Single Index Instance - 4 empty nodes - 2 SG",
 		"../testdata/planner/tenantaware/topology/4_empty_nodes_2_sg.json",
 		"../testdata/planner/tenantaware/new_index_1.json",
@@ -1317,6 +1309,14 @@ var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
 }
 
 var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
+	{
+		"Place Single Index Instance - 2 empty nodes - 1 SG",
+		"../testdata/planner/tenantaware/topology/2_empty_nodes_1_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		true,
+		"No SubCluster Below Low Usage Threshold",
+	},
 	{
 		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity Above Memory HWM",
 		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_d.json",
