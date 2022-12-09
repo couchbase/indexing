@@ -1298,6 +1298,12 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 
 		if sched {
+			if security.IsToolsConfigUsed() {
+				err := fmt.Sprintf("scheduling of create token disabled when tools config is used")
+				logging.Errorf("Fail to create index: %v, msg: %v", err, msg)
+				return fmt.Errorf("%v", msg)
+			}
+
 			scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 			if scheduleErr == nil {
 				wait := true
@@ -3234,20 +3240,22 @@ func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, boo
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 
-	// place token for recovery.  Even if the index does not exist, the delete token will
-	// be cleaned up during rebalance.  By placing the delete token, it will make sure that the
-	// outstanding create token will be deleted.
-	if err := mc.PostDeleteCommandToken(defnID, false); err != nil {
-		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
-	}
-
 	var schedToken, stopToken bool
 	var tokenErr error
-	if schedToken, stopToken, tokenErr = o.deleteScheduleTokens(defnID); tokenErr != nil {
-		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors. "+
-			"Cleanup may happen in the background.  Error=%v.", tokenErr))
-	}
+	if !security.IsToolsConfigUsed() {
+		// place token for recovery.  Even if the index does not exist, the delete token will
+		// be cleaned up during rebalance.  By placing the delete token, it will make sure that the
+		// outstanding create token will be deleted.
+		if err := mc.PostDeleteCommandToken(defnID, false); err != nil {
+			return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
+		}
 
+		if schedToken, stopToken, tokenErr = o.deleteScheduleTokens(defnID); tokenErr != nil {
+			return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors. "+
+				"Cleanup may happen in the background.  Error=%v.", tokenErr))
+		}
+
+	}
 	// find index -- this method will not return the index if the index is in DELETED
 	// status (but defn exists).
 	meta := o.findIndex(defnID)
@@ -3318,24 +3326,26 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 
 	for _, id := range defnIDs {
 
-		// Has the index been deleted?
-		found, err := mc.DeleteCommandTokenExist(id)
-		if err != nil {
-			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
-		}
-		if found {
-			logging.Warnf("Index %v have been deleted. Skip build index.", id)
-			continue
-		}
+		if !security.IsToolsConfigUsed() {
+			// Has the index been deleted?
+			found, err := mc.DeleteCommandTokenExist(id)
+			if err != nil {
+				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+			}
+			if found {
+				logging.Warnf("Index %v have been deleted. Skip build index.", id)
+				continue
+			}
 
-		// Has the index been built?
-		found, err = mc.BuildCommandTokenExist(id)
-		if err != nil {
-			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
-		}
-		if found {
-			logging.Warnf("Index %v has already built. Skip build index.", id)
-			continue
+			// Has the index been built?
+			found, err = mc.BuildCommandTokenExist(id)
+			if err != nil {
+				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+			}
+			if found {
+				logging.Warnf("Index %v has already built. Skip build index.", id)
+				continue
+			}
 		}
 
 		// find index -- this method will not return deleted index. This will only return an instance
@@ -3410,10 +3420,12 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 		}
 	}
 
-	// place token for recovery.
-	for _, id := range defnList {
-		if err := mc.PostBuildCommandToken(id); err != nil {
-			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+	if !security.IsToolsConfigUsed() {
+		// place token for recovery.
+		for _, id := range defnList {
+			if err := mc.PostBuildCommandToken(id); err != nil {
+				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+			}
 		}
 	}
 
@@ -4101,7 +4113,11 @@ func (o *MetadataProvider) GetClusterVersion() uint64 {
 func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 
 	// Find the version from metakv.  If token not found or error, fromMetakv is 0.
-	fromMetakv, metakvErr := mc.GetIndexerVersionToken()
+	var fromMetakv uint64
+	var metakvErr error
+	if !security.IsToolsConfigUsed() {
+		fromMetakv, metakvErr = mc.GetIndexerVersionToken()
+	}
 
 	// Any failed node?
 	numFailedNode := atomic.LoadInt32(&o.numFailedNode)
@@ -4165,7 +4181,7 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 	}
 
 	// update metakv
-	if latestVersion > fromMetakv {
+	if !security.IsToolsConfigUsed() && latestVersion > fromMetakv {
 		if err := mc.PostIndexerVersionToken(latestVersion); err != nil {
 			logging.Errorf("MetadataProvider: fail to post indexer version. Error = %s", err)
 		} else {
@@ -5884,10 +5900,14 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 		return err
 	}
 
-	user, pass, err := cbauth.GetHTTPServiceAuth(w.authHost)
-	if err != nil {
-		logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
-		return err
+	var err error
+	user, pass := security.GetToolsCreds()
+	if !security.IsToolsConfigUsed() {
+		user, pass, err = cbauth.GetHTTPServiceAuth(w.authHost)
+		if err != nil {
+			logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
+			return err
+		}
 	}
 
 	authReq := &AuthRequest{

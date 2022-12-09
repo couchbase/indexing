@@ -1614,6 +1614,9 @@ func WatchClusterVersionChanges(clusterAddr string, termVersion int64) {
 
 	// Note: As clusterAddr is always localhost we will not use TLS for this.
 	urlStr := fmt.Sprintf("http://%s/poolsStreaming/%s", clusterAddr, DEFAULT_POOL)
+	if security.IsToolsConfigUsed() {
+		urlStr = fmt.Sprintf("https://%s/poolsStreaming/%s", clusterAddr, DEFAULT_POOL)
+	}
 	params := &security.RequestParams{
 		UserAgent: "WatchClusterVersionChanges",
 	}
