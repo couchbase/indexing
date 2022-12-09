@@ -2182,6 +2182,12 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		//exclude partial subclusters except if there is only 1 node left in the cluster(MB-54706)
+		if len(subClusters) != 1 {
+			subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
+		}
+
 		if len(subClustersBelowLWM) != 0 {
 			result = findLeastLoadedSubCluster(subClustersBelowLWM)
 		} else {
