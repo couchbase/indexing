@@ -2257,6 +2257,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 	var err error
 	var subClusters []SubCluster
 
+	emptyNodesWithoutPairs := make(map[string]*IndexerNode)
+	emptyNodesPaired := make(map[string]*IndexerNode)
+
 	for _, node := range indexers {
 		var subcluster SubCluster
 
@@ -2268,6 +2271,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 
 		//skip empty nodes
 		if len(node.Indexes) == 0 {
+			emptyNodesWithoutPairs[node.NodeUUID] = node
+			logging.Debugf("%v Added %v to emptyNodesWithoutPairs %v", _groupIndexNodesIntoSubClusters,
+				node, emptyNodesWithoutPairs)
 			continue
 		}
 
@@ -2290,47 +2296,106 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 			}
 		}
 		if len(subcluster) == 1 {
-			subcluster, err = findPairForSingleNodeSubCluster(indexers, subcluster, subClusters)
+			var pairNode *IndexerNode
+			subcluster, pairNode, err = findPairForSingleNodeSubCluster(indexers, subcluster, subClusters)
 			if err != nil {
 				return nil, err
+			}
+			if pairNode != nil {
+				emptyNodesPaired[pairNode.NodeUUID] = pairNode
+				logging.Debugf("%v Added %v to emptyNodesPaired %v", _groupIndexNodesIntoSubClusters,
+					pairNode, emptyNodesPaired)
 			}
 		}
 
 		subClusters = append(subClusters, subcluster)
 	}
 
-	//group empty nodes into subCluster
-	for _, node := range indexers {
+	//remove the already paired empty nodes
+	for nodeUUID, _ := range emptyNodesPaired {
+		delete(emptyNodesWithoutPairs, nodeUUID)
+	}
 
-		if node.IsDeleted() {
-			continue
+	if len(emptyNodesWithoutPairs) == 0 {
+		return subClusters, nil
+	}
+
+	//It is possible to have a server group assignment which fails to pair all nodes
+	//e.g. n1[sg1], n2[sg2]. CP adds n3[sg2], n4[sg3]. This can be paired as (n1, n3) and
+	//(n2, n4). But if n1 gets paired with n4 first i.e. (n1, n4), then (n2, n3) cannot happen
+	//as both belong to the same server group sg2.
+	emptyNodeList := make([]*IndexerNode, 0, len(emptyNodesWithoutPairs))
+
+	for _, node := range emptyNodesWithoutPairs {
+		emptyNodeList = append(emptyNodeList, node)
+	}
+
+	//sort for deterministic output
+	sort.Slice(emptyNodeList, func(i, j int) bool {
+		return emptyNodeList[i].NodeUUID > emptyNodeList[j].NodeUUID
+	})
+
+	emptyNodePermutations := permuteNodes(emptyNodeList)
+	found := false
+	for _, emptyNodePerm := range emptyNodePermutations {
+		if validateServerGroupForEmptyNodes(emptyNodePerm) {
+			emptyNodeList = emptyNodePerm
+			found = true
+			break
 		}
-
-		var subcluster SubCluster
-
-		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
-			continue
-		}
-
-		//if there are no indexes on a node
-		if len(node.Indexes) == 0 {
-			logging.Infof("%v Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
-				node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
-			subcluster, err = findSubClusterForEmptyNode(indexers, node, subClusters)
-			if err != nil {
-				return nil, err
+	}
+	if found {
+		//form sub-clusters for the valid permutation
+		var subCluster SubCluster
+		for _, node := range emptyNodeList {
+			subCluster = append(subCluster, node)
+			if len(subCluster) == cSubClusterLen {
+				subClusters = append(subClusters, subCluster)
+				subCluster = nil
 			}
-			subClusters = append(subClusters, subcluster)
+		}
+		//append the last single node subcluster if available
+		if len(subCluster) == 1 {
+			subClusters = append(subClusters, subCluster)
+		}
+
+	} else {
+		//otherwise add empty nodes as single node subcluster
+		var subCluster SubCluster
+		for _, node := range emptyNodeList {
+			subCluster = append(subCluster, node)
+			subClusters = append(subClusters, subCluster)
+			subCluster = nil
+		}
+	}
+
+	return subClusters, nil
+}
+
+//validateServerGroupForEmptyNodes validates if the input nodes can form sub-cluster
+//without violating server group constraint. Each node in odd position is considered
+//to be a pair with the next even position node starting with 0 index.
+func validateServerGroupForEmptyNodes(emptyNodePermutations []*IndexerNode) bool {
+
+	if len(emptyNodePermutations) == 1 {
+		return true
+	}
+
+	for i := 0; i < len(emptyNodePermutations); i += 2 {
+
+		//length is odd
+		if i >= len(emptyNodePermutations)-1 {
+			continue
+		}
+
+		if emptyNodePermutations[i].ServerGroup == emptyNodePermutations[i+1].ServerGroup {
+			return false
 		}
 
 	}
 
-	//DEEPK It is possible to have a server group assignment which fails to pair all nodes
-	//e.g. n1[sg1], n2[sg2]. CP adds n3[sg2], n4[sg3]. This can be paired as (n1, n3) and
-	//(n2, n4). But if n1 gets paired with n4 first i.e. (n1, n4), then (n2, n3) cannot happen
-	//as both belong to the same server group sg2.
+	return true
 
-	return subClusters, nil
 }
 
 //validateSubClusterGrouping validates the constraints for
@@ -2525,10 +2590,11 @@ func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 //findSubClusterForEmptyNode finds another empty node in the cluster to
 //pair with the input single node subCluster to form a sub-cluster. If excludeNodes is specified,
 //those nodes are excluded while finding the pair.
-func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubCluster, excludeNodes []SubCluster) (SubCluster, error) {
+func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubCluster,
+	excludeNodes []SubCluster) (SubCluster, *IndexerNode, error) {
 
 	if len(subCluster) != 1 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	node := subCluster[0]
@@ -2542,12 +2608,12 @@ func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubClus
 
 			if !checkIfNodeBelongsToAnySubCluster(excludeNodes, indexer) {
 				subCluster = append(subCluster, indexer)
-				return subCluster, nil
+				return subCluster, indexer, nil
 
 			}
 		}
 	}
-	return subCluster, nil
+	return subCluster, nil, nil
 }
 
 //findSubClusterForEmptyNode finds another empty node in the cluster to
