@@ -2863,10 +2863,10 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 			if l.enableStatsLog {
 				l.writeIndexStorageStat(nil)
 			} else {
-				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
+				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil, nil))
 			}
 		} else if logging.IsEnabled(logging.Timing) {
-			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
+			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil, nil))
 		}
 	} else {
 		storageStats = ""
@@ -3147,7 +3147,8 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
+	permissionCache := common.NewSessionPermissionsCache(creds)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3159,11 +3160,18 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	allowedMeteringStats, err := creds.IsAllowed("cluster.settings!read")
+	if err != nil {
+		logging.Verbosef("StatsManager::handleMetricsHigh not enough permissions for getting metering stats. err: %v", err)
+	} else if !allowedMeteringStats {
+		logging.Verbosef("StatsManager::handleMetricsHigh not enough permissions for getting metering stats.")
+	}
+
 	is := s.stats.Get()
 	if is == nil {
 		w.WriteHeader(200)
 		w.Write([]byte(""))
-		if s.meteringMgr != nil {
+		if s.meteringMgr != nil && allowedMeteringStats {
 			_ = s.meteringMgr.WriteMetrics(w)
 		}
 		return
@@ -3171,7 +3179,10 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 
 	out := make([]byte, 0, len(is.indexes)*APPROX_METRIC_SIZE*APPROX_METRIC_COUNT)
 	for _, s := range is.indexes {
-		out = s.populateMetrics(out)
+		allowed := permissionCache.IsAllowed(s.bucket, s.scope, s.collection, "list")
+		if allowed {
+			out = s.populateMetrics(out)
+		}
 	}
 
 	func() {
@@ -3179,14 +3190,17 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		defer is.bslock.RUnlock()
 
 		for bucket, bstats := range is.buckets {
-			str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
-			out = append(out, []byte(str)...)
+			allowed := permissionCache.IsAllowed(bucket, "", "", "list")
+			if allowed {
+				str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
+				out = append(out, []byte(str)...)
+			}
 		}
 	}()
 
 	w.WriteHeader(200)
 	w.Write(out)
-	if s.meteringMgr != nil {
+	if s.meteringMgr != nil && allowedMeteringStats {
 		_ = s.meteringMgr.WriteMetrics(w)
 	}
 }
@@ -3248,21 +3262,31 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 	return result
 }
 
-func (s *statsManager) getStorageStats(spec *statsSpec) string {
+func (s *statsManager) getStorageStats(spec *statsSpec, creds cbauth.Creds) string {
 	var result strings.Builder
 	replych := make(chan []IndexStorageStats)
 	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
 	res := <-replych
 
+	permissionCache := common.NewSessionPermissionsCache(creds)
+	addSeparator := false
 	result.WriteString("[\n")
-	for i, sts := range res {
-		if i > 0 {
+	for _, sts := range res {
+		if addSeparator {
 			result.WriteString(",")
 		}
-
+		bucket := sts.Bucket
 		scope := sts.Scope
 		collection := sts.Collection
+		if creds != nil {
+			allowed := permissionCache.IsAllowed(bucket, scope, collection, "list")
+			if !allowed {
+				addSeparator = false
+				continue
+			}
+		}
+		addSeparator = true
 		if scope == common.DEFAULT_SCOPE && collection == common.DEFAULT_COLLECTION {
 			result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
 				sts.Bucket, sts.Name, sts.InstId, sts.PartnId))
@@ -3291,7 +3315,7 @@ func (s *statsManager) getStorageStats(spec *statsSpec) string {
 }
 
 func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3337,7 +3361,7 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
 			w.WriteHeader(200)
-			w.Write([]byte(s.getStorageStats(spec)))
+			w.Write([]byte(s.getStorageStats(spec, creds)))
 		} else {
 			w.WriteHeader(200)
 			w.Write([]byte("Indexer In Warmup. Please try again later."))
