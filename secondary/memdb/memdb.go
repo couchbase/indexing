@@ -1090,12 +1090,6 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		wg.Add(1)
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					logging.Fatalf("MemDBSlice::LoadFromDisk: panic detected while Loading from Disk Slice Id %v, failed to recover from the snapshot %v (err=%v)", m.id, dir, r)
-					logging.Fatalf("%s", logging.StackTrace())
-				}
-			}()
 
 			for shard := range wchan {
 				r := readers[shard]
