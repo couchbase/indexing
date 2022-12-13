@@ -3344,19 +3344,24 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
-		reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
-		if reqCtx.ReqSource == common.DDLRequestSourceUser {
-			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
-			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+		if idx.canAllowDDLDuringRebalance() {
+			logging.Infof("Indexer::handleBuildIndex Allowing DDL during rebalance for "+
+				"instIdList: %v", instIdList)
+		} else {
+			reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
+			if reqCtx.ReqSource == common.DDLRequestSourceUser {
+				errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
+				logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+				if clientCh != nil {
+					clientCh <- &MsgError{
+						err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+							severity: FATAL,
+							cause:    errors.New(errStr),
+							category: INDEXER}}
+				}
+				return
 			}
-			return
 		}
 	}
 

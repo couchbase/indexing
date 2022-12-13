@@ -1065,7 +1065,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
-				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", retryList[0])
+				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Index build will be retried in background. Reason = %v", retryList[0])
 				return true, defn.BucketUUID, defn.ScopeId, defn.CollectionId, retryList[0]
 			}
 
@@ -2108,6 +2108,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	defnIdMap := make(map[common.IndexDefnId]bool)
 	buckets := []string(nil)
 	inst2DefnMap := make(map[common.IndexInstId]common.IndexDefnId)
+	isRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 	isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 
 	addToBucketList := func(bucket string) {
@@ -2170,19 +2171,39 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 
+		// Always allow rebalance initiated builds. For user initiated
+		// builds, allow only if "canProcessDDL" returns true
+		canProcessBuild := isRebalanceBuild || isShardRebalanceBuild || m.canProcessDDL(defn.Bucket, false)
+
+		var buildErr error
 		for _, inst := range insts {
 
 			if !m.isValidInstStateForBuild(defn, inst, isShardRebalanceBuild) {
 				continue
 			}
 
-			m.setScheduleFlagAndUpdateErr(defn, inst, true, true, "")
+			if canProcessBuild { // Set schedule flag and update instIdList
+				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, "")
 
-			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
-			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
+				instIdList = append(instIdList, common.IndexInstId(inst.InstId))
+				inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
+			} else {
+				// DDL can not be processed. Set scheduled flag, update build error
+				// and continue. The defn will be added to retry list after all instances
+				// are updated with buildErr
+				buildErr = errors.New(fmt.Sprintf("Index %v will retry building in the background as rebalance is in progress for bucket: %v", defn.Name, defn.Bucket))
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: inst: %v build will be scheduled in the background as rebalance "+
+					"is in progress for bucket: %v", inst.InstId, defn.Bucket)
+				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, buildErr.Error())
+			}
 		}
 
-		addToBucketList(defn.Bucket)
+		if !canProcessBuild {
+			m.builder.notifych <- defn // Notify builder for retry
+			retryErrList = append(retryErrList, buildErr)
+		} else {
+			addToBucketList(defn.Bucket)
+		}
 	}
 
 	if m.notifier != nil && len(instIdList) != 0 {
