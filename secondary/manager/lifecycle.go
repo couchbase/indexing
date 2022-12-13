@@ -79,6 +79,8 @@ type LifecycleMgr struct {
 
 	instsInAsyncRecovery        map[common.IndexInstId]bool
 	droppedInstsInAsyncRecovery map[common.IndexInstId]bool
+
+	rebalMutex sync.RWMutex
 }
 
 type requestHolder struct {
@@ -967,6 +969,9 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 		logging.Infof("LifecycleMgr.handleRebalanceRunning() : releasing token %v", m.prepareLock.DefnId)
 	}
 
+	m.rebalMutex.Lock()
+	defer m.rebalMutex.Unlock()
+
 	m.rebalancePhase = common.RebalanceInitated
 	m.bucketTransferPhase = make(map[string]common.RebalancePhase)
 	m.prepareLock = nil
@@ -981,6 +986,9 @@ func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
 		return err
 	}
 
+	m.rebalMutex.Lock()
+	defer m.rebalMutex.Unlock()
+
 	m.rebalancePhase = req.GlobalRebalPhase
 	for bucket, bucketTransferPhase := range req.BucketTransferPhase {
 		m.bucketTransferPhase[bucket] = bucketTransferPhase
@@ -991,6 +999,9 @@ func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
 
 func (m *LifecycleMgr) handleRebalanceDone(content []byte) error {
 	logging.Infof("LifecycleMgr::handleRebalanceDone Clearing rebalance phase")
+
+	m.rebalMutex.Lock()
+	defer m.rebalMutex.Unlock()
 
 	m.rebalancePhase = common.RebalanceNotRunning
 	m.bucketTransferPhase = nil
@@ -4503,6 +4514,8 @@ func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
 
 // Returns "true" if DDL can be processed. "false" otherwise
 func (m *LifecycleMgr) canProcessDDL(bucket string, isDropReq bool) bool {
+	m.rebalMutex.RLock()
+	defer m.rebalMutex.RUnlock()
 
 	if m.isRebalanceRunning() {
 
@@ -5130,7 +5143,8 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	if quota <= 0 { // unlimited quota (documented as batchSize of -1 in config.go)
 		quota = math.MaxInt32
 	}
-	skipList := make(map[string]bool) // keyspaces w/ index(es) now building; can't start new build on these till current one completes
+	skipList := make(map[string]bool)       // keyspaces w/ index(es) now building; can't start new build on these till current one completes
+	bucketsInRebal := make(map[string]bool) // Buckets which are undergoing rebalance
 
 	metaIter, err := s.manager.repo.NewIterator()
 	if err != nil {
@@ -5140,6 +5154,15 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	defer metaIter.Close()
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
+
+		_, ok := bucketsInRebal[defn.Bucket]
+		if ok || !s.manager.canProcessDDL(defn.Bucket, false) {
+			// DDL can not be allowed on the bucket as the bucket is still in rebalance
+			bucketsInRebal[defn.Bucket] = true
+			key := getPendingKey(defn.Bucket, defn.Scope, defn.Collection)
+			skipList[key] = true
+			continue
+		}
 
 		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if len(insts) == 0 || err != nil {
