@@ -5170,6 +5170,10 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 	entries := s.commandListener.GetNewBuildTokens()
 	retryList := make(map[string]*mc.BuildCommandToken)
 
+	canAllowDDLDuringRebalance := s.manager.canAllowDDLDuringRebalance() && s.manager.isRebalanceRunning()
+
+	// TODO: This method gets invoked every 200ms. This can log a lot of messages
+	// when rebalance is in progress. Control the logging
 	processed := false
 	for entry, command := range entries {
 
@@ -5182,11 +5186,17 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 
 		// index may already be deleted or does not exist in this node
 		if defn == nil {
+			// The definition might not exist in repo due to rebalance being in progress.
+			// In such a case, queue it back to retryList
+			if canAllowDDLDuringRebalance {
+				retryList[entry] = command
+			}
+
 			continue
 		}
 
 		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
-		if err != nil {
+		if err != nil || (len(insts) == 0 && canAllowDDLDuringRebalance) {
 			retryList[entry] = command
 			logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
@@ -5203,6 +5213,12 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 						defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 					processed = true
 				}
+			} else if inst.RState == uint32(common.REBAL_PENDING) && inst.State == uint32(common.INDEX_STATE_CREATED) {
+				// Queue the index instance as it is possible that the instance is still
+				// in recovery. Builder will queue the index instance
+				logging.Infof("builder: Queuing index (%v, %v, %v, %v) as inst state is in rebalance",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+				retryList[entry] = command
 			}
 		}
 	}
