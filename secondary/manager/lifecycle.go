@@ -157,6 +157,8 @@ type builder struct {
 
 	commandListener *mc.CommandListener
 	listenerDonech  chan bool
+
+	lastLogTime time.Time
 }
 
 type janitor struct {
@@ -4961,6 +4963,10 @@ func (s *builder) run() {
 				}
 			}
 
+			if time.Since(s.lastLogTime) > time.Duration(30*time.Second) {
+				s.lastLogTime = time.Now()
+			}
+
 		case <-s.manager.killch:
 			s.commandListener.Close()
 			logging.Infof("builder: go-routine terminates.")
@@ -5145,6 +5151,7 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	}
 	skipList := make(map[string]bool)       // keyspaces w/ index(es) now building; can't start new build on these till current one completes
 	bucketsInRebal := make(map[string]bool) // Buckets which are undergoing rebalance
+	logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
 
 	metaIter, err := s.manager.repo.NewIterator()
 	if err != nil {
@@ -5161,6 +5168,10 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 			bucketsInRebal[defn.Bucket] = true
 			key := getPendingKey(defn.Bucket, defn.Scope, defn.Collection)
 			skipList[key] = true
+			if logMsg {
+				logging.Warnf("builder: Queuing index (%v, %v, %v, %v) as bucket rebalance is in progress",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+			}
 			continue
 		}
 
@@ -5194,16 +5205,15 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 	retryList := make(map[string]*mc.BuildCommandToken)
 
 	canAllowDDLDuringRebalance := s.manager.canAllowDDLDuringRebalance() && s.manager.isRebalanceRunning()
+	logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
 
-	// TODO: This method gets invoked every 200ms. This can log a lot of messages
-	// when rebalance is in progress. Control the logging
 	processed := false
 	for entry, command := range entries {
 
 		defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
 		if err != nil {
 			retryList[entry] = command
-			logging.Warnf("builder: Unable to read index definition.  Skp command %v.  Internal Error = %v.", entry, err)
+			logging.Warnf("builder: Unable to read index definition.  Skip command %v.  Internal Error = %v.", entry, err)
 			continue
 		}
 
@@ -5213,6 +5223,9 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 			// In such a case, queue it back to retryList
 			if canAllowDDLDuringRebalance {
 				retryList[entry] = command
+				if logMsg {
+					logging.Warnf("builder: Index definition does not exist in repo. Queuing to retry list %v as rebalance is in progress", entry)
+				}
 			}
 
 			continue
@@ -5221,8 +5234,13 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if err != nil || (len(insts) == 0 && canAllowDDLDuringRebalance) {
 			retryList[entry] = command
-			logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
-				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+			if err != nil {
+				logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v). err: %v. Skipping ...",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
+			} else if logMsg {
+				logging.Warnf("builder: No index instances found for definition (%v, %v, %v, %v). Queuing index "+
+					" to retry list for further processing as rebalance is in progress", defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
+			}
 			continue
 		}
 
@@ -5239,8 +5257,10 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 			} else if inst.RState == uint32(common.REBAL_PENDING) && inst.State == uint32(common.INDEX_STATE_CREATED) {
 				// Queue the index instance as it is possible that the instance is still
 				// in recovery. Builder will queue the index instance
-				logging.Infof("builder: Queuing index (%v, %v, %v, %v) as inst state is in rebalance",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+				if logMsg {
+					logging.Infof("builder: Queuing index (%v, %v, %v, %v) as inst state is in %v",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.REBAL_PENDING)
+				}
 				retryList[entry] = command
 			}
 		}
