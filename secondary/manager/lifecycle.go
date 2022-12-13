@@ -2009,6 +2009,20 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	defnIdMap := make(map[common.IndexDefnId]bool)
 	buckets := []string(nil)
 	inst2DefnMap := make(map[common.IndexInstId]common.IndexDefnId)
+	isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
+
+	addToBucketList := func(bucket string) {
+		found := false
+		for _, bucketn := range buckets {
+			if bucketn == bucket {
+				found = true
+			}
+		}
+
+		if !found {
+			buckets = append(buckets, bucket)
+		}
+	}
 
 	for _, defnId := range defnIds {
 
@@ -2026,12 +2040,14 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			skipList = append(skipList, defnId)
 			continue
 		}
+
 		if defn == nil {
 			logging.Warnf("LifecycleMgr::handleBuildIndexes: Index defnId %v is nil. Skipping this index.", defnId)
 			errMap[common.IndexInstId(defnId)] = common.ErrIndexNotFoundRebal.Error()
 			skipList = append(skipList, defnId)
 			continue
 		}
+
 		insts, err := m.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId)
 		if len(insts) == 0 || err != nil {
 			logging.Errorf("LifecycleMgr::handleBuildIndexes: Failed to find index instances for index (%v, %v, %v, %v) for defnId %v. Skipping this index.",
@@ -2041,7 +2057,6 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 
-		isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 		for _, inst := range insts {
 
 			if !m.isValidInstStateForBuild(defn, inst, isShardRebalanceBuild) {
@@ -2054,16 +2069,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
 		}
 
-		found := false
-		for _, bucket := range buckets {
-			if bucket == defn.Bucket {
-				found = true
-			}
-		}
-
-		if !found {
-			buckets = append(buckets, defn.Bucket)
-		}
+		addToBucketList(defn.Bucket)
 	}
 
 	if m.notifier != nil && len(instIdList) != 0 {
