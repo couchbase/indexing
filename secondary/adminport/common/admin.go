@@ -5,8 +5,11 @@
 // statistics, administering and managing cluster.
 package common
 
-import "errors"
-import c "github.com/couchbase/indexing/secondary/common"
+import (
+	"errors"
+
+	c "github.com/couchbase/indexing/secondary/common"
+)
 
 // errors codes
 
@@ -82,6 +85,9 @@ type Server interface {
 
 	// GetStatistics returns server statistics.
 	GetStatistics() c.Statistics
+
+	// Sets closeReqCh state to REQCH_CLOSE which enables server to close its request channel
+	CloseReqch()
 
 	// Stop server routine.
 	Stop()

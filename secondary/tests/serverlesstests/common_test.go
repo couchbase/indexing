@@ -579,8 +579,9 @@ func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t 
 
 func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, status string, t *testing.T) {
 	// Create a partitioned index with defer_build:true
-	tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket,
+	_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket,
 		n1qlStatement, false, gocb.RequestPlus)
+	FailTestIfError(err, fmt.Sprintf("Error during n1qlExecute: %v", n1qlStatement), t)
 
 	log.Printf("Executed N1ql statement: %v", n1qlStatement)
 	// Wait for index created
@@ -1119,30 +1120,24 @@ func performSwapRebalance(addNodes []string, removeNodes []string, skipValidatio
 // Due to shard locking, if there is a bug in shard
 // locking management, then index DDL operations after a
 // failed rebalance can be caught using this test
-func testDDLAfterRebalance(t *testing.T) {
+func testDDLAfterRebalance(indexNodes []string, t *testing.T) {
 	// Drop indexes[0]
 	index := indexes[0]
 	collection := "c1"
 	for _, bucket := range buckets {
-
 		err := secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
 		FailTestIfError(err, "Error while dropping index", t)
-
 	}
 
 	for _, bucket := range buckets {
-
 		waitForReplicaDrop(index, bucket, scope, collection, 0, t) // wait for replica drop-0
 		waitForReplicaDrop(index, bucket, scope, collection, 1, t) // wait for replica drop-1
-
 	}
 
 	// Recreate the index again
 	for _, bucket := range buckets {
-
 		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
-
 	}
 	// Reset all indexer stats
 	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -1154,7 +1149,8 @@ func testDDLAfterRebalance(t *testing.T) {
 		scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
 	}
 
-	validateIndexPlacement([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
-	validateShardIdMapping(clusterconfig.Nodes[1], t)
-	validateShardIdMapping(clusterconfig.Nodes[2], t)
+	validateIndexPlacement(indexNodes, t)
+	for _, indexNode := range indexNodes {
+		validateShardIdMapping(indexNode, t)
+	}
 }

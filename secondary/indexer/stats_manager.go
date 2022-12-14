@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2576,8 +2577,13 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 		mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":", mapKey))...)
 		mapSlice = append(mapSlice, '{')
 		if len(mapVal) > 0 {
-			for key, val := range mapVal {
-				mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":%v,", key, val))...)
+			var mapKeys []string
+			for k := range mapVal {
+				mapKeys = append(mapKeys, k)
+			}
+			sort.Strings(mapKeys)
+			for _, key := range mapKeys {
+				mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":%v,", key, mapVal[key]))...)
 			}
 			if len(mapSlice) > 1 {
 				mapSlice[len(mapSlice)-1] = '}'

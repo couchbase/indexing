@@ -107,6 +107,6 @@ func TestRebalancePanicAtMasterShardTokenScheduleAck(t *testing.T) {
 
 	verifyStorageDirContents(t)
 
-	testDDLAfterRebalance(t)
+	testDDLAfterRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
 
 }

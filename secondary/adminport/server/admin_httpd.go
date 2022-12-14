@@ -41,21 +41,21 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 
-	c "github.com/couchbase/indexing/secondary/common"
-
 	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+	c "github.com/couchbase/indexing/secondary/common"
 )
 
 // httpServer is a concrete type implementing adminport Server
 // interface.
 type httpServer struct {
-	mu       sync.Mutex   // handle concurrent updates to this object
-	lis      net.Listener // TCP listener
-	mux      *http.ServeMux
-	srv      *http.Server // http server
-	messages map[string]apcommon.MessageMarshaller
-	conns    map[string]net.Conn
-	reqch    chan<- apcommon.Request // request channel back to application
+	mu         sync.Mutex   // handle concurrent updates to this object
+	lis        net.Listener // TCP listener
+	mux        *http.ServeMux
+	srv        *http.Server // http server
+	messages   map[string]apcommon.MessageMarshaller
+	conns      map[string]net.Conn
+	reqch      chan<- apcommon.Request // request channel back to application
+	reqChState ChannelState
 
 	// config params
 	name      string // human readable name for this server
@@ -80,6 +80,7 @@ func NewHTTPServer(config c.Config, reqch chan<- apcommon.Request) (apcommon.Ser
 		messages:      make(map[string]apcommon.MessageMarshaller),
 		conns:         make(map[string]net.Conn),
 		reqch:         reqch,
+		reqChState:    REQCH_OPEN,
 		statsInBytes:  0.0,
 		statsOutBytes: 0.0,
 		statsMessages: make(map[string][3]uint64),
@@ -114,6 +115,15 @@ func NewHTTPServer(config c.Config, reqch chan<- apcommon.Request) (apcommon.Ser
 
 	return s, nil
 }
+
+// states for admin-server's request channel
+type ChannelState byte
+
+const (
+	REQCH_OPEN ChannelState = iota // 0
+	REQCH_CLOSE
+	REQCH_CLOSE_DONE
+)
 
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	_, valid, err := c.IsAuthValid(r)
@@ -250,8 +260,15 @@ func (s *httpServer) shutdown() {
 		for _, conn := range s.conns {
 			conn.Close()
 		}
-		close(s.reqch)
 		s.lis = nil
+	}
+}
+
+func (s *httpServer) CloseReqch() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reqChState == REQCH_OPEN {
+		s.reqChState = REQCH_CLOSE
 	}
 }
 
@@ -316,26 +333,48 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waitch := make(chan interface{}, 1)
-	// send and wait
-	s.reqch <- &httpAdminRequest{srv: s, msg: msg, waitch: waitch}
-	val := <-waitch
+	s.mu.Lock()
+	currReqchState := s.reqChState
+	s.mu.Unlock()
 
-	switch v := (val).(type) {
-	case apcommon.MessageMarshaller:
-		if dataOut, err = v.Encode(); err == nil {
-			header := w.Header()
-			header["Content-Type"] = []string{v.ContentType()}
-			w.Write(dataOut)
+	if currReqchState == REQCH_CLOSE {
+		func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
 
-		} else {
-			err = fmt.Errorf("%v, %v", apcommon.ErrorEncodeResponse, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			close(s.reqch)
+			logging.Infof("%s request channel closed. Server restarting.\n", s.logPrefix)
+			s.reqChState = REQCH_CLOSE_DONE
+		}()
+		err = fmt.Errorf("%v %v", apcommon.ErrorInternal, "server restarting")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if currReqchState == REQCH_CLOSE_DONE {
+		err = fmt.Errorf("%v %v", apcommon.ErrorInternal, "server restarting")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else {
+		waitch := make(chan interface{}, 1)
+		// send and wait
+		s.reqch <- &httpAdminRequest{srv: s, msg: msg, waitch: waitch}
+		val := <-waitch
+
+		switch v := (val).(type) {
+		case apcommon.MessageMarshaller:
+			if dataOut, err = v.Encode(); err == nil {
+				header := w.Header()
+				header["Content-Type"] = []string{v.ContentType()}
+				w.Write(dataOut)
+
+			} else {
+				err = fmt.Errorf("%v, %v", apcommon.ErrorEncodeResponse, err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+
+		case error:
+			err = fmt.Errorf("%v, %v", apcommon.ErrorInternal, v)
+			http.Error(w, v.Error(), http.StatusInternalServerError)
 		}
-
-	case error:
-		err = fmt.Errorf("%v, %v", apcommon.ErrorInternal, v)
-		http.Error(w, v.Error(), http.StatusInternalServerError)
 	}
 }
 
