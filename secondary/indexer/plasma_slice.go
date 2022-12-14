@@ -2298,7 +2298,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 
 		statsMap := make(map[string]interface{})
-		err := json.Unmarshal([]byte(pStats.Serialize()), &statsMap)
+		err := json.Unmarshal([]byte(pStats.String()), &statsMap)
 		if err == nil {
 			internalDataMap["MainStore"] = statsMap
 		} else {
@@ -2326,7 +2326,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 			}
 
 			statsMap := make(map[string]interface{})
-			err := json.Unmarshal([]byte(pStats.Serialize()), &statsMap)
+			err := json.Unmarshal([]byte(pStats.String()), &statsMap)
 			if err == nil {
 				internalDataMap["BackStore"] = statsMap
 			} else {
