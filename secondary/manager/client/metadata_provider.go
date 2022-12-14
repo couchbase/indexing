@@ -142,7 +142,6 @@ type watcher struct {
 	serviceMap   *ServiceMap
 	lastSeenTxid common.Txnid
 	authHost     string
-	aParams      *authParams
 	clusterUrl   string
 
 	incomingReqs chan *protocol.RequestHandle
@@ -194,11 +193,6 @@ type IndexerStatus struct {
 }
 
 type watcherCallback func(string, c.IndexerId, c.IndexerId)
-
-type authParams struct {
-	user string
-	pass string
-}
 
 var REQUEST_CHANNEL_COUNT = 1000
 
@@ -5647,19 +5641,6 @@ func (w *watcher) setAuthHost() error {
 
 func (w *watcher) setAuthParams() error {
 
-	if w.aParams == nil || len(w.aParams.user) == 0 || len(w.aParams.pass) == 0 {
-		user, pass, err := cbauth.GetHTTPServiceAuth(w.authHost)
-		if err != nil {
-			logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
-			return err
-		}
-
-		w.aParams = &authParams{
-			user: user,
-			pass: pass,
-		}
-	}
-
 	return nil
 }
 
@@ -5690,16 +5671,16 @@ func (w *watcher) ClientAuth(pipe *common.PeerPipe) error {
 		return err
 	}
 
-	if err := w.setAuthParams(); err != nil {
+	user, pass, err := cbauth.GetHTTPServiceAuth(w.authHost)
+	if err != nil {
+		logging.Errorf("watcher:ClientAuth cbauth.GetHTTPServiceAuth returns error %v", err)
 		return err
 	}
 
 	authReq := &AuthRequest{
-		User: w.aParams.user,
-		Pass: w.aParams.pass,
+		User: user,
+		Pass: pass,
 	}
-
-	var err error
 
 	var content []byte
 	if content, err = MarshallAuthRequest(authReq); err != nil {
