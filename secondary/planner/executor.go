@@ -4207,7 +4207,10 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 		pairForDeletedNodes = append(pairForDeletedNodes, pairNode)
 	}
 
+	logging.Infof("%v nonEmptyDeletedNodes %v", _moveTenantsFromDeletedNodes, nonEmptyDeletedNodes)
 	logging.Infof("%v pairForDeletedNodes %v", _moveTenantsFromDeletedNodes, pairForDeletedNodes)
+	logging.Infof("%v newNodes %v", _moveTenantsFromDeletedNodes, newNodes)
+
 	if len(nonEmptyDeletedNodes) > len(newNodes) {
 
 		logging.Infof("%v Num deleted nodes %v is more than num new/empty nodes %v", _moveTenantsFromDeletedNodes,
@@ -4360,7 +4363,8 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 			}
 		}
 		if found {
-			swapTenantsFromDeleteNodes(deletedNodes, newNodes, solution)
+			logging.Infof("%v selected newNodes for swap %v", _moveTenantsFromDeletedNodes, newNodes)
+			swapTenantsFromDeleteNodes(nonEmptyDeletedNodes, newNodes, solution)
 		} else {
 			return errors.New("Planner - Unable to satisfy server group constraint while replacing " +
 				"removed nodes with new nodes.")
