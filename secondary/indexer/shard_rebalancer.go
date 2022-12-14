@@ -548,6 +548,12 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 	case c.ShardTokenRestoreShard:
 		// Update in-mem book keeping and do not process the token
 		sr.updateInMemToken(ttid, tt, "source")
+
+		// Notify lifecycle manager that shard transfer is done.
+		// This will allow lifecycle manager to unblock any drop
+		// index commands that have been issued while transfer is
+		// in progress
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, c.RebalanceTransferDone)
 		return false
 
 	case c.ShardTokenDropOnSource:
@@ -833,6 +839,12 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 
 	case c.ShardTokenRestoreShard:
 		sr.updateInMemToken(ttid, tt, "dest")
+
+		// Notify lifecycle manager that shard transfer is done.
+		// This will allow lifecycle manager to unblock any drop
+		// index commands that have been issued while transfer is
+		// in progress
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, c.RebalanceTransferDone)
 
 		go sr.startShardRestore(ttid, tt)
 

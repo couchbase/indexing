@@ -623,7 +623,7 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	if prepareCreateIndex.Op == client.PREPARE {
-		if !m.canProcessDDL(prepareCreateIndex.Bucket) {
+		if !m.canProcessDDL(prepareCreateIndex.Bucket, false) {
 			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
 			response := &client.PrepareCreateResponse{
 				Accept: false,
@@ -771,7 +771,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 		bucket = defns[0].Bucket
 	}
 
-	if !m.canProcessDDL(bucket) {
+	if !m.canProcessDDL(bucket, false) {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
 		response := &client.CommitCreateResponse{
 			Accept: false,
@@ -2304,6 +2304,13 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 
 	if updateStatusOnly {
 		return nil
+	}
+
+	if !m.canProcessDDL(defn.Bucket, true) {
+		errStr := fmt.Sprintf("Index: %v deletion can not be processed as rebalance is in progress. "+
+			"Drop index will be retried in background", defn.DefnId)
+		logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
+		return errors.New(errStr)
 	}
 
 	if notify && m.notifier != nil {
@@ -4350,27 +4357,39 @@ func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string
 	return scopeID, collectionID, nil
 }
 
-// Returns "true" if DDL can be processed. "false" otherwise
-func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
+func (m *LifecycleMgr) isRebalanceRunning() bool {
 	_, err := m.repo.GetLocalValue("RebalanceRunning")
 	// err == nil means that repo contains the "RebalanceRunning" key
-	// Hence, check for more conditions before allowing DDL
-	if err == nil {
+	// which can only happen when rebalance is running
+	return err == nil
+}
 
-		// Allow or reject DDL based on "allowDDLDuringRebalance" config
-		config := m.configHolder.Load()
-		if common.IsServerlessDeployment() {
-			canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
-			if !canAllowDDLDuringRebalance {
-				logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
-				return false
-			}
-		} else {
-			canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
-			if !canAllowDDLDuringRebalance {
-				logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as config: allowDDLDuringRebalance is false")
-				return false
-			}
+func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
+	// Allow or reject DDL based on "allowDDLDuringRebalance" config
+	config := m.configHolder.Load()
+	if common.IsServerlessDeployment() {
+		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			return false
+		}
+	} else {
+		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			return false
+		}
+	}
+	return true
+}
+
+// Returns "true" if DDL can be processed. "false" otherwise
+func (m *LifecycleMgr) canProcessDDL(bucket string, isDropReq bool) bool {
+
+	if m.isRebalanceRunning() {
+
+		if !m.canAllowDDLDuringRebalance() {
+			return false
 		}
 
 		if m.rebalancePhase == common.RebalanceInitated {
@@ -4378,20 +4397,30 @@ func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
 			return false
 		}
 
+		// Rebalance planning is done and all index movements are updated
+		// at all nodes in the cluster. Check the per bucket status
+		// before processing DDL operations
 		if m.rebalancePhase == common.RebalanceTransferInProgress {
-			// Rebalance planning is done and all index movements are updated
-			// at all nodes in the cluster. Check the per bucket status
-			// before processing DDL operations
+			// For drop index, an index can be dropped once the transfer
+			// is done on the source node. Destination node can drop the
+			// index while rebalance is in progress
+			minRebalPhase := common.RebalanceDone
+			if isDropReq {
+				minRebalPhase = common.RebalanceTransferDone
+			}
+
 			if bucketTransferPhase, ok := m.bucketTransferPhase[bucket]; ok {
-				if bucketTransferPhase == common.RebalanceDone {
-					return true // Rebalance for the bucket is done. Hence allow DDL
+				// If bucket transfer has moved past the minimum rebalance phase
+				// required to allow the DDL on the bucket, then return true
+				if bucketTransferPhase >= minRebalPhase {
+					return true
 				}
 				return false
 			}
 			// Bucket is not a part of rebalance. Allow DDL on the bucket
 			return true
 		}
-
+		return false
 	}
 	return true
 }
@@ -4427,16 +4456,17 @@ func extractDefnIdInstIdReplicaString(entries map[string]*mc.DropInstanceCommand
 // 2) Any call to mutate the repository must be async request.
 func (m *janitor) cleanup() {
 
-	// TODO (Elixir) - Do we need to allow cleanup of tokens when rebalance is running?
-	// if rebalancing is running
-	if _, err := m.manager.repo.GetLocalValue("RebalanceRunning"); err == nil {
-		return
+	logging.Infof("janitor: running cleanup.")
+
+	if m.manager.isRebalanceRunning() {
+		if !m.manager.canAllowDDLDuringRebalance() {
+			return
+		}
 	}
 
 	//
 	// Cleanup based on delete token
 	//
-	logging.Infof("janitor: running cleanup.")
 
 	entries := m.commandListener.GetNewDeleteTokens()
 	retryList := make(map[string]*mc.DeleteCommandToken)

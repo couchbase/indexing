@@ -3715,20 +3715,24 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
+		if idx.canAllowDDLDuringRebalance() && msg.(*MsgDropIndex).GetMsgType() == CLUST_MGR_DROP_INDEX_DDL {
+			logging.Infof("Indexer::handleDropIndex Allowing drop index during rebalance for "+
+				"index defnId: %v, instId: %v", indexInst.Defn.DefnId, indexInst.InstId)
+		} else {
+			reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
+			if reqCtx.ReqSource == common.DDLRequestSourceUser {
+				errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
+				logging.Errorf("Indexer::handleDropIndex %v", errStr)
 
-		reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
-		if reqCtx.ReqSource == common.DDLRequestSourceUser {
-			errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
-			logging.Errorf("Indexer::handleDropIndex %v", errStr)
-
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+				if clientCh != nil {
+					clientCh <- &MsgError{
+						err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+							severity: FATAL,
+							cause:    errors.New(errStr),
+							category: INDEXER}}
+				}
+				return
 			}
-			return
 		}
 	}
 
