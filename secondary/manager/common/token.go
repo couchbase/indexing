@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/metakv"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
@@ -462,6 +463,33 @@ func DeleteCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 	commandToken := &DeleteCommandToken{}
 	id := fmt.Sprintf("%v", defnId)
 	return c.MetakvGet(DeleteDDLCommandTokenPath+id, commandToken)
+}
+
+// Returns true, it Delete command token is found within configured time.
+// Returns fails if Delete command token does not exist (or) it takes
+// more than the configured time to read metaKV
+func CheckDeleteCommandTokenWithTimeout(defnId common.IndexDefnId, durationInMilli int) bool {
+	// Make a non-blocking channel so that the go-routine can exit incase
+	// it takes more than configured time to read from metaKV
+	respCh := make(chan bool, 1)
+	if durationInMilli <= 0 { // Disable the check for "0" value
+		return false
+	}
+
+	go func() {
+		// This is a best effort call. Hence, do not process the error
+		exists, _ := DeleteCommandTokenExist(defnId)
+		respCh <- exists
+	}()
+
+	select {
+	case val := <-respCh:
+		return val
+	case <-time.After(time.Duration(durationInMilli) * time.Millisecond):
+		logging.Warnf("CheckDeleteCommandTokenWithTimeout Returning as more than %v milliseconds " +
+			"have elapsed while checking delete command token")
+		return false
+	}
 }
 
 //

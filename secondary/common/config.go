@@ -3274,6 +3274,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.deleteCommandTokenTimeout": ConfigValue{
+		5 * 1000, // 5000ms
+		"timeout, in milliseconds, to await a response for delete command token in lifecycle manager",
+		5 * 1000, // 5000ms
+		false,    // mutable
+		false,    // case-insensitive
+	},
 	"indexer.scheduleCreateRetries": ConfigValue{
 		1000,
 		"Number of retries - per index - for background index creation.",

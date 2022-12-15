@@ -1519,6 +1519,18 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		}
 	}
 
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		// If delete command token exists for this DefnId, then do not create the index
+		// during shard rebalance. Rebalancer will consider this index transfer as successful
+		// and proceed forward.
+		timeout := m.configHolder.Load()["deleteCommandTokenTimeout"].Int()
+		if mc.CheckDeleteCommandTokenWithTimeout(defn.DefnId, timeout) {
+			logging.Warnf("LifecycleMgr.CreateIndex() Delete command token exists for defnId: %v. "+
+				"Skipping index creation during rebalance", defn.DefnId)
+			return common.ErrIndexDeletedDuringRebal
+		}
+	}
+
 	replicaId := m.setReplica(defn)
 
 	partitions, versions, numPartitions := m.setPartition(defn)
@@ -2117,6 +2129,20 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 		defnIdMap[defnId] = true
+
+		// If delete command token exists for this DefnId, then do not build the index
+		// during shard rebalance. Rebalancer will consider this index transfer as successful
+		// and proceed forward. The index metadata will be deleted from lifecycle manager.
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+			timeout := m.configHolder.Load()["deleteCommandTokenTimeout"].Int()
+			if mc.CheckDeleteCommandTokenWithTimeout(defnId, timeout) {
+				logging.Warnf("LifecycleMgr.CreateIndex() Delete command token exists for defnId: %v. "+
+					"Skipping index build during rebalance", defnId)
+				errMap[common.IndexInstId(defnId)] = common.ErrIndexDeletedDuringRebal.Error()
+				skipList = append(skipList, defnId)
+				continue
+			}
+		}
 
 		// Get index definition from meta_repo; failures here add entries to skipList and errMap[defnId]
 		defn, err := m.repo.GetIndexDefnById(defnId)
