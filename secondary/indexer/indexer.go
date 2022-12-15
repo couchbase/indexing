@@ -6166,9 +6166,15 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	inst, ok := idx.indexInstMap[instId]
 	if !ok {
-		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v", instId)
-		respCh <- ErrInconsistentState
-		return
+		if idx.canAllowDDLDuringRebalance() { // Index could be dropped during rebalance
+			logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v. Index could be deleted", instId)
+			respCh <- common.ErrIndexDeletedDuringRebal
+			return
+		} else {
+			logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v", instId)
+			respCh <- ErrInconsistentState
+			return
+		}
 	}
 
 	inst.RState = rstate

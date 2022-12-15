@@ -2029,7 +2029,8 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 // handleBuildIndexes handles all kinds of build index requests
 // (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
 func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
-	isRebal := reqCtx.ReqSource == common.DDLRequestSourceRebalance // is this call from Rebalance?
+	isRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance) // is this call from Rebalance?
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
