@@ -1059,6 +1059,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				}
 
 				sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, partnMergeWaitGroup)
+
 				// Wait for the deferred partition index merge to happen
 				// This is essentially a no-op for non-partitioned indexes
 				partnMergeWaitGroup.Wait()
@@ -1313,28 +1314,23 @@ loop:
 
 			for instId, indexState := range indexStateMap {
 				err := errMap[instId]
-				if err != "" {
+
+				// At this point, the request "/recoverIndexRebalance" and/or "/buildRecoveredIndexesRebalance"
+				// are successful. This means that local metadata is updated with index instance infomration.
+				// If drop were to happen in this state, drop can remove the index from topology. In that
+				// case, the indexState would be INDEX_STATE_NIL. Instead of failing rebalance, skip the
+				// instance from further scanity checks and continue processing
+				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					logging.Warnf("ShardRebalancer::waitForIndexState, Could not get index status. "+
+						"scope/collection/index are likely dropped. Skipping instId: %v, indexState: %v, "+
+						"ttid: %v", instId, indexState, ttid)
+					continue
+				} else if err != "" {
 					l.Errorf("ShardRebalancer::waitForIndexState Error Fetching Index Status %v %v", sr.localaddr, err)
 					retryCount++
 
 					if retryCount > 5 {
 						return errors.New(err) // Return after 5 unsuccessful attempts
-					}
-					time.Sleep(retryInterval * time.Second)
-					goto loop // Retry
-				}
-
-				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-					err1 := fmt.Errorf("Could not get index status; bucket/scope/collection likely dropped."+
-						" Skipping. instId: %v, indexState %v, tt %v.", instId, indexState, tt)
-					logging.Errorf("ShardRebalancer::waitForIndexState, err: %v", err1)
-
-					retryCount++
-
-					if retryCount > 5 {
-						// Return err and fail rebalance as index definitions not found can lead to
-						// violations in cluster affinity
-						return err1 // Return after 5 unsuccessful attempts
 					}
 					time.Sleep(retryInterval * time.Second)
 					goto loop // Retry
@@ -1346,6 +1342,9 @@ loop:
 				// Check if all index instances have reached this state
 				allReachedState := true
 				for _, indexState := range indexStateMap {
+					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+						continue
+					}
 					if indexState != expectedState {
 						allReachedState = false
 						break
@@ -1381,7 +1380,18 @@ loop:
 					if realInstId == 0 {
 						instKey = instId
 					}
-					defnStats := allStats.indexes[instKey] // stats for current defn
+
+					indexState := indexStateMap[instKey]
+
+					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", instId)
+						delete(processedInsts, instKey) // consider the index build done
+						continue
+					}
+
+					// stats for current defn. If indexState is not NIL or DELETED and defn stats are nil,
+					// wait for defn stats to get populated
+					defnStats := allStats.indexes[instKey]
 					if defnStats == nil {
 						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", instKey)
 						continue // Try next index definition
@@ -1407,8 +1417,6 @@ loop:
 					if tot_remaining == 0 {
 						remainingBuildTime = 0
 					}
-
-					indexState := indexStateMap[instKey]
 
 					now := time.Now()
 					if now.Sub(lastLogTime) > 30*time.Second {
