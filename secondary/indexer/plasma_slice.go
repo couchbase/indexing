@@ -32,7 +32,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
-	"github.com/couchbase/regulator"
 )
 
 // Note - CE builds do not pull in plasma_slice.go
@@ -1135,18 +1134,18 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 	nmut = 0
 
-	var mt MeteringTransaction
+	var ar AggregateRecorder
 	// Replica writes are not metered as billable
 	billable := mdb.replicaId == 0
 
 	if mdb.EnableMetering() {
-		mt = mdb.meteringMgr.StartMeteringTxn(mdb.GetBucketName(), "", billable) // Write metering is not accounted at user level
+		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, false)
 		defer func() {
 			if abortErr == nil {
-				writeUnits, _ := mt.Commit()
-				mdb.meteringStats.recordWriteUsageStatsTxn(writeUnits)
+				writeUnits, _ := ar.Commit()
+				mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole())
 			} else {
-				mt.Abort()
+				ar.Abort()
 			}
 		}()
 	}
@@ -1217,7 +1216,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				if mdb.EnableMetering() {
 					secIdxEntry, _ := BytesToSecondaryIndexEntry(keyToBeDeleted)
 					secIdxEntryLen := secIdxEntry.lenKey() + secIdxEntry.lenDocId()
-					mt.AddIndexWrite(uint64(secIdxEntryLen), false)
+					ar.AddBytes(uint64(secIdxEntryLen))
 				}
 			}
 			nmut++
@@ -1253,7 +1252,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				if mdb.EnableMetering() {
 					secIdxEntry, _ := BytesToSecondaryIndexEntry(keyToBeAdded)
 					secIdxEntryLen := secIdxEntry.lenKey() + secIdxEntry.lenDocId()
-					mt.AddIndexWrite(uint64(secIdxEntryLen), false)
+					ar.AddBytes(uint64(secIdxEntryLen))
 				}
 			}
 
@@ -2958,16 +2957,6 @@ func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64) {
 	atomic.AddInt64(&ms.currMeteredWU, int64(writeUnits))
 }
 
-func (ms *meteringStats) recordWriteUsageStatsTxn(writeUnits []regulator.Units) {
-
-	var totalUnits uint64
-	for _, units := range writeUnits {
-		totalUnits += units.Whole()
-	}
-
-	atomic.AddInt64(&ms.currMeteredWU, int64(totalUnits))
-}
-
 func (ms *meteringStats) recordReadUsageStats(readUnits uint64) {
 	atomic.AddInt64(&ms.currMeteredRU, int64(readUnits))
 }
@@ -3426,21 +3415,18 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
-	var mt MeteringTransaction
+	var ar AggregateRecorder
 
 	enableMetering := s.slice.EnableMetering()
 	if enableMetering {
-		mt = s.slice.meteringMgr.StartMeteringTxn(s.slice.GetBucketName(), ctx.User(), !ctx.SkipReadMetering())
+		ar = s.slice.meteringMgr.StartReadAggregateRecorder(s.slice.GetBucketName(), ctx.User(), !ctx.SkipReadMetering())
 		defer func() {
-			var ru uint64
-			unitSlice, e := mt.Commit()
+			u, e := ar.Commit()
 			if e != nil {
 				// TODO: Add logging without flooding
 				return
 			}
-			for _, u := range unitSlice {
-				ru += u.Whole()
-			}
+			ru := u.Whole()
 			ctx.RecordReadUnits(ru)
 			s.slice.meteringStats.recordReadUsageStats(ru)
 		}()
@@ -3493,7 +3479,7 @@ loop:
 		}
 
 		if enableMetering {
-			mt.AddIndexRead(uint64(entry.MeteredByteLen()))
+			ar.AddBytes(uint64(entry.MeteredByteLen()))
 		}
 
 		it.Next()
@@ -3501,7 +3487,7 @@ loop:
 
 	// Include equal keys if high inclusion is requested
 	if inclusion == Both || inclusion == High {
-		err = s.iterEqualKeys(high, it, cmpFn, callback, mt)
+		err = s.iterEqualKeys(high, it, cmpFn, callback, ar)
 		if err != nil {
 			return err
 		}
@@ -3526,7 +3512,7 @@ func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
-	cmpFn CmpEntry, callback func([]byte) error, mt MeteringTransaction) error {
+	cmpFn CmpEntry, callback func([]byte) error, mt AggregateRecorder) error {
 	var err error
 
 	var entry IndexEntry
@@ -3541,7 +3527,7 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 				}
 			}
 			if mt != nil {
-				mt.AddIndexRead(uint64(entry.MeteredByteLen()))
+				mt.AddBytes(uint64(entry.MeteredByteLen()))
 			}
 		} else {
 			break
