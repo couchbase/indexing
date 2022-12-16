@@ -1389,7 +1389,7 @@ loop:
 						continue
 					}
 
-					// stats for current defn. If indexState is not NIL or DELETED and defn stats are nil,
+					//  for current defn. If indexState is not NIL or DELETED and defn stats are nil,
 					// wait for defn stats to get populated
 					defnStats := allStats.indexes[instKey]
 					if defnStats == nil {
@@ -1933,12 +1933,11 @@ func (sr *ShardRebalancer) dropShardsWhenIdle(ttid string, tt *c.TransferToken, 
 		}
 	}()
 
-	missingStatRetry := 0
 	droppedIndexes := make(map[c.IndexInstId]bool)
-
+	retryInterval := time.Duration(1)
+	retryCount := 0
 loop:
 	for {
-	labelselect:
 		select {
 		case <-sr.cancel:
 			l.Infof("ShardRebalancer::dropShardsWhenIdle: Cancel Received")
@@ -1948,6 +1947,20 @@ loop:
 			break loop
 
 		default:
+
+			localMeta, err := getLocalMeta(sr.localaddr)
+			if err != nil {
+				l.Errorf("ShardRebalancer::dropShardsWhenIdle Error Fetching Local Meta %v %v", sr.localaddr, err)
+				retryCount++
+
+				if retryCount > 5 {
+					return // Return after 5 unsuccessful attempts
+				}
+				time.Sleep(retryInterval * time.Second)
+				goto loop
+			}
+
+			indexStateMap, errMap := sr.getIndexStatusFromMeta(tt, nil, localMeta)
 
 			for i, inst := range tt.IndexInsts {
 
@@ -1963,10 +1976,32 @@ loop:
 					instKey = defn.InstId
 				}
 
+				if _, ok := droppedIndexes[instKey]; ok { // Instance is already dropped
+					continue
+				}
+
+				if instState, ok := indexStateMap[instKey]; ok {
+					err := errMap[instKey]
+					if instState == common.INDEX_STATE_NIL || instState == common.INDEX_STATE_DELETED {
+						droppedIndexes[instKey] = true // consider the index as deleted
+						continue
+					} else if err != "" {
+						l.Errorf("ShardRebalancer::dropShardsWhenIdle Error Fetching Index Status %v %v", sr.localaddr, err)
+						retryCount++
+
+						if retryCount > 50 { // After 50 retires
+							droppedIndexes[instKey] = true // Consider index drop successful and continue
+							continue
+						}
+						time.Sleep(retryInterval * time.Second)
+						goto loop // Retry
+					}
+				}
+
 				defnStats := allStats.indexes[instKey] // stats for current defn
 				if defnStats == nil {
-					l.Infof("ShardRebalancer::dropShardsWhenIdle Missing defnStats for instId %v. Retrying...", method, instKey)
-					break
+					l.Infof("ShardRebalancer::dropShardsWhenIdle Missing defnStats for instId %v. Considering the index as dropped", instKey)
+					continue // If index is deleted, then it is validated from localMeta
 				}
 
 				var pending, numRequests, numCompletedRequests int64
@@ -1976,17 +2011,10 @@ loop:
 						numRequests = partnStats.numRequests.GetValue().(int64)
 						numCompletedRequests = partnStats.numCompletedRequests.GetValue().(int64)
 					} else {
-						l.Infof("ShardRebalancer::dropShardsWhenIdle Missing partnStats for instId %d partition %v. Retrying...",
-							method, instKey, partitionId)
-						missingStatRetry++
-						if missingStatRetry > 50 {
-							if sr.needRetryForDrop(ttid, tt) {
-								break labelselect
-							} else {
-								break loop
-							}
-						}
-						break labelselect
+						l.Infof("ShardRebalancer::dropShardsWhenIdle Missing partnStats for instId %d partition %v. Considering the inst dropped",
+							instKey, partitionId)
+						droppedIndexes[instKey] = true
+						continue
 					}
 					pending += numRequests - numCompletedRequests
 				}
@@ -2015,23 +2043,34 @@ loop:
 				}
 
 				if response.Code == RESP_ERROR {
-					// Error from index processing code (e.g. the string from common.ErrCollectionNotFound)
-					if !isMissingBSC(response.Error) {
+					if isIndexInAsyncRecovery(response.Error) {
+						// Wait for async recovery to finish
+						l.Errorf("ShardRebalancer::dropShardsWhenIdle: Index is in async recovery, defn: %v, url: %v, err: %v",
+							defn, url, response.Error)
+						continue
+					} else if !isMissingBSC(response.Error) &&
+						!isIndexDeletedDuringRebal(response.Error) &&
+						!isIndexNotFoundRebal(response.Error) {
 						l.Errorf("ShardRebalancer::dropShardsWhenIdle: Error dropping index defn: %v, url: %v, err: %v",
-							sr.localaddr+url, url, response.Error)
+							defn, url, response.Error)
 						sr.setTransferTokenError(ttid, tt, response.Error)
 						return
 					}
 					// Ok: failed to drop source index because b/s/c was dropped. Continue to TransferTokenCommit state.
 					l.Infof("ShardRebalancer::dropShardsWhenIdle: Source index already dropped due to bucket/scope/collection dropped. tt %v.", method, tt)
 				}
-				droppedIndexes[inst.InstId] = true
+				droppedIndexes[instKey] = true
 			}
 		}
 
 		allInstancesDropped := true
-		for _, inst := range tt.IndexInsts {
-			if _, ok := droppedIndexes[inst.InstId]; !ok {
+		for i, _ := range tt.IndexInsts {
+			instKey := tt.RealInstIds[i]
+			if instKey == 0 {
+				instKey = tt.InstIds[i]
+			}
+
+			if _, ok := droppedIndexes[instKey]; !ok {
 				// Still some instances need to be dropped
 				allInstancesDropped = false
 				break
@@ -2049,59 +2088,6 @@ loop:
 
 		time.Sleep(1 * time.Second)
 	}
-}
-
-// needRetryForDrop is called after multiple unsuccessful attempts to get the stats for an index to be
-// dropped. It determines whether we should keep retrying or assume it was already dropped. It is only
-// assumed already to be dropped if there is no entry for it in the local metadata.
-func (sr *ShardRebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
-	const method = "ShardRebalancer::needRetryForDrop:" // for logging
-
-	localMeta, err := getLocalMeta(sr.localaddr)
-	if err != nil {
-		l.Errorf("ShardRebalancer::needRetryForDrop: Error Fetching Local Meta %v %v", sr.localaddr, err)
-		return true
-	}
-
-	instMap := make(map[c.IndexInstId]bool)
-	for i, _ := range tt.IndexInsts {
-		if tt.RealInstIds[i] != 0 {
-			instMap[tt.RealInstIds[i]] = true
-		} else {
-			instMap[tt.InstIds[i]] = true
-		}
-	}
-
-	indexStateMap, errStrMap := sr.getIndexStatusFromMeta(tt, instMap, localMeta)
-
-	for instId, indexState := range indexStateMap {
-		errStr := errStrMap[instId]
-
-		if errStr != "" {
-			l.Errorf("ShardRebalancer::needRetryForDrop: Error Fetching Index Status %v %v", sr.localaddr, errStr)
-			return true
-		}
-
-		if indexState == c.INDEX_STATE_NIL {
-			//if index cannot be found in metadata, most likely its drop has already succeeded.
-			//instead of waiting indefinitely, it is better to assume success and proceed.
-			l.Infof("ShardRebalancer::needRetryForDrop: Missing Metadata for %v. Assume success and abort retry", instId)
-			continue
-		} else {
-			// Index in shard exists in metadata. Do not change the transfer token state yet
-			return false
-		}
-	}
-
-	// Coming here means that none of the indexes in the transfer token have
-	// been found in the local meta. Hence, the indexes are likely dropped
-	// Change the state of the token and proceed further
-	tt.ShardTransferTokenState = c.ShardTokenCommit
-	setTransferTokenInMetakv(ttid, tt)
-
-	sr.updateInMemToken(ttid, tt, "source")
-
-	return true
 }
 
 func (sr *ShardRebalancer) finishRebalance(err error) {
@@ -2376,4 +2362,8 @@ func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhas
 // bucket rebalance is in progress
 func isIndexDeletedDuringRebal(errMsg string) bool {
 	return errMsg == common.ErrIndexDeletedDuringRebal.Error()
+}
+
+func isIndexInAsyncRecovery(errMsg string) bool {
+	return errMsg == common.ErrIndexInAsyncRecovery.Error()
 }
