@@ -5031,7 +5031,7 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 				idx.sendMonitorSliceMsg(sc.GetAllSlices())
 				//close all the slices
 				for _, slice := range sc.GetAllSlices() {
-					go func() {
+					go func(slice Slice, pid common.PartitionId) {
 						slice.Close()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
 							slice.IndexInstId(), pid)
@@ -5039,7 +5039,7 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 						slice.Destroy()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Destroy Done",
 							slice.IndexInstId(), pid)
-					}()
+					}(slice, pid)
 				}
 			}
 		}
