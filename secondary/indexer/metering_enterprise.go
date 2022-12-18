@@ -135,7 +135,7 @@ func (m *MeteringThrottlingMgr) RegisterRestEndpoints() {
 func (m *MeteringThrottlingMgr) MeteringEndpointHandler(w http.ResponseWriter,
 	r *http.Request) {
 
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -146,6 +146,18 @@ func (m *MeteringThrottlingMgr) MeteringEndpointHandler(w http.ResponseWriter,
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.settings!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("MeteringThrottlingMgr::MeteringEndpointHandler not enough permissions for getting metering stats")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	// TODO: Use shared buffer pool
