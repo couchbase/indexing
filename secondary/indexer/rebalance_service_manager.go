@@ -841,7 +841,9 @@ func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, 
 // initPreparePhaseRebalance is a helper for prepareRebalance.
 func (m *RebalanceServiceManager) initPreparePhaseRebalance() error {
 
-	err := m.registerRebalanceRunning(true)
+	// If DDL is allowed during rebalance (and vice-versa), then skip
+	// checking ongoing DDL operations and proceed with rebalance
+	err := m.registerRebalanceRunning(!m.canAllowDDLDuringRebalance())
 	if err != nil {
 		return err
 	}
@@ -859,6 +861,7 @@ func (m *RebalanceServiceManager) initPreparePhaseRebalance() error {
 // is processing other work, to try to avoid causing a rebalance timeout failure.
 func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error {
 	respch := make(MsgChannel)
+
 	m.supvPrioMsgch <- &MsgClustMgrLocal{
 		mType:    CLUST_MGR_SET_LOCAL,
 		key:      RebalanceRunning,
@@ -3658,4 +3661,24 @@ func findTopologyByCollection(topologies []manager.IndexTopology, bucket,
 	}
 
 	return nil
+}
+
+// If DDL is in progress while rebalance is running, then allow rebalance
+// if the flag "serverless.allowDDLDuringRebalance" is set to true
+func (m *RebalanceServiceManager) canAllowDDLDuringRebalance() bool {
+	config := m.config.Load()
+	if common.IsServerlessDeployment() {
+		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			return false
+		}
+	} else {
+		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			return false
+		}
+	}
+	return true
 }

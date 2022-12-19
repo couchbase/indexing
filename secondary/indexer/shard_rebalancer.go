@@ -334,12 +334,13 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 
 	defer sr.wg.Done()
 
-	//TODO (7.2.0): Transfer token can be processed if there
-	// are conflicts with rebalance movements. Update this logic
-	// under allow DDL during rebalance part
-	if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
-		sr.setTransferTokenError(ttid, tt, err.Error())
-		return
+	// If DDL is allowed during rebalance, skip the ongoing DDL check.
+	// Otherwise, if there is an on-going DDL, fail the rebalance.
+	if !sr.canAllowDDLDuringRebalance() {
+		if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
 	}
 
 	if !tt.IsShardTransferToken() {
@@ -1580,11 +1581,13 @@ func (sr *ShardRebalancer) doRebalance() {
 		return
 	}
 
-	// TODO: For multi-tenancy, DDL's are to be supported while
-	// rebalance is in progress. Add the support for the same
-	if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
-		sr.finishRebalance(err)
-		return
+	// If DDL is allowed during rebalance, skip the ongoing DDL check.
+	// Otherwise, if there is an on-going DDL, fail the rebalance.
+	if !sr.canAllowDDLDuringRebalance() {
+		if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
+			sr.finishRebalance(err)
+			return
+		}
 	}
 
 	select {
@@ -2356,6 +2359,25 @@ func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhas
 	}
 
 	sr.supvMsgch <- msg
+}
+
+func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
+	// Allow or reject DDL based on "allowDDLDuringRebalance" config
+	config := sr.config.Load()
+	if common.IsServerlessDeployment() {
+		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			return false
+		}
+	} else {
+		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			return false
+		}
+	}
+	return true
 }
 
 // isIndexDeletedDuringRebal returns true if an index is deleted while
