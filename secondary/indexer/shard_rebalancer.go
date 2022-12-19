@@ -985,13 +985,18 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 
 	// During shard rebalance, all active instances are built in one
-	// batch and all initial instances are built in one batch. Initial
-	// instances are those instances for which a built command is posted
-	// but build is not yet initialised. For such instances, as build
+	// batch, all initial instances are built in one batch and all catchup
+	// instances are built in another batch. Initial instances are those
+	// instances for which a built command is posted but build is not yet
+	// initialised (or) the index is being moved from source to destination
+	// while the build is in progress. For such instances, as build
 	// has to start from zero-seqno, they are built in a separate batch.
-	// Active instances can start from non-zero seqno. and catch up with KV
+	// Active, catchup instances can start from non-zero seqno. and catch
+	// up with KV. As catchup instances can be behind active instances, build
+	// catchup instances in separate batch
 	const ACTIVE_INSTS int = 0
 	const INITIAL_INSTS int = 1
+	const CATCHUP_INSTS int = 2
 
 	start := time.Now()
 
@@ -1005,6 +1010,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		currIndex := ACTIVE_INSTS
 		if defn.InstStateAtRebal == common.INDEX_STATE_INITIAL {
 			currIndex = INITIAL_INSTS
+		} else if defn.InstStateAtRebal == common.INDEX_STATE_CATCHUP {
+			currIndex = CATCHUP_INSTS
 		}
 
 		if len(nonDeferredInsts[currIndex]) == 0 {
@@ -1024,8 +1031,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 
 	for cid, defns := range groupedDefns {
-		buildDefnIdList := make([]client.IndexIdList, 2)
-		nonDeferredInsts := make([]map[c.IndexInstId]bool, 2)
+		buildDefnIdList := make([]client.IndexIdList, 3)
+		nonDeferredInsts := make([]map[c.IndexInstId]bool, 3)
 		defnIdToInstIdMap := make(map[common.IndexDefnId]common.IndexInstId)
 		// Post recover index request for all non-deferred definitions
 		// of this collection. Once all indexes are recovered, they can be
@@ -1082,9 +1089,12 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				currInsts := "active insts"
 				if i == INITIAL_INSTS {
 					currInsts = "initial insts"
+				} else if i == CATCHUP_INSTS {
+					currInsts = "catchup insts"
 				}
+
 				logging.Infof("ShardRebalancer::startShardRecovery Successfully posted "+
-					"recoveryIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
+					"recoverIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
 					"Initiating build", currInsts, buildDefnIdList[i].DefnIds, cid, ttid)
 
 				skipDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
