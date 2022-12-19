@@ -3586,19 +3586,6 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 			}
 		}
 
-		// Limit the number of concurrent build streams.
-		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-			maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
-			logging.Errorf("Indexer::handleBuildRecoveredIndexes Build is already in progress for %v collections."+
-				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, instIdList, keyspaceId)
-			if idx.enableManager {
-				delete(keyspaceIdIndexList, keyspaceId)
-				continue
-			} else {
-				return
-			}
-		}
-
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
 
