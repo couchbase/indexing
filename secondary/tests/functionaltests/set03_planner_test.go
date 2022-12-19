@@ -1213,14 +1213,6 @@ var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
 		"",
 	},
 	{
-		"Place Single Index Instance - 2 empty nodes - 1 SG",
-		"../testdata/planner/tenantaware/topology/2_empty_nodes_1_sg.json",
-		"../testdata/planner/tenantaware/new_index_1.json",
-		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
-		true,
-		"",
-	},
-	{
 		"Place Single Index Instance - 4 empty nodes - 2 SG",
 		"../testdata/planner/tenantaware/topology/4_empty_nodes_2_sg.json",
 		"../testdata/planner/tenantaware/new_index_1.json",
@@ -1317,6 +1309,14 @@ var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
 }
 
 var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
+	{
+		"Place Single Index Instance - 2 empty nodes - 1 SG",
+		"../testdata/planner/tenantaware/topology/2_empty_nodes_1_sg.json",
+		"../testdata/planner/tenantaware/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		true,
+		"No SubCluster Below Low Usage Threshold",
+	},
 	{
 		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity Above Memory HWM",
 		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_d.json",
@@ -1766,6 +1766,13 @@ var tenantAwarePlannerSwapRebalFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"",
 		false,
 	},
+	{
+		"Swap Rebalance - 1 SG, Swap 2 node - server group mismatch",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_g.json",
+		"../testdata/planner/tenantaware/topology/swap/2_non_empty_nodes_1_sg_g_out.json",
+		"Planner - Unable to satisfy server group constraint while replacing removed nodes with new nodes.",
+		false,
+	},
 }
 
 func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
@@ -1780,16 +1787,25 @@ func tenantAwarePlannerSwapRebalanceTests(t *testing.T) {
 		result, err := planner.ReadPlan(testcase.result)
 		s := planner.NewSimulator()
 		solution, err := s.RunSingleTestTenantAwareRebal(plan, plan.DeletedNodes)
-		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
 
-		err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
-		if err != nil {
-			log.Printf("Actual Solution \n")
-			solution.PrintLayout()
-			log.Printf("Expected Result %v\n", result)
+		if testcase.errStr == "" {
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+			err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, testcase.ignoreInstId)
+			if err != nil {
+				log.Printf("Actual Solution \n")
+				solution.PrintLayout()
+				log.Printf("Expected Result %v\n", result)
+			}
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+		} else {
+
+			FailTestIfNoError(err, "Error in RunSingleTestRebalance", t)
+			if strings.Contains(err.Error(), testcase.errStr) {
+				log.Printf("Expected error %v", err)
+			} else {
+				t.Fatalf("Unexpected error %v. Expected %v\n", err, testcase.errStr)
+			}
 		}
-		FailTestIfError(err, "Error in RunSingleTestRebalance", t)
-
 	}
 }
 
@@ -1863,6 +1879,13 @@ var tenantAwarePlannerScaleDownFuncTestCases = []tenantAwarePlannerRebalFuncTest
 		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_j.json",
 		"../testdata/planner/tenantaware/topology/scaledown/8_non_empty_nodes_4_sg_j_out.json",
 		"Planner - Not enough capacity to place indexes of deleted nodes.",
+		false,
+	},
+	{
+		"Rebalance - 2 SG, Move out 1 non-empty and 1 empty  node",
+		"../testdata/planner/tenantaware/topology/scaledown/4_non_empty_nodes_2_sg_k.json",
+		"../testdata/planner/tenantaware/topology/scaledown/4_non_empty_nodes_2_sg_k_out.json",
+		"",
 		false,
 	},
 }
@@ -1978,6 +2001,13 @@ var tenantAwarePlannerDefragFuncTestCases = []tenantAwarePlannerRebalFuncTestCas
 		"ScaleIn- 3 Subclusters, One above HWM, one below LWM and 1 Empty. ScaleIn. ",
 		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_k.json",
 		"../testdata/planner/tenantaware/topology/defrag/6_non_empty_nodes_3_sg_k_out.json",
+		"",
+		false,
+	},
+	{
+		"Rebalance - 1 Subcluster, Below HWM (partial replica repair)",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_l.json",
+		"../testdata/planner/tenantaware/topology/defrag/4_non_empty_nodes_3_sg_l_out.json",
 		"",
 		false,
 	},

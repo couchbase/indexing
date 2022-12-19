@@ -201,6 +201,7 @@ const (
 	START_SHARD_RESTORE
 	DESTROY_LOCAL_SHARD
 	MONITOR_SLICE_STATUS
+	UPDATE_REBALANCE_PHASE
 )
 
 type Message interface {
@@ -282,7 +283,7 @@ func (m *MsgSuccessDrop) GetKeyspaceId() string {
 	return m.keyspaceId
 }
 
-//MUT_MGR_STREAM_CLOSE
+// MUT_MGR_STREAM_CLOSE
 type MsgSuccessMutMgr struct {
 	mType MsgType
 }
@@ -2434,18 +2435,23 @@ func (m *MsgIndexerDropCollection) GetCollectionId() string {
 }
 
 type MsgStartShardTransfer struct {
-	shardIds        []common.ShardId
-	rebalanceId     string
-	transferTokenId string
-	destination     string
+	shardIds    []common.ShardId
+	taskId      string
+	transferId  string
+	destination string
 
-	// The rebalance cancelCh shared with indexer to indicate
+	// valid task types:
+	//	* common.PauseResumeTask
+	//	* common.RebalanceTask
+	taskType common.TaskType
+
+	// The task cancelCh shared with indexer to indicate
 	// any upstream cancellation of rebalance
-	cancelCh chan struct{}
+	cancelCh <-chan struct{}
 
-	// If rebalance on this node fails due to any error, doneCh
+	// If task on this node fails due to any error, doneCh
 	// is closed first. In that case, abort the transfer
-	doneCh chan struct{}
+	doneCh <-chan struct{}
 
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
@@ -2459,23 +2465,64 @@ func (m *MsgStartShardTransfer) GetShardIds() []common.ShardId {
 	return m.shardIds
 }
 
+// GetRebalanceId returns the rebalance task ID.
+// Returns empty string if the taskType is not common.RebalanceTask
 func (m *MsgStartShardTransfer) GetRebalanceId() string {
-	return m.rebalanceId
+	switch m.taskType {
+	case common.RebalanceTask:
+		return m.taskId
+	default:
+		return ""
+	}
 }
 
+// GetTransferTokenId returns the TransferTokenId for shard movement
+// Returns empty string if the taskType is not common.RebalanceTask
 func (m *MsgStartShardTransfer) GetTransferTokenId() string {
-	return m.transferTokenId
+	switch m.taskType {
+	case common.RebalanceTask:
+		return m.transferId
+	default:
+		return ""
+	}
+}
+
+// GetPauseResumeId returns taskId for Pause/Resume op.
+// Returns empty string if the taskType is not common.PauseResumeTask
+func (m *MsgStartShardTransfer) GetPauseResumeId() string {
+	switch m.taskType {
+	case common.PauseResumeTask:
+		return m.taskId
+	default:
+		return ""
+	}
+}
+
+// GetBucketUUID returns the bucket undergoing pause/resume
+// Returns empty string if the taskType is not common.PauseResumeTask
+func (m *MsgStartShardTransfer) GetBucketUUID() string {
+	switch m.taskType {
+	case common.PauseResumeTask:
+		return m.transferId
+	default:
+		return ""
+	}
 }
 
 func (m *MsgStartShardTransfer) GetDestination() string {
 	return m.destination
 }
 
-func (m *MsgStartShardTransfer) GetCancelCh() chan struct{} {
+// GetTaskType returns the type of task (common.PauseResumeTask or common.RebalanceTask)
+func (m *MsgStartShardTransfer) GetTaskType() common.TaskType {
+	return m.taskType
+}
+
+func (m *MsgStartShardTransfer) GetCancelCh() <-chan struct{} {
 	return m.cancelCh
 }
 
-func (m *MsgStartShardTransfer) GetDoneCh() chan struct{} {
+func (m *MsgStartShardTransfer) GetDoneCh() <-chan struct{} {
 	return m.doneCh
 }
 
@@ -2492,8 +2539,16 @@ func (m *MsgStartShardTransfer) String() string {
 	sbp := &sb
 
 	fmt.Fprintf(sbp, " ShardIds: %v ", m.shardIds)
-	fmt.Fprintf(sbp, " RebalanceId: %v ", m.rebalanceId)
-	fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferTokenId)
+	switch m.taskType {
+	case common.PauseResumeTask:
+		fmt.Fprintf(sbp, " PauseResumeId: %v ", m.taskId)
+		fmt.Fprintf(sbp, " BucketUUID: %v ", m.transferId)
+		fmt.Fprintf(sbp, " Task Type: Pause Resume ")
+	case common.RebalanceTask:
+		fmt.Fprintf(sbp, " RebalanceId: %v ", m.taskId)
+		fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferId)
+		fmt.Fprintf(sbp, " Task Type: Rebalance ")
+	}
 	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
 
 	return sbp.String()
@@ -2665,6 +2720,23 @@ func (m *MsgMonitorSliceStatus) GetMsgType() MsgType {
 
 func (m *MsgMonitorSliceStatus) GetSliceList() []Slice {
 	return m.sliceList
+}
+
+type MsgUpdateRebalancePhase struct {
+	GlobalRebalancePhase common.RebalancePhase
+	BucketTransferPhase  map[string]common.RebalancePhase
+}
+
+func (m *MsgUpdateRebalancePhase) GetMsgType() MsgType {
+	return UPDATE_REBALANCE_PHASE
+}
+
+func (m *MsgUpdateRebalancePhase) GetGlobalRebalancePhase() common.RebalancePhase {
+	return m.GlobalRebalancePhase
+}
+
+func (m *MsgUpdateRebalancePhase) GetBucketTransferPhase() map[string]common.RebalancePhase {
+	return m.BucketTransferPhase
 }
 
 // MsgType.String is a helper function to return string for message type.

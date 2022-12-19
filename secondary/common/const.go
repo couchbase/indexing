@@ -60,9 +60,7 @@ var ErrUnmarshalFailed = errors.New("json.Unmarshal failed")
 
 var ErrAuthMissing = errors.New("Unauthenticated access. Missing authentication information.")
 
-//
 // List of errors leading to failure of index creation
-//
 var ErrAnotherIndexCreation = errors.New("Create index or Alter replica cannot proceed due to another concurrent create index request.")
 var ErrRebalanceRunning = errors.New("Create index or Alter replica cannot proceed due to rebalance in progress.")
 var ErrNetworkPartition = errors.New("Create index or Alter replica cannot proceed due to network partition, node failover or indexer failure.")
@@ -170,3 +168,10 @@ const AUDIT_FORBIDDEN = uint32(49153)    // HTTP_STATUS_FORBIDDEN
 
 // Ingress lockdown error
 var ErrNoIngress = errors.New("AccessNoIngress")
+
+type TaskType int
+
+const (
+	RebalanceTask TaskType = iota
+	PauseResumeTask
+)

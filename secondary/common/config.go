@@ -3260,6 +3260,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.allowDDLDuringRebalance": ConfigValue{
+		false,
+		"Allow DDL operations while rebalance is in progress - for on-prem deployments",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.serverless.allowDDLDuringRebalance": ConfigValue{
+		true,
+		"Allow DDL operations while rebalance is in progress - for serverless deployments",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.scheduleCreateRetries": ConfigValue{
 		1000,
 		"Number of retries - per index - for background index creation.",

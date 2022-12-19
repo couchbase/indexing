@@ -60,7 +60,7 @@ type GenericServiceManager struct {
 // NewGenericServiceManager is the constructor for the GenericServiceManager class. It needs all the
 // args to be passed to NewPauseServiceManager and NewRebalanceServiceManager.
 func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdch MsgChannel,
-	rebalSupvMsgch MsgChannel, rebalSupvPrioMsgch MsgChannel, config common.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
+	supvMsgch MsgChannel, rebalSupvPrioMsgch MsgChannel, config common.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
 	rebalanceToken *RebalanceToken, statsMgr *statsManager) (
 	*GenericServiceManager, *PauseServiceManager, *RebalanceServiceManager) {
 	const _class = "GenericServiceManager"
@@ -87,11 +87,11 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 	m.cinfo.SetUserAgent(_class)
 
 	// Create PauseServiceManager singleton
-	pauseMgr := NewPauseServiceManager(m, mux, httpAddr)
+	pauseMgr := NewPauseServiceManager(m, mux, supvMsgch, httpAddr)
 	m.pauseMgr = pauseMgr
 
 	// Create RebalanceServiceManager singleton
-	rebalMgr := NewRebalanceServiceManager(m, httpAddr, rebalSupvCmdch, rebalSupvMsgch,
+	rebalMgr := NewRebalanceServiceManager(m, httpAddr, rebalSupvCmdch, supvMsgch,
 		rebalSupvPrioMsgch, config, nodeInfo, rebalanceRunning, rebalanceToken)
 	m.rebalMgr = rebalMgr
 
@@ -320,10 +320,11 @@ func (m *GenericServiceManager) removeGenericWaiter(w genericWaiter) {
 
 // waitForNewRev supports a long poll that does not return until canceled or a new revision occurs,
 // as well as a request for immediate reply.
-//   o Returns immediately if
-//     a. rev == nil: caller wants immediate reply
-//     b. rev != m.rev: caller does not yet have current rev
-//   o Otherwise waits until m.rev increments or caller cancels the request
+//
+//	o Returns immediately if
+//	  a. rev == nil: caller wants immediate reply
+//	  b. rev != m.rev: caller does not yet have current rev
+//	o Otherwise waits until m.rev increments or caller cancels the request
 func (m *GenericServiceManager) waitForNewRev(callerRev service.Revision,
 	cancel service.Cancel) error {
 

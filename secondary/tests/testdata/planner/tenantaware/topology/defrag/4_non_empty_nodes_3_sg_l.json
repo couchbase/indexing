@@ -1,0 +1,170 @@
+{
+   "placement":[
+      {
+         "nodeId":"127.0.0.1:9001",
+         "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg1",
+         "mandatoryQuota":500000000,
+	 "actualUnits":800,
+         "indexes": [
+                {
+                        "defnId": 2222,
+                        "instId": 2121,
+                        "name": "idx1",
+                        "bucket": "bucket2",
+			"instance": {
+				"replicaId":1,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 5555,
+                        "instId": 5151,
+                        "name": "idx2",
+                        "bucket": "bucket2",
+			"instance": {
+				"replicaId":1,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 8888,
+                        "instId": 8181,
+                        "name": "idx1",
+                        "bucket": "bucket4",
+			"instance": {
+				"replicaId":1,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":50000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 9999,
+                        "instId": 9191,
+                        "name": "idx2",
+                        "bucket": "bucket4",
+			"instance": {
+				"replicaId":1,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":50000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 58888,
+                        "instId": 58181,
+                        "name": "idx1",
+                        "bucket": "bucket5",
+			"instance": {
+				"replicaId":1,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":200
+                },
+                {
+                        "defnId": 59999,
+                        "instId": 59191,
+                        "name": "idx2",
+                        "bucket": "bucket5",
+			"instance": {
+				"replicaId":1,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":200
+                }
+         ]
+      },
+      {
+         "nodeId":"127.0.0.1:9004",
+         "nodeUUID":"zzz15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg2",
+         "mandatoryQuota":350000000,
+	 "actualUnits":500,
+         "indexes": [
+                {
+                        "defnId": 2222,
+                        "instId": 2020,
+                        "name": "idx1",
+                        "bucket": "bucket2",
+			"instance": {
+				"replicaId":0,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 5555,
+                        "instId": 5050,
+                        "name": "idx2",
+                        "bucket": "bucket2",
+			"instance": {
+				"replicaId":0,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 8888,
+                        "instId": 8080,
+                        "name": "idx1",
+                        "bucket": "bucket4",
+			"instance": {
+				"replicaId":0,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":50000000,
+			"actualunitsusage":100
+                },
+                {
+                        "defnId": 58888,
+                        "instId": 58181,
+                        "name": "idx1",
+                        "bucket": "bucket5",
+			"instance": {
+				"replicaId":0,
+	                        "Defn": {
+        	                        "numReplica":1
+                                }
+			},
+			"actualmemusage":100000000,
+			"actualunitsusage":200
+                }
+	 ]
+      }
+   ],
+   "isLive":true,
+   "usageThreshold": { "memHighThreshold" : 80,
+	"memLowThreshold" : 60,
+	"unitsHighThreshold" : 60,
+	"unitsLowThreshold" : 40,
+	"memQuota": 1000000000,
+	"unitsQuota" : 10000
+    }
+}

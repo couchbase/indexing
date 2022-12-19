@@ -1,0 +1,70 @@
+{
+   "placement":[
+      {
+         "nodeId":"127.0.0.1:9001",
+         "nodeUUID":"fdb15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg1",
+         "mandatoryQuota":300000000,
+	 "actualUnits":1000,
+         "indexes": [
+                {
+                        "defnId": 1111,
+                        "instId": 1212,
+                        "name": "idx1",
+                        "bucket": "bucket1",
+			"instance": {
+				"replicaId":0
+			},
+			"actualmemusage":300000000,
+			"actualunitsusage":1000
+                }
+         ]
+      },
+      {
+         "nodeId":"127.0.0.1:9002",
+         "nodeUUID":"zzz15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg2",
+         "mandatoryQuota":300000000,
+	 "actualUnits":1000,
+         "indexes": [
+                {
+                        "defnId": 1111,
+                        "instId": 11212,
+                        "name": "idx1",
+                        "bucket": "bucket1",
+			"instance": {
+				"replicaId":1
+			},
+			"actualmemusage":30000000,
+			"actualunitsusage":1500
+                }
+         ]
+      },
+      {
+         "nodeId":"127.0.0.1:9003",
+         "nodeUUID":"www15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg1",
+         "mandatoryQuota":0,
+	 "actualUnits":0
+      },
+      {
+         "nodeId":"127.0.0.1:9004",
+         "nodeUUID":"ppp15192216a984a53fc19de249e0ba4",
+         "serverGroup":"sg1",
+         "mandatoryQuota":0,
+	 "actualUnits":0
+      }
+   ],
+   "isLive":true,
+   "usageThreshold": { "memHighThreshold" : 80,
+	"memLowThreshold" : 60,
+	"unitsHighThreshold" : 60,
+	"unitsLowThreshold" : 40,
+	"memQuota": 2000000000,
+	"unitsQuota" : 20000
+    },
+    "deletedNodes": [
+	"127.0.0.1:9001",
+	"127.0.0.1:9002"
+    ]
+}

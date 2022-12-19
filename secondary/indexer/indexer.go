@@ -1567,6 +1567,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INST_RECOVERY_RESPONSE:
 		idx.handleInstRecoveryResponse(msg)
 
+	case UPDATE_REBALANCE_PHASE:
+		idx.sendMsgToClustMgr(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -1931,20 +1934,25 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
-		reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
-		if reqCtx.ReqSource == common.DDLRequestSourceUser {
-			errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
-			logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+		if idx.canAllowDDLDuringRebalance() && msg.(*MsgCreateIndex).GetMsgType() == CLUST_MGR_CREATE_INDEX_DDL {
+			logging.Infof("Indexer::handleCreateIndex Allowing DDL during rebalance for "+
+				"index defnId: %v, instId: %v", indexInst.Defn.DefnId, indexInst.InstId)
+		} else {
+			reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
+			if reqCtx.ReqSource == common.DDLRequestSourceUser {
+				errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
+				logging.Errorf("Indexer::handleCreateIndex %v", errStr)
 
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+				if clientCh != nil {
+					clientCh <- &MsgError{
+						err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+							severity: FATAL,
+							cause:    errors.New(errStr),
+							category: INDEXER}}
 
+				}
+				return
 			}
-			return
 		}
 	}
 
@@ -11416,5 +11424,15 @@ func (idx *indexer) setStreamOpenTimeBarrier(streamId common.StreamId) {
 	if streamId == common.INIT_STREAM {
 		t0 := time.Now()
 		idx.streamOpenTimeBarrier[streamId] = t0.Add(DEFAULT_TIME_BARRIER * time.Second)
+	}
+}
+
+func (idx *indexer) canAllowDDLDuringRebalance() bool {
+	if common.IsServerlessDeployment() {
+		allowDDLDuringRebalance := idx.config["serverless.allowDDLDuringRebalance"].Bool()
+		return allowDDLDuringRebalance
+	} else {
+		allowDDLDuringRebalance := idx.config["allowDDLDuringRebalance"].Bool()
+		return allowDDLDuringRebalance
 	}
 }

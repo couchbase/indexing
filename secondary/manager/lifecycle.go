@@ -73,6 +73,9 @@ type LifecycleMgr struct {
 	accIgnoredIds       map[common.IndexDefnId]bool
 
 	configHolder common.ConfigHolder
+
+	rebalancePhase      common.RebalancePhase
+	bucketTransferPhase map[string]common.RebalancePhase
 }
 
 type requestHolder struct {
@@ -539,6 +542,10 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleCommit(content)
 	case client.OPCODE_REBALANCE_RUNNING:
 		err = m.handleRebalanceRunning(content)
+	case client.OPCODE_UPDATE_REBALANCE_PHASE:
+		err = m.handleUpdateRebalancePhase(content)
+	case client.OPCODE_REBALANCE_DONE:
+		err = m.handleRebalanceDone(content)
 	case client.OPCODE_CREATE_INDEX_DEFER_BUILD:
 		err = m.handleCreateIndexDeferBuild(key, content, common.NewUserRequestContext())
 	case client.OPCODE_DROP_INSTANCE:
@@ -616,7 +623,7 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	if prepareCreateIndex.Op == client.PREPARE {
-		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+		if !m.canProcessDDL(prepareCreateIndex.Bucket) {
 			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
 			response := &client.PrepareCreateResponse{
 				Accept: false,
@@ -737,9 +744,18 @@ func (m *LifecycleMgr) handleCommit(content []byte) ([]byte, error) {
 func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitCreateRequest) ([]byte, error) {
 
 	if m.prepareLock == nil {
-		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
-		response := &client.CommitCreateResponse{Accept: false}
-		return client.MarshallCommitCreateResponse(response)
+		// Rebalance can reset prepareLock to nil
+		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance is running", commitCreateIndex.DefnId)
+			response := &client.CommitCreateResponse{
+				Accept: false,
+				Msg:    client.RespRebalanceRunning}
+			return client.MarshallCommitCreateResponse(response)
+		} else {
+			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
+			response := &client.CommitCreateResponse{Accept: false}
+			return client.MarshallCommitCreateResponse(response)
+		}
 	}
 
 	if m.prepareLock.RequesterId != commitCreateIndex.RequesterId ||
@@ -750,10 +766,17 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 		return client.MarshallCommitCreateResponse(response)
 	}
 
-	if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+	var bucket string
+	for _, defns := range commitCreateIndex.Definitions {
+		bucket = defns[0].Bucket
+	}
+
+	if !m.canProcessDDL(bucket) {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
-		response := &client.PrepareCreateResponse{Accept: false}
-		return client.MarshallPrepareCreateResponse(response)
+		response := &client.CommitCreateResponse{
+			Accept: false,
+			Msg:    client.RespRebalanceRunning}
+		return client.MarshallCommitCreateResponse(response)
 	}
 
 	// Verify and release the indexNames lock.
@@ -936,7 +959,34 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 		logging.Infof("LifecycleMgr.handleRebalanceRunning() : releasing token %v", m.prepareLock.DefnId)
 	}
 
+	m.rebalancePhase = common.RebalanceInitated
+	m.bucketTransferPhase = make(map[string]common.RebalancePhase)
 	m.prepareLock = nil
+	return nil
+}
+
+func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
+
+	req := &common.RebalancePhaseRequest{}
+	err := json.Unmarshal(context, req)
+	if err != nil {
+		return err
+	}
+
+	m.rebalancePhase = req.GlobalRebalPhase
+	for bucket, bucketTransferPhase := range req.BucketTransferPhase {
+		m.bucketTransferPhase[bucket] = bucketTransferPhase
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) handleRebalanceDone(content []byte) error {
+	logging.Infof("LifecycleMgr::handleRebalanceDone Clearing rebalance phase")
+
+	m.rebalancePhase = common.RebalanceNotRunning
+	m.bucketTransferPhase = nil
+
 	return nil
 }
 
@@ -2009,6 +2059,20 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	defnIdMap := make(map[common.IndexDefnId]bool)
 	buckets := []string(nil)
 	inst2DefnMap := make(map[common.IndexInstId]common.IndexDefnId)
+	isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
+
+	addToBucketList := func(bucket string) {
+		found := false
+		for _, bucketn := range buckets {
+			if bucketn == bucket {
+				found = true
+			}
+		}
+
+		if !found {
+			buckets = append(buckets, bucket)
+		}
+	}
 
 	for _, defnId := range defnIds {
 
@@ -2026,12 +2090,14 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			skipList = append(skipList, defnId)
 			continue
 		}
+
 		if defn == nil {
 			logging.Warnf("LifecycleMgr::handleBuildIndexes: Index defnId %v is nil. Skipping this index.", defnId)
 			errMap[common.IndexInstId(defnId)] = common.ErrIndexNotFoundRebal.Error()
 			skipList = append(skipList, defnId)
 			continue
 		}
+
 		insts, err := m.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId)
 		if len(insts) == 0 || err != nil {
 			logging.Errorf("LifecycleMgr::handleBuildIndexes: Failed to find index instances for index (%v, %v, %v, %v) for defnId %v. Skipping this index.",
@@ -2041,71 +2107,19 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 
-		isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 		for _, inst := range insts {
 
-			if isShardRebalanceBuild {
-				if inst.State != uint32(common.INDEX_STATE_RECOVERED) {
-					logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in recovered state. Inst state: %v. Skip this index.",
-						inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
-					continue
-				}
-			} else {
-				if inst.State != uint32(common.INDEX_STATE_READY) {
-					logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in ready state. Inst state: %v. Skip this index.",
-						inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
-
-					// Instance can exist in any state but not in INDEX_STATE_CREATED
-					// This code path can get executed only after an index is successfully created
-					// On a successful index creation, index state would be in INDEX_STATE_READY or higher
-					if inst.State == uint32(common.INDEX_STATE_CREATED) {
-						logging.Fatalf("LifecycleMgr.handleBuildIndexes: Index instance: %+v is in state: INDEX_STATE_CREATED", inst)
-
-						// It could be possible that the in-memory topoCache is corrupt(?) - a guess at this point
-						// Retrieve the topology directly from meta and log the instance to understand the state in meta store
-						topoFromMeta, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
-						if err == nil {
-							for i, _ := range topoFromMeta.Definitions {
-								if topoFromMeta.Definitions[i].DefnId == uint64(defn.DefnId) {
-									for j, _ := range topoFromMeta.Definitions[i].Instances {
-										if inst.InstId == topoFromMeta.Definitions[i].Instances[j].InstId {
-											logging.Fatalf("LifecycleMgr.handleBuildIndexes: Value of index instance: %+v in metastore", inst)
-										}
-									}
-								}
-							}
-						}
-						logging.Errorf("LifecycleMgr.handleBuildIndexes: Error while retrieving topology from meta, err: %v", err)
-					}
-					continue
-				}
+			if !m.isValidInstStateForBuild(defn, inst, isShardRebalanceBuild) {
+				continue
 			}
 
-			//Schedule the build
-			if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
-				msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
-					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-				logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
-			}
-
-			// Reset any previous error
-			m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
-				inst.RState, nil, nil, -1, nil)
+			m.setScheduleFlagAndUpdateErr(defn, inst, true, true, "")
 
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
 			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
 		}
 
-		found := false
-		for _, bucket := range buckets {
-			if bucket == defn.Bucket {
-				found = true
-			}
-		}
-
-		if !found {
-			buckets = append(buckets, defn.Bucket)
-		}
+		addToBucketList(defn.Bucket)
 	}
 
 	if m.notifier != nil && len(instIdList) != 0 {
@@ -2118,62 +2132,115 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 		if len(errMap2) != 0 {
 			logging.Errorf("LifecycleMgr::handleBuildIndexes: received build errors for instIds %v", errMap2)
+		}
 
-			// Handle all the errors from the build attempt(s)
-			for instId, build_err := range errMap2 {
-				errMap[instId] = build_err.Error() // add to return map
+		// Handle all the errors from the build attempt(s)
+		for instId, build_err := range errMap2 {
+			errMap[instId] = build_err.Error() // add to return map
 
-				defnId, ok := inst2DefnMap[instId]
-				if !ok {
-					logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
-					continue
-				}
-
-				defn, err := m.repo.GetIndexDefnById(defnId)
-				if err != nil || defn == nil {
-					logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
-					continue
-				}
-
-				inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId, instId)
-				if inst != nil && err == nil {
-					if m.canRetryBuildError(inst, build_err, isRebal) {
-						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
-					}
-					m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1, nil)
-				} else {
-					logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist, error in index instance (%v, %v, %v, %v, %v).",
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-				}
-
-				if m.canRetryBuildError(inst, build_err, isRebal) {
-					logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-
-					if inst != nil && !inst.Scheduled {
-						if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
-							msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
-								defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-							logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
-						}
-					}
-
-					retryList = append(retryList, defn)
-					retryErrList = append(retryErrList, build_err)
-				} else {
-					errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
-				}
+			defnId, ok := inst2DefnMap[instId]
+			if !ok {
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
+				continue
 			}
 
-			// Schedule retriable failed index builds for retry
-			for _, defn := range retryList {
-				m.builder.notifych <- defn
+			defn, err := m.repo.GetIndexDefnById(defnId)
+			if err != nil || defn == nil {
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
+				continue
 			}
+
+			inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId, instId)
+			if inst == nil || err != nil {
+				logging.Errorf("LifecycleMgr::handleBuildIndexes: Failed to find index instance for index (%v, %v, %v, %v) for defnId %v. err: %v. Skipping this index.",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, defnId, err)
+			}
+
+			if m.canRetryBuildError(inst, build_err, isRebal) {
+				build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
+
+				logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
+
+				m.setScheduleFlagAndUpdateErr(defn, *inst, !inst.Scheduled, true, build_err.Error())
+
+				retryList = append(retryList, defn)
+				retryErrList = append(retryErrList, build_err)
+			} else {
+				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
+			}
+		}
+
+		// Schedule retriable failed index builds for retry
+		for _, defn := range retryList {
+			m.builder.notifych <- defn
 		}
 	}
 	logging.Debugf("LifecycleMgr.buildIndexesLifecycleMgr() : buildIndexRebalance completes")
 	return retryErrList, skipList, errList, errMap
+}
+
+func (m *LifecycleMgr) isValidInstStateForBuild(defn *common.IndexDefn, inst IndexInstDistribution, isShardRebalanceBuild bool) bool {
+	if isShardRebalanceBuild {
+		if inst.State != uint32(common.INDEX_STATE_RECOVERED) {
+			logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in recovered state. Inst state: %v. Skip this index.",
+				inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
+			return false
+		}
+	} else {
+		if inst.State != uint32(common.INDEX_STATE_READY) {
+			logging.Warnf("LifecycleMgr.handleBuildIndexes: index instance %v (%v, %v, %v, %v, %v) is not in ready state. Inst state: %v. Skip this index.",
+				inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, inst.State)
+
+			// Instance can exist in any state but not in INDEX_STATE_CREATED
+			// This code path can get executed only after an index is successfully created
+			// On a successful index creation, index state would be in INDEX_STATE_READY or higher
+			if inst.State == uint32(common.INDEX_STATE_CREATED) {
+				logging.Fatalf("LifecycleMgr.handleBuildIndexes: Index instance: %+v is in state: INDEX_STATE_CREATED", inst)
+
+				// It could be possible that the in-memory topoCache is corrupt(?) - a guess at this point
+				// Retrieve the topology directly from meta and log the instance to understand the state in meta store
+				topoFromMeta, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
+				if err == nil {
+					for i, _ := range topoFromMeta.Definitions {
+						if topoFromMeta.Definitions[i].DefnId == uint64(defn.DefnId) {
+							for j, _ := range topoFromMeta.Definitions[i].Instances {
+								if inst.InstId == topoFromMeta.Definitions[i].Instances[j].InstId {
+									logging.Fatalf("LifecycleMgr.handleBuildIndexes: Value of index instance: %+v in metastore", inst)
+								}
+							}
+						}
+					}
+				}
+				logging.Errorf("LifecycleMgr.handleBuildIndexes: Error while retrieving topology from meta, err: %v", err)
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func (m *LifecycleMgr) setScheduleFlagAndUpdateErr(defn *common.IndexDefn, inst IndexInstDistribution,
+	setSchedule bool, updateErr bool, errStr string) {
+	defnId := defn.DefnId
+
+	if setSchedule {
+		if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
+			msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
+			logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
+		}
+	}
+
+	if updateErr {
+		err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
+			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil)
+		if err != nil {
+			logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist error in index instance (%v, %v, %v, %v, %v).",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
+		}
+	}
+
 }
 
 //-----------------------------------------------------------
@@ -4283,6 +4350,52 @@ func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string
 	return scopeID, collectionID, nil
 }
 
+// Returns "true" if DDL can be processed. "false" otherwise
+func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
+	_, err := m.repo.GetLocalValue("RebalanceRunning")
+	// err == nil means that repo contains the "RebalanceRunning" key
+	// Hence, check for more conditions before allowing DDL
+	if err == nil {
+
+		// Allow or reject DDL based on "allowDDLDuringRebalance" config
+		config := m.configHolder.Load()
+		if common.IsServerlessDeployment() {
+			canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+			if !canAllowDDLDuringRebalance {
+				logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+				return false
+			}
+		} else {
+			canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+			if !canAllowDDLDuringRebalance {
+				logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as config: allowDDLDuringRebalance is false")
+				return false
+			}
+		}
+
+		if m.rebalancePhase == common.RebalanceInitated {
+			logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as rebalance is still in planning phase")
+			return false
+		}
+
+		if m.rebalancePhase == common.RebalanceTransferInProgress {
+			// Rebalance planning is done and all index movements are updated
+			// at all nodes in the cluster. Check the per bucket status
+			// before processing DDL operations
+			if bucketTransferPhase, ok := m.bucketTransferPhase[bucket]; ok {
+				if bucketTransferPhase == common.RebalanceDone {
+					return true // Rebalance for the bucket is done. Hence allow DDL
+				}
+				return false
+			}
+			// Bucket is not a part of rebalance. Allow DDL on the bucket
+			return true
+		}
+
+	}
+	return true
+}
+
 //////////////////////////////////////////////////////////////
 // Lifecycle Mgr - janitor
 // Jantior cleanup deleted index in the background.  This
@@ -4314,6 +4427,7 @@ func extractDefnIdInstIdReplicaString(entries map[string]*mc.DropInstanceCommand
 // 2) Any call to mutate the repository must be async request.
 func (m *janitor) cleanup() {
 
+	// TODO (Elixir) - Do we need to allow cleanup of tokens when rebalance is running?
 	// if rebalancing is running
 	if _, err := m.manager.repo.GetLocalValue("RebalanceRunning"); err == nil {
 		return

@@ -264,12 +264,23 @@ func getDestinationFromConfig(cfg c.Config) (string, error) {
 // processTokens invokes processShardTokens of ShardRebalancer
 func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 
-	if kve.Path == RebalanceTokenPath || kve.Path == MoveIndexTokenPath {
+	if kve.Path == RebalanceTokenPath {
 		l.Infof("ShardRebalancer::processShardTokens RebalanceToken %v %s", kve.Path, kve.Value)
 		if kve.Value == nil {
 			l.Infof("ShardRebalancer::processShardTokens Rebalance Token Deleted. Mark Done.")
 			sr.cancelMetakv()
 			sr.finishRebalance(nil)
+		} else if kve.Value != nil {
+			rToken := &RebalanceToken{}
+			err := json.Unmarshal(kve.Value, rToken)
+			if err != nil {
+				l.Errorf("ShardRebalancer::processShardTokens Error observed while unmarshalling RebalanceToken")
+			} else {
+				l.Infof("ShardRebalancer::processShardTokens Rebalance Token updated with AllowDDLDuringRebalance")
+				if rToken.Version >= c.AllowDDLDuringRebalance_v1 {
+					sr.updateGlobalRebalancePhase(rToken)
+				}
+			}
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
@@ -285,6 +296,35 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 	}
 
 	return nil
+}
+
+func (sr *ShardRebalancer) updateGlobalRebalancePhase(rToken *RebalanceToken) {
+	if !sr.addToWaitGroup() {
+		return
+	}
+
+	defer sr.wg.Done()
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if rToken.RebalPhase == sr.rebalToken.RebalPhase {
+		logging.Infof("ShardRebalancer::updateGlobalRebalancePhase Skipping to update RebalPhase "+
+			"as token is already updated to phase: %v", rToken.RebalPhase)
+		return
+	}
+
+	sr.rebalToken.Version = rToken.Version
+	sr.rebalToken.RebalPhase = rToken.RebalPhase
+
+	if sr.rebalToken.RebalPhase == common.RebalanceTransferInProgress {
+		logging.Infof("ShardRebalancer::updateGlobalRebalancePhase Updating rebalance phase to %v", common.RebalanceTransferInProgress)
+		msg := &MsgUpdateRebalancePhase{
+			GlobalRebalancePhase: common.RebalanceTransferInProgress,
+		}
+
+		sr.supvMsgch <- msg
+	}
 }
 
 func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.TransferToken) {
@@ -367,6 +407,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		///////////////////////////////////////////////////////////////////
 
 		if sr.allShardTransferTokensAcked() {
+			sr.updateRebalancePhaseInGlobalRebalToken()
 			sr.batchTransferTokens()
 			sr.initiateShardTransferAsMaster()
 		}
@@ -429,9 +470,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			}
 		}
 
-		tt.ShardTransferTokenState = c.ShardTokenDeleted
-		setTransferTokenInMetakv(ttid, tt)
-		return true
+		// Return false so that if master is also destination node,
+		// it will update the book-keeping at lifecycle manager about
+		// completion of rebalance for this bucket
+		return false
 
 	case c.ShardTokenDeleted:
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
@@ -485,11 +527,9 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 
 	case c.ShardTokenCreated:
 
-		// TODO: Update in-mem book-keeping  with the list of index
-		// movements during rebalance. This information will be used
-		// for conflict resolution when  DDL and rebalance co-exist
-		// together
 		sr.updateInMemToken(ttid, tt, "source")
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceInitated)
+
 		tt.ShardTransferTokenState = c.ShardTokenScheduledOnSource
 		setTransferTokenInMetakv(ttid, tt)
 
@@ -532,6 +572,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 			}
 		}
 		return true
+
+	case c.ShardTokenCommit:
+		// If node sees a commit token, then DDL can be allowed on
+		// the bucket. It is necessary for source to update its
+		// book-keeping. Otherwise, source will reject prepare create
+		// request thinking that the rebalance of bucket is not done.
+		// During the plan phase (which happens after prepare phase),
+		// planner will decide which node the index will land-on
+		sr.updateInMemToken(ttid, tt, "source")
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
+
+		return false // Return false as this is source node. Destination node should also process the token
 
 	default:
 		return false
@@ -591,10 +643,11 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
 
 	msg := &MsgStartShardTransfer{
-		shardIds:        tt.ShardIds,
-		rebalanceId:     sr.rebalToken.RebalId,
-		transferTokenId: ttid,
-		destination:     tt.Destination,
+		shardIds:    tt.ShardIds,
+		taskId:      sr.rebalToken.RebalId,
+		transferId:  ttid,
+		taskType:    common.RebalanceTask,
+		destination: tt.Destination,
 
 		cancelCh:   sr.cancel,
 		doneCh:     sr.done,
@@ -768,11 +821,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 
 	case c.ShardTokenScheduledOnSource:
 
-		// TODO: Update in-mem book-keeping  with the list of index
-		// movements during rebalance. This information will be used
-		// for conflict resolution when  DDL and rebalance co-exist
-		// together
 		sr.updateInMemToken(ttid, tt, "dest")
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceInitated)
 		tt.ShardTransferTokenState = c.ShardTokenScheduleAck
 		setTransferTokenInMetakv(ttid, tt)
 
@@ -793,6 +843,16 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 
 		go sr.startShardRecovery(ttid, tt)
 
+		return true
+
+	case c.ShardTokenCommit:
+		// If nodes sees a commit token, then DDL can be allowed on
+		// the bucket
+		sr.updateInMemToken(ttid, tt, "dest")
+		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
+
+		tt.ShardTransferTokenState = c.ShardTokenDeleted
+		setTransferTokenInMetakv(ttid, tt)
 		return true
 
 	default:
@@ -1901,8 +1961,6 @@ loop:
 
 			tt.ShardTransferTokenState = c.ShardTokenCommit
 			setTransferTokenInMetakv(ttid, tt)
-
-			sr.updateInMemToken(ttid, tt, "source")
 			return
 		}
 
@@ -2180,5 +2238,53 @@ func (sr *ShardRebalancer) updateTransferProgress() {
 			}()
 		}
 	}
+}
 
+// This method is called on rebalance master, after all tokens are
+// moved to ShardTokenScheduleAck phase. This method is called after
+// acquiring the sr.mu mutex
+func (sr *ShardRebalancer) updateRebalancePhaseInGlobalRebalToken() {
+
+	// Make a clone of rebalance token
+	t1 := *sr.rebalToken
+	t2 := t1
+	cloneRebalToken := &t2
+
+	fn := func(r int, e error) error {
+		rebalToken := cloneRebalToken
+		rebalToken.Version = common.AllowDDLDuringRebalance_v1
+		rebalToken.RebalPhase = common.RebalanceTransferInProgress
+		err := c.MetakvSet(RebalanceTokenPath, rebalToken)
+		if err != nil {
+			l.Errorf("ShardRebalancer::updateRebalancePhaseInGlobalRebalToken Unable to set RebalanceToken In Metakv Storage. Err %v", err)
+			return err
+		}
+		l.Infof("ShardRebalancer::updateRebalancePhaseInGlobalRebalToken Registered Global Rebalance Token In Metakv %v", rebalToken)
+		return nil
+	}
+
+	helper := c.NewRetryHelper(10, time.Second, 1, fn)
+	if err := helper.Run(); err != nil {
+		logging.Errorf("ShardRebalancer::updateRebalancePhaseInGlobalRebalToken Unable to update global rebalance phase in rebalance token")
+	}
+	// Do not return the error - In case of error all DDL's during rebalance will be blocked, but rebalance can proceed
+}
+
+func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhase common.RebalancePhase) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	bucketPhase := make(map[string]common.RebalancePhase)
+	bucketPhase[bucket] = tranfserPhase
+	globalPh := common.RebalanceInitated
+	if sr.rebalToken.RebalPhase == common.RebalanceTransferInProgress {
+		globalPh = common.RebalanceTransferInProgress
+	}
+
+	msg := &MsgUpdateRebalancePhase{
+		GlobalRebalancePhase: globalPh,
+		BucketTransferPhase:  bucketPhase,
+	}
+
+	sr.supvMsgch <- msg
 }

@@ -64,6 +64,8 @@ const (
 	OPCODE_AUTH_RESPONSE                               = OPCODE_AUTH_REQUEST + 1
 	OPCODE_CREATE_RECOVER_INDEX_REBAL                  = OPCODE_AUTH_RESPONSE + 1
 	OPCODE_BUILD_RECOVERED_INDEXES_REBAL               = OPCODE_CREATE_RECOVER_INDEX_REBAL + 1
+	OPCODE_UPDATE_REBALANCE_PHASE                      = OPCODE_BUILD_RECOVERED_INDEXES_REBAL + 1
+	OPCODE_REBALANCE_DONE                              = OPCODE_UPDATE_REBALANCE_PHASE + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -142,6 +144,10 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_CREATE_RECOVER_INDEX_REBAL"
 	case OPCODE_BUILD_RECOVERED_INDEXES_REBAL:
 		return "OPCODE_BUILD_RECOVERED_INDEXES_REBAL"
+	case OPCODE_UPDATE_REBALANCE_PHASE:
+		return "OPCODE_UPDATE_REBALANCE_PHASE"
+	case OPCODE_REBALANCE_DONE:
+		return "OPCODE_REBALANCE_DONE"
 	}
 
 	return fmt.Sprintf("%v", op)
@@ -314,7 +320,8 @@ type CommitCreateRequest struct {
 }
 
 type CommitCreateResponse struct {
-	Accept bool `json:"accept,omitempty"`
+	Accept bool   `json:"accept,omitempty"`
+	Msg    string `json:"reason,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////

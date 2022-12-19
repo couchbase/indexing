@@ -306,11 +306,31 @@ func (m *schedIndexCreator) stopProcessDDL() {
 	m.allowDDL = false
 }
 
-func (m *schedIndexCreator) canProcessDDL() bool {
+func (m *schedIndexCreator) canProcessDDL(allowDDLAtRebalance bool) bool {
 	m.allowDDLMutex.RLock()
 	defer m.allowDDLMutex.RUnlock()
 
-	return m.allowDDL
+	if !allowDDLAtRebalance {
+		return m.allowDDL
+	}
+
+	if !m.allowDDL { // rebalance is running. Allow or reject based on the config
+		cfg := m.config.Load()
+		if common.IsServerlessDeployment() {
+			val, ok := cfg["serverless.allowDDLDuringRebalance"]
+			if ok {
+				return val.Bool()
+			}
+		} else {
+			val, ok := cfg["allowDDLDuringRebalance"]
+			if ok {
+				return val.Bool()
+			}
+		}
+		return false
+	}
+
+	return true
 }
 
 func (m *schedIndexCreator) startProcessDDL() {
@@ -344,7 +364,7 @@ func (m *schedIndexCreator) processSchedIndexes() {
 	for {
 		select {
 		case <-ticker.C:
-			if !m.canProcessDDL() {
+			if !m.canProcessDDL(true) {
 				continue
 			}
 
@@ -358,7 +378,7 @@ func (m *schedIndexCreator) processSchedIndexes() {
 
 		innerLoop:
 			for {
-				if !m.canProcessDDL() {
+				if !m.canProcessDDL(true) {
 					break innerLoop
 				}
 
@@ -713,8 +733,9 @@ func (m *schedIndexCreator) orphanTokenMover() {
 	for {
 		select {
 		case <-ticker.C:
+			// TODO (Elixir): Can orphan tokens be moved during rebalance
 			// Don't proceed with orphan token processing if rebalance is running.
-			if !m.canProcessDDL() {
+			if !m.canProcessDDL(false) {
 				continue
 			}
 

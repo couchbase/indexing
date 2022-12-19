@@ -158,8 +158,7 @@ func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVBuckets int) (Ti
 		return nil, err
 	}
 
-	// Skip validating the numVBuckets if user sets to 0
-	if (numVBuckets != 0) && (len(seqnos) < numVBuckets) {
+	if len(seqnos) < numVBuckets {
 		fmsg := "BucketSeqnos(): got ts only for %v vbs"
 		return nil, fmt.Errorf(fmsg, len(seqnos))
 	}

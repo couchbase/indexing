@@ -1873,6 +1873,19 @@ func (ss *StreamState) CloneCollectionIdMap(streamId common.StreamId) KeyspaceId
 
 }
 
+func (ss *StreamState) CloneStreamKeyspaceIdNumVBucketsMap() map[common.StreamId]KeyspaceIdNumVBucketsMap {
+
+	outMap := make(map[common.StreamId]KeyspaceIdNumVBucketsMap)
+	for streamID, keySpaceIDNumVBucketsMap := range ss.streamKeyspaceIdNumVBuckets {
+		outMap[streamID] = make(KeyspaceIdNumVBucketsMap)
+		for keyspaceID, numVBuckets := range keySpaceIDNumVBucketsMap {
+			outMap[streamID][keyspaceID] = numVBuckets
+		}
+	}
+	return outMap
+
+}
+
 func (ss *StreamState) CloneKeyspaceIdRollbackTime() map[string]int64 {
 
 	outMap := make(map[string]int64)

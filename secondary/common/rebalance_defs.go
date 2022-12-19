@@ -269,7 +269,7 @@ func (ttv TransferTokenVersion) String() string {
 	case SINGLE_INST_DCP_BUILD:
 		return "SINGLE_INST_DCP_BUILD"
 	case MULTI_INST_SHARD_TRANSFER:
-		return "MULTI_INIT_SHARD_TRANSFER"
+		return "MULTI_INST_SHARD_TRANSFER"
 	}
 	return "unknown"
 }
@@ -490,3 +490,39 @@ func (tt *TransferToken) IsShardTransferToken() bool {
 func (tt *TransferToken) SiblingExists() bool {
 	return tt.SiblingTokenId != ""
 }
+
+type RebalancePhase byte
+
+const (
+	RebalanceNotRunning RebalancePhase = iota
+	RebalanceInitated
+	RebalanceTransferInProgress
+	RebalanceDone
+)
+
+func (rp RebalancePhase) String() string {
+
+	switch rp {
+	case RebalanceNotRunning:
+		return "REBALANCE_NOT_RUNNING"
+	case RebalanceInitated:
+		return "REBALANCE_INITIATED"
+	case RebalanceTransferInProgress:
+		return "REBALANCE_TRANSFER_IN_PROGRESS"
+	case RebalanceDone:
+		return "REBALANCE_DONE"
+	}
+	return "unknown"
+}
+
+type RebalancePhaseRequest struct {
+	GlobalRebalPhase    RebalancePhase            `json:"globalRebalPhase,omitempty"`    // Overall rebalance phase
+	BucketTransferPhase map[string]RebalancePhase `json:"bucketTransferPhase,omitempty"` // Per-bucket rebalance phase
+}
+
+type DDLDuringRebalanceVersion byte
+
+const (
+	BlockDDLDuringRebalance DDLDuringRebalanceVersion = iota
+	AllowDDLDuringRebalance_v1
+)

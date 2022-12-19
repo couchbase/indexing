@@ -1088,12 +1088,17 @@ func (si *secondaryIndex) IndexMetadata() map[string]interface{} {
 	si.indexStatsHolder.Rwlock.RLock()
 	defer si.indexStatsHolder.Rwlock.RUnlock()
 
+	indexInfo := make(map[string]interface{})
+	for k, v := range si.indexInfo {
+		indexInfo[k] = v
+	}
+
 	statsCopy := make(map[string]interface{})
 	for k, v := range si.indexStatsHolder.StatsMap {
 		statsCopy[k] = v
 	}
-	si.indexInfo["stats"] = statsCopy
-	return si.indexInfo
+	indexInfo["stats"] = statsCopy
+	return indexInfo
 }
 
 // State implement Index{} interface.
