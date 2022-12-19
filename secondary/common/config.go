@@ -3410,6 +3410,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.rebalance.blob_storage_region": ConfigValue{
+		"",
+		"The region at which the 'blob_storage_bucket' is created. " +
+			"Passed by control plane to indexer via ns_server. For local " +
+			"storage, the value is empty",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.rebalance.blob_storage_prefix": ConfigValue{
 		"",
 		"Service specific prefix provided by control plane. The final path " +
