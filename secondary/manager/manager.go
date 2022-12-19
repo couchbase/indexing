@@ -790,6 +790,18 @@ func (m *IndexManager) CleanupIndex(index common.IndexInst) error {
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_CLEANUP_INDEX, fmt.Sprintf("%v", index.InstId), content)
 }
 
+func (m *IndexManager) NotifyInstAsyncRecoveryDone(index common.IndexInst) error {
+
+	index.Pc = nil
+	content, err := common.MarshallIndexInst(&index)
+	if err != nil {
+		return err
+	}
+
+	logging.Debugf("IndexManager.NotifyInstAsyncRecoveryDone(): making request to notify completion of async recovery for inst: %v", index.InstId)
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_INST_ASYNC_RECOVERY_DONE, fmt.Sprintf("%v", index.InstId), content)
+}
+
 func (m *IndexManager) NotifyIndexerReady() error {
 
 	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")

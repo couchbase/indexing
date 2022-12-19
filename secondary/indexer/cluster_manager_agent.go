@@ -183,6 +183,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case UPDATE_REBALANCE_PHASE:
 		c.handleUpdateRebalancePhase(cmd)
 
+	case CLUST_MGR_INST_ASYNC_RECOVERY_DONE:
+		c.handleInstAsyncRecoveryDone(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -662,6 +665,17 @@ func (c *clustMgrAgent) handleUpdateRebalancePhase(cmd Message) {
 	bucketTransferPhase := cmd.(*MsgUpdateRebalancePhase).GetBucketTransferPhase()
 
 	c.mgr.UpdateRebalancePhase(globalRebalPhase, bucketTransferPhase)
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleInstAsyncRecoveryDone(cmd Message) {
+	logging.Infof("ClustMgr:handleInstAsyncRecoveryDone %v", cmd)
+
+	index := cmd.(*MsgClustMgrUpdate).GetIndexList()[0]
+
+	err := c.mgr.NotifyInstAsyncRecoveryDone(index)
+	common.CrashOnError(err)
+
 	c.supvCmdch <- &MsgSuccess{}
 }
 

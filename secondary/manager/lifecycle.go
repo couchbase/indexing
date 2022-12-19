@@ -76,6 +76,9 @@ type LifecycleMgr struct {
 
 	rebalancePhase      common.RebalancePhase
 	bucketTransferPhase map[string]common.RebalancePhase
+
+	instsInAsyncRecovery        map[common.IndexInstId]bool
+	droppedInstsInAsyncRecovery map[common.IndexInstId]bool
 }
 
 type requestHolder struct {
@@ -200,6 +203,9 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 		clientStatsRefreshInterval: 5000,
 		acceptedNames:              make(map[string]*indexNameRequest),
 		accIgnoredIds:              make(map[common.IndexDefnId]bool),
+
+		instsInAsyncRecovery:        make(map[common.IndexInstId]bool),
+		droppedInstsInAsyncRecovery: make(map[common.IndexInstId]bool),
 	}
 
 	mgr.configHolder.Store(config)
@@ -558,6 +564,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleCheckTokenExist(content)
 	case client.OPCODE_CLIENT_STATS:
 		result, err = m.handleClientStats(content)
+	case client.OPCODE_INST_ASYNC_RECOVERY_DONE:
+		err = m.handleInstAsyncRecoveryDone(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -986,6 +994,31 @@ func (m *LifecycleMgr) handleRebalanceDone(content []byte) error {
 
 	m.rebalancePhase = common.RebalanceNotRunning
 	m.bucketTransferPhase = nil
+
+	return nil
+}
+
+func (m *LifecycleMgr) handleInstAsyncRecoveryDone(content []byte) error {
+	inst, err := common.UnmarshallIndexInst(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleInstAsyncRecoveryDone() : Unable to unmarshall index definition. Reason = %v", err)
+		return err
+	}
+
+	delete(m.instsInAsyncRecovery, inst.InstId)
+
+	// If any instance is dropped while async recovery was in progress,
+	// then delete the index now
+	if _, ok := m.droppedInstsInAsyncRecovery[inst.InstId]; ok {
+
+		delete(m.droppedInstsInAsyncRecovery, inst.InstId)
+
+		logging.Infof("LifecycleMgr::handleInstAsyncRecoveryDone Deleting index inst: %v as index was dropped "+
+			"while async recovery was in progress", inst.InstId)
+
+		// Instance is dropped while async recovery is in progress. Drop the index
+		return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, true, false, true, common.NewShardRebalanceRequestContext())
+	}
 
 	return nil
 }
@@ -1534,6 +1567,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+
+			m.instsInAsyncRecovery[instId] = true
+
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
 				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
@@ -2289,17 +2325,26 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 		return err
 	}
 
-	hasError := false
+	var hasError error
 	for _, inst := range insts {
+
+		if _, ok := m.instsInAsyncRecovery[common.IndexInstId(inst.InstId)]; ok {
+			m.droppedInstsInAsyncRecovery[common.IndexInstId(inst.InstId)] = true
+			logging.Errorf("LifecycleMgr::DeleteIndex Instance is in async recovery. Index will be deleted after "+
+				"recovery is completed, instId: %v", inst.InstId)
+			hasError = common.ErrIndexInAsyncRecovery
+			continue
+		}
+
 		// updateIndexState will not return an error if there is no index inst
 		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_DELETED); err != nil {
-			hasError = true
+			hasError = err
 		}
 	}
 
-	if hasError {
-		logging.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", err)
-		return err
+	if hasError != nil {
+		logging.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", hasError)
+		return hasError
 	}
 
 	if updateStatusOnly {
@@ -2395,6 +2440,14 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	change := new(topologyChange)
 	if err := json.Unmarshal(content, change); err != nil {
 		return err
+	}
+
+	if _, ok := m.instsInAsyncRecovery[common.IndexInstId(change.InstId)]; ok {
+		if _, ok := m.droppedInstsInAsyncRecovery[common.IndexInstId(change.InstId)]; ok {
+			logging.Infof("LifecycleMgr::handleTopologyChange Metadata updates to the index inst: %v are "+
+				"skipped as drop index was received while index is in recovery", change.InstId)
+			return nil
+		}
 	}
 
 	// Find index defnition
@@ -3240,6 +3293,9 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+
+			m.instsInAsyncRecovery[instId] = true
+
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
 				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
@@ -3518,6 +3574,13 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 	// no match index instance to delete
 	if inst == nil {
 		return nil
+	}
+
+	if _, ok := m.instsInAsyncRecovery[common.IndexInstId(inst.InstId)]; ok {
+		m.droppedInstsInAsyncRecovery[common.IndexInstId(inst.InstId)] = true
+		logging.Errorf("LifecycleMgr::DeleteIndex Instance is in async recovery. Index will be deleted "+
+			"after recovery is completed, instId: %v", inst.InstId)
+		return common.ErrIndexInAsyncRecovery
 	}
 
 	// This is no other instance to delete.  Delete the index itself.

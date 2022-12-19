@@ -2279,6 +2279,18 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	partnShardIdMap := msg.(*MsgRecoverIndexResp).GetPartnShardIdMap()
 	err := msg.(*MsgRecoverIndexResp).GetError()
 
+	// Notify lifecycle manager that the async recovery is done.
+	// If any index were dropped while async recovery was in progress
+	// they it will be deleted after async recovery is done as simultaneous
+	// index recovery and drop can lead to unwanted race conditions in plasma
+	defer func() {
+		err := idx.notifyAsyncRecoveryDone(indexInst)
+		if err != nil {
+			logging.Errorf("Indexer::handleInstRecoveryResponse Error observed while notifying "+
+				"async recovery done for inst: %v, err: %v", indexInst.InstId, err)
+		}
+	}()
+
 	if err != nil {
 		// Index recovery did not succeed. Remove index from topology
 		// Send a message to cluster manager to remove index instance from topology
@@ -9263,6 +9275,14 @@ func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
 	temp := indexInst
 	temp.Pc = nil
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{temp}}
+	return idx.sendMsgToClustMgrAndProcessResponse(msg)
+}
+
+func (idx *indexer) notifyAsyncRecoveryDone(indexInst common.IndexInst) error {
+
+	temp := indexInst
+	temp.Pc = nil
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INST_ASYNC_RECOVERY_DONE, indexList: []common.IndexInst{temp}}
 	return idx.sendMsgToClustMgrAndProcessResponse(msg)
 }
 

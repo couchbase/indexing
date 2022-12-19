@@ -84,6 +84,7 @@ var ErrPlannerConstraintViolation = errors.New("Planner Constraint Violation.")
 var ErrIndexBucketLimitReached = errors.New("Limit for number of indexes that can be created per bucket has been reached.")
 var ErrServerBusy = errors.New("Server is busy.")
 var ErrDiskLimitReached = errors.New("Bucket's disk size limit has been reached.")
+var ErrIndexInAsyncRecovery = errors.New("Index is in async recovery. Index drop will be attempted after recovery is complete")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
