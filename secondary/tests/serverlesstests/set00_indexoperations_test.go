@@ -10,15 +10,13 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
-// TODO:Add special characters to bucket names
-var buckets []string = []string{"bucket_1", "bucket_2"}
-var collections []string = []string{"_default", "c1", "c2"}
+var buckets []string = []string{"bucket_1", "bucket_%2"}
+var collections []string = []string{"_default", "c1", "c2%"}
 var scope string = "_default"
 
-// TODO: Add "#" character to primary index name
-var indexes []string = []string{"idx_secondary", "idx_secondary_defer", "primary", "primary_defer", "idx_partitioned", "idx_partitioned_defer"}
+var indexes []string = []string{"idx_secondary", "idx_secondary_defer", "#primary", "#primary_defer", "idx_partitioned", "idx_partitioned_defer"}
 var indexPartnIds [][]int = [][]int{[]int{0}, []int{0}, []int{0}, []int{0}, []int{1, 2, 3, 4, 5, 6, 7, 8}, []int{1, 2, 3, 4, 5, 6, 7, 8}}
-var numDocs int = 100
+var numDocs int = 1000
 var numScans int = 100
 
 // When creating an index through N1QL, the index is expected
