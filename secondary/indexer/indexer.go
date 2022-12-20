@@ -5795,8 +5795,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			return nil, nil, nil, err1
 		}
 
+		var shardIds []common.ShardId
+		if shardRebalance {
+			shardIds = indexInst.Defn.ShardIdsForDest
+		}
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
-			idx.meteringMgr, numVBuckets)
+			idx.meteringMgr, numVBuckets, shardIds)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if (bootstrapPhase && err == errStorageCorrupted) && !shardRebalance {
@@ -9696,7 +9700,8 @@ func (idx *indexer) memoryUsedStorage() int64 {
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (slice Slice, err error) {
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int,
+	shardIds []common.ShardId) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -9726,7 +9731,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds)
 	}
 
 	return

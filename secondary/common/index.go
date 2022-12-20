@@ -274,6 +274,8 @@ type IndexDefn struct {
 	// indexer would recover the index as INDEX_STATE_READY.
 	// Otherwise, index would recover as INDEX_STATE_RECOVERED
 	InstStateAtRebal IndexState `json:"instStateAtRebal,omitempty"`
+
+	ShardIdsForDest []ShardId `json:"shardIdsForDest,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)

@@ -1078,6 +1078,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// built in a batch
 		for _, defn := range defns {
 
+			// TODO: Use ShardIds for desintaion when changing the shardIds
+			defn.ShardIdsForDest = tt.ShardIds
 			if skip, err := sr.postRecoverIndexReq(defn, ttid, tt); err != nil {
 				setErrInTransferToken(err)
 				return
