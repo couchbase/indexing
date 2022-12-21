@@ -125,6 +125,8 @@ type plasmaSlice struct {
 
 	isPersistorActive int32
 
+	isInitialBuild int32
+
 	lastRollbackTs *common.TsVbuuid
 
 	// Array processing
@@ -283,6 +285,10 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 			destroyPlasmaSlice(storage_dir, path)
 		}
 		return nil, err
+	}
+
+	if isInitialBuild {
+		atomic.StoreInt32(&slice.isInitialBuild, 1)
 	}
 
 	slice.shardIds = nil // Reset the slice and read the actuals from the store
@@ -2243,6 +2249,9 @@ func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	}
 
 	mdb.lastRollbackTs = nil
+	if initialBuild {
+		atomic.StoreInt32(&mdb.isInitialBuild, 1)
+	}
 
 	return nil
 }
@@ -3003,6 +3012,7 @@ func (mdb *plasmaSlice) BuildDone() {
 	if !mdb.isPrimary {
 		mdb.backstore.BuildDone()
 	}
+	atomic.StoreInt32(&mdb.isInitialBuild, 0)
 }
 
 func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
