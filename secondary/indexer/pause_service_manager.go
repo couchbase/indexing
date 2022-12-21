@@ -465,7 +465,10 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err er
 		return err
 	}
 
-	// TODO: Add to metaKV
+	// Add to metaKV
+	if err = m.registerPauseTokenInMetakv(pauseToken); err != nil {
+		return err
+	}
 
 	// TODO: Register via /pauseMgr/Pause
 
@@ -1016,6 +1019,8 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 const PauseTokenTag = "PauseToken"
+const PauseMetakvDir = common.IndexingMetaDir + "pause/"
+const PauseTokenPathPrefix = PauseMetakvDir + PauseTokenTag
 
 type PauseToken struct {
 	MasterId string
@@ -1043,6 +1048,10 @@ func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string
 
 func buildKeyForLocalPauseToken(pauseToken *PauseToken) string {
 	return fmt.Sprintf("%s_%s", PauseTokenTag, pauseToken.PauseId)
+}
+
+func buildMetakvPathForPauseToken(pauseToken *PauseToken) string {
+	return fmt.Sprintf("%s_%s", PauseTokenPathPrefix, pauseToken.PauseId)
 }
 
 func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) error {
@@ -1101,5 +1110,20 @@ func (m *PauseServiceManager) cleanupLocalPauseToken(pauseToken *PauseToken) err
 	}
 
 	delete(m.pauseTokensById, pauseToken.PauseId)
+	return nil
+}
+
+func (m *PauseServiceManager) registerPauseTokenInMetakv(pauseToken *PauseToken) error {
+
+	path := buildMetakvPathForPauseToken(pauseToken)
+
+	err := common.MetakvSet(path, pauseToken)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::registerPauseTokenInMetakv: Unable to set PauseToken In Metakv Storage: Err[%v]", err)
+		return err
+	}
+
+	logging.Infof("PauseServiceManager::registerPauseTokenInMetakv: Registered Global PauseToken[%v] In Metakv at path[%v]", pauseToken, path)
+
 	return nil
 }
