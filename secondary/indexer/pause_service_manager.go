@@ -54,6 +54,9 @@ type PauseServiceManager struct {
 	tasksMu sync.RWMutex
 
 	supvMsgch MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
+
+	// Track global PauseTokens
+	pauseTokensById map[string]*PauseToken
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
@@ -73,6 +76,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		tasks:        make(map[string]*taskObj),
 
 		supvMsgch: supvMsgch,
+
+		pauseTokensById: make(map[string]*PauseToken),
 	}
 	m.config.Store(config)
 
@@ -414,10 +419,53 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
+	if err := m.initStartPhase(params.Bucket, params.ID); err != nil {
+		return  err
+	}
+
 	// Create a Pauser object to run the master orchestration loop. It will be the only thread
 	// that changes or deletes *task after this point. It will save a pointer to itself into
 	// task.pauser and start its own goroutine, so we don't need to save a pointer to it here.
 	RunPauser(m, task, true)
+	return nil
+}
+
+func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err error) {
+
+	err = func() error {
+		m.genericMgr.cinfo.Lock()
+		defer m.genericMgr.cinfo.Unlock()
+		return m.genericMgr.cinfo.FetchNodesData()
+	}()
+	if err != nil {
+		logging.Errorf("PauseServiceManager::initStartPhase: Failed to fetch nodes data via cinfo: err[%v]",
+			err)
+		return err
+	}
+
+	var masterIP string
+	masterIP, err = func() (string, error) {
+		m.genericMgr.cinfo.RLock()
+		defer m.genericMgr.cinfo.RUnlock()
+		return m.genericMgr.cinfo.GetLocalHostname()
+	}()
+	if err != nil {
+		logging.Errorf("PauseServiceManager::initStartPhase: Failed to get local host name via cinfo: err[%v]",
+			err)
+		return err
+	}
+
+	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId)
+	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
+
+	m.pauseTokensById[pauseId] = pauseToken
+
+	// TODO: Add to local metadata
+
+	// TODO: Add to metaKV
+
+	// TODO: Register via /pauseMgr/Pause
+
 	return nil
 }
 
