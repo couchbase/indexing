@@ -87,7 +87,7 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 	m.cinfo.SetUserAgent(_class)
 
 	// Create PauseServiceManager singleton
-	pauseMgr := NewPauseServiceManager(m, mux, supvMsgch, httpAddr, config)
+	pauseMgr := NewPauseServiceManager(m, mux, supvMsgch, httpAddr, config, nodeInfo)
 	m.pauseMgr = pauseMgr
 
 	// Create RebalanceServiceManager singleton

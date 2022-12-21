@@ -15,8 +15,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/couchbase/cbauth/service"
@@ -57,6 +59,9 @@ type PauseServiceManager struct {
 
 	// Track global PauseTokens
 	pauseTokensById map[string]*PauseToken
+	pauseTokenMapMu sync.RWMutex
+
+	nodeInfo *service.NodeInfo
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
@@ -66,7 +71,7 @@ type PauseServiceManager struct {
 //	mux - Indexer's HTTP server
 //	httpAddr - host:port of the local node for Index Service HTTP calls
 func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvMsgch MsgChannel,
-	httpAddr string, config common.Config) *PauseServiceManager {
+	httpAddr string, config common.Config, nodeInfo *service.NodeInfo) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -78,6 +83,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		supvMsgch: supvMsgch,
 
 		pauseTokensById: make(map[string]*PauseToken),
+
+		nodeInfo: nodeInfo,
 	}
 	m.config.Store(config)
 
@@ -458,7 +465,9 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err er
 	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId)
 	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
 
+	m.pauseTokenMapMu.Lock()
 	m.pauseTokensById[pauseId] = pauseToken
+	m.pauseTokenMapMu.Unlock()
 
 	// Add to local metadata
 	if err = m.registerLocalPauseToken(pauseToken); err != nil {
@@ -687,33 +696,143 @@ func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *htt
 // RestHandlePause handles REST API /pauseMgr/Pause by initiating work on the specified taskId on
 // this follower node.
 func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Request) {
-	const _RestHandlePause = "PauseServiceManager::RestHandlePause:"
-
-	logging.Infof("%v called", _RestHandlePause)
-	defer logging.Infof("%v returned", _RestHandlePause)
 
 	// Authenticate
-	_, ok := doAuth(r, w, _RestHandlePause)
-	if !ok {
+	if _, ok := doAuth(r, w, "PauseServiceManager::RestHandlePause:"); !ok {
+		err := fmt.Errorf("either invalid credentials or bad request")
+		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request," +
+			" err[%v]", err)
 		return
 	}
 
-	// Parameters
-	id := r.FormValue("id")
-
-	task := m.taskFind(id)
-	if task != nil {
-		// Do the work for this task
-		RunPauser(m, task, false)
-
-		return
+	writeError := func(w http.ResponseWriter, err error) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
 	}
 
-	// Task not found error reply
-	errMsg2 := fmt.Sprintf("%v taskId %v not found", _RestHandlePause, id)
-	logging.Errorf(errMsg2)
-	resp := &TaskResponse{Code: RESP_ERROR, Error: errMsg2}
-	rhSend(http.StatusInternalServerError, w, resp)
+	writeOk := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK\n"))
+	}
+
+	var pauseToken PauseToken
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		if err := json.Unmarshal(bytes, &pauseToken); err != nil {
+			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to unmarshal pause token in request" +
+				" body: err[%v] bytes[%v]", err, string(bytes))
+			writeError(w, err)
+
+			return
+		}
+
+		logging.Infof("PauseServiceManager::RestHandlePause: New Pause Token [%v]", pauseToken)
+
+		if m.observeGlobalPauseToken(pauseToken) {
+			// Pause token from rest and metakv are the same.
+
+			var task *taskObj
+			if task = m.taskFind(pauseToken.PauseId); task == nil {
+				err := fmt.Errorf("failed to find task with id[%v]", pauseToken.PauseId)
+				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause" +
+					": err[%v]", string(m.nodeInfo.NodeID), err)
+				writeError(w, err)
+
+				return
+			}
+
+			m.pauseTokenMapMu.Lock()
+			m.pauseTokensById[pauseToken.PauseId] = &pauseToken
+			m.pauseTokenMapMu.Unlock()
+
+			if err := m.registerLocalPauseToken(&pauseToken); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local" +
+					" meta: err[%v]", err)
+				writeError(w, err)
+
+				return
+			}
+
+			// TODO: Move task from prepared to running
+
+			// Move bucket to bst_PAUSING state
+			if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_PAUSE, bst_PAUSING); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to pausing" +
+					" err[%v]", err)
+				writeError(w, err)
+				return
+			}
+
+			RunPauser(m, task, false)
+
+			writeOk(w)
+			return
+
+		} else {
+			// Timed out waiting to see the token in metaKV
+
+			err := fmt.Errorf("pause token wait timeout")
+			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to observe token: err[%v]", err)
+			writeError(w, err)
+
+			return
+		}
+
+	} else {
+		writeError(w, fmt.Errorf("PauseServiceManager::RestHandlePause: Unsupported method, use only POST"))
+		return
+	}
+}
+
+func (m *PauseServiceManager) observeGlobalPauseToken(pauseToken PauseToken) bool {
+
+	// TODO: Make timeout configurable
+	// Time in seconds to fail pause if metaKV doesn't deliver the token
+	globalTokenWaitTimeout := 60 * time.Second
+
+	checkInterval := 1 * time.Second
+	var elapsed time.Duration
+	var pToken PauseToken
+	path := buildMetakvPathForPauseToken(&pauseToken)
+
+	for elapsed < globalTokenWaitTimeout {
+
+		found, err := common.MetakvGet(path, &pToken)
+		if err != nil {
+			logging.Errorf("PauseServiceManager::observeGlobalPauseToken Error Checking Pause Token In Metakv: err[%v] path[%v]",
+				err, path)
+
+			time.Sleep(checkInterval)
+			elapsed += checkInterval
+
+			continue
+		}
+
+		if found {
+			if reflect.DeepEqual(pToken, pauseToken) {
+				logging.Infof("PauseServiceManager::observeGlobalPauseToken Global And Local Pause Tokens Match: [%v]",
+					pauseToken)
+				return true
+
+			} else {
+				logging.Errorf("PauseServiceManager::observeGlobalPauseToken Mismatch in Global and Local Pause Token: Global[%v] Local[%v]",
+					pToken, pauseToken)
+				return false
+
+			}
+		}
+
+		logging.Infof("PauseServiceManager::observeGlobalPauseToken Waiting for Global Pause Token In Metakv")
+
+		time.Sleep(checkInterval)
+		elapsed += checkInterval
+	}
+
+	logging.Errorf("PauseServiceManager::observeGlobalPauseToken Timeout Waiting for Global Pause Token In Metakv: path[%v]",
+		path)
+
+	return false
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1109,7 +1228,10 @@ func (m *PauseServiceManager) cleanupLocalPauseToken(pauseToken *PauseToken) err
 		common.CrashOnError(err)
 	}
 
+	m.pauseTokenMapMu.Lock()
 	delete(m.pauseTokensById, pauseToken.PauseId)
+	m.pauseTokenMapMu.Unlock()
+
 	return nil
 }
 
