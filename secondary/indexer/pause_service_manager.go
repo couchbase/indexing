@@ -38,6 +38,8 @@ type PauseServiceManager struct {
 	genericMgr *GenericServiceManager // pointer to our parent
 	httpAddr   string                 // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
 
+	config common.ConfigHolder
+
 	// bucketStates is a map from bucket to its Pause-Resume state. The design supports concurrent
 	// pauses and resumes of different buckets, although this may not be done in practice.
 	bucketStates map[string]bucketStateEnum
@@ -61,7 +63,7 @@ type PauseServiceManager struct {
 //	mux - Indexer's HTTP server
 //	httpAddr - host:port of the local node for Index Service HTTP calls
 func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvMsgch MsgChannel,
-	httpAddr string) *PauseServiceManager {
+	httpAddr string, config common.Config) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -72,6 +74,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 
 		supvMsgch: supvMsgch,
 	}
+	m.config.Store(config)
 
 	// Save the singleton
 	SetPauseMgr(m)
@@ -954,5 +957,29 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		logging.Errorf(err.Error())
 		task.pauser.failPause(logPrefix, "TaskResponse", err)
 		return
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// PauseToken
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+type PauseToken struct {
+	MasterId string
+	MasterIP string
+
+	BucketName string
+	PauseId    string
+
+	Error    string
+}
+
+func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string) *PauseToken {
+	cfg := m.config.Load()
+	return &PauseToken{
+		MasterId:   cfg["nodeuuid"].String(),
+		MasterIP:   masterIP,
+		BucketName: bucketName,
+		PauseId:    pauseId,
 	}
 }
