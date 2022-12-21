@@ -479,7 +479,10 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err er
 		return err
 	}
 
-	// TODO: Register via /pauseMgr/Pause
+	// Register via /pauseMgr/Pause
+	if err = m.registerGlobalPauseToken(pauseToken); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1246,6 +1249,68 @@ func (m *PauseServiceManager) registerPauseTokenInMetakv(pauseToken *PauseToken)
 	}
 
 	logging.Infof("PauseServiceManager::registerPauseTokenInMetakv: Registered Global PauseToken[%v] In Metakv at path[%v]", pauseToken, path)
+
+	return nil
+}
+
+func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (err error) {
+
+	m.genericMgr.cinfo.Lock()
+	defer m.genericMgr.cinfo.Unlock()
+
+	nids := m.genericMgr.cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+	if len(nids) < 1 {
+		err := fmt.Errorf("got too few indexer nodes[%d]", len(nids))
+		logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to get NodeIds, err[%v]", err)
+
+		return err
+	}
+
+	url := "/pauseMgr/Pause"
+	for _, nid := range nids {
+
+		addr, err := m.genericMgr.cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+		if err == nil {
+
+			localaddr, err := m.genericMgr.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error Fetching Local Service" +
+					" Address [%v]", err)
+				return err
+			}
+
+			if addr == localaddr {
+				logging.Infof("PauseServiceManager::registerGlobalPauseToken: Skip local service [%v]", addr)
+				continue
+			}
+
+			body, err := json.Marshal(pauseToken)
+			if err != nil {
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to marshal pause token:" +
+					" err[%v] pauseToken[%v]", err, pauseToken)
+				return err
+			}
+
+			bodyBuf := bytes.NewBuffer(body)
+			resp, err := postWithAuth(addr+url, "application/json", bodyBuf)
+			if err != nil {
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error registering pause token," +
+					" err[%v] addr[%v]", err, addr+url)
+				return err
+			}
+
+			ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+
+		} else {
+			logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to Fetch Service Address:" +
+				" [%v]", err)
+			return err
+		}
+
+		logging.Infof("PauseServiceManager::registerGlobalPauseToken: Successfully registered pause token on" +
+			" [%v]", addr+url)
+	}
 
 	return nil
 }
