@@ -221,6 +221,8 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
 	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
 	mux.HandleFunc("/rebalanceCleanupStatus", m.handleRebalanceCleanupStatus)
+	mux.HandleFunc("/lockShards", m.handleLockShards)
+	mux.HandleFunc("/unlockShards", m.handleUnlockShards)
 }
 
 // updateNodeList initializes RebalanceServiceManager.state.servers node list on start or restart.
@@ -3700,4 +3702,74 @@ func (m *RebalanceServiceManager) canAllowDDLDuringRebalance() bool {
 		}
 	}
 	return true
+}
+
+////////////////////////////////////////////////////////
+// Rest API handlers for shard locking and unlocking
+////////////////////////////////////////////////////////
+
+func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *http.Request) {
+	_, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleLockShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if r.Method == "POST" {
+
+		bytes, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			m.writeError(w, fmt.Errorf("RebalanceServiceManager::handleLockShards Error observed while reading request body, err: %v", err))
+			return
+		}
+		var shardIds []common.ShardId
+		if err := json.Unmarshal(bytes, &shardIds); err != nil {
+			send(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		logging.Infof("RebalanceServiceManager::handleLockShards Locking shards: %v as requested by user", shardIds)
+		err = lockShards(shardIds, m.supvMsgch)
+		if err != nil {
+			logging.Infof("RebalanceServiceManager::handleLockShards Error observed when locking shards: %v, err: %v", shardIds, err)
+			m.writeError(w, err)
+			return
+		}
+		m.writeOk(w)
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
+}
+
+func (m *RebalanceServiceManager) handleUnlockShards(w http.ResponseWriter, r *http.Request) {
+
+	_, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleUnlockShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+	if r.Method == "POST" {
+
+		bytes, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			m.writeError(w, fmt.Errorf("RebalanceServiceManager::handleUnlockShards Error observed while reading request body, err: %v", err))
+			return
+		}
+		var shardIds []common.ShardId
+		if err := json.Unmarshal(bytes, &shardIds); err != nil {
+			send(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		logging.Infof("RebalanceServiceManager::handleUnlockShards Unlocking shards: %v as requested by user", shardIds)
+		err = unlockShards(shardIds, m.supvMsgch)
+		if err != nil {
+			logging.Infof("RebalanceServiceManager::handleUnlockShards Error observed when unlocking shards: %v, err: %v", shardIds, err)
+			m.writeError(w, err)
+			return
+		}
+		m.writeOk(w)
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
 }
