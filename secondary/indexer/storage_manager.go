@@ -727,6 +727,8 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 		}()
 	}
 	if snapC == nil {
+		DestroyIndexSnapshot(is)
+		logging.Infof("StorageMgr::updateSnapMapAndNotify - Destroying the last snapshot for index: %v", is.IndexInstId())
 		return
 	}
 
