@@ -136,6 +136,9 @@ type Pauser struct {
 	// delete task at this point, but GetTaskList and other processing may concurrently read it.
 	// Thus Pauser needs to write lock task.taskMu for changes but does not need to read lock it.
 	task *taskObj
+
+	// Used to signal that the PauseUploadTokens have been published.
+	waitForTokenPublish chan struct{}
 }
 
 // RunPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -149,18 +152,49 @@ func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool) {
 		pauseMgr: pauseMgr,
 		task:     task,
 		nodeDir:  "node_" + string(pauseMgr.genericMgr.nodeInfo.NodeID) + "/",
+
+		waitForTokenPublish: make(chan struct{}),
 	}
 
 	task.taskMu.Lock()
 	task.pauser = pauser
 	task.taskMu.Unlock()
 
+	go pauser.observePause()
+
+	if master {
+		go pauser.initPauseAsync()
+	} else {
+		// if not master, no need to wait for publishing of tokens
+		close(pauser.waitForTokenPublish)
+	}
+
+	// TODO: Move logic from run to handlers for PauseUploadTokens
 	go pauser.run(master)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (p *Pauser) initPauseAsync() {
+
+	// TODO: init progress update
+
+	// TODO: Generate Tokens
+
+	// TODO: Publish tokens to metaKV
+
+	// Ask observe to continue
+	close(p.waitForTokenPublish)
+}
+
+
+func (p *Pauser) observePause() {
+	<-p.waitForTokenPublish
+
+	// TODO: Observe Pause
+}
 
 // restGetLocalIndexMetadataBinary calls the /getLocalndexMetadata REST API (request_handler.go) via
 // self-loopback to get the index metadata for the current node and the task's bucket (tenant). This
