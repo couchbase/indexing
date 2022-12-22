@@ -116,6 +116,26 @@ func (put *PauseUploadToken) Clone() *PauseUploadToken {
 	return &put2
 }
 
+func setPauseUploadTokenInMetakv(putId string, put *PauseUploadToken) {
+
+	rhCb := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("setPauseUploadTokenInMetakv::rhCb: err[%v], Retrying[%d]", err, r)
+		}
+
+		return common.MetakvSet(PauseMetakvDir+putId, put)
+	}
+
+	rh := common.NewRetryHelper(10, time.Second, 1, rhCb)
+	err := rh.Run()
+
+	if err != nil {
+		logging.Fatalf("setPauseUploadTokenInMetakv: Failed to set PauseUploadToken In Meta Storage:" +
+			" putId[%v] put[%v] err[%v]", putId, put, err)
+		common.CrashOnError(err)
+	}
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Pauser class - Perform the Pause of a given bucket (similar to Rebalancer's role).
 // This is used only on the master node of a task_PAUSE task to do the GSI orchestration.
@@ -191,7 +211,9 @@ func (p *Pauser) initPauseAsync() {
 		// TODO: cleanup tokens
 	}
 
-	// TODO: Publish tokens to metaKV
+	// Publish tokens to metaKV
+	// will crash if cannot set in metaKV even after retries.
+	p.publishPauseUploadTokens(puts)
 
 	// Ask observe to continue
 	close(p.waitForTokenPublish)
@@ -274,6 +296,13 @@ func (p *Pauser) getIndexerUuids() (indexerUuids []string, err error) {
 	}
 
 	return indexerUuids, nil
+}
+
+func (p *Pauser) publishPauseUploadTokens(puts map[string]*PauseUploadToken) {
+	for putId, put := range puts {
+		setPauseUploadTokenInMetakv(putId, put)
+		logging.Infof("Pauser::publishPauseUploadTokens Published pause upload token: %v", putId)
+	}
 }
 
 func (p *Pauser) observePause() {
