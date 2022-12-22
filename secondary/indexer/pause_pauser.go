@@ -16,8 +16,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -64,6 +66,7 @@ func (s PauseUploadState) String() string {
 }
 
 const PauseUploadTokenTag = "PauseUploadToken"
+const PauseUploadTokenPathPrefix = PauseMetakvDir + PauseUploadTokenTag
 
 type PauseUploadToken struct {
 	MasterId   string
@@ -158,8 +161,17 @@ type Pauser struct {
 	// Thus Pauser needs to write lock task.taskMu for changes but does not need to read lock it.
 	task *taskObj
 
+	// Channels used for signalling
 	// Used to signal that the PauseUploadTokens have been published.
 	waitForTokenPublish chan struct{}
+	// Used to signal metakv observer to stop
+	metakvCancel chan struct{}
+
+	metakvMutex sync.RWMutex
+	wg          sync.WaitGroup
+
+	// Global token associated with this Pause task
+	pauseToken *PauseToken
 }
 
 // RunPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -168,13 +180,15 @@ type Pauser struct {
 //	pauseMgr - parent object (singleton)
 //	task - the task_PAUSE task this object will execute
 //	master - true iff this node is the master
-func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool) {
+func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool, pauseToken *PauseToken) {
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
 		task:     task,
 		nodeDir:  "node_" + string(pauseMgr.genericMgr.nodeInfo.NodeID) + "/",
 
 		waitForTokenPublish: make(chan struct{}),
+		metakvCancel:        make(chan struct{}),
+		pauseToken:          pauseToken,
 	}
 
 	task.taskMu.Lock()
@@ -306,9 +320,102 @@ func (p *Pauser) publishPauseUploadTokens(puts map[string]*PauseUploadToken) {
 }
 
 func (p *Pauser) observePause() {
+	logging.Infof("Pauser::observePause pauseToken[%v] master[%v]", p.pauseToken, p.task.isMaster())
+
 	<-p.waitForTokenPublish
 
-	// TODO: Observe Pause
+	err := metakv.RunObserveChildren(PauseMetakvDir, p.processUploadTokens, p.metakvCancel)
+	if err != nil {
+		logging.Errorf("Pauser::observePause Exiting on metaKV observe: err[%v]", err)
+
+		// TODO: cleanup tokens
+	}
+
+	logging.Infof("Pauser::observePause exiting: err[%v]", err)
+}
+
+// processUploadTokens is metakv callback, not intended to be called otherwise
+func (p *Pauser) processUploadTokens(kve metakv.KVEntry) error {
+
+	if kve.Path == buildMetakvPathForPauseToken(p.pauseToken) {
+		// Process PauseToken
+
+		logging.Infof("Pauser::processUploadTokens: PauseToken path[%v] value[%s]", kve.Path, kve.Value)
+
+		if kve.Value == nil {
+			logging.Infof("Pauser::processUploadTokens: PauseToken Deleted. Mark Done.")
+			p.cancelMetakv()
+
+			// TODO: cleanup tokens
+		}
+
+	} else if strings.Contains(kve.Path, PauseUploadTokenPathPrefix) {
+		// Process PauseUploadTokens
+
+		if kve.Value != nil {
+			putId, put, err := decodePauseUploadToken(kve.Path, kve.Value)
+			if err != nil {
+				logging.Errorf("Pauser::processUploadTokens: Failed to decode PauseUploadToken. Ignored.")
+				return nil
+			}
+
+			p.processPauseUploadToken(putId, put)
+
+		} else {
+			logging.Infof("Pauser::processUploadTokens: Received empty or deleted PauseUploadToken path[%v]",
+				kve.Path)
+
+		}
+	}
+
+	return nil
+}
+
+func (p *Pauser) cancelMetakv() {
+	p.metakvMutex.Lock()
+	defer p.metakvMutex.Unlock()
+
+	if p.metakvCancel != nil {
+		close(p.metakvCancel)
+		p.metakvCancel = nil
+	}
+}
+
+func (p *Pauser) processPauseUploadToken(putId string, put *PauseUploadToken) {
+	logging.Infof("Pauser::processPauseUploadToken putId[%v] put[%v]", putId, put)
+	if !p.addToWaitGroup() {
+		logging.Errorf("Pauser::processPauseUploadToken: Failed to add to pauser waitgroup.")
+		return
+	}
+
+	defer p.wg.Done()
+
+	// TODO: Check DDL running
+
+	// "processed" var ensures only the incoming token state gets processed by this
+	// call, as metakv will call parent processUploadTokens again for each state change.
+	var processed bool
+
+	nodeUUID := string(p.pauseMgr.nodeInfo.NodeID)
+
+	if put.MasterId == nodeUUID {
+		// TODO: Implement master handler and set processed
+	}
+
+	if (put.FollowerId == nodeUUID && !processed) {
+		// TODO: Implement follower handler
+	}
+}
+
+func (p *Pauser) addToWaitGroup() bool {
+	p.metakvMutex.Lock()
+	defer p.metakvMutex.Unlock()
+
+	if p.metakvCancel != nil {
+		p.wg.Add(1)
+		return true
+	}
+	return false
 }
 
 // restGetLocalIndexMetadataBinary calls the /getLocalndexMetadata REST API (request_handler.go) via
