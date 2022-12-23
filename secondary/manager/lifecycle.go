@@ -1536,7 +1536,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
-				m.DeleteIndex(defn.DefnId, false, false, nil)
+				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
 		} else {
@@ -1544,7 +1544,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			partnShardIdMap, err = m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx)
 			if err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
-				m.DeleteIndex(defn.DefnId, false, false, nil)
+				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
 		}
@@ -2306,7 +2306,9 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 		return nil
 	}
 
-	if !m.canProcessDDL(defn.Bucket, true) {
+	isRebalDrop := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
+	if !isRebalDrop && !m.canProcessDDL(defn.Bucket, true) { // Always allow rebalance drop
 		errStr := fmt.Sprintf("Index: %v deletion can not be processed as rebalance is in progress. "+
 			"Drop index will be retried in background", defn.DefnId)
 		logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
@@ -2377,7 +2379,11 @@ func (m *LifecycleMgr) handleCleanupIndexMetadata(content []byte) error {
 		return err
 	}
 
-	return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, false, false, false, nil)
+	reqCtx := common.NewUserRequestContext()
+	if inst.RState == common.REBAL_PENDING {
+		reqCtx = common.NewRebalanceRequestContext()
+	}
+	return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, false, false, false, reqCtx)
 }
 
 //-----------------------------------------------------------
@@ -2469,7 +2475,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 					// 3) index has at least one inst with NIL_STREAM
 
 					if streamId == common.NIL_STREAM {
-						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 							result = err
 						}
 						mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
@@ -2482,7 +2488,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 								logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance : id %v, streamId %v.",
 									instRef.InstId, instRef.StreamId)
 
-								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 									result = err
 								}
 								mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
@@ -2589,7 +2595,7 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 				// 3) index has at least one inst with NIL_STREAM
 
 				if streamId == common.NIL_STREAM {
-					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 						result = err
 					}
 				} else {
@@ -2600,7 +2606,7 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 							logging.Debugf("LifecycleMgr.handleDeleteCollection() : index instance : id %v, streamId %v.",
 								instRef.InstId, instRef.StreamId)
 
-							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 								result = err
 							}
 							break
@@ -3236,7 +3242,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
-				m.DeleteIndex(defn.DefnId, false, false, nil)
+				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
 		} else {
@@ -3312,7 +3318,8 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 
 func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) error {
 
-	isRebalance := reqCtx.ReqSource == common.DDLRequestSourceRebalance
+	isRebalance := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 	isRebalancePartition := isRebalance && common.IsPartitioned(defn.PartitionScheme)
 
 	if isRebalancePartition {
