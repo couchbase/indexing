@@ -3027,27 +3027,10 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.shardRebalance.cancelOrPanic": ConfigValue{
-		"none",
-		"Option to cancel rebalance or panic indexer. Used only for CI testing. Not a production setting",
-		"none",
-		false, // mutabale
-		false, // case-insensitive
-	},
-	"indexer.shardRebalance.cancelOrPanicTag": ConfigValue{
-		"none",
-		"The tag at which indexer will cancel rebalance or panics. Tags are defined " +
-			" based on the code location in the shard_rebalancer.go code. " +
-			"Used only for CI testing. Not a production setting",
-		"none",
-		false, // mutabale
-		false, // case-insensitive
-	},
-	"indexer.shardRebalance.cancelOrPanicNode": ConfigValue{
-		"none",
-		"The node on which rebalance cancel or panic is invoked. Used for source " +
-			" and destination node processing. Used only for CI testing. Not a production setting",
-		"none",
+	"indexer.shardRebalance.execTestAction": ConfigValue{
+		false,
+		"Option to execute a test action. Used only for CI testing. Not a production setting",
+		false,
 		false, // mutabale
 		false, // case-insensitive
 	},

@@ -404,7 +404,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.transferTokens[ttid] = tt.Clone() // Update in-memory book-keeping with new state
 
 		////////////// Testing code - Not used in production //////////////
-		testcode.CancelOrPanicAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_SCHEDULEACK, sr.cancel)
+		testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_SCHEDULEACK)
 		///////////////////////////////////////////////////////////////////
 
 		if sr.allShardTransferTokensAcked() {
