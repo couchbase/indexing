@@ -178,6 +178,10 @@ type Pauser struct {
 
 	// lock protecting access to maps like masterTokens and followerTokens
 	mu sync.RWMutex
+
+	// For cleanup
+	retErr      error
+	cleanupOnce sync.Once
 }
 
 // RunPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -231,7 +235,8 @@ func (p *Pauser) initPauseAsync() {
 		logging.Errorf("Pauser::initPauseAsync: Failed to generate PauseUploadTokens: err[%v], puts[%v]",
 			err, puts)
 
-		// TODO: cleanup tokens
+		p.finishPause(err)
+		return
 	}
 
 	// Publish tokens to metaKV
@@ -337,7 +342,7 @@ func (p *Pauser) observePause() {
 	if err != nil {
 		logging.Errorf("Pauser::observePause Exiting on metaKV observe: err[%v]", err)
 
-		// TODO: cleanup tokens
+		p.finishPause(err)
 	}
 
 	logging.Infof("Pauser::observePause exiting: err[%v]", err)
@@ -354,8 +359,7 @@ func (p *Pauser) processUploadTokens(kve metakv.KVEntry) error {
 		if kve.Value == nil {
 			logging.Infof("Pauser::processUploadTokens: PauseToken Deleted. Mark Done.")
 			p.cancelMetakv()
-
-			// TODO: cleanup tokens
+			p.finishPause(nil)
 		}
 
 	} else if strings.Contains(kve.Path, PauseUploadTokenPathPrefix) {
@@ -408,7 +412,7 @@ func (p *Pauser) processPauseUploadToken(putId string, put *PauseUploadToken) {
 	nodeUUID := string(p.pauseMgr.nodeInfo.NodeID)
 
 	if put.MasterId == nodeUUID {
-		// TODO: Implement master handler and set processed
+		processed = p.processPauseUploadTokenAsMaster(putId, put)
 	}
 
 	if (put.FollowerId == nodeUUID && !processed) {
@@ -425,6 +429,98 @@ func (p *Pauser) addToWaitGroup() bool {
 		return true
 	}
 	return false
+}
+
+func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *PauseUploadToken) bool {
+
+	logging.Infof("Pauser::processPauseUploadTokenAsMaster: putId[%v] put[%v]", putId, put)
+
+	if put.PauseId != p.task.taskId {
+		logging.Warnf("Pauser::processPauseUploadTokenAsMaster: Found PauseUploadToken[%v] with Unknown " +
+			"PauseId. Expected to match local taskId[%v]", put, p.task.taskId)
+
+		return true
+	}
+
+	if put.Error != "" {
+		logging.Errorf("Pauser::processPauseUploadTokenAsMaster: Detected PauseUploadToken[%v] in Error state." +
+			" Abort.", put)
+
+		p.cancelMetakv()
+		go p.finishPause(errors.New(put.Error))
+
+		return true
+	}
+
+	if !p.checkValidNotifyState(putId, put, "master") {
+		return true
+	}
+
+	switch put.State {
+
+	case PauseUploadTokenPosted:
+		// Follower owns token, do nothing
+
+		return false
+
+	case PauseUploadTokenInProgess:
+		// Follower owns token, just mark in memory maps.
+
+		p.updateInMemToken(putId, put, "master")
+		return false
+
+	case PauseUploadTokenProcessed:
+		// Master owns token
+
+		// Follower completed work, delete token
+		err := common.MetakvDel(PauseMetakvDir + putId)
+		if err != nil {
+			logging.Fatalf("Pauser::processPauseUploadTokenAsMaster: Failed to delete PauseUploadToken[%v] with" +
+				" putId[%v] In Meta Storage: err[%v]", put, putId, err)
+			common.CrashOnError(err)
+		}
+
+		p.updateInMemToken(putId, put, "master")
+
+		if p.checkAllTokensDone() {
+			// All the followers completed work
+
+			// TODO: set progress 100%
+
+			logging.Infof("Pauser::processPauseUploadTokenAsMaster: No Tokens Found. Mark Done.")
+
+			p.cancelMetakv()
+
+			go p.finishPause(nil)
+		}
+
+		return true
+
+	default:
+		return false
+
+	}
+
+}
+
+func (p *Pauser) finishPause(err error) {
+
+	if p.retErr == nil {
+		p.retErr = err
+	}
+
+	p.cleanupOnce.Do(p.doFinish)
+}
+
+func (p *Pauser) doFinish() {
+	logging.Infof("Pauser::doFinish Cleanup: retErr[%v]", p.retErr)
+
+	// TODO: signal others that we are cleaning up using done channel
+
+	p.cancelMetakv()
+	p.wg.Wait()
+
+	// TODO: call done callback to start the cleanup phase
 }
 
 // Often, metaKV can send multiple notifications for the same state change (probably
