@@ -689,7 +689,7 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 
 	var finalErr error
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 300; i++ {
 		client := &http.Client{}
 		address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
 
@@ -717,6 +717,53 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 
 		body, _ := ioutil.ReadAll(resp.Body)
 		if string(body) == "done" {
+			return
+		}
+		if i%5 == 0 {
+			log.Printf("Waiting for rebalance cleanup to finish on node: %v", nodeAddr)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	// todo : error out if response is error
+	tc.HandleError(finalErr, "Get RebalanceCleanupStatus")
+}
+
+func waitForTokenCleanup(nodeAddr string, t *testing.T) {
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
+	if indexerAddr == "" {
+		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	}
+
+	var finalErr error
+
+	for i := 0; i < 300; i++ {
+		client := &http.Client{}
+		address := "http://" + indexerAddr + "/listRebalanceTokens"
+
+		req, _ := http.NewRequest("GET", address, nil)
+		req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+		resp, err := client.Do(req)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
+		if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
+			finalErr = err
+			time.Sleep(1 * time.Second)
+			continue
+		} else {
+			finalErr = nil
+		}
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+			log.Printf(address)
+			log.Printf("%v", req)
+			log.Printf("%v", resp)
+			log.Printf("rebalanceCleanupStatus failed")
+		}
+
+		body, _ := ioutil.ReadAll(resp.Body)
+		if string(body) == "null\n" {
 			return
 		}
 		if i%5 == 0 {
@@ -1073,12 +1120,14 @@ func getServerGroupForNode(node string) string {
 	}
 }
 
-func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation bool, t *testing.T) {
+func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation, skipAdding bool, t *testing.T) {
 
-	for _, node := range addNodes {
-		serverGroup := getServerGroupForNode(node)
-		if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, node, "index", serverGroup); err != nil {
-			FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: %v", node, serverGroup), t)
+	if !skipAdding {
+		for _, node := range addNodes {
+			serverGroup := getServerGroupForNode(node)
+			if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, node, "index", serverGroup); err != nil {
+				FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: %v", node, serverGroup), t)
+			}
 		}
 	}
 
