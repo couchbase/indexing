@@ -2117,17 +2117,39 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http.Request) {
 	const method string = "RequestHandler::handleCachedStats:" // for logging
 
-	_, ok := doAuth(r, w, method)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
 
+	permissionsCache := common.NewSessionPermissionsCache(creds)
 	host := r.FormValue("host")
 	host = strings.Trim(host, "\"")
 
 	stats := m.rhc.GetStatsFromCache(Host2key(host))
 	if stats != nil {
-		rhSend(http.StatusOK, w, stats)
+		newStats, err := common.NewStatistics(nil)
+		if err != nil {
+			logging.Debugf("RequestHandler::handleCachedStats unable to create Statistics err: %v", err)
+		}
+		for key, val := range stats.ToMap() {
+			keys := strings.Split(key, ":")
+			bucket := keys[0]
+			if len(keys) == 5 { // collection level
+				scope := keys[1]
+				collection := keys[2]
+				if !permissionsCache.IsAllowed(bucket, scope, collection, "list") {
+					continue
+				}
+			} else if len(keys) == 3 { // bucket level
+				if !permissionsCache.IsAllowed(bucket, "", "", "list") {
+					continue
+				}
+			}
+			newStats.Set(key, val)
+		}
+
+		rhSend(http.StatusOK, w, newStats)
 	} else {
 		logging.Debugf("%v host %v", method, host)
 		msg := fmt.Sprintf("No cached stats available for %v", host)
