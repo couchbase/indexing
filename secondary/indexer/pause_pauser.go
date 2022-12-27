@@ -723,21 +723,30 @@ func (this *Pauser) run(master bool) {
 	var err error
 	reader := bytes.NewReader(nil)
 
+	dbg := true // TODO: use system config here
+
 	/////////////////////////////////////////////
 	// Work done by master only
 	/////////////////////////////////////////////
 
 	if master {
+		this.task.pauseMetadata.setVersionNoLock(common.GetLocalInternalVersion().String())
 		// Write the version.json file to the archive
-		byteSlice = []byte(fmt.Sprintf("{\"version\":%v}\n", ARCHIVE_VERSION))
-		reader.Reset(byteSlice)
-		err = Upload(this.task.archivePath, FILENAME_VERSION, reader)
+		// byteSlice = []byte(fmt.Sprintf("{\"version\":%v}\n", ARCHIVE_VERSION))
+		// reader.Reset(byteSlice)
+		data, err := json.Marshal(this.task.pauseMetadata)
 		if err != nil {
-			this.failPause("Pauser::run:", "Upload "+FILENAME_VERSION, err)
+			this.failPause("Pauser::run:", "Marshal PauseMetadata", err)
+			return
+		}
+		reader.Reset(common.ChecksumAndCompress(data,!dbg))
+		err = Upload(this.task.archivePath, FILENAME_PAUSE_METADATA, reader)
+		if err != nil {
+			this.failPause("Pauser::run:", "Upload "+FILENAME_PAUSE_METADATA, err)
 			return
 		}
 
-		logging.Tracef("Pauser::run: indexer version successfully uploaded to %v%v for taskId %v", this.task.archivePath, FILENAME_VERSION, this.task.taskId)
+		logging.Tracef("Pauser::run: indexer version successfully uploaded to %v%v for taskId %v", this.task.archivePath, FILENAME_PAUSE_METADATA, this.task.taskId)
 
 		// Notify the followers to start working on this task
 		this.pauseMgr.RestNotifyPause(this.otherIndexAddrs, this.task)
@@ -749,7 +758,6 @@ func (this *Pauser) run(master bool) {
 
 	// nodePath is the path to the node-specific archive subdirectory for the current node
 	nodePath := this.task.archivePath + this.nodeDir
-	dbg := true // TODO: use system config here
 
 	// Get the index metadata from all nodes and write it as a single file to the archive
 	byteSlice, indexMetadata, err := this.restGetLocalIndexMetadataBinary(!dbg)

@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/indexer"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -840,16 +842,18 @@ func TestPause(t *testing.T) {
 	// Pause is async so give some time for it to write its files to archive
 	time.Sleep(5 * time.Second)
 
-	// Read and verify /tmp/TestPause/version.json
-	filePath := archivePath + "version.json"
+	// Read and verify /tmp/TestPause/pauseMetadata.json
+	filePath := archivePath + indexer.FILENAME_PAUSE_METADATA
 	versionJson, err := tc.ReadFileToString(filePath)
 	if err != nil {
 		t.Fatalf("%v Pause ReadFileToString(%v) returned error: %v", _TestPause, filePath, err)
 	}
-	const expectedJson = "{\"version\":100}\n"
-	if versionJson != expectedJson {
+	expectedJson := common.GetLocalInternalVersion()
+	pauseMetadata := indexer.NewPauseMetadata()
+	json.Unmarshal([]byte(versionJson[8:]), pauseMetadata)
+	if !expectedJson.Equals(c.InternalVersion(pauseMetadata.Version)) {
 		t.Fatalf("%v Pause expected versionJson '%v', got '%v", _TestPause, expectedJson,
-			versionJson)
+			versionJson[8:])
 	}
 
 	// kjc Extend this as more Pause functionality is completed. Cancel the Pause in the mean time
