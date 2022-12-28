@@ -711,73 +711,106 @@ func (this *Pauser) failPause(logPrefix string, context string, error error) {
 	this.pauseMgr.RestNotifyFailedTask(this.otherIndexAddrs, this.task, error.Error())
 }
 
-// run is a goroutine for the main body of Pause work for this.task.
+// masterUploadPauseMetadata is master's method to upload PauseMetadata to object store
 //
-//	master - true iff this node is the master
-func (this *Pauser) run(master bool) {
-
-	// Get the list of Index node host:port addresses EXCLUDING this one
-	this.otherIndexAddrs = this.pauseMgr.GetIndexerNodeAddresses(this.pauseMgr.httpAddr)
-
-	var byteSlice []byte
-	var err error
+// this method should be called after all the followers have finished execution so we can
+// correctly upload the metadata about all the follower nodes
+//
+// meta about follower nodes should be gathered before calling this function
+// object structure after upload:
+// archivePath/
+// └── pauseMetadata.json
+func (p *Pauser) masterUploadPauseMetadata() error {
 	reader := bytes.NewReader(nil)
 
-	dbg := true // TODO: use system config here
+	metadata := p.task.pauseMetadata
 
-	/////////////////////////////////////////////
-	// Work done by master only
-	/////////////////////////////////////////////
+	metadata.lock.Lock()
+	metadata.setVersionNoLock(common.GetLocalInternalVersion().String())
+	metadata.lock.Unlock()
 
-	if master {
-		this.task.pauseMetadata.setVersionNoLock(common.GetLocalInternalVersion().String())
-		// Write the version.json file to the archive
-		// byteSlice = []byte(fmt.Sprintf("{\"version\":%v}\n", ARCHIVE_VERSION))
-		// reader.Reset(byteSlice)
-		data, err := json.Marshal(this.task.pauseMetadata)
-		if err != nil {
-			this.failPause("Pauser::run:", "Marshal PauseMetadata", err)
-			return
-		}
-		reader.Reset(common.ChecksumAndCompress(data,!dbg))
-		err = Upload(this.task.archivePath, FILENAME_PAUSE_METADATA, reader)
-		if err != nil {
-			this.failPause("Pauser::run:", "Upload "+FILENAME_PAUSE_METADATA, err)
-			return
-		}
-
-		logging.Tracef("Pauser::run: indexer version successfully uploaded to %v%v for taskId %v", this.task.archivePath, FILENAME_PAUSE_METADATA, this.task.taskId)
-
-		// Notify the followers to start working on this task
-		this.pauseMgr.RestNotifyPause(this.otherIndexAddrs, this.task)
-	} // if master
-
-	/////////////////////////////////////////////
-	// Work done by both master and followers
-	/////////////////////////////////////////////
-
-	// nodePath is the path to the node-specific archive subdirectory for the current node
-	nodePath := this.task.archivePath + this.nodeDir
-
-	// Get the index metadata from all nodes and write it as a single file to the archive
-	byteSlice, indexMetadata, err := this.restGetLocalIndexMetadataBinary(!dbg)
+	data, err := json.Marshal(metadata)
 	if err != nil {
-		this.failPause("Pauser::run:", "getLocalInstanceMetadata", err)
-		return
+		logging.Errorf("Pauser::masterUploadPauseMetadata: couldn't marshal pause metadata err :%v  for task ID: %v.", err, p.task.taskId)
+		return err
+	}
+
+	cfg := p.pauseMgr.config.Load()
+	cfgValue, ok := cfg["indexer.pause_resume.compression"]
+	var compression bool
+	if !ok {
+		compression = true
+	} else {
+		compression = cfgValue.Bool()
+	}
+	if !compression {
+		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
+	}
+
+	reader.Reset(common.ChecksumAndCompress(data, compression))
+
+	err = Upload(p.task.archivePath, FILENAME_PAUSE_METADATA, reader)
+	if err != nil {
+		logging.Errorf("Pauser::masterUploadPauseMetadata: upload of pause metadata failed to path : %v%v err: %v for task ID %v", p.task.archivePath, FILENAME_PAUSE_METADATA, err, p.task.taskId)
+		return err
+	}
+	logging.Infof("Pauser::masterUploadPauseMetadata: successful upload of pause metadata to %v%v for task ID %v", p.task.archivePath, FILENAME_PAUSE_METADATA, p.task.taskId)
+	return nil
+}
+
+// followerUploadBucketData is follower's method to upload bucket related data to object store
+//
+// it gathers bucket's indexes and uploads:
+// * Index Metadata -> FILENAME_METADATA
+// * Index Stats -> FILENAME_STATS
+// * Start Plasma Shard Transfer
+// object store structure after upload:
+// archivePath/
+// └── node_<nodeId>/
+//		├── indexMetadata.json
+//		├── indexStats.json
+//		└── /plasma_storage/PauseResume/<bucketName>/<shardId>/
+//			└── plasma shard data
+func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
+	nodePath := p.task.archivePath + p.nodeDir
+	cfg := p.pauseMgr.config.Load()
+	cfgValue, ok := cfg["indexer.pause_resume.compression"]
+	var compression bool
+	if !ok {
+		compression = true
+	} else {
+		compression = cfgValue.Bool()
+	}
+	if !compression {
+		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
+	}
+
+	reader := bytes.NewReader(nil)
+
+	logging.Tracef("Pauser::followerUploadBucketData: uploading data to path %v", nodePath)
+
+	// Step 1. Gather bucket's indexes data
+	byteSlice, indexMetadata, err := p.restGetLocalIndexMetadataBinary(compression)
+	if err != nil {
+		logging.Errorf("Pauser::followerUploadBucketData: failed to get local index metadata err :%v for task ID: %v bucket: %v", err, p.task.taskId, p.task.bucket)
+		return nil, err
 	}
 	if byteSlice == nil {
 		// there are no indexes on this node for bucket. pause is a no-op
-		logging.Infof("Pauser::run: pause is a no-op for bucket %v", this.task.bucket)
-		return
+		logging.Infof("Pauser::followerUploadBucketData: pause is a no-op for bucket %v task ID %v", p.task.bucket, p.task.taskId)
+		return nil, nil
 	}
+
+	// Step 2. Upload index metadata
 	reader.Reset(byteSlice)
 	err = Upload(nodePath, FILENAME_METADATA, reader)
 	if err != nil {
-		this.failPause("Pauser::run:", "Upload "+FILENAME_METADATA, err)
-		return
+		logging.Errorf("Pauser::followerUploadBucketData: metadata upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		return nil, err
 	}
-	logging.Infof("Pauser::run: metadata successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_METADATA, this.task.taskId)
+	logging.Infof("Pauser::followerUploadBucketData: metadata successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_METADATA, p.task.taskId)
 
+	// Step 3. Gather index stats
 	getIndexInstanceIds := func() []common.IndexInstId {
 		res := make([]common.IndexInstId, 0, len(indexMetadata.IndexDefinitions))
 		for _, topology := range indexMetadata.IndexTopologies {
@@ -785,25 +818,27 @@ func (this *Pauser) run(master bool) {
 				res = append(res, common.IndexInstId(indexDefn.Instances[0].InstId))
 			}
 		}
-		logging.Tracef("Pauser::run::getIndexInstanceId: index instance ids: %v for bucket %v", res, this.task.bucket)
+		logging.Tracef("Pauser::followerUploadBucketData::getIndexInstanceId: index instance ids: %v for bucket %v", res, p.task.bucket)
 		return res
 	}
 
-	// Write the persistent stats to the archive
-	byteSlice, err = this.pauseMgr.genericMgr.statsMgr.GetStatsForIndexesToBePersisted(getIndexInstanceIds(), !dbg)
+	byteSlice, err = p.pauseMgr.genericMgr.statsMgr.GetStatsForIndexesToBePersisted(getIndexInstanceIds(), compression)
 	if err != nil {
-		this.failPause("Pauser::run:", "GetStatsForIndexesToBePersisted", err)
-		return
+		logging.Errorf("Pauser::followerUploadBucketData: couldn't get stats for indexes err: %v for task ID: %v", err, p.task.taskId)
+		return nil, err
 	}
+
+	// Step 4. Upload index stats
 	reader.Reset(byteSlice)
 	err = Upload(nodePath, FILENAME_STATS, reader)
 	if err != nil {
-		this.failPause("Pauser::run:", "Upload "+FILENAME_STATS, err)
-		return
+		logging.Errorf("Pauser::followerUploadBucketData: stats upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_STATS, p.task.taskId)
+		return nil, err
 	}
 
-	logging.Infof("Pauser::run: stats successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_STATS, this.task.taskId)
+	logging.Infof("Pauser::followerUploadBucketData: stats successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_STATS, p.task.taskId)
 
+	// Step 5. Initiate plasma shard transfer
 	getShardIds := func() []common.ShardId {
 		uniqueShardIds := make(map[common.ShardId]bool)
 		for _, topology := range indexMetadata.IndexTopologies {
@@ -814,16 +849,15 @@ func (this *Pauser) run(master bool) {
 							uniqueShardIds[shard] = true
 						}
 					}
-
 				}
 			}
 		}
 
 		shardIds := make([]common.ShardId, 0, len(uniqueShardIds))
-		for shardId, _ := range uniqueShardIds {
+		for shardId := range uniqueShardIds {
 			shardIds = append(shardIds, shardId)
 		}
-		logging.Tracef("Pauser::run::getShardIds: found shard Ids %v for bucket %v", shardIds, this.task.bucket)
+		logging.Tracef("Pauser::followerUploadBucketData::getShardIds: found shard Ids %v for bucket %v", shardIds, p.task.bucket)
 
 		return shardIds
 	}
@@ -836,8 +870,8 @@ func (this *Pauser) run(master bool) {
 
 	msg := &MsgStartShardTransfer{
 		shardIds:    getShardIds(),
-		taskId:      this.task.taskId,
-		transferId:  this.task.bucket,
+		taskId:      p.task.taskId,
+		transferId:  p.task.bucket,
 		taskType:    common.PauseResumeTask,
 		destination: nodePath,
 
@@ -847,14 +881,13 @@ func (this *Pauser) run(master bool) {
 		progressCh: nil,
 	}
 
-	this.pauseMgr.supvMsgch <- msg
+	p.pauseMgr.supvMsgch <- msg
 
 	resp, ok := (<-respCh).(*MsgShardTransferResp)
 	if !ok || resp == nil {
 		err := fmt.Errorf("couldn't get a valid response from ShardTransferManager")
-		this.failPause("Pauser::run", "Upload plasma shards", err)
-		logging.Errorf("Pauser::run %v for taskId %v", err, this.task.taskId)
-		return
+		logging.Errorf("Pauser::followerUploadBucketData: shard upload gave invalid response err: %v for task ID: %v", err, p.task.taskId)
+		return nil, err
 	}
 	errMap := resp.GetErrorMap()
 	var errMsg strings.Builder
@@ -865,11 +898,46 @@ func (this *Pauser) run(master bool) {
 	}
 	if errMsg.Len() != 0 {
 		err = errors.New(errMsg.String())
-		this.failPause("Pauser::run", "Upload plasma shards", err)
-		logging.Errorf("Pauser::run shard uploads failed: %v for taskId %v", err, this.task.taskId)
+		logging.Errorf("Pauser::followerUploadBucketData: shard uploads failed err: %v\n for task ID: $v", err, p.task.taskId)
+		return nil, err
+	}
+
+	logging.Infof("Pauser::followerUploadBucketData: Shards saved at: %v for bucket %v", resp.GetShardPaths(), p.task.bucket)
+	return resp.GetShardPaths(), nil
+}
+
+// run is a goroutine for the main body of Pause work for this.task.
+//
+//	master - true iff this node is the master
+func (this *Pauser) run(master bool) {
+	// Get the list of Index node host:port addresses EXCLUDING this one
+	this.otherIndexAddrs = this.pauseMgr.GetIndexerNodeAddresses(this.pauseMgr.httpAddr)
+
+	/////////////////////////////////////////////
+	// Work done by master only
+	/////////////////////////////////////////////
+
+	if master {
+		err := this.masterUploadPauseMetadata()
+		if err != nil {
+			this.failPause("Pauser::run:", "Upload Pause Metadata", err)
+			return
+		}
+
+		// Notify the followers to start working on this task
+		this.pauseMgr.RestNotifyPause(this.otherIndexAddrs, this.task)
+	} // if master
+
+	/////////////////////////////////////////////
+	// Work done by both master and followers
+	/////////////////////////////////////////////
+
+	shardPathMap, err := this.followerUploadBucketData()
+	if err != nil {
+		this.failPause("Pauser::run:", "Upload Bucket Data", err)
 		return
 	}
 
-	// TODO: return shard paths back to master
-	logging.Infof("Pauser::run Shards saved at: %v for bucket %v", resp.GetShardPaths(), this.task.bucket)
+	// TODO: update shard paths in metakv tokens
+	logging.Tracef("TODO: remove this shardPathMap log %v", shardPathMap)
 }

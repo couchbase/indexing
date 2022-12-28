@@ -666,7 +666,7 @@ func (m *PauseServiceManager) PauseResumeCancelTask(id string) error {
 		return service.ErrNotFound
 	}
 	task.Cancel()
-	logging.Infof("PauseServiceManager::CancelTask: deleted and cancelled task %", id)
+	logging.Infof("PauseServiceManager::CancelTask: deleted and cancelled task %v", id)
 
 	// clear bucket state from service manager
 	m.bucketStateDelete(task.bucket)
