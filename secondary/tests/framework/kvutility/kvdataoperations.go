@@ -18,7 +18,7 @@ import (
 
 // ToDo: Refactor Code
 func Set(key string, v interface{}, bucketName string, password string, hostaddress string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+	url := "http://" + url.PathEscape(bucketName) + ":" + password + "@" + hostaddress
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
@@ -29,7 +29,7 @@ func Set(key string, v interface{}, bucketName string, password string, hostaddr
 }
 
 func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+	url := "http://" + url.PathEscape(bucketName) + ":" + password + "@" + hostaddress
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
@@ -88,7 +88,7 @@ func SetValuesWithXattrs(keyValues tc.KeyValues, bucketName string, password str
 }
 
 func SetBinaryValues(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+	url := "http://" + url.PathEscape(bucketName) + ":" + password + "@" + hostaddress
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
@@ -103,7 +103,7 @@ func SetBinaryValues(keyValues tc.KeyValues, bucketName string, password string,
 }
 
 func Get(key string, rv interface{}, bucketName string, password string, hostaddress string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+	url := "http://" + url.PathEscape(bucketName) + ":" + password + "@" + hostaddress
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
@@ -114,7 +114,7 @@ func Get(key string, rv interface{}, bucketName string, password string, hostadd
 }
 
 func Delete(key string, bucketName string, password string, hostaddress string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+	url := "http://" + url.PathEscape(bucketName) + ":" + password + "@" + hostaddress
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
@@ -125,7 +125,7 @@ func Delete(key string, bucketName string, password string, hostaddress string) 
 }
 
 func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+	url := "http://" + url.PathEscape(bucketName) + ":" + password + "@" + hostaddress
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
@@ -181,7 +181,7 @@ func CreateBucketOfType(bucketName, serverUserName, serverPassword, hostaddress,
 
 func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + url.PathEscape(bucketName)
 	req, _ := http.NewRequest("DELETE", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
@@ -201,7 +201,7 @@ func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, ho
 
 func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + url.PathEscape(bucketName)
 	data := url.Values{"name": {bucketName}, "flushEnabled": {"1"}}
 
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
@@ -225,7 +225,7 @@ func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPasswor
 
 func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/controller/doFlush"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + url.PathEscape(bucketName) + "/controller/doFlush"
 	req, _ := http.NewRequest("POST", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
@@ -246,7 +246,7 @@ func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hos
 
 func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + url.PathEscape(bucketName)
 	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}}
 
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
@@ -269,7 +269,7 @@ func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, host
 
 func GetItemCountInBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) int {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + url.PathEscape(bucketName)
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -305,7 +305,7 @@ func WaitForBucketCreation(bucketName, serverUserName, serverPassword string, ho
 		created := false
 		for j := 0; j < 30; j++ {
 			client := &http.Client{}
-			address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+			address := "http://" + hostaddress + "/pools/default/buckets/" + url.PathEscape(bucketName)
 
 			req, _ := http.NewRequest("GET", address, nil)
 			req.SetBasicAuth(serverUserName, serverPassword)

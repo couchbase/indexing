@@ -113,10 +113,10 @@ func (m *MeteringThrottlingMgr) handleConfigUpdate(cmd Message) {
 }
 
 // wrappers for checkQuota/throttle/metering etc which will use config and may be stream status
-// to determin how to record a certain operation
+// to determine how to record a certain operation
 func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	result CheckResult, throttleTime time.Duration, err error) {
-	ctx := getCtx(bucket, "")
+	ctx := getNoUserCtx(bucket)
 	estimatedUnits, err := regulator.NewUnits(regulator.Index, regulator.Write, uint64(0))
 	if err == nil {
 		quotaOpts := regulator.CheckQuotaOpts{
@@ -137,7 +137,7 @@ func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint6
 	// hence returning errors for debugging and logging purpose only
 	units, err := metering.IndexReadToRU(bytes)
 	if err == nil {
-		ctx := getCtx(bucket, user)
+		ctx := getUserCtx(bucket, user)
 		if billable {
 			return units.Whole(), regulator.RecordUnits(ctx, units)
 		} else {
@@ -152,7 +152,7 @@ func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, up
 	// hence returning errors for debugging and logging purpose only
 	units, err := metering.IndexWriteToWU(bytes, update)
 	if err == nil {
-		ctx := getCtx(bucket, "")
+		ctx := getNoUserCtx(bucket)
 		if billable {
 			return units.Whole(), regulator.RecordUnits(ctx, units)
 		} else {
@@ -167,7 +167,7 @@ func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) er
 	// hence returning errors for debugging and logging purpose only
 	units, err := metering.IndexWriteToWU(bytes, false)
 	if err == nil {
-		ctx := getCtx(bucket, "")
+		ctx := getNoUserCtx(bucket)
 		return regulator.RefundUnits(ctx, units)
 	}
 	return err
@@ -177,16 +177,29 @@ func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 	return m.handler.WriteMetrics(w)
 }
 
-type MeteringTransaction regulator.TransactionalRecorder
+type AggregateRecorder regulator.AggregateRecorder
 
-func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string, billable bool) MeteringTransaction {
-	ctx := getCtx(bucketName, user)
-	options := &regulator.TransactionOptions{
-		Unbilled: !billable,
+func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable, update bool) AggregateRecorder {
+	ctx := getNoUserCtx(bucketName)
+	options := &regulator.AggregationOptions{
+		Unbilled:         !billable,
+		DeferredMetering: true,
 	}
-	return regulator.BeginTransactionV2(ctx, options)
+	return metering.IndexWriteAggregateRecorder(ctx, update, options)
 }
 
-func getCtx(bucket, user string) regulator.Ctx {
+func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) AggregateRecorder {
+	ctx := getUserCtx(bucketName, user)
+	options := &regulator.AggregationOptions{
+		Unbilled: !billable,
+	}
+	return metering.IndexReadAggregateRecorder(ctx, options)
+}
+
+func getNoUserCtx(bucket string) regulator.Ctx {
+	return regulator.NewBucketCtx(bucket)
+}
+
+func getUserCtx(bucket, user string) regulator.Ctx {
 	return regulator.NewUserCtx(bucket, user)
 }

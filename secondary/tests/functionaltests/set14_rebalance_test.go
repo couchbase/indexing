@@ -170,14 +170,14 @@ func getTaskListAll(t *testing.T) (taskLists []*service.TaskList) {
 
 // preparePause calls the pause_service_manager.go PreparePause cbauth RPC API on each
 // index node with the provided arguments.
-func preparePause(id, bucket, bucketUuid, remotePath string, t *testing.T) {
+func preparePause(id, bucket, remotePath string, t *testing.T) {
 	const _preparePause = "set14_rebalance_test.go::preparePause:"
 
 	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	for _, nodeAddr := range indexerNodeAddrs {
 		restPath := fmt.Sprintf(
-			"/test/PreparePause?id=%v&bucket=%v&bucketUuid=%v&remotePath=%v",
-			id, bucket, bucketUuid, remotePath)
+			"/test/PreparePause?id=%v&bucket=%v&remotePath=%v",
+			id, bucket, remotePath)
 		url := makeUrlForIndexNode(nodeAddr, restPath)
 		resp, err := http.Get(url)
 		FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _preparePause, url), t)
@@ -192,14 +192,14 @@ func preparePause(id, bucket, bucketUuid, remotePath string, t *testing.T) {
 // pause performs the Elixir Pause action (hibernate a bucket) using local disk instead of S3 by
 // calling the pause_service_manager.go Pause cbauth RPC API on only one Index node, which becomes
 // the master. It returns the address of the master.
-func pause(id, bucket, bucketUuid, remotePath string, t *testing.T) (masterAddr string) {
+func pause(id, bucket, remotePath string, t *testing.T) (masterAddr string) {
 	const _pause = "set14_rebalance_test.go::pause:"
 
 	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	masterAddr = indexerNodeAddrs[0]
 	restPath := fmt.Sprintf(
-		"/test/Pause?id=%v&bucket=%v&bucketUuid=%v&remotePath=%v",
-		id, bucket, bucketUuid, remotePath)
+		"/test/Pause?id=%v&bucket=%v&remotePath=%v",
+		id, bucket, remotePath)
 	url := makeUrlForIndexNode(masterAddr, restPath)
 	resp, err := http.Get(url)
 	FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _pause, url), t)
@@ -540,12 +540,6 @@ func TestRebalanceReplicaRepair(t *testing.T) {
 	waitForRebalanceCleanup()
 }
 
-// Proxies for some ns_server constants net yet added to cbauth/service/interface.go
-const (
-	TaskTypePause  = service.TaskType("task-pause")
-	TaskTypeResume = service.TaskType("task-resume")
-)
-
 // Proxies for some constants from pause_service_manager.go as tests cannot import the indexer
 // package as that pulls in sigar which won't build here. (Thus these are also not exported.)
 const (
@@ -575,7 +569,6 @@ func TestPreparePauseAndPrepareResume(t *testing.T) {
 	const (
 		taskId      = "fakeTaskId"
 		bucket      = "fakeBucket"
-		bucketUuid  = "fakeBucketUuid"
 		remotePath  = "file:///fakeRemotePath"
 		archivePath = "/fakeRemotePath/" // tweaked version of remotePath stored in the tasks
 		dryRun      = true
@@ -584,7 +577,7 @@ func TestPreparePauseAndPrepareResume(t *testing.T) {
 
 	// PreparePause --------------------------------------------------------------------------------
 	log.Printf("%v Calling PreparePause", _TestPreparePauseAndPrepareResume)
-	preparePause(taskId, bucket, bucketUuid, remotePath, t)
+	preparePause(taskId, bucket, remotePath, t)
 	log.Printf("%v Calling GetTaskList(PreparePause)", _TestPreparePauseAndPrepareResume)
 	taskLists = getTaskListAll(t)
 	if len(taskLists) != numIndexNodes {
@@ -606,19 +599,14 @@ func TestPreparePauseAndPrepareResume(t *testing.T) {
 			t.Fatalf("%v PreparePause expected task.Status '%v', got '%v'", _TestPreparePauseAndPrepareResume,
 				service.TaskStatusRunning, task.Status)
 		}
-		if task.Type != TaskTypePause {
+		if task.Type != service.TaskTypePrepared {
 			t.Fatalf("%v PreparePause expected task.Type '%v', got '%v'", _TestPreparePauseAndPrepareResume,
-				TaskTypePause, task.Type)
+				service.TaskTypePrepared, task.Type)
 		}
 		val := task.Extra["bucket"]
 		if val != bucket {
 			t.Fatalf("%v PreparePause expected bucket '%v', got '%v'", _TestPreparePauseAndPrepareResume,
 				bucket, val)
-		}
-		val = task.Extra["bucketUuid"]
-		if val != bucketUuid {
-			t.Fatalf("%v PreparePause expected bucketUuid '%v', got '%v'", _TestPreparePauseAndPrepareResume,
-				bucketUuid, val)
 		}
 		val = task.Extra["archivePath"]
 		if val != archivePath {
@@ -678,9 +666,9 @@ func TestPreparePauseAndPrepareResume(t *testing.T) {
 			t.Fatalf("%v PrepareResume expected task.Status '%v', got '%v'", _TestPreparePauseAndPrepareResume,
 				service.TaskStatusRunning, task.Status)
 		}
-		if task.Type != TaskTypeResume {
+		if task.Type != service.TaskTypePrepared {
 			t.Fatalf("%v PrepareResume expected task.Type '%v', got '%v'", _TestPreparePauseAndPrepareResume,
-				TaskTypeResume, task.Type)
+				service.TaskTypePrepared, task.Type)
 		}
 		val := task.Extra["bucket"]
 		if val != bucket {
@@ -751,7 +739,6 @@ func TestPause(t *testing.T) {
 	const (
 		taskId      = "pauseTaskId"
 		bucket      = BUCKET
-		bucketUuid  = "pauseBucketUuid"
 		remotePath  = "file:///tmp/TestPause"
 		archivePath = "/tmp/TestPause/" // tweaked version of remotePath stored in the tasks
 		rev         = uint64(0)         // rev for CancelTask; so far does not matter for Pause-Resume
@@ -759,7 +746,7 @@ func TestPause(t *testing.T) {
 
 	// PreparePause --------------------------------------------------------------------------------
 	log.Printf("%v Calling PreparePause", _TestPause)
-	preparePause(taskId, bucket, bucketUuid, remotePath, t)
+	preparePause(taskId, bucket, remotePath, t)
 	log.Printf("%v Calling GetTaskList(PreparePause)", _TestPause)
 	taskLists = getTaskListAll(t)
 	if len(taskLists) != numIndexNodes {
@@ -781,19 +768,14 @@ func TestPause(t *testing.T) {
 			t.Fatalf("%v PreparePause expected task.Status '%v', got '%v'", _TestPause,
 				service.TaskStatusRunning, task.Status)
 		}
-		if task.Type != TaskTypePause {
+		if task.Type != service.TaskTypePrepared {
 			t.Fatalf("%v PreparePause expected task.Type '%v', got '%v'", _TestPause,
-				TaskTypePause, task.Type)
+				service.TaskTypeBucketPause, task.Type)
 		}
 		val := task.Extra["bucket"]
 		if val != bucket {
 			t.Fatalf("%v PreparePause expected bucket '%v', got '%v'", _TestPause,
 				bucket, val)
-		}
-		val = task.Extra["bucketUuid"]
-		if val != bucketUuid {
-			t.Fatalf("%v PreparePause expected bucketUuid '%v', got '%v'", _TestPause,
-				bucketUuid, val)
 		}
 		val = task.Extra["archivePath"]
 		if val != archivePath {
@@ -814,7 +796,7 @@ func TestPause(t *testing.T) {
 
 	// Pause ---------------------------------------------------------------------------------------
 	log.Printf("%v Calling Pause", _TestPause)
-	masterAddr := pause(taskId, bucket, bucketUuid, remotePath, t)
+	masterAddr := pause(taskId, bucket, remotePath, t)
 	log.Printf("%v Calling GetTaskList(Pause) on masterAddr: %v", _TestPause, masterAddr)
 	taskList := getTaskList(masterAddr, t)
 	if taskList == nil {
@@ -833,17 +815,13 @@ func TestPause(t *testing.T) {
 		t.Fatalf("%v Pause expected task.Status '%v', got '%v'", _TestPause,
 			service.TaskStatusRunning, task.Status)
 	}
-	if task.Type != TaskTypePause {
+	if task.Type != service.TaskTypeBucketPause {
 		t.Fatalf("%v Pause expected task.Type '%v', got '%v'", _TestPause,
-			TaskTypePause, task.Type)
+			service.TaskTypeBucketResume, task.Type)
 	}
 	val := task.Extra["bucket"]
 	if val != bucket {
 		t.Fatalf("%v Pause expected bucket '%v', got '%v'", _TestPause, bucket, val)
-	}
-	val = task.Extra["bucketUuid"]
-	if val != bucketUuid {
-		t.Fatalf("%v Pause expected bucketUuid '%v', got '%v'", _TestPause, bucketUuid, val)
 	}
 	val = task.Extra["archivePath"]
 	if val != archivePath {

@@ -167,7 +167,7 @@ func (this *Pauser) run(master bool) {
 	}
 	if byteSlice == nil {
 		// there are no indexes on this node for bucket. pause is a no-op
-		logging.Infof("Pauser::run: pause is a no-op for bucket %v-%v", this.task.bucket, this.task.bucketUuid)
+		logging.Infof("Pauser::run: pause is a no-op for bucket %v", this.task.bucket)
 		return
 	}
 	reader.Reset(byteSlice)
@@ -185,7 +185,7 @@ func (this *Pauser) run(master bool) {
 				res = append(res, common.IndexInstId(indexDefn.Instances[0].InstId))
 			}
 		}
-		logging.Tracef("Pauser::run::getIndexInstanceId: index instance ids: %v for bucket %v-%v", res, this.task.bucket, this.task.bucketUuid)
+		logging.Tracef("Pauser::run::getIndexInstanceId: index instance ids: %v for bucket %v", res, this.task.bucket)
 		return res
 	}
 
@@ -223,7 +223,7 @@ func (this *Pauser) run(master bool) {
 		for shardId, _ := range uniqueShardIds {
 			shardIds = append(shardIds, shardId)
 		}
-		logging.Tracef("Pauser::run::getShardIds: found shard Ids %v for bucket %v-%v", shardIds, this.task.bucket, this.task.bucketUuid)
+		logging.Tracef("Pauser::run::getShardIds: found shard Ids %v for bucket %v", shardIds, this.task.bucket)
 
 		return shardIds
 	}
@@ -237,7 +237,7 @@ func (this *Pauser) run(master bool) {
 	msg := &MsgStartShardTransfer{
 		shardIds:    getShardIds(),
 		taskId:      this.task.taskId,
-		transferId:  this.task.bucketUuid,
+		transferId:  this.task.bucket,
 		taskType:    common.PauseResumeTask,
 		destination: nodePath,
 
@@ -271,5 +271,5 @@ func (this *Pauser) run(master bool) {
 	}
 
 	// TODO: return shard paths back to master
-	logging.Infof("Pauser::run Shards saved at: %v for bucket %v-%v", resp.GetShardPaths(), this.task.bucket, this.task.bucketUuid)
+	logging.Infof("Pauser::run Shards saved at: %v for bucket %v", resp.GetShardPaths(), this.task.bucket)
 }

@@ -2279,6 +2279,18 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	partnShardIdMap := msg.(*MsgRecoverIndexResp).GetPartnShardIdMap()
 	err := msg.(*MsgRecoverIndexResp).GetError()
 
+	// Notify lifecycle manager that the async recovery is done.
+	// If any index were dropped while async recovery was in progress
+	// they it will be deleted after async recovery is done as simultaneous
+	// index recovery and drop can lead to unwanted race conditions in plasma
+	defer func() {
+		err := idx.notifyAsyncRecoveryDone(indexInst)
+		if err != nil {
+			logging.Errorf("Indexer::handleInstRecoveryResponse Error observed while notifying "+
+				"async recovery done for inst: %v, err: %v", indexInst.InstId, err)
+		}
+	}()
+
 	if err != nil {
 		// Index recovery did not succeed. Remove index from topology
 		// Send a message to cluster manager to remove index instance from topology
@@ -3715,20 +3727,24 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
+		if idx.canAllowDDLDuringRebalance() && msg.(*MsgDropIndex).GetMsgType() == CLUST_MGR_DROP_INDEX_DDL {
+			logging.Infof("Indexer::handleDropIndex Allowing drop index during rebalance for "+
+				"index defnId: %v, instId: %v", indexInst.Defn.DefnId, indexInst.InstId)
+		} else {
+			reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
+			if reqCtx.ReqSource == common.DDLRequestSourceUser {
+				errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
+				logging.Errorf("Indexer::handleDropIndex %v", errStr)
 
-		reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
-		if reqCtx.ReqSource == common.DDLRequestSourceUser {
-			errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
-			logging.Errorf("Indexer::handleDropIndex %v", errStr)
-
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+				if clientCh != nil {
+					clientCh <- &MsgError{
+						err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+							severity: FATAL,
+							cause:    errors.New(errStr),
+							category: INDEXER}}
+				}
+				return
 			}
-			return
 		}
 	}
 
@@ -5031,7 +5047,7 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 				idx.sendMonitorSliceMsg(sc.GetAllSlices())
 				//close all the slices
 				for _, slice := range sc.GetAllSlices() {
-					go func() {
+					go func(slice Slice, pid common.PartitionId) {
 						slice.Close()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
 							slice.IndexInstId(), pid)
@@ -5039,7 +5055,7 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 						slice.Destroy()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Destroy Done",
 							slice.IndexInstId(), pid)
-					}()
+					}(slice, pid)
 				}
 			}
 		}
@@ -6150,9 +6166,15 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	inst, ok := idx.indexInstMap[instId]
 	if !ok {
-		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v", instId)
-		respCh <- ErrInconsistentState
-		return
+		if idx.canAllowDDLDuringRebalance() { // Index could be dropped during rebalance
+			logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v. Index could be deleted", instId)
+			respCh <- common.ErrIndexDeletedDuringRebal
+			return
+		} else {
+			logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v", instId)
+			respCh <- ErrInconsistentState
+			return
+		}
 	}
 
 	inst.RState = rstate
@@ -9259,6 +9281,14 @@ func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
 	temp := indexInst
 	temp.Pc = nil
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{temp}}
+	return idx.sendMsgToClustMgrAndProcessResponse(msg)
+}
+
+func (idx *indexer) notifyAsyncRecoveryDone(indexInst common.IndexInst) error {
+
+	temp := indexInst
+	temp.Pc = nil
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INST_ASYNC_RECOVERY_DONE, indexList: []common.IndexInst{temp}}
 	return idx.sendMsgToClustMgrAndProcessResponse(msg)
 }
 

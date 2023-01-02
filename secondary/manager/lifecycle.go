@@ -76,6 +76,9 @@ type LifecycleMgr struct {
 
 	rebalancePhase      common.RebalancePhase
 	bucketTransferPhase map[string]common.RebalancePhase
+
+	instsInAsyncRecovery        map[common.IndexInstId]bool
+	droppedInstsInAsyncRecovery map[common.IndexInstId]bool
 }
 
 type requestHolder struct {
@@ -200,6 +203,9 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 		clientStatsRefreshInterval: 5000,
 		acceptedNames:              make(map[string]*indexNameRequest),
 		accIgnoredIds:              make(map[common.IndexDefnId]bool),
+
+		instsInAsyncRecovery:        make(map[common.IndexInstId]bool),
+		droppedInstsInAsyncRecovery: make(map[common.IndexInstId]bool),
 	}
 
 	mgr.configHolder.Store(config)
@@ -558,6 +564,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleCheckTokenExist(content)
 	case client.OPCODE_CLIENT_STATS:
 		result, err = m.handleClientStats(content)
+	case client.OPCODE_INST_ASYNC_RECOVERY_DONE:
+		err = m.handleInstAsyncRecoveryDone(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -623,7 +631,7 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	if prepareCreateIndex.Op == client.PREPARE {
-		if !m.canProcessDDL(prepareCreateIndex.Bucket) {
+		if !m.canProcessDDL(prepareCreateIndex.Bucket, false) {
 			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
 			response := &client.PrepareCreateResponse{
 				Accept: false,
@@ -771,7 +779,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 		bucket = defns[0].Bucket
 	}
 
-	if !m.canProcessDDL(bucket) {
+	if !m.canProcessDDL(bucket, false) {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
 		response := &client.CommitCreateResponse{
 			Accept: false,
@@ -986,6 +994,31 @@ func (m *LifecycleMgr) handleRebalanceDone(content []byte) error {
 
 	m.rebalancePhase = common.RebalanceNotRunning
 	m.bucketTransferPhase = nil
+
+	return nil
+}
+
+func (m *LifecycleMgr) handleInstAsyncRecoveryDone(content []byte) error {
+	inst, err := common.UnmarshallIndexInst(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleInstAsyncRecoveryDone() : Unable to unmarshall index definition. Reason = %v", err)
+		return err
+	}
+
+	delete(m.instsInAsyncRecovery, inst.InstId)
+
+	// If any instance is dropped while async recovery was in progress,
+	// then delete the index now
+	if _, ok := m.droppedInstsInAsyncRecovery[inst.InstId]; ok {
+
+		delete(m.droppedInstsInAsyncRecovery, inst.InstId)
+
+		logging.Infof("LifecycleMgr::handleInstAsyncRecoveryDone Deleting index inst: %v as index was dropped "+
+			"while async recovery was in progress", inst.InstId)
+
+		// Instance is dropped while async recovery is in progress. Drop the index
+		return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, true, false, true, common.NewShardRebalanceRequestContext())
+	}
 
 	return nil
 }
@@ -1486,6 +1519,18 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		}
 	}
 
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		// If delete command token exists for this DefnId, then do not create the index
+		// during shard rebalance. Rebalancer will consider this index transfer as successful
+		// and proceed forward.
+		timeout := m.configHolder.Load()["deleteCommandTokenTimeout"].Int()
+		if mc.CheckDeleteCommandTokenWithTimeout(defn.DefnId, timeout) {
+			logging.Warnf("LifecycleMgr.CreateIndex() Delete command token exists for defnId: %v. "+
+				"Skipping index creation during rebalance", defn.DefnId)
+			return common.ErrIndexDeletedDuringRebal
+		}
+	}
+
 	replicaId := m.setReplica(defn)
 
 	partitions, versions, numPartitions := m.setPartition(defn)
@@ -1534,9 +1579,12 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+
+			m.instsInAsyncRecovery[instId] = true
+
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
-				m.DeleteIndex(defn.DefnId, false, false, nil)
+				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
 		} else {
@@ -1544,7 +1592,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			partnShardIdMap, err = m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx)
 			if err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
-				m.DeleteIndex(defn.DefnId, false, false, nil)
+				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
 		}
@@ -1981,7 +2029,8 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 // handleBuildIndexes handles all kinds of build index requests
 // (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
 func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
-	isRebal := reqCtx.ReqSource == common.DDLRequestSourceRebalance // is this call from Rebalance?
+	isRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance) // is this call from Rebalance?
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
@@ -2081,6 +2130,20 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 		defnIdMap[defnId] = true
+
+		// If delete command token exists for this DefnId, then do not build the index
+		// during shard rebalance. Rebalancer will consider this index transfer as successful
+		// and proceed forward. The index metadata will be deleted from lifecycle manager.
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+			timeout := m.configHolder.Load()["deleteCommandTokenTimeout"].Int()
+			if mc.CheckDeleteCommandTokenWithTimeout(defnId, timeout) {
+				logging.Warnf("LifecycleMgr.CreateIndex() Delete command token exists for defnId: %v. "+
+					"Skipping index build during rebalance", defnId)
+				errMap[common.IndexInstId(defnId)] = common.ErrIndexDeletedDuringRebal.Error()
+				skipList = append(skipList, defnId)
+				continue
+			}
+		}
 
 		// Get index definition from meta_repo; failures here add entries to skipList and errMap[defnId]
 		defn, err := m.repo.GetIndexDefnById(defnId)
@@ -2289,21 +2352,39 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 		return err
 	}
 
-	hasError := false
+	var hasError error
 	for _, inst := range insts {
+
+		if _, ok := m.instsInAsyncRecovery[common.IndexInstId(inst.InstId)]; ok {
+			m.droppedInstsInAsyncRecovery[common.IndexInstId(inst.InstId)] = true
+			logging.Errorf("LifecycleMgr::DeleteIndex Instance is in async recovery. Index will be deleted after "+
+				"recovery is completed, instId: %v", inst.InstId)
+			hasError = common.ErrIndexInAsyncRecovery
+			continue
+		}
+
 		// updateIndexState will not return an error if there is no index inst
 		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_DELETED); err != nil {
-			hasError = true
+			hasError = err
 		}
 	}
 
-	if hasError {
-		logging.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", err)
-		return err
+	if hasError != nil {
+		logging.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", hasError)
+		return hasError
 	}
 
 	if updateStatusOnly {
 		return nil
+	}
+
+	isRebalDrop := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
+	if !isRebalDrop && !m.canProcessDDL(defn.Bucket, true) { // Always allow rebalance drop
+		errStr := fmt.Sprintf("Index: %v deletion can not be processed as rebalance is in progress. "+
+			"Drop index will be retried in background", defn.DefnId)
+		logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
+		return errors.New(errStr)
 	}
 
 	if notify && m.notifier != nil {
@@ -2370,7 +2451,11 @@ func (m *LifecycleMgr) handleCleanupIndexMetadata(content []byte) error {
 		return err
 	}
 
-	return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, false, false, false, nil)
+	reqCtx := common.NewUserRequestContext()
+	if inst.RState == common.REBAL_PENDING {
+		reqCtx = common.NewRebalanceRequestContext()
+	}
+	return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, false, false, false, reqCtx)
 }
 
 //-----------------------------------------------------------
@@ -2382,6 +2467,14 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	change := new(topologyChange)
 	if err := json.Unmarshal(content, change); err != nil {
 		return err
+	}
+
+	if _, ok := m.instsInAsyncRecovery[common.IndexInstId(change.InstId)]; ok {
+		if _, ok := m.droppedInstsInAsyncRecovery[common.IndexInstId(change.InstId)]; ok {
+			logging.Infof("LifecycleMgr::handleTopologyChange Metadata updates to the index inst: %v are "+
+				"skipped as drop index was received while index is in recovery", change.InstId)
+			return nil
+		}
 	}
 
 	// Find index defnition
@@ -2462,7 +2555,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 					// 3) index has at least one inst with NIL_STREAM
 
 					if streamId == common.NIL_STREAM {
-						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 							result = err
 						}
 						mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
@@ -2475,7 +2568,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 								logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance : id %v, streamId %v.",
 									instRef.InstId, instRef.StreamId)
 
-								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 									result = err
 								}
 								mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
@@ -2582,7 +2675,7 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 				// 3) index has at least one inst with NIL_STREAM
 
 				if streamId == common.NIL_STREAM {
-					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 						result = err
 					}
 				} else {
@@ -2593,7 +2686,7 @@ func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error 
 							logging.Debugf("LifecycleMgr.handleDeleteCollection() : index instance : id %v, streamId %v.",
 								instRef.InstId, instRef.StreamId)
 
-							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, common.NewUserRequestContext()); err != nil {
 								result = err
 							}
 							break
@@ -3227,9 +3320,12 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	partnShardIdMap := make(common.PartnShardIdMap)
 	if m.notifier != nil {
 		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+
+			m.instsInAsyncRecovery[instId] = true
+
 			if err := m.notifier.OnIndexRecover(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndex() : recoverIndex fails. Reason = %v", err)
-				m.DeleteIndex(defn.DefnId, false, false, nil)
+				m.DeleteIndex(defn.DefnId, false, false, reqCtx)
 				return err
 			}
 		} else {
@@ -3305,7 +3401,8 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 
 func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) error {
 
-	isRebalance := reqCtx.ReqSource == common.DDLRequestSourceRebalance
+	isRebalance := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 	isRebalancePartition := isRebalance && common.IsPartitioned(defn.PartitionScheme)
 
 	if isRebalancePartition {
@@ -3504,6 +3601,13 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 	// no match index instance to delete
 	if inst == nil {
 		return nil
+	}
+
+	if _, ok := m.instsInAsyncRecovery[common.IndexInstId(inst.InstId)]; ok {
+		m.droppedInstsInAsyncRecovery[common.IndexInstId(inst.InstId)] = true
+		logging.Errorf("LifecycleMgr::DeleteIndex Instance is in async recovery. Index will be deleted "+
+			"after recovery is completed, instId: %v", inst.InstId)
+		return common.ErrIndexInAsyncRecovery
 	}
 
 	// This is no other instance to delete.  Delete the index itself.
@@ -4350,27 +4454,39 @@ func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string
 	return scopeID, collectionID, nil
 }
 
-// Returns "true" if DDL can be processed. "false" otherwise
-func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
+func (m *LifecycleMgr) isRebalanceRunning() bool {
 	_, err := m.repo.GetLocalValue("RebalanceRunning")
 	// err == nil means that repo contains the "RebalanceRunning" key
-	// Hence, check for more conditions before allowing DDL
-	if err == nil {
+	// which can only happen when rebalance is running
+	return err == nil
+}
 
-		// Allow or reject DDL based on "allowDDLDuringRebalance" config
-		config := m.configHolder.Load()
-		if common.IsServerlessDeployment() {
-			canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
-			if !canAllowDDLDuringRebalance {
-				logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
-				return false
-			}
-		} else {
-			canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
-			if !canAllowDDLDuringRebalance {
-				logging.Warnf("LifecycleMgr::canProcessDDL Disallowing DDL as config: allowDDLDuringRebalance is false")
-				return false
-			}
+func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
+	// Allow or reject DDL based on "allowDDLDuringRebalance" config
+	config := m.configHolder.Load()
+	if common.IsServerlessDeployment() {
+		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			return false
+		}
+	} else {
+		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			return false
+		}
+	}
+	return true
+}
+
+// Returns "true" if DDL can be processed. "false" otherwise
+func (m *LifecycleMgr) canProcessDDL(bucket string, isDropReq bool) bool {
+
+	if m.isRebalanceRunning() {
+
+		if !m.canAllowDDLDuringRebalance() {
+			return false
 		}
 
 		if m.rebalancePhase == common.RebalanceInitated {
@@ -4378,20 +4494,30 @@ func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
 			return false
 		}
 
+		// Rebalance planning is done and all index movements are updated
+		// at all nodes in the cluster. Check the per bucket status
+		// before processing DDL operations
 		if m.rebalancePhase == common.RebalanceTransferInProgress {
-			// Rebalance planning is done and all index movements are updated
-			// at all nodes in the cluster. Check the per bucket status
-			// before processing DDL operations
+			// For drop index, an index can be dropped once the transfer
+			// is done on the source node. Destination node can drop the
+			// index while rebalance is in progress
+			minRebalPhase := common.RebalanceDone
+			if isDropReq {
+				minRebalPhase = common.RebalanceTransferDone
+			}
+
 			if bucketTransferPhase, ok := m.bucketTransferPhase[bucket]; ok {
-				if bucketTransferPhase == common.RebalanceDone {
-					return true // Rebalance for the bucket is done. Hence allow DDL
+				// If bucket transfer has moved past the minimum rebalance phase
+				// required to allow the DDL on the bucket, then return true
+				if bucketTransferPhase >= minRebalPhase {
+					return true
 				}
 				return false
 			}
 			// Bucket is not a part of rebalance. Allow DDL on the bucket
 			return true
 		}
-
+		return false
 	}
 	return true
 }
@@ -4427,16 +4553,17 @@ func extractDefnIdInstIdReplicaString(entries map[string]*mc.DropInstanceCommand
 // 2) Any call to mutate the repository must be async request.
 func (m *janitor) cleanup() {
 
-	// TODO (Elixir) - Do we need to allow cleanup of tokens when rebalance is running?
-	// if rebalancing is running
-	if _, err := m.manager.repo.GetLocalValue("RebalanceRunning"); err == nil {
-		return
+	logging.Infof("janitor: running cleanup.")
+
+	if m.manager.isRebalanceRunning() {
+		if !m.manager.canAllowDDLDuringRebalance() {
+			return
+		}
 	}
 
 	//
 	// Cleanup based on delete token
 	//
-	logging.Infof("janitor: running cleanup.")
 
 	entries := m.commandListener.GetNewDeleteTokens()
 	retryList := make(map[string]*mc.DeleteCommandToken)

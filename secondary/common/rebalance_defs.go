@@ -496,7 +496,12 @@ type RebalancePhase byte
 const (
 	RebalanceNotRunning RebalancePhase = iota
 	RebalanceInitated
-	RebalanceTransferInProgress
+	RebalanceTransferInProgress // Per bucket phase - Not used currently
+	RebalanceTransferDone
+	RebalanceRestoreInProgress  // Per bucket phase - Not used currently
+	RebalanceRestoreDone        // Per bucket phase - Not used currently
+	RebalanceRecoveryInProgress // Per bucket phase - Not used currently
+	RebalanceRecoveryDone       // Per bucket phase - Not used currently
 	RebalanceDone
 )
 
@@ -509,6 +514,16 @@ func (rp RebalancePhase) String() string {
 		return "REBALANCE_INITIATED"
 	case RebalanceTransferInProgress:
 		return "REBALANCE_TRANSFER_IN_PROGRESS"
+	case RebalanceTransferDone:
+		return "REBALANCE_TRANSFER_DONE"
+	case RebalanceRestoreInProgress:
+		return "REBALANCE_RESTORE_IN_PROGRESS"
+	case RebalanceRestoreDone:
+		return "REBALANCE_RESTORE_DONE"
+	case RebalanceRecoveryInProgress:
+		return "REBALANCE_RECOVERY_IN_PROGRESS"
+	case RebalanceRecoveryDone:
+		return "REBALANCE_RECOVERY_DONE"
 	case RebalanceDone:
 		return "REBALANCE_DONE"
 	}

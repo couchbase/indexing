@@ -8,6 +8,7 @@ import (
 	"log" //"os"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -579,7 +580,7 @@ func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t 
 
 func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, status string, t *testing.T) {
 	// Create a partitioned index with defer_build:true
-	_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket,
+	_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, url.PathEscape(bucket),
 		n1qlStatement, false, gocb.RequestPlus)
 	FailTestIfError(err, fmt.Sprintf("Error during n1qlExecute: %v", n1qlStatement), t)
 

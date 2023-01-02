@@ -61,30 +61,35 @@ func (u *Units) Whole() uint64 {
 	return 0
 }
 
-type MeteringTransaction struct {
+type AggregateRecorder struct {
 }
 
-func (mt *MeteringTransaction) AddIndexRead(bytes uint64) error {
+func (ar *AggregateRecorder) AddBytes(bytes uint64) error {
 	return nil
 }
 
-func (mt *MeteringTransaction) Commit() ([]Units, error) {
-	return []Units{}, nil
+func (ar *AggregateRecorder) State() (metered, pending Units, bytesPending uint64) {
+	return
 }
 
-func (mt *MeteringTransaction) Abort() error {
+func (ar *AggregateRecorder) Commit() (committed Units, err error) {
+	return
+}
+
+func (ar *AggregateRecorder) Abort() error {
 	return nil
 }
 
-func (mt *MeteringTransaction) Flush() error {
+func (ar *AggregateRecorder) Flush() error {
 	return nil
 }
 
-func (mt *MeteringTransaction) AddIndexWrite(bytes uint64, update bool) error {
-	return nil
+func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable, update bool) AggregateRecorder {
+	panic("MeteringManager::StartWriteAggregateRecorder Not implemented for Community Edition")
+	return AggregateRecorder{}
 }
 
-func (m *MeteringThrottlingMgr) StartMeteringTxn(bucketName, user string, billable bool) MeteringTransaction {
-	panic("MeteringManager::StartMeteringTxn Not implemented for Community Edition")
-	return MeteringTransaction{}
+func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) AggregateRecorder {
+	panic("MeteringManager::StartReadAggregateRecorder Not implemented for Community Edition")
+	return AggregateRecorder{}
 }

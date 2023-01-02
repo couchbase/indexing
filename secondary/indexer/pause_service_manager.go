@@ -10,12 +10,15 @@ package indexer
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/couchbase/cbauth/service"
@@ -37,6 +40,8 @@ type PauseServiceManager struct {
 	genericMgr *GenericServiceManager // pointer to our parent
 	httpAddr   string                 // local host:port for HTTP: "127.0.0.1:9102", 9108, ...
 
+	config common.ConfigHolder
+
 	// bucketStates is a map from bucket to its Pause-Resume state. The design supports concurrent
 	// pauses and resumes of different buckets, although this may not be done in practice.
 	bucketStates map[string]bucketStateEnum
@@ -51,6 +56,12 @@ type PauseServiceManager struct {
 	tasksMu sync.RWMutex
 
 	supvMsgch MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
+
+	// Track global PauseTokens
+	pauseTokensById map[string]*PauseToken
+	pauseTokenMapMu sync.RWMutex
+
+	nodeInfo *service.NodeInfo
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
@@ -60,7 +71,7 @@ type PauseServiceManager struct {
 //	mux - Indexer's HTTP server
 //	httpAddr - host:port of the local node for Index Service HTTP calls
 func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvMsgch MsgChannel,
-	httpAddr string) *PauseServiceManager {
+	httpAddr string, config common.Config, nodeInfo *service.NodeInfo) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -70,7 +81,12 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		tasks:        make(map[string]*taskObj),
 
 		supvMsgch: supvMsgch,
+
+		pauseTokensById: make(map[string]*PauseToken),
+
+		nodeInfo: nodeInfo,
 	}
+	m.config.Store(config)
 
 	// Save the singleton
 	SetPauseMgr(m)
@@ -86,6 +102,18 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	mux.HandleFunc("/test/Resume", m.testResume)
 
 	return m
+}
+
+// GetPauseMgr atomically gets the global PauseMgr pointer. When called from ScanCoordinator it may
+// still be nil as ScanCoordinator is constructed long before PauseServiceManager.
+func GetPauseMgr() *PauseServiceManager {
+	return (*PauseServiceManager)(atomic.LoadPointer(&PauseMgr))
+}
+
+// SetPauseMgr atomically sets the global PauseMgr pointer. This is done only once, when the
+// PauseServiceManager singleton is constructed.
+func SetPauseMgr(pauseMgr *PauseServiceManager) {
+	atomic.StorePointer(&PauseMgr, unsafe.Pointer(pauseMgr))
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -182,82 +210,6 @@ func (this bucketStateEnum) String() string {
 	}
 }
 
-// taskEnum defines types of tasks (following task_XXX constants) and is local analog of
-// ns_server service.TaskType.
-type taskEnum int
-
-const (
-	task_NIL taskEnum = iota // undefined
-	task_PAUSE
-	task_RESUME
-)
-
-// String converter for taskEnum type.
-func (this taskEnum) String() string {
-	switch this {
-	case task_NIL:
-		return "NilTask"
-	case task_PAUSE:
-		return "Pause"
-	case task_RESUME:
-		return "Resume"
-	default:
-		return fmt.Sprintf("undefinedTaskEnum_%v", int(this))
-	}
-}
-
-// StringNs is an alternate string converter for taskEnum that gives the value for
-// service.TaskTypeXxx constants (cbauth/service/interface.go).
-func (this taskEnum) StringNs() string {
-	switch this {
-	case task_PAUSE:
-		return "task-pause" // kjc not defined in interface.go yet
-	case task_RESUME:
-		return "task-resume" // kjc not defined in interface.go yet
-	default:
-		return fmt.Sprintf("undefinedTaskEnum_%v", int(this))
-	}
-}
-
-// statusEnum defines status of tasks (following status_XXX constants) and is local analog of
-// ns_server service.TaskStatus.
-type statusEnum int
-
-const (
-	status_RUNNING statusEnum = iota
-	status_FAILED
-	status_CANNOT_RESUME // Resume (unhibernate) dry run says cannot resume; no error in dry run
-)
-
-// String converter for statusEnum type.
-func (this statusEnum) String() string {
-	switch this {
-	case status_RUNNING:
-		return "Running"
-	case status_FAILED:
-		return "Failed"
-	case status_CANNOT_RESUME:
-		return "CannotResume"
-	default:
-		return fmt.Sprintf("undefinedStatusEnum_%v", int(this))
-	}
-}
-
-// StringNs is an alternate string converter for statusEnum that gives the value for
-// service.TaskStatusXxx constants (cbauth/service/interface.go).
-func (this statusEnum) StringNs() string {
-	switch this {
-	case status_RUNNING:
-		return string(service.TaskStatusRunning)
-	case status_FAILED:
-		return string(service.TaskStatusFailed)
-	case status_CANNOT_RESUME:
-		return "task-cannot-resume" // kjc not defined in interface.go yet
-	default:
-		return fmt.Sprintf("undefinedStatusEnum_%v", int(this))
-	}
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Type definitions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -270,15 +222,20 @@ func (this statusEnum) StringNs() string {
 type taskObj struct {
 	taskMu *sync.RWMutex // protects this taskObj; pointer as taskObj may be cloned
 
-	taskType     taskEnum   // local analog of service.TaskType
-	taskId       string     // opaque ns_server unique ID for this task
-	taskStatus   statusEnum // local analog of service.TaskStatus
-	progress     float64    // completion progress [0.0, 1.0]
-	errorMessage string     // only if a failure occurred
+	taskType     service.TaskType
+	taskId       string             // opaque ns_server unique ID for this task
+	taskStatus   service.TaskStatus // local analog of service.TaskStatus
+	progress     float64            // completion progress [0.0, 1.0]
+	errorMessage string             // only if a failure occurred
 
-	bucket     string // bucket name being Paused or Resumed
-	bucketUuid string // Pause: UUID of bucket; Resume: ""
-	dryRun     bool   // is task for Resume dry run (cluster capacity check)?
+	bucket string // bucket name being Paused or Resumed
+	// bucketUuid string // Pause: UUID of bucket; Resume: ""
+	dryRun bool // is task for Resume dry run (cluster capacity check)?
+
+	// ns_server does not differentiate between PreparePause and PrepareResume
+	// this flag is to internally track if the request if for PreparePause/PrepareResume
+	// when the taskType = service.TaskTypePrepared
+	isPause bool
 
 	// archivePath is path to top-level "directory" to use to write/read Pause/Resume images. For:
 	//   S3 format:       "s3://<s3_bucket>/index/"
@@ -297,28 +254,96 @@ type taskObj struct {
 
 	// resumer is the async object executing this task iff it is a task_RESUME, else nil
 	resumer *Resumer
+
+	// ctx holds the context object that can be used for task context
+	ctx        context.Context
+	cancelFunc context.CancelFunc
 }
 
 // NewTaskObj is the constructor for the taskObj class. If the parameters are not valid, it will
 // return (nil, error) rather than create an unsupported taskObj.
-func NewTaskObj(taskType taskEnum, taskId, bucket, bucketUuid, remotePath string, dryRun bool,
+func NewTaskObj(taskType service.TaskType, taskId, bucket, remotePath string, isPause, dryRun bool,
 ) (*taskObj, error) {
 
 	archiveType, archivePath, err := ArchiveInfoFromRemotePath(remotePath)
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &taskObj{
 		taskMu:      &sync.RWMutex{},
-		taskType:    taskType,
 		taskId:      taskId,
-		taskStatus:  status_RUNNING,
+		taskType:    taskType,
+		taskStatus:  service.TaskStatusRunning,
+		isPause:     isPause,
 		bucket:      bucket,
-		bucketUuid:  bucketUuid,
 		dryRun:      dryRun,
 		archivePath: archivePath,
 		archiveType: archiveType,
+		ctx:         ctx,
+		cancelFunc:  cancel,
 	}, nil
+}
+
+// TaskObjSetFailed sets task.status to status_FAILED and task.errMessage to errMsg.
+func (this *taskObj) TaskObjSetFailed(errMsg string) {
+	this.taskMu.Lock()
+	this.errorMessage = errMsg
+	this.taskStatus = service.TaskStatusFailed
+	this.taskMu.Unlock()
+}
+
+func (this *taskObj) setMasterNoLock() {
+	this.master = true
+}
+
+func (this *taskObj) updateTaskTypeNoLock(newTaskType service.TaskType) {
+	this.taskType = newTaskType
+}
+
+// taskObjToServiceTask creates the ns_server service.Task (cbauth/service/interface.go)
+// representation of a taskObj.
+func (this *taskObj) taskObjToServiceTask() *service.Task {
+	this.taskMu.RLock()
+	defer this.taskMu.RUnlock()
+
+	nsTask := service.Task{
+		Rev:          EncodeRev(0),
+		ID:           this.taskId,
+		Type:         this.taskType,
+		Status:       this.taskStatus,
+		IsCancelable: true,
+		Progress:     this.progress,
+		ErrorMessage: this.errorMessage,
+		Extra:        make(map[string]interface{}),
+	}
+
+	// Add task parameters to service.Extra map for supportability (ns_server will ignore these)
+	nsTask.Extra["bucket"] = this.bucket
+	if this.hasDryRun() {
+		nsTask.Extra["dryRun"] = this.dryRun
+	}
+	nsTask.Extra["archivePath"] = this.archivePath
+	nsTask.Extra["archiveType"] = this.archiveType.String()
+	nsTask.Extra["master"] = this.master
+
+	return &nsTask
+}
+
+func (this *taskObj) cancelNoLock() {
+	if this.ctx == nil || this.cancelFunc == nil {
+		logging.Warnf("taskObj::cancelNoLock: cancel called on already cancelled task %v", this.taskId)
+		return
+	}
+	this.cancelFunc()
+	this.ctx = nil
+	this.cancelFunc = nil
+}
+
+func (this *taskObj) Cancel() {
+	this.taskMu.Lock()
+	defer this.taskMu.Unlock()
+	this.cancelNoLock()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -351,63 +376,114 @@ func NewTaskObj(taskType taskEnum, taskId, bucket, bucketUuid, remotePath string
 //     and abort the Pause. Index nodes should remove their respective tasks.
 //
 // Method arguments
-//
-//	taskId - opaque ns_server unique ID for this task
-//	bucket - name of the bucket to operate on
-//	bucketUuid - UUID of the bucket to operate on
-//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
-func (m *PauseServiceManager) PreparePause(taskId, bucket, bucketUuid, remotePath string,
-) (err error) {
+// params service.PauseParams - cbauth object providing
+//   - ID: task ID
+//   - Bucket: name of the bucket to be paused
+//   - RemotePath: object store path
+func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err error) {
 	const _PreparePause = "PauseServiceManager::PreparePause:"
 
-	const args = "taskId: %v, bucket: %v, bucketUuid: %v, remotePath: %v"
-	logging.Infof("%v Called. "+args, _PreparePause, taskId, bucket, bucketUuid, remotePath)
-	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, taskId, bucket, bucketUuid,
-		remotePath)
+	const args = "taskId: %v, bucket: %v, remotePath: %v"
+	logging.Infof("%v Called. "+args, _PreparePause, params.ID, params.Bucket, params.RemotePath)
+	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, params.ID, params.Bucket, params.RemotePath)
+
+	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
-	err = m.bucketStateSet(_PreparePause, bucket, bst_NIL, bst_PREPARE_PAUSE)
+	err = m.bucketStateSet(_PreparePause, params.Bucket, bst_NIL, bst_PREPARE_PAUSE)
 	if err != nil {
 		return err
 	}
 
 	// Record the task in progress
-	return m.taskAddPause(taskId, bucket, bucketUuid, remotePath)
+	return m.taskAddPrepare(params.ID, params.Bucket, params.RemotePath, true, false)
 }
 
 // Pause is an external API called by ns_server (via cbauth) only on the GSI master node to initiate
 // a pause (formerly hibernate) of a bucket in the serverless offering.
 //
-//	taskId - opaque ns_server unique ID for this task
-//	bucket - name of the bucket to operate on
-//	bucketUuid - UUID of the bucket to operate on
-//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
-func (m *PauseServiceManager) Pause(taskId, bucket, bucketUuid, remotePath string) (err error) {
+//		params service.PauseParams - cbauth object providing
+//	  - ID: task ID
+//	  - Bucket: name of the bucket to be paused
+//	  - RemotePath: object store path
+func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	const _Pause = "PauseServiceManager::Pause:"
 
-	const args = "taskId: %v, bucket: %v, bucketUuid: %v, remotePath: %v"
-	logging.Infof("%v Called. "+args, _Pause, taskId, bucket, bucketUuid, remotePath)
-	defer logging.Infof("%v Returned %v. "+args, _Pause, err, taskId, bucket, bucketUuid,
-		remotePath)
+	const args = "taskId: %v, bucket: %v, remotePath: %v"
+	logging.Infof("%v Called. "+args, _Pause, params.ID, params.Bucket, params.RemotePath)
+	defer logging.Infof("%v Returned %v. "+args, _Pause, err, params.ID, params.Bucket, params.RemotePath)
 
 	// Update the task to set this node as master
-	task := m.taskSetMaster(taskId)
-	if task == nil {
-		err = service.ErrNotFound
-		logging.Errorf("%v taskId %v (from PreparePause) not found", _Pause, taskId)
-		return err
+	task := m.taskSetMasterAndUpdateType(params.ID, service.TaskTypeBucketPause)
+	if task == nil || !task.isPause {
+		logging.Errorf("%v taskId %v (from PreparePause) not found", _Pause, params.ID)
+		return service.ErrNotFound
 	}
 
 	// Set bst_PAUSING state
-	err = m.bucketStateSet(_Pause, bucket, bst_PREPARE_PAUSE, bst_PAUSING)
+	err = m.bucketStateSet(_Pause, params.Bucket, bst_PREPARE_PAUSE, bst_PAUSING)
 	if err != nil {
 		return err
+	}
+
+	if err := m.initStartPhase(params.Bucket, params.ID); err != nil {
+		return  err
 	}
 
 	// Create a Pauser object to run the master orchestration loop. It will be the only thread
 	// that changes or deletes *task after this point. It will save a pointer to itself into
 	// task.pauser and start its own goroutine, so we don't need to save a pointer to it here.
 	RunPauser(m, task, true)
+	return nil
+}
+
+func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err error) {
+
+	err = func() error {
+		m.genericMgr.cinfo.Lock()
+		defer m.genericMgr.cinfo.Unlock()
+		return m.genericMgr.cinfo.FetchNodesData()
+	}()
+	if err != nil {
+		logging.Errorf("PauseServiceManager::initStartPhase: Failed to fetch nodes data via cinfo: err[%v]",
+			err)
+		return err
+	}
+
+	var masterIP string
+	masterIP, err = func() (string, error) {
+		m.genericMgr.cinfo.RLock()
+		defer m.genericMgr.cinfo.RUnlock()
+		return m.genericMgr.cinfo.GetLocalHostname()
+	}()
+	if err != nil {
+		logging.Errorf("PauseServiceManager::initStartPhase: Failed to get local host name via cinfo: err[%v]",
+			err)
+		return err
+	}
+
+	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId)
+	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
+
+	m.pauseTokenMapMu.Lock()
+	m.pauseTokensById[pauseId] = pauseToken
+	m.pauseTokenMapMu.Unlock()
+
+	// Add to local metadata
+	if err = m.registerLocalPauseToken(pauseToken); err != nil {
+		return err
+	}
+
+	// Add to metaKV
+	if err = m.registerPauseTokenInMetakv(pauseToken); err != nil {
+		return err
+	}
+
+	// Register via /pauseMgr/Pause
+	if err = m.registerGlobalPauseToken(pauseToken); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -458,53 +534,55 @@ func (m *PauseServiceManager) Pause(taskId, bucket, bucketUuid, remotePath strin
 //
 // Method arguments
 //
-//	taskId - opaque ns_server unique ID for this task
-//	bucket - name of the bucket to operate on
-//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
-//	dryRun - whether this call is for a dry run or real Resume
-func (m *PauseServiceManager) PrepareResume(taskId, bucket, remotePath string, dryRun bool,
-) (err error) {
+//		params service.ResumeParams - cbauth object providing
+//	  - ID: task ID
+//	  - Bucket: name of the bucket to be paused
+//	  - RemotePath: object store path
+//		- DryRun: if this is a dryRun of resume
+func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err error) {
 	const _PrepareResume = "PauseServiceManager::PrepareResume:"
 
 	const args = "taskId: %v, bucket: %v, remotePath: %v, dryRun: %v"
-	logging.Infof("%v Called. "+args, _PrepareResume, taskId, bucket, remotePath, dryRun)
-	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, taskId, bucket, remotePath,
-		dryRun)
+	logging.Infof("%v Called. "+args, _PrepareResume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
+	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
+
+	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_RESUME state
-	err = m.bucketStateSet(_PrepareResume, bucket, bst_NIL, bst_PREPARE_RESUME)
+	err = m.bucketStateSet(_PrepareResume, params.Bucket, bst_NIL, bst_PREPARE_RESUME)
 	if err != nil {
 		return err
 	}
 
 	// Record the task in progress
-	return m.taskAddResume(taskId, bucket, remotePath, dryRun)
+	return m.taskAddPrepare(params.ID, params.Bucket, params.RemotePath, false, params.DryRun)
 }
 
 // Resume is an external API called by ns_server (via cbauth) only on the GSI master node to
 // initiate a resume (formerly unhibernate or rehydrate) of a bucket in the serverless offering.
 //
-//	taskId - opaque ns_server unique ID for this task
-//	bucket - name of the bucket to operate on
-//	remotePath - root of storage (e.g. "s3://..." or "file3://...") for the image
-//	dryRun - whether this call is for a dry run or real Resume
-func (m *PauseServiceManager) Resume(taskId, bucket, remotePath string, dryRun bool) (err error) {
+// params service.ResumeParams - cbauth object providing
+//   - ID: task ID
+//   - Bucket: name of the bucket to be paused
+//   - RemotePath: object store path
+//   - DryRun: if this is a dryRun of resume
+func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 	const _Resume = "PauseServiceManager::Resume:"
 
 	const args = "taskId: %v, bucket: %v, remotePath: %v, dryRun: %v"
-	logging.Infof("%v Called. "+args, _Resume, taskId, bucket, remotePath, dryRun)
-	defer logging.Infof("%v Returned %v. "+args, _Resume, err, taskId, bucket, remotePath, dryRun)
+	logging.Infof("%v Called. "+args, _Resume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
+	defer logging.Infof("%v Returned %v. "+args, _Resume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 
 	// Update the task to set this node as master
-	task := m.taskSetMaster(taskId)
-	if task == nil {
+	task := m.taskSetMasterAndUpdateType(params.ID, service.TaskTypeBucketResume)
+	if task == nil || task.isPause {
 		err = service.ErrNotFound
-		logging.Errorf("%v taskId %v (from PrepareResume) not found", _Resume, taskId)
+		logging.Errorf("%v taskId %v (from PrepareResume) not found", _Resume, params.ID)
 		return err
 	}
 
 	// Set bst_RESUMING state
-	err = m.bucketStateSet(_Resume, bucket, bst_PREPARE_RESUME, bst_RESUMING)
+	err = m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
 	if err != nil {
 		return err
 	}
@@ -520,10 +598,10 @@ func (m *PauseServiceManager) Resume(taskId, bucket, remotePath string, dryRun b
 // Delegates for GenericServiceManager RPC APIs
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// PauseGetTaskList is a delegate of GenericServiceManager.GetTaskList which is an external API
+// PauseResumeGetTaskList is a delegate of GenericServiceManager.PauseResumeGetTaskList which is an external API
 // called by ns_server (via cbauth). It gets the Pause-Resume task list of the current node. Since
 // service.Task is a struct, the returned tasks are copies of the originals.
-func (m *PauseServiceManager) PauseGetTaskList() (tasks []service.Task) {
+func (m *PauseServiceManager) PauseResumeGetTaskList() (tasks []service.Task) {
 	m.tasksMu.RLock()
 	defer m.tasksMu.RUnlock()
 	for _, taskObj := range m.tasks {
@@ -532,76 +610,18 @@ func (m *PauseServiceManager) PauseGetTaskList() (tasks []service.Task) {
 	return tasks
 }
 
-// PauseCancelTask is a delegate of GenericServiceManager.CancelTask which is an external API
-// called by ns_server (via cbauth). It cancels a Pause-Resume task owned by the current node.
-func (m *PauseServiceManager) PauseCancelTask(id string) error {
-	taskClone := m.taskClone(id)
-	if taskClone == nil {
+// PauseResumeCancelTask is a delegate of GenericServiceManager.PauseResumeCancelTask which is an
+// external API called by ns_server (via cbauth). It cancels a Pause-Resume task on the current node
+func (m *PauseServiceManager) PauseResumeCancelTask(id string) error {
+	task := m.taskDelete(id)
+	if task == nil || (task.taskType != service.TaskTypePrepared && task.taskType != service.TaskTypeBucketPause && task.taskType != service.TaskTypeBucketResume) {
+		logging.Errorf("PauseServiceManager::CancelTask: couldn't find task with id %v", id)
 		return service.ErrNotFound
 	}
+	task.Cancel()
+	logging.Infof("PauseServiceManager::CancelTask: deleted and cancelled task %", id)
 
-	switch taskClone.taskType {
-	case task_PAUSE:
-		return m.CancelPause(taskClone)
-	case task_RESUME:
-		return m.CancelResume(taskClone)
-	default:
-		return service.ErrNotSupported
-	}
-}
-
-// CancelPause cancels a local Pause task and deletes its Pause-Resume state. If the current node
-// was the master and the state had reached bst_PAUSING, this must do extra work to abort the
-// Pause.
-func (m *PauseServiceManager) CancelPause(taskClone *taskObj) error {
-	const _CancelPause = "PauseServiceManager::CancelPause:"
-	logging.Infof("%v canceling Pause taskId: %v, task: %+v", _CancelPause,
-		taskClone.taskId, taskClone)
-
-	// Delete the Pause task
-	task := m.taskDelete(taskClone.taskId)
-	if task == nil {
-		// Something else deleted it since caller found and cloned it
-		logging.Infof("%v taskId %v not found (already finished or canceled)", _CancelPause,
-			taskClone.taskId)
-		return service.ErrNotFound
-	}
-
-	// Master orchestrates aborting the Pause. If no node is master, the task never got past
-	// prepare, so there is nothing to orchestrate.
-	if task.master {
-		// kjc abort Pause
-	}
-
-	// Delete the bucket state
-	m.bucketStateDelete(task.bucket)
-	return nil
-}
-
-// CancelResume cancels a local Resume task and deletes its Pause-Resume state. If the current node
-// was the master and the state had reached bst_RESUMING, this must do extra work to abort the
-// Resume.
-func (m *PauseServiceManager) CancelResume(taskClone *taskObj) error {
-	const _CancelResume = "PauseServiceManager::CancelResume:"
-	logging.Infof("%v canceling Resume taskId: %v, task: %+v", _CancelResume,
-		taskClone.taskId, taskClone)
-
-	// Delete the Resume task
-	task := m.taskDelete(taskClone.taskId)
-	if task == nil {
-		// Something else deleted it since caller found and cloned it
-		logging.Infof("%v taskId: %v not found (already finished or canceled)", _CancelResume,
-			taskClone.taskId)
-		return service.ErrNotFound
-	}
-
-	// Master orchestrates aborting the Resume. If no node is master, the task never got past
-	// prepare, so there is nothing to orchestrate.
-	if task.master {
-		// kjc abort Resume
-	}
-
-	// Delete the bucket state
+	// clear bucket state from service manager
 	m.bucketStateDelete(task.bucket)
 	return nil
 }
@@ -679,33 +699,143 @@ func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *htt
 // RestHandlePause handles REST API /pauseMgr/Pause by initiating work on the specified taskId on
 // this follower node.
 func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Request) {
-	const _RestHandlePause = "PauseServiceManager::RestHandlePause:"
-
-	logging.Infof("%v called", _RestHandlePause)
-	defer logging.Infof("%v returned", _RestHandlePause)
 
 	// Authenticate
-	_, ok := doAuth(r, w, _RestHandlePause)
-	if !ok {
+	if _, ok := doAuth(r, w, "PauseServiceManager::RestHandlePause:"); !ok {
+		err := fmt.Errorf("either invalid credentials or bad request")
+		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request," +
+			" err[%v]", err)
 		return
 	}
 
-	// Parameters
-	id := r.FormValue("id")
-
-	task := m.taskFind(id)
-	if task != nil {
-		// Do the work for this task
-		RunPauser(m, task, false)
-
-		return
+	writeError := func(w http.ResponseWriter, err error) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
 	}
 
-	// Task not found error reply
-	errMsg2 := fmt.Sprintf("%v taskId %v not found", _RestHandlePause, id)
-	logging.Errorf(errMsg2)
-	resp := &TaskResponse{Code: RESP_ERROR, Error: errMsg2}
-	rhSend(http.StatusInternalServerError, w, resp)
+	writeOk := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK\n"))
+	}
+
+	var pauseToken PauseToken
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		if err := json.Unmarshal(bytes, &pauseToken); err != nil {
+			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to unmarshal pause token in request" +
+				" body: err[%v] bytes[%v]", err, string(bytes))
+			writeError(w, err)
+
+			return
+		}
+
+		logging.Infof("PauseServiceManager::RestHandlePause: New Pause Token [%v]", pauseToken)
+
+		if m.observeGlobalPauseToken(pauseToken) {
+			// Pause token from rest and metakv are the same.
+
+			var task *taskObj
+			if task = m.taskFind(pauseToken.PauseId); task == nil {
+				err := fmt.Errorf("failed to find task with id[%v]", pauseToken.PauseId)
+				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause" +
+					": err[%v]", string(m.nodeInfo.NodeID), err)
+				writeError(w, err)
+
+				return
+			}
+
+			m.pauseTokenMapMu.Lock()
+			m.pauseTokensById[pauseToken.PauseId] = &pauseToken
+			m.pauseTokenMapMu.Unlock()
+
+			if err := m.registerLocalPauseToken(&pauseToken); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local" +
+					" meta: err[%v]", err)
+				writeError(w, err)
+
+				return
+			}
+
+			// TODO: Move task from prepared to running
+
+			// Move bucket to bst_PAUSING state
+			if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_PAUSE, bst_PAUSING); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to pausing" +
+					" err[%v]", err)
+				writeError(w, err)
+				return
+			}
+
+			RunPauser(m, task, false)
+
+			writeOk(w)
+			return
+
+		} else {
+			// Timed out waiting to see the token in metaKV
+
+			err := fmt.Errorf("pause token wait timeout")
+			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to observe token: err[%v]", err)
+			writeError(w, err)
+
+			return
+		}
+
+	} else {
+		writeError(w, fmt.Errorf("PauseServiceManager::RestHandlePause: Unsupported method, use only POST"))
+		return
+	}
+}
+
+func (m *PauseServiceManager) observeGlobalPauseToken(pauseToken PauseToken) bool {
+
+	// TODO: Make timeout configurable
+	// Time in seconds to fail pause if metaKV doesn't deliver the token
+	globalTokenWaitTimeout := 60 * time.Second
+
+	checkInterval := 1 * time.Second
+	var elapsed time.Duration
+	var pToken PauseToken
+	path := buildMetakvPathForPauseToken(&pauseToken)
+
+	for elapsed < globalTokenWaitTimeout {
+
+		found, err := common.MetakvGet(path, &pToken)
+		if err != nil {
+			logging.Errorf("PauseServiceManager::observeGlobalPauseToken Error Checking Pause Token In Metakv: err[%v] path[%v]",
+				err, path)
+
+			time.Sleep(checkInterval)
+			elapsed += checkInterval
+
+			continue
+		}
+
+		if found {
+			if reflect.DeepEqual(pToken, pauseToken) {
+				logging.Infof("PauseServiceManager::observeGlobalPauseToken Global And Local Pause Tokens Match: [%v]",
+					pauseToken)
+				return true
+
+			} else {
+				logging.Errorf("PauseServiceManager::observeGlobalPauseToken Mismatch in Global and Local Pause Token: Global[%v] Local[%v]",
+					pToken, pauseToken)
+				return false
+
+			}
+		}
+
+		logging.Infof("PauseServiceManager::observeGlobalPauseToken Waiting for Global Pause Token In Metakv")
+
+		time.Sleep(checkInterval)
+		elapsed += checkInterval
+	}
+
+	logging.Errorf("PauseServiceManager::observeGlobalPauseToken Timeout Waiting for Global Pause Token In Metakv: path[%v]",
+		path)
+
+	return false
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -717,7 +847,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 func (m *PauseServiceManager) testPreparePause(w http.ResponseWriter, r *http.Request) {
 	const _testPreparePause = "PauseServiceManager::testPreparePause:"
 
-	m.testPauseOrResume(w, r, _testPreparePause, task_PAUSE, true)
+	m.testPauseOrResume(w, r, _testPreparePause, service.TaskTypePrepared, true)
 }
 
 // testPause handles unit test REST API "/test/Pause" by calling the Pause API directly, which is
@@ -725,7 +855,7 @@ func (m *PauseServiceManager) testPreparePause(w http.ResponseWriter, r *http.Re
 func (m *PauseServiceManager) testPause(w http.ResponseWriter, r *http.Request) {
 	const _testPause = "PauseServiceManager::testPause:"
 
-	m.testPauseOrResume(w, r, _testPause, task_PAUSE, false)
+	m.testPauseOrResume(w, r, _testPause, service.TaskTypeBucketPause, false)
 }
 
 // testPrepareResume handles unit test REST API "/test/PrepareResume" by calling the PreparePause
@@ -733,7 +863,7 @@ func (m *PauseServiceManager) testPause(w http.ResponseWriter, r *http.Request) 
 func (m *PauseServiceManager) testPrepareResume(w http.ResponseWriter, r *http.Request) {
 	const _testPrepareResume = "PauseServiceManager::testPrepareResume:"
 
-	m.testPauseOrResume(w, r, _testPrepareResume, task_RESUME, true)
+	m.testPauseOrResume(w, r, _testPrepareResume, service.TaskTypePrepared, false)
 }
 
 // testResume handles unit test REST API "/test/Resume" by calling the Resume API directly, which is
@@ -741,13 +871,13 @@ func (m *PauseServiceManager) testPrepareResume(w http.ResponseWriter, r *http.R
 func (m *PauseServiceManager) testResume(w http.ResponseWriter, r *http.Request) {
 	const _testResume = "PauseServiceManager::testResume:"
 
-	m.testPauseOrResume(w, r, _testResume, task_RESUME, false)
+	m.testPauseOrResume(w, r, _testResume, service.TaskTypeBucketResume, false)
 }
 
 // testPauseOrResume is the delegate of testPreparePause, testPause, testPrepareResume, testResume
 // since their logic differs only in a few parameters and which API they call.
 func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.Request,
-	logPrefix string, taskType taskEnum, prepare bool) {
+	logPrefix string, taskType service.TaskType, pause bool) {
 
 	logging.Infof("%v called", logPrefix)
 	defer logging.Infof("%v returned", logPrefix)
@@ -761,7 +891,6 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 	// Parameters
 	id := r.FormValue("id")
 	bucket := r.FormValue("bucket")
-	bucketUuid := r.FormValue("bucketUuid") // PreparePause, Pause only
 	remotePath := r.FormValue("remotePath") // e.g. S3 bucket or filesystem path
 
 	var dryRun bool
@@ -772,20 +901,18 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 
 	var err error
 	switch taskType {
-	case task_PAUSE:
-		if prepare {
-			err = m.PreparePause(id, bucket, bucketUuid, remotePath)
+	case service.TaskTypePrepared:
+		if pause {
+			err = m.PreparePause(service.PauseParams{ID: id, Bucket: bucket, RemotePath: remotePath})
 		} else {
-			err = m.Pause(id, bucket, bucketUuid, remotePath)
+			err = m.PrepareResume(service.ResumeParams{ID: id, Bucket: bucket, RemotePath: remotePath, DryRun: dryRun})
 		}
-	case task_RESUME:
-		if prepare {
-			err = m.PrepareResume(id, bucket, remotePath, dryRun)
-		} else {
-			err = m.Resume(id, bucket, remotePath, dryRun)
-		}
+	case service.TaskTypeBucketPause:
+		err = m.Pause(service.PauseParams{ID: id, Bucket: bucket, RemotePath: remotePath})
+	case service.TaskTypeBucketResume:
+		err = m.Resume(service.ResumeParams{ID: id, Bucket: bucket, RemotePath: remotePath, DryRun: dryRun})
 	default:
-		err = fmt.Errorf("%v invalid taskType %v", logPrefix, int(taskType))
+		err = fmt.Errorf("%v invalid taskType %v", logPrefix, taskType)
 	}
 	if err == nil {
 		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: id}
@@ -884,18 +1011,6 @@ func (m *PauseServiceManager) GetIndexerNodeAddresses(excludeAddr string) (nodeA
 	return nodeAddrs
 }
 
-// GetPauseMgr atomically gets the global PauseMgr pointer. When called from ScanCoordinator it may
-// still be nil as ScanCoordinator is constructed long before PauseServiceManager.
-func GetPauseMgr() *PauseServiceManager {
-	return (*PauseServiceManager)(atomic.LoadPointer(&PauseMgr))
-}
-
-// SetPauseMgr atomically sets the global PauseMgr pointer. This is done only once, when the
-// PauseServiceManager singleton is constructed.
-func SetPauseMgr(pauseMgr *PauseServiceManager) {
-	atomic.StorePointer(&PauseMgr, unsafe.Pointer(pauseMgr))
-}
-
 // taskAdd adds a task to m.tasks.
 func (m *PauseServiceManager) taskAdd(task *taskObj) {
 	m.tasksMu.Lock()
@@ -903,19 +1018,9 @@ func (m *PauseServiceManager) taskAdd(task *taskObj) {
 	m.tasksMu.Unlock()
 }
 
-// taskAddPause constructs and adds a Pause task to m.tasks.
-func (m *PauseServiceManager) taskAddPause(taskId, bucket, bucketUuid, remotePath string) error {
-	task, err := NewTaskObj(task_PAUSE, taskId, bucket, bucketUuid, remotePath, false)
-	if err != nil {
-		return err
-	}
-	m.taskAdd(task)
-	return nil
-}
-
-// taskAddResume constructs and adds a Resume task to m.tasks.
-func (m *PauseServiceManager) taskAddResume(taskId, bucket, remotePath string, dryRun bool) error {
-	task, err := NewTaskObj(task_RESUME, taskId, bucket, "", remotePath, dryRun)
+// taskAddPreparePause constructs and adds a Pause task to m.tasks.
+func (m *PauseServiceManager) taskAddPrepare(taskId, bucket, remotePath string, isPause, dryRun bool) error {
+	task, err := NewTaskObj(service.TaskTypePrepared, taskId, bucket, remotePath, isPause, dryRun)
 	if err != nil {
 		return err
 	}
@@ -968,33 +1073,22 @@ func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
 	return false
 }
 
-// taskSetMaster looks up a task by taskId and if found sets task.master to true and returns a
-// pointer to the task object (not a copy), else returns nil.
-func (m *PauseServiceManager) taskSetMaster(taskId string) *taskObj {
+func (m *PauseServiceManager) taskSetMasterAndUpdateType(taskId string, newType service.TaskType) *taskObj {
 	task := m.taskFind(taskId)
 	if task != nil {
 		task.taskMu.Lock()
-		task.master = true
+		task.setMasterNoLock()
+		task.updateTaskTypeNoLock(newType)
 		task.taskMu.Unlock()
 	}
 	return task
-}
-
-// hasBucketUuid returns whether this task has the bucketUuid parameter.
-func (this *taskObj) hasBucketUuid() bool {
-	this.taskMu.RLock()
-	defer this.taskMu.RUnlock()
-	if this.taskType == task_PAUSE {
-		return true
-	}
-	return false
 }
 
 // hasDryRun returns whether this task has the dryRun parameter.
 func (this *taskObj) hasDryRun() bool {
 	this.taskMu.RLock()
 	defer this.taskMu.RUnlock()
-	if this.taskType == task_RESUME {
+	if this.taskType == service.TaskTypeBucketResume || this.taskType == service.TaskTypePrepared {
 		return true
 	}
 	return false
@@ -1042,42 +1136,181 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	}
 }
 
-// TaskObjSetFailed sets task.status to status_FAILED and task.errMessage to errMsg.
-func (this *taskObj) TaskObjSetFailed(errMsg string) {
-	this.taskMu.Lock()
-	this.errorMessage = errMsg
-	this.taskStatus = status_FAILED
-	this.taskMu.Unlock()
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// PauseToken
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+const PauseTokenTag = "PauseToken"
+const PauseMetakvDir = common.IndexingMetaDir + "pause/"
+const PauseTokenPathPrefix = PauseMetakvDir + PauseTokenTag
+
+type PauseToken struct {
+	MasterId string
+	MasterIP string
+
+	BucketName string
+	PauseId    string
+
+	Error    string
 }
 
-// taskObjToServiceTask creates the ns_server service.Task (cbauth/service/interface.go)
-// representation of a taskObj.
-func (this *taskObj) taskObjToServiceTask() *service.Task {
-	this.taskMu.RLock()
-	defer this.taskMu.RUnlock()
+func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string) *PauseToken {
+	cfg := m.config.Load()
+	return &PauseToken{
+		MasterId:   cfg["nodeuuid"].String(),
+		MasterIP:   masterIP,
+		BucketName: bucketName,
+		PauseId:    pauseId,
+	}
+}
 
-	nsTask := service.Task{
-		Rev:          EncodeRev(0),
-		ID:           this.taskId,
-		Type:         service.TaskType(this.taskType.StringNs()),
-		Status:       service.TaskStatus(this.taskStatus.StringNs()),
-		IsCancelable: true,
-		Progress:     this.progress,
-		ErrorMessage: this.errorMessage,
-		Extra:        make(map[string]interface{}),
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// PauseToken - Lifecycle
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func buildKeyForLocalPauseToken(pauseToken *PauseToken) string {
+	return fmt.Sprintf("%s_%s", PauseTokenTag, pauseToken.PauseId)
+}
+
+func buildMetakvPathForPauseToken(pauseToken *PauseToken) string {
+	return fmt.Sprintf("%s_%s", PauseTokenPathPrefix, pauseToken.PauseId)
+}
+
+func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) error {
+
+	pToken, err := json.Marshal(pauseToken)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::registerLocalPauseToken: Failed to marshal pauseToken[%v]: err[%v]",
+			pauseToken, err)
+		return err
 	}
 
-	// Add task parameters to service.Extra map for supportability (ns_server will ignore these)
-	nsTask.Extra["bucket"] = this.bucket
-	if this.hasBucketUuid() {
-		nsTask.Extra["bucketUuid"] = this.bucketUuid
+	respch := make(MsgChannel)
+	m.supvMsgch <- &MsgClustMgrLocal{
+		mType:  CLUST_MGR_SET_LOCAL,
+		key:    buildKeyForLocalPauseToken(pauseToken),
+		value:  string(pToken),
+		respch: respch,
 	}
-	if this.hasDryRun() {
-		nsTask.Extra["dryRun"] = this.dryRun
-	}
-	nsTask.Extra["archivePath"] = this.archivePath
-	nsTask.Extra["archiveType"] = this.archiveType.String()
-	nsTask.Extra["master"] = this.master
 
-	return &nsTask
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err = resp.GetError(); err != nil {
+		logging.Errorf("PauseServiceManager::registerLocalPauseToken: Unable to set PauseToken In Local Meta" +
+			"Storage: [%v]", err)
+		return err
+	}
+
+	logging.Infof("PauseServiceManager::registerLocalPauseToken: Registered Pause Token In Local Meta: [%v]",
+		string(pToken))
+
+	return nil
+}
+
+
+func (m *PauseServiceManager) cleanupLocalPauseToken(pauseToken *PauseToken) error {
+
+	logging.Infof("PauseServiceManager::cleanupLocalPauseToken: Cleanup PauseToken[%v]", pauseToken)
+
+	key := buildKeyForLocalPauseToken(pauseToken)
+
+	respch := make(MsgChannel)
+	m.supvMsgch <- &MsgClustMgrLocal{
+		mType:  CLUST_MGR_DEL_LOCAL,
+		key:    key,
+		respch: respch,
+	}
+
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err := resp.GetError(); err != nil {
+		logging.Fatalf("PauseServiceManager::cleanupLocalPauseToken: Unable to delete Pause Token In Local"+
+			"Meta Storage. Path[%v] Err[%v]", key, err)
+		common.CrashOnError(err)
+	}
+
+	m.pauseTokenMapMu.Lock()
+	delete(m.pauseTokensById, pauseToken.PauseId)
+	m.pauseTokenMapMu.Unlock()
+
+	return nil
+}
+
+func (m *PauseServiceManager) registerPauseTokenInMetakv(pauseToken *PauseToken) error {
+
+	path := buildMetakvPathForPauseToken(pauseToken)
+
+	err := common.MetakvSet(path, pauseToken)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::registerPauseTokenInMetakv: Unable to set PauseToken In Metakv Storage: Err[%v]", err)
+		return err
+	}
+
+	logging.Infof("PauseServiceManager::registerPauseTokenInMetakv: Registered Global PauseToken[%v] In Metakv at path[%v]", pauseToken, path)
+
+	return nil
+}
+
+func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (err error) {
+
+	m.genericMgr.cinfo.Lock()
+	defer m.genericMgr.cinfo.Unlock()
+
+	nids := m.genericMgr.cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+	if len(nids) < 1 {
+		err := fmt.Errorf("got too few indexer nodes[%d]", len(nids))
+		logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to get NodeIds, err[%v]", err)
+
+		return err
+	}
+
+	url := "/pauseMgr/Pause"
+	for _, nid := range nids {
+
+		addr, err := m.genericMgr.cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+		if err == nil {
+
+			localaddr, err := m.genericMgr.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error Fetching Local Service" +
+					" Address [%v]", err)
+				return err
+			}
+
+			if addr == localaddr {
+				logging.Infof("PauseServiceManager::registerGlobalPauseToken: Skip local service [%v]", addr)
+				continue
+			}
+
+			body, err := json.Marshal(pauseToken)
+			if err != nil {
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to marshal pause token:" +
+					" err[%v] pauseToken[%v]", err, pauseToken)
+				return err
+			}
+
+			bodyBuf := bytes.NewBuffer(body)
+			resp, err := postWithAuth(addr+url, "application/json", bodyBuf)
+			if err != nil {
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error registering pause token," +
+					" err[%v] addr[%v]", err, addr+url)
+				return err
+			}
+
+			ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+
+		} else {
+			logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to Fetch Service Address:" +
+				" [%v]", err)
+			return err
+		}
+
+		logging.Infof("PauseServiceManager::registerGlobalPauseToken: Successfully registered pause token on" +
+			" [%v]", addr+url)
+	}
+
+	return nil
 }

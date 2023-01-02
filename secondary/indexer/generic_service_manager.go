@@ -87,7 +87,7 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 	m.cinfo.SetUserAgent(_class)
 
 	// Create PauseServiceManager singleton
-	pauseMgr := NewPauseServiceManager(m, mux, supvMsgch, httpAddr)
+	pauseMgr := NewPauseServiceManager(m, mux, supvMsgch, httpAddr, config, nodeInfo)
 	m.pauseMgr = pauseMgr
 
 	// Create RebalanceServiceManager singleton
@@ -161,7 +161,7 @@ func (m *GenericServiceManager) GetTaskList(rev service.Revision,
 
 	// Assemble the full task list from the child delegates
 	taskList := m.rebalMgr.RebalGetTaskList()
-	taskList.Tasks = append(taskList.Tasks, m.pauseMgr.PauseGetTaskList()...)
+	taskList.Tasks = append(taskList.Tasks, m.pauseMgr.PauseResumeGetTaskList()...)
 	taskList.Rev = EncodeRev(m.getRev()) // overwrite the rev from RebalGetTaskList
 
 	logging.Infof("%v return from rev %v call. taskList: %+v", _GetTaskList, rev, taskList)
@@ -184,9 +184,9 @@ func (m *GenericServiceManager) CancelTask(id string, rev service.Revision) erro
 
 	// Task not found in Rebalance so delegate to Pause-Resume
 	if err == service.ErrNotFound {
-		err = m.pauseMgr.PauseCancelTask(id)
+		err = m.pauseMgr.PauseResumeCancelTask(id)
 		if err != nil && err != service.ErrNotFound { // task was found but cancel failed
-			logging.Infof("%v return from rev %v call. PauseCancelTask err: %v", _CancelTask,
+			logging.Infof("%v return from rev %v call. PauseResumeCancelTask err: %v", _CancelTask,
 				rev, err)
 			return err
 		}
