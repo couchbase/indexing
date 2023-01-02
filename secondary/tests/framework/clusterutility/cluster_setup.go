@@ -148,6 +148,13 @@ func rebalanceFromRest(serverAddr, username, password string, nodesToRemove []st
 	return makeRequest(username, password, "POST", payload, getRebalanceUrl(serverAddr))
 }
 
+func getServerGroup(serverAddr, username, password, serverGroup string) ([]byte, error) {
+	log.Printf("getting server groups: %v via server %v\n",serverGroup, serverAddr)
+	payload := strings.NewReader(fmt.Sprintf("name=%s",serverGroup))
+
+	return makeRequest(username, password, "GET", payload, getServerGroupUrl(serverAddr))
+}
+
 func addServerGroup(serverAddr, username, password, serverGroup string) ([]byte, error) {
 
 	log.Printf("Adding serverGroup: %s via server: %v\n", serverGroup, serverAddr)
@@ -377,6 +384,34 @@ func AddNodeAndRebalance(serverAddr, username, password, hostname string, role s
 		return fmt.Errorf("AddNodeAndRebalance: Error during rebalance, err: %v", err)
 	}
 	return nil
+}
+
+func ServerGroupExists(serverAddr, username, password, serverGroup string) (exists bool, err error) {
+	method := "ServerGroupExists"
+	var res []byte
+	var response string        // string form of res
+	for retries := 0; ; retries++ {
+		res, err = getServerGroup(serverAddr, username, password, serverGroup)
+		if err == nil {
+			response = fmt.Sprintf("%s", res)
+			if len(response) != 0 {
+				exists = strings.Contains(response, serverGroup)
+				log.Printf("%v: server group exists %v, server: %v, response: %v",
+					method, serverAddr, serverGroup, exists)
+				return exists, nil
+			}
+		}
+		if retries >= 30 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		return false, fmt.Errorf("%v: Error while adding serverGroup: %v, err: %v",
+			method, serverGroup, err)
+	}
+	return false, fmt.Errorf("%v: Unexpected response body while adding serverGroup: %v, response: %v",
+		method, serverGroup, response)
 }
 
 func AddServerGroup(serverAddr, username, password, serverGroup string) (err error) {
