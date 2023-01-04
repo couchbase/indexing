@@ -530,7 +530,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 	go func() {
 		defer wg.Done()
 
-		tenant := fmt.Sprintf("%v_%v", slice.idxDefn.Bucket, slice.idxDefn.BucketUUID)
+		tenant := slice.GetTenantName()
 		slice.mainstore, mErr = plasma.New4(tenant, *mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX, isInitialBuild)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
@@ -544,7 +544,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		go func() {
 			defer wg.Done()
 
-			tenant := fmt.Sprintf("%v_%v", slice.idxDefn.Bucket, slice.idxDefn.BucketUUID)
+			tenant := slice.GetTenantName()
 			slice.backstore, bErr = plasma.New4(tenant, *bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX, isInitialBuild)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
@@ -2890,8 +2890,12 @@ func (mdb *plasmaSlice) String() string {
 
 }
 
+func (mdb *plasmaSlice) GetTenantName() string {
+	return fmt.Sprintf("%v_%v", mdb.idxDefn.Bucket, mdb.idxDefn.BucketUUID)
+}
+
 func (mdb *plasmaSlice) GetTenantDiskSize() (int64, error) {
-	return plasma.GetTenantDiskSize(mdb.idxDefn.Bucket)
+	return plasma.GetTenantDiskSize(mdb.GetTenantName())
 }
 
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
