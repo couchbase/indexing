@@ -5,6 +5,7 @@ type TestActionTag int
 const (
 	MASTER_SHARDTOKEN_SCHEDULEACK TestActionTag = iota + 1
 	SOURCE_SHARDTOKEN_AFTER_TRANSFER
+	DEST_SHARDTOKEN_AFTER_RESTORE
 )
 
 type TestAction int

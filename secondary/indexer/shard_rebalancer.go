@@ -963,6 +963,10 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 				}
 			}
 
+			////////////// Testing code - Not used in production //////////////
+			testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_AFTER_RESTORE)
+			///////////////////////////////////////////////////////////////////
+
 			// No errors are observed during shard transfer. Change the state of
 			// the transfer token and update metaKV
 			sr.mu.Lock()
