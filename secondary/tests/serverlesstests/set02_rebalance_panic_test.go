@@ -238,3 +238,31 @@ func TestRebalancePanicDuringDeferredIndexRecovery(t *testing.T) {
 	// the cluster. Hence populate "areInNodesFinal" to false
 	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
 }
+
+// This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
+// The Nodes[3] and Nodes[4] are added in earlier test - So, this test
+// skips adding the nodes again.
+// During restore, indexer on Nodes[3] will crash during non-deferred index
+// recovery. This will lead to rebalance failure. After rebalance, all indexes
+// should exist only on Nodes[1] and Nodes[2]
+func TestRebalancePanicDuringNonDeferredIndexRecovery(t *testing.T) {
+	log.Printf("In TestRebalancePanicDuringNonDeferredIndexRecovery")
+
+	// Crash indexer on Nodes[3] after transfer is complete
+	tag := testcode.DEST_SHARDTOKEN_DURING_NON_DEFERRED_INDEX_RECOVERY
+	err := testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[3], clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.INDEXER_PANIC, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	inNodes := []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+	outNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}
+
+	// Since rebalance is expected to fail, outNodes will be the final nodes in
+	// the cluster. Hence populate "areInNodesFinal" to false
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+}

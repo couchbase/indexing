@@ -1128,6 +1128,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				var currIndex int
 				nonDeferredInsts, buildDefnIdList, currIndex = populateInstsAndDefnIds(nonDeferredInsts, buildDefnIdList, defn, defnIdToInstIdMap)
 
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_NON_DEFERRED_INDEX_RECOVERY)
+				///////////////////////////////////////////////////////////////////
+
 				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts[currIndex], ttid, tt); err != nil {
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
