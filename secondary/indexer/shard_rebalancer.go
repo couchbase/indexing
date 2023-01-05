@@ -425,6 +425,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 	case c.ShardTokenReady:
 		sr.updateInMemToken(ttid, tt, "master")
 
+		////////////// Testing code - Not used in production //////////////
+		testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_BEFORE_DROP_ON_SOURCE)
+		///////////////////////////////////////////////////////////////////
+
 		if tt.SiblingExists() {
 			if sr.getSiblingState(tt) == c.ShardTokenReady {
 				dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
