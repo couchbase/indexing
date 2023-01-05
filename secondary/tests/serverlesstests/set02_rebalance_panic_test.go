@@ -322,3 +322,117 @@ func TestRebalancePanicBeforeDropOnSource(t *testing.T) {
 	// the cluster. Hence populate "areInNodesFinal" to false
 	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
 }
+
+// This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
+// The Nodes[3] and Nodes[4] are added in earlier test - So, this test
+// skips adding the nodes again.
+// During restore, indexer on Nodes[3] will crash after ShardTokenDropOnSource
+// is posted. This will lead to rebalance failure. After rebalance, indexes
+// should exist on both Nodes[1], Nodes[2] & Nodes[3], Nodes[4] - Since the
+// tranfserBatchSize is 2 for the tests, after first bucket movement, rebalance
+// finishes due to crash - Therefore, the indexes on second bucket should
+// remain on source nodes and indexes on first bucket should exist on dest. nodes
+func TestRebalancePanicAfterDropOnSource(t *testing.T) {
+	log.Printf("In TestRebalancePanicAfterDropOnSource")
+
+	tag := testcode.MASTER_SHARDTOKEN_AFTER_DROP_ON_SOURCE
+	err := testcode.PostOptionsRequestToMetaKV("", clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.INDEXER_PANIC, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	inNodes := []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+	outNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}
+
+	var allIndexNodes []string
+	allIndexNodes = append(allIndexNodes, inNodes...)
+	allIndexNodes = append(allIndexNodes, outNodes...)
+
+	performSwapRebalance(inNodes, outNodes, true, true, t)
+	for _, node := range allIndexNodes {
+		waitForRebalanceCleanup(node, t)
+		waitForTokenCleanup(node, t)
+	}
+
+	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	waitForStatsUpdate()
+
+	finalPlacement, err := getIndexPlacement()
+	if err != nil {
+		t.Fatalf("Error while querying getIndexStatus endpoint, err: %v", err)
+	}
+
+	if len(finalPlacement) != 4 {
+		t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+			allIndexNodes, finalPlacement)
+	}
+	for _, node := range allIndexNodes {
+		if _, ok := finalPlacement[node]; !ok {
+			t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+				allIndexNodes, finalPlacement)
+		}
+	}
+
+	for _, node := range allIndexNodes {
+		validateShardIdMapping(node, t)
+	}
+
+	collection := "c1"
+	// Scan indexes
+	for _, bucket := range buckets {
+		scanIndexReplicas(indexes[0], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[0]), t)
+		scanIndexReplicas(indexes[4], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[4]), t)
+	}
+
+	// DDL after rebalance. As one bucket would have been moved to inNodes
+	// and other bucket is on outNodes, find the nodes on which the bucket
+	// exists for validation
+	index := indexes[0]
+	for _, bucket := range buckets {
+		hosts := getHostsForBucket(bucket)
+
+		err := secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
+		FailTestIfError(err, "Error while dropping index", t)
+
+		waitForReplicaDrop(index, bucket, scope, collection, 0, t) // wait for replica drop-0
+		waitForReplicaDrop(index, bucket, scope, collection, 1, t) // wait for replica drop-1
+
+		// Recreate the index again
+
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", index, bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, "Ready", t)
+
+		// Reset all indexer stats
+		secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+		waitForStatsUpdate()
+
+		partns := indexPartnIds[0]
+
+		// Scan only the newly created index
+		scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+
+		newHosts := getHostsForBucket(bucket)
+		if len(newHosts) != len(hosts) {
+			t.Fatalf("Bucket: %v is expected to be placed on hosts: %v, bucket it exists on hosts: %v", bucket, hosts, newHosts)
+		}
+		for _, newHost := range newHosts {
+			found := false
+			for _, oldHost := range hosts {
+				if newHost == oldHost {
+					found = true
+				}
+			}
+
+			if !found {
+				t.Fatalf("Mismatch in hosts. Bucket: %v is expected to be placed on hosts: %v, bucket it exists on hosts: %v", bucket, hosts, newHosts)
+			}
+		}
+		for _, indexNode := range hosts {
+			validateShardIdMapping(indexNode, t)
+		}
+	}
+}

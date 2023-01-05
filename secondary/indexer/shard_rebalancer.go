@@ -433,6 +433,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			if sr.getSiblingState(tt) == c.ShardTokenReady {
 				dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
 				setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_AFTER_DROP_ON_SOURCE)
+				///////////////////////////////////////////////////////////////////
 			}
 		} else {
 			// If sibling does not exist, this could be replica repair or single node

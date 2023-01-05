@@ -1204,3 +1204,29 @@ func testDDLAfterRebalance(indexNodes []string, t *testing.T) {
 		validateShardIdMapping(indexNode, t)
 	}
 }
+
+func getHostsForBucket(bucket string) []string {
+	hosts := make(map[string]bool)
+
+	status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	if status != nil && err == nil {
+		indexes := status["indexes"].([]interface{})
+		for _, indexEntry := range indexes {
+			entry := indexEntry.(map[string]interface{})
+
+			if bucket != entry["bucket"].(string) {
+				continue
+			}
+
+			allHosts := entry["hosts"].([]interface{})
+			for _, host := range allHosts {
+				hosts[host.(string)] = true
+			}
+		}
+	}
+	var hostSlice []string
+	for host, _ := range hosts {
+		hostSlice = append(hostSlice, host)
+	}
+	return hostSlice
+}
