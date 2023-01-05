@@ -2292,11 +2292,15 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r *http.Request) {
 	const method string = "RequestHandler::handleIndexPlanRequest" // for logging
 
-	_, ok := doAuth(r, w, method)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
 		return
 	}
 
+	permission := fmt.Sprintf("cluster.admin.internal.index!write")
+	if !isAllowed(creds, []string{permission}, r, w, method) {
+		return
+	}
 	stmts, err := m.getIndexPlan(r)
 	if err == nil {
 		rhSend(http.StatusOK, w, stmts)
