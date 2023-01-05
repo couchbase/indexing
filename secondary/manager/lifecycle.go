@@ -4501,13 +4501,13 @@ func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
 	if common.IsServerlessDeployment() {
 		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			logging.Verbosef("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
 			return false
 		}
 	} else {
 		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			logging.Verbosef("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
 			return false
 		}
 	}
