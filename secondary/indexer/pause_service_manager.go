@@ -299,6 +299,9 @@ type taskObj struct {
 
 	// ctx holds the context object that can be used for task context
 	ctx        context.Context
+	// other packages are not supposed to call this. use Cancel/cancelNoLock
+	// cancelFunc should be called only to cancel any ongoing observers and uploads
+	// it is does not modify the task status or any other task related operations
 	cancelFunc context.CancelFunc
 
 	// PauseMetadata stores the metadata about the pause
@@ -331,12 +334,19 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, remotePath string, is
 	}, nil
 }
 
-// TaskObjSetFailed sets task.status to status_FAILED and task.errMessage to errMsg.
+// TaskObjSetFailed sets task.status to service.TaskStatusFailed and task.errMessage to errMsg.
+// this applies lock and internally calls TaskObjSetFailedNoLock
 func (this *taskObj) TaskObjSetFailed(errMsg string) {
 	this.taskMu.Lock()
-	this.errorMessage = errMsg
-	this.taskStatus = service.TaskStatusFailed
+	this.TaskObjSetFailedNoLock(errMsg)
 	this.taskMu.Unlock()
+}
+
+// TaskObjSetFailedNoLock sets the status to service.TaskStatusFailed and errorMessage to errMsg
+// callers should hold the lock
+func (t *taskObj) TaskObjSetFailedNoLock(errMsg string) {
+	t.errorMessage = errMsg
+	t.taskStatus = service.TaskStatusFailed
 }
 
 func (this *taskObj) setMasterNoLock() {
@@ -377,6 +387,8 @@ func (this *taskObj) taskObjToServiceTask() *service.Task {
 	return &nsTask
 }
 
+// cancelNoLock stops any ongoing work by the task
+// caller should hold lock. `Cancel` calls this function internally
 func (this *taskObj) cancelNoLock() {
 	if this.ctx == nil || this.cancelFunc == nil {
 		logging.Warnf("taskObj::cancelNoLock: cancel called on already cancelled task %v", this.taskId)
@@ -387,6 +399,7 @@ func (this *taskObj) cancelNoLock() {
 	this.cancelFunc = nil
 }
 
+// Cancel stops any ongoing work by the task
 func (this *taskObj) Cancel() {
 	this.taskMu.Lock()
 	defer this.taskMu.Unlock()
@@ -641,6 +654,36 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 	return nil
 }
 
+// endTask is the endpoint of pause resume
+func (m *PauseServiceManager) endTask(opErr error,taskId string) *taskObj {
+	var task *taskObj
+
+	logging.Infof("PauseServiceManager::endTask: called with err %v for taskId %v",opErr,taskId)
+	if opErr != nil {
+		// if caller has passed an error, we don't want to delete the task from task list
+		// but the task could be nil
+		task = m.taskFind(taskId)
+	} else {
+		task = m.taskDelete(taskId)
+	}
+	if task == nil {
+		logging.Infof("PauseServiceManager::endTask task with ID %v already cleaned up",taskId)
+		return nil
+	}
+
+	if opErr != nil {
+		task.errorMessage = opErr.Error()
+		logging.Infof("PauseServiceManager::endTask: skipping task cleanup now for task ID: %v",taskId)
+	}
+
+	task.Cancel()
+	m.bucketStateDelete(task.bucket)
+
+	logging.Infof("PauseServiceManager::endTask stopped task %v",task)
+
+	return task
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Delegates for GenericServiceManager RPC APIs
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -660,16 +703,12 @@ func (m *PauseServiceManager) PauseResumeGetTaskList() (tasks []service.Task) {
 // PauseResumeCancelTask is a delegate of GenericServiceManager.PauseResumeCancelTask which is an
 // external API called by ns_server (via cbauth). It cancels a Pause-Resume task on the current node
 func (m *PauseServiceManager) PauseResumeCancelTask(id string) error {
-	task := m.taskDelete(id)
-	if task == nil || (task.taskType != service.TaskTypePrepared && task.taskType != service.TaskTypeBucketPause && task.taskType != service.TaskTypeBucketResume) {
-		logging.Errorf("PauseServiceManager::CancelTask: couldn't find task with id %v", id)
+	task := m.endTask(nil,id)
+	if task != nil {
+		logging.Errorf("PauseServiceManager::PauseResumeCancelTask: couldn't find a task with ID %v", id)
 		return service.ErrNotFound
 	}
-	task.Cancel()
-	logging.Infof("PauseServiceManager::CancelTask: deleted and cancelled task %v", id)
-
-	// clear bucket state from service manager
-	m.bucketStateDelete(task.bucket)
+	logging.Infof("PauseServiceManager::PauseResumeCancelTask: removed all tasks with ID %v", id)
 	return nil
 }
 
@@ -1157,7 +1196,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	if err != nil {
 		err = fmt.Errorf("%v postWithAuth to url: %v returned error: %v", logPrefix, url, err)
 		logging.Errorf(err.Error())
-		task.pauser.failPause(logPrefix, "postWithAuth", err)
+		task.TaskObjSetFailed(err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -1167,7 +1206,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		err = fmt.Errorf("%v ReadAll(resp.Body) from url: %v returned error: %v", logPrefix,
 			url, err)
 		logging.Errorf(err.Error())
-		task.pauser.failPause(logPrefix, "ReadAll(resp.Body)", err)
+		task.TaskObjSetFailed(err.Error())
 		return
 	}
 
@@ -1176,7 +1215,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	if err != nil {
 		err = fmt.Errorf("%v Unmarshal from url: %v returned error: %v", logPrefix, url, err)
 		logging.Errorf(err.Error())
-		task.pauser.failPause(logPrefix, "Unmarshal", err)
+		task.TaskObjSetFailed(err.Error())
 		return
 	}
 
@@ -1185,7 +1224,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		err = fmt.Errorf("%v TaskResponse from url: %v reports error: %v", logPrefix,
 			url, taskResponse.Error)
 		logging.Errorf(err.Error())
-		task.pauser.failPause(logPrefix, "TaskResponse", err)
+		task.TaskObjSetFailed(err.Error())
 		return
 	}
 }
@@ -1367,4 +1406,11 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 	}
 
 	return nil
+}
+
+// monitorBucketForPauseResume - starts monitoring bucket endpoints for state changes to the bucket
+//
+// not a part of Pauser/Resumer object as it can be garbage collected while this is running
+func monitorBucketForPauseResume(bucket string, isPause bool) {
+	logging.Infof("Pauser::startWathcer: TODO: monitor bucket monitoring enpoint for bucket %v, under pause? %v", bucket, isPause)
 }
