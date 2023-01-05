@@ -10,7 +10,6 @@ package indexer
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -868,47 +867,12 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// TODO: add contextWithCancel to task and reuse it here
-	ctx := context.Background()
-	closeCh := ctx.Done()
-	respCh := make(chan Message)
-	// progressCh := make(chan *ShardTransferStatistics, 1000) TODO: progress reporting
-
-	msg := &MsgStartShardTransfer{
-		shardIds:    getShardIds(),
-		taskId:      p.task.taskId,
-		transferId:  p.task.bucket,
-		taskType:    common.PauseResumeTask,
-		destination: nodePath,
-
-		cancelCh:   closeCh,
-		doneCh:     closeCh,
-		respCh:     respCh,
-		progressCh: nil,
-	}
-
-	p.pauseMgr.supvMsgch <- msg
-
-	resp, ok := (<-respCh).(*MsgShardTransferResp)
-	if !ok || resp == nil {
-		err := fmt.Errorf("couldn't get a valid response from ShardTransferManager")
-		logging.Errorf("Pauser::followerUploadBucketData: shard upload gave invalid response err: %v for task ID: %v", err, p.task.taskId)
+	closeCh := p.task.ctx.Done()
+	shardPaths, err := p.pauseMgr.copyShardsWithLock(getShardIds(), p.task.taskId, p.task.bucket, nodePath, closeCh)
+	if err != nil {
 		return nil, err
 	}
-	errMap := resp.GetErrorMap()
-	var errMsg strings.Builder
-	for shard, err := range errMap {
-		if err != nil {
-			fmt.Fprintf(&errMsg, "Error in shardId %v upload: %v\n", shard, err)
-		}
-	}
-	if errMsg.Len() != 0 {
-		err = errors.New(errMsg.String())
-		logging.Errorf("Pauser::followerUploadBucketData: shard uploads failed err: %v\n for task ID: $v", err, p.task.taskId)
-		return nil, err
-	}
-
-	logging.Infof("Pauser::followerUploadBucketData: Shards saved at: %v for bucket %v", resp.GetShardPaths(), p.task.bucket)
-	return resp.GetShardPaths(), nil
+	return shardPaths, nil
 }
 
 // cleanupNoLocks stops any ongoing operation and starts bucket endpoint watchers

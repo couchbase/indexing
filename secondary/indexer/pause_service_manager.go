@@ -12,10 +12,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -114,6 +116,110 @@ func GetPauseMgr() *PauseServiceManager {
 // PauseServiceManager singleton is constructed.
 func SetPauseMgr(pauseMgr *PauseServiceManager) {
 	atomic.StorePointer(&PauseMgr, unsafe.Pointer(pauseMgr))
+}
+
+func (psm *PauseServiceManager) lockShards(shardIds []common.ShardId) error {
+	respCh := make(chan map[common.ShardId]error)
+
+	msg := &MsgLockUnlockShards{
+		mType: LOCK_SHARDS,
+		shardIds: shardIds,
+		respCh: respCh,
+	}
+
+	psm.supvMsgch <- msg
+
+	errMap := <- respCh
+	errBuilder := new(strings.Builder)
+	for shardId, err := range errMap {
+		if err != nil {
+			errBuilder.WriteString(fmt.Sprintf("Failed to lock shard %v err: %v",shardId,err))
+		}
+	}
+	if errBuilder.Len() == 0 {
+		return nil
+	}
+
+	return errors.New(errBuilder.String())
+}
+
+func (psm *PauseServiceManager) unlockShards(shardIds []common.ShardId) error {
+	respCh := make(chan map[common.ShardId]error)
+
+	msg := &MsgLockUnlockShards{
+		mType: UNLOCK_SHARDS,
+		shardIds: shardIds,
+		respCh: respCh,
+	}
+
+	psm.supvMsgch <- msg
+
+	errMap := <- respCh
+	errBuilder := new(strings.Builder)
+	for shardId, err := range errMap {
+		if err != nil {
+			errBuilder.WriteString(fmt.Sprintf("Failed to unlock shard %v err: %v",shardId,err))
+		}
+	}
+	if errBuilder.Len() == 0 {
+		return nil
+	}
+
+	return errors.New(errBuilder.String())
+}
+
+func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, taskId, bucket, destination string, cancelCh <-chan struct{}) (map[common.ShardId]string,error) {
+	err := psm.lockShards(shardIds)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::copyShardsWithLock: locking shards failed. err -> %v for taskId %v", err, taskId)
+		return nil, err
+	}
+	defer func(){
+		err := psm.unlockShards(shardIds)
+		if err != nil {
+			logging.Errorf("PauseServiceManager::copyShardsWithLock: unlocking shards failed. err -> %v for taskId %v", err, taskId)
+		}
+	}()
+	logging.Infof("PauseServiceManager::copyShardsWithLock: locked shards with id %v for taskId: %v", shardIds, taskId)
+
+	respCh := make(chan Message)
+
+	msg := &MsgStartShardTransfer{
+		shardIds: shardIds,
+		transferId: bucket,
+		destination: destination,
+		taskType: common.PauseResumeTask,
+		taskId: taskId,
+		respCh: respCh,
+		doneCh: cancelCh, // abort transfer if msg received on done
+		cancelCh: cancelCh,
+		progressCh: nil, // TODO: handle progress reporting
+	}
+
+	psm.supvMsgch <- msg
+
+	resp, ok := (<-respCh).(*MsgShardTransferResp)
+
+	if !ok || resp == nil {
+		// We skip unlocking of shards here. it should get called when pause gets rolled back
+		err = fmt.Errorf("either response channel got closed or sent an invalid response")
+		logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId %v", err, taskId)
+		return nil, err
+	}
+	errMap := resp.GetErrorMap()
+	errBuilder := new(strings.Builder)
+	for shardId, errInCopy := range errMap {
+		if errInCopy != nil {
+			errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v", shardId, err))
+		}
+	}
+	if errBuilder.Len() != 0 {
+		err = errors.New(errBuilder.String())
+		logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId: %v", err, taskId)
+		return nil, err
+	}
+
+	return resp.GetShardPaths(), nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
