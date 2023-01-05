@@ -335,12 +335,12 @@ func TestPauseResume(rootT *testing.T) {
 		if taskList == nil {
 			t.Fatalf("%v After Pause expected master's TaskList, got nil", _TestPause)
 		}
-		numNodeTasks = 1 // number of tasks expected in each node's task list
+		numNodeTasks = 2 // number of tasks expected in master node's task list
 		if len(taskList.Tasks) != numNodeTasks {
 			t.Fatalf("%v Pause expected len(taskList.Tasks) = %v, got %v", _TestPause,
 				numNodeTasks, len(taskList.Tasks))
 		}
-		task := taskList.Tasks[0]
+		task := taskList.Tasks[numNodeTasks-1]
 		if task.ID != pauseTaskId {
 			t.Fatalf("%v Pause expected task.ID '%v', got '%v'", _TestPause, pauseTaskId, task.ID)
 		}

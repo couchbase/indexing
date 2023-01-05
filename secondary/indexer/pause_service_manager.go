@@ -466,9 +466,11 @@ func (this *taskObj) updateTaskTypeNoLock(newTaskType service.TaskType) {
 
 // taskObjToServiceTask creates the ns_server service.Task (cbauth/service/interface.go)
 // representation of a taskObj.
-func (this *taskObj) taskObjToServiceTask() *service.Task {
+func (this *taskObj) taskObjToServiceTask() []service.Task {
 	this.taskMu.RLock()
 	defer this.taskMu.RUnlock()
+
+	tasks := make([]service.Task,0,2)
 
 	nsTask := service.Task{
 		Rev:          EncodeRev(0),
@@ -490,7 +492,25 @@ func (this *taskObj) taskObjToServiceTask() *service.Task {
 	nsTask.Extra["archiveType"] = this.archiveType.String()
 	nsTask.Extra["master"] = this.master
 
-	return &nsTask
+	if this.master {
+		prepTask := service.Task{
+			Rev: EncodeRev(0),
+			ID: nsTask.ID,
+			Type: service.TaskTypePrepared,
+			Status: nsTask.Status,
+			IsCancelable: true,
+			Progress: 100,
+			ErrorMessage: nsTask.ErrorMessage,
+			Extra: make(map[string]interface{},len(nsTask.Extra)),
+		}
+		for key, value := range nsTask.Extra {
+			prepTask.Extra[key] = value
+		}
+		tasks = append(tasks, prepTask)
+	}
+	tasks = append(tasks, nsTask)
+
+	return tasks
 }
 
 // cancelNoLock stops any ongoing work by the task
@@ -801,7 +821,7 @@ func (m *PauseServiceManager) PauseResumeGetTaskList() (tasks []service.Task) {
 	m.tasksMu.RLock()
 	defer m.tasksMu.RUnlock()
 	for _, taskObj := range m.tasks {
-		tasks = append(tasks, *taskObj.taskObjToServiceTask())
+		tasks = append(tasks, taskObj.taskObjToServiceTask()...)
 	}
 	return tasks
 }
