@@ -436,3 +436,31 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 		}
 	}
 }
+
+// This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
+// The Nodes[3] and Nodes[4] are added in earlier test - So, this test
+// skips adding the nodes again.
+// During restore, indexer on master will crash after all transfer tokens
+// are processed. This will lead to rebalance failure. However, since all
+// index movements are completed, indexes should exist only on Nodes[3] &
+// Nodes[4]
+func TestRebalancePanicAfterAllTokensAreProcessed(t *testing.T) {
+	log.Printf("In TestRebalancePanicAfterAllTokensAreProcessed")
+
+	tag := testcode.MASTER_SHARDTOKEN_ALL_TOKENS_PROCESSED
+	err := testcode.PostOptionsRequestToMetaKV("", clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.INDEXER_PANIC, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	inNodes := []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+	outNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}
+
+	// Since rebalance is expected to fail, outNodes will be the final nodes in
+	// the cluster. Hence populate "areInNodesFinal" to true
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, true, true, t)
+}

@@ -495,6 +495,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.updateInMemToken(ttid, tt, "master")
 
 		if sr.checkAllTokensDone() { // rebalance completed
+
+			////////////// Testing code - Not used in production //////////////
+			testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_ALL_TOKENS_PROCESSED)
+			///////////////////////////////////////////////////////////////////
+
 			if sr.cb.progress != nil {
 				sr.cb.progress(1.0, sr.cancel)
 			}
