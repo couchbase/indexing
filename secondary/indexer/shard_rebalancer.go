@@ -1433,6 +1433,10 @@ loop:
 
 			case common.INDEX_STATE_ACTIVE:
 
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_INDEX_BUILD)
+				///////////////////////////////////////////////////////////////////
+
 				for i, inst := range tt.IndexInsts {
 
 					defn := inst.Defn
