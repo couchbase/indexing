@@ -2176,22 +2176,27 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 	var result SubCluster
 	var errStr string
 	if len(tenantSubCluster) == 0 {
-		//No subCluster found with matching tenant. Choose any subCluster
-		//below LWM.
-		subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
-		if err != nil {
-			return nil, err
-		}
 
 		//exclude partial subclusters except if there is only 1 node left in the cluster(MB-54706)
 		if len(subClusters) != 1 {
-			subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
+			subClusters = filterPartialSubClusters(subClusters)
 		}
 
-		if len(subClustersBelowLWM) != 0 {
-			result = findLeastLoadedSubCluster(subClustersBelowLWM)
+		if len(subClusters) == 0 {
+			errStr = "Unable to find any valid SubCluster"
 		} else {
-			errStr = "No SubCluster Below Low Usage Threshold"
+			//No subCluster found with matching tenant. Choose any subCluster
+			//below LWM.
+			subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(subClustersBelowLWM) != 0 {
+				result = findLeastLoadedSubCluster(subClustersBelowLWM)
+			} else {
+				errStr = "No SubCluster Below Low Usage Threshold"
+			}
 		}
 	} else {
 		//Found subCluster with matching tenant. Choose this subCluster
@@ -2417,17 +2422,17 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 		//number of replicas. It can be less than number of replicas in
 		//case of a failed over node.
 		if len(subCluster) > int(indexSpec.Replica) {
-			logging.Errorf("%v SubCluster %v has more nodes than number of replicas %v.", _validateSubClusterGrouping,
-				subCluster, indexSpec.Replica)
-			return common.ErrPlannerConstraintViolation
+			errStr := fmt.Sprintf(" SubCluster %v has more nodes than number of replicas %v.", subCluster, indexSpec.Replica)
+			logging.Errorf("%v %v", _validateSubClusterGrouping, errStr)
+			return errors.New(common.ErrPlannerConstraintViolation.Error() + errStr)
 		}
 		sgMap := make(map[string]bool)
 		for _, indexer := range subCluster {
 			//All nodes in a sub-cluster must belong to a different server group
 			if _, ok := sgMap[indexer.ServerGroup]; ok {
-				logging.Errorf("%v SubCluster %v has multiple nodes in a server group.", _validateSubClusterGrouping,
-					subCluster)
-				return common.ErrPlannerConstraintViolation
+				errStr := fmt.Sprintf(" SubCluster %v has multiple nodes in the same server group.", subCluster)
+				logging.Errorf("%v %v", _validateSubClusterGrouping, errStr)
+				return errors.New(common.ErrPlannerConstraintViolation.Error() + errStr)
 			} else {
 				sgMap[indexer.ServerGroup] = true
 			}
