@@ -203,6 +203,9 @@ const (
 	DESTROY_LOCAL_SHARD
 	MONITOR_SLICE_STATUS
 	UPDATE_REBALANCE_PHASE
+	LOCK_SHARDS
+	UNLOCK_SHARDS
+	RESTORE_SHARD_DONE
 )
 
 type Message interface {
@@ -2740,6 +2743,41 @@ func (m *MsgUpdateRebalancePhase) GetBucketTransferPhase() map[string]common.Reb
 	return m.BucketTransferPhase
 }
 
+type MsgLockUnlockShards struct {
+	mType    MsgType
+	shardIds []common.ShardId
+	respCh   chan map[common.ShardId]error
+}
+
+func (m *MsgLockUnlockShards) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgLockUnlockShards) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgLockUnlockShards) GetRespCh() chan map[common.ShardId]error {
+	return m.respCh
+}
+
+type MsgRestoreShardDone struct {
+	shardIds []common.ShardId
+	respCh   chan bool
+}
+
+func (m *MsgRestoreShardDone) GetMsgType() MsgType {
+	return RESTORE_SHARD_DONE
+}
+
+func (m *MsgRestoreShardDone) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgRestoreShardDone) GetRespCh() chan bool {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3052,6 +3090,12 @@ func (m MsgType) String() string {
 		return "DESTROY_LOCAL_SHARD"
 	case MONITOR_SLICE_STATUS:
 		return "MONITOR_SLICE_STATUS"
+	case LOCK_SHARDS:
+		return "LOCK_SHARDS"
+	case UNLOCK_SHARDS:
+		return "UNLOCK_SHARDS"
+	case RESTORE_SHARD_DONE:
+		return "RESTORE_SHARD_DONE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

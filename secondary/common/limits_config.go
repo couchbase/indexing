@@ -8,8 +8,11 @@
 
 package common
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/logging"
+import (
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+)
 
 type LimitsCache struct{}
 
@@ -33,6 +36,9 @@ func NewLimitsCache() (*LimitsCache, error) {
 // and cluster version >= 7.1
 //
 func (lcCache *LimitsCache) EnforceLimits() (bool, error) {
+	if security.IsToolsConfigUsed() {
+		return false, nil
+	}
 	lc, err := cbauth.GetLimitsConfig()
 
 	if err != nil {

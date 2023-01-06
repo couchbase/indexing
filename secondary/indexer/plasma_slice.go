@@ -192,8 +192,9 @@ type plasmaSlice struct {
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int, replicaId int) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats,
+	isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
+	numVBuckets int, replicaId int, shardIds []common.ShardId) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -252,6 +253,15 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.mutationRate = common.NewSample(int(slice.samplingWindow / slice.samplingInterval))
 	slice.samplerStopCh = make(chan bool)
 	slice.snapInterval = sysconf["settings.inmemory_snapshot.moi.interval"].Uint64() * uint64(time.Millisecond)
+	if len(shardIds) > 0 {
+		logging.Infof("plasmaSlice::NewPlasmaSlice Id: %v IndexInstId: %v PartitionId: %v "+
+			"using shardIds: %v", sliceId, idxInstId, partitionId, shardIds)
+
+		slice.shardIds = append(slice.shardIds, shardIds[0]) // "0" is always main index shardId
+		if !isPrimary {
+			slice.shardIds = append(slice.shardIds, shardIds[1]) // "1" is always back index shardId
+		}
+	}
 
 	if err := slice.initStores(isInitialBuild); err != nil {
 		// Index is unusable. Remove the data files and reinit
@@ -265,6 +275,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		return nil, err
 	}
 
+	slice.shardIds = nil // Reset the slice and read the actuals from the store
 	slice.shardIds = append(slice.shardIds, common.ShardId(slice.mainstore.GetShardId()))
 	if !slice.isPrimary {
 		slice.shardIds = append(slice.shardIds, common.ShardId(slice.backstore.GetShardId()))
@@ -511,6 +522,13 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		if common.IsServerlessDeployment() {
 			bCfg.MaxPageItems = slice.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
 			bCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
+		}
+
+		if common.IsServerlessDeployment() && len(slice.shardIds) > 0 {
+			mCfg.UseShardId = plasma.ShardId(slice.shardIds[0])
+			if !slice.isPrimary {
+				bCfg.UseShardId = plasma.ShardId(slice.shardIds[1])
+			}
 		}
 
 		return mCfg, bCfg

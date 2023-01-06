@@ -1559,7 +1559,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case START_SHARD_TRANSFER,
 		SHARD_TRANSFER_CLEANUP,
 		START_SHARD_RESTORE,
-		DESTROY_LOCAL_SHARD:
+		DESTROY_LOCAL_SHARD,
+		LOCK_SHARDS,
+		UNLOCK_SHARDS,
+		RESTORE_SHARD_DONE:
 
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
@@ -3344,19 +3347,24 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
-		reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
-		if reqCtx.ReqSource == common.DDLRequestSourceUser {
-			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
-			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+		if idx.canAllowDDLDuringRebalance() {
+			logging.Infof("Indexer::handleBuildIndex Allowing DDL during rebalance for "+
+				"instIdList: %v", instIdList)
+		} else {
+			reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
+			if reqCtx.ReqSource == common.DDLRequestSourceUser {
+				errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
+				logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+				if clientCh != nil {
+					clientCh <- &MsgError{
+						err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+							severity: FATAL,
+							cause:    errors.New(errStr),
+							category: INDEXER}}
+				}
+				return
 			}
-			return
 		}
 	}
 
@@ -3573,19 +3581,6 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildRecoveredIndexes Build Already In"+
 				" Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
-			if idx.enableManager {
-				delete(keyspaceIdIndexList, keyspaceId)
-				continue
-			} else {
-				return
-			}
-		}
-
-		// Limit the number of concurrent build streams.
-		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-			maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
-			logging.Errorf("Indexer::handleBuildRecoveredIndexes Build is already in progress for %v collections."+
-				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, instIdList, keyspaceId)
 			if idx.enableManager {
 				delete(keyspaceIdIndexList, keyspaceId)
 				continue
@@ -5800,8 +5795,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			return nil, nil, nil, err1
 		}
 
+		var shardIds []common.ShardId
+		if shardRebalance {
+			shardIds = indexInst.Defn.ShardIdsForDest
+		}
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
-			idx.meteringMgr, numVBuckets)
+			idx.meteringMgr, numVBuckets, shardIds)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if (bootstrapPhase && err == errStorageCorrupted) && !shardRebalance {
@@ -9701,7 +9700,8 @@ func (idx *indexer) memoryUsedStorage() int64 {
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int) (slice Slice, err error) {
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int,
+	shardIds []common.ShardId) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -9731,7 +9731,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds)
 	}
 
 	return

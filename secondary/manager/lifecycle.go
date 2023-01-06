@@ -79,6 +79,8 @@ type LifecycleMgr struct {
 
 	instsInAsyncRecovery        map[common.IndexInstId]bool
 	droppedInstsInAsyncRecovery map[common.IndexInstId]bool
+
+	rebalMutex sync.RWMutex
 }
 
 type requestHolder struct {
@@ -155,6 +157,8 @@ type builder struct {
 
 	commandListener *mc.CommandListener
 	listenerDonech  chan bool
+
+	lastLogTime time.Time
 }
 
 type janitor struct {
@@ -967,6 +971,9 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 		logging.Infof("LifecycleMgr.handleRebalanceRunning() : releasing token %v", m.prepareLock.DefnId)
 	}
 
+	m.rebalMutex.Lock()
+	defer m.rebalMutex.Unlock()
+
 	m.rebalancePhase = common.RebalanceInitated
 	m.bucketTransferPhase = make(map[string]common.RebalancePhase)
 	m.prepareLock = nil
@@ -981,6 +988,9 @@ func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
 		return err
 	}
 
+	m.rebalMutex.Lock()
+	defer m.rebalMutex.Unlock()
+
 	m.rebalancePhase = req.GlobalRebalPhase
 	for bucket, bucketTransferPhase := range req.BucketTransferPhase {
 		m.bucketTransferPhase[bucket] = bucketTransferPhase
@@ -991,6 +1001,9 @@ func (m *LifecycleMgr) handleUpdateRebalancePhase(context []byte) error {
 
 func (m *LifecycleMgr) handleRebalanceDone(content []byte) error {
 	logging.Infof("LifecycleMgr::handleRebalanceDone Clearing rebalance phase")
+
+	m.rebalMutex.Lock()
+	defer m.rebalMutex.Unlock()
 
 	m.rebalancePhase = common.RebalanceNotRunning
 	m.bucketTransferPhase = nil
@@ -1065,7 +1078,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
-				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", retryList[0])
+				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Index build will be retried in background. Reason = %v", retryList[0])
 				return true, defn.BucketUUID, defn.ScopeId, defn.CollectionId, retryList[0]
 			}
 
@@ -2108,6 +2121,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	defnIdMap := make(map[common.IndexDefnId]bool)
 	buckets := []string(nil)
 	inst2DefnMap := make(map[common.IndexInstId]common.IndexDefnId)
+	isRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 	isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
 
 	addToBucketList := func(bucket string) {
@@ -2170,19 +2184,39 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			continue
 		}
 
+		// Always allow rebalance initiated builds. For user initiated
+		// builds, allow only if "canProcessDDL" returns true
+		canProcessBuild := isRebalanceBuild || isShardRebalanceBuild || m.canProcessDDL(defn.Bucket, false)
+
+		var buildErr error
 		for _, inst := range insts {
 
 			if !m.isValidInstStateForBuild(defn, inst, isShardRebalanceBuild) {
 				continue
 			}
 
-			m.setScheduleFlagAndUpdateErr(defn, inst, true, true, "")
+			if canProcessBuild { // Set schedule flag and update instIdList
+				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, "")
 
-			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
-			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
+				instIdList = append(instIdList, common.IndexInstId(inst.InstId))
+				inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
+			} else {
+				// DDL can not be processed. Set scheduled flag, update build error
+				// and continue. The defn will be added to retry list after all instances
+				// are updated with buildErr
+				buildErr = errors.New(fmt.Sprintf("Index %v will retry building in the background as rebalance is in progress for bucket: %v", defn.Name, defn.Bucket))
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: inst: %v build will be scheduled in the background as rebalance "+
+					"is in progress for bucket: %v", inst.InstId, defn.Bucket)
+				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, buildErr.Error())
+			}
 		}
 
-		addToBucketList(defn.Bucket)
+		if !canProcessBuild {
+			m.builder.notifych <- defn // Notify builder for retry
+			retryErrList = append(retryErrList, buildErr)
+		} else {
+			addToBucketList(defn.Bucket)
+		}
 	}
 
 	if m.notifier != nil && len(instIdList) != 0 {
@@ -4467,13 +4501,13 @@ func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
 	if common.IsServerlessDeployment() {
 		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			logging.Verbosef("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
 			return false
 		}
 	} else {
 		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			logging.Verbosef("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
 			return false
 		}
 	}
@@ -4482,6 +4516,8 @@ func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
 
 // Returns "true" if DDL can be processed. "false" otherwise
 func (m *LifecycleMgr) canProcessDDL(bucket string, isDropReq bool) bool {
+	m.rebalMutex.RLock()
+	defer m.rebalMutex.RUnlock()
 
 	if m.isRebalanceRunning() {
 
@@ -4927,6 +4963,10 @@ func (s *builder) run() {
 				}
 			}
 
+			if time.Since(s.lastLogTime) > time.Duration(30*time.Second) {
+				s.lastLogTime = time.Now()
+			}
+
 		case <-s.manager.killch:
 			s.commandListener.Close()
 			logging.Infof("builder: go-routine terminates.")
@@ -5109,7 +5149,9 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	if quota <= 0 { // unlimited quota (documented as batchSize of -1 in config.go)
 		quota = math.MaxInt32
 	}
-	skipList := make(map[string]bool) // keyspaces w/ index(es) now building; can't start new build on these till current one completes
+	skipList := make(map[string]bool)       // keyspaces w/ index(es) now building; can't start new build on these till current one completes
+	bucketsInRebal := make(map[string]bool) // Buckets which are undergoing rebalance
+	logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
 
 	metaIter, err := s.manager.repo.NewIterator()
 	if err != nil {
@@ -5119,6 +5161,19 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	defer metaIter.Close()
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
+
+		_, ok := bucketsInRebal[defn.Bucket]
+		if ok || !s.manager.canProcessDDL(defn.Bucket, false) {
+			// DDL can not be allowed on the bucket as the bucket is still in rebalance
+			bucketsInRebal[defn.Bucket] = true
+			key := getPendingKey(defn.Bucket, defn.Scope, defn.Collection)
+			skipList[key] = true
+			if logMsg {
+				logging.Warnf("builder: Queuing index (%v, %v, %v, %v) as bucket rebalance is in progress",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+			}
+			continue
+		}
 
 		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if len(insts) == 0 || err != nil {
@@ -5149,26 +5204,43 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 	entries := s.commandListener.GetNewBuildTokens()
 	retryList := make(map[string]*mc.BuildCommandToken)
 
+	canAllowDDLDuringRebalance := s.manager.canAllowDDLDuringRebalance() && s.manager.isRebalanceRunning()
+	logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
+
 	processed := false
 	for entry, command := range entries {
 
 		defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
 		if err != nil {
 			retryList[entry] = command
-			logging.Warnf("builder: Unable to read index definition.  Skp command %v.  Internal Error = %v.", entry, err)
+			logging.Warnf("builder: Unable to read index definition.  Skip command %v.  Internal Error = %v.", entry, err)
 			continue
 		}
 
 		// index may already be deleted or does not exist in this node
 		if defn == nil {
+			// The definition might not exist in repo due to rebalance being in progress.
+			// In such a case, queue it back to retryList
+			if canAllowDDLDuringRebalance {
+				retryList[entry] = command
+				if logMsg {
+					logging.Warnf("builder: Index definition does not exist in repo. Queuing to retry list %v as rebalance is in progress", entry)
+				}
+			}
+
 			continue
 		}
 
 		insts, err := s.manager.findAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
-		if err != nil {
+		if err != nil || (len(insts) == 0 && canAllowDDLDuringRebalance) {
 			retryList[entry] = command
-			logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
-				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+			if err != nil {
+				logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v). err: %v. Skipping ...",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
+			} else if logMsg {
+				logging.Warnf("builder: No index instances found for definition (%v, %v, %v, %v). Queuing index "+
+					" to retry list for further processing as rebalance is in progress", defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
+			}
 			continue
 		}
 
@@ -5182,6 +5254,14 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 						defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 					processed = true
 				}
+			} else if inst.RState == uint32(common.REBAL_PENDING) && inst.State == uint32(common.INDEX_STATE_CREATED) {
+				// Queue the index instance as it is possible that the instance is still
+				// in recovery. Builder will queue the index instance
+				if logMsg {
+					logging.Infof("builder: Queuing index (%v, %v, %v, %v) as inst state is in %v",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, common.REBAL_PENDING)
+				}
+				retryList[entry] = command
 			}
 		}
 	}

@@ -334,12 +334,13 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 
 	defer sr.wg.Done()
 
-	//TODO (7.2.0): Transfer token can be processed if there
-	// are conflicts with rebalance movements. Update this logic
-	// under allow DDL during rebalance part
-	if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
-		sr.setTransferTokenError(ttid, tt, err.Error())
-		return
+	// If DDL is allowed during rebalance, skip the ongoing DDL check.
+	// Otherwise, if there is an on-going DDL, fail the rebalance.
+	if !sr.canAllowDDLDuringRebalance() {
+		if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
 	}
 
 	if !tt.IsShardTransferToken() {
@@ -601,7 +602,9 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 	if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeCopy && siblingId == "" { // only replica repair case
 		// Since this is replica repair, do not drop the shard data. Only cleanup the transferred data
 		// and unlock the shards
-		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Initiating cleanup of transfer & shard unlocking for token: %v", sourceId)
+		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
+
+		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
 		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
 
 		sourceToken.ShardTransferTokenState = common.ShardTokenCommit
@@ -612,6 +615,12 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 
 		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", sourceId)
 		sr.queueDropShardRequests(sourceId)
+
+		// Skip unlocking shards as the shards are going to be destroyed
+		// Clean-up any transferred data - Currently, plasma cleans up transferred data on a successful
+		// restore. This is only a safety operation from indexer. Coming to this code means that restore
+		// is successful and this operation becomes a no-op
+		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
 
 		siblingToken := sr.getTokenById(siblingId)
 		if siblingToken != nil && siblingToken.TransferMode == common.TokenTransferModeCopy && siblingToken.SourceId == sr.nodeUUID {
@@ -644,6 +653,19 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	defer sr.wg.Done()
 
 	start := time.Now()
+
+	// Lock shard to prevent any index instance mapping while transfer is in progress
+	// Unlock of the shard happens:
+	// (a) after shard transfer is successful & destination node has recovered the shard
+	// (b) If any error is encountered, clean-up from indexer will unlock the shards
+	err := lockShards(tt.ShardIds, sr.supvMsgch)
+	if err != nil {
+		logging.Errorf("ShardRebalancer::startShardTransfer Observed error: %v when locking shards: %v", err, tt.ShardIds)
+
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
 
 	respCh := make(chan Message)                            // Carries final response of shard transfer to rebalancer
 	progressCh := make(chan *ShardTransferStatistics, 1000) // Carries periodic progress of shard tranfser to indexer
@@ -684,6 +706,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
 						tt.Destination, shardId, shardPaths, err)
 
+					unlockShards(tt.ShardIds, sr.supvMsgch)
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
 					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid, tt, err)
 					return
@@ -858,9 +881,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		return true
 
 	case c.ShardTokenCommit:
+		sr.updateInMemToken(ttid, tt, "dest")
+
+		// Destination will call RestoreShardDone for the shardId involved in the
+		// rebalance as coming here means that rebalance is successful for the
+		// tenant. After RestoreShardDone, the shards will be unlocked
+		restoreShardDone(tt.ShardIds, sr.supvMsgch)
+
+		// Unlock the shards that are locked before initiating recovery
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+
 		// If nodes sees a commit token, then DDL can be allowed on
 		// the bucket
-		sr.updateInMemToken(ttid, tt, "dest")
 		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
 
 		tt.ShardTransferTokenState = c.ShardTokenDeleted
@@ -977,6 +1009,14 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
+	if err := lockShards(tt.ShardIds, sr.supvMsgch); err != nil {
+		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
+
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
+
 	setErrInTransferToken := func(err error) {
 		if err != ErrRebalanceCancel && err != ErrRebalanceDone {
 			sr.setTransferTokenError(ttid, tt, err.Error())
@@ -984,13 +1024,18 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 
 	// During shard rebalance, all active instances are built in one
-	// batch and all initial instances are built in one batch. Initial
-	// instances are those instances for which a built command is posted
-	// but build is not yet initialised. For such instances, as build
+	// batch, all initial instances are built in one batch and all catchup
+	// instances are built in another batch. Initial instances are those
+	// instances for which a built command is posted but build is not yet
+	// initialised (or) the index is being moved from source to destination
+	// while the build is in progress. For such instances, as build
 	// has to start from zero-seqno, they are built in a separate batch.
-	// Active instances can start from non-zero seqno. and catch up with KV
+	// Active, catchup instances can start from non-zero seqno. and catch
+	// up with KV. As catchup instances can be behind active instances, build
+	// catchup instances in separate batch
 	const ACTIVE_INSTS int = 0
 	const INITIAL_INSTS int = 1
+	const CATCHUP_INSTS int = 2
 
 	start := time.Now()
 
@@ -1004,6 +1049,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		currIndex := ACTIVE_INSTS
 		if defn.InstStateAtRebal == common.INDEX_STATE_INITIAL {
 			currIndex = INITIAL_INSTS
+		} else if defn.InstStateAtRebal == common.INDEX_STATE_CATCHUP {
+			currIndex = CATCHUP_INSTS
 		}
 
 		if len(nonDeferredInsts[currIndex]) == 0 {
@@ -1023,14 +1070,16 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 
 	for cid, defns := range groupedDefns {
-		buildDefnIdList := make([]client.IndexIdList, 2)
-		nonDeferredInsts := make([]map[c.IndexInstId]bool, 2)
+		buildDefnIdList := make([]client.IndexIdList, 3)
+		nonDeferredInsts := make([]map[c.IndexInstId]bool, 3)
 		defnIdToInstIdMap := make(map[common.IndexDefnId]common.IndexInstId)
 		// Post recover index request for all non-deferred definitions
 		// of this collection. Once all indexes are recovered, they can be
 		// built in a batch
 		for _, defn := range defns {
 
+			// TODO: Use ShardIds for desintaion when changing the shardIds
+			defn.ShardIdsForDest = tt.ShardIds
 			if skip, err := sr.postRecoverIndexReq(defn, ttid, tt); err != nil {
 				setErrInTransferToken(err)
 				return
@@ -1081,9 +1130,12 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				currInsts := "active insts"
 				if i == INITIAL_INSTS {
 					currInsts = "initial insts"
+				} else if i == CATCHUP_INSTS {
+					currInsts = "catchup insts"
 				}
+
 				logging.Infof("ShardRebalancer::startShardRecovery Successfully posted "+
-					"recoveryIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
+					"recoverIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
 					"Initiating build", currInsts, buildDefnIdList[i].DefnIds, cid, ttid)
 
 				skipDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
@@ -1580,11 +1632,13 @@ func (sr *ShardRebalancer) doRebalance() {
 		return
 	}
 
-	// TODO: For multi-tenancy, DDL's are to be supported while
-	// rebalance is in progress. Add the support for the same
-	if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
-		sr.finishRebalance(err)
-		return
+	// If DDL is allowed during rebalance, skip the ongoing DDL check.
+	// Otherwise, if there is an on-going DDL, fail the rebalance.
+	if !sr.canAllowDDLDuringRebalance() {
+		if ddl, err := sr.runParams.checkDDLRunning("ShardRebalancer"); ddl {
+			sr.finishRebalance(err)
+			return
+		}
 	}
 
 	select {
@@ -2358,6 +2412,25 @@ func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhas
 	sr.supvMsgch <- msg
 }
 
+func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
+	// Allow or reject DDL based on "allowDDLDuringRebalance" config
+	config := sr.config.Load()
+	if common.IsServerlessDeployment() {
+		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			return false
+		}
+	} else {
+		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			return false
+		}
+	}
+	return true
+}
+
 // isIndexDeletedDuringRebal returns true if an index is deleted while
 // bucket rebalance is in progress
 func isIndexDeletedDuringRebal(errMsg string) bool {
@@ -2366,4 +2439,58 @@ func isIndexDeletedDuringRebal(errMsg string) bool {
 
 func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
+}
+
+func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
+
+	respCh := make(chan map[common.ShardId]error)
+	msg := &MsgLockUnlockShards{
+		mType:    LOCK_SHARDS,
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	supvMsgch <- msg
+
+	errMap := <-respCh
+	for _, err := range errMap { // Return on the first error seen
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func unlockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
+
+	respCh := make(chan map[common.ShardId]error)
+	msg := &MsgLockUnlockShards{
+		mType:    UNLOCK_SHARDS,
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	supvMsgch <- msg
+
+	errMap := <-respCh
+	for _, err := range errMap { // Return on the first error seen
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func restoreShardDone(shardIds []common.ShardId, supvMsgch MsgChannel) {
+	respCh := make(chan bool)
+	msg := &MsgRestoreShardDone{
+		shardIds: shardIds,
+		respCh:   respCh,
+	}
+
+	supvMsgch <- msg
+
+	<-respCh
 }

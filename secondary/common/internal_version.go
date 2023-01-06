@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -224,6 +225,9 @@ func newInternalVersionMonitor(
 	mon.cache = newInternalVersionCache()
 
 	mon.urlStr = fmt.Sprintf("http://%s/poolsStreaming/%s", clusterAddr, DEFAULT_POOL)
+	if security.IsToolsConfigUsed() {
+		mon.urlStr = fmt.Sprintf("https://%s/poolsStreaming/%s", clusterAddr, DEFAULT_POOL)
+	}
 	mon.param = &security.RequestParams{
 		UserAgent: "internalVersionMonitor",
 	}
@@ -341,6 +345,18 @@ func (ivc *internalVersionChecker) getNodeVersion(node couchbase.Node, svc strin
 		err := fmt.Errorf("internalVersionChecker:getNodeVersion error in GetServiceAddress for %v", node.NodeUUID)
 		setError(err)
 		return
+	}
+
+	if security.IsToolsConfigUsed() {
+		addrPort := strings.Split(addr, ":")
+		port := addrPort[1]
+		mapping := security.GetEncryptPortMapping()
+		for port1, port2 := range mapping {
+			if port == port1 {
+				port = port2
+			}
+		}
+		addr = addrPort[0] + ":" + port
 	}
 
 	url := addr + ivc.svcUrlMap[svc]

@@ -70,6 +70,10 @@ func getCertPool(setting *SecuritySetting) (*x509.CertPool, error) {
 //
 func setupClientTLSConfig(host string) (*tls.Config, error) {
 
+	if IsToolsConfigUsed() {
+		return setupClientTLSConfigTools(host)
+	}
+
 	setting := GetSecuritySetting()
 	if setting == nil {
 		return nil, fmt.Errorf("Security setting is nil")
@@ -173,7 +177,7 @@ func makeTCPConn(addr string) (net.Conn, error) {
 // So if encryption is required, conn.RemoteAddr must already be using a SSL port.
 func SecureConn(conn net.Conn, hostname, port string) (net.Conn, error) {
 
-	if EncryptionRequired(hostname, port) {
+	if EncryptionRequired(hostname, port) || IsToolsConfigUsed() {
 		return makeTLSConn(conn, hostname, port)
 	}
 
@@ -418,6 +422,10 @@ func MakeListener(addr string) (net.Listener, error) {
 //
 func GetURL(u string) (*url.URL, error) {
 
+	if IsToolsConfigUsed() {
+		return GetURLTools(u)
+	}
+
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		u = "http://" + u
 	}
@@ -608,6 +616,10 @@ func getWithAuthInternal(u string, params *RequestParams, eTag string, allowTls 
 
 	var url *url.URL
 	var err error
+
+	if IsToolsConfigUsed() {
+		return getWithAuthInternalTools(u, params, eTag)
+	}
 
 	if allowTls {
 		url, err = GetURL(u)

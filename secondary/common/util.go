@@ -500,13 +500,25 @@ func ClusterAuthUrl(cluster string) (string, error) {
 		cluster = u.Host
 	}
 
-	adminUser, adminPasswd, err := cbauth.GetHTTPServiceAuth(cluster)
-	if err != nil {
-		return "", err
+	var adminUser, adminPasswd, scheme string
+	var err error
+
+	scheme = "http"
+
+	if security.IsToolsConfigUsed() {
+		user, passwd := security.GetToolsCreds()
+		scheme = "https"
+		adminUser = user
+		adminPasswd = passwd
+	} else {
+		adminUser, adminPasswd, err = cbauth.GetHTTPServiceAuth(cluster)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	clusterUrl := url.URL{
-		Scheme: "http",
+		Scheme: scheme,
 		Host:   cluster,
 		User:   url.UserPassword(adminUser, adminPasswd),
 	}

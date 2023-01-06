@@ -83,8 +83,10 @@ type Command struct {
 
 	NumBuilds int64
 
-	CACert string
-	UseTLS bool
+	CACert      string
+	UseTLS      bool
+	UseTools    bool
+	UseLogLevel string
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -143,6 +145,8 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	// TLS Options
 	fset.BoolVar(&cmdOptions.UseTLS, "use_tls", false, "Enable TLS connections")
 	fset.StringVar(&cmdOptions.CACert, "cacert", "", "CACert")
+	fset.BoolVar(&cmdOptions.UseTools, "use_tools", false, "Use Tools config instead of CBAuth")
+	fset.StringVar(&cmdOptions.UseLogLevel, "log_level", "Warn", "Select log level from options: Silent, Fatal, Error, Warn, Info, Verbose, Timing, Debug & Trace (default Warn)")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -231,7 +235,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	}
 
 	// setup cbauth
-	if cmdOptions.Auth != "" {
+	if cmdOptions.Auth != "" && !cmdOptions.UseTools {
 		up := strings.Split(cmdOptions.Auth, ":")
 		_, err := cbauth.InternalRetryDefaultInit(cmdOptions.Server, up[0], up[1])
 		if err != nil {

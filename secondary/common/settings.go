@@ -15,6 +15,7 @@ import (
 
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 const MAX_METAKV_RETRIES = 100
@@ -32,6 +33,9 @@ const (
 
 func GetSettingsConfig(cfg Config) (Config, error) {
 	var newConfig Config
+	if security.IsToolsConfigUsed() {
+		return newConfig, nil
+	}
 	fn := func(r int, err error) error {
 		newConfig = cfg.Clone()
 		current, _, err := metakv.Get(IndexingSettingsMetaPath)

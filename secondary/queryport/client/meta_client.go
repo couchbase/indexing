@@ -120,7 +120,9 @@ func newMetaBridgeClient(
 		settings:   settings,
 	}
 
-	b.schedTokenMon = newSchedTokenMonitor(b)
+	if !security.IsToolsConfigUsed() {
+		b.schedTokenMon = newSchedTokenMonitor(b)
+	}
 
 	b.refreshCond = sync.NewCond(&b.refreshLock)
 	b.refreshCnt = 0
@@ -195,7 +197,7 @@ func (b *metadataClient) Refresh() (indexes []*mclient.IndexMetadata, metaVersio
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
 
-	if !b.settings.ListSchedIndexes() {
+	if !b.settings.ListSchedIndexes() || security.IsToolsConfigUsed() {
 		// This case is not normally entered as queryport.client.listSchedIndexes default is false
 		return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), false, nil
 	}

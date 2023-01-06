@@ -207,15 +207,19 @@ func (cp *connectionPool) getAuthInfo() (string, string, error) {
 	if cp.authHost == "" {
 		err := cp.initHostportForAuth()
 		if err != nil {
-			logging.Errorf("%v doAtuh error in initHostportForAuth: %v", cp.logPrefix, err)
+			logging.Errorf("%v doAuth error in initHostportForAuth: %v", cp.logPrefix, err)
 			return "", "", err
 		}
 	}
 
-	user, pass, err := cbauth.GetHTTPServiceAuth(cp.authHost)
-	if err != nil {
-		logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", cp.logPrefix, err)
-		return "", "", err
+	var err error
+	user, pass := security.GetToolsCreds()
+	if !security.IsToolsConfigUsed() {
+		user, pass, err = cbauth.GetHTTPServiceAuth(cp.authHost)
+		if err != nil {
+			logging.Errorf("%v doAuth cbauth.GetHTTPServiceAuth returns error %v", cp.logPrefix, err)
+			return "", "", err
+		}
 	}
 
 	return user, pass, nil

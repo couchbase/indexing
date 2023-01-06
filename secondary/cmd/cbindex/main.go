@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"syscall"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -13,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/querycmd"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 func usage(fset *flag.FlagSet) {
@@ -66,11 +68,28 @@ func main() {
 		os.Exit(0)
 	}
 
-	if cmdOptions.UseTLS {
+	logLevel := strings.ToUpper(cmdOptions.UseLogLevel)
+	logging.SetLogLevel(logging.Level(logLevel))
+	if cmdOptions.UseTools {
+		creds := strings.Split(cmdOptions.Auth, ":")
+		if len(creds) < 2 || creds[0] == "" || creds[1] == "" {
+			logging.Errorf("Error in setting config: use format -auth user:password with non-empty creds")
+			return
+		}
+		var insecureSkipVerify bool
+		if cmdOptions.CACert == "" {
+			insecureSkipVerify = true
+		}
+		err := security.SetToolsConfig(creds[0], creds[1], cmdOptions.CACert, insecureSkipVerify, true)
+		if err != nil {
+			logging.Errorf("Error in setting config: %v", err)
+			return
+		}
+	} else if cmdOptions.UseTLS {
 		querycmd.InitSecurityContext(cmdOptions.Server, "", "", "", cmdOptions.CACert, true)
 	}
 
-	if os.Getenv("CBAUTH_REVRPC_URL") == "" && cmdOptions.Auth != "" {
+	if os.Getenv("CBAUTH_REVRPC_URL") == "" && cmdOptions.Auth != "" && !cmdOptions.UseTools {
 		// unfortunately, above is read at init, so we have to respawn
 		revrpc := fmt.Sprintf("http://%v@%v/query2", cmdOptions.Auth, cmdOptions.Server)
 		os.Setenv("CBAUTH_REVRPC_URL", revrpc)

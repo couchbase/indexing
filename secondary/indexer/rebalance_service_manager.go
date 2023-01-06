@@ -221,6 +221,8 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
 	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
 	mux.HandleFunc("/rebalanceCleanupStatus", m.handleRebalanceCleanupStatus)
+	mux.HandleFunc("/lockShards", m.handleLockShards)
+	mux.HandleFunc("/unlockShards", m.handleUnlockShards)
 }
 
 // updateNodeList initializes RebalanceServiceManager.state.servers node list on start or restart.
@@ -841,7 +843,9 @@ func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, 
 // initPreparePhaseRebalance is a helper for prepareRebalance.
 func (m *RebalanceServiceManager) initPreparePhaseRebalance() error {
 
-	err := m.registerRebalanceRunning(true)
+	// If DDL is allowed during rebalance (and vice-versa), then skip
+	// checking ongoing DDL operations and proceed with rebalance
+	err := m.registerRebalanceRunning(!m.canAllowDDLDuringRebalance())
 	if err != nil {
 		return err
 	}
@@ -859,6 +863,7 @@ func (m *RebalanceServiceManager) initPreparePhaseRebalance() error {
 // is processing other work, to try to avoid causing a rebalance timeout failure.
 func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error {
 	respch := make(MsgChannel)
+
 	m.supvPrioMsgch <- &MsgClustMgrLocal{
 		mType:    CLUST_MGR_SET_LOCAL,
 		key:      RebalanceRunning,
@@ -1337,6 +1342,8 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Initiating clean-up for ttid: %v, "+
 			"shardIds: %v, destination: %v", ttid, tt.ShardIds, tt.Destination)
 
+		unlockShards(tt.ShardIds, m.supvMsgch)
+
 		respCh := make(chan bool)
 		msg := &MsgShardTransferCleanup{
 			shardPaths:      nil,
@@ -1368,6 +1375,9 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Deleted ttid: %v, "+
 			"from metakv", ttid)
 
+	case c.ShardTokenRestoreShard, c.ShardTokenRecoverShard:
+		unlockShards(tt.ShardIds, m.supvMsgch)
+
 	case c.ShardTokenReady:
 		// If this token is in Ready state, check for the presence of
 		// a tranfser token with ShardTokenDropOnSource state. If it
@@ -1387,7 +1397,9 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup will be invoked on destination node
+		} else { // Else, cleanup will be invoked on destination node. Unlock shards on source
+			unlockShards(tt.ShardIds, m.supvMsgch)
+
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 		}
@@ -1477,10 +1489,22 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup on source will be triggered
+		} else { // Else, cleanup on source will be triggered as rebalance is complete for this tenant
+			unlockShards(tt.ShardIds, m.supvMsgch)
+
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 		}
+
+	case c.ShardTokenCommit:
+
+		// Destination will call RestoreShardDone for the shardId involved in the
+		// rebalance as coming here means that rebalance is successful for the
+		// tenant. After RestoreShardDone, the shards will be unlocked
+		restoreShardDone(tt.ShardIds, m.supvMsgch)
+
+		// Unlock the shards that are locked before initiating recovery
+		unlockShards(tt.ShardIds, m.supvMsgch)
 	}
 	return nil
 }
@@ -3658,4 +3682,94 @@ func findTopologyByCollection(topologies []manager.IndexTopology, bucket,
 	}
 
 	return nil
+}
+
+// If DDL is in progress while rebalance is running, then allow rebalance
+// if the flag "serverless.allowDDLDuringRebalance" is set to true
+func (m *RebalanceServiceManager) canAllowDDLDuringRebalance() bool {
+	config := m.config.Load()
+	if common.IsServerlessDeployment() {
+		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			return false
+		}
+	} else {
+		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
+		if !canAllowDDLDuringRebalance {
+			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			return false
+		}
+	}
+	return true
+}
+
+////////////////////////////////////////////////////////
+// Rest API handlers for shard locking and unlocking
+////////////////////////////////////////////////////////
+
+func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *http.Request) {
+	_, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleLockShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if r.Method == "POST" {
+
+		bytes, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			m.writeError(w, fmt.Errorf("RebalanceServiceManager::handleLockShards Error observed while reading request body, err: %v", err))
+			return
+		}
+		var shardIds []common.ShardId
+		if err := json.Unmarshal(bytes, &shardIds); err != nil {
+			send(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		logging.Infof("RebalanceServiceManager::handleLockShards Locking shards: %v as requested by user", shardIds)
+		err = lockShards(shardIds, m.supvMsgch)
+		if err != nil {
+			logging.Infof("RebalanceServiceManager::handleLockShards Error observed when locking shards: %v, err: %v", shardIds, err)
+			m.writeError(w, err)
+			return
+		}
+		m.writeOk(w)
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
+}
+
+func (m *RebalanceServiceManager) handleUnlockShards(w http.ResponseWriter, r *http.Request) {
+
+	_, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleUnlockShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+	if r.Method == "POST" {
+
+		bytes, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			m.writeError(w, fmt.Errorf("RebalanceServiceManager::handleUnlockShards Error observed while reading request body, err: %v", err))
+			return
+		}
+		var shardIds []common.ShardId
+		if err := json.Unmarshal(bytes, &shardIds); err != nil {
+			send(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		logging.Infof("RebalanceServiceManager::handleUnlockShards Unlocking shards: %v as requested by user", shardIds)
+		err = unlockShards(shardIds, m.supvMsgch)
+		if err != nil {
+			logging.Infof("RebalanceServiceManager::handleUnlockShards Error observed when unlocking shards: %v, err: %v", shardIds, err)
+			m.writeError(w, err)
+			return
+		}
+		m.writeOk(w)
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
 }
