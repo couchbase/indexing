@@ -433,7 +433,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	// Create a Pauser object to run the master orchestration loop. It will be the only thread
 	// that changes or deletes *task after this point. It will save a pointer to itself into
 	// task.pauser and start its own goroutine, so we don't need to save a pointer to it here.
-	RunPauser(m, task, true)
+	RunPauser(m, task, true, m.pauseTokensById[params.ID])
 	return nil
 }
 
@@ -766,7 +766,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				return
 			}
 
-			RunPauser(m, task, false)
+			RunPauser(m, task, false, &pauseToken)
 
 			writeOk(w)
 			return
@@ -1092,6 +1092,13 @@ func (this *taskObj) hasDryRun() bool {
 		return true
 	}
 	return false
+}
+
+func (task *taskObj) isMaster() bool {
+	task.taskMu.RLock()
+	defer task.taskMu.RUnlock()
+
+	return task.master
 }
 
 // postWithAuthWrapper wraps postWithAuth so it can be called as a goroutine for parallel scatter.
