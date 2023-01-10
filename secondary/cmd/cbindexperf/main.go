@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/querycmd"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 func handleError(err error) {
@@ -37,6 +38,7 @@ func main() {
 	gcpercent := flag.Int("gcpercent", 100, "GC percentage")
 	useTls := flag.Bool("use_tls", false, "Set to enable TLS Connections")
 	caCert := flag.String("cacert", "", "CA Cert")
+	useTools := flag.Bool("use_tools", false, "Set to enable Tools config instead of CBAuth")
 
 	flag.Parse()
 
@@ -67,15 +69,31 @@ func main() {
 	}
 
 	runtime.GOMAXPROCS(*cpus)
-	up := strings.Split(*auth, ":")
-	_, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1])
-	if err != nil {
-		fmt.Printf("Failed to initialize cbauth: %s\n", err)
-		os.Exit(1)
+	creds := strings.Split(*auth, ":")
+	if len(creds) < 2 || creds[0] == "" || creds[1] == "" {
+		logging.Errorf("Error in setting config: use format -auth user:password with non-empty creds")
+		return
 	}
 
-	if *useTls {
-		querycmd.InitSecurityContext(*cluster, "", "", "", *caCert, true)
+	if *useTools {
+		insecureSkipVerify := false
+		if *caCert == "" {
+			insecureSkipVerify = true
+		}
+		err := security.SetToolsConfig(creds[0], creds[1], *caCert, insecureSkipVerify, true)
+		if err != nil {
+			logging.Errorf("Error in setting config: %v", err)
+			return
+		}
+	} else {
+		_, err := cbauth.InternalRetryDefaultInit(*cluster, creds[0], creds[1])
+		if err != nil {
+			fmt.Printf("Failed to initialize cbauth: %s\n", err)
+			os.Exit(1)
+		}
+		if *useTls {
+			querycmd.InitSecurityContext(*cluster, "", "", "", *caCert, true)
+		}
 	}
 
 	// Go runtime has default gc percent as 100.
