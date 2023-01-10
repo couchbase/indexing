@@ -2329,9 +2329,11 @@ func (sr *ShardRebalancer) updateTransferProgress() {
 		select {
 		case <-sr.cancel:
 			resetTransferStats()
+			return
 
 		case <-sr.done:
 			resetTransferStats()
+			return
 
 		case <-ticker.C:
 
