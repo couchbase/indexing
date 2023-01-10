@@ -1157,7 +1157,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	for _, t := range ttList {
 
 		if t.tt.IsShardTransferToken() {
-			l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
+			l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
 			if t.tt.MasterId == string(m.nodeInfo.NodeID) {
 				m.cleanupShardTokenForMaster(t.ttid, t.tt)
 			}
@@ -1306,11 +1306,11 @@ func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.
 
 	switch tt.ShardTransferTokenState {
 	case c.ShardTokenCreated, c.ShardTokenCommit, c.ShardTokenDeleted:
-		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForMaster Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 	}
@@ -1328,7 +1328,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 
@@ -1368,7 +1368,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 
@@ -1418,7 +1418,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 

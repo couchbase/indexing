@@ -1292,7 +1292,7 @@ func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value)
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer")
 			if err != nil {
 				l.Errorf("%v Unable to decode transfer token. Ignored.", _processTokens)
 				return nil
@@ -2282,7 +2282,7 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 }
 
 // decodeTransferToken unmarshals a transfer token received in a callback from metakv.
-func decodeTransferToken(path string, value []byte) (string, *c.TransferToken, error) {
+func decodeTransferToken(path string, value []byte, prefix string) (string, *c.TransferToken, error) {
 
 	ttidpos := strings.Index(path, TransferTokenTag)
 	ttid := path[ttidpos:]
@@ -2290,16 +2290,16 @@ func decodeTransferToken(path string, value []byte) (string, *c.TransferToken, e
 	tt := &c.TransferToken{}
 	err := json.Unmarshal(value, tt)
 	if err != nil {
-		l.Fatalf("Rebalancer::decodeTransferToken Failed unmarshalling value for %s: %s\n%s",
-			path, err.Error(), string(value))
+		l.Fatalf("%v::decodeTransferToken Failed unmarshalling value for %s: %s\n%s",
+			prefix, path, err.Error(), string(value))
 		return "", nil, err
 	}
 
 	// Skip logging entire index instance for every transfer token state change as it can flood logs
 	if tt.IsShardTransferToken() && tt.ShardTransferTokenState != c.ShardTokenCreated {
-		l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt.LessVerboseString())
+		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
 	} else {
-		l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt)
+		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt)
 	}
 
 	return ttid, tt, nil
