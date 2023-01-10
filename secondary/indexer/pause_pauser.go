@@ -9,7 +9,6 @@
 package indexer
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/plasma"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -725,8 +725,6 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *man
 // archivePath/
 // └── pauseMetadata.json
 func (p *Pauser) masterUploadPauseMetadata() error {
-	reader := bytes.NewReader(nil)
-
 	metadata := p.task.pauseMetadata
 
 	metadata.lock.Lock()
@@ -751,9 +749,25 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
 	}
 
-	reader.Reset(common.ChecksumAndCompress(data, compression))
+	data = common.ChecksumAndCompress(data, compression)
 
-	err = Upload(p.task.archivePath, FILENAME_PAUSE_METADATA, reader)
+	ctx := p.task.ctx
+	plasmaCfg := plasma.DefaultConfig()
+	
+	copier := plasma.MakeFileCopier(p.task.archivePath,"",plasmaCfg.Environment,plasmaCfg.CopyConfig)
+	if copier == nil {
+		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported",p.task.archivePath)
+		logging.Errorf("Pauser::masterUploadPauseMetadata: %v",err)
+		return err
+	}
+
+	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v",p.task.archivePath,FILENAME_PAUSE_METADATA))
+	if err != nil {
+		logging.Errorf("Pauser::masterUploadPauseMetadata: url encoding failed, err: %v to %v%v for task ID: %v", err, p.task.archivePath, FILENAME_METADATA, p.task.taskId)
+		return err
+	}
+	_, err = copier.UploadBytes(ctx,data,url)
+
 	if err != nil {
 		logging.Errorf("Pauser::masterUploadPauseMetadata: upload of pause metadata failed to path : %v%v err: %v for task ID %v", p.task.archivePath, FILENAME_PAUSE_METADATA, err, p.task.taskId)
 		return err
@@ -789,7 +803,14 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
 	}
 
-	reader := bytes.NewReader(nil)
+	plasmaCfg := plasma.DefaultConfig()
+	copier := plasma.MakeFileCopier(p.task.archivePath,"",plasmaCfg.Environment,plasmaCfg.CopyConfig)
+	if copier == nil {
+		err := fmt.Errorf("couldn't create a copier object. archive path %v is unsupported", p.task.archivePath)
+		logging.Errorf("Pauser::followerUploadBucketData: %v", err)
+		return nil, err
+	}
+	ctx := p.task.ctx
 
 	logging.Tracef("Pauser::followerUploadBucketData: uploading data to path %v", nodePath)
 
@@ -806,8 +827,12 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// Step 2. Upload index metadata
-	reader.Reset(byteSlice)
-	err = Upload(nodePath, FILENAME_METADATA, reader)
+	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v",nodePath,FILENAME_METADATA))
+	if err != nil {
+		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		return nil, err
+	}
+	_, err = copier.UploadBytes(ctx,byteSlice,url)
 	if err != nil {
 		logging.Errorf("Pauser::followerUploadBucketData: metadata upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
 		return nil, err
@@ -833,8 +858,12 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// Step 4. Upload index stats
-	reader.Reset(byteSlice)
-	err = Upload(nodePath, FILENAME_STATS, reader)
+	url, err = copier.GetPathEncoding(fmt.Sprintf("%v%v",nodePath,FILENAME_STATS))
+	if err != nil {
+		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		return nil, err
+	}
+	_, err = copier.UploadBytes(ctx,byteSlice,url)
 	if err != nil {
 		logging.Errorf("Pauser::followerUploadBucketData: stats upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_STATS, p.task.taskId)
 		return nil, err
