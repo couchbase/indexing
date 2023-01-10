@@ -2,9 +2,9 @@ package common
 
 import (
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	n1ql "github.com/couchbase/query/value"
 )
-import "github.com/couchbase/indexing/secondary/common"
 
 // A map that holds response results from 2i Scan APIs as well as from JSON document scan
 // Key = Primary key of scan response
@@ -45,6 +45,8 @@ type IndexStatus struct {
 	InstId       common.IndexInstId `json:"instId,omitempty"`
 	Name         string             `json:"name,omitempty"`
 	Bucket       string             `json:"bucket,omitempty"`
+	Scope        string             `json:"scope,omitempty"`
+	Collection   string             `json:"collection,omitempty"`
 	IsPrimary    bool               `json:"isPrimary,omitempty"`
 	SecExprs     []string           `json:"secExprs,omitempty"`
 	WhereExpr    string             `json:"where,omitempty"`

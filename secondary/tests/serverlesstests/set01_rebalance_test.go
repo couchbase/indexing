@@ -90,9 +90,6 @@ func TestReplicaRepair(t *testing.T) {
 	}
 	rebalance(t)
 
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
-
 	// This sleep will ensure that the stats are propagated to client
 	// Also, any pending rebalance cleanup is expected to be done during
 	// this time - so that validateShardFiles can see cleaned up directories
@@ -145,9 +142,6 @@ func TestReplicaRepairAndSwapRebalance(t *testing.T) {
 		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", clusterconfig.Nodes[1]), t)
 	}
 
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
-
 	// This sleep will ensure that the stats are propagated to client
 	// Also, any pending rebalance cleanup is expected to be done during
 	// this time - so that validateShardFiles can see cleaned up directories
@@ -183,8 +177,6 @@ func TestBuildDeferredIndexesAfterRebalance(t *testing.T) {
 			}
 		}
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
 	validateShardIdMapping(clusterconfig.Nodes[3], t)
@@ -226,8 +218,6 @@ func TestDropIndexAfterRebalance(t *testing.T) {
 			}
 		}
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
 
@@ -297,8 +287,6 @@ func TestCreateIndexsAfterRebalance(t *testing.T) {
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[1], "Created", t)
 		}
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
 	validateShardIdMapping(clusterconfig.Nodes[1], t)

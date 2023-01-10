@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/testcode"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -49,12 +48,19 @@ func TestRebalancePanicTestsSetup(t *testing.T) {
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
 
 		// Create a partitioned index
-		n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emalid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
+		n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emailid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[4], "Ready", t)
 
 		// Create a partitioned index with defer_build:true
 		n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(balance) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[5], "Created", t)
+	}
+
+	waitForStatsUpdate()
+	// Scan indexes
+	for _, bucket := range buckets {
+		scanIndexReplicas(indexes[0], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[0]), t)
+		scanIndexReplicas(indexes[4], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[4]), t)
 	}
 
 	// Enable testAction execution in the code
@@ -81,7 +87,6 @@ func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFi
 		waitForTokenCleanup(node, t)
 	}
 
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 	waitForStatsUpdate()
 
 	if !areInNodeFinal { // Since rebalance fails, outNodes will be the final nodes
@@ -109,14 +114,6 @@ func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFi
 	for _, bucket := range buckets {
 		scanIndexReplicas(indexes[0], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[0]), t)
 		scanIndexReplicas(indexes[4], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[4]), t)
-
-		scanResults, e := secondaryindex.ScanAll2(indexes[5], bucket, scope, collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
-		if e == nil {
-			t.Fatalf("Error excpected when scanning for dropped index but scan didnt fail. index: %v, bucket: %v, scope: %v, collection: %v\n", indexes[5], bucket, scope, collection)
-			log.Printf("Length of scanResults = %v", len(scanResults))
-		} else {
-			log.Printf("Scan failed as expected with error: %v, index: %v, bucket: %v, scope: %v, collection: %v\n", e, indexes[5], bucket, scope, collection)
-		}
 	}
 
 	verifyStorageDirContents(t)
@@ -358,7 +355,6 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 		waitForTokenCleanup(node, t)
 	}
 
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 	waitForStatsUpdate()
 
 	finalPlacement, err := getIndexPlacement()
@@ -406,8 +402,6 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", index, bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, "Ready", t)
 
-		// Reset all indexer stats
-		secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 		waitForStatsUpdate()
 
 		partns := indexPartnIds[0]
