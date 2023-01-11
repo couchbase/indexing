@@ -3060,6 +3060,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.pause_resume.compression": ConfigValue{
+		true,
+		"compress data before uploading to object store. Used only for CI testing. Not a production setting",
+		false,
+		false,
+		false,
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +

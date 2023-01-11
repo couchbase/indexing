@@ -1030,7 +1030,7 @@ func (m *LifecycleMgr) handleInstAsyncRecoveryDone(content []byte) error {
 			"while async recovery was in progress", inst.InstId)
 
 		// Instance is dropped while async recovery is in progress. Drop the index
-		return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, true, false, true, common.NewShardRebalanceRequestContext())
+		return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, true, false, false, common.NewShardRebalanceRequestContext())
 	}
 
 	return nil

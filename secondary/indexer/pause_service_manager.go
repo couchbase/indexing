@@ -135,8 +135,8 @@ const FILENAME_METADATA = "indexMetadata.json"
 // FILENAME_STATS is the name of the file to write containing persisted index stats from ONE node.
 const FILENAME_STATS = "indexStats.json"
 
-// FILENAME_VERSION is the name of the file to write containing the ARCHIVE_VERSION.
-const FILENAME_VERSION = "version.json"
+// FILENAME_PAUSE_METADATA is the name of the file to write containing the PauseMetadata.
+const FILENAME_PAUSE_METADATA = "pauseMetadata.json"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Enums
@@ -214,6 +214,48 @@ func (this bucketStateEnum) String() string {
 // Type definitions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// this information should be considered read only during resume
+// created by pause leader node
+type PauseMetadata struct {
+	// nodeId gives node info
+	// map[nodeId]->shardIds gives information about shardIds copied from node
+	// map[shardId] -> string are obj store paths where each shard is saved
+	Data map[service.NodeID][]common.ShardId `json:"metadata"`
+
+	// cluster Version during data creation
+	Version string `json:"version"`
+
+	lock *sync.RWMutex
+}
+
+func NewPauseMetadata() *PauseMetadata {
+	return &PauseMetadata{
+		// size value should be max nodes in a subcluster
+		Data: make(map[service.NodeID][]common.ShardId, 2),
+		lock: &sync.RWMutex{},
+	}
+}
+
+func (pm *PauseMetadata) setVersionNoLock(ver string) {
+	pm.Version = ver
+}
+
+func (pm *PauseMetadata) addShardNoLock(nodeId service.NodeID, shardId common.ShardId) {
+	nodeMap, ok := pm.Data[nodeId]
+	if !ok {
+		// size value should be no of shards per bucket
+		pm.Data[nodeId] = make([]common.ShardId, 0, 2)
+		nodeMap = pm.Data[nodeId]
+	}
+	pm.Data[nodeId] = append(nodeMap, shardId)
+}
+
+func (pm *PauseMetadata) addShard(nodeId service.NodeID, shardId common.ShardId) {
+	pm.lock.Lock()
+	defer pm.lock.Unlock()
+	pm.addShardNoLock(nodeId, shardId)
+}
+
 // taskObj represents one task of any type in the taskType enum below. This is the GSI internal
 // representation, not the GetTaskList return format.
 //
@@ -258,6 +300,10 @@ type taskObj struct {
 	// ctx holds the context object that can be used for task context
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+
+	// PauseMetadata stores the metadata about the pause
+	// this is only created and saved by the master
+	pauseMetadata *PauseMetadata
 }
 
 // NewTaskObj is the constructor for the taskObj class. If the parameters are not valid, it will
@@ -295,6 +341,7 @@ func (this *taskObj) TaskObjSetFailed(errMsg string) {
 
 func (this *taskObj) setMasterNoLock() {
 	this.master = true
+	this.pauseMetadata = NewPauseMetadata()
 }
 
 func (this *taskObj) updateTaskTypeNoLock(newTaskType service.TaskType) {
@@ -619,7 +666,7 @@ func (m *PauseServiceManager) PauseResumeCancelTask(id string) error {
 		return service.ErrNotFound
 	}
 	task.Cancel()
-	logging.Infof("PauseServiceManager::CancelTask: deleted and cancelled task %", id)
+	logging.Infof("PauseServiceManager::CancelTask: deleted and cancelled task %v", id)
 
 	// clear bucket state from service manager
 	m.bucketStateDelete(task.bucket)

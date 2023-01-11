@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/indexer"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -62,7 +64,9 @@ func executeN1qlStmt(n1qlStmt, bucketName, caller string, t *testing.T) {
 
 // printClusterConfig prints the current cluster configuration, which is a map from
 // node addresses to a slice of the service names they have, such as
-//    172.31.5.112:9000:[kv n1ql] map[127.0.0.1:9001:[index kv] 127.0.0.1:9002:[index]
+//
+//	172.31.5.112:9000:[kv n1ql] map[127.0.0.1:9001:[index kv] 127.0.0.1:9002:[index]
+//
 // caller tells the calling function and location gives a tag like "entry" or "exit".
 func printClusterConfig(caller string, location string) {
 	log.Printf("%v %v: Current cluster configuration: %v", caller, location, getClusterStatus())
@@ -245,8 +249,10 @@ func resume(id, bucket, remotePath string, dryRun bool, t *testing.T) (masterAdd
 ///////////////////////////////////////////////////////////////////////////////
 
 // TestRebalanceSetupCluster sets the starting cluster configuration expected for the rest of these tests:
-//   [0: kv n1ql] -- assumed to be correct already (not actually set here)
-//   [1: index]
+//
+//	[0: kv n1ql] -- assumed to be correct already (not actually set here)
+//	[1: index]
+//
 // It also sets indexer.settings.rebalance.redistribute_indexes = true so rebalance will move
 // indexes to empty nodes.
 func TestRebalanceSetupCluster(t *testing.T) {
@@ -275,8 +281,9 @@ func TestRebalanceSetupCluster(t *testing.T) {
 
 // TestCreateDocsBeforeRebalance creates some documents (from testdata/Users_mut.txt.gz)
 // to be indexed.
-//   Starting config: [0: kv n1ql] [1: index]
-//   Ending config:   same
+//
+//	Starting config: [0: kv n1ql] [1: index]
+//	Ending config:   same
 func TestCreateDocsBeforeRebalance(t *testing.T) {
 	const _TestCreateDocsBeforeRebalance = "set14_rebalance_test.go::TestCreateDocsBeforeRebalance:"
 	printClusterConfig(_TestCreateDocsBeforeRebalance, "entry")
@@ -296,8 +303,9 @@ func TestCreateDocsBeforeRebalance(t *testing.T) {
 // TestCreateIndexesBeforeRebalance creates some indexes so Rebalance will do
 // index movements. Otherwise this test suite would depend on other tests having
 // run before it to properly exercise Rebalance. (Cf set00_indexoperations_test.go.)
-//   Starting config: [0: kv n1ql] [1: index]
-//   Ending config:   same
+//
+//	Starting config: [0: kv n1ql] [1: index]
+//	Ending config:   same
 func TestCreateIndexesBeforeRebalance(t *testing.T) {
 	const _TestCreateIndexesBeforeRebalance = "set14_rebalance_test.go::TestCreateIndexesBeforeRebalance:"
 	printClusterConfig(_TestCreateIndexesBeforeRebalance, "entry")
@@ -355,8 +363,9 @@ func TestCreateIndexesBeforeRebalance(t *testing.T) {
 
 // TestIndexNodeRebalanceIn adds nodes [2: index] and [3: index], then rebalances. The actions performed are
 // the same as TestRebalanceReplicaRepair except that at this point in the flow there are NO replicas to repair.
-//   Starting config: [0: kv n1ql] [1: index]
-//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
+//	Starting config: [0: kv n1ql] [1: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestIndexNodeRebalanceIn(t *testing.T) {
 	addTwoNodesAndRebalance("TestIndexNodeRebalanceIn", t)
 	waitForRebalanceCleanup()
@@ -364,11 +373,14 @@ func TestIndexNodeRebalanceIn(t *testing.T) {
 
 // addTwoNodesAndRebalance is the delegate of two tests that perform the same actions at different points
 // in the Rebalance testing flow:
-//   1. TestIndexNodeRebalanceIn -- no replicas to repair
-//   2. TestRebalanceReplicaRepair -- some replicas need to be repaired
+//  1. TestIndexNodeRebalanceIn -- no replicas to repair
+//  2. TestRebalanceReplicaRepair -- some replicas need to be repaired
+//
 // Both of these expect:
-//   Starting config: [0: kv n1ql] [1: index]
-//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
+//	Starting config: [0: kv n1ql] [1: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
 // caller gives the name of the calling function for logging.
 func addTwoNodesAndRebalance(caller string, t *testing.T) {
 	printClusterConfig(caller, "entry")
@@ -400,8 +412,9 @@ func addTwoNodesAndRebalance(caller string, t *testing.T) {
 
 // TestCreateReplicatedIndexesBeforeRebalance creates indexes with replicas (now that
 // the cluster has three index nodes). A later test will do Rebalance with replica repair.
-//   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
-//   Ending config:   same
+//
+//	Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//	Ending config:   same
 func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 	const _TestCreateReplicatedIndexesBeforeRebalance = "set14_rebalance_test.go::TestCreateReplicatedIndexesBeforeRebalance:"
 	printClusterConfig(_TestCreateReplicatedIndexesBeforeRebalance, "entry")
@@ -451,8 +464,9 @@ func TestCreateReplicatedIndexesBeforeRebalance(t *testing.T) {
 // Rebalance. Since there are indexes on node 1, this will force Planner to generate transfer tokens
 // to move the indexes off of that node. (On entry there are not necessarily any indexes on nodes
 // 2-3 -- see TestIndexNodeRebalanceIn comment header.)
-//   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
-//   Ending config:   [0: kv n1ql]            [2: index] [3: index]
+//
+//	Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//	Ending config:   [0: kv n1ql]            [2: index] [3: index]
 func TestIndexNodeRebalanceOut(t *testing.T) {
 	const _TestIndexNodeRebalanceOut = "set14_rebalance_test.go::TestIndexNodeRebalanceOut:"
 	printClusterConfig(_TestIndexNodeRebalanceOut, "entry")
@@ -475,8 +489,9 @@ func TestIndexNodeRebalanceOut(t *testing.T) {
 }
 
 // TestFailoverAndRebalance fails over node [2: index] from the cluster and rebalances.
-//   Starting config: [0: kv n1ql]            [2: index] [3: index]
-//   Ending config:   [0: kv n1ql]                       [3: index]
+//
+//	Starting config: [0: kv n1ql]            [2: index] [3: index]
+//	Ending config:   [0: kv n1ql]                       [3: index]
 func TestFailoverAndRebalance(t *testing.T) {
 	const _TestFailoverAndRebalance = "set14_rebalance_test.go::TestFailoverAndRebalance:"
 	printClusterConfig(_TestFailoverAndRebalance, "entry")
@@ -503,8 +518,9 @@ func TestFailoverAndRebalance(t *testing.T) {
 
 // TestSwapRebalance adds node [1: index] to the cluster (without rebalancing), then rebalances out
 // node [3: index], thus performing a "swap rebalance" of node 1 replacing node 3.
-//   Starting config: [0: kv n1ql]                       [3: index]
-//   Ending config:   [0: kv n1ql] [1: index]
+//
+//	Starting config: [0: kv n1ql]                       [3: index]
+//	Ending config:   [0: kv n1ql] [1: index]
 func TestSwapRebalance(t *testing.T) {
 	const _TestSwapRebalance = "set14_rebalance_test.go::TestSwapRebalance:"
 	printClusterConfig(_TestSwapRebalance, "entry")
@@ -532,8 +548,10 @@ func TestSwapRebalance(t *testing.T) {
 
 // TestRebalanceReplicaRepair adds nodes [2: index] and [3: index], then rebalances. The actions performed are
 // the same as TestIndexNodeRebalanceIn except that at this point in the flow there ARE replicas to repair.
-//   Starting config: [0: kv n1ql] [1: index]
-//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
+//	Starting config: [0: kv n1ql] [1: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
 // (Same as TestIndexNodeRebalanceIn.)
 func TestRebalanceReplicaRepair(t *testing.T) {
 	addTwoNodesAndRebalance("TestRebalanceReplicaRepair", t)
@@ -547,8 +565,9 @@ const (
 )
 
 // TestPreparePauseAndPrepareResume tests Elixir PreparePause and PrepareResume initiate and cancel.
-//   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
-//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
+//	Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestPreparePauseAndPrepareResume(t *testing.T) {
 	const _TestPreparePauseAndPrepareResume = "set14_rebalance_test.go::_TestPreparePauseAndPrepareResume:"
 	printClusterConfig(_TestPreparePauseAndPrepareResume, "entry")
@@ -716,8 +735,9 @@ func TestPreparePauseAndPrepareResume(t *testing.T) {
 }
 
 // TestPause tests Elixir Pause feature using local disk instead of S3.
-//   Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
-//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
+//	Starting config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestPause(t *testing.T) {
 	const _TestPause = "set14_rebalance_test.go::TestPause:"
 	printClusterConfig(_TestPause, "entry")
@@ -838,18 +858,20 @@ func TestPause(t *testing.T) {
 	}
 
 	// Pause is async so give some time for it to write its files to archive
-	time.Sleep(5 * time.Second)
+	time.Sleep(15 * time.Second)
 
-	// Read and verify /tmp/TestPause/version.json
-	filePath := archivePath + "version.json"
+	// Read and verify /tmp/TestPause/pauseMetadata.json
+	filePath := archivePath + indexer.FILENAME_PAUSE_METADATA
 	versionJson, err := tc.ReadFileToString(filePath)
 	if err != nil {
 		t.Fatalf("%v Pause ReadFileToString(%v) returned error: %v", _TestPause, filePath, err)
 	}
-	const expectedJson = "{\"version\":100}\n"
-	if versionJson != expectedJson {
+	expectedJson := common.GetLocalInternalVersion()
+	pauseMetadata := indexer.NewPauseMetadata()
+	json.Unmarshal([]byte(versionJson[8:]), pauseMetadata)
+	if !expectedJson.Equals(c.InternalVersion(pauseMetadata.Version)) {
 		t.Fatalf("%v Pause expected versionJson '%v', got '%v", _TestPause, expectedJson,
-			versionJson)
+			versionJson[8:])
 	}
 
 	// kjc Extend this as more Pause functionality is completed. Cancel the Pause in the mean time
@@ -870,6 +892,8 @@ func TestPause(t *testing.T) {
 				numNodeTasks, len(taskList.Tasks))
 		}
 	}
+
+	secondaryindex.ChangeIndexerSettings("indexer.pause_resume.compression", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 }
 
 // TestFailureAndRebalanceDuringInitialIndexBuild
@@ -877,8 +901,9 @@ func TestPause(t *testing.T) {
 // and will trigger a rebalance. Due to the skewed index distribution
 // indexer is expected to move indexes during rebalance and this
 // rebalance should fail as DDL is in progress on the failed over node
-//   Starting Config: [0: kv n1ql] [1: index] [2: index] [3: index]
-//   Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
+//
+//	Starting Config: [0: kv n1ql] [1: index] [2: index] [3: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
 	const _TestFailureAndRebalanceDuringInitialIndexBuild = "set14_rebalance_test.go::TestFailureAndRebalanceDuringInitialIndexBuild:"
 	printClusterConfig(_TestFailureAndRebalanceDuringInitialIndexBuild, "entry")
