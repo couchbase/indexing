@@ -1570,6 +1570,13 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 		}
 	}
 
+	// If a non-nil err is seen while dropping indexes, skip shard destroy for now. Rabalance janitor
+	// will take care of cleaning up the index and the shards once the errors are resolved
+	if err != nil {
+		logging.Errorf("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Error observed while dropping indexes. Skipping shard destruction. err: %v", err)
+		return err
+	}
+
 	// Destroy the local index data
 	respCh := make(chan bool)
 
@@ -1602,7 +1609,6 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 
 	localaddr := m.localhttp
-
 	url := "/dropIndex"
 	resp, err := postWithHandleEOF(indexDefn, localaddr, url, "RebalanceServiceManager::cleanupIndex")
 	if err != nil {
