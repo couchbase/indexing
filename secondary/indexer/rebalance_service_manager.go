@@ -1305,7 +1305,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.TransferToken) error {
 
 	switch tt.ShardTransferTokenState {
-	case c.ShardTokenCreated, c.ShardTokenCommit, c.ShardTokenDeleted:
+	case c.ShardTokenCreated, c.ShardTokenDeleted:
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
@@ -1505,6 +1505,14 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 		// Unlock the shards that are locked before initiating recovery
 		unlockShards(tt.ShardIds, m.supvMsgch)
+
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleanup Token %v %v", ttid, tt.LessVerboseString())
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupShardTokenForDest Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
 	}
 	return nil
 }
