@@ -56,39 +56,50 @@ func TestRebalancePanicTestsSetup(t *testing.T) {
 		n1qlStatement = fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(balance) partition by hash(meta().id)  with {\"defer_build\":true}", indexes[5], bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[5], "Created", t)
 	}
+
+	// Enable testAction execution in the code
+	err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
 }
 
-// Prior to this test, indexes existed on nodes[1] & nodes[2].
-// This test will try to swap rebalance by adding nodes[3] & nodes[4],
-// removing nodes[1], nodes[2]. A panic is invoked in the code
-// after transfer token move to state "ScheduleAck". Post rebalance
-// failure, indexes should remain on nodes[1] & nodes[2]. The storage
-// directory for rebalance should remain empty
-func TestRebalancePanicAtMasterShardTokenScheduleAck(t *testing.T) {
-	log.Printf("In TestRebalancePanicAtMasterShardTokenScheduleAck")
+// inNodes -> Nodes coming into the cluster
+// outNodes -> Nodes going out of the cluster
+// areInNodesFinal -> 'true' if "inNodes" become the final nodes in
+//                    the cluster (i.e. rebalance succeeds)
+//                    Otherwise, "outNodes" will be the final nodes in
+//                    the cluster after rebalance
+func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFinal bool, t *testing.T) {
+	performSwapRebalance(inNodes, outNodes, true, t)
 
-	err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.cancelOrPanic", "panic", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	tc.HandleError(err, "Error in ChangeIndexerSettings")
-
-	tag := testcode.MASTER_SHARDTOKEN_SCHEDULEACK
-	err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.cancelOrPanicTag", tag, clusterconfig.Username, clusterconfig.Password, kvaddress)
-	tc.HandleError(err, "Error in ChangeIndexerSettings")
-
-	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, true, t)
-	waitForRebalanceCleanup(clusterconfig.Nodes[1], t)
-	waitForRebalanceCleanup(clusterconfig.Nodes[2], t)
-	waitForRebalanceCleanup(clusterconfig.Nodes[3], t)
-	waitForRebalanceCleanup(clusterconfig.Nodes[4], t)
+	for _, node := range inNodes {
+		waitForRebalanceCleanup(node, t)
+	}
+	for _, node := range outNodes {
+		waitForRebalanceCleanup(node, t)
+	}
 
 	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 	waitForStatsUpdate()
 
-	validateIndexPlacement([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
-	validateShardIdMapping(clusterconfig.Nodes[1], t)
-	validateShardIdMapping(clusterconfig.Nodes[2], t)
+	if !areInNodeFinal { // Since rebalance fails, outNodes will be the final nodes
+		validateIndexPlacement(outNodes, t)
+		for _, node := range outNodes {
+			validateShardIdMapping(node, t)
+		}
 
-	validateShardFiles(clusterconfig.Nodes[3], t)
-	validateShardFiles(clusterconfig.Nodes[4], t)
+		for _, node := range inNodes {
+			validateShardFiles(node, t)
+		}
+	} else {
+		validateIndexPlacement(inNodes, t)
+		for _, node := range inNodes {
+			validateShardIdMapping(node, t)
+		}
+
+		for _, node := range outNodes {
+			validateShardFiles(node, t)
+		}
+	}
 
 	collection := "c1"
 	// Scan indexes
@@ -107,6 +118,35 @@ func TestRebalancePanicAtMasterShardTokenScheduleAck(t *testing.T) {
 
 	verifyStorageDirContents(t)
 
-	testDDLAfterRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, t)
+	if !areInNodeFinal {
+		testDDLAfterRebalance(outNodes, t)
+	} else {
+		testDDLAfterRebalance(inNodes, t)
+	}
+}
 
+// Prior to this test, indexes existed on nodes[1] & nodes[2].
+// This test will try to swap rebalance by adding nodes[3] & nodes[4],
+// removing nodes[1], nodes[2]. A panic is invoked in the code
+// after transfer token move to state "ScheduleAck". Post rebalance
+// failure, indexes should remain on nodes[1] & nodes[2]. The storage
+// directory for rebalance should remain empty
+func TestRebalancePanicAtMasterShardTokenScheduleAck(t *testing.T) {
+	log.Printf("In TestRebalancePanicAtMasterShardTokenScheduleAck")
+
+	tag := testcode.MASTER_SHARDTOKEN_SCHEDULEACK
+	err := testcode.PostOptionsRequestToMetaKV("", clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.INDEXER_PANIC, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	inNodes := []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+	outNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}
+	// Since rebalance is expected to fail, outNodes will be the final nodes in
+	// the cluster. Hence populate "areInNodesFinal" to false
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, t)
 }

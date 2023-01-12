@@ -9,8 +9,6 @@
 package indexer
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,9 +18,11 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/metakv"
+	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/plasma"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -75,6 +75,7 @@ type PauseUploadToken struct {
 	State      PauseUploadState
 	BucketName string
 	Error      string
+	Shards     []common.ShardId
 }
 
 func newPauseUploadToken(masterUuid, followerUuid, pauseId, bucketName string) (string, *PauseUploadToken, error) {
@@ -216,9 +217,6 @@ func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool, pauseT
 		// if not master, no need to wait for publishing of tokens
 		close(pauser.waitForTokenPublish)
 	}
-
-	// TODO: Move logic from run to handlers for PauseUploadTokens
-	go pauser.run(master)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -403,8 +401,6 @@ func (p *Pauser) processPauseUploadToken(putId string, put *PauseUploadToken) {
 
 	defer p.wg.Done()
 
-	// TODO: Check DDL running
-
 	// "processed" var ensures only the incoming token state gets processed by this
 	// call, as metakv will call parent processUploadTokens again for each state change.
 	var processed bool
@@ -472,6 +468,17 @@ func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *PauseUploadT
 	case PauseUploadTokenProcessed:
 		// Master owns token
 
+		shardPaths := put.Shards
+		if shardPaths != nil {
+			func() {
+				p.task.pauseMetadata.lock.Lock()
+				defer p.task.pauseMetadata.lock.Unlock()
+				for _, shardId := range shardPaths {
+					p.task.pauseMetadata.addShardNoLock(service.NodeID(put.FollowerId), shardId)
+				}
+			}()
+		}
+
 		// Follower completed work, delete token
 		err := common.MetakvDel(PauseMetakvDir + putId)
 		if err != nil {
@@ -489,9 +496,11 @@ func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *PauseUploadT
 
 			logging.Infof("Pauser::processPauseUploadTokenAsMaster: No Tokens Found. Mark Done.")
 
+			err := p.masterUploadPauseMetadata()
+
 			p.cancelMetakv()
 
-			go p.finishPause(nil)
+			go p.finishPause(err)
 		}
 
 		return true
@@ -505,7 +514,7 @@ func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *PauseUploadT
 
 func (p *Pauser) finishPause(err error) {
 
-	if p.retErr == nil {
+	if p.retErr == nil && err != nil {
 		p.retErr = err
 	}
 
@@ -517,9 +526,10 @@ func (p *Pauser) doFinish() {
 
 	// TODO: signal others that we are cleaning up using done channel
 
-	p.cancelMetakv()
+	p.Cleanup()
 	p.wg.Wait()
 
+	p.pauseMgr.endTask(p.retErr,p.task.taskId)
 	// TODO: call done callback to start the cleanup phase
 }
 
@@ -560,9 +570,11 @@ func (p *Pauser) processPauseUploadTokenAsFollower(putId string, put *PauseUploa
 		return true
 
 	case PauseUploadTokenProcessed:
-		// Master owns token, just mark in memory maps
+		// Master owns token, follower work is done cleanup and start watcher
 
 		p.updateInMemToken(putId, put, "follower")
+
+		p.finishPause(nil)
 
 		return false
 
@@ -583,8 +595,16 @@ func (p *Pauser) startPauseUpload(putId string, put *PauseUploadToken) {
 	}
 	defer p.wg.Done()
 
-	// TODO: Replace sleep with actual work
-	time.Sleep(5 * time.Second)
+	shardPaths, err := p.followerUploadBucketData()
+	if err != nil {
+		put.Error = err.Error()
+	} else if shardPaths != nil {
+		shardIds := make([]common.ShardId, 0, len(shardPaths))
+		for shardId := range shardPaths {
+			shardIds = append(shardIds, shardId)
+		}
+		put.Shards = shardIds
+	}
 
 	// work done, change state, master handler will pick it up and do cleanup.
 	put.State = PauseUploadTokenProcessed
@@ -672,14 +692,12 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *man
 		this.pauseMgr.httpAddr, this.task.bucket)
 	resp, err := getWithAuth(url)
 	if err != nil {
-		this.failPause(_restGetLocalIndexMetadataBinary, fmt.Sprintf("getWithAuth(%v)", url), err)
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	byteSlice, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		this.failPause(_restGetLocalIndexMetadataBinary, "ReadAll(resp.Body)", err)
 		return nil, nil, err
 	}
 
@@ -687,7 +705,6 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *man
 	metadata := new(manager.LocalIndexMetadata)
 	err = json.Unmarshal(byteSlice, metadata)
 	if err != nil {
-		this.failPause(_restGetLocalIndexMetadataBinary, "Unmarshal localMeta", err)
 		return nil, nil, err
 	}
 	if len(metadata.IndexDefinitions) == 0 {
@@ -696,19 +713,6 @@ func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *man
 
 	// Return checksummed and optionally compressed byte slice, not the unmarshaled object
 	return common.ChecksumAndCompress(byteSlice, compress), metadata, nil
-}
-
-// failPause logs an error using the caller's logPrefix and a provided context string and aborts the
-// Pause task. If there is a set of known Indexer nodes, it will also try to notify them.
-func (this *Pauser) failPause(logPrefix string, context string, error error) {
-	logging.Errorf("%v Aborting Pause task %v due to %v error: %v", logPrefix,
-		this.task.taskId, context, error)
-
-	// Mark the task as failed directly here on master node (avoids dependency on loopback REST)
-	this.task.TaskObjSetFailed(error.Error())
-
-	// Notify other Index nodes
-	this.pauseMgr.RestNotifyFailedTask(this.otherIndexAddrs, this.task, error.Error())
 }
 
 // masterUploadPauseMetadata is master's method to upload PauseMetadata to object store
@@ -721,8 +725,6 @@ func (this *Pauser) failPause(logPrefix string, context string, error error) {
 // archivePath/
 // └── pauseMetadata.json
 func (p *Pauser) masterUploadPauseMetadata() error {
-	reader := bytes.NewReader(nil)
-
 	metadata := p.task.pauseMetadata
 
 	metadata.lock.Lock()
@@ -747,9 +749,25 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
 	}
 
-	reader.Reset(common.ChecksumAndCompress(data, compression))
+	data = common.ChecksumAndCompress(data, compression)
 
-	err = Upload(p.task.archivePath, FILENAME_PAUSE_METADATA, reader)
+	ctx := p.task.ctx
+	plasmaCfg := plasma.DefaultConfig()
+	
+	copier := plasma.MakeFileCopier(p.task.archivePath,"",plasmaCfg.Environment,plasmaCfg.CopyConfig)
+	if copier == nil {
+		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported",p.task.archivePath)
+		logging.Errorf("Pauser::masterUploadPauseMetadata: %v",err)
+		return err
+	}
+
+	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v",p.task.archivePath,FILENAME_PAUSE_METADATA))
+	if err != nil {
+		logging.Errorf("Pauser::masterUploadPauseMetadata: url encoding failed, err: %v to %v%v for task ID: %v", err, p.task.archivePath, FILENAME_METADATA, p.task.taskId)
+		return err
+	}
+	_, err = copier.UploadBytes(ctx,data,url)
+
 	if err != nil {
 		logging.Errorf("Pauser::masterUploadPauseMetadata: upload of pause metadata failed to path : %v%v err: %v for task ID %v", p.task.archivePath, FILENAME_PAUSE_METADATA, err, p.task.taskId)
 		return err
@@ -785,7 +803,14 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
 	}
 
-	reader := bytes.NewReader(nil)
+	plasmaCfg := plasma.DefaultConfig()
+	copier := plasma.MakeFileCopier(p.task.archivePath,"",plasmaCfg.Environment,plasmaCfg.CopyConfig)
+	if copier == nil {
+		err := fmt.Errorf("couldn't create a copier object. archive path %v is unsupported", p.task.archivePath)
+		logging.Errorf("Pauser::followerUploadBucketData: %v", err)
+		return nil, err
+	}
+	ctx := p.task.ctx
 
 	logging.Tracef("Pauser::followerUploadBucketData: uploading data to path %v", nodePath)
 
@@ -802,8 +827,12 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// Step 2. Upload index metadata
-	reader.Reset(byteSlice)
-	err = Upload(nodePath, FILENAME_METADATA, reader)
+	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v",nodePath,FILENAME_METADATA))
+	if err != nil {
+		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		return nil, err
+	}
+	_, err = copier.UploadBytes(ctx,byteSlice,url)
 	if err != nil {
 		logging.Errorf("Pauser::followerUploadBucketData: metadata upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
 		return nil, err
@@ -829,8 +858,12 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// Step 4. Upload index stats
-	reader.Reset(byteSlice)
-	err = Upload(nodePath, FILENAME_STATS, reader)
+	url, err = copier.GetPathEncoding(fmt.Sprintf("%v%v",nodePath,FILENAME_STATS))
+	if err != nil {
+		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		return nil, err
+	}
+	_, err = copier.UploadBytes(ctx,byteSlice,url)
 	if err != nil {
 		logging.Errorf("Pauser::followerUploadBucketData: stats upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_STATS, p.task.taskId)
 		return nil, err
@@ -863,81 +896,24 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// TODO: add contextWithCancel to task and reuse it here
-	ctx := context.Background()
-	closeCh := ctx.Done()
-	respCh := make(chan Message)
-	// progressCh := make(chan *ShardTransferStatistics, 1000) TODO: progress reporting
-
-	msg := &MsgStartShardTransfer{
-		shardIds:    getShardIds(),
-		taskId:      p.task.taskId,
-		transferId:  p.task.bucket,
-		taskType:    common.PauseResumeTask,
-		destination: nodePath,
-
-		cancelCh:   closeCh,
-		doneCh:     closeCh,
-		respCh:     respCh,
-		progressCh: nil,
-	}
-
-	p.pauseMgr.supvMsgch <- msg
-
-	resp, ok := (<-respCh).(*MsgShardTransferResp)
-	if !ok || resp == nil {
-		err := fmt.Errorf("couldn't get a valid response from ShardTransferManager")
-		logging.Errorf("Pauser::followerUploadBucketData: shard upload gave invalid response err: %v for task ID: %v", err, p.task.taskId)
-		return nil, err
-	}
-	errMap := resp.GetErrorMap()
-	var errMsg strings.Builder
-	for shard, err := range errMap {
-		if err != nil {
-			fmt.Fprintf(&errMsg, "Error in shardId %v upload: %v\n", shard, err)
-		}
-	}
-	if errMsg.Len() != 0 {
-		err = errors.New(errMsg.String())
-		logging.Errorf("Pauser::followerUploadBucketData: shard uploads failed err: %v\n for task ID: $v", err, p.task.taskId)
-		return nil, err
-	}
-
-	logging.Infof("Pauser::followerUploadBucketData: Shards saved at: %v for bucket %v", resp.GetShardPaths(), p.task.bucket)
-	return resp.GetShardPaths(), nil
-}
-
-// run is a goroutine for the main body of Pause work for this.task.
-//
-//	master - true iff this node is the master
-func (this *Pauser) run(master bool) {
-	// Get the list of Index node host:port addresses EXCLUDING this one
-	this.otherIndexAddrs = this.pauseMgr.GetIndexerNodeAddresses(this.pauseMgr.httpAddr)
-
-	/////////////////////////////////////////////
-	// Work done by master only
-	/////////////////////////////////////////////
-
-	if master {
-		err := this.masterUploadPauseMetadata()
-		if err != nil {
-			this.failPause("Pauser::run:", "Upload Pause Metadata", err)
-			return
-		}
-
-		// Notify the followers to start working on this task
-		this.pauseMgr.RestNotifyPause(this.otherIndexAddrs, this.task)
-	} // if master
-
-	/////////////////////////////////////////////
-	// Work done by both master and followers
-	/////////////////////////////////////////////
-
-	shardPathMap, err := this.followerUploadBucketData()
+	closeCh := p.task.ctx.Done()
+	shardPaths, err := p.pauseMgr.copyShardsWithLock(getShardIds(), p.task.taskId, p.task.bucket, nodePath, closeCh)
 	if err != nil {
-		this.failPause("Pauser::run:", "Upload Bucket Data", err)
-		return
+		return nil, err
 	}
-
-	// TODO: update shard paths in metakv tokens
-	logging.Tracef("TODO: remove this shardPathMap log %v", shardPathMap)
+	return shardPaths, nil
 }
+
+// cleanupNoLocks stops any ongoing operation and starts bucket endpoint watchers
+func (p *Pauser) cleanupNoLocks() {
+	p.task.cancelNoLock()
+	go monitorBucketForPauseResume(p.task.bucket, true)
+}
+
+func (p *Pauser) Cleanup() {
+	p.task.taskMu.Lock()
+	p.cleanupNoLocks()
+	p.task.taskMu.Unlock()
+	p.cancelMetakv()
+}
+

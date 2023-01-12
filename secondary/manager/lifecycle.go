@@ -3012,6 +3012,8 @@ func (m *LifecycleMgr) getDiffFromLastSent(currStats *client.IndexStats2) *clien
 // de-duplicates the stats and converts them to client.IndexStats2 format
 func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 
+	indexProcessed := make(map[string]bool)
+
 	// Returns the fully qualified index name and bucket name
 	getIndexAndBucketName := func(indexName string) (string, string) {
 		split := strings.Split(indexName, ":")
@@ -3042,6 +3044,10 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 					indexStats2.Stats[bucketName].Indexes = make(map[string]*client.PerIndexStats)
 				}
 
+				if _, ok := indexProcessed[indexName]; ok {
+					continue // Skip processing as the index is already processed
+				}
+
 				indexStats2.Stats[bucketName].NumDocsPending = stats[indexName+":num_docs_pending"].(float64)
 				indexStats2.Stats[bucketName].NumDocsQueued = stats[indexName+":num_docs_queued"].(float64)
 				indexStats2.Stats[bucketName].LastRollbackTime = stats[indexName+":last_rollback_time"].(string)
@@ -3050,7 +3056,7 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 				indexStats2.Stats[bucketName].Indexes[indexName] = &client.PerIndexStats{}
 				indexStats2.Stats[bucketName].Indexes[indexName].LastScanTime = stats[indexName+":last_known_scan_time"].(float64)
 
-				clearIndexFromStats(indexName)
+				indexProcessed[indexName] = true
 			}
 		}
 	}
