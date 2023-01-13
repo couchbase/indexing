@@ -374,6 +374,17 @@ func (ctxt *perfContext) GetReqDeadline() time.Time {
 	return time.Time{}
 }
 
+func (ctxt *perfContext) TenantCtx() tenant.Context {
+	return nil
+}
+
+func (ctxt *perfContext) SetFirstCreds(creds string) {
+}
+
+func (ctxt *perfContext) FirstCreds() (string, bool) {
+	return "", true
+}
+
 func skey2qkey(skey c.SecondaryKey) value.Values {
 	qkey := make(value.Values, 0, len(skey))
 	for _, x := range skey {
