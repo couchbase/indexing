@@ -928,6 +928,12 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 		}
 	}
 
+	if m.rebalancer != nil {
+		m.rebalancer.RestoreAndUnlockShards()
+	} else if m.rebalancerF != nil {
+		m.rebalancerF.RestoreAndUnlockShards()
+	}
+
 	err := m.cleanupLocalRToken()
 	if err != nil {
 		return err
@@ -1375,9 +1381,6 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Deleted ttid: %v, "+
 			"from metakv", ttid)
 
-	case c.ShardTokenRestoreShard, c.ShardTokenRecoverShard:
-		unlockShards(tt.ShardIds, m.supvMsgch)
-
 	case c.ShardTokenReady:
 		// If this token is in Ready state, check for the presence of
 		// a tranfser token with ShardTokenDropOnSource state. If it
@@ -1397,9 +1400,10 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup will be invoked on destination node. Unlock shards on source
-			unlockShards(tt.ShardIds, m.supvMsgch)
-
+		} else {
+			// Else, cleanup on destination will be triggered as rebalance is not complete for this tenant
+			// Shards will be unlocked for source (by rebalance_service_manager) after cleanup
+			// is complete
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 		}
@@ -1489,9 +1493,10 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup on source will be triggered as rebalance is complete for this tenant
-			unlockShards(tt.ShardIds, m.supvMsgch)
-
+		} else {
+			// Else, cleanup on source will be triggered as rebalance is complete for this tenant
+			// Shards will be unlocked for destination (by rebalance_service_manager) after cleanup
+			// is complete
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 		}
@@ -3743,7 +3748,7 @@ func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *htt
 		}
 
 		logging.Infof("RebalanceServiceManager::handleLockShards Locking shards: %v as requested by user", shardIds)
-		err = lockShards(shardIds, m.supvMsgch)
+		err = lockShards(shardIds, m.supvMsgch, false)
 		if err != nil {
 			logging.Infof("RebalanceServiceManager::handleLockShards Error observed when locking shards: %v, err: %v", shardIds, err)
 			m.writeError(w, err)

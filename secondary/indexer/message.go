@@ -206,6 +206,7 @@ const (
 	LOCK_SHARDS
 	UNLOCK_SHARDS
 	RESTORE_SHARD_DONE
+	RESTORE_AND_UNLOCK_LOCKED_SHARDS
 )
 
 type Message interface {
@@ -2744,9 +2745,10 @@ func (m *MsgUpdateRebalancePhase) GetBucketTransferPhase() map[string]common.Reb
 }
 
 type MsgLockUnlockShards struct {
-	mType    MsgType
-	shardIds []common.ShardId
-	respCh   chan map[common.ShardId]error
+	mType             MsgType
+	shardIds          []common.ShardId
+	lockedForRecovery bool
+	respCh            chan map[common.ShardId]error
 }
 
 func (m *MsgLockUnlockShards) GetMsgType() MsgType {
@@ -2755,6 +2757,10 @@ func (m *MsgLockUnlockShards) GetMsgType() MsgType {
 
 func (m *MsgLockUnlockShards) GetShardIds() []common.ShardId {
 	return m.shardIds
+}
+
+func (m *MsgLockUnlockShards) IsLockedForRecovery() bool {
+	return m.lockedForRecovery
 }
 
 func (m *MsgLockUnlockShards) GetRespCh() chan map[common.ShardId]error {
@@ -2775,6 +2781,18 @@ func (m *MsgRestoreShardDone) GetShardIds() []common.ShardId {
 }
 
 func (m *MsgRestoreShardDone) GetRespCh() chan bool {
+	return m.respCh
+}
+
+type MsgRestoreAndUnlockShards struct {
+	respCh chan bool
+}
+
+func (m *MsgRestoreAndUnlockShards) GetMsgType() MsgType {
+	return RESTORE_AND_UNLOCK_LOCKED_SHARDS
+}
+
+func (m *MsgRestoreAndUnlockShards) GetRespCh() chan bool {
 	return m.respCh
 }
 
@@ -3096,6 +3114,8 @@ func (m MsgType) String() string {
 		return "UNLOCK_SHARDS"
 	case RESTORE_SHARD_DONE:
 		return "RESTORE_SHARD_DONE"
+	case RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+		return "RESTORE_AND_UNLOCK_LOCKED_SHARDS"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

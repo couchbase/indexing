@@ -446,6 +446,10 @@ func (r *Rebalancer) Cancel() {
 	r.wg.Wait()
 }
 
+func (r *Rebalancer) RestoreAndUnlockShards() {
+	// No-op for rebalancer. Only used for shard rebalancer
+}
+
 func (r *Rebalancer) finishRebalance(err error) {
 	if err == nil && r.master && r.topologyChange != nil {
 		// Note that this function tansfers the ownership of only those

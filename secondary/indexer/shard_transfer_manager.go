@@ -16,6 +16,14 @@ type ShardTransferManager struct {
 	config common.Config
 	cmdCh  chan Message
 
+	// lockedShards represent the list of shards that are locked
+	// for rebalance and are yet to be unlocked. Whenever shard
+	// rebalancer acquires lock, this map is updated. The entires
+	// in this map is cleared either when the shard is destroyed
+	// (or) when the shard is unlocked
+	lockedShards map[common.ShardId]bool
+	mu           sync.Mutex
+
 	sliceList          []Slice
 	sliceCloseNotifier map[common.ShardId]MsgChannel
 }
@@ -24,6 +32,7 @@ func NewShardTransferManager(config common.Config) *ShardTransferManager {
 	stm := &ShardTransferManager{
 		config:             config,
 		cmdCh:              make(chan Message),
+		lockedShards:       make(map[common.ShardId]bool),
 		sliceCloseNotifier: make(map[common.ShardId]MsgChannel),
 	}
 
@@ -97,7 +106,10 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 		stm.handleUnlockShardsCommand(cmd)
 
 	case RESTORE_SHARD_DONE:
-		stm.handleRestoreShardDone(cmd)
+		go stm.handleRestoreShardDone(cmd)
+
+	case RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+		go stm.handleRestoreAndUnlockShards(cmd)
 	}
 }
 
@@ -478,6 +490,15 @@ func (stm *ShardTransferManager) processDestroyLocalShardMessage(cmd Message, no
 		if err := plasma.DestroyShardID(plasma.ShardId(shardId)); err != nil {
 			logging.Errorf("ShardTransferManager::processDestroyLocalShardMessage Error cleaning-up shardId: %v from "+
 				"local file system, err: %v", shardId, err)
+		} else {
+			// Since the shard is being destroyed, delete the shard from book-keeping as
+			// there is no need to unlock a deleted shard
+			func() {
+				stm.mu.Lock()
+				defer stm.mu.Unlock()
+
+				delete(stm.lockedShards, shardId)
+			}()
 		}
 	}
 
@@ -531,10 +552,14 @@ func (stm *ShardTransferManager) updateSliceStatus() {
 func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 	lockMsg := cmd.(*MsgLockUnlockShards)
 
+	stm.mu.Lock()
+	defer stm.mu.Unlock()
+
 	shardIds := lockMsg.GetShardIds()
 	respCh := lockMsg.GetRespCh()
+	isLockedForRecovery := lockMsg.IsLockedForRecovery()
 
-	logging.Infof("ShardTransferManager::handleLockShardCommands Initiating shard locking for shards: %v", shardIds)
+	logging.Infof("ShardTransferManager::handleLockShardCommands Initiating shard locking for shards: %v, isLockedForRecovery: %v", shardIds, isLockedForRecovery)
 	start := time.Now()
 
 	errMap := make(map[common.ShardId]error)
@@ -542,6 +567,8 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 		err := plasma.LockShard(plasma.ShardId(shardId))
 		if err != nil {
 			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard: %v, err: %v", shardId, err)
+		} else {
+			stm.lockedShards[shardId] = isLockedForRecovery
 		}
 		errMap[shardId] = err
 	}
@@ -554,6 +581,9 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 	lockMsg := cmd.(*MsgLockUnlockShards)
 
+	stm.mu.Lock()
+	defer stm.mu.Unlock()
+
 	shardIds := lockMsg.GetShardIds()
 	respCh := lockMsg.GetRespCh()
 
@@ -565,6 +595,8 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 		err := plasma.UnlockShard(plasma.ShardId(shardId))
 		if err != nil {
 			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v, err: %v", shardId, err)
+		} else {
+			delete(stm.lockedShards, shardId) // Clear book-keeping as shard is unlocked
 		}
 		errMap[shardId] = err
 	}
@@ -585,5 +617,35 @@ func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
 		plasma.RestoreShardDone(plasma.ShardId(shardId))
 	}
 	logging.Infof("ShardTransferManager::handleRestoreShardDone Finished RestoreShardDone for shards: %v, elapsed: %v", shardIds, time.Since(start))
+	respCh <- true
+}
+
+func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
+	clone := make(map[common.ShardId]bool)
+
+	msg := cmd.(*MsgRestoreAndUnlockShards)
+	respCh := msg.GetRespCh()
+	func() {
+		stm.mu.Lock()
+		defer stm.mu.Unlock()
+
+		for shardId, lockedForRecovery := range stm.lockedShards {
+			clone[shardId] = lockedForRecovery
+		}
+	}()
+
+	for shardId, lockedForRecovery := range clone {
+		if lockedForRecovery {
+			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
+			plasma.RestoreShardDone(plasma.ShardId(shardId))
+		}
+		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v", shardId)
+		if err := plasma.UnlockShard(plasma.ShardId(shardId)); err != nil {
+			logging.Errorf("ShardTransferManager::handleRestoreAndUnlockShards Error observed while unlocking shard: %v, err: %v", shardId, err)
+		} else {
+			delete(stm.lockedShards, shardId) // Clean the book-keeping
+		}
+	}
+
 	respCh <- true
 }

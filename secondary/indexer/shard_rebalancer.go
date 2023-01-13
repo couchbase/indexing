@@ -658,7 +658,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	// Unlock of the shard happens:
 	// (a) after shard transfer is successful & destination node has recovered the shard
 	// (b) If any error is encountered, clean-up from indexer will unlock the shards
-	err := lockShards(tt.ShardIds, sr.supvMsgch)
+	err := lockShards(tt.ShardIds, sr.supvMsgch, false)
 	if err != nil {
 		logging.Errorf("ShardRebalancer::startShardTransfer Observed error: %v when locking shards: %v", err, tt.ShardIds)
 
@@ -1009,7 +1009,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
-	if err := lockShards(tt.ShardIds, sr.supvMsgch); err != nil {
+	if err := lockShards(tt.ShardIds, sr.supvMsgch, true); err != nil {
 		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
 
 		unlockShards(tt.ShardIds, sr.supvMsgch)
@@ -2201,6 +2201,17 @@ func (sr *ShardRebalancer) Cancel() {
 	}
 }
 
+func (sr *ShardRebalancer) RestoreAndUnlockShards() {
+	l.Infof("ShardRebalancer::RestoreAndUnlockShards Initiating restore and shard unlock")
+
+	respCh := make(chan bool)
+	sr.supvMsgch <- &MsgRestoreAndUnlockShards{
+		respCh: respCh,
+	}
+	<-respCh
+	l.Infof("ShardRebalancer::RestoreAndUnlockShards Exiting")
+}
+
 // This function batches a group of transfer tokens
 // according to the following rules:
 //
@@ -2446,13 +2457,14 @@ func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
 }
 
-func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
+func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel, lockedForRecovery bool) error {
 
 	respCh := make(chan map[common.ShardId]error)
 	msg := &MsgLockUnlockShards{
-		mType:    LOCK_SHARDS,
-		shardIds: shardIds,
-		respCh:   respCh,
+		mType:             LOCK_SHARDS,
+		shardIds:          shardIds,
+		lockedForRecovery: lockedForRecovery,
+		respCh:            respCh,
 	}
 
 	supvMsgch <- msg
