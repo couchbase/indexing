@@ -2164,14 +2164,16 @@ func (sr *ShardRebalancer) isFinish() bool {
 	return atomic.LoadInt32(&sr.isDone) == 1
 }
 
-func (sr *ShardRebalancer) cancelMetakv() {
+func (sr *ShardRebalancer) cancelMetakv() bool {
 	sr.metakvMutex.Lock()
 	defer sr.metakvMutex.Unlock()
 
 	if sr.metakvCancel != nil {
 		close(sr.metakvCancel)
 		sr.metakvCancel = nil
+		return true
 	}
+	return false
 }
 
 func (sr *ShardRebalancer) addToWaitGroup() bool {
@@ -2193,9 +2195,10 @@ func (sr *ShardRebalancer) setTransferTokenError(ttid string, tt *c.TransferToke
 func (sr *ShardRebalancer) Cancel() {
 	l.Infof("ShardRebalancer::Cancel Exiting")
 
-	sr.cancelMetakv()
-	close(sr.cancel)
-	sr.wg.Wait()
+	if sr.cancelMetakv() {
+		close(sr.cancel)
+		sr.wg.Wait()
+	}
 }
 
 // This function batches a group of transfer tokens

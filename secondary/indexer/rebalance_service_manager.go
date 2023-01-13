@@ -2281,6 +2281,12 @@ func (m *RebalanceServiceManager) cancelPrepareTaskLOCKED() error {
 		m.monitorStopCh = nil
 	}
 
+	if common.IsServerlessDeployment() && m.rebalancerF != nil {
+		logging.Infof("RebalanceServiceManager::cancelPrepareTaskLOCKED Initiating cleanup on rebalance follower")
+		m.rebalancerF.Cancel()
+		m.onRebalanceDoneLOCKED(nil, true)
+	}
+
 	m.cleanupRebalanceRunning()
 
 	m.updateState(func(s *state) {
