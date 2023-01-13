@@ -4841,3 +4841,111 @@ func filterPartialSubClusters(subClusters []SubCluster) []SubCluster {
 	}
 	return subClusters
 }
+
+//ExecuteTenantAwarePlanForResume provides index placement planning on a tenant resume .
+//Given an input cluster url and slice of index metadata for resume nodes, it will return
+//the set of resume tokens.
+func ExecuteTenantAwarePlanForResume(clusterUrl string,
+	resumeNodes []*IndexerNode) (map[string]*common.TransferToken, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nil, false)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	p, err := executeTenantAwarePlanForResume(plan, resumeNodes)
+	if err != nil {
+		return nil, err
+	}
+
+	if p != nil {
+		logging.Infof("************ Indexer Layout After Resume*************")
+		p.Print()
+		logging.Infof("****************************************")
+	}
+
+	filterSolution(p.Result.Placement)
+
+	//TODO
+	//genResumeToken()
+
+	return nil, nil
+}
+
+func executeTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*TenantAwarePlanner,
+	error) {
+
+	const _executeTenantAwarePlanForResume = "Planner::executeTenantAwarePlanForResume"
+
+	logging.Infof("%v Resume Nodes %v", _executeTenantAwarePlanForResume, resumeNodes)
+
+	solution := solutionFromPlan2(plan)
+	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
+
+	//group indexer nodes into subclusters
+	allSubClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Infof("%v Found SubClusters  %v", _executeTenantAwarePlanForResume, allSubClusters)
+
+	//Only 1 tenant can be resumed at a time. And 1 tenant can only reside on 1 subcluster.
+	if len(resumeNodes) != cSubClusterLen {
+		errStr := fmt.Sprintf("Unexpected number of resumeNodes %v. Expected %v", len(resumeNodes), cSubClusterLen)
+		logging.Errorf("%v %v", _executeTenantAwarePlanForResume, errStr)
+		return nil, errors.New(errStr)
+	}
+
+	var resumeSubCluster SubCluster
+	for _, node := range resumeNodes {
+		resumeSubCluster = append(resumeSubCluster, node)
+	}
+
+	tenantsToBeResumed := getTenantUsageForSubClusters([]SubCluster{resumeSubCluster})
+
+	for _, tenants := range tenantsToBeResumed {
+		for _, tenant := range tenants {
+			logging.Infof("%v TenantToBeResumed %v", _executeTenantAwarePlanForResume, tenant)
+		}
+	}
+	if len(tenantsToBeResumed) == 0 {
+		errStr := "Unable to find any tenant for resume"
+		logging.Errorf("%v %v", _executeTenantAwarePlanForResume, errStr)
+		return nil, errors.New(errStr)
+	}
+
+	subClustersBelowLWM, err := findSubClustersBelowLowThreshold(allSubClusters,
+		plan.UsageThreshold)
+	if err != nil {
+		return nil, err
+	}
+
+	subClustersBelowLWM = filterPartialSubClusters(subClustersBelowLWM)
+
+	logging.Infof("%v Found SubClusters Below LWM %v", _executeTenantAwarePlanForResume, subClustersBelowLWM)
+
+	if len(subClustersBelowLWM) == 0 {
+		errStr := "No SubCluster Below Low Usage Threshold"
+		return nil, errors.New(errStr)
+	}
+
+	subClustersBelowLWM = sortSubClustersByMemUsage(subClustersBelowLWM)
+
+	tenantPlaced := moveTenantsToLowUsageSubCluster(solution, tenantsToBeResumed, subClustersBelowLWM,
+		[]SubCluster{resumeSubCluster}, plan.UsageThreshold)
+
+	if !tenantPlaced {
+		errStr := "Not Enough Capacity To Place Tenant"
+		return nil, errors.New(errStr)
+	}
+
+	return tenantAwarePlanner, nil
+}
+
+//generate resume tokens from solution
+func genResumeToken(solution *Solution) {
+
+	//TODO
+
+}
