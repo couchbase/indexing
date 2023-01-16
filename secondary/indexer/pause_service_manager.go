@@ -849,12 +849,84 @@ func (m *PauseServiceManager) cleanupPauseUploadTokens(puts map[string]*PauseUpl
 		logging.Infof("PauseServiceManager::cleanupPauseUploadTokens: Cleaning Up %v %v", putId, put)
 
 		if put.MasterId == string(m.nodeInfo.NodeID) {
-			// TODO: cleanup pause upload token for master
+			if err := m.cleanupPauseUploadTokenForMaster(putId, put); err != nil {
+				return err
+			}
 		}
 
 		if put.FollowerId == string(m.nodeInfo.NodeID) {
-			// TODO: cleanup pause upload token for follower
+			if err := m.cleanupPauseUploadTokenForFollower(putId, put); err != nil {
+				return err
+			}
 		}
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupPauseUploadTokenForMaster(putId string, put *PauseUploadToken) error {
+
+	switch put.State {
+	case PauseUploadTokenProcessed, PauseUploadTokenError:
+
+		logging.Infof("PauseServiceManager::cleanupPauseUploadTokenForMaster: Cleanup Token %v %v", putId, put)
+
+		if err := common.MetakvDel(PauseMetakvDir + putId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForMaster: Unable to delete" +
+				"PauseUploadToken[%v] In Meta Storage: err[%v]", put, err)
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, put *PauseUploadToken) error {
+
+	switch put.State {
+
+	case PauseUploadTokenPosted:
+		// Followers just acknowledged the token, just delete the token from metakv.
+
+		err := common.MetakvDel(PauseMetakvDir + putId)
+		if err != nil {
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Unable to delete[%v] in "+
+				"Meta Storage: err[%v]", put, err)
+			return err
+		}
+
+	case PauseUploadTokenInProgess:
+		// Follower node might be uploading the data
+
+		logging.Infof("PauseServiceManager::cleanupPauseUploadTokenForFollower: Initiating clean-up for" +
+			" putId[%v], put[%v]", putId, put)
+
+		pauser, exists := m.getPauser(put.PauseId)
+		if !exists {
+			err := fmt.Errorf("Pauser with pauseId[%v] not found", put.PauseId)
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Failed to find pauser:" +
+				" err[%v]", err)
+
+			return err
+		}
+
+		// Cancel pause upload work using task ctx
+		if doCancelUpload := pauser.task.cancelFunc; doCancelUpload != nil {
+			doCancelUpload()
+		} else {
+			logging.Warnf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Task already cancelled")
+		}
+
+		if err := common.MetakvDel(PauseMetakvDir + putId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Unable to delete" +
+				" PauseUploadToken[%v] In Meta Storage: err[%v]", put, err)
+			return err
+		}
+
+		logging.Infof("PauseServiceManager::cleanupPauseUploadTokenForFollower: Deleted putId[%v] from metakv",
+			putId)
+
 	}
 
 	return nil
