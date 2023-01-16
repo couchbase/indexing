@@ -649,14 +649,16 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	}
 
 	if err := m.initStartPhase(params.Bucket, params.ID); err != nil {
+		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return  err
 	}
 
 	// Create a Pauser object to run the master orchestration loop.
 
-	pauser := NewPauser(m, task, m.pauseTokensById[params.ID])
+	pauser := NewPauser(m, task, m.pauseTokensById[params.ID], m.pauseDoneCallback)
 
 	if err := m.setPauser(params.ID, pauser); err != nil {
+		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
 
@@ -711,6 +713,51 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err er
 	if err = m.registerGlobalPauseToken(pauseToken); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// pauseDoneCallback is the Pauser.cb.done callback function.
+// Upload work is interrupted based on pauseId, using cancel ctx from task in pauser.
+func (m *PauseServiceManager) pauseDoneCallback(pauseId string, err error) {
+
+	pauser, exists := m.getPauser(pauseId)
+	if !exists {
+		logging.Errorf("PauseServiceManager::pauseDoneCallback: Failed to find Pauser with pauseId[%v]", pauseId)
+		return
+	}
+
+	// If there is an error, set it in the task, otherwise, delete task from task list.
+	// TODO: Check if follower task should be handled differently.
+	m.endTask(err, pauseId)
+
+	isMaster := pauser.task.isMaster()
+
+	if err := m.runPauseCleanupPhase(pauseId, isMaster); err != nil {
+		logging.Errorf("PauseServiceManager::pauseDoneCallback: Failed to run cleanup: err[%v]", err)
+		return
+	}
+
+	if err := m.setPauser(pauseId, nil); err != nil {
+		logging.Errorf("PauseServiceManager::pauseDoneCallback: Failed to run cleanup: err[%v]", err)
+		return
+	}
+
+	logging.Infof("PauseServiceManager::pauseDoneCallback Pause Done: isMaster %v, err: %v",
+		isMaster, err)
+}
+
+func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool) error {
+
+	logging.Infof("PauseServiceManager::runPauseCleanupPhase pauseId[%v] isMaster[%v]", pauseId, isMaster)
+
+	if isMaster {
+		// TODO: cleanup global master token
+	}
+
+	// TODO: Get tokens and cleanup PauseUploadTokens
+
+	// TODO: Cleanup pause token in local meta
 
 	return nil
 }
@@ -1020,7 +1067,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				return
 			}
 
-			pauser := NewPauser(m, task, &pauseToken)
+			pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback)
 
 			if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
 				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping" +

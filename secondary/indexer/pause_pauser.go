@@ -145,6 +145,9 @@ func setPauseUploadTokenInMetakv(putId string, put *PauseUploadToken) {
 // This is used only on the master node of a task_PAUSE task to do the GSI orchestration.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+//  Called at the end of the pause lifecycle. It takes pauseId and any error as input.
+type PauseDoneCallback func(string, error)
+
 // Pauser object holds the state of Pause orchestration
 type Pauser struct {
 	// nodeDir is "node_<nodeId>/" for this node, where nodeId is the 32-digit hex ID from ns_server
@@ -183,6 +186,7 @@ type Pauser struct {
 	// For cleanup
 	retErr      error
 	cleanupOnce sync.Once
+	doneCb      PauseDoneCallback
 }
 
 // NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -190,8 +194,11 @@ type Pauser struct {
 //
 //	pauseMgr - parent object (singleton)
 //	task - the task_PAUSE task this object will execute
-//	master - true iff this node is the master
-func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken) *Pauser {
+//	pauseToken - global PauseToken
+//	doneCb - callback that initiates the cleanup phase
+func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken,
+	doneCb PauseDoneCallback) *Pauser {
+
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
 		task:     task,
@@ -203,6 +210,8 @@ func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseTo
 
 		masterTokens:   make(map[string]*PauseUploadToken),
 		followerTokens: make(map[string]*PauseUploadToken),
+
+		doneCb: doneCb,
 	}
 
 	task.taskMu.Lock()
@@ -359,6 +368,9 @@ func (p *Pauser) processUploadTokens(kve metakv.KVEntry) error {
 		logging.Infof("Pauser::processUploadTokens: PauseToken path[%v] value[%s]", kve.Path, kve.Value)
 
 		if kve.Value == nil {
+			// During cleanup, PauseToken is deleted by master and serves as a signal for
+			// all observers on followers to stop.
+
 			logging.Infof("Pauser::processUploadTokens: PauseToken Deleted. Mark Done.")
 			p.cancelMetakv()
 			p.finishPause(nil)
@@ -533,8 +545,10 @@ func (p *Pauser) doFinish() {
 	p.Cleanup()
 	p.wg.Wait()
 
-	p.pauseMgr.endTask(p.retErr,p.task.taskId)
-	// TODO: call done callback to start the cleanup phase
+	// TODO: move this to inside the done callback
+
+	// call done callback to start the cleanup phase
+	p.doneCb(p.pauseToken.PauseId, p.retErr)
 }
 
 func (p *Pauser) processPauseUploadTokenAsFollower(putId string, put *PauseUploadToken) bool {
