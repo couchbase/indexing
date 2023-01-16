@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -759,12 +760,101 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 		}
 	}
 
-	// TODO: Get tokens and cleanup PauseUploadTokens
+	_, puts, err := m.getCurrPauseTokens(pauseId)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::runPauseCleanupPhase Error Fetching Metakv Tokens: err[%v]", err)
+		return err
+	}
+
+	if len(puts) != 0 {
+		if err := m.cleanupPauseUploadTokens(puts); err != nil {
+			logging.Errorf("PauseServiceManager::runPauseCleanupPhase Error Cleaning Tokens: err[%v]", err)
+			return err
+		}
+	}
 
 	if err := m.cleanupLocalPauseToken(pauseId); err != nil {
 		logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in local" +
 			" meta: err[%v]", err)
 		return err
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken, puts map[string]*PauseUploadToken,
+	err error) {
+
+	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(metaInfo) == 0 {
+		return nil, nil, nil
+	}
+
+	puts = make(map[string]*PauseUploadToken)
+
+	for _, kv := range metaInfo {
+
+		if strings.Contains(kv.Path, PauseTokenTag) {
+			var mpt PauseToken
+			if err = json.Unmarshal(kv.Value, &mpt); err != nil {
+				return nil, nil, err
+			}
+
+			if mpt.PauseId == pauseId {
+				if pt != nil {
+					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]" +
+						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+				}
+
+				pt = &mpt
+			}
+
+		} else if strings.Contains(kv.Path, PauseUploadTokenTag) {
+			putId, put, err := decodePauseUploadToken(kv.Path, kv.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if put.PauseId == pauseId {
+				if oldPUT, ok := puts[putId]; ok {
+					return nil, nil, fmt.Errorf("encountered duplicate PauseUploadToken for" +
+						" pauseId[%v] oldPUT[%v] PUT[%v] putId[%v]", put.PauseId, oldPUT, put, putId)
+				}
+
+				puts[putId] = put
+			}
+
+		} else {
+			logging.Warnf("PauseServiceManager::getCurrPauseTokens Unknown Token %v. Ignored.", kv)
+
+		}
+
+	}
+
+	return pt, puts, nil
+}
+
+func (m *PauseServiceManager) cleanupPauseUploadTokens(puts map[string]*PauseUploadToken) error {
+
+	if puts == nil || len(puts) == 0 {
+		logging.Infof("PauseServiceManager::cleanupPauseUploadTokens: No Tokens Found For Cleanup")
+		return nil
+	}
+
+	for putId, put := range puts {
+		logging.Infof("PauseServiceManager::cleanupPauseUploadTokens: Cleaning Up %v %v", putId, put)
+
+		if put.MasterId == string(m.nodeInfo.NodeID) {
+			// TODO: cleanup pause upload token for master
+		}
+
+		if put.FollowerId == string(m.nodeInfo.NodeID) {
+			// TODO: cleanup pause upload token for follower
+		}
 	}
 
 	return nil
@@ -1532,7 +1622,6 @@ func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) er
 
 	return nil
 }
-
 
 func (m *PauseServiceManager) cleanupLocalPauseToken(pauseId string) error {
 
