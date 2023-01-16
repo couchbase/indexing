@@ -9,7 +9,17 @@
 package indexer
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/plasma"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -64,7 +74,165 @@ func (this *Resumer) failResume(logPrefix string, context string, error error) {
 	this.task.TaskObjSetFailed(error.Error())
 
 	// Notify other Index nodes
-	this.pauseMgr.RestNotifyFailedTask(this.otherIndexAddrs, this.task, error.Error())
+	// this.pauseMgr.RestNotifyFailedTask(this.otherIndexAddrs, this.task, error.Error())
+}
+
+// masterGenerateResumePlan: this method downloads all the metadata, stats from archivePath and
+// plans which nodes resume indexes for given bucket
+func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]service.NodeID, err error) {
+	// Step 1: download PauseMetadata
+	logging.Infof("Resumer::masterGenerateResumePlan: downloading pause metadata from %v for resume task ID: %v", r.task.archivePath, r.task.taskId)
+	ctx := r.task.ctx
+	plasmaCfg := plasma.DefaultConfig()
+
+	copier := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
+	if copier == nil {
+		err = fmt.Errorf("object store not supported")
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: %v", err)
+		return
+	}
+
+	data, err := copier.DownloadBytes(ctx, fmt.Sprintf("%v%v", r.task.archivePath, FILENAME_PAUSE_METADATA))
+	if err != nil {
+		logging.Errorf("Resumer::masterGenerateResumePlan: failed to download pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
+		return
+	}
+	data, err = common.ChecksumAndUncompress(data)
+	if err != nil {
+		logging.Errorf("Resumer::masterGenerateResumePlan: failed to read valid pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
+		return
+	}
+	pauseMetadata := new(PauseMetadata)
+	err = json.Unmarshal(data, pauseMetadata)
+	if err != nil {
+		logging.Errorf("Resumer::masterGenerateResumePlan: couldn't unmarshal pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
+		return
+	}
+
+	// Step 2: Download metadata and stats for all nodes in pause metadata
+	indexMetadataPerNode := make(map[service.NodeID]*manager.LocalIndexMetadata)
+	statsPerNode := make(map[service.NodeID]map[string]interface{})
+
+	var dWaiter sync.WaitGroup
+	var dLock sync.Mutex
+	dErrCh := make(chan error, len(pauseMetadata.Data))
+	for nodeId := range pauseMetadata.Data {
+		dWaiter.Add(1)
+		go func(nodeId service.NodeID) {
+			defer dWaiter.Done()
+
+			nodeDir := fmt.Sprintf("%vnode_%v", r.task.archivePath, nodeId)
+			indexMetadata, stats, err := r.downloadNodeMetadataAndStats(nodeDir)
+			if err != nil {
+				err = fmt.Errorf("couldn't get metadata and stats err: %v for nodeId %v, resume task ID: %v", err, nodeId, r.task.taskId)
+				logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
+				dErrCh <- err
+				return
+			}
+			dLock.Lock()
+			defer dLock.Unlock()
+			indexMetadataPerNode[nodeId] = indexMetadata
+			statsPerNode[nodeId] = stats
+		}(nodeId)
+	}
+	dWaiter.Wait()
+	close(dErrCh)
+
+	var errStr strings.Builder
+	for err := range dErrCh {
+		errStr.WriteString(err.Error() + "\n")
+	}
+	if errStr.Len() != 0 {
+		err = errors.New(errStr.String())
+		return
+	}
+
+	// Step 3: get replacement node for old paused data
+	for nodeId := range pauseMetadata.Data {
+		// Step 3a: generate []IndexSpec for planner
+		// idxSpecs := make([]planner.IndexSpec,0)
+
+		idxMetadata, ok := indexMetadataPerNode[nodeId]
+		if !ok {
+			err = fmt.Errorf("unable to read indexMetadata for node %v", nodeId)
+			logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
+			return
+		}
+		statsPerNode, ok := statsPerNode[nodeId]
+		if !ok {
+			err = fmt.Errorf("unable to read stats for node %v", nodeId)
+			logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
+			return
+		}
+
+		// TODO: replace with planner calls to generate []IndexerNode with []IndexUsage
+		logging.Infof("Resumer::masterGenerateResumePlan: metadata and stats from node %v available. Total Idx definitions: %v, Total stats: %v for task ID: %v", nodeId, len(idxMetadata.IndexDefinitions), len(statsPerNode))
+
+		// Step 3b: call planner
+	}
+
+	return
+}
+
+func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *manager.LocalIndexMetadata, stats map[string]interface{}, err error) {
+	defer func() {
+		if err == nil {
+			logging.Infof("Resumer::downloadNodeMetadataAndStats: successfully downloaded metadata and stats from %v", nodeDir)
+		}
+	}()
+
+	ctx := r.task.ctx
+	plasmaCfg := plasma.DefaultConfig()
+
+	copier := plasma.MakeFileCopier(nodeDir, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
+	if copier == nil {
+		err = fmt.Errorf("object store not supported")
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: %v", err)
+		return
+	}
+
+	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v", nodeDir, FILENAME_METADATA))
+	if err != nil {
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: url encoding failed %v", err)
+		return
+	}
+	data, err := copier.DownloadBytes(ctx, url)
+	if err != nil {
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: failed to download metadata err: %v", err)
+		return
+	}
+	data, err = common.ChecksumAndUncompress(data)
+	if err != nil {
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: invalid metadata in object store err :%v", err)
+		return
+	}
+	err = json.Unmarshal(data, metadata)
+	if err != nil {
+		logging.Errorf("Resumer::downloadnodeMetadataAndStats: failed to unmarshal index metadata err: %v", err)
+		return
+	}
+
+	url, err = copier.GetPathEncoding(fmt.Sprintf("%v%v", nodeDir, FILENAME_STATS))
+	if err != nil {
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: url encoding failed %v", err)
+		return
+	}
+	data, err = copier.DownloadBytes(ctx, url)
+	if err != nil {
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: failed to download stats err: %v", err)
+		return
+	}
+	data, err = common.ChecksumAndUncompress(data)
+	if err != nil {
+		logging.Errorf("Resumer::downloadNodeMetadataAndStats: invalid stats in object store err :%v", err)
+		return
+	}
+	err = json.Unmarshal(data, &stats)
+	if err != nil {
+		logging.Errorf("Resumer::downloadnodeMetadataAndStats: failed to unmarshal stats err: %v", err)
+	}
+
+	return
 }
 
 // run is a goroutine for the main body of Resume work for this.task.
