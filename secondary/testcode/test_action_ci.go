@@ -7,6 +7,8 @@ import "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
 import "fmt"
 import "time"
+import "strings"
+import "github.com/couchbase/indexing/secondary/security"
 
 func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 	execTestAction := cfg["shardRebalance.execTestAction"].Bool()
@@ -39,7 +41,14 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 		case INDEXER_PANIC:
 			panic(fmt.Errorf("TestCode::TestActionAtTag - Inducing artificial panic at tag: %v as wished", tag))
 		case REBALANCE_CANCEL:
-			// TODO: Add support for rebalance cancel
+			resp, err := security.PostWithAuth(clusterAddr+"/controller/stopRebalance", "application/json", strings.NewReader(""), nil)
+			if err != nil {
+				logging.Errorf("TestCode::TestActionAtTag - Error observed while posting cancel message, err: %v", err)
+			}
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+			time.Sleep(5 * time.Second)
 		case SLEEP:
 			logging.Infof("TestCode::TestActionAtTag: Sleeping for %v milliseconds as wished", option.SleepTime)
 			time.Sleep(time.Duration(option.SleepTime) * time.Millisecond)

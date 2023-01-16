@@ -1128,7 +1128,7 @@ func getServerGroupForNode(node string) string {
 	}
 }
 
-func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation, skipAdding bool, t *testing.T) {
+func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation, skipAdding, isRebalCancel bool, t *testing.T) {
 
 	if !skipAdding {
 		for _, node := range addNodes {
@@ -1143,11 +1143,12 @@ func performSwapRebalance(addNodes []string, removeNodes []string, skipValidatio
 	if skipValidation { // Some crash tests have their own validation. Hence, skip the validation here
 		if err != nil && strings.Contains(err.Error(), "Rebalance failed") {
 			return
-		} else if err == nil {
+		} else if !isRebalCancel && err == nil {
 			t.Fatalf("Expected rebalance failure, but rebalance passed")
 		} else {
 			FailTestIfError(err, fmt.Sprintf("Observed error: %v during rebalabce", err), t)
 		}
+		return
 	}
 
 	if err != nil {

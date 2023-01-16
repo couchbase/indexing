@@ -31,7 +31,7 @@ func TestShardRebalanceSetup(t *testing.T) {
 // All the indexes are expected to be moved to Nodes[3] & Nodes[4]
 func TestTwoNodeSwapRebalance(t *testing.T) {
 	log.Printf("In TestTwoNodeSwapRebalance")
-	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {
@@ -54,7 +54,7 @@ func TestTwoNodeSwapRebalance(t *testing.T) {
 func TestSingleNodeSwapRebalance(t *testing.T) {
 	log.Printf("In TestSingleNodeSwapRebalance")
 
-	performSwapRebalance([]string{clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[4]}, false, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[4]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {
@@ -249,7 +249,7 @@ func TestDropIndexAfterRebalance(t *testing.T) {
 func TestRebalanceAfterDropIndexes(t *testing.T) {
 	log.Printf("In TestRebalanceAfterDropIndexes")
 
-	performSwapRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, false, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {
@@ -319,7 +319,7 @@ func TestRebalanceAfterDroppedCollections(t *testing.T) {
 		}
 	}
 
-	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {

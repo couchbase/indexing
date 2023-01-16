@@ -74,9 +74,9 @@ func TestRebalancePanicTestsSetup(t *testing.T) {
 //                    the cluster (i.e. rebalance succeeds)
 //                    Otherwise, "outNodes" will be the final nodes in
 //                    the cluster after rebalance
-func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFinal, skipAdding bool, t *testing.T) {
+func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFinal, skipAdding, isRebalCancel bool, t *testing.T) {
 
-	performSwapRebalance(inNodes, outNodes, true, skipAdding, t)
+	performSwapRebalance(inNodes, outNodes, true, skipAdding, isRebalCancel, t)
 
 	for _, node := range inNodes {
 		waitForRebalanceCleanup(node, t)
@@ -148,7 +148,7 @@ func TestRebalancePanicAtMasterShardTokenScheduleAck(t *testing.T) {
 	outNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, false, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, false, false, t)
 }
 
 // Prior to this test, all indexes existed on Nodes[1] & Nodes[2]
@@ -177,7 +177,7 @@ func TestRebalancePanicAfterTransferOnSource(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, false, t)
 }
 
 // This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
@@ -205,7 +205,7 @@ func TestRebalancePanicAfterRestoreOnDest(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, false, t)
 }
 
 // This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
@@ -233,7 +233,7 @@ func TestRebalancePanicDuringDeferredIndexRecovery(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, false, t)
 }
 
 // This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
@@ -261,7 +261,7 @@ func TestRebalancePanicDuringNonDeferredIndexRecovery(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, false, t)
 }
 
 // This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
@@ -289,7 +289,7 @@ func TestRebalancePanicDuringIndexBuild(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, false, t)
 }
 
 // This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
@@ -317,7 +317,7 @@ func TestRebalancePanicBeforeDropOnSource(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to false
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, false, t)
 }
 
 // This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
@@ -349,7 +349,7 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 	allIndexNodes = append(allIndexNodes, inNodes...)
 	allIndexNodes = append(allIndexNodes, outNodes...)
 
-	performSwapRebalance(inNodes, outNodes, true, true, t)
+	performSwapRebalance(inNodes, outNodes, true, true, false, t)
 	for _, node := range allIndexNodes {
 		waitForRebalanceCleanup(node, t)
 		waitForTokenCleanup(node, t)
@@ -456,5 +456,5 @@ func TestRebalancePanicAfterAllTokensAreProcessed(t *testing.T) {
 
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to true
-	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, true, true, t)
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, true, true, false, t)
 }
