@@ -185,13 +185,13 @@ type Pauser struct {
 	cleanupOnce sync.Once
 }
 
-// RunPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
+// NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
 // task.pauser (visible to pauseMgr parent) and launches a goroutine for the work.
 //
 //	pauseMgr - parent object (singleton)
 //	task - the task_PAUSE task this object will execute
 //	master - true iff this node is the master
-func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool, pauseToken *PauseToken) {
+func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken) *Pauser {
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
 		task:     task,
@@ -209,19 +209,23 @@ func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool, pauseT
 	task.pauser = pauser
 	task.taskMu.Unlock()
 
-	go pauser.observePause()
-
-	if master {
-		go pauser.initPauseAsync()
-	} else {
-		// if not master, no need to wait for publishing of tokens
-		close(pauser.waitForTokenPublish)
-	}
+	return pauser
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (p *Pauser) startWorkers() {
+	go p.observePause()
+
+	if p.task.isMaster() {
+		go p.initPauseAsync()
+	} else {
+		// if not master, no need to wait for publishing of tokens
+		close(p.waitForTokenPublish)
+	}
+}
 
 func (p *Pauser) initPauseAsync() {
 
@@ -753,7 +757,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 
 	ctx := p.task.ctx
 	plasmaCfg := plasma.DefaultConfig()
-	
+
 	copier := plasma.MakeFileCopier(p.task.archivePath,"",plasmaCfg.Environment,plasmaCfg.CopyConfig)
 	if copier == nil {
 		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported",p.task.archivePath)
@@ -916,4 +920,3 @@ func (p *Pauser) Cleanup() {
 	p.task.taskMu.Unlock()
 	p.cancelMetakv()
 }
-

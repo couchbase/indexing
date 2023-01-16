@@ -63,6 +63,10 @@ type PauseServiceManager struct {
 	pauseTokensById map[string]*PauseToken
 	pauseTokenMapMu sync.RWMutex
 
+	// Track Pausers
+	pausersById map[string]*Pauser
+	pausersMapMu sync.Mutex
+
 	nodeInfo *service.NodeInfo
 }
 
@@ -85,6 +89,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		supvMsgch: supvMsgch,
 
 		pauseTokensById: make(map[string]*PauseToken),
+		pausersById:     make(map[string]*Pauser),
 
 		nodeInfo: nodeInfo,
 	}
@@ -104,6 +109,37 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	mux.HandleFunc("/test/Resume", m.testResume)
 
 	return m
+}
+
+// Track Pauser based on pauseId. Pauser can be deleted by calling with nil Pauser. If there is already a Pauser with
+// the pauseId, then an error is returned.
+func (m *PauseServiceManager) setPauser(pauseId string, p *Pauser) error {
+	m.pausersMapMu.Lock()
+	defer m.pausersMapMu.Unlock()
+
+	if oldPauser, ok := m.pausersById[pauseId]; ok {
+
+		if p == nil {
+			delete(m.pausersById, pauseId)
+		} else {
+			return fmt.Errorf("conflict: Pauser[%v] with pauseId[%v] already present!", oldPauser, pauseId)
+		}
+
+	} else {
+		m.pausersById[pauseId] = p
+	}
+
+	return nil
+}
+
+// Get pauser based on pauseId. If there is no such Pauser, then the returned boolean will be false.
+func (m *PauseServiceManager) getPauser(pauseId string) (*Pauser, bool) {
+	m.pausersMapMu.Lock()
+	defer m.pausersMapMu.Unlock()
+
+	pauser, exists := m.pausersById[pauseId]
+
+	return pauser, exists
 }
 
 // GetPauseMgr atomically gets the global PauseMgr pointer. When called from ScanCoordinator it may
@@ -616,10 +652,16 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return  err
 	}
 
-	// Create a Pauser object to run the master orchestration loop. It will be the only thread
-	// that changes or deletes *task after this point. It will save a pointer to itself into
-	// task.pauser and start its own goroutine, so we don't need to save a pointer to it here.
-	RunPauser(m, task, true, m.pauseTokensById[params.ID])
+	// Create a Pauser object to run the master orchestration loop.
+
+	pauser := NewPauser(m, task, m.pauseTokensById[params.ID])
+
+	if err := m.setPauser(params.ID, pauser); err != nil {
+		return err
+	}
+
+	pauser.startWorkers()
+
 	return nil
 }
 
@@ -978,7 +1020,16 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				return
 			}
 
-			RunPauser(m, task, false, &pauseToken)
+			pauser := NewPauser(m, task, &pauseToken)
+
+			if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping" +
+					" err[%v]", err)
+				writeError(w, err)
+				return
+			}
+
+			pauser.startWorkers()
 
 			writeOk(w)
 			return
