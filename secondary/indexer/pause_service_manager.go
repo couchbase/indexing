@@ -749,15 +749,23 @@ func (m *PauseServiceManager) pauseDoneCallback(pauseId string, err error) {
 
 func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool) error {
 
-	logging.Infof("PauseServiceManager::runPauseCleanupPhase pauseId[%v] isMaster[%v]", pauseId, isMaster)
+	logging.Infof("PauseServiceManager::runPauseCleanupPhase: pauseId[%v] isMaster[%v]", pauseId, isMaster)
 
 	if isMaster {
-		// TODO: cleanup global master token
+		if err := m.cleanupPauseTokenInMetakv(pauseId); err != nil {
+			logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in metkv:" +
+				" err[%v]", err)
+			return err
+		}
 	}
 
 	// TODO: Get tokens and cleanup PauseUploadTokens
 
-	// TODO: Cleanup pause token in local meta
+	if err := m.cleanupLocalPauseToken(pauseId); err != nil {
+		logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in local" +
+			" meta: err[%v]", err)
+		return err
+	}
 
 	return nil
 }
@@ -1566,6 +1574,32 @@ func (m *PauseServiceManager) registerPauseTokenInMetakv(pauseToken *PauseToken)
 	}
 
 	logging.Infof("PauseServiceManager::registerPauseTokenInMetakv: Registered Global PauseToken[%v] In Metakv at path[%v]", pauseToken, path)
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupPauseTokenInMetakv(pauseId string) error {
+
+	path := buildMetakvPathForPauseToken(pauseId)
+	var ptoken PauseToken
+
+	if found, err := common.MetakvGet(path, &ptoken); err != nil {
+		logging.Errorf("PauseServiceManager::cleanupPauseTokenInMetakv Error Fetching Pause Token From Metakv" +
+			" err[%v] path[%v]", err, path)
+
+		return err
+
+	} else if found {
+		logging.Infof("PauseServiceManager::cleanupPauseTokenInMetakv Delete Global Pause Token %v", ptoken)
+
+		if err := common.MetakvDel(path); err != nil {
+			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete RebalanceToken" +
+				" from Meta Storage. %v. Err %v", ptoken, err)
+
+			return err
+		}
+
+	}
 
 	return nil
 }
