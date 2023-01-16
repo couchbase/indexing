@@ -101,6 +101,11 @@ func newPauseUploadToken(masterUuid, followerUuid, pauseId, bucketName string) (
 func decodePauseUploadToken(path string, value []byte) (string, *PauseUploadToken, error) {
 
 	putIdPos := strings.Index(path, PauseUploadTokenTag)
+	if putIdPos < 0 {
+		return "", nil, fmt.Errorf("PauseUploadTokenTag[%v] not present in metakv path[%v]",
+			PauseUploadTokenTag, path)
+	}
+
 	putId := path[putIdPos:]
 
 	put := &PauseUploadToken{}
@@ -362,7 +367,7 @@ func (p *Pauser) observePause() {
 // processUploadTokens is metakv callback, not intended to be called otherwise
 func (p *Pauser) processUploadTokens(kve metakv.KVEntry) error {
 
-	if kve.Path == buildMetakvPathForPauseToken(p.pauseToken) {
+	if kve.Path == buildMetakvPathForPauseToken(p.pauseToken.PauseId) {
 		// Process PauseToken
 
 		logging.Infof("Pauser::processUploadTokens: PauseToken path[%v] value[%s]", kve.Path, kve.Value)

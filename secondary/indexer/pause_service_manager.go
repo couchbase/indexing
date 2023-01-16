@@ -1106,7 +1106,7 @@ func (m *PauseServiceManager) observeGlobalPauseToken(pauseToken PauseToken) boo
 	checkInterval := 1 * time.Second
 	var elapsed time.Duration
 	var pToken PauseToken
-	path := buildMetakvPathForPauseToken(&pauseToken)
+	path := buildMetakvPathForPauseToken(pauseToken.PauseId)
 
 	for elapsed < globalTokenWaitTimeout {
 
@@ -1485,12 +1485,12 @@ func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string
 // PauseToken - Lifecycle
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func buildKeyForLocalPauseToken(pauseToken *PauseToken) string {
-	return fmt.Sprintf("%s_%s", PauseTokenTag, pauseToken.PauseId)
+func buildKeyForLocalPauseToken(pauseId string) string {
+	return fmt.Sprintf("%s_%s", PauseTokenTag, pauseId)
 }
 
-func buildMetakvPathForPauseToken(pauseToken *PauseToken) string {
-	return fmt.Sprintf("%s_%s", PauseTokenPathPrefix, pauseToken.PauseId)
+func buildMetakvPathForPauseToken(pauseId string) string {
+	return fmt.Sprintf("%s_%s", PauseTokenPathPrefix, pauseId)
 }
 
 func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) error {
@@ -1505,7 +1505,7 @@ func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) er
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
 		mType:  CLUST_MGR_SET_LOCAL,
-		key:    buildKeyForLocalPauseToken(pauseToken),
+		key:    buildKeyForLocalPauseToken(pauseToken.PauseId),
 		value:  string(pToken),
 		respch: respch,
 	}
@@ -1526,11 +1526,11 @@ func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) er
 }
 
 
-func (m *PauseServiceManager) cleanupLocalPauseToken(pauseToken *PauseToken) error {
+func (m *PauseServiceManager) cleanupLocalPauseToken(pauseId string) error {
 
-	logging.Infof("PauseServiceManager::cleanupLocalPauseToken: Cleanup PauseToken[%v]", pauseToken)
+	logging.Infof("PauseServiceManager::cleanupLocalPauseToken: Cleanup PauseToken[%v]", pauseId)
 
-	key := buildKeyForLocalPauseToken(pauseToken)
+	key := buildKeyForLocalPauseToken(pauseId)
 
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
@@ -1549,7 +1549,7 @@ func (m *PauseServiceManager) cleanupLocalPauseToken(pauseToken *PauseToken) err
 	}
 
 	m.pauseTokenMapMu.Lock()
-	delete(m.pauseTokensById, pauseToken.PauseId)
+	delete(m.pauseTokensById, pauseId)
 	m.pauseTokenMapMu.Unlock()
 
 	return nil
@@ -1557,7 +1557,7 @@ func (m *PauseServiceManager) cleanupLocalPauseToken(pauseToken *PauseToken) err
 
 func (m *PauseServiceManager) registerPauseTokenInMetakv(pauseToken *PauseToken) error {
 
-	path := buildMetakvPathForPauseToken(pauseToken)
+	path := buildMetakvPathForPauseToken(pauseToken.PauseId)
 
 	err := common.MetakvSet(path, pauseToken)
 	if err != nil {
