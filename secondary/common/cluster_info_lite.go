@@ -97,7 +97,7 @@ func GetCICLStats() (Statistics, error) {
 }
 
 func HandleCICLStats(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := IsAuthValid(r)
+	creds, valid, err := IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -107,6 +107,18 @@ func HandleCICLStats(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("HandleCICLStats:: not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	if r.Method == "GET" {
