@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/plasma"
 )
 
@@ -88,7 +89,7 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 	copier := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
 		err = fmt.Errorf("object store not supported")
-		logging.Errorf("Resumer::downloadNodeMetadataAndStats: %v", err)
+		logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
 		return
 	}
 
@@ -110,7 +111,7 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 	}
 
 	// Step 2: Download metadata and stats for all nodes in pause metadata
-	indexMetadataPerNode := make(map[service.NodeID]*manager.LocalIndexMetadata)
+	indexMetadataPerNode := make(map[service.NodeID]*planner.LocalIndexMetadata)
 	statsPerNode := make(map[service.NodeID]map[string]interface{})
 
 	var dWaiter sync.WaitGroup
@@ -148,9 +149,25 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 	}
 
 	// Step 3: get replacement node for old paused data
+	resumeNodes := make([]*planner.IndexerNode,len(pauseMetadata.Data))
+	config := r.pauseMgr.config.Load()
+	clusterVersion := r.pauseMgr.genericMgr.cinfo.GetClusterVersion()
+	// since we don't support mixed mode for pause resume, we can use the current server version
+	// as the indexer version
+	indexerVersion, err := r.pauseMgr.genericMgr.cinfo.GetServerVersion(
+		r.pauseMgr.genericMgr.cinfo.GetCurrentNode(),
+	)
+	if err != nil {
+		// we should never hit this err condition as we should always be able to read current node's
+		// server version. if we do, should we fail here?
+		logging.Warnf("Resumer::masterGenerateResumePlan: couldn't fetch this node's server version. hit unreachable error. err: %v for taskId %v",err, r.task.taskId)
+		err = nil
+		// use min indexer version required for Pause-Resume
+		indexerVersion = common.INDEXER_72_VERSION
+	}
+
 	for nodeId := range pauseMetadata.Data {
-		// Step 3a: generate []IndexSpec for planner
-		// idxSpecs := make([]planner.IndexSpec,0)
+		// Step 3a: generate IndexerNode for planner
 
 		idxMetadata, ok := indexMetadataPerNode[nodeId]
 		if !ok {
@@ -168,13 +185,29 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 		// TODO: replace with planner calls to generate []IndexerNode with []IndexUsage
 		logging.Infof("Resumer::masterGenerateResumePlan: metadata and stats from node %v available. Total Idx definitions: %v, Total stats: %v for task ID: %v", nodeId, len(idxMetadata.IndexDefinitions), len(statsPerNode))
 
-		// Step 3b: call planner
+		indexerNode := planner.CreateIndexerNodeWithIndexes(string(nodeId),nil,nil)
+		
+		// Step 3b: populate IndexerNode with metadata
+		var indexerUsage []*planner.IndexUsage
+		indexerUsage, err = planner.ConvertToIndexUsages(config,idxMetadata,indexerNode,nil,
+			nil)
+		if err != nil {
+			logging.Errorf("Resumer::masterGenerateResumePlan: couldn't generate index usage. err: %v for task ID: %v", err, r.task.taskId)
+			return
+		}
+
+		indexerNode.Indexes = indexerUsage
+
+		planner.SetStatsInIndexer(indexerNode,statsPerNode,clusterVersion,indexerVersion,config)
+
+		resumeNodes = append(resumeNodes, indexerNode)
 	}
+	newNodes, err = StubExecuteTenantAwarePlanForResume(config["clusterAddr"].String(),resumeNodes)
 
 	return
 }
 
-func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *manager.LocalIndexMetadata, stats map[string]interface{}, err error) {
+func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planner.LocalIndexMetadata, stats map[string]interface{}, err error) {
 	defer func() {
 		if err == nil {
 			logging.Infof("Resumer::downloadNodeMetadataAndStats: successfully downloaded metadata and stats from %v", nodeDir)
@@ -206,11 +239,15 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *manage
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: invalid metadata in object store err :%v", err)
 		return
 	}
-	err = json.Unmarshal(data, metadata)
+
+	// NOTE: pause uploads manager.LocalIndexMetadata which has the similar fields as planner.LocalIndexMetadata
+	mgrMetadata := new(manager.LocalIndexMetadata)
+	err = json.Unmarshal(data, mgrMetadata)
 	if err != nil {
 		logging.Errorf("Resumer::downloadnodeMetadataAndStats: failed to unmarshal index metadata err: %v", err)
 		return
 	}
+	metadata = manager.TransformMetaToPlannerMeta(mgrMetadata)
 
 	url, err = copier.GetPathEncoding(fmt.Sprintf("%v%v", nodeDir, FILENAME_STATS))
 	if err != nil {
@@ -233,6 +270,11 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *manage
 	}
 
 	return
+}
+
+func StubExecuteTenantAwarePlanForResume(clusterUrl string, resumeNodes []*planner.IndexerNode) (map[service.NodeID]service.NodeID, error) {
+	logging.Infof("Resumer::StubExecuteTenantAwarePlanForResume: TODO: call actual planner")
+	return nil, nil
 }
 
 // run is a goroutine for the main body of Resume work for this.task.

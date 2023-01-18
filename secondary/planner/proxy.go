@@ -475,6 +475,25 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		// Read the index stats from the indexer node.
 		statsMap := stats.ToMap()
 
+		// memory_quota is user specified memory quota.
+		if memQuota, ok := statsMap["memory_quota"]; ok {
+			plan.MemQuota = uint64(memQuota.(float64))
+		}
+
+		var indexerVersion int
+		if indexerVersion, err = cinfo.GetServerVersion(nid); err != nil {
+			logging.Errorf("Planner::getIndexStats: Error from reading indexer version for node %v. Error = %v", nodeId, err)
+			return err
+		}
+		SetStatsInIndexer(indexer,statsMap, clusterVersion, indexerVersion, config)
+	}
+
+	return nil
+}
+
+// SetStatsInIndexer will collect all the relevant stats from statsMap and put them in indexer
+// so that it can be planned in the cluster 
+func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, clusterVersion uint64, indexerVersion int, config common.Config) {
 		/*
 			CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`
@@ -496,11 +515,6 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			actualTotalMem = uint64(memUsed.(float64))
 		}
 
-		// memory_quota is user specified memory quota.
-		if memQuota, ok := statsMap["memory_quota"]; ok {
-			plan.MemQuota = uint64(memQuota.(float64))
-		}
-
 		if memRSS, ok := statsMap["memory_rss"]; ok {
 			indexer.ActualRSS = uint64(memRSS.(float64))
 		}
@@ -520,11 +534,6 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			if duration, err := time.ParseDuration(uptime); err == nil {
 				elapsed = uint64(duration.Seconds())
 			}
-		}
-		var indexerVersion int
-		if indexerVersion, err = cinfo.GetServerVersion(nid); err != nil {
-			logging.Errorf("Planner::getIndexStats: Error from reading indexer version for node %v. Error = %v", nodeId, err)
-			return err
 		}
 
 		// cpu core in host.   This is the actual num of cpu core, not cpu quota.
@@ -871,9 +880,6 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			indexer.ActualDrainRate += index.ActualDrainRate
 			indexer.ActualScanRate += index.ActualScanRate
 		}
-	}
-
-	return nil
 }
 
 //

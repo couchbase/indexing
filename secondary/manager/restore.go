@@ -1377,6 +1377,10 @@ func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 	return &spec
 }
 
+func TransformMetaToPlannerMeta(metadata *LocalIndexMetadata) *planner.LocalIndexMetadata {
+	return transformMeta(metadata)
+}
+
 //
 // Copy metadata from type LocalIndexMetadata to planner.LocalIndexMetadata
 //
