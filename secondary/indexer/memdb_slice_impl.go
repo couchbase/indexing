@@ -1866,6 +1866,10 @@ func (mdb *memdbSlice) GetShardIds() []common.ShardId {
 	return nil // nothing to do
 }
 
+func (mdb *memdbSlice) ClearRebalRunning() {
+	// nothing to do
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

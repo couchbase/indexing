@@ -48,6 +48,7 @@ type Slice interface {
 	BuildDone()
 
 	GetShardIds() []common.ShardId
+	ClearRebalRunning()
 }
 
 // cursorCtx implements IndexReaderContext and is used

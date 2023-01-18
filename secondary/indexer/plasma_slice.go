@@ -142,6 +142,10 @@ type plasmaSlice struct {
 
 	clusterAddr string
 
+	// set to true if the slice is created as a part of rebalance
+	// This flag will be cleared at the end of rebalance
+	rebalRunning uint32
+
 	//
 	// The following fields are used for tuning writers
 	//
@@ -253,9 +257,13 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.mutationRate = common.NewSample(int(slice.samplingWindow / slice.samplingInterval))
 	slice.samplerStopCh = make(chan bool)
 	slice.snapInterval = sysconf["settings.inmemory_snapshot.moi.interval"].Uint64() * uint64(time.Millisecond)
+
 	if len(shardIds) > 0 {
+		slice.SetRebalRunning()
+
 		logging.Infof("plasmaSlice::NewPlasmaSlice Id: %v IndexInstId: %v PartitionId: %v "+
-			"using shardIds: %v", sliceId, idxInstId, partitionId, shardIds)
+			"using shardIds: %v, rebalance running: %v", sliceId, idxInstId, partitionId,
+			shardIds, slice.IsRebalRunning())
 
 		slice.shardIds = append(slice.shardIds, shardIds[0]) // "0" is always main index shardId
 		if !isPrimary {
@@ -524,7 +532,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			bCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
 		}
 
-		if common.IsServerlessDeployment() && len(slice.shardIds) > 0 {
+		if common.IsServerlessDeployment() && len(slice.shardIds) > 0 && slice.IsRebalRunning() {
 			mCfg.UseShardId = plasma.ShardId(slice.shardIds[0])
 			if !slice.isPrimary {
 				bCfg.UseShardId = plasma.ShardId(slice.shardIds[1])
@@ -4235,6 +4243,25 @@ func (slice *plasmaSlice) memoryFull() bool {
 func (slice *plasmaSlice) minimumMemory() bool {
 
 	return (float64(slice.memoryAvail()) <= float64(20*1024*1024))
+}
+
+////////////////////////////////////////////////////////////
+// Rebalance related
+////////////////////////////////////////////////////////////
+
+func (slice *plasmaSlice) IsRebalRunning() bool {
+	return atomic.LoadUint32(&slice.rebalRunning) == 1
+}
+
+func (slice *plasmaSlice) SetRebalRunning() {
+	atomic.StoreUint32(&slice.rebalRunning, 1)
+}
+
+func (slice *plasmaSlice) ClearRebalRunning() {
+	if slice.IsRebalRunning() {
+		logging.Infof("PlasmaSlice::ClearRebalRunning Clearing rebalance running for instId: %v, partnId: %v", slice.idxInstId, slice.idxPartnId)
+	}
+	atomic.StoreUint32(&slice.rebalRunning, 0)
 }
 
 ////////////////////////////////////////////////////////////

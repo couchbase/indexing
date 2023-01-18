@@ -1875,3 +1875,7 @@ func (fdb *fdbSlice) GetTenantDiskSize() (int64, error) {
 func (fdb *fdbSlice) GetShardIds() []common.ShardId {
 	return nil // nothing to do
 }
+
+func (fdb *fdbSlice) ClearRebalRunning() {
+	// nothing to do
+}
