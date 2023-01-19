@@ -670,11 +670,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 
 func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err error) {
 
-	err = func() error {
-		m.genericMgr.cinfo.Lock()
-		defer m.genericMgr.cinfo.Unlock()
-		return m.genericMgr.cinfo.FetchNodesData()
-	}()
+	err = m.genericMgr.cinfo.FetchNodesAndSvsInfoWithLock()
 	if err != nil {
 		logging.Errorf("PauseServiceManager::initStartPhase: Failed to fetch nodes data via cinfo: err[%v]",
 			err)
