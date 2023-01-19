@@ -450,7 +450,7 @@ func forceKillMemcacheD() {
 	// restart mcd process
 	fmt.Println("Restarting memcached process ...")
 	tc.KillMemcacheD()
-	time.Sleep(20 * time.Second)
+	time.Sleep(30 * time.Second)
 }
 
 func forceKillIndexer() {

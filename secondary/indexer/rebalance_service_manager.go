@@ -928,6 +928,12 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 		}
 	}
 
+	if m.rebalancer != nil {
+		m.rebalancer.RestoreAndUnlockShards()
+	} else if m.rebalancerF != nil {
+		m.rebalancerF.RestoreAndUnlockShards()
+	}
+
 	err := m.cleanupLocalRToken()
 	if err != nil {
 		return err
@@ -1157,7 +1163,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	for _, t := range ttList {
 
 		if t.tt.IsShardTransferToken() {
-			l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
+			l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
 			if t.tt.MasterId == string(m.nodeInfo.NodeID) {
 				m.cleanupShardTokenForMaster(t.ttid, t.tt)
 			}
@@ -1305,12 +1311,12 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.TransferToken) error {
 
 	switch tt.ShardTransferTokenState {
-	case c.ShardTokenCreated, c.ShardTokenCommit, c.ShardTokenDeleted:
-		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt)
+	case c.ShardTokenCreated, c.ShardTokenDeleted:
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForMaster Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 	}
@@ -1328,7 +1334,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 
@@ -1368,15 +1374,12 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Deleted ttid: %v, "+
 			"from metakv", ttid)
-
-	case c.ShardTokenRestoreShard, c.ShardTokenRecoverShard:
-		unlockShards(tt.ShardIds, m.supvMsgch)
 
 	case c.ShardTokenReady:
 		// If this token is in Ready state, check for the presence of
@@ -1397,9 +1400,10 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup will be invoked on destination node. Unlock shards on source
-			unlockShards(tt.ShardIds, m.supvMsgch)
-
+		} else {
+			// Else, cleanup on destination will be triggered as rebalance is not complete for this tenant
+			// Shards will be unlocked for source (by rebalance_service_manager) after cleanup
+			// is complete
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 		}
@@ -1418,7 +1422,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
-				"Meta Storage. %v. Err %v", tt, err)
+				"Meta Storage. %v. Err %v", ttid, err)
 			return err
 		}
 
@@ -1489,9 +1493,10 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true)
-		} else { // Else, cleanup on source will be triggered as rebalance is complete for this tenant
-			unlockShards(tt.ShardIds, m.supvMsgch)
-
+		} else {
+			// Else, cleanup on source will be triggered as rebalance is complete for this tenant
+			// Shards will be unlocked for destination (by rebalance_service_manager) after cleanup
+			// is complete
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
 		}
@@ -1505,6 +1510,14 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 		// Unlock the shards that are locked before initiating recovery
 		unlockShards(tt.ShardIds, m.supvMsgch)
+
+		l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleanup Token %v %v", ttid, tt.LessVerboseString())
+		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::cleanupShardTokenForDest Unable to delete TransferToken In "+
+				"Meta Storage. %v. Err %v", tt, err)
+			return err
+		}
 	}
 	return nil
 }
@@ -1557,6 +1570,13 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 		}
 	}
 
+	// If a non-nil err is seen while dropping indexes, skip shard destroy for now. Rabalance janitor
+	// will take care of cleaning up the index and the shards once the errors are resolved
+	if err != nil {
+		logging.Errorf("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Error observed while dropping indexes. Skipping shard destruction. err: %v", err)
+		return err
+	}
+
 	// Destroy the local index data
 	respCh := make(chan bool)
 
@@ -1589,7 +1609,6 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 
 	localaddr := m.localhttp
-
 	url := "/dropIndex"
 	resp, err := postWithHandleEOF(indexDefn, localaddr, url, "RebalanceServiceManager::cleanupIndex")
 	if err != nil {
@@ -2271,6 +2290,12 @@ func (m *RebalanceServiceManager) cancelPrepareTaskLOCKED() error {
 	if m.monitorStopCh != nil {
 		close(m.monitorStopCh)
 		m.monitorStopCh = nil
+	}
+
+	if common.IsServerlessDeployment() && m.rebalancerF != nil {
+		logging.Infof("RebalanceServiceManager::cancelPrepareTaskLOCKED Initiating cleanup on rebalance follower")
+		m.rebalancerF.Cancel()
+		m.onRebalanceDoneLOCKED(nil, true)
 	}
 
 	m.cleanupRebalanceRunning()
@@ -3729,7 +3754,7 @@ func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *htt
 		}
 
 		logging.Infof("RebalanceServiceManager::handleLockShards Locking shards: %v as requested by user", shardIds)
-		err = lockShards(shardIds, m.supvMsgch)
+		err = lockShards(shardIds, m.supvMsgch, false)
 		if err != nil {
 			logging.Infof("RebalanceServiceManager::handleLockShards Error observed when locking shards: %v, err: %v", shardIds, err)
 			m.writeError(w, err)

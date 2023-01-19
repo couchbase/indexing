@@ -40,6 +40,7 @@ import (
 )
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
+const FLAG_COMPRESSED = byte(1) // compressed flag
 
 const (
 	MAX_AUTH_RETRIES = 10
@@ -75,8 +76,6 @@ func Crc64Update(checksum uint64, bytes []byte) uint64 {
 //   header[1-4] - crc32 checksum written in big-endian order
 //   header[5-7] - unused bytes
 func ChecksumAndCompress(byteSlice []byte, compress bool) []byte {
-	const FLAG_COMPRESSED = byte(1) // compressed flag
-
 	header := make([]byte, 8)
 	if compress {
 		header[0] |= FLAG_COMPRESSED
@@ -86,6 +85,25 @@ func ChecksumAndCompress(byteSlice []byte, compress bool) []byte {
 	binary.BigEndian.PutUint32(header[1:5], checkSum)
 
 	return append(header, byteSlice...)
+}
+
+func ChecksumAndUncompress(byteSlice []byte) ([]byte, error) {
+	header := byteSlice[:8]
+	checksumFromHeader := binary.BigEndian.Uint32(header[1:5])
+	data := byteSlice[8:]
+	computedChecksum := crc32.ChecksumIEEE(data)
+	if computedChecksum != checksumFromHeader {
+		return nil, errors.New("corrupted payload detected")
+	}
+	if header[0] == FLAG_COMPRESSED {
+		// data is compressed
+		var err error
+		data, err = snappy.Decode(nil, data)
+		if err != nil {
+			return nil, fmt.Errorf("Couldn't decode payload. err: %v", err)
+		}
+	}
+	return data, nil
 }
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the

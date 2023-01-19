@@ -439,6 +439,17 @@ func (ctxt *qcmdContext) SkipKey(key string) bool {
 	return false
 }
 
+func (ctxt *qcmdContext) TenantCtx() tenant.Context {
+	return nil
+}
+
+func (ctxt *qcmdContext) SetFirstCreds(creds string) {
+}
+
+func (ctxt *qcmdContext) FirstCreds() (string, bool) {
+	return "", true
+}
+
 func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)

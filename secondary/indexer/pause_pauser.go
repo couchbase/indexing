@@ -101,6 +101,11 @@ func newPauseUploadToken(masterUuid, followerUuid, pauseId, bucketName string) (
 func decodePauseUploadToken(path string, value []byte) (string, *PauseUploadToken, error) {
 
 	putIdPos := strings.Index(path, PauseUploadTokenTag)
+	if putIdPos < 0 {
+		return "", nil, fmt.Errorf("PauseUploadTokenTag[%v] not present in metakv path[%v]",
+			PauseUploadTokenTag, path)
+	}
+
 	putId := path[putIdPos:]
 
 	put := &PauseUploadToken{}
@@ -145,6 +150,9 @@ func setPauseUploadTokenInMetakv(putId string, put *PauseUploadToken) {
 // This is used only on the master node of a task_PAUSE task to do the GSI orchestration.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+//  Called at the end of the pause lifecycle. It takes pauseId and any error as input.
+type PauseDoneCallback func(string, error)
+
 // Pauser object holds the state of Pause orchestration
 type Pauser struct {
 	// nodeDir is "node_<nodeId>/" for this node, where nodeId is the 32-digit hex ID from ns_server
@@ -183,15 +191,19 @@ type Pauser struct {
 	// For cleanup
 	retErr      error
 	cleanupOnce sync.Once
+	doneCb      PauseDoneCallback
 }
 
-// RunPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
+// NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
 // task.pauser (visible to pauseMgr parent) and launches a goroutine for the work.
 //
 //	pauseMgr - parent object (singleton)
 //	task - the task_PAUSE task this object will execute
-//	master - true iff this node is the master
-func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool, pauseToken *PauseToken) {
+//	pauseToken - global PauseToken
+//	doneCb - callback that initiates the cleanup phase
+func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken,
+	doneCb PauseDoneCallback) *Pauser {
+
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
 		task:     task,
@@ -203,25 +215,31 @@ func RunPauser(pauseMgr *PauseServiceManager, task *taskObj, master bool, pauseT
 
 		masterTokens:   make(map[string]*PauseUploadToken),
 		followerTokens: make(map[string]*PauseUploadToken),
+
+		doneCb: doneCb,
 	}
 
 	task.taskMu.Lock()
 	task.pauser = pauser
 	task.taskMu.Unlock()
 
-	go pauser.observePause()
-
-	if master {
-		go pauser.initPauseAsync()
-	} else {
-		// if not master, no need to wait for publishing of tokens
-		close(pauser.waitForTokenPublish)
-	}
+	return pauser
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (p *Pauser) startWorkers() {
+	go p.observePause()
+
+	if p.task.isMaster() {
+		go p.initPauseAsync()
+	} else {
+		// if not master, no need to wait for publishing of tokens
+		close(p.waitForTokenPublish)
+	}
+}
 
 func (p *Pauser) initPauseAsync() {
 
@@ -349,12 +367,15 @@ func (p *Pauser) observePause() {
 // processUploadTokens is metakv callback, not intended to be called otherwise
 func (p *Pauser) processUploadTokens(kve metakv.KVEntry) error {
 
-	if kve.Path == buildMetakvPathForPauseToken(p.pauseToken) {
+	if kve.Path == buildMetakvPathForPauseToken(p.pauseToken.PauseId) {
 		// Process PauseToken
 
 		logging.Infof("Pauser::processUploadTokens: PauseToken path[%v] value[%s]", kve.Path, kve.Value)
 
 		if kve.Value == nil {
+			// During cleanup, PauseToken is deleted by master and serves as a signal for
+			// all observers on followers to stop.
+
 			logging.Infof("Pauser::processUploadTokens: PauseToken Deleted. Mark Done.")
 			p.cancelMetakv()
 			p.finishPause(nil)
@@ -529,8 +550,10 @@ func (p *Pauser) doFinish() {
 	p.Cleanup()
 	p.wg.Wait()
 
-	p.pauseMgr.endTask(p.retErr,p.task.taskId)
-	// TODO: call done callback to start the cleanup phase
+	// TODO: move this to inside the done callback
+
+	// call done callback to start the cleanup phase
+	p.doneCb(p.pauseToken.PauseId, p.retErr)
 }
 
 func (p *Pauser) processPauseUploadTokenAsFollower(putId string, put *PauseUploadToken) bool {
@@ -753,7 +776,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 
 	ctx := p.task.ctx
 	plasmaCfg := plasma.DefaultConfig()
-	
+
 	copier := plasma.MakeFileCopier(p.task.archivePath,"",plasmaCfg.Environment,plasmaCfg.CopyConfig)
 	if copier == nil {
 		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported",p.task.archivePath)
@@ -916,4 +939,3 @@ func (p *Pauser) Cleanup() {
 	p.task.taskMu.Unlock()
 	p.cancelMetakv()
 }
-

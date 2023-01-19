@@ -188,17 +188,17 @@ func (sr *ShardRebalancer) initRebalAsync() {
 		for {
 			select {
 			case <-sr.cancel:
-				l.Infof("Rebalancer::initRebalAsync Cancel Received")
+				l.Infof("ShardRebalancer::initRebalAsync Cancel Received")
 				return
 
 			case <-sr.done:
-				l.Infof("Rebalancer::initRebalAsync Done Received")
+				l.Infof("ShardRebalancer::initRebalAsync Done Received")
 				return
 
 			default:
 				allWarmedup, _ := checkAllIndexersWarmedup(cfg["clusterAddr"].String())
 				if !allWarmedup {
-					l.Errorf("Rebalancer::initRebalAsync All Indexers Not Active. Waiting...")
+					l.Errorf("ShardRebalancer::initRebalAsync All Indexers Not Active. Waiting...")
 					time.Sleep(5 * time.Second)
 					continue
 				}
@@ -284,7 +284,7 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value)
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "ShardRebalancer")
 			if err != nil {
 				l.Errorf("ShardRebalancer::processShardTokens Unable to decode transfer token. Ignored.")
 				return nil
@@ -382,7 +382,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 	// TODO: Update logic in rebalance service manager to clean-up on-going
 	// transfer tokens
 	if tt.Error != "" {
-		l.Errorf("Rebalancer::processShardTransferTokenAsMaster Detected TransferToken in Error state %v. Abort.", tt)
+		l.Errorf("ShardRebalancer::processShardTransferTokenAsMaster Detected TransferToken in Error state %v. Abort.", tt)
 
 		sr.cancelMetakv()
 		go sr.finishRebalance(errors.New(tt.Error))
@@ -602,7 +602,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 	if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeCopy && siblingId == "" { // only replica repair case
 		// Since this is replica repair, do not drop the shard data. Only cleanup the transferred data
 		// and unlock the shards
-		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
+		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
 
 		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
 		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
@@ -613,7 +613,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 
 	} else if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeMove { // Single node swap rebalance (or) single node swap + replica repair in same rebalance
 
-		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Queuing token: %v for drop", sourceId)
+		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Queuing token: %v for drop", sourceId)
 		sr.queueDropShardRequests(sourceId)
 
 		// Skip unlocking shards as the shards are going to be destroyed
@@ -630,7 +630,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 		return true
 
 	} else {
-		l.Infof("ShardRebalacner::processShardTransferTokenAsSource Skipping token: %v for drop", sourceId)
+		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Skipping token: %v for drop", sourceId)
 	}
 	return false
 }
@@ -658,7 +658,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	// Unlock of the shard happens:
 	// (a) after shard transfer is successful & destination node has recovered the shard
 	// (b) If any error is encountered, clean-up from indexer will unlock the shards
-	err := lockShards(tt.ShardIds, sr.supvMsgch)
+	err := lockShards(tt.ShardIds, sr.supvMsgch, false)
 	if err != nil {
 		logging.Errorf("ShardRebalancer::startShardTransfer Observed error: %v when locking shards: %v", err, tt.ShardIds)
 
@@ -1009,7 +1009,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
-	if err := lockShards(tt.ShardIds, sr.supvMsgch); err != nil {
+	if err := lockShards(tt.ShardIds, sr.supvMsgch, true); err != nil {
 		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
 
 		unlockShards(tt.ShardIds, sr.supvMsgch)
@@ -1643,7 +1643,7 @@ func (sr *ShardRebalancer) doRebalance() {
 
 	select {
 	case <-sr.cancel:
-		l.Infof("Rebalancer::doRebalance Cancel Received. Skip Publishing Tokens.")
+		l.Infof("ShardRebalancer::doRebalance Cancel Received. Skip Publishing Tokens.")
 		return
 
 	default:
@@ -1677,7 +1677,7 @@ func (sr *ShardRebalancer) allShardTransferTokensAcked() bool {
 	}
 
 	l.Infof("ShardRebalancer::allShardTransferTokensAcked All transfer tokens " +
-		"moded to ScheduleAck state. Initiating transfer for futher processing")
+		"moved to ScheduleAck state. Initiating transfer for futher processing")
 
 	return true
 }
@@ -2164,14 +2164,16 @@ func (sr *ShardRebalancer) isFinish() bool {
 	return atomic.LoadInt32(&sr.isDone) == 1
 }
 
-func (sr *ShardRebalancer) cancelMetakv() {
+func (sr *ShardRebalancer) cancelMetakv() bool {
 	sr.metakvMutex.Lock()
 	defer sr.metakvMutex.Unlock()
 
 	if sr.metakvCancel != nil {
 		close(sr.metakvCancel)
 		sr.metakvCancel = nil
+		return true
 	}
+	return false
 }
 
 func (sr *ShardRebalancer) addToWaitGroup() bool {
@@ -2193,9 +2195,21 @@ func (sr *ShardRebalancer) setTransferTokenError(ttid string, tt *c.TransferToke
 func (sr *ShardRebalancer) Cancel() {
 	l.Infof("ShardRebalancer::Cancel Exiting")
 
-	sr.cancelMetakv()
-	close(sr.cancel)
-	sr.wg.Wait()
+	if sr.cancelMetakv() {
+		close(sr.cancel)
+		sr.wg.Wait()
+	}
+}
+
+func (sr *ShardRebalancer) RestoreAndUnlockShards() {
+	l.Infof("ShardRebalancer::RestoreAndUnlockShards Initiating restore and shard unlock")
+
+	respCh := make(chan bool)
+	sr.supvMsgch <- &MsgRestoreAndUnlockShards{
+		respCh: respCh,
+	}
+	<-respCh
+	l.Infof("ShardRebalancer::RestoreAndUnlockShards Exiting")
 }
 
 // This function batches a group of transfer tokens
@@ -2420,13 +2434,13 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	if common.IsServerlessDeployment() {
 		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			logging.Warnf("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
 			return false
 		}
 	} else {
 		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("LifecycleMgr::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			logging.Warnf("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
 			return false
 		}
 	}
@@ -2443,13 +2457,14 @@ func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
 }
 
-func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel) error {
+func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel, lockedForRecovery bool) error {
 
 	respCh := make(chan map[common.ShardId]error)
 	msg := &MsgLockUnlockShards{
-		mType:    LOCK_SHARDS,
-		shardIds: shardIds,
-		respCh:   respCh,
+		mType:             LOCK_SHARDS,
+		shardIds:          shardIds,
+		lockedForRecovery: lockedForRecovery,
+		respCh:            respCh,
 	}
 
 	supvMsgch <- msg

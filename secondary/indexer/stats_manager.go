@@ -1260,7 +1260,9 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("total_rows_returned", &is.TotalRowsReturned)
 	statMap.AddStatValueFiltered("total_rows_scanned", &is.TotalRowsScanned)
 
-	statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
+	if statMap.spec.consumerFilter == stats.IndexStatusFilter {
+		statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
+	}
 }
 
 func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {

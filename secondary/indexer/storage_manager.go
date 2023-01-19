@@ -262,13 +262,26 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,
 		LOCK_SHARDS,
-		UNLOCK_SHARDS,
 		RESTORE_SHARD_DONE:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		}
 		s.supvCmdch <- &MsgSuccess{}
+
+	case UNLOCK_SHARDS,
+		RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+
+		// At this point, rebalance is either completed or a particular group
+		// of shard movement is complete. Clear rebalance running flag for
+		// corresponding slices
+		s.ClearRebalanceRunning(cmd)
+		if s.stm != nil {
+			s.stm.ProcessCommand(cmd)
+		}
+		s.supvCmdch <- &MsgSuccess{}
+
 	}
+
 }
 
 // handleCreateSnapshot will create the necessary snapshots
@@ -2424,4 +2437,54 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 		s.stm.ProcessCommand(cmd)
 	}
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) ClearRebalanceRunning(cmd Message) {
+
+	start := time.Now()
+	defer logging.Infof("StorageMgr::ClearRebalanceRunning Done with clearing rebalance flags for all slices. elapsed: %v", time.Since(start))
+
+	shardIdMap := make(map[common.ShardId]bool)
+	switch cmd.GetMsgType() {
+	case UNLOCK_SHARDS:
+		shardIds := cmd.(*MsgLockUnlockShards).GetShardIds()
+		for _, shardId := range shardIds {
+			shardIdMap[shardId] = true
+		}
+	}
+
+	s.muSnap.Lock()
+	defer s.muSnap.Unlock()
+
+	indexPartnMap := s.indexPartnMap.Get()
+
+	//for all partitions managed by this indexer
+	for _, partnInstMap := range indexPartnMap {
+
+		for _, partnInst := range partnInstMap {
+			sc := partnInst.Sc
+
+			if len(shardIdMap) > 0 {
+				// Clear rebalance running only for the slices whose shards are getting unlocked
+				for _, slice := range sc.GetAllSlices() {
+					sliceShards := slice.GetShardIds()
+
+					for _, sliceShard := range sliceShards {
+						if _, ok := shardIdMap[sliceShard]; ok {
+							// If any shard of the slice is getting unlocked,
+							// consider rebalance done for the slice
+							slice.ClearRebalRunning()
+						}
+					}
+				}
+			} else {
+				// Reset rebalRunning for all the slices as this call is due to
+				// RESTORE_AND_UNLOCK_LOCKED_SHARDS which happens at the end of
+				// rebalance
+				for _, slice := range sc.GetAllSlices() {
+					slice.ClearRebalRunning()
+				}
+			}
+		}
+	}
 }

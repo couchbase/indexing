@@ -741,6 +741,17 @@ func (ctxt *testContext) SkipKey(key string) bool {
 	return false
 }
 
+func (ctxt *testContext) TenantCtx() tenant.Context {
+	return nil
+}
+
+func (ctxt *testContext) SetFirstCreds(cred string) {
+}
+
+func (ctxt *testContext) FirstCreds() (string, bool) {
+	return "", true
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // END testContext and its Query Context interface stubs
 ////////////////////////////////////////////////////////////////////////////////////////////////////
