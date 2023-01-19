@@ -59,6 +59,7 @@ type PauseServiceManager struct {
 	tasksMu sync.RWMutex
 
 	supvMsgch MsgChannel //channel to send msg to supervisor for normal handling (idx.wrkrRecvCh)
+	supvCmdch MsgChannel //channel to receive command msg from supervisor (idx.prMgrCmdCh)
 
 	// Track global PauseTokens
 	pauseTokensById map[string]*PauseToken
@@ -77,8 +78,9 @@ type PauseServiceManager struct {
 //	genericMgr - pointer to our parent
 //	mux - Indexer's HTTP server
 //	httpAddr - host:port of the local node for Index Service HTTP calls
-func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvMsgch MsgChannel,
-	httpAddr string, config common.Config, nodeInfo *service.NodeInfo) *PauseServiceManager {
+func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvCmdch,
+	supvMsgch MsgChannel, httpAddr string, config common.Config, nodeInfo *service.NodeInfo,
+	) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -88,6 +90,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		tasks:        make(map[string]*taskObj),
 
 		supvMsgch: supvMsgch,
+		supvCmdch: supvCmdch,
 
 		pauseTokensById: make(map[string]*PauseToken),
 		pausersById:     make(map[string]*Pauser),
@@ -108,6 +111,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	mux.HandleFunc("/test/PreparePause", m.testPreparePause)
 	mux.HandleFunc("/test/PrepareResume", m.testPrepareResume)
 	mux.HandleFunc("/test/Resume", m.testResume)
+
+	go m.run()
 
 	return m
 }
@@ -153,6 +158,59 @@ func GetPauseMgr() *PauseServiceManager {
 // PauseServiceManager singleton is constructed.
 func SetPauseMgr(pauseMgr *PauseServiceManager) {
 	atomic.StorePointer(&PauseMgr, unsafe.Pointer(pauseMgr))
+}
+
+// run is a blocking thread that runs forever and listens for commands from
+// parent to update internal operations
+func (psm *PauseServiceManager) run() {
+	for {
+		select {
+		case cmd, ok := <- psm.supvCmdch:
+			if ok {
+				if cmd.GetMsgType() == ADMIN_MGR_SHUTDOWN {
+					logging.Infof("PauseServiceManager::listenForCommands Shutting Down")
+					psm.supvCmdch <- &MsgSuccess{}
+					return
+				}
+				psm.handleSupervisorCommands(cmd)
+			} else {
+				//supervisor channel closed. exit
+				return
+			}
+		}
+	}
+}
+
+func (psm *PauseServiceManager) handleSupervisorCommands(cmd Message) {
+	switch cmd.GetMsgType() {
+
+	case CONFIG_SETTINGS_UPDATE:
+		psm.handleConfigUpdate(cmd)
+
+	case CLUST_MGR_INDEXER_READY:
+		psm.handleIndexerReady(cmd)
+
+	default:
+		logging.Fatalf("PauseServiceManager::handleSupervisorCommands Unknown Message %+v", cmd)
+		common.CrashOnError(errors.New("Unknown Msg On Supv Channel"))
+	}
+}
+
+func (psm *PauseServiceManager) handleConfigUpdate(cmd Message){
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	psm.config.Store(cfgUpdate.GetConfig())
+	psm.supvCmdch <- &MsgSuccess{}
+}
+
+func (psm *PauseServiceManager) handleIndexerReady(cmd Message) {
+	psm.supvCmdch <- &MsgSuccess{}
+
+	go psm.recoverFromCrash()
+}
+
+func (psm *PauseServiceManager) recoverFromCrash() {
+	// TODO: add recovery logic here
+	logging.Infof("PauseServiceManager::recoverFromCrash: crash recovery called on Pause-Resume service manager")
 }
 
 func (psm *PauseServiceManager) lockShards(shardIds []common.ShardId) error {

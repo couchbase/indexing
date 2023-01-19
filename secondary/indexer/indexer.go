@@ -153,6 +153,7 @@ type indexer struct {
 	storageMgrCmdCh      MsgChannel //channel to send commands to storage manager
 	tkCmdCh              MsgChannel //channel to send commands to timekeeper
 	rebalMgrCmdCh        MsgChannel //channel to send commands to rebalance manager
+	prMgrCmdCh           MsgChannel //channel to send commands to pause resume manager
 	ddlSrvMgrCmdCh       MsgChannel //channel to send commands to ddl service manager
 	schedIdxCreatorCmdCh MsgChannel // channel to send commands to sheduled index creator
 	compactMgrCmdCh      MsgChannel //channel to send commands to compaction manager
@@ -509,6 +510,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		idx.scanCoord.SetMeteringMgr(idx.meteringMgr)
 		idx.statsMgr.SetMeteringMgr(idx.meteringMgr)
 		idx.meteringMgr.RegisterRestEndpoints()
+		idx.prMgrCmdCh = make(MsgChannel)
 	}
 
 	//Start DDL Service Manager
@@ -534,7 +536,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	// Start Generic Service Manager, which creates Pause and Rebalance Managers it delegates to
-	genericMgr, pauseMgr, rebalMgr := NewGenericServiceManager(httpMux, httpAddr, idx.rebalMgrCmdCh,
+	genericMgr, pauseMgr, rebalMgr := NewGenericServiceManager(httpMux, httpAddr, idx.rebalMgrCmdCh, idx.prMgrCmdCh,
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
 		idx.rebalanceToken, idx.statsMgr)
 
@@ -1748,6 +1750,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if common.GetBuildMode() == common.ENTERPRISE && common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT {
 		idx.meteringMgrCmdCh <- msg
 		<-idx.meteringMgrCmdCh
+
+		idx.prMgrCmdCh <- msg
+		<-idx.prMgrCmdCh
 	}
 
 	idx.sendMsgToClustMgr(msg)
@@ -7985,6 +7990,14 @@ func (idx *indexer) bootstrap2() error {
 	if resp := idx.sendStreamUpdateToWorker(msg, idx.rebalMgrCmdCh,
 		"RebalanceMgr"); resp.GetMsgType() != MSG_SUCCESS {
 		return resp.(*MsgError).GetError().cause
+	}
+
+	if common.GetBuildMode() == common.ENTERPRISE && common.IsServerlessDeployment() {
+		//send Ready to Pause Resume Manager
+		if resp := idx.sendStreamUpdateToWorker(msg, idx.prMgrCmdCh,
+			"PauseResumeMgr"); resp.GetMsgType() != MSG_SUCCESS {
+			return resp.(*MsgError).GetError().cause
+		}
 	}
 
 	//if there are no indexes, return from here
