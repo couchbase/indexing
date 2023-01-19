@@ -765,7 +765,10 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 			return client.MarshallCommitCreateResponse(response)
 		} else {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
-			response := &client.CommitCreateResponse{Accept: false}
+			response := &client.CommitCreateResponse{
+				Accept: false,
+				Msg:    client.RespAnotherIndexCreation,
+			}
 			return client.MarshallCommitCreateResponse(response)
 		}
 	}
@@ -774,7 +777,10 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 		m.prepareLock.DefnId != commitCreateIndex.DefnId {
 
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because defnId and requesterId do not match", commitCreateIndex.DefnId)
-		response := &client.CommitCreateResponse{Accept: false}
+		response := &client.CommitCreateResponse{
+			Accept: false,
+			Msg:    client.RespAnotherIndexCreation,
+		}
 		return client.MarshallCommitCreateResponse(response)
 	}
 

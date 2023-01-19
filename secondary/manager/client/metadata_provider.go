@@ -610,7 +610,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 		go func(w *watcher) {
 
-			logging.Infof("send prepare create request to watcher %v", w.getAdminAddr())
+			logging.Infof("send prepare create request to watcher %v, defnId: %v", w.getAdminAddr(), defnId)
 
 			defer wg.Done()
 
@@ -628,16 +628,16 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 			}
 
 			if response != nil && response.Accept {
-				logging.Infof("Indexer %v accept prepare request. Index (%v, %v, %v, %v)",
-					w.getAdminAddr(), bucket, scope, collection, name)
+				logging.Infof("Indexer %v accept prepare request. Index (%v, %v, %v, %v, %v)",
+					w.getAdminAddr(), bucket, scope, collection, name, defnId)
 
 				atomic.AddUint32(&accept, 1)
 				return
 			}
 
 			if response != nil {
-				logging.Infof("Indexer %v rejected request for index (%v, %v, %v, %v) with reason %v",
-					w.getAdminAddr(), bucket, scope, collection, name, response.Msg)
+				logging.Infof("Indexer %v rejected request for index (%v, %v, %v, %v, %v) with reason %v",
+					w.getAdminAddr(), bucket, scope, collection, name, defnId, response.Msg)
 
 				if response.Msg == RespAnotherIndexCreation {
 					atomic.AddUint32(&schedule, 1)
@@ -744,7 +744,9 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	var cond *sync.Cond = sync.NewCond(&mutex)
 	var accept bool
 	var count int32
-	var rebalanceRunning bool
+	rebalanceRunning := false
+	schedIndex := true
+	numRespReceived := 0
 
 	errorMap := make(map[string]bool)
 
@@ -753,7 +755,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 
 		w, err := o.findWatcherByIndexerId(indexerId)
 		if err != nil {
-			logging.Errorf("Fail to cancel prepare index creation.  Cannot find watcher for indexerId %v", indexerId)
+			logging.Errorf("Fail to commit index creation.  Cannot find watcher for indexerId %v", indexerId)
 			continue
 		}
 
@@ -785,16 +787,14 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				logging.Errorf("Encountered error during create index.  Error: %v", err)
 			}
 
-			rebalRunning := false
-			if response.Msg == RespRebalanceRunning {
-				rebalRunning = true
-			}
-
 			mutex.Lock()
 			if response != nil {
 				accept = response.Accept || accept
-				rebalanceRunning = rebalanceRunning || rebalRunning
+				rebalanceRunning = rebalanceRunning || (response.Msg == RespRebalanceRunning)
+				schedIndex = schedIndex && (response.Msg == RespRebalanceRunning || response.Msg == RespAnotherIndexCreation)
+				numRespReceived++
 			}
+
 			mutex.Unlock()
 		}(w)
 	}
@@ -833,20 +833,36 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		return false, nil
 	}
 
-	// If this operation is not successful due to rebalacnce running, then
-	// schedule the index for creation.
-	if !asyncCreate && rebalanceRunning && o.settings.AllowScheduleCreateRebal() {
-		logging.Warnf("makeCommitIndexRequest: Scheduling index for background creation due to commit failure on rebalance. DefnId: %v", idxDefn.DefnId)
-		return true, nil
-	}
-
 	// asyncCreate operation will retry the operation again. Hence, no
 	// need to check for the presence of CreateCommandToken if asyncCreate
 	// is true and createErr != nil
-	if !asyncCreate || createErr == nil {
-		// As metaKV is eventually consistent, it might take some time for
-		// the createToken to propagate to all indexer nodes. Hence, check
-		// periodically for upto 10 seconds.
+	if !asyncCreate {
+
+		// Short-cut: If all watchers have responded and none of them accepted the
+		// commit request, then do not wait for CreateCommandToken
+		if numRespReceived == len(watcherMap) {
+			if schedIndex {
+				if rebalanceRunning {
+					// If atleast one node has failed commit failure due to rebalance running,
+					// then schedule based on "AllowScheduleCreateRebal" setting
+					if o.settings.AllowScheduleCreateRebal() {
+						return true, nil
+					} else {
+						return false, fmt.Errorf("Index creation failed due to rebalance in progress. err: %v", createErr)
+					}
+				}
+				// Rebalance is not running, but commit request failed due to concurrent
+				// index creation on other nodes. Schedule the index for back ground creation
+				return true, nil
+			}
+			// Index creation could not proceed due to some other error. Check for the presence
+			// of create command token
+		}
+
+		// Atleast one node has not responded. Check for the presence of CreateCommandToken in
+		// metaKV. As metaKV is eventually consistent, it might take some time for the token
+		// to be propagated to all other nodes. 10 seconds worth of time is decent enough to
+		// take a decision on the presence of a token
 		ticker := time.NewTicker(1 * time.Second)
 		retryCount := 0
 	loop:
@@ -876,6 +892,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	}
 
 	return false, createErr
+
 }
 
 func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) error {
