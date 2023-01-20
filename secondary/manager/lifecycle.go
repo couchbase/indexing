@@ -1052,7 +1052,7 @@ func (m *LifecycleMgr) handleInstAsyncRecoveryDone(content []byte) error {
 			"while async recovery was in progress", inst.InstId)
 
 		// Instance is dropped while async recovery is in progress. Drop the index
-		return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, true, false, false, common.NewShardRebalanceRequestContext())
+		return m.DeleteOrPruneIndexInstance(inst.Defn, true, false, false, common.NewShardRebalanceRequestContext())
 	}
 
 	return nil
@@ -3866,6 +3866,13 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 	if inst == nil {
 		// no match index instance to delete
 		return nil
+	}
+
+	if _, ok := m.instsInAsyncRecovery[common.IndexInstId(inst.InstId)]; ok {
+		m.droppedInstsInAsyncRecovery[common.IndexInstId(inst.InstId)] = true
+		logging.Errorf("LifecycleMgr::PruneIndexInstance Instance is in async recovery. Index will be deleted "+
+			"after recovery is completed, instId: %v", inst.InstId)
+		return common.ErrIndexInAsyncRecovery
 	}
 
 	newPartitions := make([]common.PartitionId, 0, len(partitions))
