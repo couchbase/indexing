@@ -5419,7 +5419,7 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 			indexName = indexName[0 : len(indexName)-1] // strip off trailing colon
 
 			if dedupedIndexStats, ok := stats[meta.Definition.Bucket]; !ok {
-				return result
+				break // break inner loop. Continue to process outer loop
 			} else {
 				if _, exists := dedupedIndexStats.Indexes[indexName]; exists {
 					for partitionId, indexerId2 := range inst.IndexerId {
