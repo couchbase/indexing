@@ -6,8 +6,10 @@ import (
 	"math/big"
 	"math/rand"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/couchbase/goutils/logging"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 )
 
@@ -41,7 +43,20 @@ type RandomScanRange struct {
 }
 
 func (r RandomScanRange) GetLow(spec *ScanConfig) []interface{} {
-	return randomString(r.RandomKeyLen, spec.Low[0].(string), spec.High[0].(string))
+	low_str, ok1 := spec.Low[0].(string)
+	high_str, ok2 := spec.High[0].(string)
+	if ok1 && ok2 {
+		return randomString(r.RandomKeyLen, low_str, high_str)
+	}
+
+	low_float, ok1 := spec.Low[0].(float64)
+	high_float, ok2 := spec.High[0].(float64)
+	if ok1 && ok2 {
+		return randomStringFloat(r.RandomKeyLen, low_float, high_float)
+	}
+
+	logging.Warnf("GetLow: low & high keys are not of the same type in json spec, returning low key for scan")
+	return spec.Low
 }
 
 func (r RandomScanRange) GetHigh(spec *ScanConfig) []interface{} {
@@ -97,6 +112,54 @@ func randomString(n uint32, low string, high string) []interface{} {
 	}
 
 	return []interface{}{low}
+}
+
+func randomStringFloat(keyLen uint32, low float64, high float64) []interface{} {
+	var i []interface{}
+	n := int(keyLen)
+
+	if low >= high {
+		logging.Errorf("randomStringFloat: invalid input: Low key >= High key")
+		lowStr := strconv.FormatFloat(high, 'f', -1, 64)
+		i = append(i, lowStr)
+		return i
+	}
+
+	// Create random float64 in range [low, high)
+	floatValue := low + rand.Float64()*(high-low)
+	floatValueStr := strconv.FormatFloat(floatValue, 'f', -1, 64)
+
+	// Split whole integer & decimal as strings, ex:- 123.456 to "123" & "456"
+	split := strings.Split(floatValueStr, ".")
+	intPartStr := split[0]
+	if len(split) < 2 {
+		logging.Errorf("randomStringFloat: invalid input for Low key")
+		lowStr := strconv.FormatFloat(low, 'f', -1, 64)
+		i = append(i, lowStr)
+		return i
+	}
+	floatPartStr := split[1]
+	lenIntPartStr := len(intPartStr)
+
+	// Log error when lenIntPartStr >= KeyLen + 1 constraint
+	if n <= lenIntPartStr+1 {
+		logging.Errorf("randomStringFloat: KeyLen must be > length of Low key's integer part + 1")
+		lowStr := strconv.FormatFloat(low, 'f', -1, 64)
+		i = append(i, lowStr)
+		return i
+	}
+
+	// Format for float string to limit decimals to not exceed keyLen or to increase decimal precision when length of floatKeyStr is lesser than keyLen
+	// ex:- If float = 12.3456, keyLen=8 then str = 12.34560
+	// ex:- If float = 12.3456, keyLen=6 then str = 12.346
+	format := "%" + strconv.Itoa(lenIntPartStr) + "." + strconv.Itoa(n-lenIntPartStr-1) + "f"
+	floatStr := intPartStr + "." + floatPartStr
+
+	// Convert string representation of random float using format
+	f, _ := strconv.ParseFloat(floatStr, 64)
+	str := fmt.Sprintf(format, f)
+	i = append(i, str)
+	return i
 }
 
 func randomScans(n uint32, scans qclient.Scans) qclient.Scans {
