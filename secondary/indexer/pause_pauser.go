@@ -213,7 +213,6 @@ func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseTo
 		metakvCancel:        make(chan struct{}),
 		pauseToken:          pauseToken,
 
-		masterTokens:   make(map[string]*PauseUploadToken),
 		followerTokens: make(map[string]*PauseUploadToken),
 
 		doneCb: doneCb,
@@ -254,6 +253,9 @@ func (p *Pauser) initPauseAsync() {
 		p.finishPause(err)
 		return
 	}
+
+	// Initilize master tokens instead of waiting to observe them through metakv callback
+	p.masterTokens = puts
 
 	// Publish tokens to metaKV
 	// will crash if cannot set in metaKV even after retries.
