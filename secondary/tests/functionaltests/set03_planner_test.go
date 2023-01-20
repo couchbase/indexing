@@ -1315,7 +1315,7 @@ var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
 		"../testdata/planner/tenantaware/new_index_1.json",
 		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
 		true,
-		"No SubCluster Below Low Usage Threshold",
+		"Planner not able to find any node for placement - Unable to find any valid SubCluster",
 	},
 	{
 		"Place Single Index Instance - 4 nodes - 2 SG - Tenant Affinity Above Memory HWM",
@@ -1362,6 +1362,7 @@ func tenantAwarePlannerTests(t *testing.T) {
 	tenantAwarePlannerSwapRebalanceTests(t)
 	tenantAwarePlannerScaleDownTests(t)
 	tenantAwarePlannerDefragTests(t)
+	tenantAwarePlannerResumeTests(t)
 
 }
 
@@ -2062,5 +2063,84 @@ func validateDefragUtilStats(t *testing.T, defragUtilStats map[string]map[string
 		}
 	}
 	return nil
+
+}
+
+type tenantAwarePlannerResumeTestCase struct {
+	comment  string
+	topology string
+	tenant   string
+	result   string
+	errStr   string
+}
+
+var tenantAwarePlannerResumeTestCases = []tenantAwarePlannerResumeTestCase{
+
+	{
+		"Resume - 1 tenant, Empty node in cluster.",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_a.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_tenant_a.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_a_out.json",
+		"",
+	},
+	{
+		"Resume - 1 tenant, No empty node in cluster.",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_b.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_tenant_b.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_b_out.json",
+		"",
+	},
+	{
+		"Resume - 1 tenant, No node below LWM in the cluster.",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_c.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_tenant_c.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_c_out.json",
+		"No SubCluster Below Low Usage Threshold",
+	},
+	{
+		"Resume - 1 tenant, Not enough capacity in the cluster.",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_d.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_tenant_d.json",
+		"../testdata/planner/tenantaware/topology/resume/resume_cluster_d_out.json",
+		"Not Enough Capacity To Place Tenant",
+	},
+}
+
+func tenantAwarePlannerResumeTests(t *testing.T) {
+
+	for _, testcase := range tenantAwarePlannerResumeTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		tenant, err := planner.ReadPlan(testcase.tenant)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		s := planner.NewSimulator()
+		solution, err := s.RunSingleTestTenantAwarePlanForResume(plan, tenant.Placement)
+
+		if testcase.errStr == "" {
+
+			FailTestIfError(err, "Error in tenantAwarePlannerResumeTests ", t)
+			result, err := planner.ReadPlan(testcase.result)
+			err = validateTenantAwareRebalanceSolution(t, solution, result, plan.DeletedNodes, false)
+			if err != nil {
+				log.Printf("Actual Solution \n")
+				solution.PrintLayout()
+				log.Printf("Expected Result %v\n", result)
+			}
+			FailTestIfError(err, "Error in RunSingleTestRebalance", t)
+		} else {
+
+			FailTestIfNoError(err, "Error in RunSingleTestRebalance", t)
+			if strings.Contains(err.Error(), testcase.errStr) {
+				log.Printf("Expected error %v", err)
+			} else {
+				t.Fatalf("Unexpected error %v. Expected %v\n", err, testcase.errStr)
+			}
+		}
+	}
 
 }
