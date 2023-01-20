@@ -1628,7 +1628,7 @@ func (m *RebalanceServiceManager) cleanupIndex(indexDefn c.IndexDefn) error {
 			return nil
 		}
 		l.Errorf("RebalanceServiceManager::cleanupIndex Error dropping index %v %v", localaddr+url, response.Error)
-		return err
+		return errors.New(response.Error)
 	}
 
 	return nil
