@@ -624,12 +624,20 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 	clone := make(map[common.ShardId]bool)
 
 	msg := cmd.(*MsgRestoreAndUnlockShards)
+	skipShards := msg.GetSkipShards()
 	respCh := msg.GetRespCh()
 	func() {
 		stm.mu.Lock()
 		defer stm.mu.Unlock()
 
 		for shardId, lockedForRecovery := range stm.lockedShards {
+			if skipShards != nil {
+				if _, ok := skipShards[shardId]; ok {
+					logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Skipping shard: %v from restore and unlock", shardId)
+					delete(stm.lockedShards, shardId) // Clear the book-keeping
+					continue
+				}
+			}
 			clone[shardId] = lockedForRecovery
 		}
 	}()

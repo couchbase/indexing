@@ -2785,11 +2785,16 @@ func (m *MsgRestoreShardDone) GetRespCh() chan bool {
 }
 
 type MsgRestoreAndUnlockShards struct {
-	respCh chan bool
+	skipShards map[common.ShardId]bool
+	respCh     chan bool
 }
 
 func (m *MsgRestoreAndUnlockShards) GetMsgType() MsgType {
 	return RESTORE_AND_UNLOCK_LOCKED_SHARDS
+}
+
+func (m *MsgRestoreAndUnlockShards) GetSkipShards() map[common.ShardId]bool {
+	return m.skipShards
 }
 
 func (m *MsgRestoreAndUnlockShards) GetRespCh() chan bool {
