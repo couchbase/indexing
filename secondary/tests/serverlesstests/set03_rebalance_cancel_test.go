@@ -92,3 +92,32 @@ func TestRebalanceCancelAtMasterShardTokenScheduleAck(t *testing.T) {
 	// the cluster. Hence populate "areInNodesFinal" to false
 	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, false, true, t)
 }
+
+// Prior to this test, all indexes existed on Nodes[1] & Nodes[2]
+// This test will perform swap rebalance by removing Nodes[1] & Nodes[2]
+// The Nodes[3] and Nodes[4] are added in earlier test - So, this test
+// skips adding the nodes again.
+// After finishing first transfer, indexer on Nodes[2] will cancel rebalance.
+// This will lead to rebalance failure. After rebalance, all indexes
+// should exist only on Nodes[1] and Nodes[2]
+func TestRebalanceCancelAfterTransferOnSource(t *testing.T) {
+	log.Printf("In TestRebalanceCancelAfterTransferOnSource")
+
+	// Cancel rebalance from Nodes[2] after transfer is complete
+	tag := testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER
+	err := testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[2], clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.REBALANCE_CANCEL, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	inNodes := []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+	outNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}
+
+	// Since rebalance is expected to fail, outNodes will be the final nodes in
+	// the cluster. Hence populate "areInNodesFinal" to false
+	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, false, true, true, t)
+}
