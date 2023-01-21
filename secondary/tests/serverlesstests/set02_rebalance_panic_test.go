@@ -215,7 +215,7 @@ func TestRebalancePanicAfterRestoreOnDest(t *testing.T) {
 // recovery. This will lead to rebalance failure. After rebalance, all indexes
 // should exist only on Nodes[1] and Nodes[2]
 func TestRebalancePanicDuringDeferredIndexRecovery(t *testing.T) {
-	log.Printf("In TestRebalancePanicAfterRestoreOnDest")
+	log.Printf("In TestRebalancePanicDuringDeferredIndexRecovery")
 
 	// Crash indexer on Nodes[3] after transfer is complete
 	tag := testcode.DEST_SHARDTOKEN_DURING_DEFERRED_INDEX_RECOVERY
