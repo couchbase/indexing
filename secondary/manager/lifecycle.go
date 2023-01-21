@@ -3643,10 +3643,10 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 		return nil
 	}
 
-	if _, ok := m.instsInAsyncRecovery[common.IndexInstId(inst.InstId)]; ok {
-		m.droppedInstsInAsyncRecovery[common.IndexInstId(inst.InstId)] = true
+	if _, ok := m.instsInAsyncRecovery[instId]; ok {
+		m.droppedInstsInAsyncRecovery[instId] = true
 		logging.Errorf("LifecycleMgr::DeleteIndex Instance is in async recovery. Index will be deleted "+
-			"after recovery is completed, instId: %v", inst.InstId)
+			"after recovery is completed, instId: %v", instId)
 		return common.ErrIndexInAsyncRecovery
 	}
 
