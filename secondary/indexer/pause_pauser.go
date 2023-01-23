@@ -761,7 +761,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 	}
 
 	cfg := p.pauseMgr.config.Load()
-	cfgValue, ok := cfg["indexer.pause_resume.compression"]
+	cfgValue, ok := cfg["pause_resume.compression"]
 	var compression bool
 	if !ok {
 		compression = true
@@ -815,7 +815,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	nodePath := p.task.archivePath + p.nodeDir
 	cfg := p.pauseMgr.config.Load()
-	cfgValue, ok := cfg["indexer.pause_resume.compression"]
+	cfgValue, ok := cfg["pause_resume.compression"]
 	var compression bool
 	if !ok {
 		compression = true
@@ -823,7 +823,7 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		compression = cfgValue.Bool()
 	}
 	if !compression {
-		logging.Infof("Pauser::masterUploadPauseMetadata: compression is disabled. will upload raw data")
+		logging.Infof("Pauser::followerUploadBucketData: compression is disabled. will upload raw data")
 	}
 
 	plasmaCfg := plasma.DefaultConfig()

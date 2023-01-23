@@ -59,8 +59,9 @@ type GenericServiceManager struct {
 
 // NewGenericServiceManager is the constructor for the GenericServiceManager class. It needs all the
 // args to be passed to NewPauseServiceManager and NewRebalanceServiceManager.
-func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdch MsgChannel,
-	supvMsgch MsgChannel, rebalSupvPrioMsgch MsgChannel, config common.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
+func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdch,
+	prSupvCmdch MsgChannel, supvMsgch MsgChannel, rebalSupvPrioMsgch MsgChannel,
+	config common.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
 	rebalanceToken *RebalanceToken, statsMgr *statsManager) (
 	*GenericServiceManager, *PauseServiceManager, *RebalanceServiceManager) {
 	const _class = "GenericServiceManager"
@@ -86,9 +87,12 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 	m.cinfo.SetLogPrefix(_class + ": ")
 	m.cinfo.SetUserAgent(_class)
 
-	// Create PauseServiceManager singleton
-	pauseMgr := NewPauseServiceManager(m, mux, supvMsgch, httpAddr, config, nodeInfo)
-	m.pauseMgr = pauseMgr
+	var pauseMgr *PauseServiceManager
+	if common.IsServerlessDeployment() {
+		// Create PauseServiceManager singleton
+		pauseMgr = NewPauseServiceManager(m, mux, prSupvCmdch, supvMsgch, httpAddr, config, nodeInfo)
+		m.pauseMgr = pauseMgr
+	}
 
 	// Create RebalanceServiceManager singleton
 	rebalMgr := NewRebalanceServiceManager(m, httpAddr, rebalSupvCmdch, supvMsgch,
@@ -161,7 +165,9 @@ func (m *GenericServiceManager) GetTaskList(rev service.Revision,
 
 	// Assemble the full task list from the child delegates
 	taskList := m.rebalMgr.RebalGetTaskList()
-	taskList.Tasks = append(taskList.Tasks, m.pauseMgr.PauseResumeGetTaskList()...)
+	if common.IsServerlessDeployment() && common.GetBuildMode() == common.ENTERPRISE {
+		taskList.Tasks = append(taskList.Tasks, m.pauseMgr.PauseResumeGetTaskList()...)
+	}
 	taskList.Rev = EncodeRev(m.getRev()) // overwrite the rev from RebalGetTaskList
 
 	logging.Infof("%v return from rev %v call. taskList: %+v", _GetTaskList, rev, taskList)
@@ -183,7 +189,8 @@ func (m *GenericServiceManager) CancelTask(id string, rev service.Revision) erro
 	}
 
 	// Task not found in Rebalance so delegate to Pause-Resume
-	if err == service.ErrNotFound {
+	if err == service.ErrNotFound && common.IsServerlessDeployment() && 
+		common.GetBuildMode() == common.ENTERPRISE {
 		err = m.pauseMgr.PauseResumeCancelTask(id)
 		if err != nil && err != service.ErrNotFound { // task was found but cancel failed
 			logging.Infof("%v return from rev %v call. PauseResumeCancelTask err: %v", _CancelTask,

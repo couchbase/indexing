@@ -5137,7 +5137,7 @@ func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
 	return count
 }
 
-func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket, scope, collection string) {
+func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket, scope, collection string) map[c.IndexDefnId]bool {
 
 	isBucketScopeCollEmpty := func() bool {
 		return (len(bucket) == 0 && len(scope) == 0 && len(collection) == 0)
@@ -5146,6 +5146,9 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket,
 	checkDefn := func(defn *c.IndexDefn) bool {
 		return (defn != nil && defn.Bucket == bucket && defn.Scope == scope && defn.Collection == collection)
 	}
+
+	// Current map of index definitions in the repo belonging to the node with id 'indexerId'
+	currDefnsForIndexer := make(map[c.IndexDefnId]bool)
 
 	for defnId, instsByDefnId := range r.instances {
 		defn := r.definitions[defnId]
@@ -5163,6 +5166,7 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket,
 					instIndexerId := instByVersion.FindIndexerId()
 
 					if instIndexerId == string(indexerId) {
+						currDefnsForIndexer[defnId] = true
 						delete(r.instances[defnId][instId][partnId], version)
 						logging.Debugf("remove index for indexerId : defnId %v instId %v indexerId %v", defnId, instId, instIndexerId)
 					}
@@ -5179,6 +5183,7 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket,
 			delete(r.instances, defnId)
 		}
 	}
+	return currDefnsForIndexer
 }
 
 // Removing an index with no index instance:
@@ -5272,8 +5277,9 @@ func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.In
 	//    is not known when processing Commit message from indexer.   But there is no residual metadata to clean up
 	//    during WatchMetadata (previous UnwatchMetadata haved removed metadata for same indexerId).
 	//
+	var defnsForIndexer map[c.IndexDefnId]bool
 	if len(indexerId) != 0 {
-		r.removeInstForIndexerNoLock(indexerId, topology.Bucket, topology.Scope, topology.Collection)
+		defnsForIndexer = r.removeInstForIndexerNoLock(indexerId, topology.Bucket, topology.Scope, topology.Collection)
 	}
 
 	logging.Debugf("new topology change from %v", indexerId)
@@ -5310,6 +5316,7 @@ func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.In
 				// r.Instances has all the index instances and partitions regardless of its state and version
 				temp := instRef
 				r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)][partnRef.Version] = &temp
+				delete(defnsForIndexer, defnId)
 			}
 		}
 
@@ -5319,6 +5326,16 @@ func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.In
 
 	if len(indexerId) != 0 {
 		r.cleanupOrphanDefnNoLock(indexerId, topology.Bucket, topology.Scope, topology.Collection)
+	}
+
+	// At this point, all the index definitions that are a part of the topology are removed
+	// from "r.instances" and added back again. The "defsForIndexer" map is also updated
+	// in this process. This map will now contain those definitions that are deleted from
+	// the topology but it is possible that they may not be removed from the instMeta.
+	// Update instMeta for those instances
+	for defnId, _ := range defnsForIndexer {
+		logging.Debugf("updateTopology: updating index metadata for deleted instances. defnId: %v", defnId)
+		r.updateIndexMetadataNoLock(defnId)
 	}
 
 	r.incrementVersion()
@@ -5641,7 +5658,7 @@ func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[strin
 			indexName = indexName[0 : len(indexName)-1] // strip off trailing colon
 
 			if dedupedIndexStats, ok := stats[meta.Definition.Bucket]; !ok {
-				return result
+				break // break inner loop. Continue to process outer loop
 			} else {
 				if perIndexStats, exists := dedupedIndexStats.Indexes[indexName]; exists {
 					for partitionId, indexerId2 := range inst.IndexerId {

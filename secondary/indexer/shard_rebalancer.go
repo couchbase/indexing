@@ -2201,17 +2201,6 @@ func (sr *ShardRebalancer) Cancel() {
 	}
 }
 
-func (sr *ShardRebalancer) RestoreAndUnlockShards() {
-	l.Infof("ShardRebalancer::RestoreAndUnlockShards Initiating restore and shard unlock")
-
-	respCh := make(chan bool)
-	sr.supvMsgch <- &MsgRestoreAndUnlockShards{
-		respCh: respCh,
-	}
-	<-respCh
-	l.Infof("ShardRebalancer::RestoreAndUnlockShards Exiting")
-}
-
 // This function batches a group of transfer tokens
 // according to the following rules:
 //
