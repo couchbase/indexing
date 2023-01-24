@@ -218,7 +218,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
 				} else {
-					destination, err := getDestinationFromConfig(sr.config.Load())
+					destination, region, err := getDestinationFromConfig(sr.config.Load())
 					if err != nil {
 						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
 						go sr.finishRebalance(err)
@@ -227,9 +227,10 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					// Populate destination in transfer tokens
 					for _, token := range sr.transferTokens {
 						token.Destination = destination
+						token.Region = region
 					}
 					sr.destination = destination
-					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v in all transfer tokens", destination)
+					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v, region: %v in all transfer tokens", destination, region)
 
 				}
 
@@ -241,10 +242,11 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	go sr.doRebalance()
 }
 
-func getDestinationFromConfig(cfg c.Config) (string, error) {
+func getDestinationFromConfig(cfg c.Config) (string, string, error) {
 	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
 	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
 	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
+	blobStorageRegion := cfg["settings.rebalance.blob_storage_region"].String()
 
 	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageBucket, "://") {
 		blobStorageScheme += "://"
@@ -255,9 +257,9 @@ func getDestinationFromConfig(cfg c.Config) (string, error) {
 
 	destination := blobStorageScheme + blobStorageBucket + blobStoragePrefix
 	if len(destination) == 0 {
-		return "", errors.New("Empty destination for shard rebalancer")
+		return "", blobStorageRegion, errors.New("Empty destination for shard rebalancer")
 	}
-	return destination, nil
+	return destination, blobStorageRegion, nil
 }
 
 // processTokens is invoked by observeRebalance() method
@@ -618,7 +620,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
 
 		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
-		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
+		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil)
 
 		sourceToken.ShardTransferTokenState = common.ShardTokenCommit
 		setTransferTokenInMetakv(sourceId, sourceToken)
@@ -633,7 +635,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 		// Clean-up any transferred data - Currently, plasma cleans up transferred data on a successful
 		// restore. This is only a safety operation from indexer. Coming to this code means that restore
 		// is successful and this operation becomes a no-op
-		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceId, sourceToken, nil)
+		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil)
 
 		siblingToken := sr.getTokenById(siblingId)
 		if siblingToken != nil && siblingToken.TransferMode == common.TokenTransferModeCopy && siblingToken.SourceId == sr.nodeUUID {
@@ -689,6 +691,7 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 		transferId:  ttid,
 		taskType:    common.RebalanceTask,
 		destination: tt.Destination,
+		region:      tt.Region,
 
 		cancelCh:   sr.cancel,
 		doneCh:     sr.done,
@@ -716,12 +719,12 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 			for shardId, err := range errMap {
 				if err != nil {
 					l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
-						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-						tt.Destination, shardId, shardPaths, err)
+						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, tt.Region, shardId, shardPaths, err)
 
 					unlockShards(tt.ShardIds, sr.supvMsgch)
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, ttid, tt, err)
+					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err)
 					return
 				}
 			}
@@ -759,16 +762,17 @@ func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTra
 }
 
 func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.ShardId]string,
-	destination string, ttid string, tt *c.TransferToken, err error) {
+	destination, region string, ttid string, tt *c.TransferToken, err error) {
 
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
-		"shard paths: %v, destination: %v", ttid, shardPaths, destination)
+		"shard paths: %v, destination: %v, region: %v", ttid, shardPaths, destination, region)
 
 	start := time.Now()
 	respCh := make(chan bool)
 	msg := &MsgShardTransferCleanup{
 		shardPaths:      shardPaths,
 		destination:     destination,
+		region:          region,
 		rebalanceId:     sr.rebalToken.RebalId,
 		transferTokenId: ttid,
 		respCh:          respCh,
@@ -938,6 +942,7 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		rebalanceId:     sr.rebalToken.RebalId,
 		transferTokenId: ttid,
 		destination:     tt.Destination,
+		region:          tt.Region,
 		instRenameMap:   tt.InstRenameMap,
 
 		cancelCh:   sr.cancel,
@@ -966,8 +971,8 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 					// is cleaned by the destination node. The data on S3 will be cleaned by the rebalance
 					// source node. Rebalance source node is the only writer (insert/delete) of data on S3
 					l.Errorf("ShardRebalancer::startRestoreShard Observed error during trasfer"+
-						" for destination: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-						tt.Destination, shardId, shardPaths, err)
+						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+						tt.Destination, tt.Region, shardId, shardPaths, err)
 
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
 					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)

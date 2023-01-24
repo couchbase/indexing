@@ -1350,7 +1350,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 
 		// Initiate cleanup on S3 due to broken transfer
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Initiating clean-up for ttid: %v, "+
-			"shardIds: %v, destination: %v", ttid, tt.ShardIds, tt.Destination)
+			"shardIds: %v, destination: %v, region: %v", ttid, tt.ShardIds, tt.Destination, tt.Region)
 
 		unlockShards(tt.ShardIds, m.supvMsgch)
 
@@ -1358,6 +1358,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		msg := &MsgShardTransferCleanup{
 			shardPaths:      nil,
 			destination:     tt.Destination,
+			region:          tt.Region,
 			rebalanceId:     tt.RebalId,
 			transferTokenId: ttid,
 			respCh:          respCh,
@@ -1372,7 +1373,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		<-respCh
 
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Done clean-up for ttid: %v, "+
-			"shardIds: %v, destination: %v", ttid, tt.ShardIds, tt.Destination)
+			"shardIds: %v, destination: %v, region: %v", ttid, tt.ShardIds, tt.Destination, tt.Region)
 
 		// Delete transfer token from metakv
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
@@ -1438,6 +1439,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		msg := &MsgShardTransferCleanup{
 			shardPaths:      nil,
 			destination:     tt.Destination,
+			region:          tt.Region,
 			rebalanceId:     tt.RebalId,
 			transferTokenId: ttid,
 			respCh:          respCh,
@@ -1462,6 +1464,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		msg := &MsgShardTransferCleanup{
 			shardPaths:      nil,
 			destination:     tt.Destination,
+			region:          tt.Region,
 			rebalanceId:     tt.RebalId,
 			transferTokenId: ttid,
 			respCh:          respCh,

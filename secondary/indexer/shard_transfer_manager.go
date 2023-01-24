@@ -125,6 +125,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	taskCancelCh := msg.GetCancelCh()
 	taskDoneCh := msg.GetDoneCh()
 	destination := msg.GetDestination()
+	region := msg.GetRegion()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
 
@@ -137,6 +138,9 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		ttid := msg.GetTransferTokenId()
 		meta[plasma.GSIRebalanceId] = rebalanceId
 		meta[plasma.GSIRebalanceTransferToken] = ttid
+		if region != "" {
+			meta[plasma.GSIBucketRegion] = region
+		}
 	case common.PauseResumeTask:
 		bucketUUID := msg.GetBucketUUID()
 		meta[plasma.GSIPauseResume] = bucketUUID
@@ -269,6 +273,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 
 	shardPaths := msg.GetShardPaths()
 	destination := msg.GetDestination()
+	region := msg.GetRegion()
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	respCh := msg.GetRespCh()
@@ -279,6 +284,9 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		meta := make(map[string]interface{})
 		meta[plasma.GSIRebalanceId] = rebalanceId
 		meta[plasma.GSIRebalanceTransferToken] = ttid
+		if region != "" {
+			meta[plasma.GSIBucketRegion] = region
+		}
 
 		err := plasma.DoCleanup(destination, meta)
 		if err != nil {
@@ -299,6 +307,9 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		meta[plasma.GSIRebalanceTransferToken] = ttid
 		meta[plasma.GSIShardID] = uint64(shardId)
 		meta[plasma.GSIShardUploadPath] = shardPath
+		if region != "" {
+			meta[plasma.GSIBucketRegion] = region
+		}
 
 		err := plasma.DoCleanup(destination, meta)
 		if err != nil {
@@ -322,6 +333,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	destination := msg.GetDestination()
+	region := msg.GetRegion()
 	instRenameMap := msg.GetInstRenameMap()
 	rebalCancelCh := msg.GetCancelCh()
 	rebalDoneCh := msg.GetDoneCh()
@@ -390,6 +402,11 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			meta[plasma.GSIShardID] = uint64(shardId)
 			meta[plasma.GSIShardUploadPath] = shardPath
 			meta[plasma.GSIStorageDir] = stm.config["storage_dir"].String()
+
+			if region != "" {
+				meta[plasma.GSIBucketRegion] = region
+			}
+
 			if instRenameMap != nil && len(instRenameMap[shardId]) > 0 {
 				meta[plasma.GSIReplicaRepair] = instRenameMap[shardId]
 			}

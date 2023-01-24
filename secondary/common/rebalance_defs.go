@@ -316,6 +316,9 @@ type TransferToken struct {
 	// the shard data
 	Destination string
 
+	// Region at which the S3 bucket is hosted
+	Region string
+
 	// TokenId of the source node on which drop index instances
 	// has to be initiated
 	SourceTokenId string
@@ -402,6 +405,7 @@ func (tt *TransferToken) String() string {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
 		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
 		fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
+		fmt.Fprintf(sbp, "Region: %v\n", tt.Region)
 
 		if len(tt.InstRenameMap) > 0 {
 			fmt.Fprintf(sbp, "InstRenameMap: %v\n", tt.InstRenameMap)
@@ -462,6 +466,10 @@ func (tt *TransferToken) LessVerboseString() string {
 		if tt.Destination != "" {
 			fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
 		}
+		if tt.Region != "" {
+			fmt.Fprintf(sbp, "Region: %v\n", tt.Region)
+		}
+
 		for i := range tt.IndexInsts {
 			fmt.Fprintf(sbp, "\tInstId: %v ", tt.InstIds[i])
 			fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstIds[i])

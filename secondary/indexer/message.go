@@ -2444,6 +2444,7 @@ type MsgStartShardTransfer struct {
 	taskId      string
 	transferId  string
 	destination string
+	region      string
 
 	// valid task types:
 	//	* common.PauseResumeTask
@@ -2518,6 +2519,10 @@ func (m *MsgStartShardTransfer) GetDestination() string {
 	return m.destination
 }
 
+func (m *MsgStartShardTransfer) GetRegion() string {
+	return m.region
+}
+
 // GetTaskType returns the type of task (common.PauseResumeTask or common.RebalanceTask)
 func (m *MsgStartShardTransfer) GetTaskType() common.TaskType {
 	return m.taskType
@@ -2555,6 +2560,7 @@ func (m *MsgStartShardTransfer) String() string {
 		fmt.Fprintf(sbp, " Task Type: Rebalance ")
 	}
 	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
+	fmt.Fprintf(sbp, " Region: %v ", m.region)
 
 	return sbp.String()
 }
@@ -2579,6 +2585,7 @@ func (m *MsgShardTransferResp) GetShardPaths() map[common.ShardId]string {
 type MsgShardTransferCleanup struct {
 	shardPaths      map[common.ShardId]string // shardId -> Location of shard transfer
 	destination     string
+	region          string
 	rebalanceId     string
 	transferTokenId string
 	respCh          chan bool
@@ -2594,6 +2601,10 @@ func (m *MsgShardTransferCleanup) GetShardPaths() map[common.ShardId]string {
 
 func (m *MsgShardTransferCleanup) GetDestination() string {
 	return m.destination
+}
+
+func (m *MsgShardTransferCleanup) GetRegion() string {
+	return m.region
 }
 
 func (m *MsgShardTransferCleanup) GetRebalanceId() string {
@@ -2615,6 +2626,7 @@ func (m *MsgShardTransferCleanup) String() string {
 	fmt.Fprintf(sbp, " ShardPaths: %v ", m.shardPaths)
 	fmt.Fprintf(sbp, " RebalanceId: %v ", m.rebalanceId)
 	fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferTokenId)
+	fmt.Fprintf(sbp, " Region: %v ", m.region)
 
 	return sbp.String()
 }
@@ -2624,6 +2636,7 @@ type MsgStartShardRestore struct {
 	rebalanceId     string
 	transferTokenId string
 	destination     string
+	region          string
 
 	// The rebalance cancelCh shared with indexer to indicate
 	// any upstream cancellation of rebalance
@@ -2658,6 +2671,10 @@ func (m *MsgStartShardRestore) GetTransferTokenId() string {
 
 func (m *MsgStartShardRestore) GetDestination() string {
 	return m.destination
+}
+
+func (m *MsgStartShardRestore) GetRegion() string {
+	return m.region
 }
 
 func (m *MsgStartShardRestore) GetInstRenameMap() map[common.ShardId]map[string]string {
