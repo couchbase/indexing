@@ -4689,9 +4689,10 @@ func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, 
 		return nil, err
 	}
 
-	p.Result = evaluateSolutionForScaleIn(p.Result, plan.UsageThreshold)
+	var deletedNodes []string
+	p.Result, deletedNodes = evaluateSolutionForScaleIn(p.Result, plan.UsageThreshold)
 
-	defragUtilStats := genDefragUtilStats(p.Result.Placement)
+	defragUtilStats := genDefragUtilStats(p.Result.Placement, deletedNodes)
 	return defragUtilStats, nil
 }
 
@@ -4702,7 +4703,7 @@ func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, 
 //2. "units_used_actual"
 //3. "num_tenants"
 //4. "num_index_repaired"
-func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interface{} {
+func genDefragUtilStats(placement []*IndexerNode, deletedNodes []string) map[string]map[string]interface{} {
 
 	defragUtilStats := make(map[string]map[string]interface{})
 	for _, indexerNode := range placement {
@@ -4713,6 +4714,17 @@ func genDefragUtilStats(placement []*IndexerNode) map[string]map[string]interfac
 		nodeUsageStats["num_index_repaired"] = getNumIndexRepaired(indexerNode)
 
 		defragUtilStats[indexerNode.NodeId] = nodeUsageStats
+	}
+
+	//add stats for deleted nodes
+	for _, delNode := range deletedNodes {
+		nodeUsageStats := make(map[string]interface{})
+		nodeUsageStats["memory_used_actual"] = uint64(0)
+		nodeUsageStats["units_used_actual"] = uint64(0)
+		nodeUsageStats["num_tenants"] = uint64(0)
+		nodeUsageStats["num_index_repaired"] = uint64(0)
+
+		defragUtilStats[delNode] = nodeUsageStats
 	}
 
 	return defragUtilStats
@@ -4732,7 +4744,7 @@ func getNumTenantsForNode(indexerNode *IndexerNode) uint64 {
 
 //evaluateSolutionForScaleIn checks if there is enough excess capacity to allow some
 //nodes to be removed from the cluster based on usage thresholds.
-func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThreshold) *Solution {
+func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThreshold) (*Solution, []string) {
 
 	const _evaluateSolutionForScaleIn = "Planner::evaluateSolutionForScaleIn"
 
@@ -4740,7 +4752,7 @@ func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThresho
 	//further evaluation. CP can remove the empty nodes for scale in.
 	numNewNode := solution.findNumEmptyNodes()
 	if numNewNode > 0 {
-		return solution
+		return solution, nil
 	}
 
 	//clone the original solution
@@ -4753,7 +4765,7 @@ func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThresho
 	allSubClusters, err := groupIndexNodesIntoSubClusters(cloneSolution.Placement)
 	if err != nil {
 		logging.Errorf("%v Error group into subclusters %v", _evaluateSolutionForScaleIn, err)
-		return solution
+		return solution, nil
 	}
 
 	logging.Infof("%v Found SubClusters  %v", _evaluateSolutionForScaleIn, allSubClusters)
@@ -4766,7 +4778,7 @@ func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThresho
 	//if number of subclusters below LWM are less than 2, nothing to be done
 	//minimum 2 subClusters are required below LWM to allow one subcluster to be removed.
 	if len(subClustersBelowLWM) < 2 {
-		return solution
+		return solution, nil
 	}
 
 	leastLoadedSubCluster := findLeastLoadedSubCluster(subClustersBelowLWM)
@@ -4780,7 +4792,7 @@ func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThresho
 	err = cloneSolution.markDeletedNodes(deletedNodes)
 	if err != nil {
 		logging.Errorf("%v Error marking deleted nodes %v", _evaluateSolutionForScaleIn, err)
-		return solution
+		return solution, nil
 	}
 
 	cloneSolution.numDeletedNode = cloneSolution.findNumDeleteNodes()
@@ -4791,12 +4803,12 @@ func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThresho
 	err = findPlacementForDeletedNodes(cloneSolution, usageThresholdScaleIn)
 	if err != nil {
 		//Return the original solution as there is not enough capacity for scale-in
-		return solution
+		return solution, nil
 	} else {
 		//If there is no error, it means the indexes from deleted nodes can fit
 		//in on remaining nodes under LWM with reduced scale-in thresholds.
 		//The new solution can be accepted.
-		return cloneSolution
+		return cloneSolution, deletedNodes
 	}
 
 }
