@@ -11,5 +11,17 @@
 	     "units_used_actual": 3000,
 	     "num_tenants" : 2,
              "num_index_repaired": 0
+	 },
+         "127.0.0.1:9003" : {
+	     "memory_used_actual": 0,
+	     "units_used_actual": 0,
+	     "num_tenants" : 0,
+             "num_index_repaired": 0
+	 },
+         "127.0.0.1:9006" : {
+	     "memory_used_actual": 0,
+	     "units_used_actual": 0,
+	     "num_tenants" : 0,
+             "num_index_repaired": 0
 	 }
 }
