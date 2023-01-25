@@ -31,7 +31,7 @@ func TestShardRebalanceSetup(t *testing.T) {
 // All the indexes are expected to be moved to Nodes[3] & Nodes[4]
 func TestTwoNodeSwapRebalance(t *testing.T) {
 	log.Printf("In TestTwoNodeSwapRebalance")
-	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {
@@ -54,7 +54,7 @@ func TestTwoNodeSwapRebalance(t *testing.T) {
 func TestSingleNodeSwapRebalance(t *testing.T) {
 	log.Printf("In TestSingleNodeSwapRebalance")
 
-	performSwapRebalance([]string{clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[4]}, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[4]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {
@@ -89,9 +89,6 @@ func TestReplicaRepair(t *testing.T) {
 		FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: Group 2", clusterconfig.Nodes[1]), t)
 	}
 	rebalance(t)
-
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	// This sleep will ensure that the stats are propagated to client
 	// Also, any pending rebalance cleanup is expected to be done during
@@ -145,9 +142,6 @@ func TestReplicaRepairAndSwapRebalance(t *testing.T) {
 		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", clusterconfig.Nodes[1]), t)
 	}
 
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
-
 	// This sleep will ensure that the stats are propagated to client
 	// Also, any pending rebalance cleanup is expected to be done during
 	// this time - so that validateShardFiles can see cleaned up directories
@@ -183,8 +177,6 @@ func TestBuildDeferredIndexesAfterRebalance(t *testing.T) {
 			}
 		}
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
 	validateShardIdMapping(clusterconfig.Nodes[3], t)
@@ -226,8 +218,6 @@ func TestDropIndexAfterRebalance(t *testing.T) {
 			}
 		}
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
 
@@ -259,7 +249,7 @@ func TestDropIndexAfterRebalance(t *testing.T) {
 func TestRebalanceAfterDropIndexes(t *testing.T) {
 	log.Printf("In TestRebalanceAfterDropIndexes")
 
-	performSwapRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {
@@ -297,8 +287,6 @@ func TestCreateIndexsAfterRebalance(t *testing.T) {
 			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[1], "Created", t)
 		}
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	waitForStatsUpdate()
 	validateShardIdMapping(clusterconfig.Nodes[1], t)
@@ -331,7 +319,7 @@ func TestRebalanceAfterDroppedCollections(t *testing.T) {
 		}
 	}
 
-	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, t)
+	performSwapRebalance([]string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}, false, false, false, t)
 
 	for _, bucket := range buckets {
 		for _, collection := range collections {

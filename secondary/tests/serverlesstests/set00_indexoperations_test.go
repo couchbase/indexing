@@ -17,7 +17,7 @@ var scope string = "_default"
 var indexes []string = []string{"idx_secondary", "idx_secondary_defer", "#primary", "#primary_defer", "idx_partitioned", "idx_partitioned_defer"}
 var indexPartnIds [][]int = [][]int{[]int{0}, []int{0}, []int{0}, []int{0}, []int{1, 2, 3, 4, 5, 6, 7, 8}, []int{1, 2, 3, 4, 5, 6, 7, 8}}
 var numDocs int = 1000
-var numScans int = 100
+var numScans int = 1000
 
 // When creating an index through N1QL, the index is expected
 // to be created with a replica
@@ -122,7 +122,7 @@ func createAllIndexes(bucket, scope, collection string, t *testing.T) {
 
 	if len(indexes) > 4 {
 		// Create a partitioned index
-		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emalid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(emailid) partition by hash(meta().id)", indexes[4], bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[4], "Ready", t)
 	}
 

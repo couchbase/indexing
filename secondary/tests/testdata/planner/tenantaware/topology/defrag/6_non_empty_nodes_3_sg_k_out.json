@@ -7,6 +7,12 @@
              "num_tenants" : 2,
              "num_index_repaired": 0
          },
+         "127.0.0.1:9002" : {
+             "memory_used_actual": 0,
+             "units_used_actual": 0,
+             "num_tenants" : 0,
+             "num_index_repaired": 0
+         },
          "127.0.0.1:9003" : {
              "memory_used_actual": 400000000,
              "units_used_actual": 4000,
@@ -17,6 +23,12 @@
              "memory_used_actual": 500000000,
              "units_used_actual": 5000,
              "num_tenants" : 2,
+             "num_index_repaired": 0
+         },
+         "127.0.0.1:9005" : {
+             "memory_used_actual": 0,
+             "units_used_actual": 0,
+             "num_tenants" : 0,
              "num_index_repaired": 0
          },
          "127.0.0.1:9006" : {

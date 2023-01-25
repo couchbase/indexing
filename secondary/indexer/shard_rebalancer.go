@@ -425,10 +425,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 	case c.ShardTokenReady:
 		sr.updateInMemToken(ttid, tt, "master")
 
+		////////////// Testing code - Not used in production //////////////
+		testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_BEFORE_DROP_ON_SOURCE)
+		///////////////////////////////////////////////////////////////////
+
 		if tt.SiblingExists() {
 			if sr.getSiblingState(tt) == c.ShardTokenReady {
 				dropOnSourceTokenId, dropOnSourceToken := genShardTokenDropOnSource(tt.RebalId, ttid, tt.SiblingTokenId)
 				setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_AFTER_DROP_ON_SOURCE)
+				///////////////////////////////////////////////////////////////////
 			}
 		} else {
 			// If sibling does not exist, this could be replica repair or single node
@@ -487,6 +495,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 		sr.updateInMemToken(ttid, tt, "master")
 
 		if sr.checkAllTokensDone() { // rebalance completed
+
+			////////////// Testing code - Not used in production //////////////
+			testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_ALL_TOKENS_PROCESSED)
+			///////////////////////////////////////////////////////////////////
+
 			if sr.cb.progress != nil {
 				sr.cb.progress(1.0, sr.cancel)
 			}
@@ -712,6 +725,10 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 					return
 				}
 			}
+
+			////////////// Testing code - Not used in production //////////////
+			testcode.TestActionAtTag(sr.config.Load(), testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER)
+			///////////////////////////////////////////////////////////////////
 
 			// No errors are observed during shard transfer. Change the state of
 			// the transfer token and update metaKV
@@ -959,6 +976,10 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 				}
 			}
 
+			////////////// Testing code - Not used in production //////////////
+			testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_AFTER_RESTORE)
+			///////////////////////////////////////////////////////////////////
+
 			// No errors are observed during shard transfer. Change the state of
 			// the transfer token and update metaKV
 			sr.mu.Lock()
@@ -1102,6 +1123,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 					deferredInsts[defn.InstId] = true
 				}
 
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_DEFERRED_INDEX_RECOVERY)
+				///////////////////////////////////////////////////////////////////
+
 				if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredInsts, ttid, tt); err != nil {
 					setErrInTransferToken(err)
 					return
@@ -1115,6 +1140,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 			} else {
 				var currIndex int
 				nonDeferredInsts, buildDefnIdList, currIndex = populateInstsAndDefnIds(nonDeferredInsts, buildDefnIdList, defn, defnIdToInstIdMap)
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_NON_DEFERRED_INDEX_RECOVERY)
+				///////////////////////////////////////////////////////////////////
 
 				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts[currIndex], ttid, tt); err != nil {
 					sr.setTransferTokenError(ttid, tt, err.Error())
@@ -1416,6 +1445,10 @@ loop:
 				// retry after "retryInterval" if not all indexes have reached the expectedState
 
 			case common.INDEX_STATE_ACTIVE:
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_INDEX_BUILD)
+				///////////////////////////////////////////////////////////////////
 
 				for i, inst := range tt.IndexInsts {
 

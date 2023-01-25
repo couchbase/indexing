@@ -114,7 +114,7 @@ func TestMain(m *testing.M) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.rebalance.serverless.transferBatchSize", 2, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_prefix")
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.client_stats_refresh_interval", 1000, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err = secondaryindex.ChangeIndexerSettings("indexer.client_stats_refresh_interval", 500, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.client_stats_refresh_interval")
 
 	if clusterconfig.IndexUsing != "" {
@@ -547,7 +547,8 @@ func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t 
 	for {
 		select {
 		case <-time.After(time.Duration(3 * time.Minute)):
-			t.Fatalf("Index did not become active after 3 minutes")
+			t.Fatalf("Index: %v, bucket: %v, scope: %v, collection: %v did not become active after 3 minutes",
+				index, bucket, scope, collection)
 			break
 		default:
 			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -564,7 +565,8 @@ func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t 
 
 					if index == entry["index"].(string) {
 						if strings.ToLower(indexStatus) == strings.ToLower(entry["status"].(string)) {
-							log.Printf("Index status is: %v for index: %v", indexStatus, index)
+							log.Printf("Index status is: %v for index: %v, bucket: %v, scope: %v, collection: %v",
+								indexStatus, index, bucket, scope, collection)
 							return
 						}
 					}
@@ -579,12 +581,12 @@ func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t 
 }
 
 func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, status string, t *testing.T) {
+	log.Printf("Executing N1ql statement: %v", n1qlStatement)
 	// Create a partitioned index with defer_build:true
 	_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, url.PathEscape(bucket),
 		n1qlStatement, false, gocb.RequestPlus)
 	FailTestIfError(err, fmt.Sprintf("Error during n1qlExecute: %v", n1qlStatement), t)
 
-	log.Printf("Executed N1ql statement: %v", n1qlStatement)
 	// Wait for index created
 	waitForIndexStatus(bucket, scope, collection, index, status, t)
 	waitForIndexStatus(bucket, scope, collection, index+" (replica 1)", status, t)
@@ -593,6 +595,8 @@ func execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, s
 // scanIndexReplicas scan's the index and validates if all the replicas of the index are retruning
 // valid results
 func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int, numScans, numDocs, numPartitions int, t *testing.T) {
+
+	statsBeforeScan := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 	log.Printf("scanIndexReplicas: Scanning all for index: %v, bucket: %v, scope: %v, collection: %v", index, bucket, scope, collection)
 	// Scan the index num_scans times
 	for i := 0; i < numScans; i++ {
@@ -609,7 +613,7 @@ func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int
 	}
 
 	// Get parititioned stats for the index from all nodes
-	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	statsAfterScan := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	// construct corresponding replica strings's from replicaIds
 	replicas := make([]string, len(replicaIds))
@@ -644,14 +648,14 @@ func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int
 			if collection == "_default" {
 				indexName = fmt.Sprintf("%s:%s %v%s", bucket, index, j, replicas[i])
 			}
-			num_requests[i][j] = stats[indexName+":num_requests"].(float64)
-			num_scan_errors += stats[indexName+":num_scan_errors"].(float64)
-			num_scan_timeouts += stats[indexName+":num_scan_timeouts"].(float64)
+			num_requests[i][j] = statsAfterScan[indexName+":num_requests"].(float64) - statsBeforeScan[indexName+":num_requests"].(float64)
+			num_scan_errors += statsAfterScan[indexName+":num_scan_errors"].(float64) - statsBeforeScan[indexName+":num_scan_errors"].(float64)
+			num_scan_timeouts += statsAfterScan[indexName+":num_scan_timeouts"].(float64) - statsBeforeScan[indexName+":num_scan_timeouts"].(float64)
 		}
 	}
 
 	logStats := func() {
-		log.Printf("ScanAllReplicas: Indexer stats are: %v", stats)
+		log.Printf("ScanAllReplicas: Indexer stats are: %v", statsAfterScan)
 	}
 	if num_scan_errors > 0 {
 		logStats()
@@ -669,14 +673,18 @@ func scanIndexReplicas(index, bucket, scope, collection string, replicaIds []int
 		for i := 0; i < len(replicas); i++ {
 			if num_requests[i][j] == 0 {
 				logStats()
-				t.Fatalf("Zero scan requests seen for index: %v, partnId: %v", index+replicas[i], j)
+				instId, defnId, _ := getInstAndDefnId(bucket, scope, collection, index+replicas[i])
+				t.Fatalf("Zero scan requests seen for index: %v, partnId: %v, bucket: %v, "+
+					"scope: %v, collection: %v, instId: %v, defnId: %v", index+replicas[i], j, bucket, scope, collection, instId, defnId)
 			}
 			total_scan_requests += num_requests[i][j]
 		}
 
 		if total_scan_requests != (float64)(numScans) {
 			logStats()
-			t.Fatalf("Total scan requests for all partitions does not match the total scans. Expected: %v, actual: %v, partitionID: %v", numScans, total_scan_requests, j)
+			t.Fatalf("Total scan requests for all partitions does not match the total scans. "+
+				"Expected: %v, actual: %v, index (all replicas): %v, partitionID: %v, bucket: %v, "+
+				"scope: %v, collection: %v", numScans, total_scan_requests, index, j, bucket, scope, collection)
 		}
 	}
 }
@@ -689,7 +697,7 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 
 	var finalErr error
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 300; i++ {
 		client := &http.Client{}
 		address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
 
@@ -726,6 +734,53 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 	}
 	// todo : error out if response is error
 	tc.HandleError(finalErr, "Get RebalanceCleanupStatus")
+}
+
+func waitForTokenCleanup(nodeAddr string, t *testing.T) {
+	indexerAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, nodeAddr)
+	if indexerAddr == "" {
+		t.Fatalf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	}
+
+	var finalErr error
+
+	for i := 0; i < 300; i++ {
+		client := &http.Client{}
+		address := "http://" + indexerAddr + "/listRebalanceTokens"
+
+		req, _ := http.NewRequest("GET", address, nil)
+		req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+		resp, err := client.Do(req)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
+		if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
+			finalErr = err
+			time.Sleep(1 * time.Second)
+			continue
+		} else {
+			finalErr = nil
+		}
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+			log.Printf(address)
+			log.Printf("%v", req)
+			log.Printf("%v", resp)
+			log.Printf("listRebalanceTokens failed")
+		}
+
+		body, _ := ioutil.ReadAll(resp.Body)
+		if string(body) == "null\n" {
+			return
+		}
+		if i%5 == 0 {
+			log.Printf("Waiting for rebalance cleanup (as rebalance tokens still exist) to finish on node: %v", nodeAddr)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	// todo : error out if response is error
+	tc.HandleError(finalErr, "Get listRebalanceTokens")
 }
 
 // Return shardID's for each bucket on this node
@@ -1073,12 +1128,14 @@ func getServerGroupForNode(node string) string {
 	}
 }
 
-func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation bool, t *testing.T) {
+func performSwapRebalance(addNodes []string, removeNodes []string, skipValidation, skipAdding, isRebalCancel bool, t *testing.T) {
 
-	for _, node := range addNodes {
-		serverGroup := getServerGroupForNode(node)
-		if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, node, "index", serverGroup); err != nil {
-			FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: %v", node, serverGroup), t)
+	if !skipAdding {
+		for _, node := range addNodes {
+			serverGroup := getServerGroupForNode(node)
+			if err := cluster.AddNodeWithServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, node, "index", serverGroup); err != nil {
+				FailTestIfError(err, fmt.Sprintf("Error while adding node %v cluster in server group: %v", node, serverGroup), t)
+			}
 		}
 	}
 
@@ -1086,18 +1143,17 @@ func performSwapRebalance(addNodes []string, removeNodes []string, skipValidatio
 	if skipValidation { // Some crash tests have their own validation. Hence, skip the validation here
 		if err != nil && strings.Contains(err.Error(), "Rebalance failed") {
 			return
-		} else if err == nil {
+		} else if !isRebalCancel && err == nil {
 			t.Fatalf("Expected rebalance failure, but rebalance passed")
 		} else {
 			FailTestIfError(err, fmt.Sprintf("Observed error: %v during rebalabce", err), t)
 		}
+		return
 	}
 
 	if err != nil {
 		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", removeNodes), t)
 	}
-
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	// This sleep will ensure that the stats are propagated to client
 	// Also, any pending rebalance cleanup is expected to be done during
@@ -1140,8 +1196,7 @@ func testDDLAfterRebalance(indexNodes []string, t *testing.T) {
 		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", indexes[0], bucket, scope, collection)
 		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, indexes[0], "Ready", t)
 	}
-	// Reset all indexer stats
-	secondaryindex.ResetAllIndexerStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
 	waitForStatsUpdate()
 
 	partns := indexPartnIds[0]
@@ -1154,4 +1209,64 @@ func testDDLAfterRebalance(indexNodes []string, t *testing.T) {
 	for _, indexNode := range indexNodes {
 		validateShardIdMapping(indexNode, t)
 	}
+}
+
+func getHostsForBucket(bucket string) []string {
+	hosts := make(map[string]bool)
+
+	status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	if status != nil && err == nil {
+		indexes := status["indexes"].([]interface{})
+		for _, indexEntry := range indexes {
+			entry := indexEntry.(map[string]interface{})
+
+			if bucket != entry["bucket"].(string) {
+				continue
+			}
+
+			allHosts := entry["hosts"].([]interface{})
+			for _, host := range allHosts {
+				hosts[host.(string)] = true
+			}
+		}
+	}
+	var hostSlice []string
+	for host, _ := range hosts {
+		hostSlice = append(hostSlice, host)
+	}
+	return hostSlice
+}
+
+func getInstAndDefnId(bucket, scope, collection, name string) (c.IndexInstId, c.IndexDefnId, error) {
+	url, err := makeurl("/getIndexStatus?getAll=true")
+	if err != nil {
+		return c.IndexInstId(0), c.IndexDefnId(0), err
+	}
+
+	var resp *http.Response
+	resp, err = http.Get(url)
+	if err != nil {
+		return c.IndexInstId(0), c.IndexDefnId(0), err
+	}
+
+	var respbody []byte
+	respbody, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return c.IndexInstId(0), c.IndexDefnId(0), err
+	}
+
+	var st tc.IndexStatusResponse
+	err = json.Unmarshal(respbody, &st)
+	if err != nil {
+		return c.IndexInstId(0), c.IndexDefnId(0), err
+	}
+
+	for _, idx := range st.Status {
+		if idx.Name == name && idx.Bucket == bucket &&
+			idx.Scope == scope && idx.Collection == collection {
+			return idx.InstId, idx.DefnId, nil
+		}
+	}
+
+	return c.IndexInstId(0), c.IndexDefnId(0), errors.New("Index not found in getIndexStatus")
 }

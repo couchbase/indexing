@@ -1,0 +1,88 @@
+{
+   "placement":[
+      {
+         "nodeId":"127.0.0.1:9011",
+         "nodeUUID":"resume_tenant_9011",
+         "serverGroup":"sg1",
+         "mandatoryQuota":700000000,
+         "actualUnits":250,
+         "indexes": [
+                {
+                        "defnId": 202020,
+                        "instId": 1202020,
+                        "name": "idx0",
+                        "bucket": "resume_tenant_a",
+                        "instance": {
+                                "replicaId":0
+                        },
+                        "actualmemusage":300000000,
+                        "actualunitsusage":100
+                },
+                {
+                        "defnId": 212121,
+                        "instId": 1212121,
+                        "name": "idx1",
+                        "bucket": "resume_tenant_a",
+                        "instance": {
+                                "replicaId":0
+                        },
+                        "actualmemusage":300000000,
+                        "actualunitsusage":100
+                },
+                {
+                        "defnId": 222222,
+                        "instId": 1222222,
+                        "name": "idx2",
+                        "bucket": "resume_tenant_a",
+                        "instance": {
+                                "replicaId":0
+                        },
+                        "actualmemusage":100000000,
+                        "actualunitsusage":50
+                }
+         ]
+      },
+      {
+         "nodeId":"127.0.0.1:9012",
+         "nodeUUID":"resume_tenant_9012",
+         "serverGroup":"sg2",
+         "mandatoryQuota":700000000,
+         "actualUnits":250,
+         "indexes": [
+                {
+                        "defnId": 202020,
+                        "instId": 12020201,
+                        "name": "idx0",
+                        "bucket": "resume_tenant_a",
+                        "instance": {
+                                "replicaId":1
+                        },
+                        "actualmemusage":300000000,
+                        "actualunitsusage":100
+                },
+                {
+                        "defnId": 212121,
+                        "instId": 12121211,
+                        "name": "idx1",
+                        "bucket": "resume_tenant_a",
+                        "instance": {
+                                "replicaId":1
+                        },
+                        "actualmemusage":300000000,
+                        "actualunitsusage":100
+                },
+                {
+                        "defnId": 222222,
+                        "instId": 12222221,
+                        "name": "idx2",
+                        "bucket": "resume_tenant_a",
+                        "instance": {
+                                "replicaId":1
+                        },
+                        "actualmemusage":100000000,
+                        "actualunitsusage":50
+                }
+         ]
+      }
+   ]
+}

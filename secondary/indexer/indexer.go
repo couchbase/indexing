@@ -5166,12 +5166,13 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 	retryCount := 0
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+	collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
+			if !idx.ValidateKeyspace(streamId, keyspaceId, collectionId, []string{bucketUUID}) {
 				logging.Errorf("Indexer::sendStreamUpdateForIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v", streamId, keyspaceId)
 				break retryloop
@@ -5368,6 +5369,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	idx.setStreamKeyspaceIdCurrRequest(buildStream, keyspaceId, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, buildStream)
+	collectionId := idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
@@ -5375,7 +5377,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	retryloop:
 		for {
-			if !idx.ValidateKeyspace(buildStream, keyspaceId, bucketUUIDList) {
+			if !idx.ValidateKeyspace(buildStream, keyspaceId, collectionId, bucketUUIDList) {
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
@@ -5668,13 +5670,14 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		}
 
 		reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+		collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 		go func(reqLock *kvRequest) {
 			defer idx.releaseStreamRequestLock(reqLock)
 			idx.waitStreamRequestLock(reqLock)
 		retryloop:
 			for {
 
-				if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
+				if !idx.ValidateKeyspace(streamId, keyspaceId, collectionId, []string{bucketUUID}) {
 					logging.Errorf("Indexer::removeIndexesFromStream Keyspace Not Found "+
 						"For Stream %v KeyspaceId %v", streamId, keyspaceId)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
@@ -6416,13 +6419,14 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	}
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+	collectionId := idx.streamKeyspaceIdCollectionId[common.MAINT_STREAM][bucket]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 		count := 0
 	retryloop:
 		for {
-			if !idx.ValidateKeyspace(common.MAINT_STREAM, bucket, bucketUUIDList) {
+			if !idx.ValidateKeyspace(common.MAINT_STREAM, bucket, collectionId, bucketUUIDList) {
 				logging.Errorf("Indexer::processBuildDoneCatchup Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				//TODO need to send bucket not found?
@@ -6589,13 +6593,14 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+	collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 		count := 0
 	retryloop:
 		for {
-			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+			if !idx.ValidateKeyspace(streamId, keyspaceId, collectionId, bucketUUIDList) {
 				logging.Errorf("Indexer::processBuildDoneNoCatchup Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				break retryloop
@@ -7338,7 +7343,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	retryloop:
 		for {
 			//validate keyspace before every try
-			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+			if !idx.ValidateKeyspace(streamId, keyspaceId, cid, bucketUUIDList) {
 				logging.Errorf("Indexer::startKeyspaceIdStream Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
@@ -11180,10 +11185,8 @@ func (idx *indexer) monitorKVNodes() {
 	}
 }
 
-func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
+func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId, collectionId string,
 	bucketUUIDs []string) bool {
-
-	collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
 	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
 

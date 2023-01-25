@@ -419,6 +419,16 @@ func (t *simulator) RunSingleTestDefragUtil(plan *Plan) (map[string]map[string]i
 	return stats, err
 }
 
+func (t *simulator) RunSingleTestTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*Solution, error) {
+
+	p, e := executeTenantAwarePlanForResume(plan, resumeNodes)
+	if e == nil {
+		return p.Result, nil
+	} else {
+		return nil, e
+	}
+}
+
 //////////////////////////////////////////////////////////////
 // Topology Change
 /////////////////////////////////////////////////////////////

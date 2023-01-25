@@ -2448,11 +2448,11 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			" INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.",
 			_checkInitStreamReadyToMerge, keyspaceId)
 
-		logging.LazyVerbose(func() string {
+		if forceLog || logging.IsEnabled(logging.Verbose) {
 			hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
-			return fmt.Sprintf("%v FlushTs %v\n HWT %v", _checkInitStreamReadyToMerge,
+			logging.Infof("%v FlushTs %v\n HWT %v", _checkInitStreamReadyToMerge,
 				initFlushTs, hwt)
-		})
+		}
 		return false
 	}
 
