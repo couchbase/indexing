@@ -3106,7 +3106,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3116,6 +3116,18 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleMetrics not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	is := s.stats.Get()
@@ -3215,18 +3227,11 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	allowedMeteringStats, err := creds.IsAllowed("cluster.settings!read")
-	if err != nil {
-		logging.Verbosef("StatsManager::handleMetricsHigh not enough permissions for getting metering stats. err: %v", err)
-	} else if !allowedMeteringStats {
-		logging.Verbosef("StatsManager::handleMetricsHigh not enough permissions for getting metering stats.")
-	}
-
 	is := s.stats.Get()
 	if is == nil {
 		w.WriteHeader(200)
 		w.Write([]byte(""))
-		if s.meteringMgr != nil && allowedMeteringStats {
+		if s.meteringMgr != nil {
 			_ = s.meteringMgr.WriteMetrics(w)
 		}
 		return
@@ -3249,13 +3254,13 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(200)
 	w.Write(out)
-	if s.meteringMgr != nil && allowedMeteringStats {
+	if s.meteringMgr != nil {
 		_ = s.meteringMgr.WriteMetrics(w)
 	}
 }
 
 func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3265,6 +3270,18 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleMemStatsReq not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	stats := new(runtime.MemStats)
@@ -3422,7 +3439,7 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3432,6 +3449,18 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleStorageMMStatsReq not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	if r.Method == "POST" || r.Method == "GET" {
@@ -3456,7 +3485,7 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 }
 
 func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3466,6 +3495,18 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleStatsResetReq not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	if r.Method == "POST" || r.Method == "GET" {
@@ -3486,7 +3527,7 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *statsManager) jemallocMemoryProfileHandler(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3496,6 +3537,18 @@ func (s *statsManager) jemallocMemoryProfileHandler(w http.ResponseWriter, r *ht
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::jemallocMemoryProfileHandler not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	sec, err := strconv.ParseInt(r.FormValue("seconds"), 10, 64)
@@ -3532,7 +3585,7 @@ func (s *statsManager) jemallocMemoryProfileHandler(w http.ResponseWriter, r *ht
 }
 
 func (s *statsManager) jemallocMemoryProfileActivateHandler(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3542,6 +3595,18 @@ func (s *statsManager) jemallocMemoryProfileActivateHandler(w http.ResponseWrite
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::jemallocMemoryProfileActivateHandler not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	logging.Infof("jemallocMemoryProfileActivateHandler: Request to activate jemalloc memory profiling")
@@ -3550,7 +3615,7 @@ func (s *statsManager) jemallocMemoryProfileActivateHandler(w http.ResponseWrite
 }
 
 func (s *statsManager) jemallocMemoryProfileDumpHandler(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3560,6 +3625,18 @@ func (s *statsManager) jemallocMemoryProfileDumpHandler(w http.ResponseWriter, r
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::jemallocMemoryProfileDumpHandler not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	logging.Infof("jemallocMemoryProfileDumpHandler: Request to dump jemalloc memory profile")
@@ -3568,7 +3645,7 @@ func (s *statsManager) jemallocMemoryProfileDumpHandler(w http.ResponseWriter, r
 }
 
 func (s *statsManager) jemallocMemoryProfileDeactivateHandler(w http.ResponseWriter, r *http.Request) {
-	_, valid, err := common.IsAuthValid(r)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3578,6 +3655,18 @@ func (s *statsManager) jemallocMemoryProfileDeactivateHandler(w http.ResponseWri
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::jemallocMemoryProfileDeactivateHandler not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	logging.Infof("jemallocMemoryProfileDeactivateHandler: Request to deactivate jemalloc memory profiling")
