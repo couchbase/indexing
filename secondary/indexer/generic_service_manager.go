@@ -217,8 +217,12 @@ func (m *GenericServiceManager) testCancelTask(w http.ResponseWriter, r *http.Re
 	defer logging.Infof("%v returned", _testCancelTask)
 
 	// Authenticate
-	_, ok := doAuth(r, w, _testCancelTask)
+	creds, ok := doAuth(r, w, _testCancelTask)
 	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, _testCancelTask) {
 		return
 	}
 
@@ -247,8 +251,12 @@ func (m *GenericServiceManager) testGetTaskList(w http.ResponseWriter, r *http.R
 	defer logging.Infof("%v returned", _testGetTaskList)
 
 	// Authenticate
-	_, ok := doAuth(r, w, _testGetTaskList)
+	creds, ok := doAuth(r, w, _testGetTaskList)
 	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, _testGetTaskList) {
 		return
 	}
 

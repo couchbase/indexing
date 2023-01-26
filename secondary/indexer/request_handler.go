@@ -742,8 +742,12 @@ func (m *requestHandlerContext) handleCachedIndexerNodeUUIDsRequest(
 	w http.ResponseWriter, r *http.Request) {
 	const _handleCachedIndexerNodeUUIDsRequest string = "requestHandlerContext::handleCachedIndexerNodeUUIDsRequest"
 
-	_, ok := doAuth(r, w, _handleCachedIndexerNodeUUIDsRequest)
+	creds, ok := doAuth(r, w, _handleCachedIndexerNodeUUIDsRequest)
 	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, _handleCachedIndexerNodeUUIDsRequest) {
 		return
 	}
 
@@ -3556,8 +3560,12 @@ func (m *requestHandlerContext) handleInternalVersionRequest(w http.ResponseWrit
 
 	const method string = "RequestHandler::handleInternalVersionRequest" // for logging
 
-	_, ok := doAuth(r, w, method)
+	creds, ok := doAuth(r, w, method)
 	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, method) {
 		return
 	}
 
