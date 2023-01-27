@@ -9,13 +9,20 @@
 package manager
 
 import (
+	"bytes"
+	json "encoding/json"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 //////////////////////////////////////////////////////////////
@@ -74,9 +81,14 @@ func CreateRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket
 //
 func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, error) {
 
-	// convert storage mode
-	if err := m.convertStorageMode(); err != nil {
-		return nil, err
+	serverless := (common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT)
+
+	//In serverless mode no need to convert storage mode.
+	if !serverless {
+		// convert storage mode
+		if err := m.convertStorageMode(); err != nil {
+			return nil, err
+		}
 	}
 
 	// convert image to IndexUsage
@@ -119,16 +131,30 @@ func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, e
 		return nil, nil
 	}
 
-	// associate indexer from image to current cluster
-	m.buildIndexerMapping()
+	// For serverless deployment we directly pick indexers from current cluster.
+	if !serverless {
+		// associate indexer from image to current cluster
+		m.buildIndexerMapping()
+	}
 
 	// build index defnition map
 	if err := m.updateIndexDefnId(); err != nil {
 		return nil, err
 	}
 
-	// invoke placement
-	return m.placeIndex()
+	if serverless {
+		// post schdule create tokens for restore candidates(idxToRestore+tokToRestore)
+		err = m.convertIndexestoSchedTokens()
+		if err != nil {
+			return nil, err
+		}
+		//TODO: post build tokens for restore candidates
+		return nil, nil
+	} else {
+		// invoke placement
+		return m.placeIndex()
+	}
+
 }
 
 func GetSchedCreateTokens(bucket string, filters map[string]bool, filterType string) (
@@ -171,9 +197,9 @@ func GetSchedCreateTokens(bucket string, filters map[string]bool, filterType str
 //
 func (m *RestoreContext) convertStorageMode() error {
 
-	for i, _ := range m.image.Metadata {
+	for i := range m.image.Metadata {
 		meta := &m.image.Metadata[i]
-		for j, _ := range meta.IndexDefinitions {
+		for j := range meta.IndexDefinitions {
 			defn := &meta.IndexDefinitions[j]
 			defn.Using = "gsi"
 		}
@@ -234,7 +260,7 @@ func (m *RestoreContext) convertImage() error {
 			for _, index := range indexes {
 
 				if index.Instance != nil {
-					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v, %v, %v %v, %v).",
+					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v, %v, %v, %v, %v).",
 						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, index.Instance.ReplicaId)
 
 					m.defnInImage[index.Instance.Defn.DefnId] = true
@@ -316,6 +342,8 @@ func (m *RestoreContext) findIndexToRestore() error {
 
 	defnId2NameMap := make(map[common.IndexDefnId]string)
 	replicaToRestore := make(map[common.IndexDefnId]map[int]common.IndexInstId)
+	serverless := (common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT)
+	defnIdMap := make(map[common.IndexDefnId]bool)
 
 	for indexerId, indexes := range m.idxFromImage {
 
@@ -355,12 +383,28 @@ func (m *RestoreContext) findIndexToRestore() error {
 				continue
 			}
 
+			//In Serverless we only need per IndexDefnId
+			if _, exist := defnIdMap[index.DefnId]; exist && serverless {
+				logging.Verbosef("RestoreContext:  Found index in backup metadata with the same bucket, name and definition. "+
+					"Skip restoring index (%v, %v, %v, %v, %v, %v).", index.Bucket, index.Scope, index.Collection, index.Name,
+					index.PartnId, index.Instance.ReplicaId)
+				continue
+			}
+
 			// Find if the index already exist in the current cluster with matching name, bucket, scope and collection.
 			anyInst := findMatchingInst(m.instNameMap, index.Bucket, index.Scope, index.Collection, index.Name)
 			if anyInst != nil {
 
 				// if there is matching index, check if it has the same definition.
 				if common.IsEquivalentIndex(&anyInst.Instance.Defn, &index.Instance.Defn) {
+
+					if serverless {
+						logging.Infof("RestoreContext:  Find index in the target cluster with the same bucket, name and definition. "+
+							"Skip restoring index (%v, %v, %v, %v, %v, %v).", index.Bucket, index.Scope, index.Collection, index.Name,
+							index.PartnId, index.Instance.ReplicaId)
+						defnIdMap[index.DefnId] = true
+						continue
+					}
 
 					// if it has the same definiton, check if the same replica exist
 					// ** For pre-spock backup, ReplicaId is 0
@@ -429,6 +473,7 @@ func (m *RestoreContext) findIndexToRestore() error {
 						logging.Infof("RestoreContext:  Find schedule create token in the target cluster with the same bucket, scope, collection, name. "+
 							"Skip restoring index (%v, %v, %v, %v, %v, %v).", index.Bucket, index.Scope, index.Collection, index.Name,
 							index.PartnId, index.Instance.ReplicaId)
+						defnIdMap[index.DefnId] = true
 						continue
 					}
 
@@ -443,6 +488,33 @@ func (m *RestoreContext) findIndexToRestore() error {
 					index.Name = newName
 					index.Instance.Defn.Name = newName
 				}
+			}
+
+			if serverless {
+				instId, err := common.NewIndexInstId()
+				if err != nil {
+					return err
+				}
+
+				temp := *index
+				temp.InstId = instId
+				if temp.Instance != nil {
+					if temp.Instance.Defn.GetNumReplica() != 1 {
+						temp.Instance.Defn.NumReplica = 1
+						logging.Infof("RestoreContext: For index (%v, %v, %v, %v), setting num replica to 1 for Serverless Deployment",
+							temp.Instance.Defn.Bucket, temp.Instance.Defn.Scope, temp.Instance.Defn.Collection,
+							temp.Instance.Defn.Name)
+						index.Instance.Defn.NumReplica2.InitializeCounter(index.Instance.Defn.NumReplica)
+					}
+				}
+
+				if temp.Instance != nil {
+					temp.Instance.InstId = instId
+				}
+				defnIdMap[temp.DefnId] = true
+				m.idxToRestore[common.IndexerId(indexerId)] = append(m.idxToRestore[common.IndexerId(indexerId)], &temp)
+				continue
+
 			}
 
 			// For existing schedule create token (with same name), findAnyReplica will return nil
@@ -494,6 +566,8 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 
 	maxReplicas := len(m.current.Placement) - 1
 
+	serverless := (common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT)
+
 	for defnId, token := range m.image.SchedTokens {
 		logging.Infof("RestoreContext:  Processing schedule create token in backup image (%v, %v, %v, %v).",
 			token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name)
@@ -535,6 +609,9 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 			// There aren't any other versions/instanced of token.Definition.
 			// So just update the NumReplica.
 			token.Definition.NumReplica = uint32(maxReplicas)
+			if serverless {
+				token.Definition.NumReplica2.InitializeCounter(token.Definition.NumReplica)
+			}
 		}
 
 		// Check for existing instance/token
@@ -668,6 +745,117 @@ func (m *RestoreContext) buildIndexerMapping() {
 			excludes = append(excludes, match)
 		}
 	}
+}
+
+//
+// For Serverless Deployment Convert Restore candidates to Schedule Create Tokens.
+// TODO: Wait for Schedule Create Token
+func (m *RestoreContext) convertIndexestoSchedTokens() error {
+
+	//Using round robin to select indexer from the indexers in the current cluster.
+	i := 0
+	for _, indexes := range m.idxToRestore {
+
+		for _, index := range indexes {
+
+			index.Instance.Defn.Deferred = true
+			if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+				index.Instance.Defn.NumPartitions = 8
+			}
+
+			// Find an indexer node in the target cluster
+			indexer := m.current.Placement[i]
+
+			scheduleErr := makeScheduleCreateRequest(&index.Instance.Defn, indexer)
+			if scheduleErr != nil {
+
+				logging.Errorf("RestoreContext::convertIndexestoSchedTokens: Could not restore index. Reason: %v", scheduleErr)
+				return fmt.Errorf("Could not restore index. Reason: %v", scheduleErr)
+			}
+			i = (i + 1) % len(m.current.Placement)
+		}
+	}
+
+	for _, token := range m.tokToRestore {
+
+		token.Definition.Deferred = true
+		if common.IsPartitioned(token.Definition.PartitionScheme) {
+			token.Definition.NumPartitions = 8
+		}
+
+		// Find an indexer node in the target cluster
+		indexer := m.current.Placement[i]
+
+		scheduleErr := makeScheduleCreateRequest(&token.Definition, indexer)
+		if scheduleErr != nil {
+
+			logging.Errorf("RestoreContext::convertIndexestoSchedTokens: Could not restore index. Reason: %v", scheduleErr)
+			return fmt.Errorf("Could not restore index. Reason: %v", scheduleErr)
+		}
+		i = (i + 1) % len(m.current.Placement)
+	}
+	return nil
+}
+
+//
+// Post Schedule Create Tokens for the given Restore Candidate onto the selected Indexer.
+//
+func makeScheduleCreateRequest(idxDefn *common.IndexDefn, indexer *planner.IndexerNode) error {
+
+	addr := indexer.RestUrl
+	url := addr + "/postScheduleCreateRequest"
+
+	req := &client.ScheduleCreateRequest{
+		Definition: *idxDefn,
+		Plan:       map[string]interface{}{},
+		IndexerId:  common.IndexerId(indexer.IndexerId),
+	}
+
+	buf, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	bytesBuf := bytes.NewBuffer(buf)
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+
+	var resp *http.Response
+	resp, err = security.PostWithAuth(url, "application/json", bytesBuf, params)
+	if err != nil {
+		logging.Errorf("RestoreContext::makeScheduleCreateRequest: error in PostWithAuth: %v, for index (%v, %v, %v, %v)",
+			err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		ioutil.ReadAll(resp.Body)
+	} else {
+		logging.Errorf("RestoreContext::makeScheduleCreateRequest: unexpected http status: %v, for index (%v, %v, %v, %v)",
+			resp.StatusCode, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+
+		var msg interface{}
+		buf := new(bytes.Buffer)
+		if _, err := buf.ReadFrom(resp.Body); err != nil {
+			logging.Errorf("RestoreContext::makeScheduleCreateRequest: error in reading response body: %v, for index (%v, %v, %v, %v)",
+				err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+			return err
+		}
+
+		if err := json.Unmarshal(buf.Bytes(), &msg); err != nil {
+			logging.Errorf("RestoreContext::makeScheduleCreateRequest: error in unmarshalling response body: %v, for index (%v, %v, %v, %v)",
+				err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+			return err
+		}
+
+		return fmt.Errorf("Error in posting schedule create request %v", msg)
+	}
+
+	logging.Infof("RestoreContext: Indexer %v has posted schedule create token for index (%v, %v, %v, %v, %v)",
+		indexer.IndexerId, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name,
+		idxDefn.DefnId)
+
+	return nil
 }
 
 //
