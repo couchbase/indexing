@@ -142,8 +142,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 			meta[plasma.GSIBucketRegion] = region
 		}
 	case common.PauseResumeTask:
-		bucketUUID := msg.GetBucketUUID()
-		meta[plasma.GSIPauseResume] = bucketUUID
+		bucket := msg.GetBucket()
+		meta[plasma.GSIPauseResume] = bucket
 	}
 
 	// Closed when all shards are done processing
@@ -330,8 +330,8 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 	start := time.Now()
 	shardPaths := msg.GetShardPaths()
-	rebalanceId := msg.GetRebalanceId()
-	ttid := msg.GetTransferTokenId()
+	var taskId, transferId string
+	taskType := msg.GetTaskType()
 	destination := msg.GetDestination()
 	region := msg.GetRegion()
 	instRenameMap := msg.GetInstRenameMap()
@@ -339,6 +339,15 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	rebalDoneCh := msg.GetDoneCh()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
+
+	switch taskType {
+	case common.RebalanceTask:
+		taskId = msg.GetRebalanceId()
+		transferId = msg.GetTransferTokenId()
+	case common.PauseResumeTask:
+		taskId = msg.GetPauseResumeId()
+		transferId = msg.GetBucket()
+	}
 
 	// Closed when all shards are done processing
 	restoreDoneCh := make(chan bool)
@@ -383,12 +392,14 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	}
 
 	progressCb := func(transferStats plasma.ShardTransferStatistics) {
-		// Send the progress to rebalancer
-		progressCh <- &ShardTransferStatistics{
-			totalBytes:   transferStats.TotalBytes,
-			bytesWritten: transferStats.BytesWritten,
-			transferRate: transferStats.AvgXferRate,
-			shardId:      common.ShardId(transferStats.ShardId),
+		if progressCh != nil {
+			// Send the progress to caller
+			progressCh <- &ShardTransferStatistics{
+				totalBytes:   transferStats.TotalBytes,
+				bytesWritten: transferStats.BytesWritten,
+				transferRate: transferStats.AvgXferRate,
+				shardId:      common.ShardId(transferStats.ShardId),
+			}
 		}
 	}
 
@@ -397,8 +408,13 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			wg.Add(1)
 
 			meta := make(map[string]interface{})
-			meta[plasma.GSIRebalanceId] = rebalanceId
-			meta[plasma.GSIRebalanceTransferToken] = ttid
+			switch taskType {
+			case common.RebalanceTask:
+				meta[plasma.GSIRebalanceId] = taskId
+				meta[plasma.GSIRebalanceTransferToken] = transferId
+			case common.PauseResumeTask:
+				meta[plasma.GSIPauseResume] = transferId
+			}
 			meta[plasma.GSIShardID] = uint64(shardId)
 			meta[plasma.GSIShardUploadPath] = shardPath
 			meta[plasma.GSIStorageDir] = stm.config["storage_dir"].String()

@@ -80,7 +80,7 @@ type PauseServiceManager struct {
 //	httpAddr - host:port of the local node for Index Service HTTP calls
 func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvCmdch,
 	supvMsgch MsgChannel, httpAddr string, config common.Config, nodeInfo *service.NodeInfo,
-	) *PauseServiceManager {
+) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -305,7 +305,7 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 	errBuilder := new(strings.Builder)
 	for shardId, errInCopy := range errMap {
 		if errInCopy != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v", shardId, err))
+			errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v", shardId, errInCopy))
 		}
 	}
 	if errBuilder.Len() != 0 {
@@ -314,6 +314,49 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 		return nil, err
 	}
 
+	return resp.GetShardPaths(), nil
+}
+
+func (psm *PauseServiceManager) downloadShardsWithoutLock(
+	shardPaths map[common.ShardId]string,
+	taskId, bucket, origin, region string,
+	cancelCh <-chan struct{},
+) (map[common.ShardId]string, error) {
+
+	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v from %v for taskId %v", shardPaths, taskId)
+	respCh := make(chan Message)
+	msg := &MsgStartShardRestore{
+		taskType:    common.PauseResumeTask,
+		taskId:      taskId,
+		transferId:  bucket,
+		shardPaths:  shardPaths,
+		destination: origin,
+		region:      region,
+		cancelCh:    cancelCh,
+		doneCh:      cancelCh,
+		progressCh:  nil,
+	}
+
+	psm.supvMsgch <- msg
+	resp, ok := (<-respCh).(*MsgShardTransferResp)
+
+	if !ok || resp == nil {
+		err := fmt.Errorf("either response channel got closed or sent an invalid response")
+		logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
+		return nil, err
+	}
+	errMap := resp.GetErrorMap()
+	errBuilder := new(strings.Builder)
+	for shardId, errInCopy := range errMap {
+		if errInCopy != nil {
+			errBuilder.WriteString(fmt.Sprintf("Failed to download shard %v, err: %v", shardId, errInCopy))
+		}
+	}
+	if errBuilder.Len() != 0 {
+		err := errors.New(errBuilder.String())
+		logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
+		return nil, err
+	}
 	return resp.GetShardPaths(), nil
 }
 
