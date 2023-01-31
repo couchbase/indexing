@@ -3123,12 +3123,51 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]byte, 0, 256)
+	out := make([]byte, 0, 2048)
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_quota gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_quota %v\n", METRICS_PREFIX, is.memoryQuota.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_total gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_used_total %v\n", METRICS_PREFIX, is.memoryUsed.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_indexes gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_indexes %v\n", METRICS_PREFIX, is.numIndexes.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnum_storage_instances gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnum_storage_instances %v\n", METRICS_PREFIX, is.numStorageInstances.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_resident_percent gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vavg_resident_percent %v\n", METRICS_PREFIX, is.avgResidentPercent.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_mutation_rate gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vavg_mutation_rate %v\n", METRICS_PREFIX, is.avgMutationRate.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_drain_rate gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vavg_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_disk_bps gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_data_size gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_data_size %v\n", METRICS_PREFIX, is.totalDataSize.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_disk_size gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_disk_size %v\n", METRICS_PREFIX, is.totalDiskSize.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_storage gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vmemory_used_storage %v\n", METRICS_PREFIX, is.memoryUsedStorage.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_total_storage gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vmemory_total_storage %v\n", METRICS_PREFIX, is.memoryTotalStorage.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_requests gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_requests %v\n", METRICS_PREFIX, is.TotalRequests.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_returned gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_returned %v\n", METRICS_PREFIX, is.TotalRowsReturned.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_scanned gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_scanned %v\n", METRICS_PREFIX, is.TotalRowsScanned.Value()))...)
 
 	if common.IsServerlessDeployment() {
 		out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_actual gauge\n", METRICS_PREFIX))...)
