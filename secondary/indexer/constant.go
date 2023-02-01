@@ -102,3 +102,4 @@ const (
 const DEFAULT_TIME_BARRIER = 2
 
 const cReadUnitNormalizationFactor = 100
+const cInitBuildWUNormalizationFactor = 10

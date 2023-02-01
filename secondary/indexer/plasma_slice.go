@@ -3059,6 +3059,7 @@ func (mdb *plasmaSlice) updateUsageStats() {
 
 	if sinceLastStat >= 1 { //atleast 1 second
 
+		//first compute the newRUs/newWUs accrued since last computation
 		var newRUs, newWUs int64
 		lastMeteredWU := idxStats.lastMeteredWU.Value()
 		lastMeteredRU := idxStats.lastMeteredRU.Value()
@@ -3073,6 +3074,8 @@ func (mdb *plasmaSlice) updateUsageStats() {
 			newRUs = (currMeteredRU - lastMeteredRU) / sinceLastStat
 			idxStats.lastMeteredRU.Set(currMeteredRU)
 		}
+
+		//update the currMaxWU/currMaxRU if applicable
 		currMaxWU := idxStats.currMaxWriteUsage.Value()
 		if newWUs > currMaxWU {
 			idxStats.currMaxWriteUsage.Set(newWUs)
@@ -3082,12 +3085,22 @@ func (mdb *plasmaSlice) updateUsageStats() {
 			idxStats.currMaxReadUsage.Set(newRUs)
 		}
 
-		currUnitsUsage := newWUs + (newRUs / cReadUnitNormalizationFactor)
+		//normalize the WU/RU and compute the current units usage
+
+		var writeUnitNormalizationFactor int64 = 1
+		if atomic.LoadInt32(&mdb.isInitialBuild) == 1 {
+			writeUnitNormalizationFactor = cInitBuildWUNormalizationFactor
+		}
+
+		currUnitsUsage := (newWUs / writeUnitNormalizationFactor) + (newRUs / cReadUnitNormalizationFactor)
+
+		//update the last 20min max units usage, if applicable
 		max20minUnitsUsage := idxStats.max20minUnitsUsage.Value()
 		if currUnitsUsage > max20minUnitsUsage {
 			idxStats.max20minUnitsUsage.Set(currUnitsUsage)
 		}
 
+		//update the avgUnitsUsage based on the current and last avg.
 		lastAvgUnitsUsage := idxStats.avgUnitsUsage.Value()
 		avgUnitsUsage := (lastAvgUnitsUsage + currUnitsUsage) / 2
 
