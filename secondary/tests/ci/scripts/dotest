@@ -68,7 +68,7 @@ start_cluster_serverless() {
     echo "Starting server: attempt $a"
     stop_cluster
     cd $WORKSPACE/ns_server
-    ./cluster_run -n7 --serverless 1>$WORKSPACE/run.log 2>&1 &
+    ./cluster_run -n5 --serverless 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
@@ -76,15 +76,11 @@ start_cluster_serverless() {
         grep -qs 'Couchbase Server has started' logs/n_2/info.log && \
         grep -qs 'Couchbase Server has started' logs/n_3/info.log && \
         grep -qs 'Couchbase Server has started' logs/n_4/info.log && \
-        grep -qs 'Couchbase Server has started' logs/n_5/info.log && \
-        grep -qs 'Couchbase Server has started' logs/n_6/info.log && \
           wget -qO- http://localhost:9000/ &>/dev/null &&
             wget -qO- http://localhost:9001/ &>/dev/null &&
             wget -qO- http://localhost:9002/ &>/dev/null &&
             wget -qO- http://localhost:9003/ &>/dev/null &&
             wget -qO- http://localhost:9004/ &>/dev/null &&
-            wget -qO- http://localhost:9005/ &>/dev/null &&
-            wget -qO- http://localhost:9006/ &>/dev/null &&
               ok_run=1 && break
       sleep 3
     done
