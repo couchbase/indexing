@@ -179,7 +179,7 @@ func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFi
 
 func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionConfig, certFile, keyFile, caFile string) {
 
-	logging.Infof("Recieve security change notification. encryption=%v", encryptConfig.EncryptData)
+	logging.Infof("Receive security change notification. encryption=%v", encryptConfig.EncryptData)
 
 	newSetting := &SecuritySetting{}
 
@@ -330,7 +330,7 @@ func (p *SecurityContext) setInitialized() {
 
 func (p *SecurityContext) refresh(code uint64) error {
 
-	logging.Infof("Recieve security change notification. code %v", code)
+	logging.Infof("Receive security change notification. code %v", code)
 
 	newSetting := &SecuritySetting{}
 
