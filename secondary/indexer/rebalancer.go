@@ -409,7 +409,7 @@ func (r *Rebalancer) initRebalAsync() {
 					if len(r.transferTokens) == 0 {
 						r.transferTokens = nil
 					} else if c.IsServerlessDeployment() {
-						destination, err := getDestinationFromConfig(r.config.Load())
+						destination, region, err := getDestinationFromConfig(r.config.Load())
 						if err != nil {
 							l.Errorf("Rebalancer::initRebalAsync err: %v", err)
 							go r.finishRebalance(err)
@@ -418,6 +418,7 @@ func (r *Rebalancer) initRebalAsync() {
 						// Populate destination in transfer tokens
 						for _, token := range r.transferTokens {
 							token.Destination = destination
+							token.Region = region
 						}
 						l.Infof("Rebalancer::initRebalAsync Populated destination: %v in all transfer tokens", destination)
 					}

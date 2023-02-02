@@ -698,39 +698,46 @@ func waitForRebalanceCleanup(nodeAddr string, t *testing.T) {
 	var finalErr error
 
 	for i := 0; i < 300; i++ {
-		client := &http.Client{}
-		address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
+		val := func() bool {
+			client := &http.Client{}
+			address := "http://" + indexerAddr + "/rebalanceCleanupStatus"
 
-		req, _ := http.NewRequest("GET", address, nil)
-		req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
-		req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-		resp, err := client.Do(req)
-		if resp != nil {
-			defer resp.Body.Close()
-		}
-		if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
-			finalErr = err
+			req, _ := http.NewRequest("GET", address, nil)
+			req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+			req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			resp, err := client.Do(req)
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+			if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
+				finalErr = err
+				time.Sleep(1 * time.Second)
+				return false
+			} else {
+				finalErr = nil
+			}
+
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+				log.Printf(address)
+				log.Printf("%v", req)
+				log.Printf("%v", resp)
+				log.Printf("rebalanceCleanupStatus failed")
+			}
+
+			body, _ := ioutil.ReadAll(resp.Body)
+			if string(body) == "done" {
+				return true
+			}
+			if i%5 == 0 {
+				log.Printf("Waiting for rebalance cleanup to finish on node: %v", nodeAddr)
+			}
 			time.Sleep(1 * time.Second)
-			continue
-		} else {
-			finalErr = nil
-		}
+			return false
+		}()
 
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-			log.Printf(address)
-			log.Printf("%v", req)
-			log.Printf("%v", resp)
-			log.Printf("rebalanceCleanupStatus failed")
-		}
-
-		body, _ := ioutil.ReadAll(resp.Body)
-		if string(body) == "done" {
+		if val {
 			return
 		}
-		if i%5 == 0 {
-			log.Printf("Waiting for rebalance cleanup to finish on node: %v", nodeAddr)
-		}
-		time.Sleep(1 * time.Second)
 	}
 	// todo : error out if response is error
 	tc.HandleError(finalErr, "Get RebalanceCleanupStatus")
@@ -745,39 +752,46 @@ func waitForTokenCleanup(nodeAddr string, t *testing.T) {
 	var finalErr error
 
 	for i := 0; i < 300; i++ {
-		client := &http.Client{}
-		address := "http://" + indexerAddr + "/listRebalanceTokens"
+		val := func() bool {
+			client := &http.Client{}
+			address := "http://" + indexerAddr + "/listRebalanceTokens"
 
-		req, _ := http.NewRequest("GET", address, nil)
-		req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
-		req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-		resp, err := client.Do(req)
-		if resp != nil {
-			defer resp.Body.Close()
-		}
-		if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
-			finalErr = err
+			req, _ := http.NewRequest("GET", address, nil)
+			req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
+			req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			resp, err := client.Do(req)
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+			if err != nil { // Indexer's HTTP port might not be up yet if indexer restarts. Wait for some time and retry
+				finalErr = err
+				time.Sleep(1 * time.Second)
+				return false
+			} else {
+				finalErr = nil
+			}
+
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+				log.Printf(address)
+				log.Printf("%v", req)
+				log.Printf("%v", resp)
+				log.Printf("listRebalanceTokens failed")
+			}
+
+			body, _ := ioutil.ReadAll(resp.Body)
+			if string(body) == "null\n" {
+				return true
+			}
+			if i%5 == 0 {
+				log.Printf("Waiting for rebalance cleanup (as rebalance tokens still exist) to finish on node: %v", nodeAddr)
+			}
 			time.Sleep(1 * time.Second)
-			continue
-		} else {
-			finalErr = nil
-		}
+			return false
+		}()
 
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-			log.Printf(address)
-			log.Printf("%v", req)
-			log.Printf("%v", resp)
-			log.Printf("listRebalanceTokens failed")
-		}
-
-		body, _ := ioutil.ReadAll(resp.Body)
-		if string(body) == "null\n" {
+		if val {
 			return
 		}
-		if i%5 == 0 {
-			log.Printf("Waiting for rebalance cleanup (as rebalance tokens still exist) to finish on node: %v", nodeAddr)
-		}
-		time.Sleep(1 * time.Second)
 	}
 	// todo : error out if response is error
 	tc.HandleError(finalErr, "Get listRebalanceTokens")
@@ -797,9 +811,11 @@ func getShardIds(nodeAddr string, t *testing.T) map[string]map[string]bool {
 	req.SetBasicAuth(clusterconfig.Username, clusterconfig.Password)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Get getLocalIndexMetadata")
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		log.Printf(address)
@@ -1032,6 +1048,10 @@ func getIndexStatusFromIndexer() (*tc.IndexStatusResponse, error) {
 
 	var resp *http.Response
 	resp, err = http.Get(url)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+
 	if err != nil {
 		return nil, err
 	}

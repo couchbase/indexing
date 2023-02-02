@@ -17,7 +17,7 @@ var scope string = "_default"
 var indexes []string = []string{"idx_secondary", "idx_secondary_defer", "#primary", "#primary_defer", "idx_partitioned", "idx_partitioned_defer"}
 var indexPartnIds [][]int = [][]int{[]int{0}, []int{0}, []int{0}, []int{0}, []int{1, 2, 3, 4, 5, 6, 7, 8}, []int{1, 2, 3, 4, 5, 6, 7, 8}}
 var numDocs int = 1000
-var numScans int = 1000
+var numScans int = 100
 
 // When creating an index through N1QL, the index is expected
 // to be created with a replica

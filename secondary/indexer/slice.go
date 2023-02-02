@@ -49,6 +49,8 @@ type Slice interface {
 
 	GetShardIds() []common.ShardId
 	ClearRebalRunning()
+
+	GetWriteUnits() uint64
 }
 
 // cursorCtx implements IndexReaderContext and is used
