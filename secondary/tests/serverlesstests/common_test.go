@@ -954,7 +954,8 @@ func verifyStorageDirContents(t *testing.T) {
 		}
 		log.Fatal(err)
 	}
-	r, _ := regexp.Compile("^plasma_storage($|/Rebalance($|/([0-9a-f]+)($|/TransferToken($|/TransferToken([0-9a-f]{1,2}:){7}([0-9a-f]{1,2})$))))")
+
+	r, _ := regexp.Compile("^plasma_storage_v1($|/[0-9a-f]+_TransferToken([0-9a-f]{1,2}_){7}([0-9a-f]{1,2})$)")
 	for _, file := range files {
 		if !file.IsDir() {
 			t.Fatalf("verifyStorageDirContents: Non directory file: %v found. All files are expected to be directories", file)
