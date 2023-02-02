@@ -750,7 +750,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
-	if err := m.initStartPhase(params.Bucket, params.ID); err != nil {
+	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
 		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return  err
 	}
@@ -769,7 +769,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	return nil
 }
 
-func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err error) {
+func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string, typ PauseTokenType) (err error) {
 
 	err = m.genericMgr.cinfo.FetchNodesAndSvsInfoWithLock()
 	if err != nil {
@@ -790,7 +790,7 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err er
 		return err
 	}
 
-	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId)
+	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId, typ)
 	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
 
 	m.pauseTokenMapMu.Lock()
@@ -1126,6 +1126,11 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 	// Set bst_RESUMING state
 	err = m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
 	if err != nil {
+		return err
+	}
+
+	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
+		// TODO: Cleanup
 		return err
 	}
 
@@ -1728,6 +1733,13 @@ const PauseTokenTag = "PauseToken"
 const PauseMetakvDir = common.IndexingMetaDir + "pause/"
 const PauseTokenPathPrefix = PauseMetakvDir + PauseTokenTag
 
+type PauseTokenType uint8
+
+const (
+	PauseTokenPause PauseTokenType = iota
+	PauseTokenResume
+)
+
 type PauseToken struct {
 	MasterId string
 	MasterIP string
@@ -1735,16 +1747,19 @@ type PauseToken struct {
 	BucketName string
 	PauseId    string
 
-	Error    string
+	Type PauseTokenType
+
+	Error string
 }
 
-func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string) *PauseToken {
+func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string, typ PauseTokenType) *PauseToken {
 	cfg := m.config.Load()
 	return &PauseToken{
 		MasterId:   cfg["nodeuuid"].String(),
 		MasterIP:   masterIP,
 		BucketName: bucketName,
 		PauseId:    pauseId,
+		Type:       typ,
 	}
 }
 
