@@ -1672,6 +1672,10 @@ func (mdb *memdbSlice) IndexInstId() common.IndexInstId {
 	return mdb.idxInstId
 }
 
+func (mdb *memdbSlice) IndexPartnId() common.PartitionId {
+	return mdb.idxPartnId
+}
+
 //IndexDefnId returns the Index DefnId this slice
 //is associated with
 func (mdb *memdbSlice) IndexDefnId() common.IndexDefnId {

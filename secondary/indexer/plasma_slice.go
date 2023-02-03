@@ -2435,6 +2435,10 @@ func (mdb *plasmaSlice) IndexInstId() common.IndexInstId {
 	return mdb.idxInstId
 }
 
+func (mdb *plasmaSlice) IndexPartnId() common.PartitionId {
+	return mdb.idxPartnId
+}
+
 //IndexDefnId returns the Index DefnId this slice
 //is associated with
 func (mdb *plasmaSlice) IndexDefnId() common.IndexDefnId {
