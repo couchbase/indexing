@@ -3376,9 +3376,9 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.units_quota": ConfigValue{
-		uint64(5000 * 20),
-		"Maximum RU/WU quota for indexer",
-		uint64(5000 * 20),
+		uint64(10000),
+		"Maximum RU+WU quota per indexer node",
+		uint64(10000),
 		false, // mutable
 		false, // case-insensitive
 	},

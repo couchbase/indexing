@@ -125,6 +125,8 @@ type plasmaSlice struct {
 
 	isPersistorActive int32
 
+	isInitialBuild int32
+
 	lastRollbackTs *common.TsVbuuid
 
 	// Array processing
@@ -283,6 +285,10 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 			destroyPlasmaSlice(storage_dir, path)
 		}
 		return nil, err
+	}
+
+	if isInitialBuild {
+		atomic.StoreInt32(&slice.isInitialBuild, 1)
 	}
 
 	slice.shardIds = nil // Reset the slice and read the actuals from the store
@@ -2243,6 +2249,9 @@ func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	}
 
 	mdb.lastRollbackTs = nil
+	if initialBuild {
+		atomic.StoreInt32(&mdb.isInitialBuild, 1)
+	}
 
 	return nil
 }
@@ -3003,6 +3012,7 @@ func (mdb *plasmaSlice) BuildDone() {
 	if !mdb.isPrimary {
 		mdb.backstore.BuildDone()
 	}
+	atomic.StoreInt32(&mdb.isInitialBuild, 0)
 }
 
 func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
@@ -3049,6 +3059,7 @@ func (mdb *plasmaSlice) updateUsageStats() {
 
 	if sinceLastStat >= 1 { //atleast 1 second
 
+		//first compute the newRUs/newWUs accrued since last computation
 		var newRUs, newWUs int64
 		lastMeteredWU := idxStats.lastMeteredWU.Value()
 		lastMeteredRU := idxStats.lastMeteredRU.Value()
@@ -3063,6 +3074,8 @@ func (mdb *plasmaSlice) updateUsageStats() {
 			newRUs = (currMeteredRU - lastMeteredRU) / sinceLastStat
 			idxStats.lastMeteredRU.Set(currMeteredRU)
 		}
+
+		//update the currMaxWU/currMaxRU if applicable
 		currMaxWU := idxStats.currMaxWriteUsage.Value()
 		if newWUs > currMaxWU {
 			idxStats.currMaxWriteUsage.Set(newWUs)
@@ -3072,18 +3085,56 @@ func (mdb *plasmaSlice) updateUsageStats() {
 			idxStats.currMaxReadUsage.Set(newRUs)
 		}
 
-		currUnitsUsage := newWUs + (newRUs / cReadUnitNormalizationFactor)
+		//normalize the WU/RU and compute the current units usage
+		currUnitsUsage := mdb.computeNormalizedWU(newWUs) + mdb.computeNormalizedRU(newRUs)
+
+		//update the last 20min max units usage, if applicable
 		max20minUnitsUsage := idxStats.max20minUnitsUsage.Value()
 		if currUnitsUsage > max20minUnitsUsage {
 			idxStats.max20minUnitsUsage.Set(currUnitsUsage)
 		}
 
+		//update the avgUnitsUsage based on the current and last avg.
 		lastAvgUnitsUsage := idxStats.avgUnitsUsage.Value()
 		avgUnitsUsage := (lastAvgUnitsUsage + currUnitsUsage) / 2
 
 		idxStats.avgUnitsUsage.Set(avgUnitsUsage)
 		idxStats.lastUnitsStatTime.Set(int64(time.Now().UnixNano()))
 	}
+}
+
+func (mdb *plasmaSlice) computeNormalizedWU(newWUs int64) int64 {
+
+	if newWUs == 0 {
+		return 0
+	}
+
+	var writeUnitNormalizationFactor int64 = 1
+	if atomic.LoadInt32(&mdb.isInitialBuild) == 1 {
+		writeUnitNormalizationFactor = cInitBuildWUNormalizationFactor
+	}
+
+	if newWUs < writeUnitNormalizationFactor {
+		return 1
+	}
+
+	normalizedWU := newWUs / writeUnitNormalizationFactor
+	return normalizedWU
+
+}
+
+func (mdb *plasmaSlice) computeNormalizedRU(newRUs int64) int64 {
+
+	if newRUs == 0 {
+		return 0
+	}
+
+	if newRUs < cReadUnitNormalizationFactor {
+		return 1
+	}
+
+	normalizedRU := newRUs / cReadUnitNormalizationFactor
+	return normalizedRU
 }
 
 func (mdb *plasmaSlice) updateUsageStatsOnCommit() {
