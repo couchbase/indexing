@@ -635,7 +635,7 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	if prepareCreateIndex.Op == client.PREPARE {
-		if !m.canProcessDDL(prepareCreateIndex.Bucket, false) {
+		if !m.canProcessDDL(prepareCreateIndex.Bucket) {
 			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
 			response := &client.PrepareCreateResponse{
 				Accept: false,
@@ -789,7 +789,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 		bucket = defns[0].Bucket
 	}
 
-	if !m.canProcessDDL(bucket, false) {
+	if !m.canProcessDDL(bucket) {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
 		response := &client.CommitCreateResponse{
 			Accept: false,
@@ -2192,7 +2192,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 		// Always allow rebalance initiated builds. For user initiated
 		// builds, allow only if "canProcessDDL" returns true
-		canProcessBuild := isRebalanceBuild || isShardRebalanceBuild || m.canProcessDDL(defn.Bucket, false)
+		canProcessBuild := isRebalanceBuild || isShardRebalanceBuild || m.canProcessDDL(defn.Bucket)
 
 		var buildErr error
 		for _, inst := range insts {
@@ -2416,15 +2416,6 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 
 	if updateStatusOnly {
 		return nil
-	}
-
-	isRebalDrop := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
-		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
-	if !isRebalDrop && !m.canProcessDDL(defn.Bucket, true) { // Always allow rebalance drop
-		errStr := fmt.Sprintf("Index: %v deletion can not be processed as rebalance is in progress. "+
-			"Drop index will be retried in background", defn.DefnId)
-		logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
-		return errors.New(errStr)
 	}
 
 	if notify && m.notifier != nil {
@@ -4527,7 +4518,7 @@ func (m *LifecycleMgr) canAllowDDLDuringRebalance() bool {
 }
 
 // Returns "true" if DDL can be processed. "false" otherwise
-func (m *LifecycleMgr) canProcessDDL(bucket string, isDropReq bool) bool {
+func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
 	m.rebalMutex.RLock()
 	defer m.rebalMutex.RUnlock()
 
@@ -4546,18 +4537,10 @@ func (m *LifecycleMgr) canProcessDDL(bucket string, isDropReq bool) bool {
 		// at all nodes in the cluster. Check the per bucket status
 		// before processing DDL operations
 		if m.rebalancePhase == common.RebalanceTransferInProgress {
-			// For drop index, an index can be dropped once the transfer
-			// is done on the source node. Destination node can drop the
-			// index while rebalance is in progress
-			minRebalPhase := common.RebalanceDone
-			if isDropReq {
-				minRebalPhase = common.RebalanceTransferDone
-			}
-
 			if bucketTransferPhase, ok := m.bucketTransferPhase[bucket]; ok {
 				// If bucket transfer has moved past the minimum rebalance phase
 				// required to allow the DDL on the bucket, then return true
-				if bucketTransferPhase >= minRebalPhase {
+				if bucketTransferPhase >= common.RebalanceDone {
 					return true
 				}
 				return false
@@ -5175,7 +5158,7 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
 		_, ok := bucketsInRebal[defn.Bucket]
-		if ok || !s.manager.canProcessDDL(defn.Bucket, false) {
+		if ok || !s.manager.canProcessDDL(defn.Bucket) {
 			// DDL can not be allowed on the bucket as the bucket is still in rebalance
 			bucketsInRebal[defn.Bucket] = true
 			key := getPendingKey(defn.Bucket, defn.Scope, defn.Collection)
