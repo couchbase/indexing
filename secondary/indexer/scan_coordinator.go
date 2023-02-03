@@ -230,11 +230,11 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
 
-	case INDEXER_PAUSE:
-		s.handleIndexerPause(cmd)
+	case INDEXER_PAUSE_MOI:
+		s.handleIndexerPauseMOI(cmd)
 
-	case INDEXER_RESUME:
-		s.handleIndexerResume(cmd)
+	case INDEXER_RESUME_MOI:
+		s.handleIndexerResumeMOI(cmd)
 
 	case INDEXER_BOOTSTRAP:
 		s.handleIndexerBootstrap(cmd)
@@ -968,7 +968,7 @@ func isSnapTsConsistentOrAhead(snapTs, reqTs *common.TsVbuuid, strict_chk_thresh
 func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {
 	const _isScanAllowed = "ScanCoordinator::isScanAllowed:"
 
-	if s.getIndexerState() == common.INDEXER_PAUSED {
+	if s.getIndexerState() == common.INDEXER_PAUSED_MOI {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
 
@@ -1224,13 +1224,13 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
-func (s *scanCoordinator) handleIndexerPause(cmd Message) {
-	s.setIndexerState(common.INDEXER_PAUSED)
+func (s *scanCoordinator) handleIndexerPauseMOI(cmd Message) {
+	s.setIndexerState(common.INDEXER_PAUSED_MOI)
 	s.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+func (s *scanCoordinator) handleIndexerResumeMOI(cmd Message) {
 
 	msg := cmd.(*MsgIndexerState)
 	rollbackTimes := msg.GetRollbackTimes()

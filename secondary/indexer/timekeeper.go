@@ -244,14 +244,14 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case INDEX_PROGRESS_STATS:
 		tk.handleStats(cmd)
 
-	case INDEXER_PAUSE:
-		tk.handleIndexerPause(cmd)
+	case INDEXER_PAUSE_MOI:
+		tk.handleIndexerPauseMOI(cmd)
 
-	case INDEXER_PREPARE_UNPAUSE:
-		tk.handlePrepareUnpause(cmd)
+	case INDEXER_PREPARE_UNPAUSE_MOI:
+		tk.handlePrepareUnpauseMOI(cmd)
 
-	case INDEXER_RESUME:
-		tk.handleIndexerResume(cmd)
+	case INDEXER_RESUME_MOI:
+		tk.handleIndexerResumeMOI(cmd)
 
 	case INDEXER_ABORT_RECOVERY:
 		tk.handleAbortRecovery(cmd)
@@ -1069,7 +1069,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -1290,7 +1290,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleStreamEnd Received StreamEnd In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -1553,7 +1553,7 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
 func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, keyspaceId string, vbList []Vbucket) {
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleStreamConnError Received ConnError In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -1679,7 +1679,7 @@ func (tk *timekeeper) handleDcpSystemEvent(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleDcpSystemEvent Received SystemEvent In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -1748,7 +1748,7 @@ func (tk *timekeeper) handleOSOSnapshotMarker(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleOSOSnapshotMarker Received OSO Snapshot In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -1997,7 +1997,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, keyspaceId, true)
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleStreamRequestDone Skip Repair Check In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v.", keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -2139,7 +2139,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, keyspaceId, true)
 
-	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Timekeeper::handleRecoveryDone Skip Repair Check In "+
 			"Prepare Unpause State. KeyspaceId %v Stream %v.", keyspaceId, streamId)
 		tk.supvCmdch <- &MsgSuccess{}
@@ -3787,7 +3787,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	//if timekeeper has moved to prepare unpause state, ignore
 	//the response message as all streams are going to be
 	//restarted anyways
-	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE) {
+	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE_MOI) {
 		tk.lock.Lock()
 		delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 		tk.lock.Unlock()
@@ -4629,37 +4629,37 @@ func (tk *timekeeper) calcSkipFactorForFastFlush(streamId common.StreamId,
 	}
 }
 
-func (tk *timekeeper) handleIndexerPause(cmd Message) {
+func (tk *timekeeper) handleIndexerPauseMOI(cmd Message) {
 
-	logging.Infof("Timekeeper::handleIndexerPause")
+	logging.Infof("Timekeeper::handleIndexerPauseMOI")
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.indexerState = common.INDEXER_PAUSED
+	tk.indexerState = common.INDEXER_PAUSED_MOI
 
 	tk.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (tk *timekeeper) handlePrepareUnpause(cmd Message) {
+func (tk *timekeeper) handlePrepareUnpauseMOI(cmd Message) {
 
-	logging.Infof("Timekeeper::handlePrepareUnpause")
+	logging.Infof("Timekeeper::handlePrepareUnpauseMOI")
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.indexerState = common.INDEXER_PREPARE_UNPAUSE
+	tk.indexerState = common.INDEXER_PREPARE_UNPAUSE_MOI
 
-	go tk.doUnpause()
+	go tk.doUnpauseMOI()
 
 	tk.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (tk *timekeeper) handleIndexerResume(cmd Message) {
+func (tk *timekeeper) handleIndexerResumeMOI(cmd Message) {
 
-	logging.Infof("Timekeeper::handleIndexerResume")
+	logging.Infof("Timekeeper::handleIndexerResumeMOI")
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -4688,7 +4688,7 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 
 }
 
-func (tk *timekeeper) doUnpause() {
+func (tk *timekeeper) doUnpauseMOI() {
 
 	//send unpause to indexer once there is no repair in progress
 	ticker := time.NewTicker(time.Second * 1)
@@ -4697,14 +4697,14 @@ func (tk *timekeeper) doUnpause() {
 	for range ticker.C {
 
 		if tk.checkAnyRepairPending() {
-			logging.Infof("Timekeeper::doUnpause Dropping Request to Unpause. " +
+			logging.Infof("Timekeeper::doUnpauseMOI Dropping Request to Unpause. " +
 				"Next Try In 1 Second...")
 			continue
 		}
 		break
 	}
 
-	tk.supvRespch <- &MsgIndexerState{mType: INDEXER_UNPAUSE}
+	tk.supvRespch <- &MsgIndexerState{mType: INDEXER_UNPAUSE_MOI}
 }
 
 func (tk *timekeeper) checkAnyRepairPending() bool {
