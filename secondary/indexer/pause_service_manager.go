@@ -421,7 +421,7 @@ type PauseMetadata struct {
 	// nodeId gives node info
 	// map[nodeId]->shardIds gives information about shardIds copied from node
 	// map[shardId] -> string are obj store paths where each shard is saved
-	Data map[service.NodeID][]common.ShardId `json:"metadata"`
+	Data map[service.NodeID]map[common.ShardId]string `json:"metadata"`
 
 	// cluster Version during data creation
 	Version string `json:"version"`
@@ -432,7 +432,7 @@ type PauseMetadata struct {
 func NewPauseMetadata() *PauseMetadata {
 	return &PauseMetadata{
 		// size value should be max nodes in a subcluster
-		Data: make(map[service.NodeID][]common.ShardId, 2),
+		Data: make(map[service.NodeID]map[common.ShardId]string, 2),
 		lock: &sync.RWMutex{},
 	}
 }
@@ -441,20 +441,20 @@ func (pm *PauseMetadata) setVersionNoLock(ver string) {
 	pm.Version = ver
 }
 
-func (pm *PauseMetadata) addShardNoLock(nodeId service.NodeID, shardId common.ShardId) {
-	nodeMap, ok := pm.Data[nodeId]
+func (pm *PauseMetadata) addShardPathNoLock(nodeId service.NodeID, shardId common.ShardId,
+	shardPath string) {
+	_, ok := pm.Data[nodeId]
 	if !ok {
 		// size value should be no of shards per bucket
-		pm.Data[nodeId] = make([]common.ShardId, 0, 2)
-		nodeMap = pm.Data[nodeId]
+		pm.Data[nodeId] = make(map[common.ShardId]string, 2)
 	}
-	pm.Data[nodeId] = append(nodeMap, shardId)
+	pm.Data[nodeId][shardId] = shardPath
 }
 
-func (pm *PauseMetadata) addShard(nodeId service.NodeID, shardId common.ShardId) {
+func (pm *PauseMetadata) addShardPaths(nodeId service.NodeID, shardPaths map[common.ShardId]string) {
 	pm.lock.Lock()
 	defer pm.lock.Unlock()
-	pm.addShardNoLock(nodeId, shardId)
+	pm.Data[nodeId] = shardPaths
 }
 
 // taskObj represents one task of any type in the taskType enum below. This is the GSI internal
