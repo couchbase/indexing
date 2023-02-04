@@ -565,7 +565,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		defer wg.Done()
 
 		tenant := slice.GetTenantName()
-		slice.mainstore, mErr = plasma.New4(tenant, *mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX, isInitialBuild)
+		shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment()
+		slice.mainstore, mErr = plasma.New4(tenant, *mCfg, shared, slice.newBorn, MAIN_INDEX, isInitialBuild)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -579,7 +580,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			defer wg.Done()
 
 			tenant := slice.GetTenantName()
-			slice.backstore, bErr = plasma.New4(tenant, *bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX, isInitialBuild)
+			shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment()
+			slice.backstore, bErr = plasma.New4(tenant, *bCfg, shared, slice.newBorn, BACK_INDEX, isInitialBuild)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
