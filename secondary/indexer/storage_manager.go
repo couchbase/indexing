@@ -84,7 +84,7 @@ type storageMgr struct {
 	// List of shards that are currently in rebalance tranfser phase
 	// A shard is added to the list when transfer is initiated and
 	// cleared when transfer is done
-	shardsInTransfer map[common.ShardId]bool
+	shardsInTransfer map[common.ShardId][]chan bool
 }
 
 type snapshotWaiter struct {
@@ -134,8 +134,9 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		snapshotNotifych: snapshotNotifych,
 		snapshotReqCh:    snapshotReqCh,
 		config:           config,
-		shardsInTransfer: make(map[common.ShardId]bool),
+
 		wrkrCh:           make(chan Message, 100),
+		shardsInTransfer: make(map[common.ShardId][]chan bool),
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
@@ -1080,6 +1081,9 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 		}
 
 	} else {
+		if sm.stm != nil { // Only for shard rebalancer
+			sm.waitForTransferCompletion(slice.GetShardIds())
+		}
 		//if there is no snapshot available, rollback to zero
 		err := slice.RollbackToZero(isInitialBuild())
 		if err == nil {
@@ -2473,9 +2477,16 @@ func (s *storageMgr) handleShardTransfer(cmd Message) {
 	// TODO: Add a configurable setting to enable or disable disk snapshotting
 	// of shards that are in transfer
 
-	shardIds := cmd.(*MsgStartShardTransfer).GetShardIds()
+	msg := cmd.(*MsgStartShardTransfer)
+	shardIds := msg.GetShardIds()
+
+	storageMgrCancelCh := make(chan bool)
+	storageMgrRespCh := make(chan bool)
+	msg.storageMgrCancelCh = storageMgrCancelCh
+	msg.storageMgrRespCh = storageMgrRespCh
+
 	for _, shardId := range shardIds {
-		s.shardsInTransfer[shardId] = true
+		s.shardsInTransfer[shardId] = []chan bool{storageMgrCancelCh, storageMgrRespCh}
 	}
 	logging.Infof("StorageMgr::handleShardTransfer Updated book-keeping for shardIds: %v", shardIds)
 	if s.stm != nil {
@@ -2575,5 +2586,41 @@ func (s *storageMgr) SetRebalanceRunning(cmd Message) {
 				}
 			}
 		}
+	}
+}
+
+// If rebalance transfer is in progress, then this method
+// will cancel rebalance transfer and waits for plasma to finish
+// processing. Also, the shard transefer book-keeping is updated
+//
+// If no tranfer is in progress, then this method is a no-op
+func (sm *storageMgr) waitForTransferCompletion(shardIds []common.ShardId) {
+	transferInProgress := false
+	var cancelCh, respCh chan bool
+	for _, shardId := range shardIds {
+		if val, ok := sm.shardsInTransfer[shardId]; ok {
+			transferInProgress = true
+			cancelCh = val[0]
+			respCh = val[1]
+			break
+		}
+	}
+
+	// Shards are not being transferred. Return
+	if !transferInProgress {
+		logging.Infof("StorageMgr::waitForTransferCompletion Transer is not in progress for shardIds: %v", shardIds)
+		return
+	}
+
+	logging.Infof("StorageMgr::waitForTransferCompletion Initiating transfer cancel for shardIds: %v", shardIds)
+
+	close(cancelCh) // Cancel the transfer
+	<-respCh
+
+	logging.Infof("StorageMgr::waitForTransferCompletion Done with transfer cancel for shardIds: %v", shardIds)
+
+	// At this point, transfer is complete. Clear the book-keeping
+	for _, shardId := range shardIds {
+		delete(sm.shardsInTransfer, shardId)
 	}
 }

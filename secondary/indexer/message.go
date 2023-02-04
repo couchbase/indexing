@@ -2461,6 +2461,12 @@ type MsgStartShardTransfer struct {
 
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
+
+	// These channels are used by storage manager to cancel
+	// rebalance transfer (in cases where a slice has to rollback
+	// to zero while transfer is in progress)
+	storageMgrCancelCh chan bool
+	storageMgrRespCh   chan bool
 }
 
 func (m *MsgStartShardTransfer) GetMsgType() MsgType {
@@ -2542,6 +2548,14 @@ func (m *MsgStartShardTransfer) GetProgressCh() chan *ShardTransferStatistics {
 
 func (m *MsgStartShardTransfer) GetRespCh() chan Message {
 	return m.respCh
+}
+
+func (m *MsgStartShardTransfer) GetStorageMgrCancelCh() chan bool {
+	return m.storageMgrCancelCh
+}
+
+func (m *MsgStartShardTransfer) GetStorageMgrRespCh() chan bool {
+	return m.storageMgrRespCh
 }
 
 func (m *MsgStartShardTransfer) String() string {

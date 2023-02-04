@@ -133,6 +133,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	region := msg.GetRegion()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
+	storageMgrCancelCh := msg.GetStorageMgrCancelCh()
+	storageMgrRespCh := msg.GetStorageMgrRespCh()
 
 	// Used by plasma to construct a path on S3
 	meta := make(map[string]interface{})
@@ -246,6 +248,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 			respCh:     respCh,
 		}
 
+		close(storageMgrRespCh)
 		stm.supvWrkrCh <- respMsg
 	}
 
@@ -259,6 +262,9 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	case <-transferDoneCh: // All shards are done processing
 		sendResponse()
 		return
+
+	case <-storageMgrCancelCh:
+		closeCancelCh()
 	}
 
 	// Incase taskCancelCh or taskDoneCh is closed first, then
