@@ -261,8 +261,15 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		START_SHARD_RESTORE,
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,
-		LOCK_SHARDS,
 		RESTORE_SHARD_DONE:
+		if s.stm != nil {
+			s.stm.ProcessCommand(cmd)
+		}
+		s.supvCmdch <- &MsgSuccess{}
+
+	case LOCK_SHARDS:
+		s.SetRebalanceRunning(cmd)
+
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		}
@@ -860,6 +867,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			}
 
 			if restartTs == nil {
+
 				err = sm.rollbackAllToZero(streamId, keyspaceId)
 				if err != nil {
 					sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
@@ -2453,6 +2461,8 @@ func (s *storageMgr) ClearRebalanceRunning(cmd Message) {
 		}
 	}
 
+	logging.Infof("StorageMgr::ClearRebalanceRunning Clearing rebalance flags for all slices with shardIds: %v", shardIdMap)
+
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
@@ -2483,6 +2493,48 @@ func (s *storageMgr) ClearRebalanceRunning(cmd Message) {
 				// rebalance
 				for _, slice := range sc.GetAllSlices() {
 					slice.ClearRebalRunning()
+				}
+			}
+		}
+	}
+}
+
+func (s *storageMgr) SetRebalanceRunning(cmd Message) {
+
+	start := time.Now()
+	defer logging.Infof("StorageMgr::SetRebalanceRunning Done with setting rebalance flags for all slices. elapsed: %v", time.Since(start))
+
+	shardIdMap := make(map[common.ShardId]bool)
+	shardIds := cmd.(*MsgLockUnlockShards).GetShardIds()
+	for _, shardId := range shardIds {
+		shardIdMap[shardId] = true
+	}
+
+	logging.Infof("StorageMgr::SetRebalanceRunning Setting rebalance flags for all slices with shardIds: %v", shardIdMap)
+
+	s.muSnap.Lock()
+	defer s.muSnap.Unlock()
+
+	indexPartnMap := s.indexPartnMap.Get()
+
+	//for all partitions managed by this indexer
+	for _, partnInstMap := range indexPartnMap {
+
+		for _, partnInst := range partnInstMap {
+			sc := partnInst.Sc
+
+			if len(shardIdMap) > 0 {
+				// Set rebalance running only for the slices whose shards are getting locked
+				for _, slice := range sc.GetAllSlices() {
+					sliceShards := slice.GetShardIds()
+
+					for _, sliceShard := range sliceShards {
+						if _, ok := shardIdMap[sliceShard]; ok {
+							// If any shard of the slice is getting unlocked,
+							// consider rebalance done for the slice
+							slice.SetRebalRunning()
+						}
+					}
 				}
 			}
 		}

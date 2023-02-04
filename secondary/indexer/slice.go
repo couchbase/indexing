@@ -50,6 +50,7 @@ type Slice interface {
 
 	GetShardIds() []common.ShardId
 	ClearRebalRunning()
+	SetRebalRunning()
 
 	GetWriteUnits() uint64
 }

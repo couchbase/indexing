@@ -1884,6 +1884,10 @@ func (fdb *fdbSlice) ClearRebalRunning() {
 	// nothing to do
 }
 
+func (fdb *fdbSlice) SetRebalRunning() {
+	// nothing to do
+}
+
 func (fdb *fdbSlice) GetWriteUnits() uint64 {
 	return 0
 }

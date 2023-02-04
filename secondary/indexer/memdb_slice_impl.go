@@ -1874,6 +1874,10 @@ func (mdb *memdbSlice) ClearRebalRunning() {
 	// nothing to do
 }
 
+func (mdb *memdbSlice) SetRebalRunning() {
+	// nothing to do
+}
+
 func (mdb *memdbSlice) GetWriteUnits() uint64 {
 	return 0
 }
