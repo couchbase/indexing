@@ -2568,6 +2568,8 @@ func (m *MsgStartShardTransfer) String() string {
 type MsgShardTransferResp struct {
 	errMap     map[common.ShardId]error
 	shardPaths map[common.ShardId]string //ShardId -> Location where shard is uploaded
+	shardIds   []common.ShardId
+	respCh     chan Message
 }
 
 func (m *MsgShardTransferResp) GetMsgType() MsgType {
@@ -2580,6 +2582,14 @@ func (m *MsgShardTransferResp) GetErrorMap() map[common.ShardId]error {
 
 func (m *MsgShardTransferResp) GetShardPaths() map[common.ShardId]string {
 	return m.shardPaths
+}
+
+func (m *MsgShardTransferResp) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgShardTransferResp) GetRespCh() chan Message {
+	return m.respCh
 }
 
 type MsgShardTransferCleanup struct {

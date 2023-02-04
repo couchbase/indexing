@@ -10,7 +10,7 @@ type ShardTransferManager struct {
 	cmdCh  chan Message
 }
 
-func NewShardTransferManager(config common.Config) *ShardTransferManager {
+func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
 	return nil
 }
 

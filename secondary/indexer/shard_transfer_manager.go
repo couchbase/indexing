@@ -16,6 +16,10 @@ type ShardTransferManager struct {
 	config common.Config
 	cmdCh  chan Message
 
+	// Storage manager command channel. Used to route
+	// the response of rebalance transfer status
+	supvWrkrCh chan Message
+
 	// lockedShards represent the list of shards that are locked
 	// for rebalance and are yet to be unlocked. Whenever shard
 	// rebalancer acquires lock, this map is updated. The entires
@@ -28,12 +32,13 @@ type ShardTransferManager struct {
 	sliceCloseNotifier map[common.ShardId]MsgChannel
 }
 
-func NewShardTransferManager(config common.Config) *ShardTransferManager {
+func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
 	stm := &ShardTransferManager{
 		config:             config,
 		cmdCh:              make(chan Message),
 		lockedShards:       make(map[common.ShardId]bool),
 		sliceCloseNotifier: make(map[common.ShardId]MsgChannel),
+		supvWrkrCh:         supvWrkrCh,
 	}
 
 	go stm.run()
@@ -237,9 +242,11 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		respMsg := &MsgShardTransferResp{
 			errMap:     errMap,
 			shardPaths: shardPaths,
+			shardIds:   shardIds,
+			respCh:     respCh,
 		}
 
-		respCh <- respMsg
+		stm.supvWrkrCh <- respMsg
 	}
 
 	select {

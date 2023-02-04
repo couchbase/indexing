@@ -46,6 +46,7 @@ type StorageManager interface {
 type storageMgr struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
+	wrkrCh     MsgChannel // Channel to listen all messages from worker
 
 	snapshotReqCh []MsgChannel // Channel to listen for snapshot requests from scan coordinator
 
@@ -79,6 +80,11 @@ type storageMgr struct {
 	lastFlushDone int64
 
 	stm *ShardTransferManager
+
+	// List of shards that are currently in rebalance tranfser phase
+	// A shard is added to the list when transfer is initiated and
+	// cleared when transfer is done
+	shardsInTransfer map[common.ShardId]bool
 }
 
 type snapshotWaiter struct {
@@ -128,6 +134,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		snapshotNotifych: snapshotNotifych,
 		snapshotReqCh:    snapshotReqCh,
 		config:           config,
+		shardsInTransfer: make(map[common.ShardId]bool),
+		wrkrCh:           make(chan Message, 100),
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
@@ -157,7 +165,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	}
 
 	if common.IsServerlessDeployment() {
-		s.stm = NewShardTransferManager(s.config)
+		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
 	} else {
 		s.stm = nil
 	}
@@ -201,6 +209,12 @@ loop:
 				break loop
 			}
 
+		case cmd, ok := <-s.wrkrCh:
+			if ok {
+				s.handleWorkerCommands(cmd)
+			} else {
+				break loop
+			}
 		}
 	}
 }
@@ -289,6 +303,20 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	}
 
+}
+
+func (s *storageMgr) handleWorkerCommands(cmd Message) {
+	switch cmd.GetMsgType() {
+	case SHARD_TRANSFER_RESPONSE:
+
+		shardIds := cmd.(*MsgShardTransferResp).GetShardIds()
+		respCh := cmd.(*MsgShardTransferResp).GetRespCh()
+		for _, shardId := range shardIds {
+			delete(s.shardsInTransfer, shardId)
+		}
+		logging.Infof("StorageMgr::ShardTransferResponse Clearing book-keeping for shardIds: %v", shardIds)
+		respCh <- cmd
+	}
 }
 
 // handleCreateSnapshot will create the necessary snapshots
@@ -2443,7 +2471,13 @@ func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
 
 func (s *storageMgr) handleShardTransfer(cmd Message) {
 	// TODO: Add a configurable setting to enable or disable disk snapshotting
-	// of shards that are in transfesr
+	// of shards that are in transfer
+
+	shardIds := cmd.(*MsgStartShardTransfer).GetShardIds()
+	for _, shardId := range shardIds {
+		s.shardsInTransfer[shardId] = true
+	}
+	logging.Infof("StorageMgr::handleShardTransfer Updated book-keeping for shardIds: %v", shardIds)
 	if s.stm != nil {
 		s.stm.ProcessCommand(cmd)
 	}
