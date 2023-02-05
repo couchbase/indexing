@@ -1477,13 +1477,6 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		indexes = nil
 	}
 
-	if command == CommandRebalance && (len(outIndexes) != 0 || solution.findNumEmptyNodes() != 0) {
-		partitioned := findAllPartitionedIndexExcluding(solution, indexes)
-		if len(partitioned) != 0 {
-			indexes = append(indexes, partitioned...)
-		}
-	}
-
 	if isInternal {
 		//map key is string bucket:scope:collection:name this is used to group duplicate indexUsages by defn/replica/partition
 		indexNameToUsageMap := make(map[string]map[common.IndexDefnId]map[int]map[common.PartitionId][]*IndexUsage)
