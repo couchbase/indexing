@@ -667,6 +667,12 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
+	// If rebalance transfer fails due to rollbackToZero, then transfer is attempted
+	// for upto the limit specified by the config "indexer.rebalance.serverless.transferRetries"
+	retryCount := 0
+	maxRetries := sr.config.Load()["rebalance.serverless.transferRetries"].Int()
+
+loop:
 	start := time.Now()
 
 	// Lock shard to prevent any index instance mapping while transfer is in progress
@@ -723,9 +729,21 @@ func (sr *ShardRebalancer) startShardTransfer(ttid string, tt *c.TransferToken) 
 						tt.Destination, tt.Region, shardId, shardPaths, err)
 
 					unlockShards(tt.ShardIds, sr.supvMsgch)
+
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err)
-					return
+					if err == ErrIndexRollback {
+						if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
+							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err)
+							return
+						} else {
+							retryCount++
+							// Clean up the transferred data with nil error and retry transfer
+							// If transfer could not be completed after configured attempts, then set
+							// error in transfer token
+							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil)
+							goto loop
+						}
+					}
 				}
 			}
 

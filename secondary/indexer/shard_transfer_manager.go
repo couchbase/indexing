@@ -136,6 +136,13 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	storageMgrCancelCh := msg.GetStorageMgrCancelCh()
 	storageMgrRespCh := msg.GetStorageMgrRespCh()
 
+	// If storage manager is the once cancelling transfer, then this flag
+	// is set to true. In such a case, the errMap returned to caller will
+	// be modified with 'ErrIndexRollback' so that rebalancer can continue
+	// rebalance for other buckets and fail rebalance at the end. This is
+	// a no-op for pause-resume codepaths
+	isStorageMgrCancel := false
+
 	// Used by plasma to construct a path on S3
 	meta := make(map[string]interface{})
 
@@ -241,6 +248,14 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		logging.Infof("ShardTransferManager::processShardTransferMessage All shards processing done. Sending response "+
 			"errMap: %v, shardPaths: %v, destination: %v, elapsed(sec): %v", errMap, shardPaths, destination, elapsed)
 
+		if isStorageMgrCancel {
+			logging.Infof("ShardTransferManager::processShardTransferMessage All shards processing done. "+
+				"Updating errMap as IndexRollback due to transfer cancellation invoked by storage manager. ShardIds: %v", shardIds)
+			for shardId := range errMap {
+				errMap[shardId] = ErrIndexRollback
+			}
+		}
+
 		respMsg := &MsgShardTransferResp{
 			errMap:     errMap,
 			shardPaths: shardPaths,
@@ -264,6 +279,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		return
 
 	case <-storageMgrCancelCh:
+		isStorageMgrCancel = true
 		closeCancelCh()
 	}
 
