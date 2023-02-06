@@ -104,7 +104,7 @@ GoModBuild (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/i
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT indexer
-  GOVERSION 1.19)
+  GOVERSION 1.20)
 
 GoModBuild (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   DEPENDS ${DEPS}
@@ -113,7 +113,7 @@ GoModBuild (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.19)
+  GOVERSION 1.20)
 
 GoModBuild (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   DEPENDS ${DEPS}
@@ -122,7 +122,7 @@ GoModBuild (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/c
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.19)
+  GOVERSION 1.20)
 
 GoModBuild (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   DEPENDS ${DEPS}
@@ -131,7 +131,7 @@ GoModBuild (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/c
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.19)
+  GOVERSION 1.20)
 
 GoModBuild (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
   DEPENDS ${DEPS}
@@ -140,4 +140,4 @@ GoModBuild (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/c
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
-  GOVERSION 1.19)
+  GOVERSION 1.20)
