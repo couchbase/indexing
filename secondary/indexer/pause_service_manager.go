@@ -66,8 +66,12 @@ type PauseServiceManager struct {
 	pauseTokenMapMu sync.RWMutex
 
 	// Track Pausers
-	pausersById map[string]*Pauser
+	pausersById  map[string]*Pauser
 	pausersMapMu sync.Mutex
+
+	// Track Resumers
+	resumersById  map[string]*Resumer
+	resumersMapMu sync.Mutex
 
 	nodeInfo *service.NodeInfo
 }
@@ -94,6 +98,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 
 		pauseTokensById: make(map[string]*PauseToken),
 		pausersById:     make(map[string]*Pauser),
+		resumersById:    make(map[string]*Resumer),
 
 		nodeInfo: nodeInfo,
 	}
@@ -146,6 +151,37 @@ func (m *PauseServiceManager) getPauser(pauseId string) (*Pauser, bool) {
 	pauser, exists := m.pausersById[pauseId]
 
 	return pauser, exists
+}
+
+// Track Resumer based on resumeId. Resumer can be deleted by calling with nil Resumer. If there is already a Resumer
+// with the resumeId, then an error is returned.
+func (m *PauseServiceManager) setResumer(resumeId string, r *Resumer) error {
+	m.resumersMapMu.Lock()
+	defer m.resumersMapMu.Unlock()
+
+	if oldResumer, ok := m.resumersById[resumeId]; ok {
+
+		if r == nil {
+			delete(m.resumersById, resumeId)
+		} else {
+			return fmt.Errorf("conflict: Resumer[%v] with resumeId[%v] already present!", oldResumer, resumeId)
+		}
+
+	} else {
+		m.resumersById[resumeId] = r
+	}
+
+	return nil
+}
+
+// Get Resumer based on resumeId. If there is no such Resumer, then the returned boolean will be false.
+func (m *PauseServiceManager) getResumer(resumeId string) (*Resumer, bool) {
+	m.resumersMapMu.Lock()
+	defer m.resumersMapMu.Unlock()
+
+	resumer, exists := m.resumersById[resumeId]
+
+	return resumer, exists
 }
 
 // GetPauseMgr atomically gets the global PauseMgr pointer. When called from ScanCoordinator it may
@@ -1134,10 +1170,16 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 		return err
 	}
 
-	// Create a Resumer object to run the master orchestration loop. It will be the only thread
-	// that changes or deletes *task after this point. It will save a pointer to itself into
-	// task.resumer and start its own goroutine, so we don't need to save a pointer to it here.
-	RunResumer(m, task, true)
+	// Create a Resumer object to run the master orchestration loop.
+
+	resumer := NewResumer(m, task, true)
+
+	if err := m.setResumer(params.ID, resumer); err != nil {
+		return err
+	}
+
+	resumer.startWorkers()
+
 	return nil
 }
 

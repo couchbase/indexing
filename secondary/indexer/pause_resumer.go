@@ -144,29 +144,65 @@ type Resumer struct {
 	// delete task at this point, but GetTaskList and other processing may concurrently read it.
 	// Thus Resumer needs to write lock task.taskMu for changes but does not need to read lock it.
 	task *taskObj
+
+	// Used to signal that the ResumeDownloadTokens have been published.
+	waitForTokenPublish chan struct{}
 }
 
-// RunResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
+// NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
 // task.pauser (visible to pauseMgr parent) and launches a goroutine for the work.
-//   pauseMgr - parent object (singleton)
-//   task - the task_RESUME task this object will execute
-//   master - true iff this node is the master
-func RunResumer(pauseMgr *PauseServiceManager, task *taskObj, master bool) {
+//
+//	pauseMgr - parent object (singleton)
+//	task - the task_RESUME task this object will execute
+//	master - true iff this node is the master
+func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, master bool) *Resumer {
 	resumer := &Resumer{
 		pauseMgr: pauseMgr,
 		task:     task,
+
+		waitForTokenPublish: make(chan struct{}),
 	}
 
 	task.taskMu.Lock()
 	task.resumer = resumer
 	task.taskMu.Unlock()
 
-	go resumer.run(master)
+	return resumer
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (r *Resumer) startWorkers() {
+	go r.observeResume()
+
+	if r.task.isMaster() {
+		go r.initResumeAsync()
+	} else {
+		// if not master, no need to wait for publishing of tokens
+		close(r.waitForTokenPublish)
+	}
+}
+
+func (r *Resumer) initResumeAsync() {
+
+	// TODO: init progress update
+
+	// TODO: Generate Tokens
+
+	// TODO: Publish tokens to metaKV
+
+	// Ask observe to continue
+	close(r.waitForTokenPublish)
+}
+
+
+func (r *Resumer) observeResume() {
+	<-r.waitForTokenPublish
+
+	// TODO: Observe Pause
+}
 
 // failResume logs an error using the caller's logPrefix and a provided context string and aborts
 // the Resume task. If there is a set of known Indexer nodes, it will also try to notify them.
@@ -378,15 +414,4 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 func StubExecuteTenantAwarePlanForResume(clusterUrl string, resumeNodes []*planner.IndexerNode) (map[service.NodeID]service.NodeID, error) {
 	logging.Infof("Resumer::StubExecuteTenantAwarePlanForResume: TODO: call actual planner")
 	return nil, nil
-}
-
-// run is a goroutine for the main body of Resume work for this.task.
-//   master - true iff this node is the master
-func (this *Resumer) run(master bool) {
-	const _run = "Resumer::run:"
-
-	// Get the list of Index node host:port addresses EXCLUDING this one
-	this.otherIndexAddrs = this.pauseMgr.GetIndexerNodeAddresses(this.pauseMgr.httpAddr)
-
-	// kjc implement Resume
 }
