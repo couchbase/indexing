@@ -1318,7 +1318,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 	// Authenticate
 	if _, ok := doAuth(r, w, "PauseServiceManager::RestHandlePause:"); !ok {
 		err := fmt.Errorf("either invalid credentials or bad request")
-		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request," +
+		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request,"+
 			" err[%v]", err)
 		return
 	}
@@ -1337,7 +1337,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(bytes, &pauseToken); err != nil {
-			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to unmarshal pause token in request" +
+			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to unmarshal pause token in request"+
 				" body: err[%v] bytes[%v]", err, string(bytes))
 			writeError(w, err)
 
@@ -1352,7 +1352,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 			var task *taskObj
 			if task = m.taskFind(pauseToken.PauseId); task == nil {
 				err := fmt.Errorf("failed to find task with id[%v]", pauseToken.PauseId)
-				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause" +
+				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause"+
 					": err[%v]", string(m.nodeInfo.NodeID), err)
 				writeError(w, err)
 
@@ -1364,7 +1364,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 			m.pauseTokenMapMu.Unlock()
 
 			if err := m.registerLocalPauseToken(&pauseToken); err != nil {
-				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local" +
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local"+
 					" meta: err[%v]", err)
 				writeError(w, err)
 
@@ -1373,24 +1373,49 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 
 			// TODO: Move task from prepared to running
 
-			// Move bucket to bst_PAUSING state
-			if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_PAUSE, bst_PAUSING); err != nil {
-				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to pausing" +
-					" err[%v]", err)
-				writeError(w, err)
-				return
+			if pauseToken.Type == PauseTokenPause {
+
+				// Move bucket to bst_PAUSING state
+				if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_PAUSE, bst_PAUSING); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to pausing"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback)
+
+				if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				pauser.startWorkers()
+
+			} else if pauseToken.Type == PauseTokenResume {
+
+				// Move bucket to bst_RESUMING state
+				if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_RESUME, bst_RESUMING); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to resuming"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				resumer := NewResumer(m, task, false)
+
+				if err := m.setResumer(pauseToken.PauseId, resumer); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Resumer in bookkeeping"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				resumer.startWorkers()
+
 			}
-
-			pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback)
-
-			if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
-				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping" +
-					" err[%v]", err)
-				writeError(w, err)
-				return
-			}
-
-			pauser.startWorkers()
 
 			writeOk(w)
 			return
