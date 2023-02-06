@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
@@ -126,6 +127,26 @@ func (rdt *ResumeDownloadToken) Clone() *ResumeDownloadToken {
 	return &rdt2
 }
 
+func setResumeDownloadTokenInMetakv(rdtId string, rdt *ResumeDownloadToken) {
+
+	rhCb := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("setResumeDownloadTokenInMetakv::rhCb: err[%v], Retrying[%d]", err, r)
+		}
+
+		return common.MetakvSet(PauseMetakvDir+rdtId, rdt)
+	}
+
+	rh := common.NewRetryHelper(10, time.Second, 1, rhCb)
+	err := rh.Run()
+
+	if err != nil {
+		logging.Fatalf("setResumeDownloadTokenInMetakv: Failed to set ResumeDownloadToken In Meta Storage:"+
+			" rdtId[%v] rdt[%v] err[%v]", rdtId, rdt, err)
+		common.CrashOnError(err)
+	}
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Resumer class - Perform the Resume of a given bucket (similar to Rebalancer's role).
 // This is used only on the master node of a task_RESUME task to do the GSI orchestration.
@@ -191,12 +212,20 @@ func (r *Resumer) initResumeAsync() {
 
 	// TODO: Generate Tokens
 
-	// TODO: Publish tokens to metaKV
+	// Publish tokens to metaKV
+	// will crash if cannot set in metaKV even after retries.
+	r.publishResumeDownloadTokens(nil)
 
 	// Ask observe to continue
 	close(r.waitForTokenPublish)
 }
 
+func (r *Resumer) publishResumeDownloadTokens(rdts map[string]*ResumeDownloadToken) {
+	for rdtId, rdt := range rdts {
+		setResumeDownloadTokenInMetakv(rdtId, rdt)
+		logging.Infof("Pauser::publishResumeDownloadTokens Published resume upload token: %v", rdtId)
+	}
+}
 
 func (r *Resumer) observeResume() {
 	<-r.waitForTokenPublish
