@@ -1163,6 +1163,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		tokenMap[t.ttid] = t.tt
 	}
 
+	updateTokenMap := true
 	// cleanup transfer token
 	for _, t := range ttList {
 
@@ -1172,10 +1173,10 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 				m.cleanupShardTokenForMaster(t.ttid, t.tt)
 			}
 			if t.tt.SourceId == string(m.nodeInfo.NodeID) {
-				m.cleanupShardTokenForSource(t.ttid, t.tt, tokenMap, cleanupFailedShards)
+				m.cleanupShardTokenForSource(t.ttid, t.tt, tokenMap, cleanupFailedShards, &updateTokenMap)
 			}
 			if t.tt.DestId == string(m.nodeInfo.NodeID) {
-				m.cleanupShardTokenForDest(t.ttid, t.tt, tokenMap, cleanupFailedShards)
+				m.cleanupShardTokenForDest(t.ttid, t.tt, tokenMap, cleanupFailedShards, &updateTokenMap)
 			}
 		} else {
 			l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
@@ -1327,7 +1328,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.
 	return nil
 }
 
-func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, cleanupFailedShards map[c.ShardId]bool) error {
+func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, cleanupFailedShards map[c.ShardId]bool, updateTokenMap *bool) error {
 
 	switch tt.ShardTransferTokenState {
 	case c.ShardTokenScheduledOnSource:
@@ -1387,6 +1388,8 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			"from metakv", ttid)
 
 	case c.ShardTokenReady:
+
+	retryCleanupAtReady:
 		// If this token is in Ready state, check for the presence of
 		// a tranfser token with ShardTokenDropOnSource state. If it
 		// exists then the index instances on source node can be dropped.
@@ -1399,6 +1402,17 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 					break
 				}
 			}
+		}
+
+		// If drop on source token is not found, then it could be a race condition
+		// between rebalance cleanup and posting DropOnSourceToken. To avoid the
+		// race, wait for 5 seconds and update the token map. Do this only once
+		if !dropOnSource && (*updateTokenMap) {
+			logging.Infof("RebalanceServiceManager::cleanupShardTokenForSource Fetching transfer tokens again " +
+				"from metaKV before attempting to drop token on source")
+			m.updateShardTokenMap(tokenMap)
+			*updateTokenMap = false
+			goto retryCleanupAtReady
 		}
 
 		if dropOnSource {
@@ -1416,7 +1430,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 	return nil
 }
 
-func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, cleanupFailedShards map[c.ShardId]bool) error {
+func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, cleanupFailedShards map[c.ShardId]bool, updateTokenMap *bool) error {
 
 	// TODO: Node may have updated in-memory booking for DDL
 	// during rebalance support. Clean that
@@ -1483,6 +1497,8 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 	case c.ShardTokenReady:
 
+	retryCleanupAtReady:
+
 		dropOnDest := true
 		for _, tt := range tokenMap {
 			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
@@ -1494,6 +1510,17 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 					break
 				}
 			}
+		}
+
+		// If drop on source token is not found, then it could be a race condition
+		// between rebalance cleanup and posting DropOnSourceToken. To avoid the
+		// race, wait for 5 seconds and update the token map. Do this only once
+		if dropOnDest && (*updateTokenMap) {
+			logging.Infof("RebalanceServiceManager::cleanupShardTokenForDest Fetching transfer tokens again " +
+				"from metaKV before attempting to drop token on destination")
+			m.updateShardTokenMap(tokenMap)
+			*updateTokenMap = false
+			goto retryCleanupAtReady
 		}
 
 		if dropOnDest {
@@ -1527,6 +1554,29 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		}
 	}
 	return nil
+}
+
+func (m *RebalanceServiceManager) updateShardTokenMap(tokenMap map[string]*c.TransferToken) {
+
+	refetchTime := m.config.Load()["rebalance.serverless.refetchTokenWaitTime"].Int()
+	timeout := time.NewTimer(time.Duration(refetchTime) * time.Millisecond)
+
+	select {
+	case <-timeout.C:
+		rtokens, err := m.getCurrRebalTokens()
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::updateShardTokenMap Error Fetching Metakv Tokens %v", err)
+			return
+		}
+
+		if rtokens != nil && len(rtokens.TT) != 0 {
+			l.Infof("RebalanceServiceManager::updateShardTokenMap Found %v tokens. Cleaning up.", len(rtokens.TT))
+			for ttid, tt := range rtokens.TT {
+				tokenMap[ttid] = tt
+			}
+		}
+		return
+	}
 }
 
 func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
