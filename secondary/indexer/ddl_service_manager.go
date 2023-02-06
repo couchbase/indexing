@@ -326,6 +326,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 		logging.Errorf("%v Failed to initialize metadata provider.  Error=%v.", method, err)
 		return
 	}
+	defer provider.Close()
 	m.handleClusterStorageMode(httpAddrMap, provider)
 }
 
