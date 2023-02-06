@@ -3191,7 +3191,7 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request) {
 	creds, valid, err := common.IsAuthValid(r)
-	permissionCache := common.NewSessionPermissionsCache(creds)
+
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -3201,6 +3201,18 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.stats!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("StatsManager::handleMetricsHigh not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	allowedMeteringStats, err := creds.IsAllowed("cluster.settings!read")
@@ -3222,10 +3234,7 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 
 	out := make([]byte, 0, len(is.indexes)*APPROX_METRIC_SIZE*APPROX_METRIC_COUNT)
 	for _, s := range is.indexes {
-		allowed := permissionCache.IsAllowed(s.bucket, s.scope, s.collection, "list")
-		if allowed {
-			out = s.populateMetrics(out)
-		}
+		out = s.populateMetrics(out)
 	}
 
 	func() {
@@ -3233,11 +3242,8 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		defer is.bslock.RUnlock()
 
 		for bucket, bstats := range is.buckets {
-			allowed := permissionCache.IsAllowed(bucket, "", "", "list")
-			if allowed {
-				str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
-				out = append(out, []byte(str)...)
-			}
+			str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
+			out = append(out, []byte(str)...)
 		}
 	}()
 

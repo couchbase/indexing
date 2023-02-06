@@ -75,7 +75,7 @@ type PauseUploadToken struct {
 	State      PauseUploadState
 	BucketName string
 	Error      string
-	Shards     []common.ShardId
+	ShardPaths map[common.ShardId]string
 }
 
 func newPauseUploadToken(masterUuid, followerUuid, pauseId, bucketName string) (string, *PauseUploadToken, error) {
@@ -491,15 +491,9 @@ func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *PauseUploadT
 	case PauseUploadTokenProcessed:
 		// Master owns token
 
-		shardPaths := put.Shards
+		shardPaths := put.ShardPaths
 		if shardPaths != nil {
-			func() {
-				p.task.pauseMetadata.lock.Lock()
-				defer p.task.pauseMetadata.lock.Unlock()
-				for _, shardId := range shardPaths {
-					p.task.pauseMetadata.addShardNoLock(service.NodeID(put.FollowerId), shardId)
-				}
-			}()
+			p.task.pauseMetadata.addShardPaths(service.NodeID(put.FollowerId), shardPaths)
 		}
 
 		// Follower completed work, delete token
@@ -624,11 +618,7 @@ func (p *Pauser) startPauseUpload(putId string, put *PauseUploadToken) {
 	if err != nil {
 		put.Error = err.Error()
 	} else if shardPaths != nil {
-		shardIds := make([]common.ShardId, 0, len(shardPaths))
-		for shardId := range shardPaths {
-			shardIds = append(shardIds, shardId)
-		}
-		put.Shards = shardIds
+		put.ShardPaths = shardPaths
 	}
 
 	// work done, change state, master handler will pick it up and do cleanup.
@@ -925,6 +915,9 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	shardPaths, err := p.pauseMgr.copyShardsWithLock(getShardIds(), p.task.taskId, p.task.bucket, nodePath, closeCh)
 	if err != nil {
 		return nil, err
+	}
+	for shardId, shardPath := range shardPaths {
+		shardPaths[shardId] = strings.TrimPrefix(shardPath, nodePath)
 	}
 	return shardPaths, nil
 }
