@@ -1592,7 +1592,9 @@ func (s *storageMgr) handleStats(cmd Message) {
 				totalDataSize += st.Stats.DataSize
 				totalDiskSize += st.Stats.DiskSize
 				totalRecsInMem += idxStats.numRecsInMem.Value()
+				totalRecsInMem += idxStats.bsNumRecsInMem.Value()
 				totalRecsOnDisk += idxStats.numRecsOnDisk.Value()
+				totalRecsOnDisk += idxStats.bsNumRecsOnDisk.Value()
 				avgMutationRate += idxStats.avgMutationRate.Value()
 				avgDrainRate += idxStats.avgDrainRate.Value()
 				avgDiskBps += idxStats.avgDiskBps.Value()
@@ -1608,6 +1610,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 		stats.avgDiskBps.Set(avgDiskBps)
 		stats.unitsUsedActual.Set(unitsUsage)
 		if numStorageInstances > 0 {
+
 			stats.avgResidentPercent.Set(common.ComputePercent(totalRecsInMem, totalRecsOnDisk))
 		} else {
 			stats.avgResidentPercent.Set(0)

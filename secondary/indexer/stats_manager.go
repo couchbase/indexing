@@ -259,6 +259,8 @@ type IndexStats struct {
 	cacheMisses               stats.Int64Val
 	numRecsInMem              stats.Int64Val
 	numRecsOnDisk             stats.Int64Val
+	bsNumRecsInMem            stats.Int64Val
+	bsNumRecsOnDisk           stats.Int64Val
 
 	numKeySize64     stats.Int64Val // 0 - 64
 	numKeySize256    stats.Int64Val // 65 - 256
@@ -527,6 +529,8 @@ func (s *IndexStats) Init() {
 	s.cacheMisses.Init()
 	s.numRecsInMem.Init()
 	s.numRecsOnDisk.Init()
+	s.bsNumRecsInMem.Init()
+	s.bsNumRecsOnDisk.Init()
 
 	s.numKeySize64.Init()
 	s.numKeySize256.Init()
@@ -2002,6 +2006,18 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.numRecsOnDisk.Value()
 		},
 		&s.numRecsOnDisk, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("backstore_recs_in_mem",
+		func(ss *IndexStats) int64 {
+			return ss.bsNumRecsInMem.Value()
+		},
+		&s.bsNumRecsInMem, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("backstore_recs_on_disk",
+		func(ss *IndexStats) int64 {
+			return ss.bsNumRecsOnDisk.Value()
+		},
+		&s.bsNumRecsOnDisk, s.partnInt64Stats)
 
 	if common.IsServerlessDeployment() {
 		statMap.AddAggrStatFiltered("avg_units_usage",

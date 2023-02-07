@@ -2659,6 +2659,8 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)
 	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
+	mdb.idxStats.bsNumRecsInMem.Set(bsNumRecsMem)
+	mdb.idxStats.bsNumRecsOnDisk.Set(bsNumRecsDisk)
 	return sts, nil
 }
 
