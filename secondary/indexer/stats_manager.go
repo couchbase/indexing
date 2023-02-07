@@ -3199,6 +3199,10 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_scanned gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_scanned %v\n", METRICS_PREFIX, is.TotalRowsScanned.Value()))...)
 
+	is.memoryRss.Set(getRSS())
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_rss gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vmemory_rss %v\n", METRICS_PREFIX, is.memoryRss.Value()))...)
+
 	if common.IsServerlessDeployment() {
 		out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_used_actual gauge\n", METRICS_PREFIX))...)
 		out = append(out, []byte(fmt.Sprintf("%vmemory_used_actual %v\n", METRICS_PREFIX, is.memoryUsedActual.Value()))...)
