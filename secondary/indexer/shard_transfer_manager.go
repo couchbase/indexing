@@ -348,6 +348,62 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	return
 }
 
+func (stm *ShardTransferManager) cleanupStagingDirOnRestore(cmd Message) {
+	msg := cmd.(*MsgStartShardRestore)
+
+	cleanupStart := time.Now()
+	var wg sync.WaitGroup
+	var taskId, transferId string
+
+	taskType := msg.GetTaskType()
+	destination := msg.GetDestination()
+	region := msg.GetRegion()
+
+	meta := make(map[string]interface{})
+	if taskType == common.RebalanceTask {
+		taskId = msg.GetRebalanceId()
+		transferId = msg.GetTransferTokenId()
+		meta[plasma.GSIRebalanceId] = taskId
+		meta[plasma.GSIRebalanceTransferToken] = transferId
+	} else if taskType == common.PauseResumeTask {
+		taskId = msg.GetPauseResumeId()
+		transferId = msg.GetBucket()
+		meta[plasma.GSIPauseResume] = transferId
+	} else {
+		logging.Fatalf("ShardTransferManager::cleanupStagingDirOnRestore Invalid taskType seen, taskType: %v, "+
+			"taskId: %v, transferId: %v", taskType, taskId, transferId)
+		return // no-op for other task types
+	}
+
+	if region != "" {
+		meta[plasma.GSIBucketRegion] = region
+	}
+
+	doneCb := func(err error) {
+		defer wg.Done()
+		logging.Infof("ShardTransferManager::cleanupStagingDirOnRestore Invoked doneCb for taskType: %v, "+
+			"taskId: %v, transferId: %v", taskType, taskId, transferId)
+		if err != nil {
+			logging.Infof("ShardTransferManager::cleanupStagingDirOnRestore Error observed during cleanup of local staging "+
+				" directory for taskType: %v, taskId: %v, transferId: %v, err: %v", taskType, taskId, transferId, err)
+		}
+	}
+
+	wg.Add(1)
+	err := plasma.DoCleanupStaging(destination, meta, doneCb)
+	if err != nil {
+		wg.Done()
+		logging.Errorf("ShardTransferManager::cleanupStagingDirOnRestore Error initiating "+
+			"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
+		return
+	}
+	wg.Wait()
+
+	elapsed := time.Since(cleanupStart).Seconds()
+	logging.Infof("ShardTransferManager::cleanupStagingDirOnRestore Clean-up done for staging directory for taskType: %v, "+
+		"taskId: %v, transferId: %v, elapsed(sec): %v", taskType, taskId, transferId, elapsed)
+}
+
 func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	msg := cmd.(*MsgStartShardRestore)
 	logging.Infof("ShardTransferManager::processShardRestoreMessage Initiating command: %v", msg)
@@ -473,6 +529,14 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	}()
 
 	sendResponse := func() {
+
+		// Upon completion of restore, cleanup the transferred data. Cleanup is a
+		// best effort call. So, ignore any errors arising out during Cleanup
+
+		// TODO: Does pause-resume need to handle any errors arising out of staging
+		// cleanup during resume(?)
+		stm.cleanupStagingDirOnRestore(cmd)
+
 		elapsed := time.Since(start).Seconds()
 		logging.Infof("ShardTransferManager::processShardRestoreMessage All shards are restored. Sending response "+
 			"errMap: %v, shardPaths: %v, destination: %v, elapsed(sec): %v", errMap, shardPaths, destination, elapsed)
