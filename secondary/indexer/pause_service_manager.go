@@ -854,6 +854,12 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		return err
 	}
 
+	//update supv about bucket pause state
+	m.supvMsgch <- &MsgPauseUpdateBucketState{
+		bucket:           params.Bucket,
+		bucketPauseState: bst_PREPARE_PAUSE,
+	}
+
 	// Record the task in progress
 	return m.taskAddPrepare(params.ID, params.Bucket, params.BlobStorageRegion, params.RemotePath,
 		true, false)
@@ -2423,8 +2429,7 @@ type PauseToken struct {
 	BucketName string
 	PauseId    string
 
-	Type PauseTokenType
-
+	Type  PauseTokenType
 	Error string
 }
 

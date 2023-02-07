@@ -235,6 +235,9 @@ type indexer struct {
 	globalRebalPhase    common.RebalancePhase
 	perBucketRebalPhase map[string]common.RebalancePhase
 	slicePendingClosure map[string][]Slice
+
+	//maintains bucket->bucketStateEnum mapping for pause state
+	bucketPauseState map[string]bucketStateEnum
 }
 
 type kvRequest struct {
@@ -338,9 +341,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdResetList:                make(map[string]resetList),
 		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
 
-		pendingReset: make(map[common.IndexInstId]bool),
-		bsRunParams:  &runParams{},
-		instsPerColl: make(map[string]map[string]map[common.IndexInstId]bool),
+		pendingReset:     make(map[common.IndexInstId]bool),
+		bsRunParams:      &runParams{},
+		instsPerColl:     make(map[string]map[string]map[common.IndexInstId]bool),
+		bucketPauseState: make(map[string]bucketStateEnum),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1598,6 +1602,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			logging.Fatalf("Indexer::handleWorkerMsgs msg %v should only used in serverless mode", msg)
 			common.CrashOnError(errors.New("Invalid Msg On Worker Channel"))
 		}
+
+	case PAUSE_UPDATE_BUCKET_STATE:
+		idx.handleUpdateBucketPauseState(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -11904,4 +11911,27 @@ func closeSlices(sliceList []Slice, logPrefix string) {
 				logPrefix, slice.IndexInstId(), slice.IndexPartnId())
 		}(s)
 	}
+}
+
+func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
+
+	req := msg.(*MsgPauseUpdateBucketState)
+	bucket := req.GetBucket()
+	bucketState := req.GetBucketPauseState()
+
+	currState := idx.bucketPauseState[bucket]
+
+	logging.Infof("Indexer::handleUpdateBucketPauseState Updating from %v to %v", currState, bucketState)
+
+	//update indexer book-keeping
+	idx.bucketPauseState[bucket] = bucketState
+
+	//update scan coordinator
+	idx.scanCoordCmdCh <- msg
+	<-idx.scanCoordCmdCh
+
+	//update timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+
 }

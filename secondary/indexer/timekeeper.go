@@ -60,6 +60,9 @@ type timekeeper struct {
 	meteringMgr *MeteringThrottlingMgr
 
 	lastStatsTime int64
+
+	//maintains bucket->bucketStateEnum mapping for pause state
+	bucketPauseState map[string]bucketStateEnum
 }
 
 type InitialBuildInfo struct {
@@ -98,6 +101,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
 		cinfoProvider:     cip,
 		cinfoProviderLock: cipLock,
+		bucketPauseState:  make(map[string]bucketStateEnum),
 	}
 
 	tk.indexInstMap.Init()
@@ -255,6 +259,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case INDEXER_ABORT_RECOVERY:
 		tk.handleAbortRecovery(cmd)
+
+	case PAUSE_UPDATE_BUCKET_STATE:
+		tk.handleUpdateBucketPauseState(cmd)
 
 	default:
 		logging.Errorf("Timekeeper::handleSupvervisorCommands "+
@@ -4683,6 +4690,24 @@ func (tk *timekeeper) handleIndexerResumeMOI(cmd Message) {
 			}
 		}
 	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handleUpdateBucketPauseState(cmd Message) {
+
+	logging.Infof("Timekeeper::handleUpdateBucketPauseState")
+
+	req := cmd.(*MsgPauseUpdateBucketState)
+	bucket := req.GetBucket()
+	bucketState := req.GetBucketPauseState()
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	//update indexer book-keeping
+	tk.bucketPauseState[bucket] = bucketState
 
 	tk.supvCmdch <- &MsgSuccess{}
 

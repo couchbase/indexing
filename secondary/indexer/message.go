@@ -209,6 +209,7 @@ const (
 	RESTORE_AND_UNLOCK_LOCKED_SHARDS
 	METERING_MGR_STOP_WRITE_BILLING
 	METERING_MGR_START_WRITE_BILLING
+	PAUSE_UPDATE_BUCKET_STATE
 )
 
 type Message interface {
@@ -2922,6 +2923,23 @@ func (m *MsgMeteringUpdate) String() string {
 	return str
 }
 
+type MsgPauseUpdateBucketState struct {
+	bucket           string
+	bucketPauseState bucketStateEnum
+}
+
+func (m *MsgPauseUpdateBucketState) GetMsgType() MsgType {
+	return PAUSE_UPDATE_BUCKET_STATE
+}
+
+func (m *MsgPauseUpdateBucketState) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgPauseUpdateBucketState) GetBucketPauseState() bucketStateEnum {
+	return m.bucketPauseState
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3246,6 +3264,9 @@ func (m MsgType) String() string {
 		return "METERING_MGR_START_WRITE_BILLING"
 	case METERING_MGR_STOP_WRITE_BILLING:
 		return "METERING_MGR_STOP_WRITE_BILLING"
+	case PAUSE_UPDATE_BUCKET_STATE:
+		return "PAUSE_UPDATE_BUCKET_STATE"
+
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}

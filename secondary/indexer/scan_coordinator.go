@@ -76,6 +76,9 @@ type scanCoordinator struct {
 
 	totalMaintDocsQueued int64
 	numKeyspaces         int64
+
+	//maintains bucket->bucketStateEnum mapping for pause state
+	bucketPauseState map[string]bucketStateEnum
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -100,6 +103,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		indexInstMap:     make(common.IndexInstMap),
 		indexPartnMap:    make(IndexPartnMap),
 		indexDefnMap:     make(map[common.IndexDefnId][]common.IndexInstId),
+		bucketPauseState: make(map[string]bucketStateEnum),
 	}
 
 	s.config.Store(config)
@@ -247,6 +251,10 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_NUMVBUCKETS:
 		s.handleUpdateNumVBuckets(cmd)
+
+	case PAUSE_UPDATE_BUCKET_STATE:
+		s.handleUpdateBucketPauseState(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -1281,6 +1289,22 @@ func (s *scanCoordinator) handleSecurityChange(cmd Message) {
 	}
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleUpdateBucketPauseState(cmd Message) {
+
+	req := cmd.(*MsgPauseUpdateBucketState)
+	bucket := req.GetBucket()
+	bucketState := req.GetBucketPauseState()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	//update indexer book-keeping
+	s.bucketPauseState[bucket] = bucketState
+
+	s.supvCmdch <- &MsgSuccess{}
+
 }
 
 /////////////////////////////////////////////////////////////////////////
