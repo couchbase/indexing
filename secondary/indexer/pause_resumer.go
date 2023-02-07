@@ -162,7 +162,10 @@ func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseT
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (r *Resumer) startWorkers() {
-	go r.observeResume()
+	// no need to observe resume during dry run
+	if !r.task.dryRun {
+		go r.observeResume()
+	}
 
 	if r.task.isMaster() {
 		go r.initResumeAsync()
@@ -176,11 +179,27 @@ func (r *Resumer) initResumeAsync() {
 
 	// TODO: init progress update
 
-	// TODO: Generate Tokens
+	rdts, err := r.masterGenerateResumePlan()
+	if err != nil {
+		logging.Errorf(
+			"Resumer::initResumeAsync: couldn't generate plan for resume. err: %v for task ID: %v",
+			err, r.task.taskId,
+		)
+		r.finishResume(err)
+		return
+	}
+
+	if r.task.dryRun {
+		// TODO: should rdts be persisted for reuse in resume without dryRun? if yes, how?
+		r.finishResume(nil)
+		return
+	}
+
+	r.masterTokens = rdts
 
 	// Publish tokens to metaKV
 	// will crash if cannot set in metaKV even after retries.
-	r.publishResumeDownloadTokens(nil)
+	r.publishResumeDownloadTokens(rdts)
 
 	// Ask observe to continue
 	close(r.waitForTokenPublish)
@@ -443,8 +462,10 @@ func (r *Resumer) startResumeDownload(rdtId string, rdt *common.ResumeDownloadTo
 	}
 	defer r.wg.Done()
 
-	// TODO: Replace sleep with actual work
-	time.Sleep(5 * time.Second)
+	err := r.followerResumeBuckets(rdt)
+	if err != nil {
+		rdt.Error = err.Error()
+	}
 
 	// work done, change state, master handler will pick it up and do cleanup.
 	rdt.State = common.ResumeDownloadTokenProcessed
@@ -524,6 +545,7 @@ func (r *Resumer) checkAllTokensDone() bool {
 // failResume logs an error using the caller's logPrefix and a provided context string and aborts
 // the Resume task. If there is a set of known Indexer nodes, it will also try to notify them.
 func (this *Resumer) failResume(logPrefix string, context string, error error) {
+	// TODO: replace failResume with task status updates
 	logging.Errorf("%v Aborting Resume task %v due to %v error: %v", logPrefix,
 		this.task.taskId, context, error)
 
@@ -536,7 +558,7 @@ func (this *Resumer) failResume(logPrefix string, context string, error error) {
 
 // masterGenerateResumePlan: this method downloads all the metadata, stats from archivePath and
 // plans which nodes resume indexes for given bucket
-func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]service.NodeID, err error) {
+func (r *Resumer) masterGenerateResumePlan() (map[string]*common.ResumeDownloadToken,error) {
 	// Step 1: download PauseMetadata
 	logging.Infof("Resumer::masterGenerateResumePlan: downloading pause metadata from %v for resume task ID: %v", r.task.archivePath, r.task.taskId)
 	ctx := r.task.ctx
@@ -544,26 +566,26 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 
 	copier := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
-		err = fmt.Errorf("object store not supported")
+		err := fmt.Errorf("object store not supported")
 		logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
-		return
+		return nil, err
 	}
 
 	data, err := copier.DownloadBytes(ctx, fmt.Sprintf("%v%v", r.task.archivePath, FILENAME_PAUSE_METADATA))
 	if err != nil {
 		logging.Errorf("Resumer::masterGenerateResumePlan: failed to download pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
-		return
+		return nil, err
 	}
 	data, err = common.ChecksumAndUncompress(data)
 	if err != nil {
 		logging.Errorf("Resumer::masterGenerateResumePlan: failed to read valid pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
-		return
+		return nil, err
 	}
 	pauseMetadata := new(PauseMetadata)
 	err = json.Unmarshal(data, pauseMetadata)
 	if err != nil {
 		logging.Errorf("Resumer::masterGenerateResumePlan: couldn't unmarshal pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
-		return
+		return nil, err
 	}
 
 	// Step 2: Download metadata and stats for all nodes in pause metadata
@@ -578,7 +600,7 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 		go func(nodeId service.NodeID) {
 			defer dWaiter.Done()
 
-			nodeDir := fmt.Sprintf("%vnode_%v", r.task.archivePath, nodeId)
+			nodeDir := generateNodeDir(r.task.archivePath, nodeId)
 			indexMetadata, stats, err := r.downloadNodeMetadataAndStats(nodeDir)
 			if err != nil {
 				err = fmt.Errorf("couldn't get metadata and stats err: %v for nodeId %v, resume task ID: %v", err, nodeId, r.task.taskId)
@@ -601,7 +623,7 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 	}
 	if errStr.Len() != 0 {
 		err = errors.New(errStr.String())
-		return
+		return nil, err
 	}
 
 	// Step 3: get replacement node for old paused data
@@ -629,13 +651,13 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 		if !ok {
 			err = fmt.Errorf("unable to read indexMetadata for node %v", nodeId)
 			logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
-			return
+			return nil, err
 		}
 		statsPerNode, ok := statsPerNode[nodeId]
 		if !ok {
 			err = fmt.Errorf("unable to read stats for node %v", nodeId)
 			logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
-			return
+			return nil, err
 		}
 
 		// TODO: replace with planner calls to generate []IndexerNode with []IndexUsage
@@ -649,7 +671,7 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 			nil)
 		if err != nil {
 			logging.Errorf("Resumer::masterGenerateResumePlan: couldn't generate index usage. err: %v for task ID: %v", err, r.task.taskId)
-			return
+			return nil, err
 		}
 
 		indexerNode.Indexes = indexerUsage
@@ -658,9 +680,25 @@ func (r *Resumer) masterGenerateResumePlan() (newNodes map[service.NodeID]servic
 
 		resumeNodes = append(resumeNodes, indexerNode)
 	}
-	newNodes, err = StubExecuteTenantAwarePlanForResume(config["clusterAddr"].String(), resumeNodes)
+	rdts, err := planner.ExecuteTenantAwarePlanForResume(config["clusterAddr"].String(),
+		r.task.taskId, string(r.pauseMgr.genericMgr.nodeInfo.NodeID), r.task.bucket, resumeNodes)
+	if err != nil {
+		err = fmt.Errorf("master failed to plan resume. Reason: %v", err)
+		return nil, err
+	}
+	for _, rdt := range rdts {
+		shardPaths, ok := pauseMetadata.Data[service.NodeID(rdt.UploaderId)]
+		if !ok {
+			err = fmt.Errorf("no shard paths found for uploader %v", rdt.UploaderId)
+			logging.Errorf("Resumer::masterGenerateResumePlan: %v for task ID: %v", err,
+				r.task.taskId)
+			return nil, err
+		}
+		rdt.ShardPaths = shardPaths
+	}
+	logging.Infof("Resumer::masterGenerateResumePlan create resume download tokens %v", rdts)
 
-	return
+	return rdts, nil
 }
 
 func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planner.LocalIndexMetadata, stats map[string]interface{}, err error) {
@@ -728,7 +766,49 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 	return
 }
 
-func StubExecuteTenantAwarePlanForResume(clusterUrl string, resumeNodes []*planner.IndexerNode) (map[service.NodeID]service.NodeID, error) {
-	logging.Infof("Resumer::StubExecuteTenantAwarePlanForResume: TODO: call actual planner")
-	return nil, nil
+// followerResumeBuckets performs resume tasks on the called follower
+// It performs the following steps:
+// 1. Download metadata and stats
+// 2. Download plasma shards
+// 3. restore indexes in common.INDEX_STATE_RECOVERED state
+// Returns: []client.IndexIdList - it a list of list of indexes to build grouped by stream state
+func (r *Resumer) followerResumeBuckets(rdt *common.ResumeDownloadToken) error {
+	nodeDir := generateNodeDir(r.task.archivePath, service.NodeID(rdt.UploaderId))
+
+	// TODO: make all these downloads async. blocking go threads for networks downloads
+	// is bad design
+
+	metadata, stats, err := r.downloadNodeMetadataAndStats(nodeDir)
+	if err != nil {
+		err = fmt.Errorf("couldn't download metadata/stats uploaded by %v, err: %v",
+			rdt.UploaderId, err)
+		logging.Errorf("Resumer::followerResumeBucket: %v", err)
+		return err
+	}
+
+	logging.Infof(
+		"Resumer::followerResumeBucket: downloaded metadata of %v indexes and stats (count=%v) for task ID %v",
+		len(metadata.IndexDefinitions), len(stats), r.task.taskId,
+	)
+
+	shardPaths := rdt.ShardPaths
+	for shardId, shardPath := range shardPaths {
+		shardPaths[shardId] = generateShardPath(nodeDir, shardPath)
+	}
+
+	cancelCh := r.task.ctx.Done()
+	_, err = r.pauseMgr.downloadShardsWithoutLock(shardPaths, r.task.taskId, r.task.bucket,
+		r.task.archivePath, "", cancelCh)
+	if err != nil {
+		err = fmt.Errorf("couldn't download plasma shards %v; err: %v for task ID: %v",
+			rdt.ShardPaths, err, r.task.taskId)
+
+		logging.Errorf("Resumer::followerResumeBucket: %v", err)
+		return err
+	}
+	logging.Infof("Resumer::followerResumeBucket: successfully downloaded shards for task ID %v",
+		r.task.taskId)
+
+	// TODO: recover indexes and if required change state to common.INDEX_STATE_RECOVERED
+	return nil
 }

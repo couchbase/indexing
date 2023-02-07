@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -371,6 +372,7 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 		cancelCh:    cancelCh,
 		doneCh:      cancelCh,
 		progressCh:  nil,
+		respCh:      respCh,
 	}
 
 	psm.supvMsgch <- msg
@@ -786,7 +788,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
-	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
+	if err = m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
 		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
@@ -795,7 +797,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 
 	pauser := NewPauser(m, task, m.pauseTokensById[params.ID], m.pauseDoneCallback)
 
-	if err := m.setPauser(params.ID, pauser); err != nil {
+	if err = m.setPauser(params.ID, pauser); err != nil {
 		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
@@ -1144,29 +1146,29 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 //   - Bucket: name of the bucket to be paused
 //   - RemotePath: object store path
 //   - DryRun: if this is a dryRun of resume
-func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
+func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 	const _Resume = "PauseServiceManager::Resume:"
 
 	const args = "taskId: %v, bucket: %v, remotePath: %v, dryRun: %v"
 	logging.Infof("%v Called. "+args, _Resume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
-	defer logging.Infof("%v Returned %v. "+args, _Resume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
-
 	// Update the task to set this node as master
 	task := m.taskSetMasterAndUpdateType(params.ID, service.TaskTypeBucketResume)
 	if task == nil || task.isPause {
-		err = service.ErrNotFound
+		err := service.ErrNotFound
 		logging.Errorf("%v taskId %v (from PrepareResume) not found", _Resume, params.ID)
 		return err
 	}
 
 	// Set bst_RESUMING state
-	err = m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
+	err := m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
 	if err != nil {
+		logging.Errorf("%v failed to set bucket state; err: %v for task ID: %v", _Resume,
+			err, params.ID)
 		return err
 	}
 
 	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
-		// TODO: Cleanup
+		logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
 		return err
 	}
 
@@ -1175,11 +1177,13 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 	resumer := NewResumer(m, task, m.pauseTokensById[params.ID])
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
+		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
 		return err
 	}
 
 	resumer.startWorkers()
 
+	logging.Infof("%v started resume with task ID %v", _Resume, params.ID)
 	return nil
 }
 
@@ -2011,4 +2015,42 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 // not a part of Pauser/Resumer object as it can be garbage collected while this is running
 func monitorBucketForPauseResume(bucket string, isPause bool) {
 	logging.Infof("Pauser::startWathcer: TODO: monitor bucket monitoring enpoint for bucket %v, under pause? %v", bucket, isPause)
+}
+
+func CancellableTaskRunnerWithContext(ctx context.Context, cancelledError error) func(func() error) error {
+	return func(executor func() error) error {
+		if ctx == nil {
+			return cancelledError
+		}
+		closeCh := ctx.Done()
+		return CancellableTaskRunnerWithChannel(closeCh, cancelledError)(executor)
+	}
+}
+
+func CancellableTaskRunnerWithChannel(closeCh <-chan struct{}, cancelledError error) func(func() error) error {
+	return func(executor func() error) error {
+		select {
+		case <-closeCh:
+			return cancelledError
+		default:
+			return executor()
+		}
+	}
+}
+
+// generateNodeDir joins archivePath and nodeId to create a node directory used during pause resume
+// nodeDir ends with filepath.Seperator(/)
+func generateNodeDir(archivePath string, nodeId service.NodeID) string {
+	separator := string(filepath.Separator)
+	archivePath = strings.TrimSuffix(archivePath, separator)
+	return filepath.Join(archivePath, fmt.Sprintf("node_%v", nodeId)) + separator
+}
+
+// generateShardPath generates a location to download shards from
+// shardPath ends with filepath.Seperator(/)
+func generateShardPath(nodeDir string, trimmedShardPath string) string {
+	separator := string(filepath.Separator)
+	trimmedShardPath = strings.TrimPrefix(trimmedShardPath, separator)
+	nodeDir = strings.TrimSuffix(nodeDir, separator)
+	return filepath.Join(nodeDir, trimmedShardPath) + separator
 }

@@ -91,7 +91,7 @@ func setPauseUploadTokenInMetakv(putId string, put *common.PauseUploadToken) {
 // This is used only on the master node of a task_PAUSE task to do the GSI orchestration.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-//  Called at the end of the pause lifecycle. It takes pauseId and any error as input.
+// Called at the end of the pause lifecycle. It takes pauseId and any error as input.
 type PauseDoneCallback func(string, error)
 
 // Pauser object holds the state of Pause orchestration
@@ -148,7 +148,7 @@ func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseTo
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
 		task:     task,
-		nodeDir:  "node_" + string(pauseMgr.genericMgr.nodeInfo.NodeID) + "/",
+		nodeDir:  generateNodeDir(task.archivePath, pauseMgr.genericMgr.nodeInfo.NodeID),
 
 		waitForTokenPublish: make(chan struct{}),
 		metakvCancel:        make(chan struct{}),
@@ -741,12 +741,12 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 // object store structure after upload:
 // archivePath/
 // └── node_<nodeId>/
-//		├── indexMetadata.json
-//		├── indexStats.json
-//		└── /plasma_storage/PauseResume/<bucketName>/<shardId>/
-//			└── plasma shard data
+//
+//	├── indexMetadata.json
+//	├── indexStats.json
+//	└── /plasma_storage/PauseResume/<bucketName>/<shardId>/
+//		└── plasma shard data
 func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
-	nodePath := p.task.archivePath + p.nodeDir
 	cfg := p.pauseMgr.config.Load()
 	cfgValue, ok := cfg["pause_resume.compression"]
 	var compression bool
@@ -768,7 +768,7 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 	ctx := p.task.ctx
 
-	logging.Tracef("Pauser::followerUploadBucketData: uploading data to path %v", nodePath)
+	logging.Tracef("Pauser::followerUploadBucketData: uploading data to path %v", p.nodeDir)
 
 	// Step 1. Gather bucket's indexes data
 	byteSlice, indexMetadata, err := p.restGetLocalIndexMetadataBinary(compression)
@@ -783,17 +783,17 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// Step 2. Upload index metadata
-	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v", nodePath, FILENAME_METADATA))
+	url, err := copier.GetPathEncoding(fmt.Sprintf("%v%v", p.nodeDir, FILENAME_METADATA))
 	if err != nil {
-		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, p.nodeDir, FILENAME_METADATA, p.task.taskId)
 		return nil, err
 	}
 	_, err = copier.UploadBytes(ctx, byteSlice, url)
 	if err != nil {
-		logging.Errorf("Pauser::followerUploadBucketData: metadata upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		logging.Errorf("Pauser::followerUploadBucketData: metadata upload failed, err: %v to %v%v for task ID: %v", err, p.nodeDir, FILENAME_METADATA, p.task.taskId)
 		return nil, err
 	}
-	logging.Infof("Pauser::followerUploadBucketData: metadata successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_METADATA, p.task.taskId)
+	logging.Infof("Pauser::followerUploadBucketData: metadata successfully uploaded to %v%v for taskId %v", p.nodeDir, FILENAME_METADATA, p.task.taskId)
 
 	// Step 3. Gather index stats
 	getIndexInstanceIds := func() []common.IndexInstId {
@@ -814,18 +814,18 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	// Step 4. Upload index stats
-	url, err = copier.GetPathEncoding(fmt.Sprintf("%v%v", nodePath, FILENAME_STATS))
+	url, err = copier.GetPathEncoding(fmt.Sprintf("%v%v", p.nodeDir, FILENAME_STATS))
 	if err != nil {
-		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_METADATA, p.task.taskId)
+		logging.Errorf("Pauser::followerUploadBucketData: url encoding failed, err: %v to %v%v for task ID: %v", err, p.nodeDir, FILENAME_METADATA, p.task.taskId)
 		return nil, err
 	}
 	_, err = copier.UploadBytes(ctx, byteSlice, url)
 	if err != nil {
-		logging.Errorf("Pauser::followerUploadBucketData: stats upload failed, err: %v to %v%v for task ID: %v", err, nodePath, FILENAME_STATS, p.task.taskId)
+		logging.Errorf("Pauser::followerUploadBucketData: stats upload failed, err: %v to %v%v for task ID: %v", err, p.nodeDir, FILENAME_STATS, p.task.taskId)
 		return nil, err
 	}
 
-	logging.Infof("Pauser::followerUploadBucketData: stats successfully uploaded to %v%v for taskId %v", nodePath, FILENAME_STATS, p.task.taskId)
+	logging.Infof("Pauser::followerUploadBucketData: stats successfully uploaded to %v%v for taskId %v", p.nodeDir, FILENAME_STATS, p.task.taskId)
 
 	// Step 5. Initiate plasma shard transfer
 	getShardIds := func() []common.ShardId {
@@ -853,12 +853,13 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 
 	// TODO: add contextWithCancel to task and reuse it here
 	closeCh := p.task.ctx.Done()
-	shardPaths, err := p.pauseMgr.copyShardsWithLock(getShardIds(), p.task.taskId, p.task.bucket, nodePath, closeCh)
+	shardPaths, err := p.pauseMgr.copyShardsWithLock(getShardIds(), p.task.taskId, p.task.bucket,
+		p.nodeDir, closeCh)
 	if err != nil {
 		return nil, err
 	}
 	for shardId, shardPath := range shardPaths {
-		shardPaths[shardId] = strings.TrimPrefix(shardPath, nodePath)
+		shardPaths[shardId] = strings.TrimPrefix(shardPath, p.nodeDir)
 	}
 	return shardPaths, nil
 }
