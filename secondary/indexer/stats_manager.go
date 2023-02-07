@@ -2888,6 +2888,9 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_returned %v\n", METRICS_PREFIX, is.TotalRowsReturned.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_scanned %v\n", METRICS_PREFIX, is.TotalRowsScanned.Value()))...)
 
+	is.memoryRss.Set(getRSS())
+	out = append(out, []byte(fmt.Sprintf("%vmemory_rss %v\n", METRICS_PREFIX, is.memoryRss.Value()))...)
+
 	w.WriteHeader(200)
 	w.Write([]byte(out))
 }
