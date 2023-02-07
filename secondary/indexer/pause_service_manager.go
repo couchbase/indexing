@@ -478,6 +478,40 @@ const (
 	bst_RESUMED
 )
 
+func (this bucketStateEnum) IsPausing() bool {
+
+	if this == bst_PREPARE_PAUSE ||
+		this == bst_PAUSING ||
+		this == bst_PAUSED {
+		return true
+	} else {
+		return false
+	}
+
+}
+
+func (this bucketStateEnum) IsResuming() bool {
+
+	if this == bst_PREPARE_RESUME ||
+		this == bst_RESUMING ||
+		this == bst_RESUMED {
+		return true
+	} else {
+		return false
+	}
+
+}
+
+func (this bucketStateEnum) IsHibernating() bool {
+
+	if this.IsPausing() || this.IsResuming() {
+		return true
+	} else {
+		return false
+	}
+
+}
+
 // String converter for bucketStateEnum type.
 func (this bucketStateEnum) String() string {
 	switch this {

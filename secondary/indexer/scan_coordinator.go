@@ -990,9 +990,9 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest)
 		}
 	}
 
-	if pauseMgr := GetPauseMgr(); pauseMgr != nil {
-		if bucketState := pauseMgr.BucketScansBlocked(scan.Bucket); bucketState != bst_NIL {
-			return fmt.Errorf("%v Bucket '%v' scans blocked while in Pause-Resume state %v", _isScanAllowed,
+	if common.IsServerlessDeployment() {
+		if bucketState := s.getBucketPauseState(scan.Bucket); bucketState.IsHibernating() {
+			return fmt.Errorf("%v Bucket '%v' scans blocked while in Pause/Resume state %v", _isScanAllowed,
 				scan.Bucket, bucketState)
 		}
 	}
@@ -1305,6 +1305,18 @@ func (s *scanCoordinator) handleUpdateBucketPauseState(cmd Message) {
 
 	s.supvCmdch <- &MsgSuccess{}
 
+}
+
+func (s *scanCoordinator) getBucketPauseState(bucket string) bucketStateEnum {
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if state, ok := s.bucketPauseState[bucket]; ok {
+		return state
+	} else {
+		return bst_NIL
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////
