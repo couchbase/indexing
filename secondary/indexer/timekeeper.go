@@ -3687,6 +3687,17 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		return
 	}
 
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip repair stream
+		if bucketState := tk.getBucketPauseStateNoLock(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Timekeeper::repairStream %v %v Skip Stream Repair due to bucket state %v", streamId,
+				keyspaceId, bucketState)
+
+			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+			return
+		}
+	}
+
 	// Start rollback if necessary:
 	needsRollback, canRollback := tk.ss.canRollbackNow(streamId, keyspaceId)
 	if canRollback {
@@ -3781,13 +3792,36 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
+	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
+	keyspaceId := restartMsg.(*MsgRestartVbuckets).GetKeyspaceId()
+
+	skipRepairDuringBucketPause := func() bool {
+
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+
+		if common.IsServerlessDeployment() {
+			//if the bucket is going to hibernate, skip repair response
+			if bucketState := tk.getBucketPauseStateNoLock(keyspaceId); bucketState.IsHibernating() {
+				logging.Infof("Timekeeper::sendRestartMsg %v %v Skip Stream Repair due to bucket state %v", streamId,
+					keyspaceId, bucketState)
+
+				delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+				return true
+			}
+		}
+		return false
+	}
+
+	if skipRepairDuringBucketPause() {
+		return
+	}
+
 	tk.supvRespch <- restartMsg
 
 	//wait on respCh
 	kvresp := <-restartMsg.(*MsgRestartVbuckets).GetResponseCh()
 
-	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
-	keyspaceId := restartMsg.(*MsgRestartVbuckets).GetKeyspaceId()
 	repairVbs := restartMsg.(*MsgRestartVbuckets).RepairVbs()
 	shutdownVbs := restartMsg.(*MsgRestartVbuckets).ConnErrVbs()
 
@@ -3798,6 +3832,10 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.lock.Lock()
 		delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 		tk.lock.Unlock()
+		return
+	}
+
+	if skipRepairDuringBucketPause() {
 		return
 	}
 
@@ -4939,4 +4977,16 @@ func getSnapshotTimestampForInst(instId common.IndexInstId, indexPartnMap IndexP
 		}
 	}
 	return minTs
+}
+
+//Caller must hold timekeeper lock when calling this function
+func (tk *timekeeper) getBucketPauseStateNoLock(keyspaceId string) bucketStateEnum {
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+
+	if state, ok := tk.bucketPauseState[bucket]; ok {
+		return state
+	} else {
+		return bst_NIL
+	}
 }

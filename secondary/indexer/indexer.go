@@ -4068,6 +4068,15 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		return
 	}
 
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip making start stream request
+		if bucketState := idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Indexer::handleInitPrepRecovery %v %v Skip Stream Request due "+
+				"to bucket state %v", streamId, keyspaceId, bucketState)
+			return
+		}
+	}
+
 	//if the stream is inactive(e.g. all indexes get dropped)
 	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
 		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v "+
@@ -4704,6 +4713,15 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 		logging.Warnf("Indexer::handleKVStreamRepair Skipped Repair "+
 			"In %v state", is)
 		return
+	}
+
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip making start stream request
+		if bucketState := idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Indexer::handleKVStreamRepair %v %v Skip Stream Request due "+
+				"to bucket state %v", streamId, keyspaceId, bucketState)
+			return
+		}
 	}
 
 	//repair is not required for inactive/prepare recovery keyspace streams
@@ -7461,6 +7479,16 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	logging.Infof("Indexer::startKeyspaceIdStream Stream: %v KeyspaceId: %v SessionId %v RestartTS %v",
 		streamId, keyspaceId, sessionId, restartTs)
 
+	bucketState := bst_NIL
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip making start stream request
+		if bucketState = idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Indexer::startKeyspaceIdStream %v %v Skip Stream Request due to bucket state %v", streamId,
+				keyspaceId, bucketState)
+			return
+		}
+	}
+
 	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, keyspaceId)
 	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, keyspaceId)
 
@@ -7814,6 +7842,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 						}
 						break retryloop
 					} else {
+						if common.IsServerlessDeployment() {
+							if bucketState = idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+								logging.Infof("Indexer::startKeyspaceIdStream %v %v %v Skip Stream Request retry due "+
+									"to bucket state %v", streamId, keyspaceId, sessionId, bucketState)
+								break retryloop
+							}
+						}
 						logging.Errorf("Indexer::startKeyspaceIdStream Stream %v KeyspaceId %v "+
 							"SessionId %v. Error from Projector %v. Retrying %v.", streamId, keyspaceId,
 							sessionId, respErr.cause, count)
@@ -11934,4 +11969,15 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
+}
+
+func (idx *indexer) getBucketPauseState(keyspaceId string) bucketStateEnum {
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+
+	if state, ok := idx.bucketPauseState[bucket]; ok {
+		return state
+	} else {
+		return bst_NIL
+	}
 }
