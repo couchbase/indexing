@@ -2719,7 +2719,7 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
 	plasma.MFragThreshold = cfg["plasma.memFragThreshold"].Float64()
 	plasma.EnableContainerSupport = cfg["plasma.EnableContainerSupport"].Bool()
-	plasma.DQThreshold = cfg["plasma.serverless.discretionaryQuotaThreshold"].Float64()
+	plasma.DQThreshold = float64(cfg["settings.thresholds.mem_low"].Int()) / 100
 
 	// hole cleaner global config
 	numHoleCleanerThreads := int(math.Ceil(float64(runtime.GOMAXPROCS(0)) *
