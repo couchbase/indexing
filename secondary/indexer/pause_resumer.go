@@ -179,6 +179,12 @@ type Resumer struct {
 
 	// Global token associated with this Resume task
 	pauseToken *PauseToken
+
+	// in-memory bookkeeping for observed tokens
+	masterTokens, followerTokens map[string]*ResumeDownloadToken
+
+	// lock protecting access to maps like masterTokens and followerTokens
+	mu sync.RWMutex
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -195,6 +201,9 @@ func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseT
 		waitForTokenPublish: make(chan struct{}),
 		metakvCancel:        make(chan struct{}),
 		pauseToken:          pauseToken,
+
+		masterTokens:   make(map[string]*ResumeDownloadToken),
+		followerTokens: make(map[string]*ResumeDownloadToken),
 	}
 
 	task.taskMu.Lock()
@@ -337,6 +346,76 @@ func (r *Resumer) addToWaitGroup() bool {
 		return true
 	}
 	return false
+}
+
+// Often, metaKV can send multiple notifications for the same state change (probably
+// due to the eventual consistent nature of metaKV). Keep track of all state changes
+// in in-memory bookkeeping and ignore the duplicate notifications
+func (r *Resumer) checkValidNotifyState(rdtId string, rdt *ResumeDownloadToken, caller string) bool {
+
+	// As the default state is "ResumeDownloadTokenPosted"
+	// do not check for valid state changes for this state
+	if rdt.State == ResumeDownloadTokenPosted {
+		return true
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var inMemToken *ResumeDownloadToken
+	var ok bool
+
+	if caller == "master" {
+		inMemToken, ok = r.masterTokens[rdtId]
+	} else if caller == "follower" {
+		inMemToken, ok = r.followerTokens[rdtId]
+	}
+
+	if ok {
+		// Token seen before, validate the state
+
+		// < for invalid state change
+		// == for duplicate notification
+		if rdt.State <= inMemToken.State {
+			logging.Warnf("Resumer::checkValidNotifyState Detected Invalid State Change Notification"+
+				" for [%v]. rdtId[%v] Local[%v] Metakv[%v]", caller, rdtId, inMemToken.State, rdt.State)
+
+			return false
+		}
+	}
+
+	return true
+}
+
+func (r *Resumer) updateInMemToken(rdtId string, rdt *ResumeDownloadToken, caller string) {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if caller == "master" {
+		r.masterTokens[rdtId] = rdt.Clone()
+	} else if caller == "follower" {
+		r.followerTokens[rdtId] = rdt.Clone()
+	}
+}
+
+func (r *Resumer) checkAllTokensDone() bool {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for rdtId, rdt := range r.masterTokens {
+		if rdt.State < ResumeDownloadTokenProcessed {
+			// Either posted or processing
+
+			logging.Infof("Resumer::checkAllTokensDone ResumeDownloadToken: rdtId[%v] is in state[%v]",
+				rdtId, rdt.State)
+
+			return false
+		}
+	}
+
+	return true
 }
 
 // failResume logs an error using the caller's logPrefix and a provided context string and aborts
