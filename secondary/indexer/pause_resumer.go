@@ -185,6 +185,10 @@ type Resumer struct {
 
 	// lock protecting access to maps like masterTokens and followerTokens
 	mu sync.RWMutex
+
+	// For cleanup
+	retErr      error
+	cleanupOnce sync.Once
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -258,7 +262,7 @@ func (r *Resumer) observeResume() {
 	if err != nil {
 		logging.Errorf("Resumer::observeResume Exiting on metaKV observe: err[%v]", err)
 
-		// TODO: cleanup tokens
+		r.finishResume(err)
 	}
 
 	logging.Infof("Resumer::observeResume exiting: err[%v]", err)
@@ -275,8 +279,7 @@ func (r *Resumer) processDownloadTokens(kve metakv.KVEntry) error {
 		if kve.Value == nil {
 			logging.Infof("Resumer::processDownloadTokens: PauseToken Deleted. Mark Done.")
 			r.cancelMetakv()
-
-			// TODO: cleanup tokens
+			r.finishResume(nil)
 		}
 
 	} else if strings.Contains(kve.Path, ResumeDownloadTokenPathPrefix) {
@@ -329,7 +332,7 @@ func (r *Resumer) processResumeDownloadToken(rdtId string, rdt *ResumeDownloadTo
 	nodeUUID := string(r.pauseMgr.nodeInfo.NodeID)
 
 	if rdt.MasterId == nodeUUID {
-		// TODO: Implement master handler and set processed
+		processed = r.processResumeDownloadTokenAsMaster(rdtId, rdt)
 	}
 
 	if rdt.FollowerId == nodeUUID && !processed {
@@ -346,6 +349,98 @@ func (r *Resumer) addToWaitGroup() bool {
 		return true
 	}
 	return false
+}
+
+func (r *Resumer) processResumeDownloadTokenAsMaster(rdtId string, rdt *ResumeDownloadToken) bool {
+
+	logging.Infof("Resumer::processResumeDownloadTokenAsMaster: rdtId[%v] rdt[%v]", rdtId, rdt)
+
+	if rdt.ResumeId != r.task.taskId {
+		logging.Warnf("Resumer::processResumeDownloadTokenAsMaster: Found ResumeDownloadToken[%v] with Unknown "+
+			"ResumeId. Expected to match local taskId[%v]", rdt, r.task.taskId)
+
+		return true
+	}
+
+	if rdt.Error != "" {
+		logging.Errorf("Resumer::processResumeDownloadTokenAsMaster: Detected PauseUploadToken[%v] in Error state."+
+			" Abort.", rdt)
+
+		r.cancelMetakv()
+		go r.finishResume(errors.New(rdt.Error))
+
+		return true
+	}
+
+	if !r.checkValidNotifyState(rdtId, rdt, "master") {
+		return true
+	}
+
+	switch rdt.State {
+
+	case ResumeDownloadTokenPosted:
+		// Follower owns token, do nothing
+
+		return false
+
+	case ResumeDownloadTokenInProgess:
+		// Follower owns token, just mark in memory maps.
+
+		r.updateInMemToken(rdtId, rdt, "master")
+		return false
+
+	case ResumeDownloadTokenProcessed:
+		// Master owns token
+
+		// Follower completed work, delete token
+		err := common.MetakvDel(PauseMetakvDir + rdtId)
+		if err != nil {
+			logging.Fatalf("Resumer::processResumeDownloadTokenAsMaster: Failed to delete ResumeDownloadToken[%v] with"+
+				" rdtId[%v] In Meta Storage: err[%v]", rdt, rdtId, err)
+			common.CrashOnError(err)
+		}
+
+		r.updateInMemToken(rdtId, rdt, "master")
+
+		if r.checkAllTokensDone() {
+			// All the followers completed work
+
+			// TODO: set progress 100%
+
+			logging.Infof("Resumer::processResumeDownloadTokenAsMaster: No Tokens Found. Mark Done.")
+
+			r.cancelMetakv()
+
+			go r.finishResume(nil)
+		}
+
+		return true
+
+	default:
+		return false
+
+	}
+
+}
+
+func (r *Resumer) finishResume(err error) {
+
+	if r.retErr == nil {
+		r.retErr = err
+	}
+
+	r.cleanupOnce.Do(r.doFinish)
+}
+
+func (r *Resumer) doFinish() {
+	logging.Infof("Resumer::doFinish Cleanup: retErr[%v]", r.retErr)
+
+	// TODO: signal others that we are cleaning up using done channel
+
+	r.cancelMetakv()
+	r.wg.Wait()
+
+	// TODO: call done callback to start the cleanup phase
 }
 
 // Often, metaKV can send multiple notifications for the same state change (probably
