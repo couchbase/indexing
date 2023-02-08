@@ -3082,6 +3082,11 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 					tk.ss.streamKeyspaceIdThrottleDuration[streamId][keyspaceId] += int64(sleepDuration)
 					tk.lock.Unlock()
 
+					keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
+					if keyspaceStats != nil {
+						keyspaceStats.numThrottles.Add(1)
+						keyspaceStats.throttleLat.Add(int64(sleepDuration))
+					}
 					logging.Debugf("Timekeeper::sendNewStabilityTs: Flusher observed write throttles for keyspaceid %v streamId %v duration %v", keyspaceId, streamId, sleepDuration)
 					time.Sleep(sleepDuration)
 				} else {
