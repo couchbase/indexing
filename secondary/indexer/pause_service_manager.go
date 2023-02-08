@@ -1172,7 +1172,7 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 
 	// Create a Resumer object to run the master orchestration loop.
 
-	resumer := NewResumer(m, task, true)
+	resumer := NewResumer(m, task, m.pauseTokensById[params.ID])
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		return err
@@ -1404,7 +1404,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 					return
 				}
 
-				resumer := NewResumer(m, task, false)
+				resumer := NewResumer(m, task, &pauseToken)
 
 				if err := m.setResumer(pauseToken.PauseId, resumer); err != nil {
 					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Resumer in bookkeeping"+

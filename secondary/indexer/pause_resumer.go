@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -65,6 +66,7 @@ func (s ResumeDownloadState) String() string {
 }
 
 const ResumeDownloadTokenTag = "ResumeDownloadToken"
+const ResumeDownloadTokenPathPrefix = PauseMetakvDir + ResumeDownloadTokenTag
 
 type ResumeDownloadToken struct {
 	MasterId   string
@@ -166,8 +168,17 @@ type Resumer struct {
 	// Thus Resumer needs to write lock task.taskMu for changes but does not need to read lock it.
 	task *taskObj
 
+	// Channels used for signalling
 	// Used to signal that the ResumeDownloadTokens have been published.
 	waitForTokenPublish chan struct{}
+	// Used to signal metakv observer to stop
+	metakvCancel chan struct{}
+
+	metakvMutex sync.RWMutex
+	wg          sync.WaitGroup
+
+	// Global token associated with this Resume task
+	pauseToken *PauseToken
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -176,12 +187,14 @@ type Resumer struct {
 //	pauseMgr - parent object (singleton)
 //	task - the task_RESUME task this object will execute
 //	master - true iff this node is the master
-func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, master bool) *Resumer {
+func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken) *Resumer {
 	resumer := &Resumer{
 		pauseMgr: pauseMgr,
 		task:     task,
 
 		waitForTokenPublish: make(chan struct{}),
+		metakvCancel:        make(chan struct{}),
+		pauseToken:          pauseToken,
 	}
 
 	task.taskMu.Lock()
@@ -228,9 +241,102 @@ func (r *Resumer) publishResumeDownloadTokens(rdts map[string]*ResumeDownloadTok
 }
 
 func (r *Resumer) observeResume() {
+	logging.Infof("Resumer::observeResume pauseToken[%v] master[%v]", r.pauseToken, r.task.isMaster())
+
 	<-r.waitForTokenPublish
 
-	// TODO: Observe Pause
+	err := metakv.RunObserveChildren(PauseMetakvDir, r.processDownloadTokens, r.metakvCancel)
+	if err != nil {
+		logging.Errorf("Resumer::observeResume Exiting on metaKV observe: err[%v]", err)
+
+		// TODO: cleanup tokens
+	}
+
+	logging.Infof("Resumer::observeResume exiting: err[%v]", err)
+}
+
+// processDownloadTokens is metakv callback, not intended to be called otherwise
+func (r *Resumer) processDownloadTokens(kve metakv.KVEntry) error {
+
+	if kve.Path == buildMetakvPathForPauseToken(r.pauseToken.PauseId) {
+		// Process PauseToken
+
+		logging.Infof("Resumer::processDownloadTokens: PauseToken path[%v] value[%s]", kve.Path, kve.Value)
+
+		if kve.Value == nil {
+			logging.Infof("Resumer::processDownloadTokens: PauseToken Deleted. Mark Done.")
+			r.cancelMetakv()
+
+			// TODO: cleanup tokens
+		}
+
+	} else if strings.Contains(kve.Path, ResumeDownloadTokenPathPrefix) {
+		// Process ResumeDownloadTokens
+
+		if kve.Value != nil {
+			rdtId, rdt, err := decodeResumeDownloadToken(kve.Path, kve.Value)
+			if err != nil {
+				logging.Errorf("Resumer::processDownloadTokens: Failed to decode ResumeDownloadToken. Ignored.")
+				return nil
+			}
+
+			r.processResumeDownloadToken(rdtId, rdt)
+
+		} else {
+			logging.Infof("Resumer::processDownloadTokens: Received empty or deleted ResumeDownloadToken path[%v]",
+				kve.Path)
+
+		}
+	}
+
+	return nil
+}
+
+func (r *Resumer) cancelMetakv() {
+	r.metakvMutex.Lock()
+	defer r.metakvMutex.Unlock()
+
+	if r.metakvCancel != nil {
+		close(r.metakvCancel)
+		r.metakvCancel = nil
+	}
+}
+
+func (r *Resumer) processResumeDownloadToken(rdtId string, rdt *ResumeDownloadToken) {
+	logging.Infof("Resumer::processResumeDownloadToken rdtId[%v] rdt[%v]", rdtId, rdt)
+	if !r.addToWaitGroup() {
+		logging.Errorf("Resumer::processResumeDownloadToken: Failed to add to resumer waitgroup.")
+		return
+	}
+
+	defer r.wg.Done()
+
+	// TODO: Check DDL running
+
+	// "processed" var ensures only the incoming token state gets processed by this
+	// call, as metakv will call parent processDownloadTokens again for each state change.
+	var processed bool
+
+	nodeUUID := string(r.pauseMgr.nodeInfo.NodeID)
+
+	if rdt.MasterId == nodeUUID {
+		// TODO: Implement master handler and set processed
+	}
+
+	if rdt.FollowerId == nodeUUID && !processed {
+		// TODO: Implement follower handler
+	}
+}
+
+func (r *Resumer) addToWaitGroup() bool {
+	r.metakvMutex.Lock()
+	defer r.metakvMutex.Unlock()
+
+	if r.metakvCancel != nil {
+		r.wg.Add(1)
+		return true
+	}
+	return false
 }
 
 // failResume logs an error using the caller's logPrefix and a provided context string and aborts
