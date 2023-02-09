@@ -336,7 +336,7 @@ func (r *Resumer) processResumeDownloadToken(rdtId string, rdt *ResumeDownloadTo
 	}
 
 	if rdt.FollowerId == nodeUUID && !processed {
-		// TODO: Implement follower handler
+		r.processResumeDownloadTokenAsFollower(rdtId, rdt)
 	}
 }
 
@@ -441,6 +441,74 @@ func (r *Resumer) doFinish() {
 	r.wg.Wait()
 
 	// TODO: call done callback to start the cleanup phase
+}
+
+func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *ResumeDownloadToken) bool {
+
+	logging.Infof("Resumer::processResumeDownloadTokenAsFollower: rdtId[%v] rdt[%v]", rdtId, rdt)
+
+	if rdt.ResumeId != r.task.taskId {
+		logging.Warnf("Resumer::processResumeDownloadTokenAsFollower: Found ResumeDownloadToken[%v] with Unknown "+
+			"PauseId. Expected to match local taskId[%v]", rdt, r.task.taskId)
+
+		return true
+	}
+
+	if !r.checkValidNotifyState(rdtId, rdt, "follower") {
+		return true
+	}
+
+	switch rdt.State {
+
+	case ResumeDownloadTokenPosted:
+		// Follower owns token, update in-memory and move to InProgress State
+
+		r.updateInMemToken(rdtId, rdt, "follower")
+
+		rdt.State = ResumeDownloadTokenInProgess
+		setResumeDownloadTokenInMetakv(rdtId, rdt)
+
+		return true
+
+	case ResumeDownloadTokenInProgess:
+		// Follower owns token, update in-memory and start pause work
+
+		r.updateInMemToken(rdtId, rdt, "follower")
+
+		go r.startResumeDownload(rdtId, rdt)
+
+		return true
+
+	case ResumeDownloadTokenProcessed:
+		// Master owns token, just mark in memory maps
+
+		r.updateInMemToken(rdtId, rdt, "follower")
+
+		return false
+
+	default:
+		return false
+	}
+}
+
+func (r *Resumer) startResumeDownload(rdtId string, rdt *ResumeDownloadToken) {
+	start := time.Now()
+	logging.Infof("Resumer::startResumeDownload: Begin work: rdtId[%v] rdt[%v]", rdtId, rdt)
+	defer logging.Infof("Resumer::startResumeDownload: Done work: rdtId[%v] rdt[%v] took[%v]",
+		rdtId, rdt, time.Since(start))
+
+	if !r.addToWaitGroup() {
+		logging.Errorf("Resumer::startResumeDownload: Failed to add to resumer waitgroup.")
+		return
+	}
+	defer r.wg.Done()
+
+	// TODO: Replace sleep with actual work
+	time.Sleep(5 * time.Second)
+
+	// work done, change state, master handler will pick it up and do cleanup.
+	rdt.State = ResumeDownloadTokenProcessed
+	setResumeDownloadTokenInMetakv(rdtId, rdt)
 }
 
 // Often, metaKV can send multiple notifications for the same state change (probably
