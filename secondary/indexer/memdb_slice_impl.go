@@ -1672,6 +1672,10 @@ func (mdb *memdbSlice) IndexInstId() common.IndexInstId {
 	return mdb.idxInstId
 }
 
+func (mdb *memdbSlice) IndexPartnId() common.PartitionId {
+	return mdb.idxPartnId
+}
+
 //IndexDefnId returns the Index DefnId this slice
 //is associated with
 func (mdb *memdbSlice) IndexDefnId() common.IndexDefnId {
@@ -1867,6 +1871,10 @@ func (mdb *memdbSlice) GetShardIds() []common.ShardId {
 }
 
 func (mdb *memdbSlice) ClearRebalRunning() {
+	// nothing to do
+}
+
+func (mdb *memdbSlice) SetRebalRunning() {
 	// nothing to do
 }
 

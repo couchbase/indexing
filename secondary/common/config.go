@@ -3027,6 +3027,21 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.serverless.transferRetries": ConfigValue{
+		3,
+		"Number of times source node will attempt to retry transfer if transfer has " +
+			"failed due to rollbackToZero",
+		3,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.serverless.refetchTokenWaitTime": ConfigValue{
+		5000, // 5000 ms
+		"Duration after which the the list of transfer tokens are refetched from metaKV",
+		5000,  // 5000ms
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.shardRebalance.execTestAction": ConfigValue{
 		false,
 		"Option to execute a test action. Used only for CI testing. Not a production setting",

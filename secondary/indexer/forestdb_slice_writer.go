@@ -1370,6 +1370,10 @@ func (fdb *fdbSlice) IndexInstId() common.IndexInstId {
 	return fdb.idxInstId
 }
 
+func (fdb *fdbSlice) IndexPartnId() common.PartitionId {
+	return 0 // Partition indexes are not supported in FDB
+}
+
 //IndexDefnId returns the Index DefnId this slice
 //is associated with
 func (fdb *fdbSlice) IndexDefnId() common.IndexDefnId {
@@ -1877,6 +1881,10 @@ func (fdb *fdbSlice) GetShardIds() []common.ShardId {
 }
 
 func (fdb *fdbSlice) ClearRebalRunning() {
+	// nothing to do
+}
+
+func (fdb *fdbSlice) SetRebalRunning() {
 	// nothing to do
 }
 

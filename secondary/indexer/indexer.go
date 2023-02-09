@@ -230,6 +230,11 @@ type indexer struct {
 	bsRunParams *runParams // bootstrap values of DDL running and inProgressIndexNames
 
 	instsPerColl map[string]map[string]map[common.IndexInstId]bool // bucket -> collId -> InstId
+
+	// Shard rebalance related book-keeping
+	globalRebalPhase    common.RebalancePhase
+	perBucketRebalPhase map[string]common.RebalancePhase
+	slicePendingClosure map[string][]Slice
 }
 
 type kvRequest struct {
@@ -1581,6 +1586,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.handleInstRecoveryResponse(msg)
 
 	case UPDATE_REBALANCE_PHASE:
+		idx.updateRebalancePhase(msg)
 		idx.sendMsgToClustMgr(msg)
 
 	default:
@@ -3241,11 +3247,18 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 				//close all the slices
 				idx.sendMonitorSliceMsg(partnInst.Sc.GetAllSlices())
 				for _, slice := range partnInst.Sc.GetAllSlices() {
+					if idx.shouldSkipSliceClose(inst.Defn.Bucket, inst.InstId) {
+						logging.Infof("PrunePartition: skipping slice closure as rebalance transfer is in progress for bucket: %v, instId: %v, partnId: %v",
+							inst.Defn.Bucket, inst.InstId, partnInst.Defn.GetPartitionId())
+						idx.slicePendingClosure[inst.Defn.Bucket] = append(idx.slicePendingClosure[inst.Defn.Bucket], slice)
+						continue
+					}
+
 					go func(partnInst PartitionInst, slice Slice) {
 						slice.Close()
 						//wipe the physical files
 						slice.Destroy()
-						logging.Infof("Prune Partiiton: destroy slice inst %v partn %v path %v",
+						logging.Infof("PrunePartition: destroy slice inst %v partn %v path %v",
 							slice.IndexInstId(), partnInst.Defn.GetPartitionId(), slice.Path())
 					}(partnInst, slice)
 				}
@@ -5053,8 +5066,16 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 				pid := partnInst.Defn.GetPartitionId()
 
 				idx.sendMonitorSliceMsg(sc.GetAllSlices())
+
 				//close all the slices
 				for _, slice := range sc.GetAllSlices() {
+					if idx.shouldSkipSliceClose(indexInst.Defn.Bucket, indexInst.InstId) {
+						logging.Infof("Indexer::cleanupIndexData skipping slice closure as rebalance transfer is in progress for bucket: %v instId: %v, partnId: %v",
+							indexInst.Defn.Bucket, indexInst.InstId, pid)
+						idx.slicePendingClosure[indexInst.Defn.Bucket] = append(idx.slicePendingClosure[indexInst.Defn.Bucket], slice)
+						continue
+					}
+
 					go func(slice Slice, pid common.PartitionId) {
 						slice.Close()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
@@ -9422,6 +9443,11 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true
 
+			idx.clearRebalancePhase(true)
+			idx.globalRebalPhase = common.RebalanceInitated
+			idx.slicePendingClosure = make(map[string][]Slice)
+			idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
+
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
 			idx.sendMsgToClustMgrAndProcessResponse(msg)
 
@@ -9460,6 +9486,7 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 			// 2) If real inst is pruned, it will be updated with correct partition list.
 			idx.updateStreamForRebalance(true)
 
+			idx.clearRebalancePhase(false)
 			idx.rebalanceRunning = false
 		} else if key == RebalanceTokenTag {
 			idx.rebalanceToken = nil
@@ -11503,5 +11530,97 @@ func (idx *indexer) canAllowDDLDuringRebalance() bool {
 	} else {
 		allowDDLDuringRebalance := idx.config["allowDDLDuringRebalance"].Bool()
 		return allowDDLDuringRebalance
+	}
+}
+
+func (idx *indexer) updateRebalancePhase(cmd Message) error {
+
+	logging.Infof("Indexer:updateRebalancePhase %v", cmd)
+
+	globalRebalPhase := cmd.(*MsgUpdateRebalancePhase).GetGlobalRebalancePhase()
+	bucketTransferPhase := cmd.(*MsgUpdateRebalancePhase).GetBucketTransferPhase()
+	idx.globalRebalPhase = globalRebalPhase
+	for bucket, transferPhase := range bucketTransferPhase {
+		idx.perBucketRebalPhase[bucket] = transferPhase
+	}
+
+	// If transfer is completed for any buckets, then close the slices
+	// of the index instances belonging to those buckets
+	for bucket, transferPhase := range idx.perBucketRebalPhase {
+		if sliceList, ok := idx.slicePendingClosure[bucket]; ok {
+			if transferPhase >= common.RebalanceTransferDone {
+				closeSlices(sliceList, "Indexer::updateRebalancePhase")
+				delete(idx.slicePendingClosure, bucket)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (idx *indexer) clearRebalancePhase(newRebal bool) {
+	logging.Infof("Indexer:clearRebalancePhase Clearing book-keeping on rebalance done")
+	idx.globalRebalPhase = common.RebalanceNotRunning
+	idx.perBucketRebalPhase = nil
+
+	// At the start of a new rebalance request, if there are slices left over
+	// in idx.slicePendingClosure, it is a bug in indexer book-keeping. Log fatal
+	// error and clear the book-keeping
+	if newRebal {
+		if len(idx.slicePendingClosure) > 0 {
+			var str string
+			for bucket, sliceList := range idx.slicePendingClosure {
+				for _, slice := range sliceList {
+					str += fmt.Sprintf("bucket: %v, instId: %v, partnId: %v\n", bucket, slice.IndexInstId(), slice.IndexPartnId())
+				}
+			}
+			logging.Fatalf("Indexer::clearRebalancePhase slicePendingClosure has some slices waiting to be closed "+
+				"at the start of new rebalance. List:\n%v", str)
+		}
+	}
+
+	for bucket, sliceList := range idx.slicePendingClosure {
+		closeSlices(sliceList, "Indexer::clearRebalancePhase")
+		delete(idx.slicePendingClosure, bucket)
+	}
+	idx.slicePendingClosure = nil
+}
+
+func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId) bool {
+	if idx.globalRebalPhase == common.RebalanceInitated {
+		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in drop phase, inst: %v", instId)
+		return true
+	}
+
+	// Rebalance planning is done and all index movements are updated
+	// at all nodes in the cluster. Check the per bucket status
+	if idx.globalRebalPhase == common.RebalanceTransferInProgress {
+		// Slice closure is allowed on a bucket only after transfer is done
+
+		if bucketTransferPhase, ok := idx.perBucketRebalPhase[bucket]; ok {
+			// If bucket transfer has moved past the minimum rebalance phase
+			// required to allow the DDL on the bucket, then return true
+			if bucketTransferPhase >= common.RebalanceTransferDone {
+				return false
+			}
+			return true
+		}
+		// Bucket is not a part of rebalance. Allow slice closure on the bucket
+		return false
+	}
+	return false // Rebalance is done - Allow slice closure
+}
+
+func closeSlices(sliceList []Slice, logPrefix string) {
+	for _, s := range sliceList {
+		go func(slice Slice) {
+			slice.Close()
+			logging.Infof("%v IndexInst %v Partition %v Close Done",
+				logPrefix, slice.IndexInstId(), slice.IndexPartnId())
+			//wipe the physical files
+			slice.Destroy()
+			logging.Infof("%v IndexInst %v Partition %v Destroy Done",
+				logPrefix, slice.IndexInstId(), slice.IndexPartnId())
+		}(s)
 	}
 }

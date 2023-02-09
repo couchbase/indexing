@@ -31,6 +31,7 @@ type Slice interface {
 	Path() string
 	Status() SliceStatus
 	IndexInstId() common.IndexInstId
+	IndexPartnId() common.PartitionId
 	IndexDefnId() common.IndexDefnId
 	IsActive() bool
 	IsDirty() bool
@@ -49,6 +50,7 @@ type Slice interface {
 
 	GetShardIds() []common.ShardId
 	ClearRebalRunning()
+	SetRebalRunning()
 
 	GetWriteUnits() uint64
 }

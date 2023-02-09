@@ -46,6 +46,7 @@ type StorageManager interface {
 type storageMgr struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
+	wrkrCh     MsgChannel // Channel to listen all messages from worker
 
 	snapshotReqCh []MsgChannel // Channel to listen for snapshot requests from scan coordinator
 
@@ -79,6 +80,11 @@ type storageMgr struct {
 	lastFlushDone int64
 
 	stm *ShardTransferManager
+
+	// List of shards that are currently in rebalance tranfser phase
+	// A shard is added to the list when transfer is initiated and
+	// cleared when transfer is done
+	shardsInTransfer map[common.ShardId][]chan bool
 }
 
 type snapshotWaiter struct {
@@ -128,6 +134,9 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		snapshotNotifych: snapshotNotifych,
 		snapshotReqCh:    snapshotReqCh,
 		config:           config,
+
+		wrkrCh:           make(chan Message, 100),
+		shardsInTransfer: make(map[common.ShardId][]chan bool),
 	}
 	s.indexInstMap.Init()
 	s.indexPartnMap.Init()
@@ -157,7 +166,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	}
 
 	if common.IsServerlessDeployment() {
-		s.stm = NewShardTransferManager(s.config)
+		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
 	} else {
 		s.stm = nil
 	}
@@ -201,6 +210,12 @@ loop:
 				break loop
 			}
 
+		case cmd, ok := <-s.wrkrCh:
+			if ok {
+				s.handleWorkerCommands(cmd)
+			} else {
+				break loop
+			}
 		}
 	}
 }
@@ -261,8 +276,15 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		START_SHARD_RESTORE,
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,
-		LOCK_SHARDS,
 		RESTORE_SHARD_DONE:
+		if s.stm != nil {
+			s.stm.ProcessCommand(cmd)
+		}
+		s.supvCmdch <- &MsgSuccess{}
+
+	case LOCK_SHARDS:
+		s.SetRebalanceRunning(cmd)
+
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		}
@@ -282,6 +304,20 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	}
 
+}
+
+func (s *storageMgr) handleWorkerCommands(cmd Message) {
+	switch cmd.GetMsgType() {
+	case SHARD_TRANSFER_RESPONSE:
+
+		shardIds := cmd.(*MsgShardTransferResp).GetShardIds()
+		respCh := cmd.(*MsgShardTransferResp).GetRespCh()
+		for _, shardId := range shardIds {
+			delete(s.shardsInTransfer, shardId)
+		}
+		logging.Infof("StorageMgr::ShardTransferResponse Clearing book-keeping for shardIds: %v", shardIds)
+		respCh <- cmd
+	}
 }
 
 // handleCreateSnapshot will create the necessary snapshots
@@ -860,6 +896,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			}
 
 			if restartTs == nil {
+
 				err = sm.rollbackAllToZero(streamId, keyspaceId)
 				if err != nil {
 					sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
@@ -1044,6 +1081,9 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 		}
 
 	} else {
+		if sm.stm != nil { // Only for shard rebalancer
+			sm.waitForTransferCompletion(slice.GetShardIds())
+		}
 		//if there is no snapshot available, rollback to zero
 		err := slice.RollbackToZero(isInitialBuild())
 		if err == nil {
@@ -1584,7 +1624,9 @@ func (s *storageMgr) handleStats(cmd Message) {
 				totalDataSize += st.Stats.DataSize
 				totalDiskSize += st.Stats.DiskSize
 				totalRecsInMem += idxStats.numRecsInMem.Value()
+				totalRecsInMem += idxStats.bsNumRecsInMem.Value()
 				totalRecsOnDisk += idxStats.numRecsOnDisk.Value()
+				totalRecsOnDisk += idxStats.bsNumRecsOnDisk.Value()
 				avgMutationRate += idxStats.avgMutationRate.Value()
 				avgDrainRate += idxStats.avgDrainRate.Value()
 				avgDiskBps += idxStats.avgDiskBps.Value()
@@ -1600,6 +1642,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 		stats.avgDiskBps.Set(avgDiskBps)
 		stats.unitsUsedActual.Set(unitsUsage)
 		if numStorageInstances > 0 {
+
 			stats.avgResidentPercent.Set(common.ComputePercent(totalRecsInMem, totalRecsOnDisk))
 		} else {
 			stats.avgResidentPercent.Set(0)
@@ -2432,7 +2475,20 @@ func (s *storageMgr) assertOnNonAlignedDiskCommit(streamId common.StreamId,
 
 func (s *storageMgr) handleShardTransfer(cmd Message) {
 	// TODO: Add a configurable setting to enable or disable disk snapshotting
-	// of shards that are in transfesr
+	// of shards that are in transfer
+
+	msg := cmd.(*MsgStartShardTransfer)
+	shardIds := msg.GetShardIds()
+
+	storageMgrCancelCh := make(chan bool)
+	storageMgrRespCh := make(chan bool)
+	msg.storageMgrCancelCh = storageMgrCancelCh
+	msg.storageMgrRespCh = storageMgrRespCh
+
+	for _, shardId := range shardIds {
+		s.shardsInTransfer[shardId] = []chan bool{storageMgrCancelCh, storageMgrRespCh}
+	}
+	logging.Infof("StorageMgr::handleShardTransfer Updated book-keeping for shardIds: %v", shardIds)
 	if s.stm != nil {
 		s.stm.ProcessCommand(cmd)
 	}
@@ -2452,6 +2508,8 @@ func (s *storageMgr) ClearRebalanceRunning(cmd Message) {
 			shardIdMap[shardId] = true
 		}
 	}
+
+	logging.Infof("StorageMgr::ClearRebalanceRunning Clearing rebalance flags for all slices with shardIds: %v", shardIdMap)
 
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
@@ -2486,5 +2544,83 @@ func (s *storageMgr) ClearRebalanceRunning(cmd Message) {
 				}
 			}
 		}
+	}
+}
+
+func (s *storageMgr) SetRebalanceRunning(cmd Message) {
+
+	start := time.Now()
+	defer logging.Infof("StorageMgr::SetRebalanceRunning Done with setting rebalance flags for all slices. elapsed: %v", time.Since(start))
+
+	shardIdMap := make(map[common.ShardId]bool)
+	shardIds := cmd.(*MsgLockUnlockShards).GetShardIds()
+	for _, shardId := range shardIds {
+		shardIdMap[shardId] = true
+	}
+
+	logging.Infof("StorageMgr::SetRebalanceRunning Setting rebalance flags for all slices with shardIds: %v", shardIdMap)
+
+	s.muSnap.Lock()
+	defer s.muSnap.Unlock()
+
+	indexPartnMap := s.indexPartnMap.Get()
+
+	//for all partitions managed by this indexer
+	for _, partnInstMap := range indexPartnMap {
+
+		for _, partnInst := range partnInstMap {
+			sc := partnInst.Sc
+
+			if len(shardIdMap) > 0 {
+				// Set rebalance running only for the slices whose shards are getting locked
+				for _, slice := range sc.GetAllSlices() {
+					sliceShards := slice.GetShardIds()
+
+					for _, sliceShard := range sliceShards {
+						if _, ok := shardIdMap[sliceShard]; ok {
+							// If any shard of the slice is getting unlocked,
+							// consider rebalance done for the slice
+							slice.SetRebalRunning()
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// If rebalance transfer is in progress, then this method
+// will cancel rebalance transfer and waits for plasma to finish
+// processing. Also, the shard transefer book-keeping is updated
+//
+// If no tranfer is in progress, then this method is a no-op
+func (sm *storageMgr) waitForTransferCompletion(shardIds []common.ShardId) {
+	transferInProgress := false
+	var cancelCh, respCh chan bool
+	for _, shardId := range shardIds {
+		if val, ok := sm.shardsInTransfer[shardId]; ok {
+			transferInProgress = true
+			cancelCh = val[0]
+			respCh = val[1]
+			break
+		}
+	}
+
+	// Shards are not being transferred. Return
+	if !transferInProgress {
+		logging.Infof("StorageMgr::waitForTransferCompletion Transer is not in progress for shardIds: %v", shardIds)
+		return
+	}
+
+	logging.Infof("StorageMgr::waitForTransferCompletion Initiating transfer cancel for shardIds: %v", shardIds)
+
+	close(cancelCh) // Cancel the transfer
+	<-respCh
+
+	logging.Infof("StorageMgr::waitForTransferCompletion Done with transfer cancel for shardIds: %v", shardIds)
+
+	// At this point, transfer is complete. Clear the book-keeping
+	for _, shardId := range shardIds {
+		delete(sm.shardsInTransfer, shardId)
 	}
 }

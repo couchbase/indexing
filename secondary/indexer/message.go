@@ -2461,6 +2461,12 @@ type MsgStartShardTransfer struct {
 
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
+
+	// These channels are used by storage manager to cancel
+	// rebalance transfer (in cases where a slice has to rollback
+	// to zero while transfer is in progress)
+	storageMgrCancelCh chan bool
+	storageMgrRespCh   chan bool
 }
 
 func (m *MsgStartShardTransfer) GetMsgType() MsgType {
@@ -2504,9 +2510,9 @@ func (m *MsgStartShardTransfer) GetPauseResumeId() string {
 	}
 }
 
-// GetBucketUUID returns the bucket undergoing pause/resume
+// GetBucket returns the bucket undergoing pause/resume
 // Returns empty string if the taskType is not common.PauseResumeTask
-func (m *MsgStartShardTransfer) GetBucketUUID() string {
+func (m *MsgStartShardTransfer) GetBucket() string {
 	switch m.taskType {
 	case common.PauseResumeTask:
 		return m.transferId
@@ -2544,6 +2550,14 @@ func (m *MsgStartShardTransfer) GetRespCh() chan Message {
 	return m.respCh
 }
 
+func (m *MsgStartShardTransfer) GetStorageMgrCancelCh() chan bool {
+	return m.storageMgrCancelCh
+}
+
+func (m *MsgStartShardTransfer) GetStorageMgrRespCh() chan bool {
+	return m.storageMgrRespCh
+}
+
 func (m *MsgStartShardTransfer) String() string {
 	var sb strings.Builder
 	sbp := &sb
@@ -2568,6 +2582,8 @@ func (m *MsgStartShardTransfer) String() string {
 type MsgShardTransferResp struct {
 	errMap     map[common.ShardId]error
 	shardPaths map[common.ShardId]string //ShardId -> Location where shard is uploaded
+	shardIds   []common.ShardId
+	respCh     chan Message
 }
 
 func (m *MsgShardTransferResp) GetMsgType() MsgType {
@@ -2580,6 +2596,14 @@ func (m *MsgShardTransferResp) GetErrorMap() map[common.ShardId]error {
 
 func (m *MsgShardTransferResp) GetShardPaths() map[common.ShardId]string {
 	return m.shardPaths
+}
+
+func (m *MsgShardTransferResp) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgShardTransferResp) GetRespCh() chan Message {
+	return m.respCh
 }
 
 type MsgShardTransferCleanup struct {
@@ -2632,19 +2656,24 @@ func (m *MsgShardTransferCleanup) String() string {
 }
 
 type MsgStartShardRestore struct {
-	shardPaths      map[common.ShardId]string
-	rebalanceId     string
-	transferTokenId string
-	destination     string
-	region          string
+	shardPaths  map[common.ShardId]string
+	taskId      string
+	transferId  string
+	destination string // destination - root s3 path where shards are stored
+	region      string
+
+	// valud task types:
+	//  * common.PauseResumeTask
+	//  * common.RebalanceTask
+	taskType common.TaskType
 
 	// The rebalance cancelCh shared with indexer to indicate
 	// any upstream cancellation of rebalance
-	cancelCh chan struct{}
+	cancelCh <-chan struct{}
 
 	// If rebalance on this node fails due to any error, doneCh
 	// is closed first. In that case, abort the restore process
-	doneCh chan struct{}
+	doneCh <-chan struct{}
 
 	// used by shard rebalancer during replica repair
 	instRenameMap map[common.ShardId]map[string]string
@@ -2661,12 +2690,48 @@ func (m *MsgStartShardRestore) GetShardPaths() map[common.ShardId]string {
 	return m.shardPaths
 }
 
+// GetRebalanceId returns the rebalance task ID.
+// Returns empty string if the taskType is not common.RebalanceTask
 func (m *MsgStartShardRestore) GetRebalanceId() string {
-	return m.rebalanceId
+	switch m.taskType {
+	case common.RebalanceTask:
+		return m.taskId
+	default:
+		return ""
+	}
 }
 
+// GetTransferTokenId returns the TransferTokenId for shard movement
+// Returns empty string if the taskType is not common.RebalanceTask
 func (m *MsgStartShardRestore) GetTransferTokenId() string {
-	return m.transferTokenId
+	switch m.taskType {
+	case common.RebalanceTask:
+		return m.transferId
+	default:
+		return ""
+	}
+}
+
+// GetPauseResumeId returns taskId for Pause/Resume op.
+// Returns empty string if the taskType is not common.PauseResumeTask
+func (m *MsgStartShardRestore) GetPauseResumeId() string {
+	switch m.taskType {
+	case common.PauseResumeTask:
+		return m.taskId
+	default:
+		return ""
+	}
+}
+
+// GetBucket returns the bucket undergoing pause/resume
+// Returns empty string if the taskType is not common.PauseResumeTask
+func (m *MsgStartShardRestore) GetBucket() string {
+	switch m.taskType {
+	case common.PauseResumeTask:
+		return m.transferId
+	default:
+		return ""
+	}
 }
 
 func (m *MsgStartShardRestore) GetDestination() string {
@@ -2681,11 +2746,16 @@ func (m *MsgStartShardRestore) GetInstRenameMap() map[common.ShardId]map[string]
 	return m.instRenameMap
 }
 
-func (m *MsgStartShardRestore) GetCancelCh() chan struct{} {
+// GetTaskType returns the type of task (common.PauseResumeTask or common.RebalanceTask)
+func (m *MsgStartShardRestore) GetTaskType() common.TaskType {
+	return m.taskType
+}
+
+func (m *MsgStartShardRestore) GetCancelCh() <-chan struct{} {
 	return m.cancelCh
 }
 
-func (m *MsgStartShardRestore) GetDoneCh() chan struct{} {
+func (m *MsgStartShardRestore) GetDoneCh() <-chan struct{} {
 	return m.doneCh
 }
 

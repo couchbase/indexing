@@ -16,6 +16,10 @@ type ShardTransferManager struct {
 	config common.Config
 	cmdCh  chan Message
 
+	// Storage manager command channel. Used to route
+	// the response of rebalance transfer status
+	supvWrkrCh chan Message
+
 	// lockedShards represent the list of shards that are locked
 	// for rebalance and are yet to be unlocked. Whenever shard
 	// rebalancer acquires lock, this map is updated. The entires
@@ -28,12 +32,13 @@ type ShardTransferManager struct {
 	sliceCloseNotifier map[common.ShardId]MsgChannel
 }
 
-func NewShardTransferManager(config common.Config) *ShardTransferManager {
+func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
 	stm := &ShardTransferManager{
 		config:             config,
 		cmdCh:              make(chan Message),
 		lockedShards:       make(map[common.ShardId]bool),
 		sliceCloseNotifier: make(map[common.ShardId]MsgChannel),
+		supvWrkrCh:         supvWrkrCh,
 	}
 
 	go stm.run()
@@ -128,6 +133,15 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	region := msg.GetRegion()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
+	storageMgrCancelCh := msg.GetStorageMgrCancelCh()
+	storageMgrRespCh := msg.GetStorageMgrRespCh()
+
+	// If storage manager is the once cancelling transfer, then this flag
+	// is set to true. In such a case, the errMap returned to caller will
+	// be modified with 'ErrIndexRollback' so that rebalancer can continue
+	// rebalance for other buckets and fail rebalance at the end. This is
+	// a no-op for pause-resume codepaths
+	isStorageMgrCancel := false
 
 	// Used by plasma to construct a path on S3
 	meta := make(map[string]interface{})
@@ -142,8 +156,8 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 			meta[plasma.GSIBucketRegion] = region
 		}
 	case common.PauseResumeTask:
-		bucketUUID := msg.GetBucketUUID()
-		meta[plasma.GSIPauseResume] = bucketUUID
+		bucket := msg.GetBucket()
+		meta[plasma.GSIPauseResume] = bucket
 	}
 
 	// Closed when all shards are done processing
@@ -234,12 +248,23 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		logging.Infof("ShardTransferManager::processShardTransferMessage All shards processing done. Sending response "+
 			"errMap: %v, shardPaths: %v, destination: %v, elapsed(sec): %v", errMap, shardPaths, destination, elapsed)
 
+		if isStorageMgrCancel {
+			logging.Infof("ShardTransferManager::processShardTransferMessage All shards processing done. "+
+				"Updating errMap as IndexRollback due to transfer cancellation invoked by storage manager. ShardIds: %v", shardIds)
+			for shardId := range errMap {
+				errMap[shardId] = ErrIndexRollback
+			}
+		}
+
 		respMsg := &MsgShardTransferResp{
 			errMap:     errMap,
 			shardPaths: shardPaths,
+			shardIds:   shardIds,
+			respCh:     respCh,
 		}
 
-		respCh <- respMsg
+		close(storageMgrRespCh)
+		stm.supvWrkrCh <- respMsg
 	}
 
 	select {
@@ -252,6 +277,10 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	case <-transferDoneCh: // All shards are done processing
 		sendResponse()
 		return
+
+	case <-storageMgrCancelCh:
+		isStorageMgrCancel = true
+		closeCancelCh()
 	}
 
 	// Incase taskCancelCh or taskDoneCh is closed first, then
@@ -330,8 +359,8 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 	start := time.Now()
 	shardPaths := msg.GetShardPaths()
-	rebalanceId := msg.GetRebalanceId()
-	ttid := msg.GetTransferTokenId()
+	var taskId, transferId string
+	taskType := msg.GetTaskType()
 	destination := msg.GetDestination()
 	region := msg.GetRegion()
 	instRenameMap := msg.GetInstRenameMap()
@@ -339,6 +368,15 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	rebalDoneCh := msg.GetDoneCh()
 	respCh := msg.GetRespCh()
 	progressCh := msg.GetProgressCh()
+
+	switch taskType {
+	case common.RebalanceTask:
+		taskId = msg.GetRebalanceId()
+		transferId = msg.GetTransferTokenId()
+	case common.PauseResumeTask:
+		taskId = msg.GetPauseResumeId()
+		transferId = msg.GetBucket()
+	}
 
 	// Closed when all shards are done processing
 	restoreDoneCh := make(chan bool)
@@ -383,12 +421,14 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	}
 
 	progressCb := func(transferStats plasma.ShardTransferStatistics) {
-		// Send the progress to rebalancer
-		progressCh <- &ShardTransferStatistics{
-			totalBytes:   transferStats.TotalBytes,
-			bytesWritten: transferStats.BytesWritten,
-			transferRate: transferStats.AvgXferRate,
-			shardId:      common.ShardId(transferStats.ShardId),
+		if progressCh != nil {
+			// Send the progress to caller
+			progressCh <- &ShardTransferStatistics{
+				totalBytes:   transferStats.TotalBytes,
+				bytesWritten: transferStats.BytesWritten,
+				transferRate: transferStats.AvgXferRate,
+				shardId:      common.ShardId(transferStats.ShardId),
+			}
 		}
 	}
 
@@ -397,8 +437,13 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			wg.Add(1)
 
 			meta := make(map[string]interface{})
-			meta[plasma.GSIRebalanceId] = rebalanceId
-			meta[plasma.GSIRebalanceTransferToken] = ttid
+			switch taskType {
+			case common.RebalanceTask:
+				meta[plasma.GSIRebalanceId] = taskId
+				meta[plasma.GSIRebalanceTransferToken] = transferId
+			case common.PauseResumeTask:
+				meta[plasma.GSIPauseResume] = transferId
+			}
 			meta[plasma.GSIShardID] = uint64(shardId)
 			meta[plasma.GSIShardUploadPath] = shardPath
 			meta[plasma.GSIStorageDir] = stm.config["storage_dir"].String()
