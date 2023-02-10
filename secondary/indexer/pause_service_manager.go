@@ -66,8 +66,12 @@ type PauseServiceManager struct {
 	pauseTokenMapMu sync.RWMutex
 
 	// Track Pausers
-	pausersById map[string]*Pauser
+	pausersById  map[string]*Pauser
 	pausersMapMu sync.Mutex
+
+	// Track Resumers
+	resumersById  map[string]*Resumer
+	resumersMapMu sync.Mutex
 
 	nodeInfo *service.NodeInfo
 }
@@ -94,6 +98,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 
 		pauseTokensById: make(map[string]*PauseToken),
 		pausersById:     make(map[string]*Pauser),
+		resumersById:    make(map[string]*Resumer),
 
 		nodeInfo: nodeInfo,
 	}
@@ -146,6 +151,37 @@ func (m *PauseServiceManager) getPauser(pauseId string) (*Pauser, bool) {
 	pauser, exists := m.pausersById[pauseId]
 
 	return pauser, exists
+}
+
+// Track Resumer based on resumeId. Resumer can be deleted by calling with nil Resumer. If there is already a Resumer
+// with the resumeId, then an error is returned.
+func (m *PauseServiceManager) setResumer(resumeId string, r *Resumer) error {
+	m.resumersMapMu.Lock()
+	defer m.resumersMapMu.Unlock()
+
+	if oldResumer, ok := m.resumersById[resumeId]; ok {
+
+		if r == nil {
+			delete(m.resumersById, resumeId)
+		} else {
+			return fmt.Errorf("conflict: Resumer[%v] with resumeId[%v] already present!", oldResumer, resumeId)
+		}
+
+	} else {
+		m.resumersById[resumeId] = r
+	}
+
+	return nil
+}
+
+// Get Resumer based on resumeId. If there is no such Resumer, then the returned boolean will be false.
+func (m *PauseServiceManager) getResumer(resumeId string) (*Resumer, bool) {
+	m.resumersMapMu.Lock()
+	defer m.resumersMapMu.Unlock()
+
+	resumer, exists := m.resumersById[resumeId]
+
+	return resumer, exists
 }
 
 // GetPauseMgr atomically gets the global PauseMgr pointer. When called from ScanCoordinator it may
@@ -750,7 +786,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
-	if err := m.initStartPhase(params.Bucket, params.ID); err != nil {
+	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
 		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return  err
 	}
@@ -769,7 +805,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	return nil
 }
 
-func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err error) {
+func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string, typ PauseTokenType) (err error) {
 
 	err = m.genericMgr.cinfo.FetchNodesAndSvsInfoWithLock()
 	if err != nil {
@@ -790,7 +826,7 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string) (err er
 		return err
 	}
 
-	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId)
+	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId, typ)
 	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
 
 	m.pauseTokenMapMu.Lock()
@@ -1129,10 +1165,21 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 		return err
 	}
 
-	// Create a Resumer object to run the master orchestration loop. It will be the only thread
-	// that changes or deletes *task after this point. It will save a pointer to itself into
-	// task.resumer and start its own goroutine, so we don't need to save a pointer to it here.
-	RunResumer(m, task, true)
+	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
+		// TODO: Cleanup
+		return err
+	}
+
+	// Create a Resumer object to run the master orchestration loop.
+
+	resumer := NewResumer(m, task, m.pauseTokensById[params.ID])
+
+	if err := m.setResumer(params.ID, resumer); err != nil {
+		return err
+	}
+
+	resumer.startWorkers()
+
 	return nil
 }
 
@@ -1271,7 +1318,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 	// Authenticate
 	if _, ok := doAuth(r, w, "PauseServiceManager::RestHandlePause:"); !ok {
 		err := fmt.Errorf("either invalid credentials or bad request")
-		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request," +
+		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request,"+
 			" err[%v]", err)
 		return
 	}
@@ -1290,7 +1337,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(bytes, &pauseToken); err != nil {
-			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to unmarshal pause token in request" +
+			logging.Errorf("PauseServiceManager::RestHandlePause: Failed to unmarshal pause token in request"+
 				" body: err[%v] bytes[%v]", err, string(bytes))
 			writeError(w, err)
 
@@ -1305,7 +1352,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 			var task *taskObj
 			if task = m.taskFind(pauseToken.PauseId); task == nil {
 				err := fmt.Errorf("failed to find task with id[%v]", pauseToken.PauseId)
-				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause" +
+				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause"+
 					": err[%v]", string(m.nodeInfo.NodeID), err)
 				writeError(w, err)
 
@@ -1317,7 +1364,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 			m.pauseTokenMapMu.Unlock()
 
 			if err := m.registerLocalPauseToken(&pauseToken); err != nil {
-				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local" +
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local"+
 					" meta: err[%v]", err)
 				writeError(w, err)
 
@@ -1326,24 +1373,49 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 
 			// TODO: Move task from prepared to running
 
-			// Move bucket to bst_PAUSING state
-			if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_PAUSE, bst_PAUSING); err != nil {
-				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to pausing" +
-					" err[%v]", err)
-				writeError(w, err)
-				return
+			if pauseToken.Type == PauseTokenPause {
+
+				// Move bucket to bst_PAUSING state
+				if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_PAUSE, bst_PAUSING); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to pausing"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback)
+
+				if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				pauser.startWorkers()
+
+			} else if pauseToken.Type == PauseTokenResume {
+
+				// Move bucket to bst_RESUMING state
+				if err := m.bucketStateSet("PauseServiceManager::RestHandlePause", task.bucket, bst_PREPARE_RESUME, bst_RESUMING); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to change bucketState to resuming"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				resumer := NewResumer(m, task, &pauseToken)
+
+				if err := m.setResumer(pauseToken.PauseId, resumer); err != nil {
+					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Resumer in bookkeeping"+
+						" err[%v]", err)
+					writeError(w, err)
+					return
+				}
+
+				resumer.startWorkers()
+
 			}
-
-			pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback)
-
-			if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
-				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping" +
-					" err[%v]", err)
-				writeError(w, err)
-				return
-			}
-
-			pauser.startWorkers()
 
 			writeOk(w)
 			return
@@ -1728,6 +1800,13 @@ const PauseTokenTag = "PauseToken"
 const PauseMetakvDir = common.IndexingMetaDir + "pause/"
 const PauseTokenPathPrefix = PauseMetakvDir + PauseTokenTag
 
+type PauseTokenType uint8
+
+const (
+	PauseTokenPause PauseTokenType = iota
+	PauseTokenResume
+)
+
 type PauseToken struct {
 	MasterId string
 	MasterIP string
@@ -1735,16 +1814,19 @@ type PauseToken struct {
 	BucketName string
 	PauseId    string
 
-	Error    string
+	Type PauseTokenType
+
+	Error string
 }
 
-func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string) *PauseToken {
+func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string, typ PauseTokenType) *PauseToken {
 	cfg := m.config.Load()
 	return &PauseToken{
 		MasterId:   cfg["nodeuuid"].String(),
 		MasterIP:   masterIP,
 		BucketName: bucketName,
 		PauseId:    pauseId,
+		Type:       typ,
 	}
 }
 
