@@ -418,7 +418,7 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 			lastReportedProgress[stats.shardId] = currProg
 		case respMsg := <-respCh:
 			resp, ok := respMsg.(*MsgShardTransferResp)
-		
+
 			if !ok || resp == nil {
 				err := fmt.Errorf("either response channel got closed or sent an invalid response")
 				logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
@@ -1925,7 +1925,7 @@ func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 		errStr := opErr.Error()
 		if !task.isPause && strings.Contains(errStr, "Not Enough Capacity To Place Tenant") ||
 			strings.Contains(errStr, "No SubCluster Below Low Usage Threshold") {
-				status = service.TaskStatusCannotResume
+			status = service.TaskStatusCannotResume
 		}
 		if !m.taskSetFailed(taskId, errStr, status) {
 			logging.Errorf("PauseServiceManager::endTask: Failed to find task while setting failed status")
@@ -2182,7 +2182,7 @@ func (psm *PauseServiceManager) RestHandleGetProgress(w http.ResponseWriter, r *
 	// is nil, we can safely assume that the work is finished and return 100.0
 	if (task.isPause && task.pauser == nil) ||
 		(task.resumer == nil) {
-			progress = 100.0
+		progress = 100.0
 	} else if task.isPause {
 		progress = task.pauser.followerProgress.GetFloat64()
 	} else {

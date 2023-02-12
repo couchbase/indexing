@@ -1,0 +1,117 @@
+@server=127.0.0.1
+@username=Administrator
+@password=asdasd
+@archivePath=s3://gsi/{{$timestamp}}
+@blobStorageRegion=us-east-1
+@bucket =travel-sample
+###
+POST http://{{server}}:9000/clusterInit HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}&dataPath={{$processEnv HOME}}/.tmp/data/n_0/data&indexPath={{$processEnv HOME}}/.tmp/data/n_0/data&eventingPath={{$processEnv HOME}}/.tmp/data/n_0/data&javaHome=&sendStats=true&services=kv,n1ql&analyticsPath={{$processEnv HOME}}/.tmp/data/n_0/data&clusterName=resume-e2e&memoryQuota=2048&afamily=ipv4&indexMemoryQuota=2048&afamilyOnly=false&nodeEncryption=on&username={{username}}&password={{password}}&port=SAME
+###
+
+POST http://{{server}}:9000/pools/default/serverGroups HTTP/1.1
+Content-Type:  application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+name=Group 2
+###
+# @name serverGrps
+GET http://{{server}}:9000/pools/default/serverGroups HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+
+###
+POST http://{{server}}:9000/{{serverGrps.response.body.$.groups[1].addNodeURI}} HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19001&user={{username}}&password={{password}}&services=kv
+###
+POST http://{{server}}:9000/pools/default/serverGroups/0/addNode HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19002&user={{username}}&password={{password}}&services=index
+###
+POST http://{{server}}:9000/{{serverGrps.response.body.$.groups[1].addNodeURI}} HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19003&user={{username}}&password={{password}}&services=index
+###
+POST http://{{server}}:9000/controller/rebalance HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+knownNodes=n_0@{{server}},n_1@{{server}},n_2@{{server}},n_3@{{server}}&ejectedNodes=
+###
+POST http://{{server}}:9000/pools/default HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+indexMemoryQuota=2048
+###
+POST http://{{server}}:9000/settings/indexes HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/x-www-form-urlencoded
+
+storageMode=plasma
+###
+DELETE http://{{server}}:9000/pools/default/buckets/default HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+
+###
+POST http://{{server}}:9000/pools/default/buckets HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+name={{bucket}}&width=1&weight=1&bucketType=couchbase&storageBackend=magma&ramQuota=1024
+
+###
+POST http://{{server}}:9499/query/service HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"statement": "create index idx on `travel-sample`(Field_1);"
+}
+
+###
+POST http://{{server}}:9114/internal/settings
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"indexer.pause_resume.blob_storage_endpoint": "http://172.16.12.104:4566"
+}
+###
+POST http://{{server}}:9000/controller/pause HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"bucket": "{{bucket}}",
+	"remote_path": "{{archivePath}}",
+	"blob_storage_region": "{{blobStorageRegion}}",
+	"rate_limit": 102400
+}
+
+###
+GET http://{{server}}:9000/pools/default/tasks
+Authorization: Basic {{username}} {{password}}
+
+###
+GET http://{{server}}:9114/test/GetTaskList HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+
+###
+GET http://{{server}}:9120/test/GetTaskList HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+
+###
+DELETE http://{{server}}:9000/pools/default/buckets/{{bucket}} HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+
+###

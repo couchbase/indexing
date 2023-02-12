@@ -2,10 +2,11 @@ package serverlesstests
 
 import (
 	"fmt"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/manager"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -21,9 +24,9 @@ import (
 )
 
 const (
-	BUCKET     string = "pause_resume" // bucket to create indexes in
-	SCOPE      string = "indexing"
-	COLLECTION string = "random"
+	pauseResumeBucket     string = "pauseResumeBucket" // bucket to create indexes in
+	pauseResumeScope      string = "indexing"
+	pauseResumeCollection string = "test"
 )
 
 // Proxies for some constants from pause_service_manager.go as tests cannot import the indexer
@@ -34,7 +37,7 @@ const (
 
 // getIndexerNodeAddrs returns ipAddr:port of each index node.
 func getIndexerNodeAddrs(t *testing.T) []string {
-	const _getIndexerNodeAddrs = "set03_pause_resume_test::getIndexerNodeAddrs:"
+	const _getIndexerNodeAddrs = "set05_pause_resume_test::getIndexerNodeAddrs:"
 
 	indexerNodeAddrs, err := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
 	FailTestIfError(err,
@@ -60,7 +63,7 @@ func skipTest() bool {
 // specified nodeAddr (ipAddr:port) and returns its TaskList response. It omits nil responses so as
 // not to mask mysterious failures by making it look like a non-trivial response was received.
 func getTaskList(nodeAddr string, t *testing.T) (taskList *service.TaskList) {
-	const _getTaskList = "set03_pause_resume_test::getTaskList:"
+	const _getTaskList = "set05_pause_resume_test::getTaskList:"
 
 	url := makeUrlForIndexNode(nodeAddr, "/test/GetTaskList")
 	resp, err := http.Get(url)
@@ -101,7 +104,7 @@ func getTaskListAll(t *testing.T) (taskLists []*service.TaskList) {
 // cancelTask calls the generic_sercvice_manager.go CancelTaskList cbauth RPC API on each index node
 // with the provided arguments.
 func cancelTask(id string, rev uint64, t *testing.T) {
-	const _cancelTask = "set03_pause_resume_test::cancelTask:"
+	const _cancelTask = "set05_pause_resume_test::cancelTask:"
 
 	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	for _, nodeAddr := range indexerNodeAddrs {
@@ -120,7 +123,7 @@ func cancelTask(id string, rev uint64, t *testing.T) {
 // preparePause calls the pause_service_manager.go PreparePause cbauth RPC API on each
 // index node with the provided arguments.
 func preparePause(id, bucket, remotePath string, t *testing.T) {
-	const _preparePause = "set03_pause_resume_test::preparePause:"
+	const _preparePause = "set05_pause_resume_test::preparePause:"
 
 	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	for _, nodeAddr := range indexerNodeAddrs {
@@ -142,7 +145,7 @@ func preparePause(id, bucket, remotePath string, t *testing.T) {
 // calling the pause_service_manager.go Pause cbauth RPC API on only one Index node, which becomes
 // the master. It returns the address of the master.
 func pause(id, bucket, remotePath string, t *testing.T) (masterAddr string) {
-	const _pause = "set03_pause_resume_test::pause:"
+	const _pause = "set05_pause_resume_test::pause:"
 
 	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	masterAddr = indexerNodeAddrs[0]
@@ -163,7 +166,7 @@ func pause(id, bucket, remotePath string, t *testing.T) (masterAddr string) {
 // prepareResume calls the pause_service_manager.go PrepareResume cbauth RPC API on each
 // index node with the provided arguments.
 func prepareResume(id, bucket, remotePath string, dryRun bool, t *testing.T) {
-	const _prepareResume = "set03_pause_resume_test::prepareResume:"
+	const _prepareResume = "set05_pause_resume_test::prepareResume:"
 
 	indexerNodeAddrs := getIndexerNodeAddrs(t)
 	for _, nodeAddr := range indexerNodeAddrs {
@@ -185,117 +188,29 @@ func prepareResume(id, bucket, remotePath string, dryRun bool, t *testing.T) {
 // calling the pause_service_manager.go Resume cbauth RPC API on only one Index node, which becomes
 // the master. It returns the address of the master.
 func resume(id, bucket, remotePath string, dryRun bool, t *testing.T) (masterAddr string) {
-	// kjc_implement
+	const _resume = "set05_pause_resume_test::resume:"
+
+	indexerNodeAddrs := getIndexerNodeAddrs(t)
+	masterAddr = indexerNodeAddrs[0]
+	restPath := fmt.Sprintf(
+		"/test/Resume?id=%v&bucket=%v&remotePath=%v&dryRun=%v",
+		id, bucket, remotePath, dryRun)
+	url := makeUrlForIndexNode(masterAddr, restPath)
+	resp, err := http.Get(url)
+	FailTestIfError(err, fmt.Sprintf("%v http.Get %v returned error", _resume, url), t)
+	defer resp.Body.Close()
+
+	_, err = ioutil.ReadAll(resp.Body)
+	FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll %v returned error", _resume, url), t)
+
 	return masterAddr
 }
 
-func TestPauseResume(rootT *testing.T) {
-	setup := func() {
-		err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-		tc.HandleError(err,"DropAllSecondaryIndexes in pause resume setup")
-		log.Printf("Setting up cluster with sample data")
-		ok, err := clusterutility.ServerGroupExists(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 1")
-		tc.HandleError(err, "Fetch group info")
-		if !ok {
-			err = clusterutility.AddServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 1")
-			log.Printf("Added server group 1")
-		}
-
-		ok, err = clusterutility.ServerGroupExists(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 2")
-		tc.HandleError(err, "Fetch group info")
-		if !ok {
-			err = clusterutility.AddServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 2")
-			log.Printf("Added server group 2")
-		}
-		tc.HandleError(err, "Create Server group 2")
-		resetCluster(rootT)
-		numDocs = 100000
-
-		kvutility.CreateBucket(BUCKET, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512", "")
-
-		kvutility.WaitForBucketCreation(BUCKET, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0]})
-
-		manifest := kvutility.CreateCollection(BUCKET, SCOPE, COLLECTION, clusterconfig.Username, clusterconfig.Password, clusterconfig.KVAddress)
-		cid := kvutility.WaitForCollectionCreation(BUCKET, SCOPE, COLLECTION, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0]}, manifest)
-
-		CreateDocsForCollection(BUCKET, cid, numDocs)
-
-		indexName := "index_eyeColor"
-
-		err = secondaryindex.CreateSecondaryIndex3(indexName, BUCKET, SCOPE, COLLECTION, indexManagementAddress, "",
-			[]string{"eyeColor"}, nil, false, nil, common.SINGLE, nil, true, defaultIndexActiveTimeout, nil)
-		tc.HandleError(err, "Error in creating the index")
-
-		err = mc.DeleteAllCommandTokens()
-		tc.HandleError(err, "Failed to delete all command token during setup")
-
-		statIsZero := func (substr string, stats map[string]interface{}) bool {
-			for stat, val := range stats {
-				if strings.Contains(stat, substr) && val.(float64) < 1 {
-					return true
-				}
-			}
-			return false
-		}
-
-		log.Printf("Waiting for index to catch up to kv")
-
-		for start, i := time.Now(), 0; ; i++ {
-			stats := secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
-
-			for stat, val := range stats {
-				for _, st := range []string{"num_docs_", "items_count"} {
-					if strings.Contains(stat, st) {
-						log.Printf("\ti[%d] stat[%v] val[%v]", i, stat, val)
-					}
-				}
-			}
-
-			if statIsZero("num_docs_pending", stats) && statIsZero("num_docs_queued", stats) {
-				log.Printf("Done waiting, both num_docs_pending and num_docs_queued are 0")
-				break
-			}
-
-			if time.Since(start) > 5 * time.Minute {
-				rootT.Fatalf("Indexes not caught up after 5 Mins!")
-				break
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-
-		log.Printf("Created keyspace %v.%v.%v with %v docs and %v index", BUCKET, SCOPE, COLLECTION, numDocs, indexName)
-	}
-
-	destroy := func() {
-		log.Printf("Cleaning up cluster of sample data")
-		err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-		tc.HandleError(err, "Error in DropAllSecondaryIndexes on PauseResume bucket")
-
-		kvutility.EnableBucketFlush(BUCKET, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-		kvutility.FlushBucket(BUCKET, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-
-		kvutility.DeleteBucket(BUCKET, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-
-		log.Printf("Deleted %v bucket with indexes from cluster", BUCKET)
-	}
-
-	setup()
-	defer destroy()
-
-	const (
-		pauseTaskId   = "pauseTaskId"
-		resumeTaskId  = "resumeTaskId"
-		remotePath    = "file:///tmp/TestPause"
-		archivePath   = "/tmp/TestPause/" // tweaked version of remotePath stored in the tasks
-		rev           = uint64(0) // rev for CancelTask; so far does not matter for Pause-Resume
-		numIndexNodes = 2
-	)
-
-	numNodeTasks := 0
-
-	rootT.Run("PreparePause", func(t *testing.T) {
-		const _TestPreparePause = "set03_pause_resume_test::_TestPreparePause:"
+func runPause(t *testing.T, numIndexNodes int, pauseTaskId, remotePath, archivePath string,
+	rev uint64) *indexer.PauseMetadata {
+	var pauseMetadata *indexer.PauseMetadata
+	t.Run("PreparePause", func(t *testing.T) {
+		const _TestPreparePause = "set05_pause_resume_test::_TestPreparePause:"
 
 		log.Printf("%v Before start, calling GetTaskList", _TestPreparePause)
 		taskLists := getTaskListAll(t)
@@ -305,14 +220,14 @@ func TestPauseResume(rootT *testing.T) {
 
 		// PreparePause
 		log.Printf("%v Calling PreparePause", _TestPreparePause)
-		preparePause(pauseTaskId, BUCKET, remotePath, t)
+		preparePause(pauseTaskId, pauseResumeBucket, remotePath, t)
 		log.Printf("%v Calling GetTaskList(PreparePause)", _TestPreparePause)
 		taskLists = getTaskListAll(t)
 		if len(taskLists) != numIndexNodes {
 			t.Fatalf("%v After PreparePause expected %v getTaskListAll replies, got %v", _TestPreparePause,
 				numIndexNodes, len(taskLists))
 		}
-		numNodeTasks = 1 // number of tasks expected in each node's task list
+		numNodeTasks := 1 // number of tasks expected in each node's task list
 		for _, taskList := range taskLists {
 			if len(taskList.Tasks) != numNodeTasks {
 				t.Fatalf("%v PreparePause expected len(taskList.Tasks) = %v, got %v", _TestPreparePause,
@@ -332,9 +247,9 @@ func TestPauseResume(rootT *testing.T) {
 					service.TaskTypePrepared, task.Type)
 			}
 			val := task.Extra["bucket"]
-			if val != BUCKET {
+			if val != pauseResumeBucket {
 				t.Fatalf("%v PreparePause expected bucket '%v', got '%v'", _TestPreparePause,
-					BUCKET, val)
+					pauseResumeBucket, val)
 			}
 			val = task.Extra["archivePath"]
 			if val != archivePath {
@@ -354,8 +269,8 @@ func TestPauseResume(rootT *testing.T) {
 		}
 	})
 
-	rootT.Run("Pause", func(t *testing.T) {
-		const _TestPause = "set03_pause_resume_test.go::TestPause:"
+	t.Run("Pause", func(t *testing.T) {
+		const _TestPause = "set05_pause_resume_test.go::TestPause:"
 
 		secondaryindex.ChangeIndexerSettings("indexer.pause_resume.compression", false, clusterconfig.Username, clusterconfig.Password, kvaddress)
 
@@ -368,14 +283,14 @@ func TestPauseResume(rootT *testing.T) {
 
 		// Pause
 		log.Printf("%v Calling Pause", _TestPause)
-		masterAddr := pause(pauseTaskId, BUCKET, remotePath, t)
+		masterAddr := pause(pauseTaskId, pauseResumeBucket, remotePath, t)
 		start := time.Now().Unix()
 		log.Printf("%v Calling GetTaskList(Pause) on masterAddr: %v", _TestPause, masterAddr)
 		taskList := getTaskList(masterAddr, t)
 		if taskList == nil {
 			t.Fatalf("%v After Pause expected master's TaskList, got nil", _TestPause)
 		}
-		numNodeTasks = 2 // number of tasks expected in master node's task list
+		numNodeTasks := 2 // number of tasks expected in master node's task list
 		if len(taskList.Tasks) != numNodeTasks {
 			t.Fatalf("%v Pause expected len(taskList.Tasks) = %v, got %v", _TestPause,
 				numNodeTasks, len(taskList.Tasks))
@@ -393,8 +308,8 @@ func TestPauseResume(rootT *testing.T) {
 				service.TaskTypeBucketResume, task.Type)
 		}
 		val := task.Extra["bucket"]
-		if val != BUCKET {
-			t.Fatalf("%v Pause expected bucket '%v', got '%v'", _TestPause, BUCKET, val)
+		if val != pauseResumeBucket {
+			t.Fatalf("%v Pause expected bucket '%v', got '%v'", _TestPause, pauseResumeBucket, val)
 		}
 		val = task.Extra["archivePath"]
 		if val != archivePath {
@@ -426,22 +341,33 @@ func TestPauseResume(rootT *testing.T) {
 
 		// Read and verify /tmp/TestPause/pauseMetadata.json
 		filePath := archivePath + indexer.FILENAME_PAUSE_METADATA
-		versionJson, err := tc.ReadFileToString(filePath)
+		metadataJson, err := tc.ReadFileToString(filePath)
 		if err != nil {
 			t.Fatalf("%v Pause ReadFileToString(%v) returned error: %v", _TestPause, filePath, err)
 		}
-		log.Printf("%v got PauseMetadata: %v",_TestPause,versionJson)
+		metadataBytes, err := common.ChecksumAndUncompress([]byte(metadataJson))
+		if err != nil {
+			t.Fatalf("%v Pause ChecksumAndUncompress returned error: %v", _TestPause, err)
+		}
+		pauseMetadata = new(indexer.PauseMetadata)
+		if err = json.Unmarshal(metadataBytes, pauseMetadata); err != nil {
+			t.Fatalf("%v couldn't unmarshal saved data to type; err: %v", _TestPause, err)
+		}
+		log.Printf("%v read pause metadata as: %v", _TestPause, pauseMetadata)
 		expectedJson := common.GetLocalInternalVersion()
-		if !strings.Contains(versionJson, fmt.Sprintf("\"version\":\"%v\"", expectedJson)) {
-			t.Fatalf("%v Pause expected versionJson '%v', got '%v'", _TestPause, expectedJson,
-				versionJson)
+		if !expectedJson.Equals(common.InternalVersion(pauseMetadata.Version)) {
+			t.Fatalf("%v Pause expected version '%v', got '%v'", _TestPause, expectedJson,
+				pauseMetadata.Version)
+		}
+		if len(pauseMetadata.Data) != 2 {
+			t.Fatalf("%v coudln't pause on all nodes. expected %v, got %v", _TestPause, 2, len(pauseMetadata.Data))
 		}
 
 		secondaryindex.ChangeIndexerSettings("indexer.pause_resume.compression", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	})
 
-	rootT.Run("CancelPause", func(t *testing.T) {
-		const _TestPreparePauseAndPrepareResume = "set03_pause_resume_test::CancelPause:"
+	t.Run("CancelPause", func(t *testing.T) {
+		const _TestPreparePauseAndPrepareResume = "set05_pause_resume_test::CancelPause:"
 		// CancelTask
 		log.Printf("%v Calling CancelTask", _TestPreparePauseAndPrepareResume)
 		cancelTask(pauseTaskId, rev, t)
@@ -451,7 +377,7 @@ func TestPauseResume(rootT *testing.T) {
 			t.Fatalf("%v After CancelTask expected %v getTaskListAll replies, got %v", _TestPreparePauseAndPrepareResume,
 				numIndexNodes, len(taskLists))
 		}
-		numNodeTasks = 0 // number of tasks expected in each node's task list
+		numNodeTasks := 0 // number of tasks expected in each node's task list
 		for _, taskList := range taskLists {
 			if len(taskList.Tasks) != numNodeTasks {
 				t.Fatalf("%v CancelTask expected len(taskList.Tasks) = %v, got %v", _TestPreparePauseAndPrepareResume,
@@ -460,95 +386,373 @@ func TestPauseResume(rootT *testing.T) {
 		}
 	})
 
-	rootT.Run("PrepareResume", func(t *testing.T) {
-		const _TestPrepareResume = "set03_pause_resume_test::_TestPrepareResume:"
-		if skipTest() {
-			log.Printf("%v Test skipped", _TestPrepareResume)
-			return
-		}
+	return pauseMetadata
+}
 
-		log.Printf("%v Before start, calling GetTaskList", _TestPrepareResume)
-		taskLists := getTaskListAll(t)
-		if len(taskLists) != numIndexNodes {
-			t.Fatalf("%v Before start expected %v getTaskListAll replies, got %v", _TestPrepareResume, numIndexNodes, len(taskLists))
-		}
-		dryRun := false
+func runResume(t *testing.T, numIndexNodes int, resumeTaskId, remotePath, archivePath string,
+	rev uint64) {
+	runs := []bool{true, false}
 
-		log.Printf("%v Calling PrepareResume", _TestPrepareResume)
-		prepareResume(resumeTaskId, BUCKET, remotePath, dryRun, t)
-		log.Printf("%v Calling GetTaskList(PrepareResume)", _TestPrepareResume)
-		taskLists = getTaskListAll(t)
-		if len(taskLists) != numIndexNodes {
-			t.Fatalf("%v After PrepareResume expected %v getTaskListAll replies, got %v", _TestPrepareResume,
-				numIndexNodes, len(taskLists))
-		}
-		numNodeTasks := 1 // number of tasks expected in each node's task list
-		for _, taskList := range taskLists {
+	for _, dryRun := range runs {
+		t.Run(fmt.Sprintf("PrepareResume/dryRun-%v", dryRun), func(t *testing.T) {
+			const _TestPrepareResume = "set05_pause_resume_test::_TestPrepareResume:"
+			if skipTest() {
+				log.Printf("%v Test skipped", _TestPrepareResume)
+				return
+			}
+
+			log.Printf("%v Before start, calling GetTaskList", _TestPrepareResume)
+			taskLists := getTaskListAll(t)
+			if len(taskLists) != numIndexNodes {
+				t.Fatalf("%v Before start expected %v getTaskListAll replies, got %v", _TestPrepareResume, numIndexNodes, len(taskLists))
+			}
+
+			log.Printf("%v Calling PrepareResume", _TestPrepareResume)
+			prepareResume(resumeTaskId, pauseResumeBucket, remotePath, dryRun, t)
+			log.Printf("%v Calling GetTaskList(PrepareResume)", _TestPrepareResume)
+			taskLists = getTaskListAll(t)
+			if len(taskLists) != numIndexNodes {
+				t.Fatalf("%v After PrepareResume expected %v getTaskListAll replies, got %v", _TestPrepareResume,
+					numIndexNodes, len(taskLists))
+			}
+			numNodeTasks := 1 // number of tasks expected in each node's task list
+			for _, taskList := range taskLists {
+				if len(taskList.Tasks) != numNodeTasks {
+					t.Fatalf("%v PrepareResume expected len(taskList.Tasks) = %v, got %v", _TestPrepareResume,
+						numNodeTasks, len(taskList.Tasks))
+				}
+				task := taskList.Tasks[0]
+				if task.ID != resumeTaskId {
+					t.Fatalf("%v PrepareResume expected task.ID '%v', got '%v'", _TestPrepareResume,
+						resumeTaskId, task.ID)
+				}
+				if task.Status != service.TaskStatusRunning {
+					t.Fatalf("%v PrepareResume expected task.Status '%v', got '%v'", _TestPrepareResume,
+						service.TaskStatusRunning, task.Status)
+				}
+				if task.Type != service.TaskTypePrepared {
+					t.Fatalf("%v PrepareResume expected task.Type '%v', got '%v'", _TestPrepareResume,
+						service.TaskTypePrepared, task.Type)
+				}
+				val := task.Extra["bucket"]
+				if val != pauseResumeBucket {
+					t.Fatalf("%v PrepareResume expected bucket '%v', got '%v'", _TestPrepareResume,
+						pauseResumeBucket, val)
+				}
+				val = task.Extra["dryRun"]
+				if val != dryRun {
+					t.Fatalf("%v PrepareResume expected dryRun '%v', got '%v'", _TestPrepareResume,
+						dryRun, val)
+				}
+				val = task.Extra["archivePath"]
+				if val != archivePath {
+					t.Fatalf("%v PrepareResume expected archivePath '%v', got '%v'", _TestPrepareResume,
+						archivePath, val)
+				}
+				val = task.Extra["archiveType"]
+				if val != archive_FILE {
+					t.Fatalf("%v PrepareResume expected archiveType '%v', got '%v'", _TestPrepareResume,
+						archive_FILE, val)
+				}
+				val = task.Extra["master"]
+				if val != false {
+					t.Fatalf("%v PrepareResume expected master '%v', got '%v'", _TestPrepareResume,
+						false, val)
+				}
+			}
+		})
+
+		t.Run(fmt.Sprintf("Resume/dryRun-%v", dryRun), func(t *testing.T) {
+			const _TestResume = "set05_pause_resume_test.go::TestResume:"
+
+			log.Printf("%v Before start, calling GetTaskList", _TestResume)
+			taskLists := getTaskListAll(t)
+			if len(taskLists) != numIndexNodes {
+				t.Fatalf("%v Before start expected %v getTaskListAll replies, got %v", _TestResume,
+					numIndexNodes, len(taskLists))
+			}
+
+			// Resume
+			log.Printf("%v Calling Resume", _TestResume)
+			masterAddr := resume(resumeTaskId, pauseResumeBucket, remotePath, dryRun, t)
+			start := time.Now().Unix()
+			log.Printf("%v Calling GetTaskList(Resume) on masterAddr: %v", _TestResume, masterAddr)
+			taskList := getTaskList(masterAddr, t)
+			if taskList == nil {
+				t.Fatalf("%v After Resume expected master's TaskList, got nil", _TestResume)
+			}
+			numNodeTasks := 2 // number of tasks expected in master node's task list
 			if len(taskList.Tasks) != numNodeTasks {
-				t.Fatalf("%v PrepareResume expected len(taskList.Tasks) = %v, got %v", _TestPrepareResume,
+				t.Fatalf("%v Resume expected len(taskList.Tasks) = %v, got %v", _TestResume,
 					numNodeTasks, len(taskList.Tasks))
 			}
-			task := taskList.Tasks[0]
+			task := taskList.Tasks[numNodeTasks-1]
 			if task.ID != resumeTaskId {
-				t.Fatalf("%v PrepareResume expected task.ID '%v', got '%v'", _TestPrepareResume,
-					pauseTaskId, task.ID)
+				t.Fatalf("%v Resume expected task.ID '%v', got '%v'", _TestResume, resumeTaskId, task.ID)
 			}
 			if task.Status != service.TaskStatusRunning {
-				t.Fatalf("%v PrepareResume expected task.Status '%v', got '%v'", _TestPrepareResume,
+				t.Fatalf("%v Resume expected task.Status '%v', got '%v'", _TestResume,
 					service.TaskStatusRunning, task.Status)
 			}
-			if task.Type != service.TaskTypePrepared {
-				t.Fatalf("%v PrepareResume expected task.Type '%v', got '%v'", _TestPrepareResume,
-					service.TaskTypePrepared, task.Type)
+			if task.Type != service.TaskTypeBucketResume {
+				t.Fatalf("%v Resume expected task.Type '%v', got '%v'", _TestResume,
+					service.TaskTypeBucketResume, task.Type)
 			}
 			val := task.Extra["bucket"]
-			if val != BUCKET {
-				t.Fatalf("%v PrepareResume expected bucket '%v', got '%v'", _TestPrepareResume,
-					BUCKET, val)
-			}
-			val = task.Extra["dryRun"]
-			if val != dryRun {
-				t.Fatalf("%v PrepareResume expected dryRun '%v', got '%v'", _TestPrepareResume,
-					dryRun, val)
+			if val != pauseResumeBucket {
+				t.Fatalf("%v Resume expected bucket '%v', got '%v'", _TestResume, pauseResumeBucket, val)
 			}
 			val = task.Extra["archivePath"]
 			if val != archivePath {
-				t.Fatalf("%v PrepareResume expected archivePath '%v', got '%v'", _TestPrepareResume,
-					archivePath, val)
+				t.Fatalf("%v Resume expected archivePath '%v', got '%v'", _TestResume, archivePath, val)
 			}
 			val = task.Extra["archiveType"]
 			if val != archive_FILE {
-				t.Fatalf("%v PrepareResume expected archiveType '%v', got '%v'", _TestPrepareResume,
+				t.Fatalf("%v Resume expected archiveType '%v', got '%v'", _TestResume,
 					archive_FILE, val)
 			}
 			val = task.Extra["master"]
-			if val != false {
-				t.Fatalf("%v PrepareResume expected master '%v', got '%v'", _TestPrepareResume,
-					false, val)
+			if val != true {
+				t.Fatalf("%v Resume expected master '%v', got '%v'", _TestResume, true, val)
+			}
+
+			for list := getTaskList(masterAddr, t); list != nil && len(list.Tasks) != 0; list = getTaskList(masterAddr, t) {
+				errStr := new(strings.Builder)
+				for _, task := range list.Tasks {
+					if len(task.ErrorMessage) != 0 {
+						errStr.WriteString(task.ErrorMessage)
+					}
+				}
+				if errStr.Len() != 0 {
+					t.Fatalf("%v Got error in executing Resume err: %v", _TestResume, errStr.String())
+				}
+				log.Printf("Waiting for Resume to finish since %v seconds. Current status of list: %v...", time.Now().Unix()-start, list)
+				time.Sleep(5 * time.Second)
+			}
+
+			// TODO: add post - resume checks? getLocalIndexMetadata, stats, etc
+		})
+
+		t.Run(fmt.Sprintf("CancelResume/dryRun-%v", dryRun), func(t *testing.T) {
+			const _TestCancelResume = "set05_pause_resume_test::CancelResume:"
+			log.Printf("%v Calling CancelTask", _TestCancelResume)
+			cancelTask(resumeTaskId, rev, t)
+			log.Printf("%v Calling GetTaskList()", _TestCancelResume)
+			taskLists := getTaskListAll(t)
+			if len(taskLists) != numIndexNodes {
+				t.Fatalf("%v After CancelTask expected %v getTaskListAll replies, got %v", _TestCancelResume,
+					numIndexNodes, len(taskLists))
+			}
+			numNodeTasks := 0 // number of tasks expected in each node's task list
+			for _, taskList := range taskLists {
+				if len(taskList.Tasks) != numNodeTasks {
+					t.Fatalf("%v CancelTask expected len(taskList.Tasks) = %v, got %v", _TestCancelResume,
+						numNodeTasks, len(taskList.Tasks))
+				}
+			}
+		})
+
+		t.Run(fmt.Sprintf("TokenCleanup/dryRun-%v", dryRun), func(t *testing.T) {
+			common.MetakvRecurciveDel(common.PauseMetakvDir)
+		})
+	}
+}
+
+func comparePauseMetadata(pauseMetadata *indexer.PauseMetadata,
+	idxsLocalMetadata []manager.LocalIndexMetadata) bool {
+	getShards := func(idxLocalMetadata manager.LocalIndexMetadata) []common.ShardId {
+		uniqueShardIds := make(map[common.ShardId]bool)
+		for _, topology := range idxLocalMetadata.IndexTopologies {
+			for _, indexDefn := range topology.Definitions {
+				for _, instance := range indexDefn.Instances {
+					for _, partition := range instance.Partitions {
+						for _, shard := range partition.ShardIds {
+							uniqueShardIds[shard] = true
+						}
+					}
+				}
 			}
 		}
-	})
 
-	rootT.Run("Resume", func(t *testing.T) {
-	})
-
-	rootT.Run("CancelResume", func(t *testing.T) {
-		const _TestCancelResume = "set03_pause_resume_test::CancelResume:"
-		log.Printf("%v Calling CancelTask", _TestCancelResume)
-		cancelTask(resumeTaskId, rev, t)
-		log.Printf("%v Calling GetTaskList()", _TestCancelResume)
-		taskLists := getTaskListAll(t)
-		if len(taskLists) != numIndexNodes {
-			t.Fatalf("%v After CancelTask expected %v getTaskListAll replies, got %v", _TestCancelResume,
-				numIndexNodes, len(taskLists))
+		shardIds := make([]common.ShardId, 0, len(uniqueShardIds))
+		for shardId := range uniqueShardIds {
+			shardIds = append(shardIds, shardId)
 		}
-		numNodeTasks = 0 // number of tasks expected in each node's task list
-		for _, taskList := range taskLists {
-			if len(taskList.Tasks) != numNodeTasks {
-				t.Fatalf("%v CancelTask expected len(taskList.Tasks) = %v, got %v", _TestCancelResume,
-					numNodeTasks, len(taskList.Tasks))
+
+		return shardIds
+	}
+	shardIds := make([]common.ShardId, 0)
+	for _, idxLocalMetadata := range idxsLocalMetadata {
+		shardIds = append(shardIds, getShards(idxLocalMetadata)...)
+	}
+	found := true
+	for i := 0; i < len(shardIds) && found; i++ {
+		localFound := false
+		for _, shardMap := range pauseMetadata.Data {
+			if _, ok := shardMap[shardIds[i]]; ok {
+				localFound = true
+				break
 			}
 		}
+		found = found && localFound
+	}
+	totalPausedShards := 0
+	for _, shardMap := range pauseMetadata.Data {
+		for _, _ = range shardMap {
+			totalPausedShards++
+		}
+	}
+	log.Printf("found: %v? lens: %v>=%v", found, len(shardIds), totalPausedShards)
+	return found && len(shardIds) >= totalPausedShards
+}
+
+func TestPauseResume(rootT *testing.T) {
+	var (
+		archivePath = rootT.TempDir() + "/"
+		remotePath  = fmt.Sprintf("file://%v", archivePath)
+		indexName   = "index_eyeColor"
+		numDocs     = 100000
+	)
+
+	createBucket := func() {
+		fmt.Println("=== SETUP   CreateBucket")
+		kvutility.CreateBucket(pauseResumeBucket, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512", "")
+
+		kvutility.WaitForBucketCreation(pauseResumeBucket, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0]})
+
+		manifest := kvutility.CreateCollection(pauseResumeBucket, pauseResumeScope, pauseResumeCollection, clusterconfig.Username, clusterconfig.Password, clusterconfig.KVAddress)
+		cid := kvutility.WaitForCollectionCreation(pauseResumeBucket, pauseResumeScope, pauseResumeCollection, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[0]}, manifest)
+
+		CreateDocsForCollection(pauseResumeBucket, cid, numDocs)
+	}
+
+	createAndScanIndex := func() {
+
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(company)", indexName, pauseResumeBucket, pauseResumeScope, pauseResumeCollection)
+		execN1qlAndWaitForStatus(n1qlStatement, pauseResumeBucket, pauseResumeScope, pauseResumeCollection, indexName, "Ready", rootT)
+
+		waitForStatsUpdate()
+
+		// Scan the index
+		scanIndexReplicas(indexName, pauseResumeBucket, pauseResumeScope, pauseResumeCollection, []int{0, 1}, numScans, numDocs, 1, rootT)
+	}
+
+	deleteBucket := func() {
+
+		fmt.Println("=== CLEANUP   DeleteBucket")
+		err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+		tc.HandleError(err, "Error in DropAllSecondaryIndexes on PauseResume bucket")
+
+		kvutility.EnableBucketFlush(pauseResumeBucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.FlushBucket(pauseResumeBucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+		kvutility.DeleteBucket(pauseResumeBucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+		log.Printf("Deleted %v bucket with indexes from cluster", pauseResumeBucket)
+
+	}
+
+	tuneCluster := func() {
+
+		fmt.Println("=== SETUP   TestPauseResume")
+		err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+		tc.HandleError(err, "DropAllSecondaryIndexes in pause resume setup")
+		log.Printf("Setting up cluster with sample data")
+		ok, err := clusterutility.ServerGroupExists(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 1")
+		tc.HandleError(err, "Fetch group info")
+		if !ok {
+			err = clusterutility.AddServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 1")
+			log.Printf("Added server group 1")
+		}
+
+		ok, err = clusterutility.ServerGroupExists(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 2")
+		tc.HandleError(err, "Fetch group info")
+		if !ok {
+			err = clusterutility.AddServerGroup(kvaddress, clusterconfig.Username, clusterconfig.Password, "Group 2")
+			log.Printf("Added server group 2")
+		}
+		tc.HandleError(err, "Create Server group 2")
+		resetCluster(rootT)
+
+	}
+
+	setup := func() {
+
+		tuneCluster()
+
+		createBucket()
+
+		createAndScanIndex()
+
+		log.Printf("Created keyspace %v.%v.%v with %v docs and %v index", pauseResumeBucket, pauseResumeScope, pauseResumeCollection, numDocs, indexName)
+	}
+
+	destroy := func() {
+		fmt.Println("=== Cleanup   TestPauseResume")
+
+		var dirTree strings.Builder
+		dirTree.WriteString("->" + archivePath + "\n")
+		filepath.WalkDir(archivePath, func(path string, d fs.DirEntry, err error) error {
+			if path == archivePath {
+				return nil
+			}
+			n := len(strings.Split(path, string(filepath.Separator)))
+			dirTree.WriteString(fmt.Sprintf("%*v%v\n", n*2-1, "->", strings.TrimPrefix(path, archivePath)))
+			return nil
+		})
+		log.Printf("Final structure of archivePath: \n%v", dirTree.String())
+
+		deleteBucket()
+	}
+
+	setup()
+	defer destroy()
+
+	const (
+		pauseTaskId   = "pauseTaskId"
+		resumeTaskId  = "resumeTaskId"
+		rev           = uint64(0) // rev for CancelTask; so far does not matter for Pause-Resume
+		numIndexNodes = 2
+	)
+
+	pauseMetadata := runPause(rootT, numIndexNodes, pauseTaskId, remotePath, archivePath, rev)
+
+	fmt.Println("=== Cleanup   RemoveIndexes")
+	err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	tc.HandleError(err, "DropAllSecondaryIndexes in pause resume setup")
+	// sleeping for DDLs to finish
+	time.Sleep(5*time.Minute + 1*time.Second)
+	tc.HandleError(common.MetakvRecurciveDel(mc.DeleteDDLCommandTokenPath), "Couldn't delete DeleteDDLCommandTokens")
+
+	fmt.Println("=== RUN   ResumeOnSameCluster")
+
+	// resume on same cluster
+	runResume(rootT, numIndexNodes, resumeTaskId, remotePath, archivePath, rev)
+
+	rootT.Run("PostResumeChecks", func(t *testing.T) {
+
+		indexMetadataPath := fmt.Sprintf("/getLocalIndexMetadata?useETag=false&bucket=%v", pauseResumeBucket)
+		idxsMetadata := make([]manager.LocalIndexMetadata, 0, 2)
+
+		for _, host := range getIndexerNodeAddrs(rootT) {
+			var idxerLocalMetadata manager.LocalIndexMetadata
+			url := makeUrlForIndexNode(host, indexMetadataPath)
+			resp, err := http.Get(url)
+			tc.HandleError(err, "failed to fetch local index metadata for "+host)
+			body, err := ioutil.ReadAll(resp.Body)
+			tc.HandleError(err, "Read response body")
+			log.Printf("Got Local Metadata from %v as -> %v", host, string(body))
+			tc.HandleError(json.Unmarshal(body, &idxerLocalMetadata), "failed to unmarshal body for "+host)
+			resp.Body.Close()
+
+			idxsMetadata = append(idxsMetadata, idxerLocalMetadata)
+		}
+
+		metadataMatches := comparePauseMetadata(pauseMetadata, idxsMetadata)
+		if !metadataMatches {
+			t.Fatalf("Mismatch in paused metadata and recovered metadata.\nPause Metadata: %v\nNew Index Metadata: %v", pauseMetadata, idxsMetadata)
+		}
+
 	})
 
 }
