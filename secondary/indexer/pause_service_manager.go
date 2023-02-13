@@ -1320,12 +1320,86 @@ func (m *PauseServiceManager) cleanupResumeDownloadTokens(rdts map[string]*commo
 		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokens: Cleaning Up %v %v", rdtId, rdt)
 
 		if rdt.MasterId == string(m.nodeInfo.NodeID) {
-			// TODO: cleanup pause upload token for master
+			if err := m.cleanupResumeDownloadTokenForMaster(rdtId, rdt); err != nil {
+				return err
+			}
 		}
 
 		if rdt.FollowerId == string(m.nodeInfo.NodeID) {
-			// TODO: cleanup pause upload token for follower
+			if err := m.cleanupResumeDownloadTokenForFollower(rdtId, rdt); err != nil {
+				return err
+			}
 		}
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupResumeDownloadTokenForMaster(rdtId string, rdt *common.ResumeDownloadToken) error {
+
+	switch rdt.State {
+	case common.ResumeDownloadTokenProcessed, common.ResumeDownloadTokenError:
+
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokenForMaster: Cleanup Token %v %v",
+			rdtId, rdt)
+
+		if err := common.MetakvDel(PauseMetakvDir + rdtId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForMaster: Unable to delete"+
+				"ResumeDownloadToken[%v] In Meta Storage: err[%v]", rdt, err)
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupResumeDownloadTokenForFollower(rdtId string, rdt *common.ResumeDownloadToken) error {
+
+	switch rdt.State {
+
+	case common.ResumeDownloadTokenPosted:
+		// Followers just acknowledged the token, just delete the token from metakv.
+
+		err := common.MetakvDel(PauseMetakvDir + rdtId)
+		if err != nil {
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Unable to delete[%v]"+
+				" in Meta Storage: err[%v]", rdt, err)
+			return err
+		}
+
+	case common.ResumeDownloadTokenInProgess:
+		// Follower node might be uploading the data
+
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Initiating cleanup for"+
+			" rdtId[%v], rdt[%v]", rdtId, rdt)
+
+		resumer, exists := m.getResumer(rdt.ResumeId)
+		if !exists {
+			err := fmt.Errorf("Resumer with resumeId[%v] not found", rdt.ResumeId)
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Failed to find"+
+				" resumer: err[%v]", err)
+
+			return err
+		}
+
+		// Cancel resume download work using task ctx
+		if doCancelDownload := resumer.task.cancelFunc; doCancelDownload != nil {
+			doCancelDownload()
+			// TODO: Call new plasma API to cleanup local staging.
+		} else {
+			logging.Warnf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Task already cancelled")
+		}
+
+		if err := common.MetakvDel(PauseMetakvDir + rdtId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Unable to delete"+
+				" ResumeDownloadToken[%v] In Meta Storage: err[%v]", rdt, err)
+			return err
+		}
+
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Deleted rdtId[%v] from"+
+			" metakv", rdtId)
+
 	}
 
 	return nil
