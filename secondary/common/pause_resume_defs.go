@@ -141,14 +141,24 @@ const ResumeDownloadTokenTag = "ResumeDownloadToken"
 const ResumeDownloadTokenPathPrefix = PauseMetakvDir + ResumeDownloadTokenTag
 
 type ResumeDownloadToken struct {
-	MasterId   string
-	FollowerId string
-	ResumeId   string
-	State      ResumeDownloadState
-	BucketName string
-	Error      string
-	UploaderId string
-	ShardPaths map[ShardId]string
+	MasterId     string
+	FollowerId   string
+	FollowerHost string
+	ResumeId     string
+	State        ResumeDownloadState
+	BucketName   string
+	Error        string
+	UploaderId   string
+	ShardPaths   map[ShardId]string
+
+	// Set of index instances belonging to resumed shard
+	InstIds     []IndexInstId
+	RealInstIds []IndexInstId
+	IndexInsts  []IndexInst
+
+	// IDs of the main and back index shards for the group
+	// of index instances being resumed.
+	ShardIds []ShardId
 }
 
 func (rdt *ResumeDownloadToken) Clone() *ResumeDownloadToken {
