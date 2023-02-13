@@ -1169,21 +1169,68 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
 		logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
+		m.runResumeCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
 
 	// Create a Resumer object to run the master orchestration loop.
 
-	resumer := NewResumer(m, task, m.pauseTokensById[params.ID])
+	resumer := NewResumer(m, task, m.pauseTokensById[params.ID], m.resumeDoneCallback)
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
+		m.runResumeCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
 
 	resumer.startWorkers()
 
 	logging.Infof("%v started resume with task ID %v", _Resume, params.ID)
+	return nil
+}
+
+// resumeDoneCallback is the Resumer.doneCb callback function.
+// Download work is interrupted based on resumeId, using cancel ctx from task in resumer.
+func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
+
+	resumer, exists := m.getResumer(resumeId)
+	if !exists {
+		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to find Resumer with resumeId[%v]", resumeId)
+		return
+	}
+
+	// If there is an error, set it in the task, otherwise, delete task from task list.
+	// TODO: Check if follower task should be handled differently.
+	m.endTask(err, resumeId)
+
+	isMaster := resumer.task.isMaster()
+
+	if err := m.runResumeCleanupPhase(resumeId, isMaster); err != nil {
+		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to run cleanup: err[%v]", err)
+		return
+	}
+
+	if err := m.setResumer(resumeId, nil); err != nil {
+		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to unset Resumer: err[%v]", err)
+		return
+	}
+
+	logging.Infof("PauseServiceManager::resumeDoneCallback Resume Done: isMaster %v, err: %v",
+		isMaster, err)
+}
+
+func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bool) error {
+
+	logging.Infof("PauseServiceManager::runResumeCleanupPhase resumeId[%v] isMaster[%v]", resumeId, isMaster)
+
+	if isMaster {
+		// TODO: cleanup global master token
+	}
+
+	// TODO: Get tokens and cleanup ResumeDownloadTokens
+
+	// TODO: Cleanup pause token in local meta
+
 	return nil
 }
 
@@ -1408,7 +1455,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 					return
 				}
 
-				resumer := NewResumer(m, task, &pauseToken)
+				resumer := NewResumer(m, task, &pauseToken, m.resumeDoneCallback)
 
 				if err := m.setResumer(pauseToken.PauseId, resumer); err != nil {
 					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Resumer in bookkeeping"+

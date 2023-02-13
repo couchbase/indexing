@@ -487,8 +487,6 @@ func (p *Pauser) doFinish() {
 	p.Cleanup()
 	p.wg.Wait()
 
-	// TODO: move this to inside the done callback
-
 	// call done callback to start the cleanup phase
 	p.doneCb(p.pauseToken.PauseId, p.retErr)
 }

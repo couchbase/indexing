@@ -94,6 +94,9 @@ func setResumeDownloadTokenInMetakv(rdtId string, rdt *common.ResumeDownloadToke
 // This is used only on the master node of a task_RESUME task to do the GSI orchestration.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+//  Called at the end of the resume lifecycle. It takes resumeId and any error as input.
+type ResumeDoneCallback func(string, error)
+
 // Resumer object holds the state of Resume orchestration
 type Resumer struct {
 	// otherIndexAddrs is "host:port" to all the known Index Service nodes EXCLUDING this one
@@ -129,6 +132,7 @@ type Resumer struct {
 	// For cleanup
 	retErr      error
 	cleanupOnce sync.Once
+	doneCb      ResumeDoneCallback
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -136,8 +140,11 @@ type Resumer struct {
 //
 //	pauseMgr - parent object (singleton)
 //	task - the task_RESUME task this object will execute
-//	master - true iff this node is the master
-func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken) *Resumer {
+//	pauseToken - global master PauseToken
+//	doneCb - callback that initiates the cleanup phase
+func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken,
+	doneCb ResumeDoneCallback) *Resumer {
+
 	resumer := &Resumer{
 		pauseMgr: pauseMgr,
 		task:     task,
@@ -148,6 +155,8 @@ func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseT
 
 		masterTokens:   make(map[string]*common.ResumeDownloadToken),
 		followerTokens: make(map[string]*common.ResumeDownloadToken),
+
+		doneCb: doneCb,
 	}
 
 	task.taskMu.Lock()
@@ -236,6 +245,9 @@ func (r *Resumer) processDownloadTokens(kve metakv.KVEntry) error {
 		logging.Infof("Resumer::processDownloadTokens: PauseToken path[%v] value[%s]", kve.Path, kve.Value)
 
 		if kve.Value == nil {
+			// During cleanup, PauseToken is deleted by master and serves as a signal for
+			// all observers on followers to stop.
+
 			logging.Infof("Resumer::processDownloadTokens: PauseToken Deleted. Mark Done.")
 			r.cancelMetakv()
 			r.finishResume(nil)
@@ -399,7 +411,8 @@ func (r *Resumer) doFinish() {
 	r.cancelMetakv()
 	r.wg.Wait()
 
-	// TODO: call done callback to start the cleanup phase
+	// call done callback to start the cleanup phase
+	r.doneCb(r.pauseToken.PauseId, r.retErr)
 }
 
 func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *common.ResumeDownloadToken) bool {
