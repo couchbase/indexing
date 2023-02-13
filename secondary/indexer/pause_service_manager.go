@@ -939,7 +939,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 				return nil, nil, err
 			}
 
-			if mpt.PauseId == pauseId {
+			if mpt.PauseId == pauseId && mpt.Type == PauseTokenPause {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
@@ -1231,12 +1231,101 @@ func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bo
 		}
 	}
 
-	// TODO: Get tokens and cleanup ResumeDownloadTokens
+	_, rdts, err := m.getCurrResumeTokens(resumeId)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Error Fetching Metakv Tokens: err[%v]", err)
+		return err
+	}
+
+	if len(rdts) != 0 {
+		if err := m.cleanupResumeDownloadTokens(rdts); err != nil {
+			logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Error Cleaning Tokens: err[%v]", err)
+			return err
+		}
+	}
 
 	if err := m.cleanupLocalPauseToken(resumeId); err != nil {
 		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseToken in local"+
 			" meta: err[%v]", err)
 		return err
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseToken,
+	rdts map[string]*common.ResumeDownloadToken, err error) {
+
+	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(metaInfo) == 0 {
+		return nil, nil, nil
+	}
+
+	rdts = make(map[string]*common.ResumeDownloadToken)
+
+	for _, kv := range metaInfo {
+
+		if strings.Contains(kv.Path, PauseTokenTag) {
+			var mpt PauseToken
+			if err = json.Unmarshal(kv.Value, &mpt); err != nil {
+				return nil, nil, err
+			}
+
+			if mpt.PauseId == resumeId && mpt.Type == PauseTokenResume {
+				if pt != nil {
+					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for resumeId[%v]"+
+						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+				}
+
+				pt = &mpt
+			}
+
+		} else if strings.Contains(kv.Path, common.ResumeDownloadTokenTag) {
+			rdtId, rdt, err := decodeResumeDownloadToken(kv.Path, kv.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if rdt.ResumeId == resumeId {
+				if oldRDT, ok := rdts[rdtId]; ok {
+					return nil, nil, fmt.Errorf("encountered duplicate ResumeDownloadToken for"+
+						" resumeId[%v] oldRDT[%v] rdt[%v] rdtId[%v]", rdt.ResumeId, oldRDT, rdt, rdtId)
+				}
+
+				rdts[rdtId] = rdt
+			}
+
+		} else {
+			logging.Warnf("PauseServiceManager::getCurrResumeTokens: Unknown Token %v. Ignored.", kv)
+
+		}
+
+	}
+
+	return pt, rdts, nil
+}
+
+func (m *PauseServiceManager) cleanupResumeDownloadTokens(rdts map[string]*common.ResumeDownloadToken) error {
+
+	if rdts == nil || len(rdts) <= 0 {
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokens: No Tokens Found For Cleanup")
+		return nil
+	}
+
+	for rdtId, rdt := range rdts {
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokens: Cleaning Up %v %v", rdtId, rdt)
+
+		if rdt.MasterId == string(m.nodeInfo.NodeID) {
+			// TODO: cleanup pause upload token for master
+		}
+
+		if rdt.FollowerId == string(m.nodeInfo.NodeID) {
+			// TODO: cleanup pause upload token for follower
+		}
 	}
 
 	return nil
