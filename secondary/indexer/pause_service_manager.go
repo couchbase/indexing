@@ -1221,15 +1221,23 @@ func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
 
 func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bool) error {
 
-	logging.Infof("PauseServiceManager::runResumeCleanupPhase resumeId[%v] isMaster[%v]", resumeId, isMaster)
+	logging.Infof("PauseServiceManager::runResumeCleanupPhase: resumeId[%v] isMaster[%v]", resumeId, isMaster)
 
 	if isMaster {
-		// TODO: cleanup global master token
+		if err := m.cleanupPauseTokenInMetakv(resumeId); err != nil {
+			logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseToken in metkv:"+
+				" err[%v]", err)
+			return err
+		}
 	}
 
 	// TODO: Get tokens and cleanup ResumeDownloadTokens
 
-	// TODO: Cleanup pause token in local meta
+	if err := m.cleanupLocalPauseToken(resumeId); err != nil {
+		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseToken in local"+
+			" meta: err[%v]", err)
+		return err
+	}
 
 	return nil
 }
@@ -1984,7 +1992,7 @@ func (m *PauseServiceManager) cleanupPauseTokenInMetakv(pauseId string) error {
 		logging.Infof("PauseServiceManager::cleanupPauseTokenInMetakv Delete Global Pause Token %v", ptoken)
 
 		if err := common.MetakvDel(path); err != nil {
-			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete RebalanceToken"+
+			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete PauseToken"+
 				" from Meta Storage. %v. Err %v", ptoken, err)
 
 			return err
