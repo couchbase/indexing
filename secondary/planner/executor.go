@@ -4850,8 +4850,8 @@ func filterPartialSubClusters(subClusters []SubCluster) []SubCluster {
 //ExecuteTenantAwarePlanForResume provides index placement planning on a tenant resume .
 //Given an input cluster url and slice of index metadata for resume nodes, it will return
 //the set of resume tokens.
-func ExecuteTenantAwarePlanForResume(clusterUrl string,
-	resumeNodes []*IndexerNode) (map[string]*common.TransferToken, error) {
+func ExecuteTenantAwarePlanForResume(clusterUrl string, resumeId, masterId, bucket string,
+	resumeNodes []*IndexerNode) (map[string]*common.ResumeDownloadToken, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil, false)
 	if err != nil {
@@ -4863,18 +4863,15 @@ func ExecuteTenantAwarePlanForResume(clusterUrl string,
 		return nil, err
 	}
 
-	if p != nil {
-		logging.Infof("************ Indexer Layout After Resume*************")
-		p.Print()
-		logging.Infof("****************************************")
+	//find destination subcluster for the resumed tenant
+	destSubCluster := findDestSubClusterForResumedTenant(p.Result, bucket)
+
+	rdts, err := genResumeDownloadToken(p.Result, destSubCluster, bucket, resumeId, masterId)
+	if err != nil {
+		return nil, err
 	}
+	return rdts, nil
 
-	filterSolution(p.Result.Placement)
-
-	//TODO
-	//genResumeToken()
-
-	return nil, nil
 }
 
 func executeTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*TenantAwarePlanner,
@@ -4948,9 +4945,237 @@ func executeTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*T
 	return tenantAwarePlanner, nil
 }
 
-//generate resume tokens from solution
-func genResumeToken(solution *Solution) {
+//findDestSubClusterForResumedTenant finds the dest subCluster for the resumed tenant.
+//In V1, resumed tenant can be planced on a single subcluster only.
+func findDestSubClusterForResumedTenant(solution *Solution, bucket string) SubCluster {
 
-	//TODO
+	//There is only one tenant resumed at a time. Find resumed nodes based on matching bucket name.
+	var destSubCluster SubCluster
 
+	for _, node := range solution.Placement {
+		for _, index := range node.Indexes {
+			if index.Bucket == bucket {
+				destSubCluster = append(destSubCluster, node)
+				break
+			}
+		}
+	}
+
+	return destSubCluster
+}
+
+//generate resume download tokens from solution
+func genResumeDownloadToken(solution *Solution,
+	destSubCluster SubCluster, bucket, resumeId,
+	masterId string) (map[string]*common.ResumeDownloadToken, error) {
+
+	// Generate a mapping between defnId -> replicaId -> instanceId.
+	defnIdToInstIdMap := getDefnIdToInstIdMap(solution)
+
+	getInstIds := func(index *IndexUsage) (common.IndexInstId /* instId*/, common.IndexInstId /*realInstId*/, error) {
+
+		if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+			instId, err := common.NewIndexInstId()
+			if err != nil {
+				return 0, 0, fmt.Errorf("Fail to generate transfer token.  Reason: %v", err)
+			}
+
+			return instId, index.InstId, nil
+		}
+		return index.InstId, 0, nil
+	}
+
+	initInstInToken := func(token *common.ResumeDownloadToken, index *IndexUsage) error {
+
+		token.IndexInsts = append(token.IndexInsts, *index.Instance)
+
+		instId, realInstId, err := getInstIds(index)
+		if err != nil {
+			return err
+		}
+		token.InstIds = append(token.InstIds, instId)
+		token.RealInstIds = append(token.RealInstIds, realInstId)
+		return nil
+	}
+
+	tokens := make(map[string]*common.ResumeDownloadToken)
+
+	initToken := func(index *IndexUsage, destNode *IndexerNode) (*common.ResumeDownloadToken, error) {
+
+		token := &common.ResumeDownloadToken{
+			MasterId:     masterId,
+			FollowerId:   destNode.NodeUUID,
+			FollowerHost: destNode.NodeId,
+			ResumeId:     resumeId,
+			State:        common.ResumeDownloadTokenPosted,
+			BucketName:   bucket,
+			UploaderId:   index.initialNode.NodeUUID,
+			ShardIds:     index.ShardIds,
+		}
+
+		if err := initInstInToken(token, index); err != nil {
+			return nil, err
+		}
+		return token, nil
+	}
+
+	addIndexToToken := func(tokenKey string, index *IndexUsage, dest *IndexerNode) error {
+
+		// Currently, planner is generating a new index instance per partition.
+		// This method will group all partitions of an index residing on a node
+		// into a single index instance
+		groupIndexInstances(index, defnIdToInstIdMap)
+
+		token, ok := tokens[tokenKey]
+		if !ok {
+			var err error
+			if token, err = initToken(index, dest); err != nil {
+				return err
+			}
+			tokens[tokenKey] = token
+		}
+
+		if token != nil {
+			sliceIndex := len(token.InstIds) - 1
+			found := false
+			instIds := token.InstIds
+			if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+				// For partitioned index, use realInstIds. If it is the first
+				// time this partition index is being processed, it will be
+				// added due to !found becoming true
+				instIds = token.RealInstIds
+			}
+
+			for i, instId := range instIds {
+				if instId == index.InstId {
+					sliceIndex = i
+					found = true
+					break
+				}
+			}
+
+			if !found { // Instance not already appended to list. Add now
+				if err := initInstInToken(token, index); err != nil {
+					return err
+				}
+
+				sliceIndex = len(token.InstIds) - 1
+			}
+
+			token.IndexInsts[sliceIndex].Defn.InstStateAtRebal = token.IndexInsts[sliceIndex].State
+			token.IndexInsts[sliceIndex].Defn.InstVersion = token.IndexInsts[sliceIndex].Version
+			token.IndexInsts[sliceIndex].Defn.ReplicaId = token.IndexInsts[sliceIndex].ReplicaId
+			token.IndexInsts[sliceIndex].Defn.Using = common.IndexType(dest.StorageMode)
+			if token.IndexInsts[sliceIndex].Pc != nil {
+				token.IndexInsts[sliceIndex].Defn.NumPartitions = uint32(token.IndexInsts[sliceIndex].Pc.GetNumPartitions())
+			}
+			token.IndexInsts[sliceIndex].Pc = nil
+
+			// Token exist for the same index replica between the same source and target.   Add partition to token.
+			token.IndexInsts[sliceIndex].Defn.Partitions = append(token.IndexInsts[sliceIndex].Defn.Partitions, index.PartnId)
+			token.IndexInsts[sliceIndex].Defn.Versions = append(token.IndexInsts[sliceIndex].Defn.Versions, index.Instance.Version)
+
+		}
+		return nil
+	}
+
+	for _, dest := range destSubCluster {
+		for _, index := range dest.Indexes {
+
+			//skip indexes which do not belong to the resumed tenant
+			if index.Bucket != bucket {
+				continue
+			}
+
+			// Primary index contians only one shard. Process primary
+			// index shard after all secondary index tokens are generated
+			// so that it can be added to one of the existing token for
+			// the shard
+			if len(index.ShardIds) == 1 {
+				continue
+			}
+
+			shardIds := make([]common.ShardId, len(index.ShardIds))
+			copy(shardIds, index.ShardIds)
+
+			// one token for every pair of shard movements of a bucket between
+			// a specific source and destination
+			sort.Slice(shardIds, func(i, j int) bool {
+				return shardIds[i] < shardIds[j]
+			})
+
+			//one token for resume of every tenant on every destination(currently there is
+			//only one tenant and destination)
+			tokenKey := fmt.Sprintf("%v %v %v", index.Bucket, index.ShardIds, dest.NodeUUID)
+			if err := addIndexToToken(tokenKey, index, dest); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Process primary indexes only
+	for _, dest := range destSubCluster {
+		for _, index := range dest.Indexes {
+
+			//skip indexes which do not belong to the resumed tenant
+			if index.Bucket != bucket {
+				continue
+			}
+
+			if len(index.ShardIds) != 1 {
+				continue
+			}
+
+			// Find a token key that contains the shard of this index
+			// Note: Since tokens are grouped based on shardId's, it is
+			// expected to have only one token matching the shardId of
+			// primary index
+			found := false
+			for tokenKey, token := range tokens {
+
+				if index.Bucket != token.IndexInsts[0].Defn.Bucket {
+					continue
+				}
+
+				if dest.NodeUUID != token.FollowerId {
+					continue
+				}
+
+				for _, shardId := range token.ShardIds {
+					if index.ShardIds[0] == shardId {
+						// Add index to this token
+						addIndexToToken(tokenKey, index, dest)
+						found = true
+						break
+					}
+
+				}
+			}
+			// Could be only primary indexes in this shard
+			// Generate a new token and add it to the group
+			if !found {
+				tokenKey := fmt.Sprintf("%v %v %v", index.Bucket, index.ShardIds, dest.NodeUUID)
+				if err := addIndexToToken(tokenKey, index, dest); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	result := make(map[string]*common.ResumeDownloadToken)
+	for _, token := range tokens {
+		ustr, _ := common.NewUUID()
+		rdtId := fmt.Sprintf("%s%s", common.ResumeDownloadTokenTag, ustr.Str())
+		result[rdtId] = token
+	}
+
+	logResumeDownloadTokens := func() {
+		for rdtid, token := range result {
+			logging.Infof("Generating Resume Download Token (%v) for resume (%v)", rdtid, token)
+		}
+	}
+
+	logResumeDownloadTokens()
+
+	return result, nil
 }
