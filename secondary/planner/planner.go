@@ -4202,6 +4202,8 @@ func (c *IndexerConstraint) SatisfyClusterHAConstraint(s *Solution, eligibles ma
 // IndexerNode
 //////////////////////////////////////////////////////////////
 
+const tempNodeUUID = "tempNodeUUID_"
+
 //
 // This function creates a new indexer node
 //
@@ -4209,7 +4211,7 @@ func newIndexerNode(nodeId string, sizing SizingMethod) *IndexerNode {
 
 	r := &IndexerNode{
 		NodeId:         nodeId,
-		NodeUUID:       "tempNodeUUID_" + nodeId,
+		NodeUUID:       tempNodeUUID + nodeId,
 		meetConstraint: true,
 	}
 
@@ -4226,7 +4228,7 @@ func CreateIndexerNodeWithIndexes(nodeId string, sizing SizingMethod, indexes []
 
 	r := &IndexerNode{
 		NodeId:         nodeId,
-		NodeUUID:       "tempNodeUUID_" + nodeId,
+		NodeUUID:       tempNodeUUID + nodeId,
 		Indexes:        indexes,
 		meetConstraint: true,
 	}

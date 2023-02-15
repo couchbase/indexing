@@ -17,6 +17,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/couchbase/cbauth/service"
@@ -5009,7 +5010,7 @@ func genResumeDownloadToken(solution *Solution,
 			ResumeId:     resumeId,
 			State:        common.ResumeDownloadTokenPosted,
 			BucketName:   bucket,
-			UploaderId:   index.initialNode.NodeUUID,
+			UploaderId:   strings.TrimPrefix(index.initialNode.NodeUUID, tempNodeUUID),
 			ShardIds:     index.ShardIds,
 		}
 
