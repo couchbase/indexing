@@ -1362,6 +1362,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			rebalanceId:     tt.RebalId,
 			transferTokenId: ttid,
 			respCh:          respCh,
+			syncCleanup:     false,
 		}
 
 		m.supvMsgch <- msg
@@ -1455,6 +1456,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			rebalanceId:     tt.RebalId,
 			transferTokenId: ttid,
 			respCh:          respCh,
+			syncCleanup:     false,
 		}
 
 		m.supvMsgch <- msg
@@ -1479,6 +1481,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			rebalanceId:     tt.RebalId,
 			transferTokenId: ttid,
 			respCh:          respCh,
+			syncCleanup:     false,
 		}
 
 		m.supvMsgch <- msg

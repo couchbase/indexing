@@ -2612,6 +2612,7 @@ type MsgShardTransferCleanup struct {
 	rebalanceId     string
 	transferTokenId string
 	respCh          chan bool
+	syncCleanup     bool
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
@@ -2636,6 +2637,10 @@ func (m *MsgShardTransferCleanup) GetTransferTokenId() string {
 
 func (m *MsgShardTransferCleanup) GetRespCh() chan bool {
 	return m.respCh
+}
+
+func (m *MsgShardTransferCleanup) IsSyncCleanup() bool {
+	return m.syncCleanup
 }
 
 func (m *MsgShardTransferCleanup) String() string {

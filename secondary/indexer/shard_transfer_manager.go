@@ -305,6 +305,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	respCh := msg.GetRespCh()
+	isSyncCleanup := msg.IsSyncCleanup()
 
 	meta := make(map[string]interface{})
 	meta[plasma.GSIRebalanceId] = rebalanceId
@@ -313,10 +314,31 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 		meta[plasma.GSIBucketRegion] = region
 	}
 
-	err := plasma.DoCleanup(destination, meta)
-	if err != nil {
-		logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
-			"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
+	if !isSyncCleanup { // Invoke asynchronous cleanup
+		err := plasma.DoCleanup(destination, meta, nil)
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
+				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
+		}
+	} else { // Wait for cleanup to finish
+		var wg sync.WaitGroup
+		doneCb := func(err error) {
+			logging.Infof("ShardTransferManager::processTransferCleanupMessage doneCb invoked for "+
+				"ttid: %v, rebalanceId: %v", ttid, rebalanceId)
+			if err != nil {
+				logging.Errorf("ShardTransferManager::processTransferCleanupMessage error observed during "+
+					"transfer cleanup, ttid: %v, rebalanceId: %v, err: %v", ttid, rebalanceId, err)
+			}
+			wg.Done()
+		}
+
+		wg.Add(1)
+		err := plasma.DoCleanup(destination, meta, doneCb)
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
+				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
+		}
+		wg.Wait()
 	}
 
 	elapsed := time.Since(start).Seconds()

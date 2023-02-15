@@ -620,7 +620,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
 
 		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
-		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil)
+		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil, false)
 
 		sourceToken.ShardTransferTokenState = common.ShardTokenCommit
 		setTransferTokenInMetakv(sourceId, sourceToken)
@@ -635,7 +635,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 		// Clean-up any transferred data - Currently, plasma cleans up transferred data on a successful
 		// restore. This is only a safety operation from indexer. Coming to this code means that restore
 		// is successful and this operation becomes a no-op
-		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil)
+		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil, false)
 
 		siblingToken := sr.getTokenById(siblingId)
 		if siblingToken != nil && siblingToken.TransferMode == common.TokenTransferModeCopy && siblingToken.SourceId == sr.nodeUUID {
@@ -733,14 +733,14 @@ loop:
 					// Invoke clean-up for all shards even if error is observed for one shard transfer
 					if err == ErrIndexRollback {
 						if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
-							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err)
+							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
 							return
 						} else {
 							retryCount++
 							// Clean up the transferred data with nil error and retry transfer
 							// If transfer could not be completed after configured attempts, then set
 							// error in transfer token
-							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil)
+							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil, true)
 							goto loop
 						}
 					}
@@ -780,7 +780,7 @@ func (sr *ShardRebalancer) updateTransferStatistics(ttid string, stats *ShardTra
 }
 
 func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.ShardId]string,
-	destination, region string, ttid string, tt *c.TransferToken, err error) {
+	destination, region string, ttid string, tt *c.TransferToken, err error, syncCleanup bool) {
 
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
 		"destination: %v, region: %v", ttid, destination, region)
@@ -793,6 +793,7 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		rebalanceId:     sr.rebalToken.RebalId,
 		transferTokenId: ttid,
 		respCh:          respCh,
+		syncCleanup:     syncCleanup,
 	}
 
 	sr.supvMsgch <- msg
