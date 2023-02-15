@@ -3537,9 +3537,9 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 func (idx *indexer) dispatchBuildRecoveredIndexes(msg Message) {
 
 	reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
-	if reqCtx.ReqSource != common.DDLRequestSourceShardRebalance {
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
 		idx.handleBuildRecoveredIndexes(msg)
-	} else if reqCtx.ReqSource != common.DDLRequestSourceResume {
+	} else if reqCtx.ReqSource == common.DDLRequestSourceResume {
 		idx.handleResumeRecoveredIndexes(msg)
 	}
 
