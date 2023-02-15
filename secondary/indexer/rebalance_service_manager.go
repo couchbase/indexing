@@ -1357,7 +1357,6 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 
 		respCh := make(chan bool)
 		msg := &MsgShardTransferCleanup{
-			shardPaths:      nil,
 			destination:     tt.Destination,
 			region:          tt.Region,
 			rebalanceId:     tt.RebalId,
@@ -1451,7 +1450,6 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 		respCh := make(chan bool)
 		msg := &MsgShardTransferCleanup{
-			shardPaths:      nil,
 			destination:     tt.Destination,
 			region:          tt.Region,
 			rebalanceId:     tt.RebalId,
@@ -1476,7 +1474,6 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 		respCh := make(chan bool)
 		msg := &MsgShardTransferCleanup{
-			shardPaths:      nil,
 			destination:     tt.Destination,
 			region:          tt.Region,
 			rebalanceId:     tt.RebalId,

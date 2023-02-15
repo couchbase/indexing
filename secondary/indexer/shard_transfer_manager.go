@@ -300,57 +300,30 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	logging.Infof("ShardTransferManager::processTransferCleanupMessage Initiating command: %v", msg)
 	start := time.Now()
 
-	shardPaths := msg.GetShardPaths()
 	destination := msg.GetDestination()
 	region := msg.GetRegion()
 	rebalanceId := msg.GetRebalanceId()
 	ttid := msg.GetTransferTokenId()
 	respCh := msg.GetRespCh()
 
-	// For cleanup cases where indexer does not have the information about
-	// the shardPaths
-	if len(shardPaths) == 0 {
-		meta := make(map[string]interface{})
-		meta[plasma.GSIRebalanceId] = rebalanceId
-		meta[plasma.GSIRebalanceTransferToken] = ttid
-		if region != "" {
-			meta[plasma.GSIBucketRegion] = region
-		}
-
-		err := plasma.DoCleanup(destination, meta)
-		if err != nil {
-			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
-				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
-		}
-
-		elapsed := time.Since(start).Seconds()
-		logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards, elapsed(sec): %v", elapsed)
-		// Notify the caller that cleanup has been initiated for all shards
-		respCh <- true
-		return
+	meta := make(map[string]interface{})
+	meta[plasma.GSIRebalanceId] = rebalanceId
+	meta[plasma.GSIRebalanceTransferToken] = ttid
+	if region != "" {
+		meta[plasma.GSIBucketRegion] = region
 	}
 
-	for shardId, shardPath := range shardPaths {
-		meta := make(map[string]interface{})
-		meta[plasma.GSIRebalanceId] = rebalanceId
-		meta[plasma.GSIRebalanceTransferToken] = ttid
-		meta[plasma.GSIShardID] = uint64(shardId)
-		meta[plasma.GSIShardUploadPath] = shardPath
-		if region != "" {
-			meta[plasma.GSIBucketRegion] = region
-		}
-
-		err := plasma.DoCleanup(destination, meta)
-		if err != nil {
-			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
-				"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
-		}
+	err := plasma.DoCleanup(destination, meta)
+	if err != nil {
+		logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
+			"cleanup for destination: %v, meta: %v, err: %v", destination, meta, err)
 	}
 
 	elapsed := time.Since(start).Seconds()
 	logging.Infof("ShardTransferManager::processTransferCleanupMessage Clean-up initiated for all shards, elapsed(sec): %v", elapsed)
 	// Notify the caller that cleanup has been initiated for all shards
 	respCh <- true
+	return
 }
 
 func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {

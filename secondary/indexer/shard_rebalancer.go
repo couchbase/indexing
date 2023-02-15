@@ -783,12 +783,11 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 	destination, region string, ttid string, tt *c.TransferToken, err error) {
 
 	l.Infof("ShardRebalancer::initiateShardTransferCleanup Initiating clean-up for ttid: %v, "+
-		"shard paths: %v, destination: %v, region: %v", ttid, shardPaths, destination, region)
+		"destination: %v, region: %v", ttid, destination, region)
 
 	start := time.Now()
 	respCh := make(chan bool)
 	msg := &MsgShardTransferCleanup{
-		shardPaths:      shardPaths,
 		destination:     destination,
 		region:          region,
 		rebalanceId:     sr.rebalToken.RebalId,
