@@ -268,6 +268,7 @@ func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, confi
 		mux.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
 		mux.HandleFunc("/buildIndexRebalance", handlerContext.buildIndexRequestRebalance)
 		mux.HandleFunc("/buildRecoveredIndexesRebalance", handlerContext.buildRecoveredIndexesRebalance)
+		mux.HandleFunc("/resumeRecoveredIndexes", handlerContext.resumeRecoveredIndexes)
 		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
 		mux.HandleFunc( // stripped-down version of getIndexStatus
 			"/getCachedIndexTopology", handlerContext.handleCachedIndexTopologyRequest)
@@ -604,6 +605,37 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 	req.Index.SetCollectionDefaults()
 
 	return req
+}
+
+func (m *requestHandlerContext) resumeRecoveredIndexes(w http.ResponseWriter, r *http.Request) {
+	const method string = "RequestHandler::resumeRecoveredIndexesRebalance" // for logging
+
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		return
+	}
+
+	// convert request
+	request := m.convertIndexRequest(r)
+	if request == nil {
+		rhSendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for build index")
+		return
+	}
+
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!build", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
+	if !isAllowed(creds, []string{permission}, r, w, method) {
+		return
+	}
+
+	// call the index manager to handle the DDL
+	indexIds := request.IndexIds
+	if err := m.mgr.HandleResumeRecoveredIndexes(indexIds); err == nil {
+		// No error, return success
+		rhSendIndexResponse(w)
+	} else {
+		// report failure
+		rhSendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+	}
 }
 
 //////////////////////////////////////////////////////
