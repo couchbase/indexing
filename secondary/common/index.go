@@ -847,6 +847,7 @@ const (
 	DDLRequestSourceUser DDLRequestSource = iota
 	DDLRequestSourceRebalance
 	DDLRequestSourceShardRebalance
+	DDLRequestSourceResume
 )
 
 type MetadataRequestContext struct {
@@ -863,6 +864,10 @@ func NewUserRequestContext() *MetadataRequestContext {
 
 func NewShardRebalanceRequestContext() *MetadataRequestContext {
 	return &MetadataRequestContext{ReqSource: DDLRequestSourceShardRebalance}
+}
+
+func NewResumeRequestContext() *MetadataRequestContext {
+	return &MetadataRequestContext{ReqSource: DDLRequestSourceResume}
 }
 
 // Format of the data encoding, when it is being transferred over the wire
