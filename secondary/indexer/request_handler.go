@@ -622,7 +622,7 @@ func (m *requestHandlerContext) resumeRecoveredIndexes(w http.ResponseWriter, r 
 		return
 	}
 
-	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!build", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
+	permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!build", request.Index.Bucket)
 	if !isAllowed(creds, []string{permission}, r, w, method) {
 		return
 	}

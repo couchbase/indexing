@@ -67,6 +67,7 @@ const (
 	OPCODE_UPDATE_REBALANCE_PHASE                      = OPCODE_BUILD_RECOVERED_INDEXES_REBAL + 1
 	OPCODE_REBALANCE_DONE                              = OPCODE_UPDATE_REBALANCE_PHASE + 1
 	OPCODE_INST_ASYNC_RECOVERY_DONE                    = OPCODE_REBALANCE_DONE + 1
+	OPCODE_RESUME_RECOVERED_INDEXES                    = OPCODE_INST_ASYNC_RECOVERY_DONE + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -151,6 +152,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_REBALANCE_DONE"
 	case OPCODE_INST_ASYNC_RECOVERY_DONE:
 		return "OPCODE_ASYNC_RECOVERY_DONE"
+	case OPCODE_RESUME_RECOVERED_INDEXES:
+		return "OPCODE_RESUME_RECOVERED_INDEXES"
 	}
 
 	return fmt.Sprintf("%v", op)
