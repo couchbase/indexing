@@ -85,6 +85,8 @@ type KeyspaceStats struct {
 	snapLatDist        stats.Histogram
 	lastSnapDone       stats.Int64Val
 	numForceInMemSnap  stats.Int64Val
+	throttleLat        stats.Int64Val
+	numThrottles       stats.Uint64Val
 }
 
 // KeyspaceStats.Init initializes a per-keyspace stats object.
@@ -102,6 +104,8 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.snapLatDist.InitLatency(snapLatencyDist, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 	s.lastSnapDone.Init()
 	s.numForceInMemSnap.Init()
+	s.throttleLat.Init()
+	s.numThrottles.Init()
 }
 
 func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
@@ -118,6 +122,10 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("last_snapshot_done", &s.lastSnapDone)
 	statMap.AddStatValueFiltered("num_force_inmem_snap", &s.numForceInMemSnap)
 
+	if common.IsServerlessDeployment() {
+		statMap.AddStatValueFiltered("throttle_latency_ns", &s.throttleLat)
+		statMap.AddStatValueFiltered("num_throttles", &s.numThrottles)
+	}
 	bucket := GetBucketFromKeyspaceId(s.keyspaceId)
 	if st := common.BucketSeqsTiming(bucket); st != nil {
 		statMap.AddStatValueFiltered("timings/dcp_getseqs", st)

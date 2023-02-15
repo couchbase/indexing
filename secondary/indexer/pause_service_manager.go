@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -201,7 +202,7 @@ func SetPauseMgr(pauseMgr *PauseServiceManager) {
 func (psm *PauseServiceManager) run() {
 	for {
 		select {
-		case cmd, ok := <- psm.supvCmdch:
+		case cmd, ok := <-psm.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == ADMIN_MGR_SHUTDOWN {
 					logging.Infof("PauseServiceManager::listenForCommands Shutting Down")
@@ -232,7 +233,7 @@ func (psm *PauseServiceManager) handleSupervisorCommands(cmd Message) {
 	}
 }
 
-func (psm *PauseServiceManager) handleConfigUpdate(cmd Message){
+func (psm *PauseServiceManager) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	psm.config.Store(cfgUpdate.GetConfig())
 	psm.supvCmdch <- &MsgSuccess{}
@@ -253,18 +254,18 @@ func (psm *PauseServiceManager) lockShards(shardIds []common.ShardId) error {
 	respCh := make(chan map[common.ShardId]error)
 
 	msg := &MsgLockUnlockShards{
-		mType: LOCK_SHARDS,
+		mType:    LOCK_SHARDS,
 		shardIds: shardIds,
-		respCh: respCh,
+		respCh:   respCh,
 	}
 
 	psm.supvMsgch <- msg
 
-	errMap := <- respCh
+	errMap := <-respCh
 	errBuilder := new(strings.Builder)
 	for shardId, err := range errMap {
 		if err != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to lock shard %v err: %v",shardId,err))
+			errBuilder.WriteString(fmt.Sprintf("Failed to lock shard %v err: %v", shardId, err))
 		}
 	}
 	if errBuilder.Len() == 0 {
@@ -278,18 +279,18 @@ func (psm *PauseServiceManager) unlockShards(shardIds []common.ShardId) error {
 	respCh := make(chan map[common.ShardId]error)
 
 	msg := &MsgLockUnlockShards{
-		mType: UNLOCK_SHARDS,
+		mType:    UNLOCK_SHARDS,
 		shardIds: shardIds,
-		respCh: respCh,
+		respCh:   respCh,
 	}
 
 	psm.supvMsgch <- msg
 
-	errMap := <- respCh
+	errMap := <-respCh
 	errBuilder := new(strings.Builder)
 	for shardId, err := range errMap {
 		if err != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to unlock shard %v err: %v",shardId,err))
+			errBuilder.WriteString(fmt.Sprintf("Failed to unlock shard %v err: %v", shardId, err))
 		}
 	}
 	if errBuilder.Len() == 0 {
@@ -299,13 +300,13 @@ func (psm *PauseServiceManager) unlockShards(shardIds []common.ShardId) error {
 	return errors.New(errBuilder.String())
 }
 
-func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, taskId, bucket, destination string, cancelCh <-chan struct{}) (map[common.ShardId]string,error) {
+func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, taskId, bucket, destination string, cancelCh <-chan struct{}) (map[common.ShardId]string, error) {
 	err := psm.lockShards(shardIds)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::copyShardsWithLock: locking shards failed. err -> %v for taskId %v", err, taskId)
 		return nil, err
 	}
-	defer func(){
+	defer func() {
 		err := psm.unlockShards(shardIds)
 		if err != nil {
 			logging.Errorf("PauseServiceManager::copyShardsWithLock: unlocking shards failed. err -> %v for taskId %v", err, taskId)
@@ -316,15 +317,15 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 	respCh := make(chan Message)
 
 	msg := &MsgStartShardTransfer{
-		shardIds: shardIds,
-		transferId: bucket,
+		shardIds:    shardIds,
+		transferId:  bucket,
 		destination: destination,
-		taskType: common.PauseResumeTask,
-		taskId: taskId,
-		respCh: respCh,
-		doneCh: cancelCh, // abort transfer if msg received on done
-		cancelCh: cancelCh,
-		progressCh: nil, // TODO: handle progress reporting
+		taskType:    common.PauseResumeTask,
+		taskId:      taskId,
+		respCh:      respCh,
+		doneCh:      cancelCh, // abort transfer if msg received on done
+		cancelCh:    cancelCh,
+		progressCh:  nil, // TODO: handle progress reporting
 	}
 
 	psm.supvMsgch <- msg
@@ -371,6 +372,7 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 		cancelCh:    cancelCh,
 		doneCh:      cancelCh,
 		progressCh:  nil,
+		respCh:      respCh,
 	}
 
 	psm.supvMsgch <- msg
@@ -578,7 +580,7 @@ type taskObj struct {
 	resumer *Resumer
 
 	// ctx holds the context object that can be used for task context
-	ctx        context.Context
+	ctx context.Context
 	// other packages are not supposed to call this. use Cancel/cancelNoLock
 	// cancelFunc should be called only to cancel any ongoing observers and uploads
 	// it is does not modify the task status or any other task related operations
@@ -644,7 +646,7 @@ func (this *taskObj) taskObjToServiceTask() []service.Task {
 	this.taskMu.RLock()
 	defer this.taskMu.RUnlock()
 
-	tasks := make([]service.Task,0,2)
+	tasks := make([]service.Task, 0, 2)
 
 	nsTask := service.Task{
 		Rev:          EncodeRev(0),
@@ -668,14 +670,14 @@ func (this *taskObj) taskObjToServiceTask() []service.Task {
 
 	if this.master {
 		prepTask := service.Task{
-			Rev: EncodeRev(0),
-			ID: nsTask.ID,
-			Type: service.TaskTypePrepared,
-			Status: nsTask.Status,
+			Rev:          EncodeRev(0),
+			ID:           nsTask.ID,
+			Type:         service.TaskTypePrepared,
+			Status:       nsTask.Status,
 			IsCancelable: true,
-			Progress: 100,
+			Progress:     100,
 			ErrorMessage: nsTask.ErrorMessage,
-			Extra: make(map[string]interface{},len(nsTask.Extra)),
+			Extra:        make(map[string]interface{}, len(nsTask.Extra)),
 		}
 		for key, value := range nsTask.Extra {
 			prepTask.Extra[key] = value
@@ -786,16 +788,16 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
-	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
+	if err = m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
 		m.runPauseCleanupPhase(params.ID, task.isMaster())
-		return  err
+		return err
 	}
 
 	// Create a Pauser object to run the master orchestration loop.
 
 	pauser := NewPauser(m, task, m.pauseTokensById[params.ID], m.pauseDoneCallback)
 
-	if err := m.setPauser(params.ID, pauser); err != nil {
+	if err = m.setPauser(params.ID, pauser); err != nil {
 		m.runPauseCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
@@ -887,7 +889,7 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 
 	if isMaster {
 		if err := m.cleanupPauseTokenInMetakv(pauseId); err != nil {
-			logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in metkv:" +
+			logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in metkv:"+
 				" err[%v]", err)
 			return err
 		}
@@ -907,7 +909,7 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 	}
 
 	if err := m.cleanupLocalPauseToken(pauseId); err != nil {
-		logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in local" +
+		logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in local"+
 			" meta: err[%v]", err)
 		return err
 	}
@@ -915,7 +917,7 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 	return nil
 }
 
-func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken, puts map[string]*PauseUploadToken,
+func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken, puts map[string]*common.PauseUploadToken,
 	err error) {
 
 	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
@@ -927,7 +929,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 		return nil, nil, nil
 	}
 
-	puts = make(map[string]*PauseUploadToken)
+	puts = make(map[string]*common.PauseUploadToken)
 
 	for _, kv := range metaInfo {
 
@@ -939,14 +941,14 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 
 			if mpt.PauseId == pauseId {
 				if pt != nil {
-					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]" +
+					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
 				}
 
 				pt = &mpt
 			}
 
-		} else if strings.Contains(kv.Path, PauseUploadTokenTag) {
+		} else if strings.Contains(kv.Path, common.PauseUploadTokenTag) {
 			putId, put, err := decodePauseUploadToken(kv.Path, kv.Value)
 			if err != nil {
 				return nil, nil, err
@@ -954,7 +956,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 
 			if put.PauseId == pauseId {
 				if oldPUT, ok := puts[putId]; ok {
-					return nil, nil, fmt.Errorf("encountered duplicate PauseUploadToken for" +
+					return nil, nil, fmt.Errorf("encountered duplicate PauseUploadToken for"+
 						" pauseId[%v] oldPUT[%v] PUT[%v] putId[%v]", put.PauseId, oldPUT, put, putId)
 				}
 
@@ -971,7 +973,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 	return pt, puts, nil
 }
 
-func (m *PauseServiceManager) cleanupPauseUploadTokens(puts map[string]*PauseUploadToken) error {
+func (m *PauseServiceManager) cleanupPauseUploadTokens(puts map[string]*common.PauseUploadToken) error {
 
 	if puts == nil || len(puts) == 0 {
 		logging.Infof("PauseServiceManager::cleanupPauseUploadTokens: No Tokens Found For Cleanup")
@@ -997,15 +999,15 @@ func (m *PauseServiceManager) cleanupPauseUploadTokens(puts map[string]*PauseUpl
 	return nil
 }
 
-func (m *PauseServiceManager) cleanupPauseUploadTokenForMaster(putId string, put *PauseUploadToken) error {
+func (m *PauseServiceManager) cleanupPauseUploadTokenForMaster(putId string, put *common.PauseUploadToken) error {
 
 	switch put.State {
-	case PauseUploadTokenProcessed, PauseUploadTokenError:
+	case common.PauseUploadTokenProcessed, common.PauseUploadTokenError:
 
 		logging.Infof("PauseServiceManager::cleanupPauseUploadTokenForMaster: Cleanup Token %v %v", putId, put)
 
 		if err := common.MetakvDel(PauseMetakvDir + putId); err != nil {
-			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForMaster: Unable to delete" +
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForMaster: Unable to delete"+
 				"PauseUploadToken[%v] In Meta Storage: err[%v]", put, err)
 			return err
 		}
@@ -1015,11 +1017,11 @@ func (m *PauseServiceManager) cleanupPauseUploadTokenForMaster(putId string, put
 	return nil
 }
 
-func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, put *PauseUploadToken) error {
+func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, put *common.PauseUploadToken) error {
 
 	switch put.State {
 
-	case PauseUploadTokenPosted:
+	case common.PauseUploadTokenPosted:
 		// Followers just acknowledged the token, just delete the token from metakv.
 
 		err := common.MetakvDel(PauseMetakvDir + putId)
@@ -1029,16 +1031,16 @@ func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, p
 			return err
 		}
 
-	case PauseUploadTokenInProgess:
+	case common.PauseUploadTokenInProgess:
 		// Follower node might be uploading the data
 
-		logging.Infof("PauseServiceManager::cleanupPauseUploadTokenForFollower: Initiating clean-up for" +
+		logging.Infof("PauseServiceManager::cleanupPauseUploadTokenForFollower: Initiating clean-up for"+
 			" putId[%v], put[%v]", putId, put)
 
 		pauser, exists := m.getPauser(put.PauseId)
 		if !exists {
 			err := fmt.Errorf("Pauser with pauseId[%v] not found", put.PauseId)
-			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Failed to find pauser:" +
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Failed to find pauser:"+
 				" err[%v]", err)
 
 			return err
@@ -1051,8 +1053,8 @@ func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, p
 			logging.Warnf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Task already cancelled")
 		}
 
-		if err := common.MetakvDel(PauseMetakvDir + putId); err != nil {
-			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Unable to delete" +
+		if err := common.MetakvDel(common.PauseMetakvDir + putId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupPauseUploadTokenForFollower: Unable to delete"+
 				" PauseUploadToken[%v] In Meta Storage: err[%v]", put, err)
 			return err
 		}
@@ -1144,29 +1146,29 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 //   - Bucket: name of the bucket to be paused
 //   - RemotePath: object store path
 //   - DryRun: if this is a dryRun of resume
-func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
+func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 	const _Resume = "PauseServiceManager::Resume:"
 
 	const args = "taskId: %v, bucket: %v, remotePath: %v, dryRun: %v"
 	logging.Infof("%v Called. "+args, _Resume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
-	defer logging.Infof("%v Returned %v. "+args, _Resume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
-
 	// Update the task to set this node as master
 	task := m.taskSetMasterAndUpdateType(params.ID, service.TaskTypeBucketResume)
 	if task == nil || task.isPause {
-		err = service.ErrNotFound
+		err := service.ErrNotFound
 		logging.Errorf("%v taskId %v (from PrepareResume) not found", _Resume, params.ID)
 		return err
 	}
 
 	// Set bst_RESUMING state
-	err = m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
+	err := m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
 	if err != nil {
+		logging.Errorf("%v failed to set bucket state; err: %v for task ID: %v", _Resume,
+			err, params.ID)
 		return err
 	}
 
 	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
-		// TODO: Cleanup
+		logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
 		return err
 	}
 
@@ -1175,19 +1177,21 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) (err error) {
 	resumer := NewResumer(m, task, m.pauseTokensById[params.ID])
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
+		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
 		return err
 	}
 
 	resumer.startWorkers()
 
+	logging.Infof("%v started resume with task ID %v", _Resume, params.ID)
 	return nil
 }
 
 // endTask is the endpoint of pause resume
-func (m *PauseServiceManager) endTask(opErr error,taskId string) *taskObj {
+func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	var task *taskObj
 
-	logging.Infof("PauseServiceManager::endTask: called with err %v for taskId %v",opErr,taskId)
+	logging.Infof("PauseServiceManager::endTask: called with err %v for taskId %v", opErr, taskId)
 	if opErr != nil {
 		// if caller has passed an error, we don't want to delete the task from task list
 		// but the task could be nil
@@ -1196,19 +1200,19 @@ func (m *PauseServiceManager) endTask(opErr error,taskId string) *taskObj {
 		task = m.taskDelete(taskId)
 	}
 	if task == nil {
-		logging.Infof("PauseServiceManager::endTask task with ID %v already cleaned up",taskId)
+		logging.Infof("PauseServiceManager::endTask task with ID %v already cleaned up", taskId)
 		return nil
 	}
 
 	if opErr != nil {
 		task.errorMessage = opErr.Error()
-		logging.Infof("PauseServiceManager::endTask: skipping task cleanup now for task ID: %v",taskId)
+		logging.Infof("PauseServiceManager::endTask: skipping task cleanup now for task ID: %v", taskId)
 	}
 
 	task.Cancel()
 	m.bucketStateDelete(task.bucket)
 
-	logging.Infof("PauseServiceManager::endTask stopped task %v",task)
+	logging.Infof("PauseServiceManager::endTask stopped task %v", task)
 
 	return task
 }
@@ -1232,7 +1236,7 @@ func (m *PauseServiceManager) PauseResumeGetTaskList() (tasks []service.Task) {
 // PauseResumeCancelTask is a delegate of GenericServiceManager.PauseResumeCancelTask which is an
 // external API called by ns_server (via cbauth). It cancels a Pause-Resume task on the current node
 func (m *PauseServiceManager) PauseResumeCancelTask(id string) error {
-	task := m.endTask(nil,id)
+	task := m.endTask(nil, id)
 	if task != nil {
 		logging.Errorf("PauseServiceManager::PauseResumeCancelTask: couldn't find a task with ID %v", id)
 		return service.ErrNotFound
@@ -1863,7 +1867,7 @@ func (m *PauseServiceManager) registerLocalPauseToken(pauseToken *PauseToken) er
 	resp := respMsg.(*MsgClustMgrLocal)
 
 	if err = resp.GetError(); err != nil {
-		logging.Errorf("PauseServiceManager::registerLocalPauseToken: Unable to set PauseToken In Local Meta" +
+		logging.Errorf("PauseServiceManager::registerLocalPauseToken: Unable to set PauseToken In Local Meta"+
 			"Storage: [%v]", err)
 		return err
 	}
@@ -1924,7 +1928,7 @@ func (m *PauseServiceManager) cleanupPauseTokenInMetakv(pauseId string) error {
 	var ptoken PauseToken
 
 	if found, err := common.MetakvGet(path, &ptoken); err != nil {
-		logging.Errorf("PauseServiceManager::cleanupPauseTokenInMetakv Error Fetching Pause Token From Metakv" +
+		logging.Errorf("PauseServiceManager::cleanupPauseTokenInMetakv Error Fetching Pause Token From Metakv"+
 			" err[%v] path[%v]", err, path)
 
 		return err
@@ -1933,7 +1937,7 @@ func (m *PauseServiceManager) cleanupPauseTokenInMetakv(pauseId string) error {
 		logging.Infof("PauseServiceManager::cleanupPauseTokenInMetakv Delete Global Pause Token %v", ptoken)
 
 		if err := common.MetakvDel(path); err != nil {
-			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete RebalanceToken" +
+			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete RebalanceToken"+
 				" from Meta Storage. %v. Err %v", ptoken, err)
 
 			return err
@@ -1965,7 +1969,7 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 
 			localaddr, err := m.genericMgr.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE, true)
 			if err != nil {
-				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error Fetching Local Service" +
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error Fetching Local Service"+
 					" Address [%v]", err)
 				return err
 			}
@@ -1977,7 +1981,7 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 
 			body, err := json.Marshal(pauseToken)
 			if err != nil {
-				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to marshal pause token:" +
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to marshal pause token:"+
 					" err[%v] pauseToken[%v]", err, pauseToken)
 				return err
 			}
@@ -1985,7 +1989,7 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 			bodyBuf := bytes.NewBuffer(body)
 			resp, err := postWithAuth(addr+url, "application/json", bodyBuf)
 			if err != nil {
-				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error registering pause token," +
+				logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Error registering pause token,"+
 					" err[%v] addr[%v]", err, addr+url)
 				return err
 			}
@@ -1994,12 +1998,12 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 			resp.Body.Close()
 
 		} else {
-			logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to Fetch Service Address:" +
+			logging.Errorf("PauseServiceManager::registerGlobalPauseToken: Failed to Fetch Service Address:"+
 				" [%v]", err)
 			return err
 		}
 
-		logging.Infof("PauseServiceManager::registerGlobalPauseToken: Successfully registered pause token on" +
+		logging.Infof("PauseServiceManager::registerGlobalPauseToken: Successfully registered pause token on"+
 			" [%v]", addr+url)
 	}
 
@@ -2011,4 +2015,42 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 // not a part of Pauser/Resumer object as it can be garbage collected while this is running
 func monitorBucketForPauseResume(bucket string, isPause bool) {
 	logging.Infof("Pauser::startWathcer: TODO: monitor bucket monitoring enpoint for bucket %v, under pause? %v", bucket, isPause)
+}
+
+func CancellableTaskRunnerWithContext(ctx context.Context, cancelledError error) func(func() error) error {
+	return func(executor func() error) error {
+		if ctx == nil {
+			return cancelledError
+		}
+		closeCh := ctx.Done()
+		return CancellableTaskRunnerWithChannel(closeCh, cancelledError)(executor)
+	}
+}
+
+func CancellableTaskRunnerWithChannel(closeCh <-chan struct{}, cancelledError error) func(func() error) error {
+	return func(executor func() error) error {
+		select {
+		case <-closeCh:
+			return cancelledError
+		default:
+			return executor()
+		}
+	}
+}
+
+// generateNodeDir joins archivePath and nodeId to create a node directory used during pause resume
+// nodeDir ends with filepath.Seperator(/)
+func generateNodeDir(archivePath string, nodeId service.NodeID) string {
+	separator := string(filepath.Separator)
+	archivePath = strings.TrimSuffix(archivePath, separator)
+	return filepath.Join(archivePath, fmt.Sprintf("node_%v", nodeId)) + separator
+}
+
+// generateShardPath generates a location to download shards from
+// shardPath ends with filepath.Seperator(/)
+func generateShardPath(nodeDir string, trimmedShardPath string) string {
+	separator := string(filepath.Separator)
+	trimmedShardPath = strings.TrimPrefix(trimmedShardPath, separator)
+	nodeDir = strings.TrimSuffix(nodeDir, separator)
+	return filepath.Join(nodeDir, trimmedShardPath) + separator
 }
