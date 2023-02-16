@@ -14,6 +14,7 @@ import (
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	manager "github.com/couchbase/indexing/secondary/manager"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 
@@ -383,4 +384,47 @@ func GetIndexHttpAddrOnNode(serverUserName, serverPassword, hostaddress string) 
 	}
 
 	return ""
+}
+
+func GetIndexLocalMetadata(serverUserName, serverPassword, nodeAddr string) (*manager.LocalIndexMetadata, error) {
+	indexerAddr := GetIndexHttpAddrOnNode(serverUserName, serverPassword, nodeAddr)
+	if indexerAddr == "" {
+		return nil, fmt.Errorf("indexerAddr is empty for nodeAddr: %v", nodeAddr)
+	}
+
+	client := &http.Client{}
+	address := "http://" + indexerAddr + "/getLocalIndexMetadata"
+	log.Printf("for GetIndexLocalMetadata %v", address)
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%v, %v", "Error in call GET /getLocalIndexMetadata", err)
+	} else if resp != nil {
+		defer resp.Body.Close()
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf("For %v GET /getLocalIndexMetadata failed", address)
+		return nil, fmt.Errorf("For %v, %v ", address, "GET /getLocalIndexMetadata failed")
+	}
+
+	localMeta := new(manager.LocalIndexMetadata)
+	body, _ := ioutil.ReadAll(resp.Body)
+	if err = json.Unmarshal(body, &localMeta); err != nil {
+		tc.HandleError(err, "GET /getLocalIndexMetadata :: Unmarshal of response body")
+		return nil, fmt.Errorf("Error unmarshal response %v %v", address, err)
+	}
+	return localMeta, nil
+}
+
+func GetNumIndexesOnNode(serverUserName, serverPassword, addr string) (int, error) {
+	localIndexMetadata, err := GetIndexLocalMetadata(serverUserName, serverPassword, addr)
+	if err != nil {
+		return -1, err
+	}
+
+	return len(localIndexMetadata.IndexDefinitions), nil
 }

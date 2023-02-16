@@ -538,6 +538,156 @@ func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
 	printClusterConfig(_TestFailureAndRebalanceDuringInitialIndexBuild, "exit")
 }
 
+// Adds a Node with specified Service running, with the Address taken from config at nodeNumber; nodeNumber is between 0 to 3
+func addOneCustomNodeAndRebalance(caller, service string, nodeNumber uint64, t *testing.T) {
+	log.Printf("%v: Adding node %v with service %v to the cluster", caller, clusterconfig.Nodes[nodeNumber], service)
+	addNode(clusterconfig.Nodes[nodeNumber], service, t)
+	rebalance(t)
+}
+
+// This is a helper function to test redistribute indexes work when an Indexing Node is being added to the cluster,
+// both the caller have the same entry cluster configuration
+//
+//	Starting config: [0: kv n1ql] [1: index]
+//	Ending config:   [0: kv n1ql] [1: index] [2: index]
+func redistributeIndexWhenNodeIsAdded(caller string, t *testing.T, movement bool) {
+
+	var _redistributeIndexWhenNodeIsAdded = "set14_rebalance_test.go::" + caller
+
+	if skipTest() {
+		log.Printf("%v Test skipped", _redistributeIndexWhenNodeIsAdded)
+		return
+	}
+
+	if clusterconfig.IndexUsing != "forestdb" {
+		// Add 10 Non-Partitioned Indexes, 0-REPLICA
+		numToCreate := 10
+		log.Printf("%v 1. Creating %v indexes: non-partitioned, 0-REPLICA, non-deferred",
+			_redistributeIndexWhenNodeIsAdded, numToCreate)
+		for field1 := 0; field1 < numToCreate; field1++ {
+			fieldName1 := fieldNames[field1%len(fieldNames)]
+			fieldName2 := fieldNames[(field1+3)%len(fieldNames)]
+			indexName := indexNamePrefix + "0REPLICAS_" + fieldName1 + "_" + fieldName2
+			n1qlStmt := fmt.Sprintf("create index %v on `%v`(%v, %v)  with { \"nodes\":[\"127.0.0.1:9001\"]}",
+				indexName, BUCKET, fieldName1, fieldName2)
+			executeN1qlStmt(n1qlStmt, BUCKET, _redistributeIndexWhenNodeIsAdded, t)
+			log.Printf("%v %v index is now active.", _redistributeIndexWhenNodeIsAdded, indexName)
+		}
+
+		// Create 4 Indexes w/ 5-PARTITION, 0-REPLICA, non-deferred indexes. Skip on FDB to avoid error:
+		// [5000] GSI CreateIndex() - cause: Create Index fails. Reason = Cannot create partitioned index using forestdb
+		numToCreate = 4
+		log.Printf("%v 2. Creating %v indexes: 5-PARTITION, 0-REPLICA, non-deferred",
+			_redistributeIndexWhenNodeIsAdded, numToCreate)
+		for field1 := 0; field1 < numToCreate; field1++ {
+			fieldName1 := fieldNames[field1%len(fieldNames)]
+			fieldName2 := fieldNames[(field1+4)%len(fieldNames)]
+			indexName := indexNamePrefix + "5PARTITIONS_0REPLICAS_" + fieldName1 + "_" + fieldName2
+			n1qlStmt := fmt.Sprintf(
+				"create index %v on `%v`(%v, %v) partition by hash(Meta().id) with {\"num_partition\":5, \"nodes\":[\"127.0.0.1:9001\"]}",
+				indexName, BUCKET, fieldName1, fieldName2)
+			executeN1qlStmt(n1qlStmt, BUCKET, _redistributeIndexWhenNodeIsAdded, t)
+			log.Printf("%v %v index is now active.", _redistributeIndexWhenNodeIsAdded, indexName)
+		}
+
+		//find the number of Indexes on Node[1] 127.0.0.1:9001
+		oldNumIndexesOnNode1, err := secondaryindex.GetNumIndexesOnNode(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		if err != nil {
+			t.Fatalf("%v Unable to get old number of Indexes on Node %v", _redistributeIndexWhenNodeIsAdded, clusterconfig.Nodes[1])
+		}
+
+		// Add a Node and rebalances internally
+		addOneCustomNodeAndRebalance(_redistributeIndexWhenNodeIsAdded, "index", 2, t)
+
+		// after rebalance
+		newNumIndexesOnNode1, err := secondaryindex.GetNumIndexesOnNode(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1])
+		if err != nil {
+			t.Fatalf("%v Unable to get new number of Indexes on Node %v", _redistributeIndexWhenNodeIsAdded, clusterconfig.Nodes[1])
+		}
+
+		newNumIndexesOnNode2, err := secondaryindex.GetNumIndexesOnNode(clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[2])
+		if err != nil {
+			t.Fatalf("%v Unable to get new number of Indexes on Node %v", _redistributeIndexWhenNodeIsAdded, clusterconfig.Nodes[1])
+		}
+
+		if !movement {
+			if newNumIndexesOnNode1 != oldNumIndexesOnNode1 || newNumIndexesOnNode2 != 0 {
+				t.Fatal("Some Index Movement took place, Index number mistach with previous number of Indexes")
+			}
+		} else {
+			if newNumIndexesOnNode1 == oldNumIndexesOnNode1 || newNumIndexesOnNode2 == 0 {
+				t.Fatal("No Index Movement took place, Expected all index movement")
+			}
+		}
+	} else {
+		log.Printf("%v Skipped test because of ForestDB.", _redistributeIndexWhenNodeIsAdded)
+	}
+}
+
+// redistributeIndexSetup sets the starting cluster configuration expected for the rest of these tests:
+//
+//	[0: kv n1ql] -- assumed to be correct already (not actually set here)
+//	[1: index]
+//
+// and sets the indexer.settings.rebalance.redistribute_indexes = redistributeIndexFlag, for testing
+// redistribute index behaviour during rebalance
+func redistributeIndexSetup(caller string, t *testing.T, redistributeIndexFlag bool) {
+	var _redistributeIndexSetup = "set14_rebalance_test.go::" + caller + "::Setup"
+	printClusterConfig(_redistributeIndexSetup, "entry")
+	if skipTest() {
+		log.Printf("%v Test skipped", _redistributeIndexSetup)
+		return
+	}
+
+	log.Printf("%v 1. Setting up initial cluster configuration", _redistributeIndexSetup)
+	setupCluster(t)
+
+	status := getClusterStatus()
+	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
+		t.Fatalf("%v Unexpected cluster configuration: %v", _redistributeIndexSetup, status)
+	}
+
+	// Disable Rebalance to restrict indexes movement onto empty nodes
+	log.Printf("%v 2. Changing indexer.settings.rebalance.redistribute_indexes to %v", _redistributeIndexSetup, redistributeIndexFlag)
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.redistribute_indexes",
+		redistributeIndexFlag, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error setting indexer.settings.rebalance.redistribute_indexes to true")
+
+	log.Printf("%v 3. Setup is completed", _redistributeIndexSetup)
+	printClusterConfig(_redistributeIndexSetup, "exit")
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Test Cases where indexer.settings.rebalance.redistribute_indexes = false
+/////////////////////////////////////////////////////////////////////////////
+
+func TestRedistributeWhenNodeIsAddedForFalse(t *testing.T) {
+	const _TestRedistributeIndexWhenNodeIsAdded = "TestRedistributeWhenNodeIsAddedForFalse"
+	redistributeIndexFlag := false
+	// configures the cluster for test
+	redistributeIndexSetup(_TestRedistributeIndexWhenNodeIsAdded, t, redistributeIndexFlag)
+	redistributeIndexWhenNodeIsAdded(_TestRedistributeIndexWhenNodeIsAdded, t, redistributeIndexFlag)
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Test Cases where indexer.settings.rebalance.redistribute_indexes = true
+/////////////////////////////////////////////////////////////////////////////
+
+func TestRedistributeWhenNodeIsAddedForTrue(t *testing.T) {
+	const _TestRedistributeIndexWhenNodeIsAdded = "TestRedistributeWhenNodeIsAddedForTrue"
+	redistributeIndexFlag := true
+	// configures the cluster for test
+	redistributeIndexSetup(_TestRedistributeIndexWhenNodeIsAdded, t, redistributeIndexFlag)
+	redistributeIndexWhenNodeIsAdded(_TestRedistributeIndexWhenNodeIsAdded, t, redistributeIndexFlag)
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// TO-DO:
+// 1. Non-Index Node Delete/Add Scenario
+// 2. IndexerNode Removal
+// 3. Swap Rebalance
+///////////////////////////////////////////////////////////////////////////////
+
 // TestRebalanceResetCluster restores indexer.settings.rebalance.redistribute_indexes = false
 // to avoid affecting other tests, including those that call addNodeAndRebalance/AddNodeAndRebalance,
 // amd then resets the expected starting cluster configuration, as some later tests depend on it.

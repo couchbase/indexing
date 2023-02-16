@@ -939,7 +939,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 				return nil, nil, err
 			}
 
-			if mpt.PauseId == pauseId {
+			if mpt.PauseId == pauseId && mpt.Type == PauseTokenPause {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
@@ -1169,21 +1169,239 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
 		logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
+		m.runResumeCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
 
 	// Create a Resumer object to run the master orchestration loop.
 
-	resumer := NewResumer(m, task, m.pauseTokensById[params.ID])
+	resumer := NewResumer(m, task, m.pauseTokensById[params.ID], m.resumeDoneCallback)
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
+		m.runResumeCleanupPhase(params.ID, task.isMaster())
 		return err
 	}
 
 	resumer.startWorkers()
 
 	logging.Infof("%v started resume with task ID %v", _Resume, params.ID)
+	return nil
+}
+
+// resumeDoneCallback is the Resumer.doneCb callback function.
+// Download work is interrupted based on resumeId, using cancel ctx from task in resumer.
+func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
+
+	resumer, exists := m.getResumer(resumeId)
+	if !exists {
+		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to find Resumer with resumeId[%v]", resumeId)
+		return
+	}
+
+	// If there is an error, set it in the task, otherwise, delete task from task list.
+	// TODO: Check if follower task should be handled differently.
+	m.endTask(err, resumeId)
+
+	isMaster := resumer.task.isMaster()
+
+	if err := m.runResumeCleanupPhase(resumeId, isMaster); err != nil {
+		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to run cleanup: err[%v]", err)
+		return
+	}
+
+	if err := m.setResumer(resumeId, nil); err != nil {
+		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to unset Resumer: err[%v]", err)
+		return
+	}
+
+	logging.Infof("PauseServiceManager::resumeDoneCallback Resume Done: isMaster %v, err: %v",
+		isMaster, err)
+}
+
+func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bool) error {
+
+	logging.Infof("PauseServiceManager::runResumeCleanupPhase: resumeId[%v] isMaster[%v]", resumeId, isMaster)
+
+	if isMaster {
+		if err := m.cleanupPauseTokenInMetakv(resumeId); err != nil {
+			logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseToken in metkv:"+
+				" err[%v]", err)
+			return err
+		}
+	}
+
+	_, rdts, err := m.getCurrResumeTokens(resumeId)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Error Fetching Metakv Tokens: err[%v]", err)
+		return err
+	}
+
+	if len(rdts) != 0 {
+		if err := m.cleanupResumeDownloadTokens(rdts); err != nil {
+			logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Error Cleaning Tokens: err[%v]", err)
+			return err
+		}
+	}
+
+	if err := m.cleanupLocalPauseToken(resumeId); err != nil {
+		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseToken in local"+
+			" meta: err[%v]", err)
+		return err
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseToken,
+	rdts map[string]*common.ResumeDownloadToken, err error) {
+
+	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(metaInfo) == 0 {
+		return nil, nil, nil
+	}
+
+	rdts = make(map[string]*common.ResumeDownloadToken)
+
+	for _, kv := range metaInfo {
+
+		if strings.Contains(kv.Path, PauseTokenTag) {
+			var mpt PauseToken
+			if err = json.Unmarshal(kv.Value, &mpt); err != nil {
+				return nil, nil, err
+			}
+
+			if mpt.PauseId == resumeId && mpt.Type == PauseTokenResume {
+				if pt != nil {
+					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for resumeId[%v]"+
+						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+				}
+
+				pt = &mpt
+			}
+
+		} else if strings.Contains(kv.Path, common.ResumeDownloadTokenTag) {
+			rdtId, rdt, err := decodeResumeDownloadToken(kv.Path, kv.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if rdt.ResumeId == resumeId {
+				if oldRDT, ok := rdts[rdtId]; ok {
+					return nil, nil, fmt.Errorf("encountered duplicate ResumeDownloadToken for"+
+						" resumeId[%v] oldRDT[%v] rdt[%v] rdtId[%v]", rdt.ResumeId, oldRDT, rdt, rdtId)
+				}
+
+				rdts[rdtId] = rdt
+			}
+
+		} else {
+			logging.Warnf("PauseServiceManager::getCurrResumeTokens: Unknown Token %v. Ignored.", kv)
+
+		}
+
+	}
+
+	return pt, rdts, nil
+}
+
+func (m *PauseServiceManager) cleanupResumeDownloadTokens(rdts map[string]*common.ResumeDownloadToken) error {
+
+	if rdts == nil || len(rdts) <= 0 {
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokens: No Tokens Found For Cleanup")
+		return nil
+	}
+
+	for rdtId, rdt := range rdts {
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokens: Cleaning Up %v %v", rdtId, rdt)
+
+		if rdt.MasterId == string(m.nodeInfo.NodeID) {
+			if err := m.cleanupResumeDownloadTokenForMaster(rdtId, rdt); err != nil {
+				return err
+			}
+		}
+
+		if rdt.FollowerId == string(m.nodeInfo.NodeID) {
+			if err := m.cleanupResumeDownloadTokenForFollower(rdtId, rdt); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupResumeDownloadTokenForMaster(rdtId string, rdt *common.ResumeDownloadToken) error {
+
+	switch rdt.State {
+	case common.ResumeDownloadTokenProcessed, common.ResumeDownloadTokenError:
+
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokenForMaster: Cleanup Token %v %v",
+			rdtId, rdt)
+
+		if err := common.MetakvDel(PauseMetakvDir + rdtId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForMaster: Unable to delete"+
+				"ResumeDownloadToken[%v] In Meta Storage: err[%v]", rdt, err)
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupResumeDownloadTokenForFollower(rdtId string, rdt *common.ResumeDownloadToken) error {
+
+	switch rdt.State {
+
+	case common.ResumeDownloadTokenPosted:
+		// Followers just acknowledged the token, just delete the token from metakv.
+
+		err := common.MetakvDel(PauseMetakvDir + rdtId)
+		if err != nil {
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Unable to delete[%v]"+
+				" in Meta Storage: err[%v]", rdt, err)
+			return err
+		}
+
+	case common.ResumeDownloadTokenInProgess:
+		// Follower node might be uploading the data
+
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Initiating cleanup for"+
+			" rdtId[%v], rdt[%v]", rdtId, rdt)
+
+		resumer, exists := m.getResumer(rdt.ResumeId)
+		if !exists {
+			err := fmt.Errorf("Resumer with resumeId[%v] not found", rdt.ResumeId)
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Failed to find"+
+				" resumer: err[%v]", err)
+
+			return err
+		}
+
+		// Cancel resume download work using task ctx
+		if doCancelDownload := resumer.task.cancelFunc; doCancelDownload != nil {
+			doCancelDownload()
+			// TODO: Call new plasma API to cleanup local staging.
+		} else {
+			logging.Warnf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Task already cancelled")
+		}
+
+		if err := common.MetakvDel(PauseMetakvDir + rdtId); err != nil {
+			logging.Errorf("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Unable to delete"+
+				" ResumeDownloadToken[%v] In Meta Storage: err[%v]", rdt, err)
+			return err
+		}
+
+		logging.Infof("PauseServiceManager::cleanupResumeDownloadTokenForFollower: Deleted rdtId[%v] from"+
+			" metakv", rdtId)
+
+	}
+
 	return nil
 }
 
@@ -1408,7 +1626,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 					return
 				}
 
-				resumer := NewResumer(m, task, &pauseToken)
+				resumer := NewResumer(m, task, &pauseToken, m.resumeDoneCallback)
 
 				if err := m.setResumer(pauseToken.PauseId, resumer); err != nil {
 					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Resumer in bookkeeping"+
@@ -1937,7 +2155,7 @@ func (m *PauseServiceManager) cleanupPauseTokenInMetakv(pauseId string) error {
 		logging.Infof("PauseServiceManager::cleanupPauseTokenInMetakv Delete Global Pause Token %v", ptoken)
 
 		if err := common.MetakvDel(path); err != nil {
-			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete RebalanceToken"+
+			logging.Fatalf("PauseServiceManager::cleanupPauseTokenInMetakv Unable to delete PauseToken"+
 				" from Meta Storage. %v. Err %v", ptoken, err)
 
 			return err
