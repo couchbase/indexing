@@ -1360,23 +1360,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 
 		unlockShards(tt.ShardIds, m.supvMsgch)
 
-		respCh := make(chan bool)
-		msg := &MsgShardTransferCleanup{
-			destination:     tt.Destination,
-			region:          tt.Region,
-			rebalanceId:     tt.RebalId,
-			transferTokenId: ttid,
-			respCh:          respCh,
-			syncCleanup:     false,
-		}
-
-		m.supvMsgch <- msg
-
-		// Wait for response of clean-up.
-		// Note that cleanup happens asyncronously in the back-ground.
-		// Getting a response here only means that cleanup has been
-		// initiated by plasma
-		<-respCh
+		m.cleanupTranferredData(ttid, tt)
 
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForSource: Done clean-up for ttid: %v, "+
 			"shardIds: %v, destination: %v, region: %v", ttid, tt.ShardIds, tt.Destination, tt.Region)
@@ -1453,24 +1437,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 	case c.ShardTokenRestoreShard:
 		// Destination node might have crashed while download is in progress
 		// Cleanup data on S3
-
-		respCh := make(chan bool)
-		msg := &MsgShardTransferCleanup{
-			destination:     tt.Destination,
-			region:          tt.Region,
-			rebalanceId:     tt.RebalId,
-			transferTokenId: ttid,
-			respCh:          respCh,
-			syncCleanup:     false,
-		}
-
-		m.supvMsgch <- msg
-
-		// Wait for response of clean-up.
-		// Note that cleanup happens asyncronously in the back-ground.
-		// Getting a response here only means that cleanup has been
-		// initiated by plasma
-		<-respCh
+		m.cleanupTranferredData(ttid, tt)
 
 		// Clean up local index instances
 		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, false, cleanupFailedShards)
@@ -1479,23 +1446,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		// In this state, shard is successfully restored
 		// Cleanup data on S3
 
-		respCh := make(chan bool)
-		msg := &MsgShardTransferCleanup{
-			destination:     tt.Destination,
-			region:          tt.Region,
-			rebalanceId:     tt.RebalId,
-			transferTokenId: ttid,
-			respCh:          respCh,
-			syncCleanup:     false,
-		}
-
-		m.supvMsgch <- msg
-
-		// Wait for response of clean-up.
-		// Note that cleanup happens asyncronously in the back-ground.
-		// Getting a response here only means that cleanup has been
-		// initiated by plasma
-		<-respCh
+		m.cleanupTranferredData(ttid, tt)
 
 		// Drop all indexes on destination and cleanup the data locally
 		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards)
@@ -1601,6 +1552,16 @@ func (m *RebalanceServiceManager) doesDropOnSourceExist(ttid string) bool {
 	return false
 }
 
+// At the time of this function invocation, the following tokens can exist
+// in metaKV:
+//   a. DropOnSource tokens
+//   b. Tokens that have failed cleanup and owner is alive
+//   c. Tokens that have failed cleanup and owner is not alive
+//
+// For tokens of type (b) and (c), this method will cleanup tranferred data
+// on S3 irrespective of whether the node is alive or not. It will not cleanup
+// any token. The token will be cleaned by either`` by the respective owner (or)
+// during next rebalance by orphan token cleaner
 func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 	rtokens, err := m.getCurrRebalTokens()
 	if err != nil {
@@ -1620,11 +1581,19 @@ func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 					// ShardTokenDropOnSource
 					err = c.MetakvDel(RebalanceMetakvDir + ttid)
 					if err != nil {
-						l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+						l.Errorf("RebalanceServiceManager::cleanupAllDropOnSourceTokens Unable to delete TransferToken In "+
 							"Meta Storage. %v. Err %v", tt, err)
 						return err
 					}
 				}
+			} else if tt.ShardTransferTokenState == c.ShardTokenTransferShard ||
+				tt.ShardTransferTokenState == c.ShardTokenRestoreShard ||
+				tt.ShardTransferTokenState == c.ShardTokenRecoverShard {
+
+				logging.Infof("RebalanceServiceManager::cleanupAllDropOnSourceTokens Cleaning up transferred data for ttid: %v", ttid)
+				// Cleanup only the tranferred data. Token cleanup will be
+				//  done by orphanToken cleaner or by the corresponding owner
+				m.cleanupTranferredData(ttid, tt)
 			}
 		}
 	}
@@ -3925,23 +3894,7 @@ func (m *RebalanceServiceManager) cleanupOrphanShardTransferToken(ttid string, t
 
 		// MsgShardTransferCleanup takes care of cleaning of tranferred data and
 		// staging cleanup
-		respCh := make(chan bool)
-		msg := &MsgShardTransferCleanup{
-			destination:     tt.Destination,
-			region:          tt.Region,
-			rebalanceId:     tt.RebalId,
-			transferTokenId: ttid,
-			respCh:          respCh,
-			syncCleanup:     false,
-		}
-
-		m.supvMsgch <- msg
-
-		// Wait for response of clean-up.
-		// Note that cleanup happens asyncronously in the back-ground.
-		// Getting a response here only means that cleanup has been
-		// initiated by plasma
-		<-respCh
+		m.cleanupTranferredData(ttid, tt)
 
 		l.Infof("RebalanceServiceManager::cleanupOrphanShardTransferToken: Done clean-up for ttid: %v, "+
 			"shardIds: %v, destination: %v, region: %v", ttid, tt.ShardIds, tt.Destination, tt.Region)
@@ -3958,4 +3911,26 @@ func (m *RebalanceServiceManager) cleanupOrphanShardTransferToken(ttid string, t
 		return err
 	}
 	return nil
+}
+
+func (m *RebalanceServiceManager) cleanupTranferredData(ttid string, tt *c.TransferToken) {
+	// MsgShardTransferCleanup takes care of cleaning of tranferred data and
+	// staging cleanup
+	respCh := make(chan bool)
+	msg := &MsgShardTransferCleanup{
+		destination:     tt.Destination,
+		region:          tt.Region,
+		rebalanceId:     tt.RebalId,
+		transferTokenId: ttid,
+		respCh:          respCh,
+		syncCleanup:     false,
+	}
+
+	m.supvMsgch <- msg
+
+	// Wait for response of clean-up.
+	// Note that cleanup happens asyncronously in the back-ground.
+	// Getting a response here only means that cleanup has been
+	// initiated by plasma
+	<-respCh
 }
