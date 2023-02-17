@@ -1038,7 +1038,7 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 	for ttid, tt := range rtokens.TT {
 
 		ownerAlive = false
-		ownerId = m.getTransferTokenOwner(tt)
+		ownerId = m.getTransferTokenOwner(ttid, tt)
 		for _, node := range change.KeepNodes {
 			if ownerId == string(node.NodeInfo.NodeID) {
 				ownerAlive = true
@@ -1048,11 +1048,16 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 
 		if !ownerAlive {
 			l.Infof("RebalanceServiceManager::cleanupOrphanTokens Cleaning Up Token Owner %v %v %v", ownerId, ttid, tt)
-			err := c.MetakvDel(RebalanceMetakvDir + ttid)
-			if err != nil {
-				l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete TransferToken from "+
-					"Meta Storage. %v. Err %v", ttid, err)
-				return err
+			if tt.IsShardTransferToken() {
+				// Initiate cleanup for tranfer token
+				return m.cleanupOrphanShardTransferToken(ttid, tt)
+			} else {
+				err := c.MetakvDel(RebalanceMetakvDir + ttid)
+				if err != nil {
+					l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete TransferToken from "+
+						"Meta Storage. %v. Err %v", ttid, err)
+					return err
+				}
 			}
 		}
 	}
@@ -1577,6 +1582,23 @@ func (m *RebalanceServiceManager) updateShardTokenMap(tokenMap map[string]*c.Tra
 		}
 		return
 	}
+}
+
+func (m *RebalanceServiceManager) doesDropOnSourceExist(ttid string) bool {
+	rtokens, _ := m.getCurrRebalTokens()
+
+	if rtokens != nil && len(rtokens.TT) != 0 {
+		for _, tt := range rtokens.TT {
+			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
+				sourceId := tt.SourceTokenId
+				siblingId := tt.SiblingTokenId
+				if ttid == sourceId || ttid == siblingId {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
@@ -2513,8 +2535,8 @@ func (m *RebalanceServiceManager) checkLocalCleanupPending() bool {
 	}
 
 	if rtokens != nil && len(rtokens.TT) != 0 {
-		for _, tt := range rtokens.TT {
-			ownerId := m.getTransferTokenOwner(tt)
+		for ttid, tt := range rtokens.TT {
+			ownerId := m.getTransferTokenOwner(ttid, tt)
 			if ownerId == string(m.nodeInfo.NodeID) {
 				l.Infof("RebalanceServiceManager::checkLocalCleanupPending Found Local Pending Cleanup Token %v", tt)
 				return true
@@ -2535,8 +2557,8 @@ func (m *RebalanceServiceManager) checkGlobalCleanupPending() bool {
 
 	servers := m.getStateServers()
 	if rtokens != nil && len(rtokens.TT) != 0 {
-		for _, tt := range rtokens.TT {
-			ownerId := m.getTransferTokenOwner(tt)
+		for ttid, tt := range rtokens.TT {
+			ownerId := m.getTransferTokenOwner(ttid, tt)
 			for _, s := range servers {
 				if ownerId == string(s) {
 					l.Infof("RebalanceServiceManager::checkGlobalCleanupPending Found Global Pending Cleanup for Owner %v Token %v", ownerId, tt)
@@ -2553,16 +2575,34 @@ func (m *RebalanceServiceManager) checkGlobalCleanupPending() bool {
 // getTransferTokenOwner returns the node ID of the token's owning node. Owner
 // defined for each state here should match those processed by/under rebalancer
 // functions processTokenAsMaster, processTokenAsSource, and processTokenAsDest.
-func (m *RebalanceServiceManager) getTransferTokenOwner(tt *c.TransferToken) string {
+func (m *RebalanceServiceManager) getTransferTokenOwner(ttid string, tt *c.TransferToken) string {
 
-	switch tt.State {
-	case c.TransferTokenReady:
-		return tt.SourceId
-	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
-		c.TransferTokenInitiate, c.TransferTokenInProgress, c.TransferTokenMerge:
-		return tt.DestId
-	case c.TransferTokenCommit, c.TransferTokenDeleted:
-		return tt.MasterId
+	if tt.IsShardTransferToken() {
+		switch tt.ShardTransferTokenState {
+		case c.ShardTokenCreated, c.ShardTokenDeleted:
+			return tt.MasterId
+		case c.ShardTokenScheduledOnSource, c.ShardTokenTransferShard:
+			return tt.SourceId
+		case c.ShardTokenScheduleAck, c.ShardTokenRestoreShard,
+			c.ShardTokenRecoverShard, c.ShardTokenCommit:
+			return tt.DestId
+		case c.ShardTokenReady:
+			if m.doesDropOnSourceExist(ttid) {
+				return tt.SourceId
+			} else {
+				return tt.DestId
+			}
+		}
+	} else {
+		switch tt.State {
+		case c.TransferTokenReady:
+			return tt.SourceId
+		case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
+			c.TransferTokenInitiate, c.TransferTokenInProgress, c.TransferTokenMerge:
+			return tt.DestId
+		case c.TransferTokenCommit, c.TransferTokenDeleted:
+			return tt.MasterId
+		}
 	}
 
 	return ""
@@ -3869,4 +3909,53 @@ func (m *RebalanceServiceManager) RestoreAndUnlockShards(skipShards map[c.ShardI
 	}
 	<-respCh
 	l.Infof("RebalanceServiceManager::RestoreAndUnlockShards Exiting")
+}
+
+// An orphan shard token is the once for which the owner is not alive
+// i.e. owner is out of the cluster. If the transfer token is in a state
+// where the data on S3 might not have been deleted, then initaite cleanup
+// of data on S3 along with deleting the token from metaKV
+func (m *RebalanceServiceManager) cleanupOrphanShardTransferToken(ttid string, tt *c.TransferToken) error {
+	logging.Infof("RebalanceServiceManager::cleanupOrphanShardTransferToken Cleaning up orphan token: %v as owner is not alive", ttid)
+
+	switch tt.ShardTransferTokenState {
+	case c.ShardTokenTransferShard, c.ShardTokenRestoreShard, c.ShardTokenRecoverShard:
+		// Initate transferred data cleanup and staging directory cleanup
+		// along with deleting the metaKV token
+
+		// MsgShardTransferCleanup takes care of cleaning of tranferred data and
+		// staging cleanup
+		respCh := make(chan bool)
+		msg := &MsgShardTransferCleanup{
+			destination:     tt.Destination,
+			region:          tt.Region,
+			rebalanceId:     tt.RebalId,
+			transferTokenId: ttid,
+			respCh:          respCh,
+			syncCleanup:     false,
+		}
+
+		m.supvMsgch <- msg
+
+		// Wait for response of clean-up.
+		// Note that cleanup happens asyncronously in the back-ground.
+		// Getting a response here only means that cleanup has been
+		// initiated by plasma
+		<-respCh
+
+		l.Infof("RebalanceServiceManager::cleanupOrphanShardTransferToken: Done clean-up for ttid: %v, "+
+			"shardIds: %v, destination: %v, region: %v", ttid, tt.ShardIds, tt.Destination, tt.Region)
+
+	default:
+		// For all other cases, delete the metaKV token as the node is out
+		// of the cluster
+	}
+
+	err := c.MetakvDel(RebalanceMetakvDir + ttid)
+	if err != nil {
+		l.Errorf("RebalanceServiceManager::cleanupOrphanShardTransferToken Unable to delete TransferToken from "+
+			"Meta Storage. %v. Err %v", ttid, err)
+		return err
+	}
+	return nil
 }
