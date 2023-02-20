@@ -524,6 +524,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_RECOVERED_INDEXES_REBAL:
 		err = m.handleBuildIndexes(content, common.NewShardRebalanceRequestContext())
+	case client.OPCODE_RESUME_RECOVERED_INDEXES:
+		err = m.handleBuildIndexes(content, common.NewResumeRequestContext())
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_RETRY:
@@ -2048,8 +2050,9 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 // handleBuildIndexes handles all kinds of build index requests
 // (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
 func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
-	isRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
-		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance) // is this call from Rebalance?
+	isRebalOrResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
+		reqCtx.ReqSource == common.DDLRequestSourceResume) // is this call from Rebalance or Resume?
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
@@ -2062,9 +2065,9 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 		input[i] = common.IndexDefnId(id)
 	}
 
-	retryList, skipList, errList, errMap := m.buildIndexesLifecycleMgr(input, reqCtx, isRebal)
+	retryList, skipList, errList, errMap := m.buildIndexesLifecycleMgr(input, reqCtx, isRebalOrResume)
 	var errMsg string
-	if !isRebal {
+	if !isRebalOrResume {
 		if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 { // at least one reportable error
 			errMsg = "Build index fails."
 
@@ -2118,7 +2121,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 //     messages added here for failures in skipList since Indexer was never called for these
 //     (and the keys for these will be defnId instead of instId as we don't have the latter)
 func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
-	reqCtx *common.MetadataRequestContext, isRebal bool) (
+	reqCtx *common.MetadataRequestContext, isRebalOrResume bool) (
 	retryErrList []error, skipList []common.IndexDefnId, errList []error, errMap map[common.IndexInstId]string) {
 
 	errMap = make(map[common.IndexInstId]string)
@@ -2129,6 +2132,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 	inst2DefnMap := make(map[common.IndexInstId]common.IndexDefnId)
 	isRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 	isShardRebalanceBuild := (reqCtx.ReqSource == common.DDLRequestSourceShardRebalance)
+	isResumeBuild := (reqCtx.ReqSource == common.DDLRequestSourceResume)
 
 	addToBucketList := func(bucket string) {
 		found := false
@@ -2192,12 +2196,13 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 		// Always allow rebalance initiated builds. For user initiated
 		// builds, allow only if "canProcessDDL" returns true
-		canProcessBuild := isRebalanceBuild || isShardRebalanceBuild || m.canProcessDDL(defn.Bucket)
+		canProcessBuild := isRebalanceBuild ||
+			isShardRebalanceBuild || isResumeBuild || m.canProcessDDL(defn.Bucket)
 
 		var buildErr error
 		for _, inst := range insts {
 
-			if !m.isValidInstStateForBuild(defn, inst, isShardRebalanceBuild) {
+			if !m.isValidInstStateForBuild(defn, inst, isShardRebalanceBuild || isResumeBuild) {
 				continue
 			}
 
@@ -2227,7 +2232,8 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 	if m.notifier != nil && len(instIdList) != 0 {
 		var errMap2 map[common.IndexInstId]error
-		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
+			reqCtx.ReqSource == common.DDLRequestSourceResume {
 			errMap2 = m.notifier.OnRecoveredIndexBuild(instIdList, buckets, reqCtx)
 		} else {
 			errMap2 = m.notifier.OnIndexBuild(instIdList, buckets, reqCtx)
@@ -2259,7 +2265,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, defnId, err)
 			}
 
-			if m.canRetryBuildError(inst, build_err, isRebal) {
+			if m.canRetryBuildError(inst, build_err, isRebalOrResume) {
 				build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
 
 				logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
@@ -3928,9 +3934,9 @@ func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
 
 // canRetryBuildError determines whether a particular build error can be retried.
 // Index builds are never retried in rebalance as Rebalancer would never learn their fates.
-func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, isRebal bool) bool {
+func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, isRebalOrResume bool) bool {
 
-	if inst == nil || isRebal || inst.RState != uint32(common.REBAL_ACTIVE) {
+	if inst == nil || isRebalOrResume || inst.RState != uint32(common.REBAL_ACTIVE) {
 		return false
 	}
 

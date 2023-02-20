@@ -18,47 +18,49 @@ import (
 
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
-	"github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/plasma"
 )
 
 func newResumeDownloadToken(masterUuid, followerUuid, resumeId, bucketName, uploaderId string) (
-	string, *common.ResumeDownloadToken, error) {
+	string, *c.ResumeDownloadToken, error) {
 
-	rdt := &common.ResumeDownloadToken{
+	rdt := &c.ResumeDownloadToken{
 		MasterId:   masterUuid,
 		FollowerId: followerUuid,
 		ResumeId:   resumeId,
-		State:      common.ResumeDownloadTokenPosted,
+		State:      c.ResumeDownloadTokenPosted,
 		BucketName: bucketName,
 		UploaderId: uploaderId,
 	}
 
-	ustr, err := common.NewUUID()
+	ustr, err := c.NewUUID()
 	if err != nil {
 		logging.Warnf("newResumeDownloadToken: Failed to generate uuid: err[%v]", err)
 		return "", nil, err
 	}
 
-	rdtId := fmt.Sprintf("%s%s", common.ResumeDownloadTokenTag, ustr.Str())
+	rdtId := fmt.Sprintf("%s%s", c.ResumeDownloadTokenTag, ustr.Str())
 
 	return rdtId, rdt, nil
 }
 
-func decodeResumeDownloadToken(path string, value []byte) (string, *common.ResumeDownloadToken, error) {
+func decodeResumeDownloadToken(path string, value []byte) (string, *c.ResumeDownloadToken, error) {
 
-	rdtIdPos := strings.Index(path, common.ResumeDownloadTokenTag)
+	rdtIdPos := strings.Index(path, c.ResumeDownloadTokenTag)
 	if rdtIdPos < 0 {
 		return "", nil, fmt.Errorf("ResumeDownloadTokenTag[%v] not present in metakv path[%v]",
-			common.ResumeDownloadTokenTag, path)
+			c.ResumeDownloadTokenTag, path)
 	}
 
 	rdtId := path[rdtIdPos:]
 
-	rdt := &common.ResumeDownloadToken{}
+	rdt := &c.ResumeDownloadToken{}
 	err := json.Unmarshal(value, rdt)
 	if err != nil {
 		logging.Errorf("decodeResumeDownloadToken: Failed to unmarshal value[%s] path[%v]: err[%v]",
@@ -69,23 +71,23 @@ func decodeResumeDownloadToken(path string, value []byte) (string, *common.Resum
 	return rdtId, rdt, nil
 }
 
-func setResumeDownloadTokenInMetakv(rdtId string, rdt *common.ResumeDownloadToken) {
+func setResumeDownloadTokenInMetakv(rdtId string, rdt *c.ResumeDownloadToken) {
 
 	rhCb := func(r int, err error) error {
 		if r > 0 {
 			logging.Warnf("setResumeDownloadTokenInMetakv::rhCb: err[%v], Retrying[%d]", err, r)
 		}
 
-		return common.MetakvSet(PauseMetakvDir+rdtId, rdt)
+		return c.MetakvSet(PauseMetakvDir+rdtId, rdt)
 	}
 
-	rh := common.NewRetryHelper(10, time.Second, 1, rhCb)
+	rh := c.NewRetryHelper(10, time.Second, 1, rhCb)
 	err := rh.Run()
 
 	if err != nil {
 		logging.Fatalf("setResumeDownloadTokenInMetakv: Failed to set ResumeDownloadToken In Meta Storage:"+
 			" rdtId[%v] rdt[%v] err[%v]", rdtId, rdt, err)
-		common.CrashOnError(err)
+		c.CrashOnError(err)
 	}
 }
 
@@ -124,7 +126,7 @@ type Resumer struct {
 	pauseToken *PauseToken
 
 	// in-memory bookkeeping for observed tokens
-	masterTokens, followerTokens map[string]*common.ResumeDownloadToken
+	masterTokens, followerTokens map[string]*c.ResumeDownloadToken
 
 	// lock protecting access to maps like masterTokens and followerTokens
 	mu sync.RWMutex
@@ -153,8 +155,8 @@ func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseT
 		metakvCancel:        make(chan struct{}),
 		pauseToken:          pauseToken,
 
-		masterTokens:   make(map[string]*common.ResumeDownloadToken),
-		followerTokens: make(map[string]*common.ResumeDownloadToken),
+		masterTokens:   make(map[string]*c.ResumeDownloadToken),
+		followerTokens: make(map[string]*c.ResumeDownloadToken),
 
 		doneCb: doneCb,
 	}
@@ -214,7 +216,7 @@ func (r *Resumer) initResumeAsync() {
 	close(r.waitForTokenPublish)
 }
 
-func (r *Resumer) publishResumeDownloadTokens(rdts map[string]*common.ResumeDownloadToken) {
+func (r *Resumer) publishResumeDownloadTokens(rdts map[string]*c.ResumeDownloadToken) {
 	for rdtId, rdt := range rdts {
 		setResumeDownloadTokenInMetakv(rdtId, rdt)
 		logging.Infof("Pauser::publishResumeDownloadTokens Published resume upload token: %v", rdtId)
@@ -253,7 +255,7 @@ func (r *Resumer) processDownloadTokens(kve metakv.KVEntry) error {
 			r.finishResume(nil)
 		}
 
-	} else if strings.Contains(kve.Path, common.ResumeDownloadTokenPathPrefix) {
+	} else if strings.Contains(kve.Path, c.ResumeDownloadTokenPathPrefix) {
 		// Process ResumeDownloadTokens
 
 		if kve.Value != nil {
@@ -285,7 +287,7 @@ func (r *Resumer) cancelMetakv() {
 	}
 }
 
-func (r *Resumer) processResumeDownloadToken(rdtId string, rdt *common.ResumeDownloadToken) {
+func (r *Resumer) processResumeDownloadToken(rdtId string, rdt *c.ResumeDownloadToken) {
 	logging.Infof("Resumer::processResumeDownloadToken rdtId[%v] rdt[%v]", rdtId, rdt)
 	if !r.addToWaitGroup() {
 		logging.Errorf("Resumer::processResumeDownloadToken: Failed to add to resumer waitgroup.")
@@ -322,7 +324,7 @@ func (r *Resumer) addToWaitGroup() bool {
 	return false
 }
 
-func (r *Resumer) processResumeDownloadTokenAsMaster(rdtId string, rdt *common.ResumeDownloadToken) bool {
+func (r *Resumer) processResumeDownloadTokenAsMaster(rdtId string, rdt *c.ResumeDownloadToken) bool {
 
 	logging.Infof("Resumer::processResumeDownloadTokenAsMaster: rdtId[%v] rdt[%v]", rdtId, rdt)
 
@@ -349,26 +351,26 @@ func (r *Resumer) processResumeDownloadTokenAsMaster(rdtId string, rdt *common.R
 
 	switch rdt.State {
 
-	case common.ResumeDownloadTokenPosted:
+	case c.ResumeDownloadTokenPosted:
 		// Follower owns token, do nothing
 
 		return false
 
-	case common.ResumeDownloadTokenInProgess:
+	case c.ResumeDownloadTokenInProgess:
 		// Follower owns token, just mark in memory maps.
 
 		r.updateInMemToken(rdtId, rdt, "master")
 		return false
 
-	case common.ResumeDownloadTokenProcessed:
+	case c.ResumeDownloadTokenProcessed:
 		// Master owns token
 
 		// Follower completed work, delete token
-		err := common.MetakvDel(PauseMetakvDir + rdtId)
+		err := c.MetakvDel(PauseMetakvDir + rdtId)
 		if err != nil {
 			logging.Fatalf("Resumer::processResumeDownloadTokenAsMaster: Failed to delete ResumeDownloadToken[%v] with"+
 				" rdtId[%v] In Meta Storage: err[%v]", rdt, rdtId, err)
-			common.CrashOnError(err)
+			c.CrashOnError(err)
 		}
 
 		r.updateInMemToken(rdtId, rdt, "master")
@@ -415,7 +417,7 @@ func (r *Resumer) doFinish() {
 	r.doneCb(r.pauseToken.PauseId, r.retErr)
 }
 
-func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *common.ResumeDownloadToken) bool {
+func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *c.ResumeDownloadToken) bool {
 
 	logging.Infof("Resumer::processResumeDownloadTokenAsFollower: rdtId[%v] rdt[%v]", rdtId, rdt)
 
@@ -432,17 +434,17 @@ func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *common
 
 	switch rdt.State {
 
-	case common.ResumeDownloadTokenPosted:
+	case c.ResumeDownloadTokenPosted:
 		// Follower owns token, update in-memory and move to InProgress State
 
 		r.updateInMemToken(rdtId, rdt, "follower")
 
-		rdt.State = common.ResumeDownloadTokenInProgess
+		rdt.State = c.ResumeDownloadTokenInProgess
 		setResumeDownloadTokenInMetakv(rdtId, rdt)
 
 		return true
 
-	case common.ResumeDownloadTokenInProgess:
+	case c.ResumeDownloadTokenInProgess:
 		// Follower owns token, update in-memory and start pause work
 
 		r.updateInMemToken(rdtId, rdt, "follower")
@@ -451,7 +453,7 @@ func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *common
 
 		return true
 
-	case common.ResumeDownloadTokenProcessed:
+	case c.ResumeDownloadTokenProcessed:
 		// Master owns token, just mark in memory maps
 
 		r.updateInMemToken(rdtId, rdt, "follower")
@@ -463,7 +465,7 @@ func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *common
 	}
 }
 
-func (r *Resumer) startResumeDownload(rdtId string, rdt *common.ResumeDownloadToken) {
+func (r *Resumer) startResumeDownload(rdtId string, rdt *c.ResumeDownloadToken) {
 	start := time.Now()
 	logging.Infof("Resumer::startResumeDownload: Begin work: rdtId[%v] rdt[%v]", rdtId, rdt)
 	defer logging.Infof("Resumer::startResumeDownload: Done work: rdtId[%v] rdt[%v] took[%v]",
@@ -475,31 +477,31 @@ func (r *Resumer) startResumeDownload(rdtId string, rdt *common.ResumeDownloadTo
 	}
 	defer r.wg.Done()
 
-	err := r.followerResumeBuckets(rdt)
+	err := r.followerResumeBuckets(rdtId, rdt)
 	if err != nil {
 		rdt.Error = err.Error()
 	}
 
 	// work done, change state, master handler will pick it up and do cleanup.
-	rdt.State = common.ResumeDownloadTokenProcessed
+	rdt.State = c.ResumeDownloadTokenProcessed
 	setResumeDownloadTokenInMetakv(rdtId, rdt)
 }
 
 // Often, metaKV can send multiple notifications for the same state change (probably
 // due to the eventual consistent nature of metaKV). Keep track of all state changes
 // in in-memory bookkeeping and ignore the duplicate notifications
-func (r *Resumer) checkValidNotifyState(rdtId string, rdt *common.ResumeDownloadToken, caller string) bool {
+func (r *Resumer) checkValidNotifyState(rdtId string, rdt *c.ResumeDownloadToken, caller string) bool {
 
 	// As the default state is "ResumeDownloadTokenPosted"
 	// do not check for valid state changes for this state
-	if rdt.State == common.ResumeDownloadTokenPosted {
+	if rdt.State == c.ResumeDownloadTokenPosted {
 		return true
 	}
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var inMemToken *common.ResumeDownloadToken
+	var inMemToken *c.ResumeDownloadToken
 	var ok bool
 
 	if caller == "master" {
@@ -524,7 +526,7 @@ func (r *Resumer) checkValidNotifyState(rdtId string, rdt *common.ResumeDownload
 	return true
 }
 
-func (r *Resumer) updateInMemToken(rdtId string, rdt *common.ResumeDownloadToken, caller string) {
+func (r *Resumer) updateInMemToken(rdtId string, rdt *c.ResumeDownloadToken, caller string) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -542,7 +544,7 @@ func (r *Resumer) checkAllTokensDone() bool {
 	defer r.mu.Unlock()
 
 	for rdtId, rdt := range r.masterTokens {
-		if rdt.State < common.ResumeDownloadTokenProcessed {
+		if rdt.State < c.ResumeDownloadTokenProcessed {
 			// Either posted or processing
 
 			logging.Infof("Resumer::checkAllTokensDone ResumeDownloadToken: rdtId[%v] is in state[%v]",
@@ -571,7 +573,7 @@ func (this *Resumer) failResume(logPrefix string, context string, error error) {
 
 // masterGenerateResumePlan: this method downloads all the metadata, stats from archivePath and
 // plans which nodes resume indexes for given bucket
-func (r *Resumer) masterGenerateResumePlan() (map[string]*common.ResumeDownloadToken,error) {
+func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken, error) {
 	// Step 1: download PauseMetadata
 	logging.Infof("Resumer::masterGenerateResumePlan: downloading pause metadata from %v for resume task ID: %v", r.task.archivePath, r.task.taskId)
 	ctx := r.task.ctx
@@ -589,7 +591,7 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*common.ResumeDownloadT
 		logging.Errorf("Resumer::masterGenerateResumePlan: failed to download pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
 		return nil, err
 	}
-	data, err = common.ChecksumAndUncompress(data)
+	data, err = c.ChecksumAndUncompress(data)
 	if err != nil {
 		logging.Errorf("Resumer::masterGenerateResumePlan: failed to read valid pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
 		return nil, err
@@ -654,9 +656,9 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*common.ResumeDownloadT
 		logging.Warnf("Resumer::masterGenerateResumePlan: couldn't fetch this node's server version. hit unreachable error. err: %v for taskId %v", err, r.task.taskId)
 		err = nil
 		// use min indexer version required for Pause-Resume
-		indexerVersion = common.INDEXER_72_VERSION
+		indexerVersion = c.INDEXER_72_VERSION
 	}
-	sysConfig, err := common.GetSettingsConfig(common.SystemConfig)
+	sysConfig, err := c.GetSettingsConfig(c.SystemConfig)
 	if err != nil {
 		err = fmt.Errorf("Unable to get system config; err: %v", err)
 		logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
@@ -748,7 +750,7 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: failed to download metadata err: %v", err)
 		return
 	}
-	data, err = common.ChecksumAndUncompress(data)
+	data, err = c.ChecksumAndUncompress(data)
 	if err != nil {
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: invalid metadata in object store err :%v", err)
 		return
@@ -773,7 +775,7 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: failed to download stats err: %v", err)
 		return
 	}
-	data, err = common.ChecksumAndUncompress(data)
+	data, err = c.ChecksumAndUncompress(data)
 	if err != nil {
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: invalid stats in object store err :%v", err)
 		return
@@ -792,7 +794,7 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 // 2. Download plasma shards
 // 3. restore indexes in common.INDEX_STATE_RECOVERED state
 // Returns: []client.IndexIdList - it a list of list of indexes to build grouped by stream state
-func (r *Resumer) followerResumeBuckets(rdt *common.ResumeDownloadToken) error {
+func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken) error {
 	nodeDir := generateNodeDir(r.task.archivePath, service.NodeID(rdt.UploaderId))
 
 	// TODO: make all these downloads async. blocking go threads for networks downloads
@@ -829,6 +831,330 @@ func (r *Resumer) followerResumeBuckets(rdt *common.ResumeDownloadToken) error {
 	logging.Infof("Resumer::followerResumeBucket: successfully downloaded shards for task ID %v",
 		r.task.taskId)
 
-	// TODO: recover indexes and if required change state to common.INDEX_STATE_RECOVERED
+	err = r.recoverShard(rdtId, rdt, cancelCh)
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (r *Resumer) recoverShard(rdtid string,
+	rdt *c.ResumeDownloadToken, cancelCh <-chan struct{}) error {
+
+	//lock the restored shard
+	if err := lockShards(rdt.ShardIds, r.pauseMgr.supvMsgch, true); err != nil {
+		logging.Errorf("Resumer::recoverShard:: error observed while locking shards: %v, err: %v", rdt.ShardIds, err)
+
+		unlockShards(rdt.ShardIds, r.pauseMgr.supvMsgch)
+		return err
+	}
+
+	start := time.Now()
+
+	//Restored shard for a resumed tenant can only contain a) active instances (MAINT_STREAM/INDEX_STATE_ACTIVE) or
+	//deferred indexes(NIL_STREAM/INDEX_STATE_CREATE/READY). PreparePause will ensure that tenant doesn't get
+	//paused if there are indexes in any other state. As pause happens after few days of inactivity, it is
+	//the expected situation.
+
+	var buildDefnIdList client.IndexIdList
+
+	nonDeferredInsts := make(map[c.IndexInstId]bool)
+	defnIdToInstIdMap := make(map[c.IndexDefnId]c.IndexInstId)
+
+	//set InstIds in Defn
+	func(rdt *c.ResumeDownloadToken) {
+		for i, _ := range rdt.IndexInsts {
+			defn := &rdt.IndexInsts[i].Defn
+			defn.SetCollectionDefaults()
+
+			defn.Nodes = nil
+			defn.InstId = rdt.InstIds[i]
+			defn.RealInstId = rdt.RealInstIds[i]
+		}
+		return
+	}(rdt)
+
+	for _, inst := range rdt.IndexInsts {
+
+		defn := inst.Defn
+		defn.ShardIdsForDest = rdt.ShardIds
+		if skip, err := r.postRecoverIndexReq(defn); err != nil {
+			return err
+		} else if skip {
+			// bucket (or) scope (or) collection (or) index are dropped.
+			// Continue instead of failing resume
+			continue
+		}
+
+		currInst := make(map[c.IndexInstId]bool)
+
+		// For deferred indexes, build command is not required
+		if defn.Deferred &&
+			(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				defn.InstStateAtRebal == c.INDEX_STATE_READY) {
+
+			currInst[defn.InstId] = true
+
+			if err := r.waitForIndexState(c.INDEX_STATE_READY, currInst, rdtid, rdt, cancelCh); err != nil {
+				return err
+			}
+
+		} else {
+
+			buildDefnIdList.DefnIds = append(buildDefnIdList.DefnIds, uint64(defn.DefnId))
+			defnIdToInstIdMap[defn.DefnId] = defn.InstId
+
+			currInst[defn.InstId] = true
+
+			if err := r.waitForIndexState(c.INDEX_STATE_RECOVERED, currInst, rdtid, rdt, cancelCh); err != nil {
+				return err
+			}
+
+		}
+
+	}
+
+	if len(buildDefnIdList.DefnIds) > 0 {
+
+		logging.Infof("Resumer::recoverShard Successfully posted "+
+			"recoverIndexRebalance requests for defnIds: %v rdtid: %v. "+
+			"Initiating build.", buildDefnIdList, rdtid)
+
+		skipDefns, err := r.postResumeIndexesReq(buildDefnIdList)
+		if err != nil {
+			return err
+		}
+
+		// Do not wait for index state of skipped insts
+		if len(skipDefns) > 0 {
+			logging.Infof("Resumer::recoverShard Skipping state monitoring for insts: %v "+
+				"as scope/collection/index is dropped", skipDefns)
+			for defnId, _ := range skipDefns {
+				if instId, ok := defnIdToInstIdMap[defnId]; ok {
+					delete(nonDeferredInsts, instId)
+				}
+			}
+		}
+
+		logging.Infof("Resumer::recoverShard Waiting for index state to "+
+			"become active for insts: %v", nonDeferredInsts)
+
+		if err := r.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts, rdtid, rdt, cancelCh); err != nil {
+			return err
+		}
+	}
+
+	elapsed := time.Since(start).Seconds()
+	l.Infof("Resumer::recoverShard Finished recovery of all indexes in rdtid: %v, elapsed(sec): %v", rdtid, elapsed)
+
+	// Follower will call RestoreShardDone for the shardId involved in the
+	// resume.
+	restoreShardDone(rdt.ShardIds, r.pauseMgr.supvMsgch)
+
+	// Unlock the shards
+	unlockShards(rdt.ShardIds, r.pauseMgr.supvMsgch)
+
+	return nil
+}
+
+func (r *Resumer) postRecoverIndexReq(indexDefn c.IndexDefn) (bool, error) {
+
+	url := "/recoverIndexRebalance"
+
+	resp, err := postWithHandleEOF(indexDefn, r.pauseMgr.httpAddr, url, "Resumer::postRecoverIndexReq")
+	if err != nil {
+		logging.Errorf("Resumer::postRecoverIndexReq Error observed when posting recover index request, "+
+			"indexDefnId: %v, err: %v", indexDefn.DefnId, err)
+		return false, err
+	}
+
+	response := new(IndexResponse)
+	if err := convertResponse(resp, response); err != nil {
+		l.Errorf("Resumer::postRecoverIndexReq Error unmarshal response for indexDefnId: %v, "+
+			"url: %v, err: %v", indexDefn.DefnId, r.pauseMgr.httpAddr+url, err)
+		return false, err
+	}
+
+	if response.Error != "" {
+		if isMissingBSC(response.Error) || isIndexDeletedDuringRebal(response.Error) {
+			logging.Infof("Resumer::postRecoverIndexReq scope/collection/index is "+
+				"deleted during rebalance. Skipping the indexDefnId: %v from further processing. "+
+				"indexDefnId: %v, Error: %v", indexDefn.DefnId, response.Error)
+			return true, nil
+		}
+		l.Errorf("Resumer::postRecoverIndexReq Error received for indexDefnId: %v, err: %v",
+			indexDefn.DefnId, response.Error)
+		return false, errors.New(response.Error)
+	}
+	return false, nil
+}
+
+func (r *Resumer) postResumeIndexesReq(defnIdList client.IndexIdList) (map[c.IndexDefnId]bool, error) {
+
+	url := "/resumeRecoveredIndexes"
+
+	resp, err := postWithHandleEOF(defnIdList, r.pauseMgr.httpAddr, url, "Resumer::postResumeIndexesReq")
+	if err != nil {
+		logging.Errorf("Resumer::postResumeIndexesReq Error observed when posting build indexes request, "+
+			"defnIdList: %v, err: %v", defnIdList.DefnIds, err)
+		return nil, err
+	}
+
+	response := new(IndexResponse)
+	if err := convertResponse(resp, response); err != nil {
+		l.Errorf("Resumer::postResumeIndexesReq Error unmarshal response for defnIdList: %v, "+
+			"url: %v, err: %v", defnIdList.DefnIds, r.pauseMgr.httpAddr+url, err)
+		return nil, err
+	}
+
+	if response.Error != "" {
+		skipDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+		if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
+			l.Errorf("Resumer::postResumeIndexesReq Error received for defnIdList: %v, err: %v",
+				defnIdList.DefnIds, response.Error)
+			return nil, errors.New(response.Error)
+		} else {
+			return skipDefns, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *Resumer) waitForIndexState(expectedState c.IndexState,
+	processedInsts map[c.IndexInstId]bool, rdtid string,
+	rdt *c.ResumeDownloadToken, cancelCh <-chan struct{}) error {
+
+	lastLogTime := time.Now()
+
+	retryInterval := time.Duration(1)
+	retryCount := 0
+loop:
+	for {
+
+		select {
+		case <-cancelCh:
+			//TODO return relevant error
+			l.Infof("Resumer::waitForIndexState Cancel Received")
+			return ErrRebalanceCancel
+
+		default:
+			statsMgr := r.pauseMgr.genericMgr.statsMgr
+			allStats := statsMgr.stats.Get()
+
+			indexerState := allStats.indexerStateHolder.GetValue().(string)
+			if indexerState == "Paused" {
+				err := fmt.Errorf("Paused state detected for %v", r.pauseMgr.httpAddr)
+				l.Errorf("Resumer::waitForIndexState err: %v", err)
+				return err
+			}
+
+			localMeta, err := getLocalMeta(r.pauseMgr.httpAddr)
+			if err != nil {
+				l.Errorf("Resumer::waitForIndexState Error Fetching Local Meta %v %v", r.pauseMgr.httpAddr, err)
+				retryCount++
+
+				if retryCount > 5 {
+					return err // Return after 5 unsuccessful attempts
+				}
+				time.Sleep(retryInterval * time.Second)
+				goto loop
+			}
+
+			indexStateMap, errMap := r.getIndexStatusFromMeta(rdt, processedInsts, localMeta)
+			for instId, indexState := range indexStateMap {
+				err := errMap[instId]
+
+				// At this point, the request "/recoverIndexRebalance" and/or "/resumeRecoveredIndexes"
+				// are successful. This means that local metadata is updated with index instance infomration.
+				// If drop were to happen in this state, drop can remove the index from topology. In that
+				// case, the indexState would be INDEX_STATE_NIL. Instead of failing rebalance, skip the
+				// instance from further scanity checks and continue processing
+				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					logging.Warnf("Resumer::waitForIndexState, Could not get index status. "+
+						"scope/collection/index are likely dropped. Skipping instId: %v, indexState: %v, "+
+						"rdtid: %v", instId, indexState, rdtid)
+					continue
+				} else if err != "" {
+					l.Errorf("Resumer::waitForIndexState Error Fetching Index Status %v %v", r.pauseMgr.httpAddr, err)
+					retryCount++
+
+					if retryCount > 5 {
+						return errors.New(err) // Return after 5 unsuccessful attempts
+					}
+					time.Sleep(retryInterval * time.Second)
+					goto loop // Retry
+				}
+			}
+
+			switch expectedState {
+			case c.INDEX_STATE_READY, c.INDEX_STATE_RECOVERED, c.INDEX_STATE_ACTIVE:
+				// Check if all index instances have reached this state
+				allReachedState := true
+				for _, indexState := range indexStateMap {
+					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+						continue
+					}
+					if indexState != expectedState {
+						allReachedState = false
+						break
+					}
+				}
+
+				if allReachedState {
+					logging.Infof("Resumer::waitForIndexState: Indexes: %v reached state: %v", indexStateMap, expectedState)
+					return nil
+				}
+
+				now := time.Now()
+				if now.Sub(lastLogTime) > 30*time.Second {
+					lastLogTime = now
+					logging.Infof("Resumer::waitForIndexState: Waiting for some indexes to reach state: %v, indexes: %v", expectedState, indexStateMap)
+				}
+				// retry after "retryInterval" if not all indexes have reached the expectedState
+			}
+		}
+		// reset retry count as one iteration of the loop could be completed
+		// successfully without any error
+		retryCount = 0
+
+		time.Sleep(retryInterval * time.Second)
+	}
+
+	return nil
+}
+
+func (r *Resumer) getIndexStatusFromMeta(rdt *c.ResumeDownloadToken,
+	processedInsts map[c.IndexInstId]bool,
+	localMeta *manager.LocalIndexMetadata) (map[c.IndexInstId]c.IndexState, map[c.IndexInstId]string) {
+
+	outStates := make(map[c.IndexInstId]c.IndexState)
+	outErr := make(map[c.IndexInstId]string)
+	for i, inst := range rdt.IndexInsts {
+
+		instId := rdt.InstIds[i]
+		realInstId := rdt.RealInstIds[i]
+
+		if !isInstProcessed(instId, realInstId, processedInsts) {
+			continue
+		}
+
+		topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
+		if topology == nil {
+			outStates[instId] = c.INDEX_STATE_NIL
+			outErr[instId] = fmt.Sprintf("Topology Information Missing for Bucket %v Scope %v Collection %v",
+				inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
+			continue
+		}
+
+		state, errMsg := topology.GetStatusByInst(inst.Defn.DefnId, instId)
+		if state == c.INDEX_STATE_NIL && realInstId != 0 {
+			state, errMsg = topology.GetStatusByInst(inst.Defn.DefnId, realInstId)
+			outStates[realInstId], outErr[realInstId] = state, errMsg
+		} else {
+			outStates[instId], outErr[instId] = state, errMsg
+		}
+	}
+
+	return outStates, outErr
 }

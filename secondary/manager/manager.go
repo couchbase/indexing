@@ -620,6 +620,15 @@ func (m *IndexManager) HandleBuildRecoveredIndexesRebalance(indexIds client.Inde
 	return m.requestServer.MakeRequest(client.OPCODE_BUILD_RECOVERED_INDEXES_REBAL, key, content)
 }
 
+func (m *IndexManager) HandleResumeRecoveredIndexes(indexIds client.IndexIdList) error {
+
+	key := fmt.Sprintf("%d", indexIds.DefnIds[0])
+	content, _ := client.MarshallIndexIdList(&indexIds)
+	//TODO handle err
+
+	return m.requestServer.MakeRequest(client.OPCODE_RESUME_RECOVERED_INDEXES, key, content)
+}
+
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap) error {

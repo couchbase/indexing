@@ -291,6 +291,7 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 		if !ok {
 			errmsg := fmt.Sprintf("GSI index id %v not found.", id)
 			err := errors.NewError(nil, errmsg)
+			l.Warnf("%v Observed error when finding index: %v, err: %v", gsi.logPrefix, id, err)
 			return nil, errors.NewCbIndexNotFoundError(err)
 		}
 	}
@@ -417,11 +418,7 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
 	}
-	// refresh to get back the newly created index.
-	if err := gsi.Refresh(); err != nil {
-		return nil, err
-	}
-	index, errr := gsi.IndexById(defnID2String(defnID))
+	index, errr := gsi.retryableIndexbyId(defnID)
 	if errr != nil {
 		return nil, errr
 	}
@@ -495,7 +492,7 @@ func (gsi *gsiKeyspace) CreateIndex(
 	if err := gsi.Refresh(); err != nil {
 		return nil, err
 	}
-	return gsi.IndexById(defnID2String(defnID))
+	return gsi.retryableIndexbyId(defnID)
 }
 
 // CreateIndex2 implements datastore.Indexer2{} interface. Create a secondary
@@ -613,11 +610,30 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreateIndex()")
 	}
-	// refresh to get back the newly created index.
-	if err := gsi.Refresh(); err != nil {
-		return nil, err
+
+	return gsi.retryableIndexbyId(defnID)
+}
+
+// If there is no error during index creation but if IndexById returns
+// an error, then it could be due to stale list of indexes. Retry
+// Refresh() for upto 3 attempts before concluding the presence
+// of an index
+func (gsi *gsiKeyspace) retryableIndexbyId(defnID uint64) (datastore.Index, errors.Error) {
+	var index datastore.Index
+	var err errors.Error
+	for i := 0; i < 3; i++ {
+		// refresh to get back the newly created index.
+		if err = gsi.Refresh(); err != nil {
+			return nil, err
+		}
+		if index, err = gsi.IndexById(defnID2String(defnID)); err != nil {
+			time.Sleep(1 * time.Millisecond)
+			continue // retry
+		} else {
+			return index, nil
+		}
 	}
-	return gsi.IndexById(defnID2String(defnID))
+	return index, err
 }
 
 // CreateIndex5 implements datastore.Indexer5{} interface. Create a secondary

@@ -1838,7 +1838,7 @@ func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 		resp = &MsgSuccess{}
 
 	case CLUST_MGR_BUILD_RECOVERED_INDEXES:
-		idx.handleBuildRecoveredIndexes(msg)
+		idx.dispatchBuildRecoveredIndexes(msg)
 		resp = &MsgSuccess{}
 
 	default:
@@ -3534,6 +3534,17 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 }
 
+func (idx *indexer) dispatchBuildRecoveredIndexes(msg Message) {
+
+	reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
+	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
+		idx.handleBuildRecoveredIndexes(msg)
+	} else if reqCtx.ReqSource == common.DDLRequestSourceResume {
+		idx.handleResumeRecoveredIndexes(msg)
+	}
+
+}
+
 func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 	instIdList := msg.(*MsgBuildIndex).GetIndexList()
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
@@ -3656,7 +3667,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 
 		// Compute restartTs for allKeyspaceIds and extract the restartTs for
 		// this keyspaceId
-		allRestartTs, allNilSnaps := idx.makeRestartTs(common.INIT_STREAM)
+		allRestartTs, allNilSnaps := idx.makeRestartTs(common.INIT_STREAM, "")
 
 		idx.prepareStreamKeyspaceIdForFreshStart(common.INIT_STREAM, keyspaceId)
 
@@ -3670,6 +3681,161 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 					allNilSnaps, false, false, sessionId)
 			}
 			idx.setStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId, STREAM_ACTIVE)
+		} else {
+			allKeyspaceIds := make([]string, 0)
+			for kid, _ := range allRestartTs {
+				allKeyspaceIds = append(allKeyspaceIds, kid)
+			}
+			err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
+				"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
+			logging.Errorf("Indexer::handleBuildRecoveredIndexes: err: %v", err)
+			// Not able to compute restartTs is an error
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err,
+						category: INDEXER}}
+			}
+			return
+		}
+
+		//store updated state and streamId in meta store
+		if idx.enableManager {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true,
+				true, false, true, true, false, false, false, nil, nil); err != nil {
+				common.CrashOnError(err)
+			}
+		} else {
+			idx.keyspaceIdCreateClientChMap[keyspaceId] = clientCh
+			return
+		}
+	}
+
+	if idx.enableManager {
+		clientCh <- &MsgBuildIndexResponse{errMap: errMap} // return instId-specific build errors to caller
+	} else {
+		clientCh <- &MsgSuccess{}
+	}
+}
+
+func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
+	instIdList := msg.(*MsgBuildIndex).GetIndexList()
+	clientCh := msg.(*MsgBuildIndex).GetRespCh()
+
+	logging.Infof("Indexer::handleResumeRecoveredIndexes %v", instIdList)
+
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
+
+	if len(instIdList) == 0 {
+		logging.Warnf("Indexer::handleResumeRecoveredIndexes Nothing To Build")
+		if clientCh != nil {
+			clientCh <- &MsgSuccess{}
+		}
+	}
+
+	is := idx.getIndexerState()
+	if is != common.INDEXER_ACTIVE {
+		errStr := fmt.Sprintf("Indexer Cannot Process Build Index In %v State", is)
+		logging.Errorf("Indexer::handleResumeRecoveredIndexes %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_NOT_ACTIVE,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	errMap := make(map[common.IndexInstId]error) // build errors by instId
+
+	for keyspaceId, instIdList := range keyspaceIdIndexList {
+		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap, true)
+		if !ok {
+			logging.Errorf("Indexer::handleResumeRecoveredIndexes Invalid Index List "+
+				"KeyspaceId %v. Index in error %v.", keyspaceId, errMap)
+			if idx.enableManager {
+				if len(instIdList) == 0 {
+					delete(keyspaceIdIndexList, keyspaceId)
+					continue
+				}
+			} else {
+				return
+			}
+		}
+
+		// Check if Initial Build is already running for this index's keyspace. Indexer does not support multiple
+		// builds on the same keyspace because the keyspaceId is used as a key to stream maps.
+		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
+			logging.Errorf("Indexer::handleResumeRecoveredIndexes Build Already In"+
+				" Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
+			if idx.enableManager {
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else {
+				return
+			}
+		}
+
+		//assign resumed indexes to MAINT_STREAM
+		var resumedStream common.StreamId = common.MAINT_STREAM
+
+		if len(instIdList) != 0 {
+			keyspaceIdIndexList[keyspaceId] = instIdList
+		} else {
+			delete(keyspaceIdIndexList, keyspaceId)
+			continue
+		}
+
+		idx.bulkUpdateStream(instIdList, resumedStream)
+
+		// Set the state of indexes to active as the indexed data is already
+		// recovered from disk
+		var resumedState common.IndexState = common.INDEX_STATE_ACTIVE
+
+		idx.bulkUpdateState(instIdList, resumedState)
+		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
+
+		logging.Infof("Indexer::handleResumeRecoveredIndexes Added Index: %v to Stream: %v State: %v",
+			instIdList, resumedStream, resumedState)
+
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+		updatedIndexes := idx.getInsts(instIdList)
+		msgUpdateIndexInstMap.AppendUpdatedInsts(updatedIndexes)
+
+		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err,
+						category: INDEXER}}
+			}
+			common.CrashOnError(err)
+		}
+
+		// Compute restartTs for the given keyspaceId
+		allRestartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM, keyspaceId)
+
+		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, keyspaceId)
+
+		if restartTs, ok := allRestartTs[keyspaceId]; ok {
+			sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
+			if restartTs != nil {
+				idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, restartTs, nil, nil,
+					allNilSnaps, false, false, sessionId)
+			} else {
+				idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, nil, nil, nil,
+					allNilSnaps, false, false, sessionId)
+			}
+			idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
 		} else {
 			allKeyspaceIds := make([]string, 0)
 			for kid, _ := range allRestartTs {
@@ -9125,7 +9291,7 @@ func isValidRecoveryState(state common.IndexState) bool {
 func (idx *indexer) startStreams() bool {
 
 	//Start MAINT_STREAM
-	restartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM)
+	restartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM, "")
 
 	idx.initStreamKeyspaceIdState(common.MAINT_STREAM)
 
@@ -9138,7 +9304,7 @@ func (idx *indexer) startStreams() bool {
 	}
 
 	//Start INIT_STREAM
-	restartTs, allNilSnaps = idx.makeRestartTs(common.INIT_STREAM)
+	restartTs, allNilSnaps = idx.makeRestartTs(common.INIT_STREAM, "")
 
 	idx.initStreamKeyspaceIdState(common.INIT_STREAM)
 
@@ -9153,7 +9319,7 @@ func (idx *indexer) startStreams() bool {
 
 }
 
-func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.TsVbuuid, map[string]bool) {
+func (idx *indexer) makeRestartTs(streamId common.StreamId, keyspaceId string) (map[string]*common.TsVbuuid, map[string]bool) {
 
 	restartTs := make(map[string]*common.TsVbuuid)
 	allNilSnaps := make(map[string]bool)
@@ -9161,48 +9327,55 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.
 	for idxInstId, partnMap := range idx.indexPartnMap {
 		idxInst := idx.indexInstMap[idxInstId]
 
-		if idxInst.Stream == streamId {
+		if idxInst.Stream != streamId {
+			continue
+		}
 
-			for _, partnInst := range partnMap {
+		//keyspaceId == "" indicates include all keyspaceIds
+		if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId &&
+			keyspaceId != "" {
+			continue
+		}
 
-				sc := partnInst.Sc
+		for _, partnInst := range partnMap {
 
-				//there is only one slice for now
-				slice := sc.GetSliceById(0)
+			sc := partnInst.Sc
 
-				infos, err := slice.GetSnapshots()
-				// TODO: Proper error handling if possible
-				if err != nil {
-					panic("Unable read snapinfo -" + err.Error())
-				}
+			//there is only one slice for now
+			slice := sc.GetSliceById(0)
 
-				s := NewSnapshotInfoContainer(infos)
-				latestSnapInfo := s.GetLatest()
+			infos, err := slice.GetSnapshots()
+			// TODO: Proper error handling if possible
+			if err != nil {
+				panic("Unable read snapinfo -" + err.Error())
+			}
 
-				keyspaceId := idxInst.Defn.KeyspaceId(idxInst.Stream)
-				if _, ok := allNilSnaps[keyspaceId]; !ok {
-					allNilSnaps[keyspaceId] = true
-				}
+			s := NewSnapshotInfoContainer(infos)
+			latestSnapInfo := s.GetLatest()
 
-				//There may not be a valid snapshot info if no flush
-				//happened for this index
-				if latestSnapInfo != nil {
-					allNilSnaps[keyspaceId] = false
-					ts := latestSnapInfo.Timestamp()
-					if oldTs, ok := restartTs[keyspaceId]; ok {
-						if oldTs == nil {
-							continue
-						}
-						if !ts.AsRecentTs(oldTs) {
-							restartTs[keyspaceId] = ts
-						}
-					} else {
+			keyspaceId := idxInst.Defn.KeyspaceId(idxInst.Stream)
+			if _, ok := allNilSnaps[keyspaceId]; !ok {
+				allNilSnaps[keyspaceId] = true
+			}
+
+			//There may not be a valid snapshot info if no flush
+			//happened for this index
+			if latestSnapInfo != nil {
+				allNilSnaps[keyspaceId] = false
+				ts := latestSnapInfo.Timestamp()
+				if oldTs, ok := restartTs[keyspaceId]; ok {
+					if oldTs == nil {
+						continue
+					}
+					if !ts.AsRecentTs(oldTs) {
 						restartTs[keyspaceId] = ts
 					}
 				} else {
-					//set restartTs to nil for this keyspace
-					restartTs[keyspaceId] = nil
+					restartTs[keyspaceId] = ts
 				}
+			} else {
+				//set restartTs to nil for this keyspace
+				restartTs[keyspaceId] = nil
 			}
 		}
 	}
