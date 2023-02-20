@@ -677,6 +677,15 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				m.prepareLock = nil
 			}
 		}
+
+		// Clear the duplicate index name book-keeping
+		if len(prepareCreateIndex.Bucket) > 0 {
+			key := buildDuplicateIndexKey(prepareCreateIndex)
+			if acceptedIndex, ok := m.acceptedNames[key]; ok && acceptedIndex.defnId == prepareCreateIndex.DefnId {
+				delete(m.acceptedNames, key)
+			}
+
+		}
 		return nil, nil
 	}
 
@@ -848,6 +857,10 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 	return msg, err
 }
 
+func buildDuplicateIndexKey(req *client.PrepareCreateRequest) string {
+	return fmt.Sprintf("%v:%v:%v:%v", req.Bucket, req.Scope, req.Collection, req.Name)
+}
+
 // Check for duplicate index name; returns true if duplicate index exists
 //
 // This function checks if an index with same name/keyspace is either
@@ -871,7 +884,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 // the older request will fail to release the lock during commit phase.
 func (m *LifecycleMgr) checkDuplicateIndex(req *client.PrepareCreateRequest) (exists bool, err error) {
 
-	key := fmt.Sprintf("%v:%v:%v:%v", req.Bucket, req.Scope, req.Collection, req.Name)
+	key := buildDuplicateIndexKey(req)
 
 	acquire := false
 
