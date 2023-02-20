@@ -466,7 +466,7 @@ func (c *GsiClient) UpdateDataEncodingFormat(clusterVer uint64) {
 	if clusterVer >= common.INDEXER_65_VERSION {
 		msg := "GsiClient::UpdateUsecjson: using collatejson as data format "
 		msg += "between indexer and GsiClient"
-		logging.Infof(msg)
+		logging.Debugf(msg)
 		c.SetDataEncodingFormat(common.DATA_ENC_COLLATEJSON)
 	} else {
 		c.SetDataEncodingFormat(common.DATA_ENC_JSON)
