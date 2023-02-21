@@ -437,6 +437,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			cfg.IdleRR = slice.sysconf["plasma.serverless.idleResidentRatio"].Float64()
 			cfg.MutationRateLimit = int64(slice.sysconf["plasma.serverless.mutationRateLimit"].Int())
 			cfg.IdleDurationThreshold = time.Duration(slice.sysconf["plasma.serverless.idleDurationThreshold"].Int()) * time.Second
+			cfg.UseMultipleContainers = slice.sysconf["plasma.serverless.useMultipleContainers"].Bool()
 
 			cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.serverless.LSSSegmentFileSize"].Int())
 
@@ -2827,6 +2828,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.mainstore.MaxDeltaChainLen = mdb.sysconf["plasma.serverless.mainIndex.maxNumPageDeltas"].Int()
 		mdb.mainstore.MaxPageItems = mdb.sysconf["plasma.serverless.mainIndex.pageSplitThreshold"].Int()
 		mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
+		mdb.mainstore.UseMultipleContainers = mdb.sysconf["plasma.serverless.useMultipleContainers"].Bool()
 
 		mdb.mainstore.CPdbg = mdb.sysconf["plasma.serverless.shardCopy.dbg"].Bool()
 		mdb.mainstore.S3HttpDbg = int64(mdb.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
@@ -2929,6 +2931,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			mdb.backstore.IdleDurationThreshold = time.Duration(mdb.sysconf["plasma.serverless.idleDurationThreshold"].Int()) * time.Second
 			mdb.backstore.MaxPageItems = mdb.sysconf["plasma.serverless.backIndex.pageSplitThreshold"].Int()
 			mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
+			mdb.backstore.UseMultipleContainers = mdb.sysconf["plasma.serverless.useMultipleContainers"].Bool()
 
 			mdb.backstore.CPdbg = mdb.sysconf["plasma.serverless.shardCopy.dbg"].Bool()
 			mdb.backstore.S3HttpDbg = int64(mdb.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
