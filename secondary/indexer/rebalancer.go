@@ -1154,6 +1154,47 @@ func (r *Rebalancer) moveTokenToBuildingLOCKED(ttid string, tt *common.TransferT
 	delete(r.toBuildTTsByDestId[destId], ttid)
 }
 
+//checkAnyTTPendingAcceptByDestId check if any TT in current batch for a dest has not yet
+//moved to TransferTokenAccepted state.
+func (r *Rebalancer) checkAnyTTPendingAcceptByDestId(destId string) bool {
+
+	const method string = "Rebalancer::checkAnyTTPendingAcceptByDestId:"
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
+
+	buildingMap := r.buildingTTsByDestId[destId]
+
+	for ttid, tt := range buildingMap {
+		if tt.State == c.TransferTokenCreated {
+			//if TT is in TransferTokenCreated state, it is yet to be accepted by the dest
+			logging.Infof("%v Found TransferToken %v in %v state", method, ttid, tt.State)
+			return true
+		}
+	}
+	return false
+}
+
+//getAcceptedTTByDestId returns the list of accepted TTs for given dest.
+func (r *Rebalancer) getAcceptedTTByDestId(destId string) map[string]*c.TransferToken {
+
+	const method string = "Rebalancer::getAcceptedTTByDestId:"
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
+
+	acceptedTTs := make(map[string]*common.TransferToken)
+	buildingMap := r.buildingTTsByDestId[destId]
+
+	for ttid, tt := range buildingMap {
+		if tt.State == c.TransferTokenAccepted {
+			acceptedTTs[ttid] = tt
+		}
+	}
+
+	return acceptedTTs
+}
+
 // streamKeyFromTT returns a key for the init stream indexer will use for the given transfer token. This is for
 // local tracking only so does not need to use just the bucket if it is in default scope and collection.
 func streamKeyFromTT(tt *common.TransferToken) string {
@@ -2173,8 +2214,30 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 	switch tt.State {
 
 	case c.TransferTokenAccepted:
-		tt.State = c.TransferTokenInitiate
-		setTransferTokenInMetakv(ttid, tt)
+		r.updateMasterTokenState(ttid, c.TransferTokenAccepted)
+
+		if tt.IsUserDeferred() {
+			//user deferred index do not require build and can be moved
+			//to initiate state independently
+			tt.State = c.TransferTokenInitiate
+			setTransferTokenInMetakv(ttid, tt)
+		} else {
+
+			//Move to initiate state only if all the tokens have been
+			//accepted by the destination. There can be a race condition
+			//where destination receives initiate state before it
+			//gets notified about create of some tokens in the batch.
+			if !r.checkAnyTTPendingAcceptByDestId(tt.DestId) {
+
+				//find all tokens in the batch for this dest and
+				//move to initiate state.
+				acceptedTTs := r.getAcceptedTTByDestId(tt.DestId)
+				for ttid, tt := range acceptedTTs {
+					tt.State = c.TransferTokenInitiate
+					setTransferTokenInMetakv(ttid, tt)
+				}
+			}
+		}
 
 	case c.TransferTokenRefused:
 		//TODO replan
