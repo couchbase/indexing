@@ -1891,3 +1891,6 @@ func (fdb *fdbSlice) SetRebalRunning() {
 func (fdb *fdbSlice) GetWriteUnits() uint64 {
 	return 0
 }
+
+func (fdb *fdbSlice) SetStopWriteUnitBilling(isRebalance bool) {
+}

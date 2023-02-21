@@ -194,6 +194,7 @@ type plasmaSlice struct {
 
 	meteringMgr   *MeteringThrottlingMgr
 	meteringStats *meteringStats
+	stopWUBilling uint32
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
@@ -662,6 +663,30 @@ func (s *plasmaSlice) GetWriteUnits() uint64 {
 	return wu
 }
 
+func (s *plasmaSlice) isMeteringMaster() bool {
+	return (s.replicaId == 0)
+}
+
+func (s *plasmaSlice) SetStopWriteUnitBilling(disableBilling bool) {
+	if !s.EnableMetering() || !s.isMeteringMaster() {
+		return
+	}
+
+	if disableBilling {
+		atomic.StoreUint32(&s.stopWUBilling, 1)
+		logging.Infof("plasmaSlice::SetStopWriteUnitBilling SliceId %v IndexInstId %v PartitionId %v Stopped Billing WUs",
+			s.id, s.idxInstId, s.idxPartnId)
+	} else {
+		atomic.StoreUint32(&s.stopWUBilling, 0)
+		logging.Infof("plasmaSlice::SetStopWriteUnitBilling SliceId %v IndexInstId %v PartitionId %v Started Billing WUs",
+			s.id, s.idxInstId, s.idxPartnId)
+	}
+}
+
+func (s *plasmaSlice) isWriteBillingStopped() bool {
+	return atomic.LoadUint32(&s.stopWUBilling) == 1
+}
+
 func (s *plasmaSlice) RecordWriteUnits(bytes uint64) {
 	if !s.EnableMetering() {
 		return
@@ -669,15 +694,16 @@ func (s *plasmaSlice) RecordWriteUnits(bytes uint64) {
 
 	var err error
 	var wu uint64
-	billable := (s.replicaId == 0)
-	if billable {
+	if s.isMeteringMaster() {
 		// If billable fetch the number of WUs and add to local counter
 		// before recording in regulator so that we can refund if there
 		// is a restart. Its fine to refund more.
 		wu, err = s.meteringMgr.IndexWriteToWU(bytes)
 		if err == nil {
 			atomic.AddUint64(&s.meteringStats.writeUnits, wu)
-			err = s.meteringMgr.RecordWriteUnitsComputed(s.idxDefn.Bucket, wu, true, false)
+			wuBilling := !s.isWriteBillingStopped()
+			err = s.meteringMgr.RecordWriteUnitsComputed(s.idxDefn.Bucket,
+				wu, wuBilling, false)
 			s.meteringStats.recordWriteUsageStats(wu)
 		}
 	} else {

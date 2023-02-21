@@ -365,7 +365,7 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 		processed = sr.processShardTransferTokenAsSource(ttid, tt)
 	}
 
-	if tt.DestId == sr.nodeUUID && !processed {
+	if (tt.DestId == sr.nodeUUID && !processed) || (tt.ShardTransferTokenState == c.ShardTokenDropOnSource) {
 		processed = sr.processShardTransferTokenAsDest(ttid, tt)
 	}
 }
@@ -593,7 +593,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 				return true
 			}
 		}
-		return true
+		return false
 
 	case c.ShardTokenCommit:
 		// If node sees a commit token, then DDL can be allowed on
@@ -655,6 +655,16 @@ func (sr *ShardRebalancer) getTokenById(ttid string) *c.TransferToken {
 	defer sr.mu.Unlock()
 
 	if token, ok := sr.sourceTokens[ttid]; ok && token != nil {
+		return token.Clone()
+	}
+	return nil // Return error as the default state
+}
+
+func (sr *ShardRebalancer) getAcceptedTokenById(ttid string) *c.TransferToken {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if token, ok := sr.acceptedTokens[ttid]; ok && token != nil {
 		return token.Clone()
 	}
 	return nil // Return error as the default state
@@ -869,6 +879,16 @@ func (sr *ShardRebalancer) getSourceIdForTokenId(ttid string) string {
 	return ""
 }
 
+func (sr *ShardRebalancer) getDestinationIdForTokenId(ttid string) string {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if tt, ok := sr.acceptedTokens[ttid]; ok {
+		return tt.DestId
+	}
+	return ""
+}
+
 func (sr *ShardRebalancer) queueDropShardRequests(ttid string) {
 	const method string = "ShardRebalancer::queueDropShardRequests:" // for logging
 
@@ -939,6 +959,33 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		go sr.startShardRecovery(ttid, tt)
 
 		return true
+
+	case c.ShardTokenDropOnSource:
+		enableWriteBilling := func(token *c.TransferToken) {
+			msg := &MsgMeteringUpdate{
+				mType:   METERING_MGR_START_WRITE_BILLING,
+				InstIds: make([]c.IndexInstId, 0),
+				respCh:  make(chan error),
+			}
+			msg.InstIds = append(msg.InstIds, token.InstIds...)
+
+			sr.supvMsgch <- msg
+			<-msg.respCh
+		}
+
+		// Enable metering on destination node after DropOnSource token is posted
+		// After this point shard is assumed to be moved to destination
+		if sr.getDestinationIdForTokenId(tt.SourceTokenId) == sr.nodeUUID {
+			srcToken := sr.getAcceptedTokenById(tt.SourceTokenId)
+			enableWriteBilling(srcToken)
+			return true
+		}
+		if sr.getDestinationIdForTokenId(tt.SiblingTokenId) == sr.nodeUUID {
+			sibToken := sr.getAcceptedTokenById(tt.SiblingTokenId)
+			enableWriteBilling(sibToken)
+			return true
+		}
+		return false
 
 	case c.ShardTokenCommit:
 		sr.updateInMemToken(ttid, tt, "dest")

@@ -231,6 +231,10 @@ func (m *MeteringThrottlingMgr) handleSupvervisorCommands(cmd Message) {
 		m.handleUpdateIndexPartnMap(cmd)
 	case CLUST_MGR_INDEXER_READY:
 		m.handleIndexerReady()
+	case METERING_MGR_STOP_WRITE_BILLING:
+		m.handleStopWriteBilling(cmd)
+	case METERING_MGR_START_WRITE_BILLING:
+		m.handleStartWriteBilling(cmd)
 	default:
 		logging.Errorf("MeteringThrottlingMgr: Received Unknown Command %v", cmd)
 		m.supvCmdch <- &MsgError{
@@ -238,6 +242,46 @@ func (m *MeteringThrottlingMgr) handleSupvervisorCommands(cmd Message) {
 				severity: NORMAL,
 				category: METERING_THROTTLING_MGR}}
 	}
+}
+
+// handleStarWriteBilling start WU Billing for slices. This will only impact the
+// slices for which WU Billing was stopped
+func (m *MeteringThrottlingMgr) handleStartWriteBilling(cmd Message) {
+	msg := cmd.(*MsgMeteringUpdate)
+	instIdsToStart := msg.GetInstanceIds()
+
+	indexPartnMap := m.indexPartnMap.Get()
+	for _, instId := range instIdsToStart {
+		if partnInstMap, ok := indexPartnMap[instId]; ok {
+			for _, partn := range partnInstMap {
+				for _, slice := range partn.Sc.GetAllSlices() {
+					slice.SetStopWriteUnitBilling(false)
+				}
+			}
+		}
+	}
+	msg.respCh <- nil
+	m.supvCmdch <- &MsgSuccess{}
+}
+
+// handleStopWriteBilling stops the write billing for the instIds give in the
+// input message
+func (m *MeteringThrottlingMgr) handleStopWriteBilling(cmd Message) {
+	msg := cmd.(*MsgMeteringUpdate)
+	instIdsToStop := msg.GetInstanceIds()
+
+	indexPartnMap := m.indexPartnMap.Get()
+	for _, instId := range instIdsToStop {
+		if partnInstMap, ok := indexPartnMap[instId]; ok {
+			for _, partn := range partnInstMap {
+				for _, slice := range partn.Sc.GetAllSlices() {
+					slice.SetStopWriteUnitBilling(true)
+				}
+			}
+		}
+	}
+	msg.respCh <- nil
+	m.supvCmdch <- &MsgSuccess{}
 }
 
 func (m *MeteringThrottlingMgr) handleConfigUpdate(cmd Message) {

@@ -207,6 +207,8 @@ const (
 	UNLOCK_SHARDS
 	RESTORE_SHARD_DONE
 	RESTORE_AND_UNLOCK_LOCKED_SHARDS
+	METERING_MGR_STOP_WRITE_BILLING
+	METERING_MGR_START_WRITE_BILLING
 )
 
 type Message interface {
@@ -2888,6 +2890,31 @@ func (m *MsgRestoreAndUnlockShards) GetRespCh() chan bool {
 	return m.respCh
 }
 
+type MsgMeteringUpdate struct {
+	mType   MsgType
+	InstIds []common.IndexInstId
+	respCh  chan error
+}
+
+func (m *MsgMeteringUpdate) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgMeteringUpdate) GetInstanceIds() []common.IndexInstId {
+	return m.InstIds
+}
+
+func (m *MsgMeteringUpdate) GetRespCh() chan error {
+	return m.respCh
+}
+
+func (m *MsgMeteringUpdate) String() string {
+	str := fmt.Sprintf("Message: MsgMeteringUpdate")
+	str += fmt.Sprintf("\n\t mType: %s", m.mType)
+	str += fmt.Sprintf("\n\t InstIds: %v", m.InstIds)
+	return str
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3208,7 +3235,10 @@ func (m MsgType) String() string {
 		return "RESTORE_SHARD_DONE"
 	case RESTORE_AND_UNLOCK_LOCKED_SHARDS:
 		return "RESTORE_AND_UNLOCK_LOCKED_SHARDS"
-
+	case METERING_MGR_START_WRITE_BILLING:
+		return "METERING_MGR_START_WRITE_BILLING"
+	case METERING_MGR_STOP_WRITE_BILLING:
+		return "METERING_MGR_STOP_WRITE_BILLING"
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
