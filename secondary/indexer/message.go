@@ -2607,20 +2607,16 @@ func (m *MsgShardTransferResp) GetRespCh() chan Message {
 }
 
 type MsgShardTransferCleanup struct {
-	shardPaths      map[common.ShardId]string // shardId -> Location of shard transfer
 	destination     string
 	region          string
 	rebalanceId     string
 	transferTokenId string
 	respCh          chan bool
+	syncCleanup     bool
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
 	return SHARD_TRANSFER_CLEANUP
-}
-
-func (m *MsgShardTransferCleanup) GetShardPaths() map[common.ShardId]string {
-	return m.shardPaths
 }
 
 func (m *MsgShardTransferCleanup) GetDestination() string {
@@ -2643,13 +2639,17 @@ func (m *MsgShardTransferCleanup) GetRespCh() chan bool {
 	return m.respCh
 }
 
+func (m *MsgShardTransferCleanup) IsSyncCleanup() bool {
+	return m.syncCleanup
+}
+
 func (m *MsgShardTransferCleanup) String() string {
 	var sb strings.Builder
 	sbp := &sb
 
-	fmt.Fprintf(sbp, " ShardPaths: %v ", m.shardPaths)
 	fmt.Fprintf(sbp, " RebalanceId: %v ", m.rebalanceId)
 	fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferTokenId)
+	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
 	fmt.Fprintf(sbp, " Region: %v ", m.region)
 
 	return sbp.String()
