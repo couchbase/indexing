@@ -9616,10 +9616,12 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true
 
-			idx.clearRebalancePhase(true)
-			idx.globalRebalPhase = common.RebalanceInitated
-			idx.slicePendingClosure = make(map[string][]Slice)
-			idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
+			if common.IsServerlessDeployment() {
+				idx.clearRebalancePhase(true)
+				idx.globalRebalPhase = common.RebalanceInitated
+				idx.slicePendingClosure = make(map[string][]Slice)
+				idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
+			}
 
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
 			idx.sendMsgToClustMgrAndProcessResponse(msg)
@@ -11708,6 +11710,11 @@ func (idx *indexer) canAllowDDLDuringRebalance() bool {
 
 func (idx *indexer) updateRebalancePhase(cmd Message) error {
 
+	// update rebalance phase only for serverless deployments
+	if !common.IsServerlessDeployment() {
+		return nil
+	}
+
 	logging.Infof("Indexer:updateRebalancePhase %v", cmd)
 
 	globalRebalPhase := cmd.(*MsgUpdateRebalancePhase).GetGlobalRebalancePhase()
@@ -11760,6 +11767,12 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 }
 
 func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId) bool {
+
+	// Always close slices for non-serverless deployments
+	if !common.IsServerlessDeployment() {
+		return false
+	}
+
 	if idx.globalRebalPhase == common.RebalanceInitated {
 		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in drop phase, inst: %v", instId)
 		return true
