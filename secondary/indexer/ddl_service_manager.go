@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/audit"
@@ -1269,8 +1270,13 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 
 func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, valid := m.validateAuth(w, r)
+	if !valid {
 		logging.Errorf("DDLServiceMgr::handleListMetadataTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListMetadataTokens:") {
 		return
 	}
 
@@ -1416,8 +1422,13 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, valid := m.validateAuth(w, r)
+	if !valid {
 		logging.Errorf("DDLServiceMgr::handleListCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListCreateTokens:") {
 		return
 	}
 
@@ -1500,8 +1511,13 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 // with a list of all delete tokens in metakv on this indexer host.
 func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
 		logging.Errorf("DDLServiceMgr::handleListDeleteTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListDeleteTokens:") {
 		return
 	}
 
@@ -1544,8 +1560,13 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 func (m *DDLServiceMgr) handleListGenericTokenPaths(w http.ResponseWriter,
 	r *http.Request, callerName string, listerFunc func() ([]string, error)) {
 
-	if !m.validateAuth(w, r) {
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
 		logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths Validation Failure caller: %v, req: %v", callerName, common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListGenericTokenPaths:") {
 		return
 	}
 
@@ -1593,8 +1614,13 @@ func (m *DDLServiceMgr) handleListDeleteTokenPaths(w http.ResponseWriter, r *htt
 // with a list of all drop instance tokens in metakv on this indexer host.
 func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, valid := m.validateAuth(w, r)
+	if !valid {
 		logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListDropInstanceTokens:") {
 		return
 	}
 
@@ -1640,8 +1666,13 @@ func (m *DDLServiceMgr) handleListDropInstanceTokenPaths(w http.ResponseWriter, 
 
 func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, valid := m.validateAuth(w, r)
+	if !valid {
 		logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListScheduleCreateTokens:") {
 		return
 	}
 
@@ -1679,8 +1710,13 @@ func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r 
 
 func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
 		logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "DDLServiceMgr::handleListStopScheduleCreateTokens:") {
 		return
 	}
 
@@ -1717,9 +1753,13 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 }
 
 func (m *DDLServiceMgr) handleTransferScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
-	valid := m.validateAuth(w, r)
+	creds, valid := m.validateAuth(w, r)
 	if !valid {
 		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "DDLServiceMgr::handleTransferScheduleCreateTokens:") {
 		return
 	}
 
@@ -1764,8 +1804,8 @@ func (m *DDLServiceMgr) transferScheduleCreateTokens(tokens []mc.ScheduleCreateT
 	return nil
 }
 
-func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := common.IsAuthValid(r)
+func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -1774,7 +1814,7 @@ func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) boo
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 	}
-	return valid
+	return creds, valid
 }
 
 func (m *DDLServiceMgr) startCommandListner() {
