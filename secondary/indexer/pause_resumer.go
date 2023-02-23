@@ -977,12 +977,6 @@ func (r *Resumer) postRecoverIndexReq(indexDefn c.IndexDefn) (bool, error) {
 	}
 
 	if response.Error != "" {
-		if isMissingBSC(response.Error) || isIndexDeletedDuringRebal(response.Error) {
-			logging.Infof("Resumer::postRecoverIndexReq scope/collection/index is "+
-				"deleted during rebalance. Skipping the indexDefnId: %v from further processing. "+
-				"indexDefnId: %v, Error: %v", indexDefn.DefnId, response.Error)
-			return true, nil
-		}
 		l.Errorf("Resumer::postRecoverIndexReq Error received for indexDefnId: %v, err: %v",
 			indexDefn.DefnId, response.Error)
 		return false, errors.New(response.Error)
