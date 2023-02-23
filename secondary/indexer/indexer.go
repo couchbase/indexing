@@ -3394,7 +3394,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 	}
 
-	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList, common.INIT_STREAM)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
@@ -3595,7 +3595,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		}
 	}
 
-	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList, common.INIT_STREAM)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
@@ -3753,7 +3753,7 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 		return
 	}
 
-	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList, common.MAINT_STREAM)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
@@ -9849,12 +9849,12 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 	return newList, len(newList) == len(instIdList)-skipCount
 }
 
-func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
+func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId, streamId common.StreamId) map[string][]common.IndexInstId {
 
 	keyspaceIdInstList := make(map[string][]common.IndexInstId)
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
-		keyspaceId := indexInst.Defn.KeyspaceId(common.INIT_STREAM)
+		keyspaceId := indexInst.Defn.KeyspaceId(streamId)
 		if instList, ok := keyspaceIdInstList[keyspaceId]; ok {
 			instList = append(instList, indexInst.InstId)
 			keyspaceIdInstList[keyspaceId] = instList
