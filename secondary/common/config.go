@@ -3642,10 +3642,18 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
-	"indexer.plasma.serverless.shardCopy.dbg": ConfigValue{
+	"indexer.plasma.shardCopy.dbg": ConfigValue{
 		false,
 		"Enable debug during shard transfer and restore",
 		false,
+		false,
+		false,
+	},
+	"indexer.plasma.shardCopy.maxRetries": ConfigValue{
+		2,
+		"Maximum retry attempts for transient network errors." +
+			"For e.g, connection resets on downloads are not retried by the aws sdk",
+		2,
 		false,
 		false,
 	},
@@ -3666,9 +3674,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.serverless.shardCopy.s3MaxRetries": ConfigValue{
-		3,
+		4,
 		"Maximum HTTP level retry attempts for an S3 request. This is aws sdk default as well.",
-		3,
+		4,
 		false,
 		false,
 	},
