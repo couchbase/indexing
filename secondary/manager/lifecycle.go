@@ -2228,7 +2228,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 				// DDL can not be processed. Set scheduled flag, update build error
 				// and continue. The defn will be added to retry list after all instances
 				// are updated with buildErr
-				buildErr = errors.New(fmt.Sprintf("Index %v will retry building in the background as rebalance is in progress for bucket: %v", defn.Name, defn.Bucket))
+				buildErr = errors.New(fmt.Sprintf("Index %v %v as rebalance is in progress for bucket: %v", defn.Name, common.ErrRetryIndexBuild, defn.Bucket))
 				logging.Warnf("LifecycleMgr::handleBuildIndexes: inst: %v build will be scheduled in the background as rebalance "+
 					"is in progress for bucket: %v", inst.InstId, defn.Bucket)
 				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, buildErr.Error())
@@ -2279,7 +2279,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			}
 
 			if m.canRetryBuildError(inst, build_err, isRebalOrResume) {
-				build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
+				build_err = errors.New(fmt.Sprintf("Index %v %v for reason: %v.", defn.Name, common.ErrRetryIndexBuild, build_err.Error()))
 
 				logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)

@@ -617,7 +617,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 	if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeCopy && siblingId == "" { // only replica repair case
 		// Since this is replica repair, do not drop the shard data. Only cleanup the transferred data
 		// and unlock the shards
-		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Initiating shard unlocking for token: %v", sourceId)
+		l.Infof("ShardRebalancer::checkAndQueueTokenForDrop Initiating shard unlocking for token: %v", sourceId)
 
 		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
 		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil, false)
@@ -628,7 +628,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 
 	} else if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeMove { // Single node swap rebalance (or) single node swap + replica repair in same rebalance
 
-		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Queuing token: %v for drop", sourceId)
+		l.Infof("ShardRebalancer::checkAndQueueTokenForDrop Queuing token: %v for drop", sourceId)
 		sr.queueDropShardRequests(sourceId)
 
 		// Skip unlocking shards as the shards are going to be destroyed
@@ -645,7 +645,7 @@ func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sou
 		return true
 
 	} else {
-		l.Infof("ShardRebalancer::processShardTransferTokenAsSource Skipping token: %v for drop", sourceId)
+		l.Infof("ShardRebalancer::checkAndQueueTokenForDrop Skipping token: %v for drop", sourceId)
 	}
 	return false
 }
@@ -2096,15 +2096,23 @@ loop:
 						droppedIndexes[instKey] = true // consider the index as deleted
 						continue
 					} else if err != "" {
-						l.Errorf("ShardRebalancer::dropShardsWhenIdle Error Fetching Index Status %v %v", sr.localaddr, err)
-						retryCount++
+						// If index build is scheduled but it could not proceed, then
+						// ignore the error and proceed to drop the index
+						if strings.Contains(err, common.ErrRetryIndexBuild.Error()) {
+							logging.Infof("ShardRebalancer::dropShardsWhenIdle Ignoring err: %v for inst: %v and "+
+								"proceeding to drop the index", err, instKey)
+							// Continue to drop the index
+						} else {
+							l.Errorf("ShardRebalancer::dropShardsWhenIdle Error Fetching Index Status %v, err: %v", sr.localaddr, err)
+							retryCount++
 
-						if retryCount > 50 { // After 50 retires
-							droppedIndexes[instKey] = true // Consider index drop successful and continue
-							continue
+							if retryCount > 50 { // After 50 retires
+								droppedIndexes[instKey] = true // Consider index drop successful and continue
+								continue
+							}
+							time.Sleep(retryInterval * time.Second)
+							goto loop // Retry
 						}
-						time.Sleep(retryInterval * time.Second)
-						goto loop // Retry
 					}
 				}
 
@@ -2195,6 +2203,9 @@ loop:
 			setTransferTokenInMetakv(ttid, tt)
 			return
 		}
+
+		// reset retryCount as one iteration has been successfully completed
+		retryCount = 0
 
 		time.Sleep(1 * time.Second)
 	}
