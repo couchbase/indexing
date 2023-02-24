@@ -1401,7 +1401,16 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 				"from metaKV before attempting to drop token on source")
 			m.updateShardTokenMap(tokenMap)
 			*updateTokenMap = false
-			goto retryCleanupAtReady
+
+			// If token still exists in metaKV (i.e. if destination has not
+			// deleted the token) then re-check if the token has to be
+			// dropped on source. Otherwise, skip processing the token
+			// on destination
+			if _, ok := tokenMap[ttid]; ok {
+				goto retryCleanupAtReady
+			} else {
+				dropOnSource = false
+			}
 		}
 
 		if dropOnSource {
@@ -1476,7 +1485,15 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 				"from metaKV before attempting to drop token on destination")
 			m.updateShardTokenMap(tokenMap)
 			*updateTokenMap = false
-			goto retryCleanupAtReady
+
+			// If token still exists metaKV (i.e. if source has not deleted
+			// the token) then re-check if the token has to be dropped on
+			// destination. Otherwise, skip processing the token on destination
+			if _, ok := tokenMap[ttid]; ok {
+				goto retryCleanupAtReady
+			} else {
+				dropOnDest = false
+			}
 		}
 
 		if dropOnDest {
@@ -1525,7 +1542,15 @@ func (m *RebalanceServiceManager) updateShardTokenMap(tokenMap map[string]*c.Tra
 			return
 		}
 
-		if rtokens != nil && len(rtokens.TT) != 0 {
+		// Clear earlier entries of tokenMap as transfer tokens are being refetched
+		// from metaKV. Do not re-initialise the tokenMap
+		// using "make" as that will not be reflected outside this method
+		for ttid, _ := range tokenMap {
+			delete(tokenMap, ttid)
+		}
+
+		// Update the remaining tokens in the tokenMap
+		if rtokens != nil {
 			l.Infof("RebalanceServiceManager::updateShardTokenMap Found %v tokens. Cleaning up.", len(rtokens.TT))
 			for ttid, tt := range rtokens.TT {
 				tokenMap[ttid] = tt
