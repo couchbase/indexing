@@ -3394,7 +3394,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 	}
 
-	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList, common.INIT_STREAM)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
@@ -3595,7 +3595,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		}
 	}
 
-	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList, common.INIT_STREAM)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
@@ -3753,7 +3753,7 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 		return
 	}
 
-	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList, common.MAINT_STREAM)
 	errMap := make(map[common.IndexInstId]error) // build errors by instId
 
 	for keyspaceId, instIdList := range keyspaceIdIndexList {
@@ -9616,10 +9616,12 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true
 
-			idx.clearRebalancePhase(true)
-			idx.globalRebalPhase = common.RebalanceInitated
-			idx.slicePendingClosure = make(map[string][]Slice)
-			idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
+			if common.IsServerlessDeployment() {
+				idx.clearRebalancePhase(true)
+				idx.globalRebalPhase = common.RebalanceInitated
+				idx.slicePendingClosure = make(map[string][]Slice)
+				idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
+			}
 
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
 			idx.sendMsgToClustMgrAndProcessResponse(msg)
@@ -9847,12 +9849,12 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 	return newList, len(newList) == len(instIdList)-skipCount
 }
 
-func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
+func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId, streamId common.StreamId) map[string][]common.IndexInstId {
 
 	keyspaceIdInstList := make(map[string][]common.IndexInstId)
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
-		keyspaceId := indexInst.Defn.KeyspaceId(common.INIT_STREAM)
+		keyspaceId := indexInst.Defn.KeyspaceId(streamId)
 		if instList, ok := keyspaceIdInstList[keyspaceId]; ok {
 			instList = append(instList, indexInst.InstId)
 			keyspaceIdInstList[keyspaceId] = instList
@@ -11708,6 +11710,11 @@ func (idx *indexer) canAllowDDLDuringRebalance() bool {
 
 func (idx *indexer) updateRebalancePhase(cmd Message) error {
 
+	// update rebalance phase only for serverless deployments
+	if !common.IsServerlessDeployment() {
+		return nil
+	}
+
 	logging.Infof("Indexer:updateRebalancePhase %v", cmd)
 
 	globalRebalPhase := cmd.(*MsgUpdateRebalancePhase).GetGlobalRebalancePhase()
@@ -11760,6 +11767,12 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 }
 
 func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId) bool {
+
+	// Always close slices for non-serverless deployments
+	if !common.IsServerlessDeployment() {
+		return false
+	}
+
 	if idx.globalRebalPhase == common.RebalanceInitated {
 		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in drop phase, inst: %v", instId)
 		return true

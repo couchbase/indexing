@@ -4603,6 +4603,10 @@ func getTenantUsageForSubCluster(subCluster SubCluster) []*TenantUsage {
 			continue
 		}
 
+		if highestUsageNode == nil {
+			highestUsageNode = indexNode
+		}
+
 		if indexNode.MandatoryQuota > maxMemoryUsage {
 			maxMemoryUsage = indexNode.MandatoryQuota
 			highestUsageNode = indexNode

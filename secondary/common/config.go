@@ -3562,6 +3562,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.serverless.useMultipleContainers": ConfigValue{
+		false,
+		"use multiple containers for memory management",
+		false,
+		false,
+		false,
+	},
 	"indexer.serverless.scan.throttle.queued_threshold": ConfigValue{
 		500,
 		"Pause scan if queued mutation exceed threshold per bucket",
