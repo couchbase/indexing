@@ -681,16 +681,32 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 	return watcherMap, nil, false, false
 }
 
+func (o *MetadataProvider) getCancelPrepareRequest(defn *c.IndexDefn, sched bool) *PrepareCreateRequest {
+	request := &PrepareCreateRequest{
+		Op:          CANCEL_PREPARE,
+		DefnId:      defn.DefnId,
+		RequesterId: o.providerId,
+	}
+
+	// If index is not getting scheduled, then add additional parameters
+	// to the request so that lifecycle manager can clear its book-keeping
+	if !sched {
+		// Populate bucket, scope, collection and name in the cancel request
+		request.Bucket = defn.Bucket
+		request.Scope = defn.Scope
+		request.Collection = defn.Collection
+		request.Name = defn.Name
+	}
+	return request
+
+}
+
 //
 // This function clean up prepare index request
 //
-func (o *MetadataProvider) cancelPrepareIndexRequest(defnId c.IndexDefnId, watcherMap map[c.IndexerId]int) {
+func (o *MetadataProvider) cancelPrepareIndexRequest(defn *c.IndexDefn, watcherMap map[c.IndexerId]int, sched bool) {
 
-	request := &PrepareCreateRequest{
-		Op:          CANCEL_PREPARE,
-		DefnId:      defnId,
-		RequesterId: o.providerId,
-	}
+	request := o.getCancelPrepareRequest(defn, sched)
 
 	content, err := MarshallPrepareCreateRequest(request)
 	if err != nil {
@@ -698,6 +714,7 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defnId c.IndexDefnId, watch
 		return
 	}
 
+	defnId := defn.DefnId
 	key := fmt.Sprintf("%d", defnId)
 	for indexerId, _ := range watcherMap {
 
@@ -724,7 +741,8 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defnId c.IndexDefnId, watch
 // This function makes a call to create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxDefn *c.IndexDefn, requestId uint64,
-	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int, asyncCreate bool) (bool, error) {
+	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int,
+	asyncCreate, scheduleOnFailure bool) (bool, error) {
 
 	request := &CommitCreateRequest{
 		Op:          op,
@@ -853,7 +871,15 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				}
 				// Rebalance is not running, but commit request failed due to concurrent
 				// index creation on other nodes. Schedule the index for back ground creation
-				return true, nil
+				// Only for serverless deployments
+				if scheduleOnFailure &&
+					o.GetClusterVersion() >= c.INDEXER_70_VERSION &&
+					c.IsServerlessDeployment() {
+					return true, nil
+				} else {
+					// no-op at this point.
+					// We wait on create command token check and eventually return error
+				}
 			}
 			// Index creation could not proceed due to some other error. Check for the presence
 			// of create command token
@@ -1297,10 +1323,6 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true, ctime)
 
 	if err != nil {
-		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
-		msg := fmt.Sprintf("Index creation for index %v, bucket %v, scope %v, collection %v"+
-			" cannot start. Reason: %v.", idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, err)
-
 		sched := false
 
 		clusterVersion := o.GetClusterVersion()
@@ -1313,6 +1335,10 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 			// Check if background creation is allowed during rebalance
 			sched = false
 		}
+
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap, sched)
+		msg := fmt.Sprintf("Index creation for index %v, bucket %v, scope %v, collection %v"+
+			" cannot start. Reason: %v.", idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, err)
 
 		if sched {
 			if security.IsToolsConfigUsed() {
@@ -1408,7 +1434,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
 
 		if err != nil && (c.IsServerlessDeployment() || (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error()) || strings.Contains(err.Error(), c.ErrIndexBucketLimitReached.Error()))) {
-			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
 			return err
 		}
 	}
@@ -1434,16 +1460,17 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	// In serverless deployments, when DDL operations during rebalance are supported, and if commit
 	// request of an index failes due to rebalance, then the index is scheduled for background creation
 	schedIndex := false
-	schedIndex, err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate)
+	schedIndex, err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate, scheduleOnFailure)
 	if err != nil {
 		logging.Errorf("Fail to create index: %v", err)
 		return err
 	}
 
-	if c.IsServerlessDeployment() && schedIndex {
+	// schedIndex will be true only for serverless deployments
+	if schedIndex {
 
 		// Cancel the previously sent prepare request
-		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap, schedIndex)
 
 		scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 		if scheduleErr == nil {
@@ -3793,7 +3820,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false, 0)
 
 	if err != nil {
-		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(&defn, watcherMap, false)
 		return fmt.Errorf("Fail to alter index: %v", err)
 	}
 
@@ -3801,18 +3828,18 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	// Let see if the watcher map matches the node list.
 	valid, err := o.verifyNodeList(nodeList, watcherMap)
 	if err != nil {
-		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(&defn, watcherMap, false)
 		return fmt.Errorf("Fail to alter index: %v", err)
 	}
 	if !valid {
-		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(&defn, watcherMap, false)
 		return fmt.Errorf("Cluster has failed nodes, undergo network partition, or unable to determine indexer node status.")
 	}
 
 	// Fetch the numReplica
 	numReplica, err := o.getNumReplica(defn.DefnId, defn.Name, defn.Bucket, defn.Scope, defn.Collection, watcherMap)
 	if err != nil {
-		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(&defn, watcherMap, false)
 		return fmt.Errorf("Fail to alter index: %v", err)
 	}
 	curCount, _ := numReplica.Value()
@@ -3829,7 +3856,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 
 	// Alter replica_count.   Check if we already have the desired number of replica
 	if int(curCount) == count {
-		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(&defn, watcherMap, false)
 		return fmt.Errorf("Index already has %v number of replica.", curCount)
 	}
 
@@ -3860,12 +3887,12 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 	for indexerId, _ := range watcherMap {
 		exist, err := o.SendCheckTokenRequest(indexerId, idxDefn.DefnId, DROP_INDEX_TOKEN)
 		if err != nil {
-			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
 			logging.Errorf("Fail to alter index: %v", err)
 			return err
 		}
 		if exist {
-			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
 			err := fmt.Errorf("Cannot alter index while the index is in the process of being dropped.")
 			logging.Errorf("Fail to alter index: %v", err)
 			return err
@@ -3879,7 +3906,7 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 	//
 	_, definitions, err := o.replicaRepair(idxDefn, numReplica, increment, plan, watcherMap)
 	if err != nil {
-		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
 		return err
 	}
 
@@ -3893,10 +3920,10 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 	//
 	requestId, err := c.NewIndexInstId()
 	if err != nil {
-		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
 		return err
 	}
-	_, err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap, false)
+	_, err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap, false, false)
 	if err != nil {
 		logging.Errorf("Fail to alter index: %v", err)
 		return err
@@ -3920,7 +3947,7 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 	//
 	instIds, replicaIds, err := o.replicaDrop(idxDefn, numReplica, decrement, numPartition, dropReplicaId, plan, watcherMap)
 	if err != nil {
-		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
 		logging.Errorf("Fail to drop index replica: %v", err)
 		return err
 	}
@@ -3957,7 +3984,7 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 	// The first indexer that responds with success will create a token so that it can roll forward even if this
 	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
 	//
-	_, err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap, false)
+	_, err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap, false, false)
 	if err != nil {
 		logging.Errorf("Fail to alter index: %v", err)
 		return err

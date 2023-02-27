@@ -677,6 +677,15 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				m.prepareLock = nil
 			}
 		}
+
+		// Clear the duplicate index name book-keeping
+		if len(prepareCreateIndex.Bucket) > 0 {
+			key := buildDuplicateIndexKey(prepareCreateIndex)
+			if acceptedIndex, ok := m.acceptedNames[key]; ok && acceptedIndex.defnId == prepareCreateIndex.DefnId {
+				delete(m.acceptedNames, key)
+			}
+
+		}
 		return nil, nil
 	}
 
@@ -848,6 +857,10 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 	return msg, err
 }
 
+func buildDuplicateIndexKey(req *client.PrepareCreateRequest) string {
+	return fmt.Sprintf("%v:%v:%v:%v", req.Bucket, req.Scope, req.Collection, req.Name)
+}
+
 // Check for duplicate index name; returns true if duplicate index exists
 //
 // This function checks if an index with same name/keyspace is either
@@ -871,7 +884,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 // the older request will fail to release the lock during commit phase.
 func (m *LifecycleMgr) checkDuplicateIndex(req *client.PrepareCreateRequest) (exists bool, err error) {
 
-	key := fmt.Sprintf("%v:%v:%v:%v", req.Bucket, req.Scope, req.Collection, req.Name)
+	key := buildDuplicateIndexKey(req)
 
 	acquire := false
 
@@ -2215,7 +2228,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 				// DDL can not be processed. Set scheduled flag, update build error
 				// and continue. The defn will be added to retry list after all instances
 				// are updated with buildErr
-				buildErr = errors.New(fmt.Sprintf("Index %v will retry building in the background as rebalance is in progress for bucket: %v", defn.Name, defn.Bucket))
+				buildErr = errors.New(fmt.Sprintf("Index %v %v as rebalance is in progress for bucket: %v", defn.Name, common.ErrRetryIndexBuild, defn.Bucket))
 				logging.Warnf("LifecycleMgr::handleBuildIndexes: inst: %v build will be scheduled in the background as rebalance "+
 					"is in progress for bucket: %v", inst.InstId, defn.Bucket)
 				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, buildErr.Error())
@@ -2266,7 +2279,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			}
 
 			if m.canRetryBuildError(inst, build_err, isRebalOrResume) {
-				build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
+				build_err = errors.New(fmt.Sprintf("Index %v %v for reason: %v.", defn.Name, common.ErrRetryIndexBuild, build_err.Error()))
 
 				logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
