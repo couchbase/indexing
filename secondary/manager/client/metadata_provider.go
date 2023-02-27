@@ -485,6 +485,16 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 			return c.IndexDefnId(0), errors.New(err.Error()), false
 		}
+
+		//If there is any failed or unhealthy node, fail the create index. The constraints
+		//for sub-cluster affinity can be reliably validated if all nodes are healthy and reachable.
+		if !o.isClusterHealthy() || !o.AllWatchersAlive() {
+			index := fmt.Sprintf("%v:%v:%v:%v", bucket, scope, collection, name)
+			errMsg := fmt.Sprintf("Fails to create index (%v) as some of index service nodes are"+
+				" in failed/unhealthy state.", index)
+			logging.Errorf("%v", errMsg)
+			return c.IndexDefnId(0), errors.New(errMsg), false
+		}
 	}
 
 	if clusterVersion < c.INDEXER_70_VERSION {
