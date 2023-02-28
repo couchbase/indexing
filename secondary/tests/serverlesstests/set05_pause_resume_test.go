@@ -2,6 +2,7 @@ package serverlesstests
 
 import (
 	"fmt"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -223,6 +224,9 @@ func TestPauseResume(rootT *testing.T) {
 
 		err = secondaryindex.CreateSecondaryIndex(indexName, BUCKET, indexManagementAddress, "", []string{"eyeColor"}, false, nil, true, defaultIndexActiveTimeout, nil)
 		tc.HandleError(err, "Error in creating the index")
+
+		err = mc.DeleteAllCommandTokens()
+		tc.HandleError(err, "Failed to delete all command token during setup")
 
 		log.Printf("Created keyspace %v.%v.%v with %v docs and %v index", BUCKET, SCOPE, COLLECTION, numDocs, indexName)
 	}

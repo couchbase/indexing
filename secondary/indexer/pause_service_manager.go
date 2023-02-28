@@ -28,6 +28,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/plasma"
 )
 
@@ -805,6 +806,17 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		return err
 	}
 
+	// Check for DDL command tokens
+	if inProg, inProgDefns, err := mc.CheckInProgressCommandTokensForBucket(params.Bucket); err != nil {
+		return err
+	} else if inProg {
+		err = fmt.Errorf("found in progress DDL command tokens for bucket[%v] defns[%v]",
+			params.Bucket, inProgDefns)
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+
+		return err
+	}
+
 	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
@@ -1309,6 +1321,17 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	if ddlRunning, inProgressIndexName := m.checkDDLRunningForBucket(params.Bucket); ddlRunning {
 		err = fmt.Errorf("DDL is running for indexes [%v]", inProgressIndexName)
 		logging.Errorf("PauseServiceManager::PrepareResume: Found indexes with DDL in progress: err[%v]", err)
+		return err
+	}
+
+	// Check for DDL command tokens
+	if inProg, inProgDefns, err := mc.CheckInProgressCommandTokensForBucket(params.Bucket); err != nil {
+		return err
+	} else if inProg {
+		err = fmt.Errorf("found in progress DDL command tokens for bucket[%v] defns[%v]",
+			params.Bucket, inProgDefns)
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
 		return err
 	}
 
