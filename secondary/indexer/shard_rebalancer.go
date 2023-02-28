@@ -1046,6 +1046,64 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 	<-respCh
 }
 
+func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn, ttid string, tt *c.TransferToken, isDeferred, pendingCreate bool) (bool, error) {
+
+	// TODO: Use ShardIds for desintaion when changing the shardIds
+	defn.ShardIdsForDest = tt.ShardIds
+
+	if !pendingCreate {
+
+		if skip, err := sr.postRecoverIndexReq(*defn, ttid, tt); err != nil {
+			return false, err
+		} else if skip {
+			// bucket (or) scope (or) collection (or) index are dropped.
+			// Continue instead of failing rebalance
+			return true, nil
+		}
+	} else {
+		// For pendingCreate indexes, explicitly set deferred to true so that shard rebalancer
+		// will only create the index metadata and DDL service manager will take care of building
+		// the index on destination node after rebalance is done
+		defn.Deferred = true
+
+		if skip, err := sr.postCreateIndexReq(*defn, ttid, tt); err != nil {
+			return false, err
+		} else if skip {
+			// bucket (or) scope (or) collection (or) index are dropped.
+			// Continue instead of failing rebalance
+			return true, nil
+		}
+	}
+
+	// For deferred indexes and pendingCreate, build command is not required
+	// wait for index state to move to Ready phase
+	if isDeferred || pendingCreate {
+
+		var partnMergeWaitGroup sync.WaitGroup
+		deferredInsts := make(map[common.IndexInstId]bool)
+		if defn.RealInstId != 0 {
+			deferredInsts[defn.RealInstId] = true
+		} else {
+			deferredInsts[defn.InstId] = true
+		}
+
+		////////////// Testing code - Not used in production //////////////
+		testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_DEFERRED_INDEX_RECOVERY)
+		///////////////////////////////////////////////////////////////////
+
+		if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredInsts, ttid, tt); err != nil {
+			return false, err
+		}
+
+		sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, partnMergeWaitGroup)
+
+		// Wait for the deferred partition index merge to happen
+		// This is essentially a no-op for non-partitioned indexes
+		partnMergeWaitGroup.Wait()
+	}
+	return false, nil
+}
+
 func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) {
 
 	if !sr.addToWaitGroup() {
@@ -1113,6 +1171,8 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		return nonDeferredInsts, buildDefnIdList, currIndex
 	}
 
+	pendingCreateDefnList := make([]c.IndexDefn, 0)
+
 	for cid, defns := range groupedDefns {
 		buildDefnIdList := make([]client.IndexIdList, 3)
 		nonDeferredInsts := make([]map[c.IndexInstId]bool, 3)
@@ -1122,9 +1182,16 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// built in a batch
 		for _, defn := range defns {
 
-			// TODO: Use ShardIds for desintaion when changing the shardIds
-			defn.ShardIdsForDest = tt.ShardIds
-			if skip, err := sr.postRecoverIndexReq(defn, ttid, tt); err != nil {
+			if defn.ShardIdsForDest == nil { // Process pendingCreate indexes at the end
+				pendingCreateDefnList = append(pendingCreateDefnList, defn)
+				continue
+			}
+
+			isDeferred := defn.Deferred &&
+				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+					defn.InstStateAtRebal == c.INDEX_STATE_READY)
+
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, defn.ShardIdsForDest == nil); err != nil {
 				setErrInTransferToken(err)
 				return
 			} else if skip {
@@ -1133,34 +1200,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				continue
 			}
 
-			// For deferred indexes, build command is not required
-			if defn.Deferred &&
-				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
-					defn.InstStateAtRebal == c.INDEX_STATE_READY) {
-
-				var partnMergeWaitGroup sync.WaitGroup
-				deferredInsts := make(map[common.IndexInstId]bool)
-				if defn.RealInstId != 0 {
-					deferredInsts[defn.RealInstId] = true
-				} else {
-					deferredInsts[defn.InstId] = true
-				}
-
-				////////////// Testing code - Not used in production //////////////
-				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_DEFERRED_INDEX_RECOVERY)
-				///////////////////////////////////////////////////////////////////
-
-				if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredInsts, ttid, tt); err != nil {
-					setErrInTransferToken(err)
-					return
-				}
-
-				sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, partnMergeWaitGroup)
-
-				// Wait for the deferred partition index merge to happen
-				// This is essentially a no-op for non-partitioned indexes
-				partnMergeWaitGroup.Wait()
-			} else {
+			// "createDeferredIndex" method will wait for index state to move to READY phase
+			// for deferred indexes
+			// For non-deferred indexes, wait for index state to move to RECOVERED phase
+			if !isDeferred {
 				var currIndex int
 				nonDeferredInsts, buildDefnIdList, currIndex = populateInstsAndDefnIds(nonDeferredInsts, buildDefnIdList, defn, defnIdToInstIdMap)
 
@@ -1172,9 +1215,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
 				}
-
 			}
-
 		}
 
 		for i := range buildDefnIdList {
@@ -1218,6 +1259,19 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		}
 	}
 
+	// Create metadata for all pendingCreate indexes on destination node
+	// Do not build the indexes as this can lead to long rebalance times.
+	// DDL service manager will take care of building the indexes after
+	// rebalance is done
+	for _, defn := range pendingCreateDefnList {
+		if skip, err := sr.createDeferredIndex(&defn, ttid, tt, false, true); err != nil {
+			setErrInTransferToken(err)
+			return
+		} else if skip {
+			continue
+		}
+	}
+
 	elapsed := time.Since(start).Seconds()
 	l.Infof("ShardRebalancer::startShardRecovery Finished recovery of all indexes in ttid: %v, elapsed(sec): %v", ttid, elapsed)
 	// Coming here means that all indexes are actively build without any error
@@ -1248,11 +1302,11 @@ func groupInstsPerColl(tt *c.TransferToken) map[string][]common.IndexDefn {
 func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
 	select {
 	case <-sr.cancel:
-		l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
+		l.Infof("ShardRebalancer::postRecoverIndexReq rebalance cancel received")
 		return false, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
 	case <-sr.done:
-		l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
+		l.Infof("ShardRebalancer::postRecoverIndexReq rebalance done received")
 		return false, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
 	default:
@@ -1290,11 +1344,11 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, error) {
 	select {
 	case <-sr.cancel:
-		l.Infof("ShardRebalancer::startShardRecovery rebalance cancel received")
+		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance cancel received")
 		return nil, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
 	case <-sr.done:
-		l.Infof("ShardRebalancer::startShardRecovery rebalance done received")
+		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance done received")
 		return nil, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
 	default:
@@ -1345,6 +1399,48 @@ func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (ma
 		}
 	}
 	return skipDefns, nil
+}
+
+func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
+	select {
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::postCreateIndexReq rebalance cancel received")
+		return false, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
+
+	case <-sr.done:
+		l.Infof("ShardRebalancer::postCreateIndexReq rebalance done received")
+		return false, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
+
+	default:
+		url := "/createIndexRebalance"
+
+		resp, err := postWithHandleEOF(indexDefn, sr.localaddr, url, "ShardRebalancer::postCreateIndexReq")
+		if err != nil {
+			logging.Errorf("ShardRebalancer::postCreateIndexReq Error observed when posting recover index request, "+
+				"indexDefnId: %v, err: %v", indexDefn.DefnId, err)
+			return false, err
+		}
+
+		response := new(IndexResponse)
+		if err := convertResponse(resp, response); err != nil {
+			l.Errorf("ShardRebalancer::postCreateIndexReq Error unmarshal response for indexDefnId: %v, "+
+				"url: %v, err: %v", indexDefn.DefnId, sr.localaddr+url, err)
+			return false, err
+		}
+
+		if response.Error != "" {
+			if isMissingBSC(response.Error) || isIndexDeletedDuringRebal(response.Error) {
+				logging.Infof("ShardRebalancer::postCreateIndexReq scope/collection/index is "+
+					"deleted during rebalance. Skipping the indexDefnId: %v from further processing. "+
+					"indexDefnId: %v, Error: %v", indexDefn.DefnId, response.Error)
+				return true, nil
+			}
+			l.Errorf("ShardRebalancer::postCreateIndexReq Error received for indexDefnId: %v, err: %v",
+				indexDefn.DefnId, response.Error)
+			return false, errors.New(response.Error)
+		}
+	}
+	return false, nil
 }
 
 func (sr *ShardRebalancer) waitForIndexState(expectedState c.IndexState,

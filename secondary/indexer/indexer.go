@@ -2018,8 +2018,13 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		idx.stats.AddPartitionStats(indexInst, partnDefn.GetPartitionId())
 	}
 
+	reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
+	// For pendingCreate indexes, the ReqSource would be DDLRequestSourceRebalance but
+	// for shard rebalance, the ShardIdsForDest will be > 0
+	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance) && (len(indexInst.Defn.ShardIdsForDest) > 0)
+
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, false)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
