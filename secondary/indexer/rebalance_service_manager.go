@@ -139,6 +139,23 @@ type runParams struct {
 	ddlRunningIndexNames []string
 }
 
+func filterRunParamsByBucket(ddlRunning bool, ddlRunningIndexNames []string, bucketName string) (
+	_ bool, fDDLRunningIndexNames []string) {
+
+	if bucketName == "" {
+		return ddlRunning, ddlRunningIndexNames
+	}
+
+	for _, idxName := range ddlRunningIndexNames {
+		// indexer::checkDDLInProgress build idxName by concatenating IndexDefn.Bucket and IndexDefn.Name
+		if strings.HasPrefix(idxName, bucketName) {
+			fDDLRunningIndexNames = append(fDDLRunningIndexNames, idxName)
+		}
+	}
+
+	return len(fDDLRunningIndexNames) > 0, fDDLRunningIndexNames
+}
+
 var rebalanceHttpTimeout int
 var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress and Logs UI for any error"
 

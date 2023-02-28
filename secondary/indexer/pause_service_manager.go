@@ -798,6 +798,13 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		}
 	}
 
+	// Check for initial or catchup state
+	if ddlRunning, inProgressIndexName := m.checkDDLRunningForBucket(params.Bucket); ddlRunning {
+		err = fmt.Errorf("DDL is running for indexes [%v]", inProgressIndexName)
+		logging.Errorf("PauseServiceManager::PreparePause: Found indexes with DDL in progress: err[%v]", err)
+		return err
+	}
+
 	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
@@ -1296,6 +1303,13 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 			logging.Errorf("PauseServiceManager::PrepareResume: Failed local cleanup: err[%v]", err)
 			return err
 		}
+	}
+
+	// Check for initial or catchup state
+	if ddlRunning, inProgressIndexName := m.checkDDLRunningForBucket(params.Bucket); ddlRunning {
+		err = fmt.Errorf("DDL is running for indexes [%v]", inProgressIndexName)
+		logging.Errorf("PauseServiceManager::PrepareResume: Found indexes with DDL in progress: err[%v]", err)
+		return err
 	}
 
 	// TODO: Check remotePath access?
@@ -2597,4 +2611,16 @@ func generatePlasmaCopierConfig(task *taskObj) *plasma.Config {
 	cfg.CopyConfig.KeyPrefix = task.archivePath
 	cfg.CopyConfig.Region = task.region
 	return &cfg
+}
+
+func (m *PauseServiceManager) checkDDLRunningForBucket(bucketName string) (bool, []string) {
+
+	respCh := make(MsgChannel)
+	m.supvMsgch <- &MsgCheckDDLInProgress{respCh: respCh, bucketName: bucketName}
+	msg := <-respCh
+
+	ddlInProgress := msg.(*MsgDDLInProgressResponse).GetDDLInProgress()
+	inProgressIndexNames := msg.(*MsgDDLInProgressResponse).GetInProgressIndexNames()
+
+	return ddlInProgress, inProgressIndexNames
 }
