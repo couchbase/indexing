@@ -776,8 +776,27 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	// If pauseRunning is set in gometa, pause is still running , a pause must not be attempted by caller.
 	// Cleanup anyway and continue.
 
-	// TODO: There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
-	// TODO: implement pause-resume janitor to periodically clean orphaned tokens
+	// There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+	if idsToClean, err := m.checkLocalPauseCleanupPending(params.Bucket); err != nil {
+		return err
+	} else if len(idsToClean) > 0 {
+		logging.Warnf("PauseServiceManager::PreparePause: Found tokens for local cleanup, running cleanup:"+
+			" idsToClean[%v]", idsToClean)
+
+		for pauseId, _ := range idsToClean {
+			if err := m.runPauseCleanupPhase(pauseId, false); err != nil {
+				return err
+			}
+		}
+
+		if idsToClean, err = m.checkLocalPauseCleanupPending(params.Bucket); err != nil {
+			return err
+		} else if len(idsToClean) > 0 {
+			err = fmt.Errorf("found tokens for local cleanup, after cleanup: idsToClean[%v]", idsToClean)
+			logging.Errorf("PauseServiceManager::PreparePause: Failed local cleanup: err[%v]", err)
+			return err
+		}
+	}
 
 	// TODO: Check remotePath access?
 
@@ -833,7 +852,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	pt, exists := m.getPauseToken(params.ID)
 	if !exists {
 		err := fmt.Errorf("master pause token not found for id[%v] during pause", params.ID)
-		
+
 		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
@@ -946,7 +965,8 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 		}
 	}
 
-	_, puts, err := m.getCurrPauseTokens(pauseId)
+	ptFilter, putFilter := getPauseTokenFiltersByPauseId(pauseId)
+	_, puts, err := m.getCurrPauseTokens(ptFilter, putFilter)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::runPauseCleanupPhase Error Fetching Metakv Tokens: err[%v]", err)
 		return err
@@ -968,7 +988,25 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 	return nil
 }
 
-func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken, puts map[string]*common.PauseUploadToken,
+type putFilterFn func(*common.PauseUploadToken) bool
+
+func getPauseTokenFiltersByPauseId(pauseId string) (ptFilterFn, putFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.PauseId == pauseId
+		}, func(put *common.PauseUploadToken) bool {
+			return put.PauseId == pauseId
+		}
+}
+
+func getPauseTokenFiltersByBucket(bucketName string) (ptFilterFn, putFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.BucketName == bucketName
+		}, func(put *common.PauseUploadToken) bool {
+			return put.BucketName == bucketName
+		}
+}
+
+func (m *PauseServiceManager) getCurrPauseTokens(ptFilter ptFilterFn, putFilter putFilterFn) (pt *PauseToken, puts map[string]*common.PauseUploadToken,
 	err error) {
 
 	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
@@ -990,7 +1028,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 				return nil, nil, err
 			}
 
-			if mpt.PauseId == pauseId && mpt.Type == PauseTokenPause {
+			if ptFilter(&mpt) && mpt.Type == PauseTokenPause {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
@@ -1005,7 +1043,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 				return nil, nil, err
 			}
 
-			if put.PauseId == pauseId {
+			if putFilter(put) {
 				if oldPUT, ok := puts[putId]; ok {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseUploadToken for"+
 						" pauseId[%v] oldPUT[%v] PUT[%v] putId[%v]", put.PauseId, oldPUT, put, putId)
@@ -1118,6 +1156,43 @@ func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, p
 	return nil
 }
 
+func (m *PauseServiceManager) checkLocalPauseCleanupPending(bucketName string) (map[string]bool, error) {
+
+	ptFilter, putFilter := getPauseTokenFiltersByBucket(bucketName)
+	_, puts, err := m.getCurrPauseTokens(ptFilter, putFilter)
+
+	if err != nil {
+		logging.Errorf("PauseServiceManager::checkLocalPauseCleanupPending: Failed to fetch from Metakv:"+
+			" err[%v]", err)
+
+		return nil, err
+	}
+
+	idsToClean := make(map[string]bool)
+	for _, put := range puts {
+		ownerId := m.getPauseUploadTokenOwner(put)
+		if ownerId == string(m.nodeInfo.NodeID) {
+			logging.Infof("PauseServiceManager::checkLocalPauseCleanupPending: Found local token"+
+				" pending cleanup: put[%v]", put)
+			idsToClean[put.PauseId] = true
+		}
+	}
+
+	return idsToClean, nil
+}
+
+func (m *PauseServiceManager) getPauseUploadTokenOwner(put *common.PauseUploadToken) string {
+
+	switch put.State {
+	case common.PauseUploadTokenPosted, common.PauseUploadTokenInProgess:
+		return put.FollowerId
+	case common.PauseUploadTokenProcessed, common.PauseUploadTokenError:
+		return put.MasterId
+	}
+
+	return ""
+}
+
 // PrepareResume is an external API called by ns_server (via cbauth) on all index nodes before
 // calling Resume on leader only. The Resume call following PrepareResume will be given the SAME
 // dryRun value. The full sequence is:
@@ -1201,8 +1276,27 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	// If resumeRunning is set in gometa, resume is still running , a resume must not be attempted by caller.
 	// Cleanup anyway and continue.
 
-	// TODO: implement pause-resume janitor to periodically clean orphaned tokens
-	// TODO: There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+	// There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+	if idsToClean, err := m.checkLocalResumeCleanupPending(params.Bucket); err != nil {
+		return err
+	} else if len(idsToClean) > 0 {
+		logging.Warnf("PauseServiceManager::PrepareResume: Found tokens for local cleanup, running cleanup:"+
+			" idsToClean[%v]", idsToClean)
+
+		for resumeId, _ := range idsToClean {
+			if err := m.runResumeCleanupPhase(resumeId, false); err != nil {
+				return err
+			}
+		}
+
+		if idsToClean, err = m.checkLocalResumeCleanupPending(params.Bucket); err != nil {
+			return err
+		} else if len(idsToClean) > 0 {
+			err = fmt.Errorf("found tokens for local cleanup, after cleanup: idsToClean[%v]", idsToClean)
+			logging.Errorf("PauseServiceManager::PrepareResume: Failed local cleanup: err[%v]", err)
+			return err
+		}
+	}
 
 	// TODO: Check remotePath access?
 
@@ -1339,7 +1433,8 @@ func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bo
 		}
 	}
 
-	_, rdts, err := m.getCurrResumeTokens(resumeId)
+	ptFilter, rdtFilter := getResumeTokenFiltersByResumeId(resumeId)
+	_, rdts, err := m.getCurrResumeTokens(ptFilter, rdtFilter)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Error Fetching Metakv Tokens: err[%v]", err)
 		return err
@@ -1361,7 +1456,25 @@ func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bo
 	return nil
 }
 
-func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseToken,
+type rdtFilterFn func(*common.ResumeDownloadToken) bool
+
+func getResumeTokenFiltersByResumeId(resumeId string) (ptFilterFn, rdtFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.PauseId == resumeId
+		}, func(rdt *common.ResumeDownloadToken) bool {
+			return rdt.ResumeId == resumeId
+		}
+}
+
+func getResumeTokenFiltersByBucket(bucketName string) (ptFilterFn, rdtFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.BucketName == bucketName
+		}, func(rdt *common.ResumeDownloadToken) bool {
+			return rdt.BucketName == bucketName
+		}
+}
+
+func (m *PauseServiceManager) getCurrResumeTokens(ptFilter ptFilterFn, rdtFilter rdtFilterFn) (pt *PauseToken,
 	rdts map[string]*common.ResumeDownloadToken, err error) {
 
 	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
@@ -1383,7 +1496,7 @@ func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseTok
 				return nil, nil, err
 			}
 
-			if mpt.PauseId == resumeId && mpt.Type == PauseTokenResume {
+			if ptFilter(&mpt) && mpt.Type == PauseTokenResume {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for resumeId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
@@ -1398,7 +1511,7 @@ func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseTok
 				return nil, nil, err
 			}
 
-			if rdt.ResumeId == resumeId {
+			if rdtFilter(rdt) {
 				if oldRDT, ok := rdts[rdtId]; ok {
 					return nil, nil, fmt.Errorf("encountered duplicate ResumeDownloadToken for"+
 						" resumeId[%v] oldRDT[%v] rdt[%v] rdtId[%v]", rdt.ResumeId, oldRDT, rdt, rdtId)
@@ -1511,6 +1624,42 @@ func (m *PauseServiceManager) cleanupResumeDownloadTokenForFollower(rdtId string
 	}
 
 	return nil
+}
+
+func (m *PauseServiceManager) checkLocalResumeCleanupPending(bucketName string) (map[string]bool, error) {
+
+	ptFilter, rdtFilter := getResumeTokenFiltersByBucket(bucketName)
+	_, rdts, err := m.getCurrResumeTokens(ptFilter, rdtFilter)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::checkLocalResumeCleanupPending: Failed to fetch from Metakv:"+
+			" err[%v]", err)
+
+		return nil, err
+	}
+
+	idsToClean := make(map[string]bool)
+	for _, rdt := range rdts {
+		ownerId := m.getResumeDownloadTokenOwner(rdt)
+		if ownerId == string(m.nodeInfo.NodeID) {
+			logging.Infof("PauseServiceManager::checkLocalResumeCleanupPending: Found local token"+
+				" pending cleanup: rdt[%v]", rdt)
+			idsToClean[rdt.ResumeId] = true
+		}
+	}
+
+	return idsToClean, nil
+}
+
+func (m *PauseServiceManager) getResumeDownloadTokenOwner(rdt *common.ResumeDownloadToken) string {
+
+	switch rdt.State {
+	case common.ResumeDownloadTokenPosted, common.ResumeDownloadTokenInProgess:
+		return rdt.FollowerId
+	case common.ResumeDownloadTokenProcessed, common.ResumeDownloadTokenError:
+		return rdt.MasterId
+	}
+
+	return ""
 }
 
 // endTask is the endpoint of pause resume
@@ -1701,7 +1850,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 			if err := m.setPauseToken(pauseToken.PauseId, &pauseToken); err != nil {
 				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set pause token: err[%v]", err)
 				writeError(w, err)
-				
+
 				return
 			}
 
@@ -2147,6 +2296,8 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 const PauseTokenTag = "PauseToken"
 const PauseMetakvDir = common.IndexingMetaDir + "pause/"
 const PauseTokenPathPrefix = PauseMetakvDir + PauseTokenTag
+
+type ptFilterFn func(*PauseToken) bool
 
 type PauseTokenType uint8
 
