@@ -360,7 +360,9 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 	cancelCh <-chan struct{},
 ) (map[common.ShardId]string, error) {
 
-	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v from %v for taskId %v", shardPaths, taskId)
+	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v for taskId %v",
+		shardPaths, taskId)
+
 	respCh := make(chan Message)
 	msg := &MsgStartShardRestore{
 		taskType:    common.PauseResumeTask,
@@ -1128,10 +1130,14 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 
 	// TODO: Check remotePath access?
 
-	// Set bst_PREPARE_RESUME state
-	err = m.bucketStateSet(_PrepareResume, params.Bucket, bst_NIL, bst_PREPARE_RESUME)
-	if err != nil {
-		return err
+	if !params.DryRun {
+
+		// Set bst_PREPARE_RESUME state
+		err = m.bucketStateSet(_PrepareResume, params.Bucket, bst_NIL, bst_PREPARE_RESUME)
+		if err != nil {
+			return err
+		}
+
 	}
 
 	// Record the task in progress
@@ -1159,18 +1165,23 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 		return err
 	}
 
-	// Set bst_RESUMING state
-	err := m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
-	if err != nil {
-		logging.Errorf("%v failed to set bucket state; err: %v for task ID: %v", _Resume,
-			err, params.ID)
-		return err
-	}
+	// Don't update any state/register resume if this is a dryRun
+	if !params.DryRun {
 
-	if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
-		logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
-		m.runResumeCleanupPhase(params.ID, task.isMaster())
-		return err
+		// Set bst_RESUMING state
+		err := m.bucketStateSet(_Resume, params.Bucket, bst_PREPARE_RESUME, bst_RESUMING)
+		if err != nil {
+			logging.Errorf("%v failed to set bucket state; err: %v for task ID: %v", _Resume,
+				err, params.ID)
+			return err
+		}
+	
+		if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
+			logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
+			m.runResumeCleanupPhase(params.ID, task.isMaster())
+			return err
+		}
+
 	}
 
 	// Create a Resumer object to run the master orchestration loop.

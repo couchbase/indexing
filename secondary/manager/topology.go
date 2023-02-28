@@ -864,6 +864,7 @@ func transformPartnDist(partitions *IndexPartDistribution) *mc.IndexPartDistribu
 	partn.Version = partitions.Version
 	partn.SinglePartition = *transformSinglePartn(&partitions.SinglePartition)
 	partn.KeyPartition = *transformKeyPartitions(&partitions.KeyPartition)
+	partn.ShardIds = partitions.ShardIds
 
 	return partn
 }
