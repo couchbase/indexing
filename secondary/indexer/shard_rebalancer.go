@@ -979,23 +979,53 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 			l.Infof("ShardRebalancer::startRestoreShard Received response for restore of "+
 				"shardIds: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
 
+			cleanupAndSetErr := func(shardId common.ShardId, shardPaths map[common.ShardId]string, err error) {
+
+				// If there are any errors during restore, the restored data on local file system
+				// is cleaned by the destination node. The data on S3 will be cleaned by the rebalance
+				// source node. Rebalance source node is the only writer (insert/delete) of data on S3
+				l.Errorf("ShardRebalancer::startRestoreShard Observed error during trasfer"+
+					" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+					tt.Destination, tt.Region, shardId, shardPaths, err)
+
+				// Invoke clean-up for all shards even if error is observed for one shard transfer
+				sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
+				sr.setTransferTokenError(ttid, tt, err.Error())
+				return
+
+			}
+
 			msg := respMsg.(*MsgShardTransferResp)
 			errMap := msg.GetErrorMap()
 			shardPaths := msg.GetShardPaths()
 
+			hasErr := false
 			for shardId, err := range errMap {
 				if err != nil {
-					// If there are any errors during restore, the restored data on local file system
-					// is cleaned by the destination node. The data on S3 will be cleaned by the rebalance
-					// source node. Rebalance source node is the only writer (insert/delete) of data on S3
-					l.Errorf("ShardRebalancer::startRestoreShard Observed error during trasfer"+
-						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-						tt.Destination, tt.Region, shardId, shardPaths, err)
+					hasErr = true
 
-					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					sr.initiateLocalShardCleanup(ttid, shardPaths, tt)
-					sr.setTransferTokenError(ttid, tt, err.Error())
-					return
+					// context canceled error can be a by-product of some other
+					// errors that happened during transfer/restore. Do not
+					// use "context canceled" errors as the first preference for setting
+					// transfer token errors. If there is no other error type, the
+					// use this error
+					if strings.Contains(err.Error(), "context canceled") {
+						continue
+					} else {
+						cleanupAndSetErr(shardId, shardPaths, err)
+						return
+					}
+				}
+			}
+
+			if hasErr {
+				// Coming here means that all errors are "context canceled" errors
+				// Use the same to update transfer token
+				for shardId, err := range errMap {
+					if err != nil { // Use the first error
+						cleanupAndSetErr(shardId, shardPaths, err)
+						return
+					}
 				}
 			}
 
