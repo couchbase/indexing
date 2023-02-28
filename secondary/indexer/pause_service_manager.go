@@ -752,6 +752,33 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	logging.Infof("%v Called. "+args, _PreparePause, params.ID, params.Bucket, params.RemotePath)
 	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, params.ID, params.Bucket, params.RemotePath)
 
+	// TODO: If bucket state is already set (due to calling prepare before cancelling previous attempt),
+	// return service.ErrConflict
+
+	// TODO: recover pause state in bootstrap1 and add checks here
+	// Fail Prepare if bootstrap cleanup is still pending
+
+	// If master pauseToken is present, pause is still running, a pause must not be attempted by caller.
+	if opts, exists := m.findPauseTokensForBucket(params.Bucket); exists {
+		// Cleanup anyway and continue.
+
+		logging.Warnf("PauseServiceManager::PreparePause: master pause token already present for"+
+			" bucket[%v] old pts[%v] during prepare pause. Attempting cleanup", params.Bucket, opts)
+
+		for _, opt := range opts {
+			if err := m.runPauseCleanupPhase(opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// TODO: add pauseRunning gometa flag that gets set during prepare
+	// If pauseRunning is set in gometa, pause is still running , a pause must not be attempted by caller.
+	// Cleanup anyway and continue.
+
+	// TODO: There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+	// TODO: implement pause-resume janitor to periodically clean orphaned tokens
+
 	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
@@ -793,16 +820,36 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	}
 
 	if err = m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
-		m.runPauseCleanupPhase(params.ID, task.isMaster())
+		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
 		return err
 	}
 
 	// Create a Pauser object to run the master orchestration loop.
 
-	pauser := NewPauser(m, task, m.pauseTokensById[params.ID], m.pauseDoneCallback)
+	pt, exists := m.getPauseToken(params.ID)
+	if !exists {
+		err := fmt.Errorf("master pause token not found for id[%v] during pause", params.ID)
+		
+		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
+		return err
+	}
+
+	pauser := NewPauser(m, task, pt, m.pauseDoneCallback)
 
 	if err = m.setPauser(params.ID, pauser); err != nil {
-		m.runPauseCleanupPhase(params.ID, task.isMaster())
+		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
 		return err
 	}
 
@@ -835,9 +882,9 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string, typ Pau
 	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId, typ)
 	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
 
-	m.pauseTokenMapMu.Lock()
-	m.pauseTokensById[pauseId] = pauseToken
-	m.pauseTokenMapMu.Unlock()
+	if err = m.setPauseToken(pauseId, pauseToken); err != nil {
+		return err
+	}
 
 	// Add to local metadata
 	if err = m.registerLocalPauseToken(pauseToken); err != nil {
@@ -1130,6 +1177,33 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	logging.Infof("%v Called. "+args, _PrepareResume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 
+	// TODO: If bucket state is already set (due to calling prepare before cancelling previous attempt),
+	// return service.ErrConflict
+
+	// TODO: recover resume state in bootstrap1 and add checks here
+	// Fail Prepare if bootstrap cleanup is still pending
+
+	// If master pauseToken is present, pause is still running, a pause must not be attempted by caller.
+	if opts, exists := m.findPauseTokensForBucket(params.Bucket); exists {
+		// Cleanup anyway and continue.
+
+		logging.Warnf("PauseServiceManager::PrepareResume: master pause token already present for"+
+			" bucket[%v] old pts[%v] during prepare resume. Attempting cleanup", params.Bucket, opts)
+
+		for _, opt := range opts {
+			if err := m.runResumeCleanupPhase(opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// TODO: add resumeRunning gometa flag that gets set during prepare
+	// If resumeRunning is set in gometa, resume is still running , a resume must not be attempted by caller.
+	// Cleanup anyway and continue.
+
+	// TODO: implement pause-resume janitor to periodically clean orphaned tokens
+	// TODO: There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+
 	// TODO: Check remotePath access?
 
 	if !params.DryRun {
@@ -1181,7 +1255,11 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 	
 		if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
 			logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
-			m.runResumeCleanupPhase(params.ID, task.isMaster())
+			if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+				logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+				return cerr
+			}
+	
 			return err
 		}
 
@@ -1189,11 +1267,27 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 	// Create a Resumer object to run the master orchestration loop.
 
-	resumer := NewResumer(m, task, m.pauseTokensById[params.ID], m.resumeDoneCallback)
+	pt, exists := m.getPauseToken(params.ID)
+	if !exists {
+		err := fmt.Errorf("master pause token not found for id[%v] during resume", params.ID)
+
+		if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
+		return err
+	}
+
+	resumer := NewResumer(m, task, pt, m.resumeDoneCallback)
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
-		m.runResumeCleanupPhase(params.ID, task.isMaster())
+		if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
 		return err
 	}
 
@@ -1604,9 +1698,12 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				return
 			}
 
-			m.pauseTokenMapMu.Lock()
-			m.pauseTokensById[pauseToken.PauseId] = &pauseToken
-			m.pauseTokenMapMu.Unlock()
+			if err := m.setPauseToken(pauseToken.PauseId, &pauseToken); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set pause token: err[%v]", err)
+				writeError(w, err)
+				
+				return
+			}
 
 			if err := m.registerLocalPauseToken(&pauseToken); err != nil {
 				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local"+
@@ -2081,6 +2178,47 @@ func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string
 	}
 }
 
+func (m *PauseServiceManager) getPauseToken(id string) (*PauseToken, bool) {
+	m.pauseTokenMapMu.RLock()
+	defer m.pauseTokenMapMu.RUnlock()
+
+	pt, exists := m.pauseTokensById[id]
+
+	return pt, exists
+}
+
+func (m *PauseServiceManager) setPauseToken(id string, pt *PauseToken) error {
+	m.pauseTokenMapMu.Lock()
+	defer m.pauseTokenMapMu.Unlock()
+
+	if oldPT, ok := m.pauseTokensById[id]; ok {
+
+		if pt == nil {
+			delete(m.pauseTokensById, id)
+		} else {
+			return fmt.Errorf("conflict: PauseToken[%v] with id[%v] already present!", oldPT, id)
+		}
+
+	} else {
+		m.pauseTokensById[id] = pt
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) findPauseTokensForBucket(bucketName string) (pts []*PauseToken, exists bool) {
+	m.pauseTokenMapMu.RLock()
+	defer m.pauseTokenMapMu.RUnlock()
+
+	for _, pt := range m.pauseTokensById {
+		if pt.BucketName == bucketName {
+			pts = append(pts, pt)
+		}
+	}
+
+	return pts, len(pts) > 0
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // PauseToken - Lifecycle
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2147,9 +2285,9 @@ func (m *PauseServiceManager) cleanupLocalPauseToken(pauseId string) error {
 		common.CrashOnError(err)
 	}
 
-	m.pauseTokenMapMu.Lock()
-	delete(m.pauseTokensById, pauseId)
-	m.pauseTokenMapMu.Unlock()
+	if err := m.setPauseToken(pauseId, nil); err != nil {
+		return err
+	}
 
 	return nil
 }
