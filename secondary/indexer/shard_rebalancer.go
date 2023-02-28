@@ -722,8 +722,11 @@ loop:
 			errMap := msg.GetErrorMap()
 			shardPaths := msg.GetShardPaths()
 
+			hasErr := false
 			for shardId, err := range errMap {
 				if err != nil {
+					hasErr = true
+
 					l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
 						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
 						tt.Destination, tt.Region, shardId, shardPaths, err)
@@ -734,6 +737,7 @@ loop:
 					if err == ErrIndexRollback {
 						if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
 							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+							sr.setTransferTokenError(ttid, tt, err.Error())
 							return
 						} else {
 							retryCount++
@@ -743,6 +747,23 @@ loop:
 							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil, true)
 							goto loop
 						}
+					} else if strings.Contains(err.Error(), "context canceled") {
+						continue // Do not set this error in transfer token. Look for other errors
+					} else {
+						sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+						sr.setTransferTokenError(ttid, tt, err.Error())
+						return
+					}
+				}
+			}
+
+			// All errors are "context canceled" errors. Use the same to update transfer token
+			if hasErr {
+				for _, err := range errMap {
+					if err != nil {
+						sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+						sr.setTransferTokenError(ttid, tt, err.Error())
+						return
 					}
 				}
 			}
