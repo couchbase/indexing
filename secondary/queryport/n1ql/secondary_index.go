@@ -291,7 +291,6 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 		if !ok {
 			errmsg := fmt.Sprintf("GSI index id %v not found.", id)
 			err := errors.NewError(nil, errmsg)
-			l.Warnf("%v Observed error when finding index: %v, err: %v", gsi.logPrefix, id, err)
 			return nil, errors.NewCbIndexNotFoundError(err)
 		}
 	}

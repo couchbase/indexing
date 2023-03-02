@@ -48,7 +48,7 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 			if resp != nil {
 				defer resp.Body.Close()
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(3 * time.Second)
 		case SLEEP:
 			logging.Infof("TestCode::TestActionAtTag: Sleeping for %v milliseconds as wished", option.SleepTime)
 			time.Sleep(time.Duration(option.SleepTime) * time.Millisecond)
