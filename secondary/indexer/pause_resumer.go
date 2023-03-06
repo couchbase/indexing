@@ -410,7 +410,7 @@ func (r *Resumer) doFinish() {
 
 	// TODO: signal others that we are cleaning up using done channel
 
-	r.cancelMetakv()
+	r.Cleanup()
 	r.wg.Wait()
 
 	// call done callback to start the cleanup phase
@@ -1151,4 +1151,16 @@ func (r *Resumer) getIndexStatusFromMeta(rdt *c.ResumeDownloadToken,
 	}
 
 	return outStates, outErr
+}
+
+func (r *Resumer) cleanupNoLocks() {
+	r.task.cancelNoLock()
+	go monitorBucketForPauseResume(r.task.bucket, true)
+}
+
+func (r *Resumer) Cleanup() {
+	r.task.taskMu.Lock()
+	r.cleanupNoLocks()
+	r.task.taskMu.Unlock()
+	r.cancelMetakv()
 }

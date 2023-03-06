@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
@@ -24,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
@@ -772,7 +773,9 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 			" bucket[%v] old pts[%v] during prepare pause. Attempting cleanup", params.Bucket, opts)
 
 		for _, opt := range opts {
-			if err := m.runPauseCleanupPhase(opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID)); err != nil {
+			if err := m.runPauseCleanupPhase(
+				params.Bucket, opt.PauseId,opt.MasterId == string(m.nodeInfo.NodeID),
+			); err != nil {
 				return err
 			}
 		}
@@ -790,7 +793,7 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 			" idsToClean[%v]", idsToClean)
 
 		for pauseId, _ := range idsToClean {
-			if err := m.runPauseCleanupPhase(pauseId, false); err != nil {
+			if err := m.runPauseCleanupPhase(params.Bucket, pauseId, false); err != nil {
 				return err
 			}
 		}
@@ -882,7 +885,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	}
 
 	if err = m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
-		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+		if cerr := m.runPauseCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
 		}
@@ -896,7 +899,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	if !exists {
 		err := fmt.Errorf("master pause token not found for id[%v] during pause", params.ID)
 
-		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+		if cerr := m.runPauseCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
 		}
@@ -907,7 +910,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	pauser := NewPauser(m, task, pt, m.pauseDoneCallback)
 
 	if err = m.setPauser(params.ID, pauser); err != nil {
-		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+		if cerr := m.runPauseCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
 		}
@@ -977,12 +980,13 @@ func (m *PauseServiceManager) pauseDoneCallback(pauseId string, err error) {
 	}
 
 	// If there is an error, set it in the task, otherwise, delete task from task list.
-	// TODO: Check if follower task should be handled differently.
-	m.endTask(err, pauseId)
-
 	isMaster := pauser.task.isMaster()
 
-	if err := m.runPauseCleanupPhase(pauseId, isMaster); err != nil {
+	if isMaster {
+		m.endTask(err, pauseId)
+	}
+
+	if err := m.runPauseCleanupPhase(pauser.task.bucket, pauseId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::pauseDoneCallback: Failed to run cleanup: err[%v]", err)
 		return
 	}
@@ -996,9 +1000,11 @@ func (m *PauseServiceManager) pauseDoneCallback(pauseId string, err error) {
 		isMaster, err)
 }
 
-func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool) error {
+func (m *PauseServiceManager) runPauseCleanupPhase(bucket, pauseId string, isMaster bool) error {
 
 	logging.Infof("PauseServiceManager::runPauseCleanupPhase: pauseId[%v] isMaster[%v]", pauseId, isMaster)
+
+	m.bucketStateDelete(bucket)
 
 	if isMaster {
 		if err := m.cleanupPauseTokenInMetakv(pauseId); err != nil {
@@ -1313,7 +1319,9 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 			" bucket[%v] old pts[%v] during prepare resume. Attempting cleanup", params.Bucket, opts)
 
 		for _, opt := range opts {
-			if err := m.runResumeCleanupPhase(opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID)); err != nil {
+			if err := m.runResumeCleanupPhase(
+				params.Bucket, opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID),
+			); err != nil {
 				return err
 			}
 		}
@@ -1331,7 +1339,7 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 			" idsToClean[%v]", idsToClean)
 
 		for resumeId, _ := range idsToClean {
-			if err := m.runResumeCleanupPhase(resumeId, false); err != nil {
+			if err := m.runResumeCleanupPhase(params.Bucket, resumeId, false); err != nil {
 				return err
 			}
 		}
@@ -1426,7 +1434,7 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 		if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
 			logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
-			if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			if cerr := m.runResumeCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 				logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 				return cerr
 			}
@@ -1442,7 +1450,7 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 	if !exists {
 		err := fmt.Errorf("master pause token not found for id[%v] during resume", params.ID)
 
-		if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+		if cerr := m.runResumeCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
 		}
@@ -1454,7 +1462,7 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
-		if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+		if cerr := m.runResumeCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
 		}
@@ -1479,12 +1487,13 @@ func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
 	}
 
 	// If there is an error, set it in the task, otherwise, delete task from task list.
-	// TODO: Check if follower task should be handled differently.
-	m.endTask(err, resumeId)
-
 	isMaster := resumer.task.isMaster()
 
-	if err := m.runResumeCleanupPhase(resumeId, isMaster); err != nil {
+	if isMaster {
+		m.endTask(err, resumeId)
+	}
+
+	if err := m.runResumeCleanupPhase(resumer.task.bucket, resumeId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to run cleanup: err[%v]", err)
 		return
 	}
@@ -1498,9 +1507,11 @@ func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
 		isMaster, err)
 }
 
-func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bool) error {
+func (m *PauseServiceManager) runResumeCleanupPhase(bucket, resumeId string, isMaster bool) error {
 
 	logging.Infof("PauseServiceManager::runResumeCleanupPhase: resumeId[%v] isMaster[%v]", resumeId, isMaster)
+
+	m.bucketStateDelete(bucket)
 
 	if isMaster {
 		if err := m.cleanupPauseTokenInMetakv(resumeId); err != nil {
@@ -1765,7 +1776,6 @@ func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	}
 
 	task.Cancel()
-	m.bucketStateDelete(task.bucket)
 
 	logging.Infof("PauseServiceManager::endTask stopped task %v", task)
 
