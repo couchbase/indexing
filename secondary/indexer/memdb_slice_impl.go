@@ -1882,6 +1882,9 @@ func (mdb *memdbSlice) GetWriteUnits() uint64 {
 	return 0
 }
 
+func (mdb *memdbSlice) SetStopWriteUnitBilling(disableBilling bool) {
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

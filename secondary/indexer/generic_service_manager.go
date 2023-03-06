@@ -189,7 +189,7 @@ func (m *GenericServiceManager) CancelTask(id string, rev service.Revision) erro
 	}
 
 	// Task not found in Rebalance so delegate to Pause-Resume
-	if err == service.ErrNotFound && common.IsServerlessDeployment() && 
+	if err == service.ErrNotFound && common.IsServerlessDeployment() &&
 		common.GetBuildMode() == common.ENTERPRISE {
 		err = m.pauseMgr.PauseResumeCancelTask(id)
 		if err != nil && err != service.ErrNotFound { // task was found but cancel failed

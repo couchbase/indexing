@@ -577,7 +577,7 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	// Step 1: download PauseMetadata
 	logging.Infof("Resumer::masterGenerateResumePlan: downloading pause metadata from %v for resume task ID: %v", r.task.archivePath, r.task.taskId)
 	ctx := r.task.ctx
-	plasmaCfg := plasma.DefaultConfig()
+	plasmaCfg := generatePlasmaCopierConfig(r.task)
 
 	copier := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
@@ -731,7 +731,7 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 	}()
 
 	ctx := r.task.ctx
-	plasmaCfg := plasma.DefaultConfig()
+	plasmaCfg := generatePlasmaCopierConfig(r.task)
 
 	copier := plasma.MakeFileCopier(nodeDir, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {

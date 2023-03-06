@@ -1501,6 +1501,19 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards)
 		} else {
+			// On Destination if we see a token in ShardTokenDropOnSource state
+			// it implies that source instance will be cleaned up and hence there
+			// wont be any metering there. Destination may or may not have started
+			// metering so enable it.
+			msg := &MsgMeteringUpdate{
+				mType:   METERING_MGR_START_WRITE_BILLING,
+				InstIds: make([]c.IndexInstId, 0),
+				respCh:  make(chan error, 0),
+			}
+			msg.InstIds = append(msg.InstIds, tt.InstIds...)
+			m.supvMsgch <- msg
+			<-msg.respCh
+
 			// Else, cleanup on source will be triggered as rebalance is complete for this tenant
 			// Shards will be unlocked for destination (by rebalance_service_manager) after cleanup
 			// is complete

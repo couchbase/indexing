@@ -1589,6 +1589,16 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.updateRebalancePhase(msg)
 		idx.sendMsgToClustMgr(msg)
 
+	case METERING_MGR_START_WRITE_BILLING,
+		METERING_MGR_STOP_WRITE_BILLING:
+		if idx.meteringMgr != nil {
+			idx.meteringMgrCmdCh <- msg
+			<-idx.meteringMgrCmdCh
+		} else {
+			logging.Fatalf("Indexer::handleWorkerMsgs msg %v should only used in serverless mode", msg)
+			common.CrashOnError(errors.New("Invalid Msg On Worker Channel"))
+		}
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -2018,8 +2028,13 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		idx.stats.AddPartitionStats(indexInst, partnDefn.GetPartitionId())
 	}
 
+	reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
+	// For pendingCreate indexes, the ReqSource would be DDLRequestSourceRebalance but
+	// for shard rebalance, the ShardIdsForDest will be > 0
+	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance) && (len(indexInst.Defn.ShardIdsForDest) > 0)
+
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, false)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -6027,6 +6042,9 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			return nil, nil, nil, err1
 		}
 
+		if shardRebalance {
+			slice.SetStopWriteUnitBilling(true)
+		}
 		partnInst.Sc.AddSlice(0, slice)
 		if len(slice.GetShardIds()) > 0 {
 			partnInst.Defn.AddShardIds(slice.GetShardIds())

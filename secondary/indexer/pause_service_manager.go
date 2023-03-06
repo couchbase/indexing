@@ -28,6 +28,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/plasma"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -555,9 +556,8 @@ type taskObj struct {
 	errorMessage string             // only if a failure occurred
 
 	bucket string // bucket name being Paused or Resumed
-	// bucketUuid string // Pause: UUID of bucket; Resume: ""
 	dryRun bool // is task for Resume dry run (cluster capacity check)?
-
+	region string // region of the object store bucket
 	// ns_server does not differentiate between PreparePause and PrepareResume
 	// this flag is to internally track if the request if for PreparePause/PrepareResume
 	// when the taskType = service.TaskTypePrepared
@@ -595,8 +595,8 @@ type taskObj struct {
 
 // NewTaskObj is the constructor for the taskObj class. If the parameters are not valid, it will
 // return (nil, error) rather than create an unsupported taskObj.
-func NewTaskObj(taskType service.TaskType, taskId, bucket, remotePath string, isPause, dryRun bool,
-) (*taskObj, error) {
+func NewTaskObj(taskType service.TaskType, taskId, bucket, region, remotePath string,
+	isPause, dryRun bool) (*taskObj, error) {
 
 	archiveType, archivePath, err := ArchiveInfoFromRemotePath(remotePath)
 	if err != nil {
@@ -610,6 +610,7 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, remotePath string, is
 		taskStatus:  service.TaskStatusRunning,
 		isPause:     isPause,
 		bucket:      bucket,
+		region:      region,
 		dryRun:      dryRun,
 		archivePath: archivePath,
 		archiveType: archiveType,
@@ -760,7 +761,8 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	}
 
 	// Record the task in progress
-	return m.taskAddPrepare(params.ID, params.Bucket, params.RemotePath, true, false)
+	return m.taskAddPrepare(params.ID, params.Bucket, params.BlobStorageRegion, params.RemotePath,
+		true, false)
 }
 
 // Pause is an external API called by ns_server (via cbauth) only on the GSI master node to initiate
@@ -1141,7 +1143,8 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	}
 
 	// Record the task in progress
-	return m.taskAddPrepare(params.ID, params.Bucket, params.RemotePath, false, params.DryRun)
+	return m.taskAddPrepare(params.ID, params.Bucket, params.BlobStorageRegion, params.RemotePath,
+		false, params.DryRun)
 }
 
 // Resume is an external API called by ns_server (via cbauth) only on the GSI master node to
@@ -1901,8 +1904,10 @@ func (m *PauseServiceManager) taskAdd(task *taskObj) {
 }
 
 // taskAddPreparePause constructs and adds a Pause task to m.tasks.
-func (m *PauseServiceManager) taskAddPrepare(taskId, bucket, remotePath string, isPause, dryRun bool) error {
-	task, err := NewTaskObj(service.TaskTypePrepared, taskId, bucket, remotePath, isPause, dryRun)
+func (m *PauseServiceManager) taskAddPrepare(taskId, bucket, region, remotePath string,
+	isPause, dryRun bool) error {
+	task, err := NewTaskObj(service.TaskTypePrepared, taskId, bucket, region, remotePath,
+		isPause, dryRun)
 	if err != nil {
 		return err
 	}
@@ -2272,7 +2277,7 @@ func CancellableTaskRunnerWithChannel(closeCh <-chan struct{}, cancelledError er
 func generateNodeDir(archivePath string, nodeId service.NodeID) string {
 	separator := string(filepath.Separator)
 	archivePath = strings.TrimSuffix(archivePath, separator)
-	return filepath.Join(archivePath, fmt.Sprintf("node_%v", nodeId)) + separator
+	return strings.Join([]string{archivePath, fmt.Sprintf("node_%v", nodeId), ""}, separator)
 }
 
 // generateShardPath generates a location to download shards from
@@ -2281,5 +2286,13 @@ func generateShardPath(nodeDir string, trimmedShardPath string) string {
 	separator := string(filepath.Separator)
 	trimmedShardPath = strings.TrimPrefix(trimmedShardPath, separator)
 	nodeDir = strings.TrimSuffix(nodeDir, separator)
-	return filepath.Join(nodeDir, trimmedShardPath) + separator
+	return strings.Join([]string{nodeDir, trimmedShardPath, ""}, separator)
+}
+
+func generatePlasmaCopierConfig(task *taskObj) *plasma.Config {
+	cfg := plasma.DefaultConfig()
+	cfg.CopyConfig.KeyEncoding = true
+	cfg.CopyConfig.KeyPrefix = task.archivePath
+	cfg.CopyConfig.Region = task.region
+	return &cfg
 }

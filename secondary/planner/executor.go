@@ -618,11 +618,11 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			ShardIds:                index.ShardIds,
 		}
 
-		if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId && !index.pendingCreate {
+		if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId {
 			token.SourceHost = index.initialNode.NodeId
 			token.SourceId = index.initialNode.NodeUUID
 			token.TransferMode = common.TokenTransferModeMove
-		} else if index.initialNode == nil && !index.pendingCreate { // Replica repair case
+		} else if index.initialNode == nil { // Replica repair case
 			token.SourceId = index.siblingIndex.initialNode.NodeUUID
 			token.SourceHost = index.siblingIndex.initialNode.NodeId
 			token.TransferMode = common.TokenTransferModeCopy
@@ -694,6 +694,16 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				}
 			}
 
+			// For indexes marked pendingCreate, shardIds do not exist yet
+			// Explicitly set the ShardIdsForDest to nil. Rebalancer will
+			// use this information to create a new index instead of
+			// recovering the index from restored shard
+			if index.pendingCreate {
+				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest = nil
+			} else {
+				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest = index.ShardIds
+			}
+
 			token.IndexInsts[sliceIndex].Defn.InstStateAtRebal = token.IndexInsts[sliceIndex].State
 			token.IndexInsts[sliceIndex].Defn.InstVersion = token.IndexInsts[sliceIndex].Version + 1
 			token.IndexInsts[sliceIndex].Defn.ReplicaId = token.IndexInsts[sliceIndex].ReplicaId
@@ -703,9 +713,14 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			}
 			token.IndexInsts[sliceIndex].Pc = nil
 
-			// Token exist for the same index replica between the same source and target.   Add partition to token.
-			token.IndexInsts[sliceIndex].Defn.Partitions = append(token.IndexInsts[sliceIndex].Defn.Partitions, index.PartnId)
-			token.IndexInsts[sliceIndex].Defn.Versions = append(token.IndexInsts[sliceIndex].Defn.Versions, index.Instance.Version+1)
+			if found {
+				// Token exist for the same index replica between the same source and target.   Add partition to token.
+				token.IndexInsts[sliceIndex].Defn.Partitions = append(token.IndexInsts[sliceIndex].Defn.Partitions, index.PartnId)
+				token.IndexInsts[sliceIndex].Defn.Versions = append(token.IndexInsts[sliceIndex].Defn.Versions, index.Instance.Version+1)
+			} else { // Initialise the partitions as this is the first time
+				token.IndexInsts[sliceIndex].Defn.Partitions = []common.PartitionId{index.PartnId}
+				token.IndexInsts[sliceIndex].Defn.Versions = []int{index.Instance.Version + 1}
+			}
 
 			if token.IndexInsts[sliceIndex].Defn.InstVersion < index.Instance.Version+1 {
 				token.IndexInsts[sliceIndex].Defn.InstVersion = index.Instance.Version + 1
@@ -721,7 +736,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			// index shard after all secondary index tokens are generated
 			// so that it can be added to one of the existing token for
 			// the shard
-			if len(index.ShardIds) == 1 {
+			if len(index.ShardIds) == 1 || index.pendingCreate {
 				continue
 			}
 
@@ -756,7 +771,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 
-			if len(index.ShardIds) != 1 {
+			if len(index.ShardIds) != 1 || index.pendingCreate {
 				continue
 			}
 
@@ -810,6 +825,69 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 					}
 				}
 			}
+		}
+	}
+
+	// Process all pendingCreate indexes
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+
+			if !index.pendingCreate {
+				continue
+			}
+
+			// Find a token key that is already moving the index belonging
+			// to this bucket.
+			// Note: Since tokens are grouped based on shardId's, it is
+			// expected to have only one token matching the shardId of
+			// primary index
+			found := false
+			for tokenKey, token := range tokens {
+
+				if index.Bucket != token.IndexInsts[0].Defn.Bucket {
+					continue
+				}
+
+				if index.destNode.NodeUUID != token.DestId {
+					continue
+				}
+
+				// for pendingCreate index, initial node is always non-nil
+				if index.initialNode == nil {
+					logging.Fatalf("genShardTransferToken: initialNode is nil for pendingCreate index (%v, %v, %v, %v, %v)",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId)
+					continue
+				}
+
+				if index.initialNode != nil && index.initialNode.NodeUUID != token.SourceId {
+					continue
+				}
+
+				if index.destNode != nil && index.destNode.NodeUUID != token.DestId {
+					continue
+				}
+
+				// At this point, "token" is moving the indexes from source node to
+				// destination node for this bucket. Add the pendingCreate index to
+				// this token.
+				addIndexToToken(tokenKey, index, indexer)
+				found = true
+				break
+			}
+			// Could be only pendingCreate index is this group
+			// Generate a new token and add it to the group
+			if !found {
+				var tokenKey string
+				if index.initialNode != nil && index.initialNode.NodeId != index.destNode.NodeId {
+					tokenKey = fmt.Sprintf("%v pending_create_%v %v %v", index.Bucket, index.ShardIds, index.initialNode.NodeUUID, index.destNode.NodeUUID)
+				} // initialNode is non-nil for pending create indexes
+				if len(tokenKey) > 0 {
+					if err := addIndexToToken(tokenKey, index, indexer); err != nil {
+						return nil, err
+					}
+				}
+			}
+
 		}
 	}
 

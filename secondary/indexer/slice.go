@@ -53,6 +53,7 @@ type Slice interface {
 	SetRebalRunning()
 
 	GetWriteUnits() uint64
+	SetStopWriteUnitBilling(disableBilling bool)
 }
 
 // cursorCtx implements IndexReaderContext and is used
