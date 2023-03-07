@@ -32,7 +32,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
-	"github.com/couchbase/regulator"
 )
 
 // Note - CE builds do not pull in plasma_slice.go
@@ -3066,17 +3065,6 @@ func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64, initBuild bool
 	} else {
 		atomic.AddInt64(&ms.currMeteredWU, int64(writeUnits))
 	}
-}
-
-func (ms *meteringStats) recordWriteUsageStatsTxn(writeUnits []regulator.Units) uint64 {
-
-	var totalUnits uint64
-	for _, units := range writeUnits {
-		totalUnits += units.Whole()
-	}
-
-	atomic.AddInt64(&ms.currMeteredWU, int64(totalUnits))
-	return totalUnits
 }
 
 func (ms *meteringStats) recordReadUsageStats(readUnits uint64) {
