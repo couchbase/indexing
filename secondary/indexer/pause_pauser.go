@@ -862,7 +862,6 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 // cleanupNoLocks stops any ongoing operation and starts bucket endpoint watchers
 func (p *Pauser) cleanupNoLocks() {
 	p.task.cancelNoLock()
-	go monitorBucketForPauseResume(p.task.bucket, true)
 }
 
 func (p *Pauser) Cleanup() {

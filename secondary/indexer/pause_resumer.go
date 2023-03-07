@@ -1155,7 +1155,6 @@ func (r *Resumer) getIndexStatusFromMeta(rdt *c.ResumeDownloadToken,
 
 func (r *Resumer) cleanupNoLocks() {
 	r.task.cancelNoLock()
-	go monitorBucketForPauseResume(r.task.bucket, true)
 }
 
 func (r *Resumer) Cleanup() {

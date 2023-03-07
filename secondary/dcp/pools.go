@@ -154,6 +154,8 @@ type Bucket struct {
 	Rev      int            `json:"rev"`
 	NodesExt []NodeServices `json:"nodesExt"`
 
+	HibernationState string `json:"hibernation_state,omitempty"`
+
 	pool        *Pool
 	commonSufix string
 }

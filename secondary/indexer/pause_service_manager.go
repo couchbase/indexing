@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/plasma"
@@ -986,6 +988,8 @@ func (m *PauseServiceManager) pauseDoneCallback(pauseId string, err error) {
 		m.endTask(err, pauseId)
 	}
 
+	go m.monitorBucketForPauseResume(pauser.task.bucket, pauser.task.taskId, isMaster, true)
+
 	if err := m.runPauseCleanupPhase(pauser.task.bucket, pauseId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::pauseDoneCallback: Failed to run cleanup: err[%v]", err)
 		return
@@ -1492,6 +1496,8 @@ func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
 	if isMaster {
 		m.endTask(err, resumeId)
 	}
+
+	go m.monitorBucketForPauseResume(resumer.task.bucket, resumer.task.taskId, isMaster, false)
 
 	if err := m.runResumeCleanupPhase(resumer.task.bucket, resumeId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to run cleanup: err[%v]", err)
@@ -2653,8 +2659,73 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 // monitorBucketForPauseResume - starts monitoring bucket endpoints for state changes to the bucket
 //
 // not a part of Pauser/Resumer object as it can be garbage collected while this is running
-func monitorBucketForPauseResume(bucket string, isPause bool) {
-	logging.Infof("Pauser::startWathcer: TODO: monitor bucket monitoring enpoint for bucket %v, under pause? %v", bucket, isPause)
+func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId string,
+	isMaster, isPause bool) {
+	// this function should not have any panics as this could get called during bootstrap on crash
+	// recovery. If the panic cannot be resolved, indexer will go in crash loop
+	defer func() {
+		if err := recover(); err != nil {
+			logging.Fatalf("PauseServiceManager::monitorBucketForPauseResume: recovered from panic %v", err)
+		}
+	}()
+
+	config := psm.config.Load()
+	clusterAddr, err := common.ClusterAuthUrl(config["clusterAddr"].String())
+	if err != nil {
+		logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to generate cluster auth url. err: %v for task ID: %v",
+			err, taskId)
+		return
+	}
+	client, err := couchbase.Connect(clusterAddr)
+	if err != nil {
+		logging.Warnf("PauseServiceManager::monitorBucketForPauseResume: creation of couchbase client failed. err: %v",
+			err)
+	}
+
+	closeCh := make(chan bool)
+
+	processStateUpdate := func(data interface{}) error {
+		bucket, ok := data.(*couchbase.Bucket)
+		if !ok {
+			return errors.New("bucket extraction error. failed to read bucket from data")
+		}
+		logging.Infof("PauseServicerManager::monitorBucketForPauseResume: got bucket updates %v",
+			bucket)
+		if len(bucket.HibernationState) == 0 {
+			// bucket no more in hibernation
+		}
+		switch strings.ToLower(bucket.HibernationState) {
+		case "resuming", "pausing":
+			// no action states
+		case "resumed":
+			// bucket resumed
+		case "paused":
+			// bucket paused
+		default:
+			logging.Warnf("PauseServiceManager::monitorBucketForPauseResume:processStateUpdate: saw unkown hibernation_state `%v` on bucket `%v`",
+				bucket.HibernationState, bucketName)
+		}
+
+		return nil
+	}
+	for i := 0; err != nil && i < 10; i++ {
+		err = client.RunObserveCollectionManifestChanges("default", bucketName, processStateUpdate,
+			closeCh)
+		if err != nil {
+			if err == io.EOF {
+				// bucket deleted
+			} else if strings.Contains(err.Error(), "HTTP error 404") {
+				// bucket didn't exist
+			} else {
+				// Network error/marshalling error?
+				logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to observe bucket (%v) streaming endpoint. err: %v. Retrying (%v)",
+					bucketName, err, i)
+			}
+			
+		}
+	}
+	logging.Infof("PauseServiceManager::monitorBucketForPauseResume: exiting bucket monitor for bucket %v; err %v for task ID: %v (for pause? -> %v)",
+		bucketName, err, taskId, isPause)
 }
 
 func CancellableTaskRunnerWithContext(ctx context.Context, cancelledError error) func(func() error) error {
