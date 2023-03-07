@@ -476,6 +476,8 @@ const (
 	// state and only open such a bucket for business if it gets marked as active. Resume-related
 	// tasks do NOT exist. This state ends when either the bucket is marked active or is dropped.
 	bst_RESUMED
+
+	bst_ONLINE
 )
 
 func (this bucketStateEnum) IsPausing() bool {
@@ -529,6 +531,8 @@ func (this bucketStateEnum) String() string {
 		return "Resuming"
 	case bst_RESUMED:
 		return "Resumed"
+	case bst_ONLINE:
+		return "Online"
 	default:
 		return fmt.Sprintf("undefinedBucketStateEnum_%v", int(this))
 	}
@@ -941,6 +945,7 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	// Set bst_PREPARE_PAUSE state
 	err = m.bucketStateSet(_PreparePause, params.Bucket, bst_NIL, bst_PREPARE_PAUSE)
 	if err != nil {
+		err = m.bucketStateSet(_PreparePause, params.Bucket, bst_ONLINE, bst_PREPARE_PAUSE)
 		return err
 	}
 
@@ -1491,7 +1496,13 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		// Set bst_PREPARE_RESUME state
 		err = m.bucketStateSet(_PrepareResume, params.Bucket, bst_NIL, bst_PREPARE_RESUME)
 		if err != nil {
+			m.bucketStateSet(_PrepareResume, params.Bucket, bst_ONLINE, bst_PREPARE_RESUME)
 			return err
+		}
+
+		m.supvMsgch <- &MsgPauseUpdateBucketState{
+			bucket:           params.Bucket,
+			bucketPauseState: bst_PREPARE_RESUME,
 		}
 
 	}
@@ -2814,14 +2825,26 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 			bucket)
 		if len(bucket.HibernationState) == 0 {
 			// bucket no more in hibernation
+			if isPause {
+				psm.rollbackPause(bucketName)
+			}
+			psm.startBucketStreams(bucketName)
+			close(closeCh)
 		}
 		switch strings.ToLower(bucket.HibernationState) {
 		case "resuming", "pausing":
 			// no action states
 		case "resumed":
 			// bucket resumed
+			if !isPause {
+				psm.startBucketStreams(bucketName)
+				close(closeCh)
+			}
 		case "paused":
 			// bucket paused
+			if isPause {
+				close(closeCh)
+			}
 		default:
 			logging.Warnf("PauseServiceManager::monitorBucketForPauseResume:processStateUpdate: saw unkown hibernation_state `%v` on bucket `%v`",
 				bucket.HibernationState, bucketName)
@@ -2829,24 +2852,45 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 
 		return nil
 	}
-	for i := 0; err != nil && i < 10; i++ {
+
+	// we could potentially get io.EOF on network drops/server shutdowns too; it is better to retry
+	// on streaming endpoint and encounter a `404` for given bucket to be sure that the bucket is
+	// deleted from ns_server;
+
+	// TODO: verify if we can create a bucket with same name on cluster if the original is hibernated
+	for i := 0; err != nil && (i < 10 || err == io.EOF); i++ {
 		err = client.RunObserveCollectionManifestChanges("default", bucketName, processStateUpdate,
 			closeCh)
 		if err != nil {
-			if err == io.EOF {
+			if strings.Contains(err.Error(), "HTTP error 404") {
 				// bucket deleted
-			} else if strings.Contains(err.Error(), "HTTP error 404") {
-				// bucket didn't exist
+				if !isPause {
+					psm.rollbackResume(bucketName)
+				}
 			} else {
 				// Network error/marshalling error?
 				logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to observe bucket (%v) streaming endpoint. err: %v. Retrying (%v)",
 					bucketName, err, i)
 			}
-
 		}
 	}
 	logging.Infof("PauseServiceManager::monitorBucketForPauseResume: exiting bucket monitor for bucket %v; err %v for task ID: %v (for pause? -> %v)",
 		bucketName, err, taskId, isPause)
+}
+
+func (psm *PauseServiceManager) startBucketStreams(bucketName string) {
+	psm.supvMsgch <- &MsgPauseUpdateBucketState{
+		bucket:           bucketName,
+		bucketPauseState: bst_ONLINE,
+	}
+}
+
+func (psm *PauseServiceManager) rollbackPause(bucketName string) {
+	psm.bucketStateDelete(bucketName)
+}
+
+func (psm *PauseServiceManager) rollbackResume(bucketName string) {
+	psm.bucketStateDelete(bucketName)
 }
 
 func CancellableTaskRunnerWithContext(ctx context.Context, cancelledError error) func(func() error) error {
