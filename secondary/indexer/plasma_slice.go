@@ -3202,8 +3202,8 @@ func (mdb *plasmaSlice) updateUsageStatsOnCommit() {
 	atomic.StoreInt64(&ms.diskSnap1MaxWriteUsage, diskSnap1MaxWriteUsage)
 	atomic.StoreInt64(&ms.diskSnap1MaxReadUsage, diskSnap1MaxReadUsage)
 
-	diskSnap2MaxUsage := diskSnap2MaxWriteUsage + (diskSnap2MaxReadUsage / cReadUnitNormalizationFactor)
-	diskSnap1MaxUsage := diskSnap1MaxWriteUsage + (diskSnap1MaxReadUsage / cReadUnitNormalizationFactor)
+	diskSnap2MaxUsage := diskSnap2MaxWriteUsage + diskSnap2MaxReadUsage
+	diskSnap1MaxUsage := diskSnap1MaxWriteUsage + diskSnap1MaxReadUsage
 
 	if diskSnap1MaxUsage > diskSnap2MaxUsage {
 		idxStats.max20minUnitsUsage.Set(diskSnap1MaxUsage)
@@ -3228,7 +3228,7 @@ func (mdb *plasmaSlice) updateUsageStatsFromSnapshotMeta(stats map[string]interf
 	mdb.idxStats.currMaxWriteUsage.Set(diskSnapMaxWriteUsage)
 	mdb.idxStats.currMaxReadUsage.Set(diskSnapMaxReadUsage)
 
-	diskSnapMaxUsage := diskSnapMaxWriteUsage + (diskSnapMaxReadUsage / cReadUnitNormalizationFactor)
+	diskSnapMaxUsage := diskSnapMaxWriteUsage + diskSnapMaxReadUsage
 	mdb.idxStats.max20minUnitsUsage.Set(diskSnapMaxUsage)
 
 	avgUnitsUsage := safeGetInt64(stats[SNAP_STATS_AVG_UNITS_USAGE])
