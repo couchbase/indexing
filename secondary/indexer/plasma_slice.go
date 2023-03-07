@@ -48,8 +48,9 @@ const (
 )
 
 type meteringStats struct {
-	currMeteredWU int64 //cumulative write units since last disk snapshot
-	currMeteredRU int64 //cumulative read units since last disk snapshot
+	currMeteredWU     int64 //cumulative write units since last disk snapshot
+	currMeteredRU     int64 //cumulative read units since last disk snapshot
+	currMeteredInitWU int64 //cumulative write units since last disk snapshot
 
 	diskSnap1MaxReadUsage  int64 //max write usage stored in disk snapshot1
 	diskSnap1MaxWriteUsage int64 //max read usage stored in disk snapshot1
@@ -704,11 +705,13 @@ func (s *plasmaSlice) RecordWriteUnits(bytes uint64) {
 			wuBilling := !s.isWriteBillingStopped()
 			err = s.meteringMgr.RecordWriteUnitsComputed(s.idxDefn.Bucket,
 				wu, wuBilling, false)
-			s.meteringStats.recordWriteUsageStats(wu)
+			initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
+			s.meteringStats.recordWriteUsageStats(wu, initBuild)
 		}
 	} else {
 		wu, err = s.meteringMgr.RecordWriteUnits(s.idxDefn.Bucket, bytes, false, false)
-		s.meteringStats.recordWriteUsageStats(wu)
+		initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
+		s.meteringStats.recordWriteUsageStats(wu, initBuild)
 	}
 	if err != nil {
 		// TODO: Handle error graciously
@@ -1239,7 +1242,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					// TODO: Add logging without flooding
 					return
 				}
-				mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole())
+				initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
+				mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole(), initBuild)
 			} else {
 				ar.Abort()
 			}
@@ -3056,8 +3060,12 @@ func (mdb *plasmaSlice) GetShardIds() []common.ShardId {
 	return mdb.shardIds
 }
 
-func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64) {
-	atomic.AddInt64(&ms.currMeteredWU, int64(writeUnits))
+func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64, initBuild bool) {
+	if initBuild {
+		atomic.AddInt64(&ms.currMeteredInitWU, int64(writeUnits))
+	} else {
+		atomic.AddInt64(&ms.currMeteredWU, int64(writeUnits))
+	}
 }
 
 func (ms *meteringStats) recordWriteUsageStatsTxn(writeUnits []regulator.Units) uint64 {
@@ -3081,14 +3089,13 @@ func (mdb *plasmaSlice) updateUsageStats() {
 		return
 	}
 
-	ms := mdb.meteringStats
 	idxStats := mdb.idxStats
 
 	last := idxStats.lastUnitsStatTime.Value()
 
 	var sinceLastStat int64
 	if last == 0 { //first iteration
-		sinceLastStat = 1
+		sinceLastStat = 30 //default stats collection interval
 	} else {
 		lastTime := time.Unix(0, last)
 		sinceLastStat = int64(time.Since(lastTime).Seconds())
@@ -3101,8 +3108,8 @@ func (mdb *plasmaSlice) updateUsageStats() {
 		lastMeteredWU := idxStats.lastMeteredWU.Value()
 		lastMeteredRU := idxStats.lastMeteredRU.Value()
 
-		currMeteredWU := atomic.LoadInt64(&ms.currMeteredWU)
-		currMeteredRU := atomic.LoadInt64(&ms.currMeteredRU)
+		currMeteredWU := mdb.computeNormalizedWU()
+		currMeteredRU := mdb.computeNormalizedRU()
 		if currMeteredWU > lastMeteredWU {
 			newWUs = (currMeteredWU - lastMeteredWU) / sinceLastStat
 			idxStats.lastMeteredWU.Set(currMeteredWU)
@@ -3122,8 +3129,8 @@ func (mdb *plasmaSlice) updateUsageStats() {
 			idxStats.currMaxReadUsage.Set(newRUs)
 		}
 
-		//normalize the WU/RU and compute the current units usage
-		currUnitsUsage := mdb.computeNormalizedWU(newWUs) + mdb.computeNormalizedRU(newRUs)
+		//compute the units usage in the current stats interval
+		currUnitsUsage := newWUs + newRUs
 
 		//update the last 20min max units usage, if applicable
 		max20minUnitsUsage := idxStats.max20minUnitsUsage.Value()
@@ -3140,37 +3147,39 @@ func (mdb *plasmaSlice) updateUsageStats() {
 	}
 }
 
-func (mdb *plasmaSlice) computeNormalizedWU(newWUs int64) int64 {
+func (mdb *plasmaSlice) computeNormalizedWU() int64 {
 
-	if newWUs == 0 {
-		return 0
+	ms := mdb.meteringStats
+	currMeteredWU := atomic.LoadInt64(&ms.currMeteredWU)
+	currMeteredInitWU := atomic.LoadInt64(&ms.currMeteredInitWU)
+
+	var normalizedWU int64
+	if currMeteredInitWU > 0 {
+		if currMeteredInitWU < cInitBuildWUNormalizationFactor {
+			normalizedWU = 1
+		} else {
+			normalizedWU = currMeteredInitWU / cInitBuildWUNormalizationFactor
+		}
 	}
 
-	var writeUnitNormalizationFactor int64 = 1
-	if atomic.LoadInt32(&mdb.isInitialBuild) == 1 {
-		writeUnitNormalizationFactor = cInitBuildWUNormalizationFactor
-	}
-
-	if newWUs < writeUnitNormalizationFactor {
-		return 1
-	}
-
-	normalizedWU := newWUs / writeUnitNormalizationFactor
+	normalizedWU = normalizedWU + currMeteredWU
 	return normalizedWU
 
 }
 
-func (mdb *plasmaSlice) computeNormalizedRU(newRUs int64) int64 {
+func (mdb *plasmaSlice) computeNormalizedRU() int64 {
 
-	if newRUs == 0 {
+	ms := mdb.meteringStats
+	currMeteredRU := atomic.LoadInt64(&ms.currMeteredRU)
+	if currMeteredRU == 0 {
 		return 0
 	}
 
-	if newRUs < cReadUnitNormalizationFactor {
+	if currMeteredRU < cReadUnitNormalizationFactor {
 		return 1
 	}
 
-	normalizedRU := newRUs / cReadUnitNormalizationFactor
+	normalizedRU := currMeteredRU / cReadUnitNormalizationFactor
 	return normalizedRU
 }
 
