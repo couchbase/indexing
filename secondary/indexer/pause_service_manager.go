@@ -754,8 +754,12 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	logging.Infof("%v Called. "+args, _PreparePause, params.ID, params.Bucket, params.RemotePath)
 	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, params.ID, params.Bucket, params.RemotePath)
 
-	// TODO: If bucket state is already set (due to calling prepare before cancelling previous attempt),
-	// return service.ErrConflict
+	// Check if calling prepare before cancelling/cleaning up previous attempt)
+	if bucketTasks := m.taskFindForBucket(params.Bucket); len(bucketTasks) > 0 {
+		logging.Errorf("PauseServiceManager::PreparePause: Previous attempt not cleaned up:"+
+			" err[%v] found tasks[%v] for bucket[%v]", service.ErrConflict, bucketTasks, params.Bucket)
+		return service.ErrConflict
+	}
 
 	// TODO: recover pause state in bootstrap1 and add checks here
 	// Fail Prepare if bootstrap cleanup is still pending
@@ -1291,8 +1295,12 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	logging.Infof("%v Called. "+args, _PrepareResume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 
-	// TODO: If bucket state is already set (due to calling prepare before cancelling previous attempt),
-	// return service.ErrConflict
+	// Check if calling prepare before cancelling/cleaning up previous attempt
+	if bucketTasks := m.taskFindForBucket(params.Bucket); len(bucketTasks) > 0 {
+		logging.Errorf("PauseServiceManager::PrepareResume: Previous attempt not cleaned up:"+
+			" err[%v] found tasks[%v] for bucket[%v]", service.ErrConflict, bucketTasks, params.Bucket)
+		return service.ErrConflict
+	}
 
 	// TODO: recover resume state in bootstrap1 and add checks here
 	// Fail Prepare if bootstrap cleanup is still pending
@@ -2275,6 +2283,20 @@ func (m *PauseServiceManager) taskFind(taskId string) *taskObj {
 	m.tasksMu.RLock()
 	defer m.tasksMu.RUnlock()
 	return m.tasks[taskId]
+}
+
+func (m *PauseServiceManager) taskFindForBucket(bucketName string) map[string]*taskObj {
+	m.tasksMu.RLock()
+	defer m.tasksMu.RUnlock()
+
+	bucketTasks := make(map[string]*taskObj)
+	for taskId, task := range m.tasks {
+		if task.bucket == bucketName {
+			bucketTasks[taskId] = task
+		}
+	}
+
+	return bucketTasks
 }
 
 // taskSetFailed looks up a task by taskId and if found marks it as failed with the given errMsg and
