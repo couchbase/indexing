@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
@@ -817,6 +818,17 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		return err
 	}
 
+	// Caller is not expected to start Pause if rebalance is running
+	// This check also covers replica repair
+	if rebalanceRunning, err := m.checkRebalanceRunning(); err != nil {
+		return err
+	} else if rebalanceRunning {
+		err = fmt.Errorf("found in-progress rebalance")
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+
+		return err
+	}
+
 	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
@@ -1330,6 +1342,16 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	} else if inProg {
 		err = fmt.Errorf("found in progress DDL command tokens for bucket[%v] defns[%v]",
 			params.Bucket, inProgDefns)
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	}
+
+	// Caller is not expected to start Resume if rebalance is running
+	if rebalanceRunning, err := m.checkRebalanceRunning(); err != nil {
+		return err
+	} else if rebalanceRunning {
+		err = fmt.Errorf("found in-progress rebalance")
 		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
 
 		return err
@@ -2646,4 +2668,29 @@ func (m *PauseServiceManager) checkDDLRunningForBucket(bucketName string) (bool,
 	inProgressIndexNames := msg.(*MsgDDLInProgressResponse).GetInProgressIndexNames()
 
 	return ddlInProgress, inProgressIndexNames
+}
+
+func (m *PauseServiceManager) checkRebalanceRunning() (rebalanceRunning bool, err error) {
+
+	respch := make(MsgChannel)
+	m.supvMsgch <- &MsgClustMgrLocal{
+		mType:  CLUST_MGR_GET_LOCAL,
+		key:    RebalanceRunning,
+		respch: respch,
+	}
+
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err = resp.GetError(); err != nil {
+		if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+			return false, nil
+		}
+
+		logging.Errorf("PauseServiceManager::checkRebalanceRunning: Failed to get rebalanceRunning from"+
+			" local meta: [%v]", err)
+		return false, err
+	}
+
+	return true, nil
 }
