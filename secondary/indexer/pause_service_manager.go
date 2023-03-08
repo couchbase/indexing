@@ -829,6 +829,14 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		return err
 	}
 
+	// Make sure all indexes are caught up
+	if caughtUp, indexes := m.checkIndexesCaughtUp(params.Bucket); !caughtUp {
+		err = fmt.Errorf("found indexes[%v]len[%d] with non-zero pending or queued mutations", indexes, len(indexes))
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+
+		return err
+	}
+
 	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
@@ -1357,6 +1365,8 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		return err
 	}
 
+	// Indexes for this bucket do not exist yet, no need to check if they are caught up
+
 	// TODO: Check remotePath access?
 
 	if !params.DryRun {
@@ -1405,14 +1415,14 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 				err, params.ID)
 			return err
 		}
-	
+
 		if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
 			logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
 			if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
 				logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 				return cerr
 			}
-	
+
 			return err
 		}
 
@@ -2693,4 +2703,19 @@ func (m *PauseServiceManager) checkRebalanceRunning() (rebalanceRunning bool, er
 	}
 
 	return true, nil
+}
+
+func (m *PauseServiceManager) checkIndexesCaughtUp(bucketName string) (_ bool, notCaughtUpIndexes []string) {
+
+	allStats := m.genericMgr.statsMgr.stats.Get()
+
+	for _, idxSts := range allStats.indexes {
+		if idxSts.bucket == bucketName &&
+			(idxSts.numDocsPending.Value() > 0 || idxSts.numDocsQueued.Value() > 0) {
+			notCaughtUpIndexes = append(notCaughtUpIndexes, fmt.Sprintf("bkt[%v]idx[%v]pen[%v]que[%v]",
+				bucketName, idxSts.name, idxSts.numDocsPending.Value(), idxSts.numDocsQueued.Value()))
+		}
+	}
+
+	return len(notCaughtUpIndexes) <= 0, notCaughtUpIndexes
 }

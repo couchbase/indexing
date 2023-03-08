@@ -117,6 +117,9 @@ func TestMain(m *testing.M) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.client_stats_refresh_interval", 500, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.client_stats_refresh_interval")
 
+	err = secondaryindex.ChangeIndexerSettings("indexer.stats_cache_timeout", 500, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.stats_cache_timeout")
+
 	if clusterconfig.IndexUsing != "" {
 		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
 		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)

@@ -228,6 +228,9 @@ func TestPauseResume(rootT *testing.T) {
 		err = mc.DeleteAllCommandTokens()
 		tc.HandleError(err, "Failed to delete all command token during setup")
 
+		// TestMain changes stats_cache_timeout to 500ms, wait till stats refresh
+		time.Sleep(2 * time.Second)
+
 		log.Printf("Created keyspace %v.%v.%v with %v docs and %v index", BUCKET, SCOPE, COLLECTION, numDocs, indexName)
 	}
 
