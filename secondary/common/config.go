@@ -1082,6 +1082,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.serverless.max_parallel_collection_builds": ConfigValue{
+		20,
+		"[Serverless] Maximum number of collections that can be built simultaneously." +
+			"Note: This setting does not limit the number of indexes that are being " +
+			"built in each collection",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//fdb specific config
 	"indexer.stream_reader.fdb.syncBatchInterval": ConfigValue{
@@ -3935,6 +3944,18 @@ func (config Config) GetIndexerNumCpuPrc() int {
 
 func (config Config) String() string {
 	return string(config.Json())
+}
+
+var indexerServerLessConfigMap = map[string]string{
+	"max_parallel_collection_builds": "serverless.max_parallel_collection_builds",
+}
+
+func (config Config) GetDeploymentModelAwareCfgInt(k string) int {
+	key := k
+	if IsServerlessDeployment() {
+		key = indexerServerLessConfigMap[k]
+	}
+	return config.getIndexerConfigInt(key)
 }
 
 // Int assumes config value is an integer and returns the same.

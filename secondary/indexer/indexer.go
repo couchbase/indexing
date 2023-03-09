@@ -3442,7 +3442,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		// Limit the number of concurrent build streams.
 		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-			maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
+			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
 				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, instIdList, keyspaceId)
 			if idx.enableManager {
@@ -6304,7 +6304,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
+	maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
 
 	parallelCollectionBuildMap := make(map[string]bool)
 	// Find all the keyspaces on which initial build is in progress
