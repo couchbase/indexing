@@ -816,23 +816,9 @@ func (c *ClusterInfoCache) GetServiceFromPort(addr string) (string, error) {
 //
 
 func (c *ClusterInfoCache) TranslatePort(host, src, dest string) (string, error) {
-	for nid, n := range c.nodes {
-		for _, svc := range n.Services {
-			if svc == "index" {
-				srcPort, err := c.GetServiceAddress(NodeId(nid), src, true)
-				if err != nil {
-					return "", err
-				}
-
-				if srcPort == host {
-					destPort, err := c.GetServiceAddress(NodeId(nid), dest, true)
-					if err != nil {
-						return "", err
-					}
-
-					return destPort, nil
-				}
-			}
+	for _, nodeServices := range c.nodesvs {
+		if addr, _ := nodeServices.GetHostNameWithPort(src); len(addr) != 0 && addr == host {
+			return nodeServices.GetHostNameWithPort(dest)
 		}
 	}
 

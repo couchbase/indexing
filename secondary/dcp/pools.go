@@ -1024,6 +1024,11 @@ func (c *Client) GetPoolServices(name string) (ps PoolServices, err error) {
 
 	poolURI := "/pools/" + poolName + "/nodeServices"
 	err = c.parseURLResponse(poolURI, &ps)
+	for i := range ps.NodesExt {
+		if len(ps.NodesExt[i].Hostname) == 0 {
+			ps.NodesExt[i].Hostname = c.BaseURL.Hostname()
+		}
+	}
 
 	return
 }
