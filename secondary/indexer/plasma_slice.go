@@ -32,7 +32,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
-	"github.com/couchbase/regulator"
 )
 
 // Note - CE builds do not pull in plasma_slice.go
@@ -59,6 +58,10 @@ type meteringStats struct {
 	diskSnap2MaxWriteUsage int64 //max read usage stored in disk snapshot2
 
 	writeUnits uint64 //total billed write units needed to build the slice
+
+	numInserts int64 //num metered inserts
+	numUpdates int64 //num metered updates
+	numDeletes int64 //num metered deletes
 }
 
 type plasmaSlice struct {
@@ -1037,6 +1040,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 			mdb.RecordWriteUnits(uint64(len(docid)))
+			mdb.recordNewOps(1, 0, 0)
 		}
 		mdb.isDirty = true
 		return 1
@@ -1058,6 +1062,13 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 	if !init {
 		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId, false); !changed {
 			return 0
+		}
+
+		//Insert gets counted as 1 write. Record it as insert or update.
+		if ndel == 0 {
+			mdb.recordNewOps(1, 0, 0)
+		} else {
+			mdb.recordNewOps(0, 1, 0)
 		}
 	}
 
@@ -1220,6 +1231,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	} else {
 		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	}
+
+	mdb.recordNewOpsArrIndex(int64(len(indexEntriesToBeAdded)), int64(len(indexEntriesToBeDeleted)))
 
 	nmut = 0
 
@@ -1477,6 +1490,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 			mdb.RecordWriteUnits(uint64(len(docid)))
+			mdb.recordNewOps(0, 0, 1)
 		}
 
 		mdb.isDirty = true
@@ -1496,11 +1510,15 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 	mdb.back[workerId].BeginNoThrottle()
 	defer mdb.back[workerId].End()
 
+	itemFound := false
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
 	buf := mdb.encodeBuf[workerId]
 	if err == nil {
+
+		itemFound = true
+
 		// Delete the entries only if the entry is different
 		if hasEqualBackEntry(compareKey, backEntry) {
 			return 0, false
@@ -1536,11 +1554,18 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 		if meterDelete && itemDeleted == true {
 			keylen := getKeyLenFromEntry(entry)
 			mdb.RecordWriteUnits(uint64(len(docid) + keylen))
+			mdb.recordNewOps(0, 0, 1)
 		}
 	}
 
 	mdb.isDirty = true
-	return 1, true
+
+	if itemFound {
+		return 1, true
+	} else {
+		//nothing deleted
+		return 0, true
+	}
 }
 
 func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int, meterDelete bool) (nmut int) {
@@ -1623,6 +1648,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 
 			if meterDelete {
 				mdb.RecordWriteUnits(uint64(len(docid) + keyDelSz))
+				mdb.recordNewOps(0, 0, 1)
 			}
 		}
 	}
@@ -3068,19 +3094,43 @@ func (ms *meteringStats) recordWriteUsageStats(writeUnits uint64, initBuild bool
 	}
 }
 
-func (ms *meteringStats) recordWriteUsageStatsTxn(writeUnits []regulator.Units) uint64 {
-
-	var totalUnits uint64
-	for _, units := range writeUnits {
-		totalUnits += units.Whole()
-	}
-
-	atomic.AddInt64(&ms.currMeteredWU, int64(totalUnits))
-	return totalUnits
-}
-
 func (ms *meteringStats) recordReadUsageStats(readUnits uint64) {
 	atomic.AddInt64(&ms.currMeteredRU, int64(readUnits))
+}
+
+func (mdb *plasmaSlice) recordNewOps(newInserts,
+	newUpdates, newDeletes int64) {
+
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	ms := mdb.meteringStats
+
+	atomic.AddInt64(&ms.numInserts, newInserts)
+	atomic.AddInt64(&ms.numUpdates, newUpdates)
+	atomic.AddInt64(&ms.numDeletes, newDeletes)
+}
+
+func (mdb *plasmaSlice) recordNewOpsArrIndex(indexEntriesToBeAdded int64,
+	indexEntriesToBeDeleted int64) {
+
+	if !mdb.EnableMetering() {
+		return
+	}
+
+	//count the entries that need to be deleted as updates, rest
+	//are counted as inserts
+	var newInserts, newUpdates int64
+	if indexEntriesToBeAdded >= indexEntriesToBeDeleted {
+		newInserts = indexEntriesToBeAdded - indexEntriesToBeDeleted
+		newUpdates = indexEntriesToBeDeleted
+	} else {
+		newUpdates = indexEntriesToBeDeleted - indexEntriesToBeAdded
+		newInserts = indexEntriesToBeAdded
+	}
+
+	mdb.recordNewOps(newInserts, newUpdates, 0)
 }
 
 func (mdb *plasmaSlice) updateUsageStats() {
@@ -3153,18 +3203,47 @@ func (mdb *plasmaSlice) computeNormalizedWU() int64 {
 	currMeteredWU := atomic.LoadInt64(&ms.currMeteredWU)
 	currMeteredInitWU := atomic.LoadInt64(&ms.currMeteredInitWU)
 
-	var normalizedWU int64
+	var normalizedInitWU, normalizedWU int64
 	if currMeteredInitWU > 0 {
 		if currMeteredInitWU < cInitBuildWUNormalizationFactor {
-			normalizedWU = 1
+			normalizedInitWU = 1
 		} else {
-			normalizedWU = currMeteredInitWU / cInitBuildWUNormalizationFactor
+			normalizedInitWU = currMeteredInitWU / cInitBuildWUNormalizationFactor
 		}
 	}
 
-	normalizedWU = normalizedWU + currMeteredWU
-	return normalizedWU
+	if currMeteredWU > 0 {
 
+		//Updates are more costly due to deletion of old index entry.
+		//Use different normalization factor for inserts.
+		numInserts := atomic.LoadInt64(&ms.numInserts)
+		numUpdates := atomic.LoadInt64(&ms.numUpdates)
+		numDeletes := atomic.LoadInt64(&ms.numDeletes)
+
+		var ratioInserts float64
+
+		totalOps := numInserts + numUpdates + numDeletes
+		if totalOps > 0 {
+			ratioInserts = float64(numInserts) / float64(totalOps)
+		}
+
+		insertWUs := int64(ratioInserts * float64(currMeteredWU))
+		nonInsertWUs := currMeteredWU - insertWUs
+
+		var normalizedInsertWUs int64
+		if insertWUs < cInsertWUNormalizationFactor {
+			if insertWUs == 0 {
+				normalizedInsertWUs = 0
+			} else {
+				normalizedInsertWUs = 1
+			}
+		} else {
+			normalizedInsertWUs = insertWUs / cInsertWUNormalizationFactor
+		}
+		normalizedWU = normalizedInsertWUs + nonInsertWUs
+	}
+
+	return normalizedInitWU + normalizedWU
 }
 
 func (mdb *plasmaSlice) computeNormalizedRU() int64 {
@@ -3202,8 +3281,8 @@ func (mdb *plasmaSlice) updateUsageStatsOnCommit() {
 	atomic.StoreInt64(&ms.diskSnap1MaxWriteUsage, diskSnap1MaxWriteUsage)
 	atomic.StoreInt64(&ms.diskSnap1MaxReadUsage, diskSnap1MaxReadUsage)
 
-	diskSnap2MaxUsage := diskSnap2MaxWriteUsage + (diskSnap2MaxReadUsage / cReadUnitNormalizationFactor)
-	diskSnap1MaxUsage := diskSnap1MaxWriteUsage + (diskSnap1MaxReadUsage / cReadUnitNormalizationFactor)
+	diskSnap2MaxUsage := diskSnap2MaxWriteUsage + diskSnap2MaxReadUsage
+	diskSnap1MaxUsage := diskSnap1MaxWriteUsage + diskSnap1MaxReadUsage
 
 	if diskSnap1MaxUsage > diskSnap2MaxUsage {
 		idxStats.max20minUnitsUsage.Set(diskSnap1MaxUsage)
@@ -3228,7 +3307,7 @@ func (mdb *plasmaSlice) updateUsageStatsFromSnapshotMeta(stats map[string]interf
 	mdb.idxStats.currMaxWriteUsage.Set(diskSnapMaxWriteUsage)
 	mdb.idxStats.currMaxReadUsage.Set(diskSnapMaxReadUsage)
 
-	diskSnapMaxUsage := diskSnapMaxWriteUsage + (diskSnapMaxReadUsage / cReadUnitNormalizationFactor)
+	diskSnapMaxUsage := diskSnapMaxWriteUsage + diskSnapMaxReadUsage
 	mdb.idxStats.max20minUnitsUsage.Set(diskSnapMaxUsage)
 
 	avgUnitsUsage := safeGetInt64(stats[SNAP_STATS_AVG_UNITS_USAGE])
@@ -3248,7 +3327,11 @@ func (mdb *plasmaSlice) resetUsageStats() {
 
 	ms := mdb.meteringStats
 	atomic.StoreInt64(&ms.currMeteredWU, 0)
+	atomic.StoreInt64(&ms.currMeteredInitWU, 0)
 	atomic.StoreInt64(&ms.currMeteredRU, 0)
+	atomic.StoreInt64(&ms.numInserts, 0)
+	atomic.StoreInt64(&ms.numUpdates, 0)
+	atomic.StoreInt64(&ms.numDeletes, 0)
 
 }
 

@@ -311,12 +311,12 @@ type IndexStats struct {
 	snapGenLatDist     stats.Histogram
 
 	//serverless stats
-	lastMeteredWU      stats.Int64Val //Updated every stats interval with cumulative metered WU. Reset every disk snapshot.
-	lastMeteredRU      stats.Int64Val //Updated every stats interval with cumulative metered RU. Reset every disk snapshot.
-	currMaxReadUsage   stats.Int64Val //max read usage since last disk snapshot. persisted with disk snapshot.
-	currMaxWriteUsage  stats.Int64Val //max write usage since last disk snapshot. persisted with disk snapshot.
-	avgUnitsUsage      stats.Int64Val //units usage moving average
-	max20minUnitsUsage stats.Int64Val //max units usage in the last 20mins(highest among current usage vs both disk snapshots max)
+	lastMeteredWU      stats.Int64Val //Updated every stats interval with cumulative normalized metered WU. Reset every disk snapshot.
+	lastMeteredRU      stats.Int64Val //Updated every stats interval with cumulative normalized metered RU. Reset every disk snapshot.
+	currMaxReadUsage   stats.Int64Val //max normalized read usage since last disk snapshot. persisted with disk snapshot.
+	currMaxWriteUsage  stats.Int64Val //max normalized write usage since last disk snapshot. persisted with disk snapshot.
+	avgUnitsUsage      stats.Int64Val //normalized units usage moving average
+	max20minUnitsUsage stats.Int64Val //max normalized units usage in the last 20mins(highest among current usage vs both disk snapshots max)
 	lastUnitsStatTime  stats.Int64Val //last time when units usage stats were calculated
 }
 
@@ -797,8 +797,8 @@ type IndexerStats struct {
 	notFoundError      stats.Int64Val
 	numTenants         stats.Int64Val
 
-	unitsQuota      stats.Int64Val //RU/WU units quota for serverless model
-	unitsUsedActual stats.Int64Val //RU/WU units used for serverless model
+	unitsQuota      stats.Int64Val //RU/WU normalized units quota for serverless model
+	unitsUsedActual stats.Int64Val //RU/WU normalized units used for serverless model
 
 	indexerState  stats.Int64Val
 	prjLatencyMap *MapHolder
