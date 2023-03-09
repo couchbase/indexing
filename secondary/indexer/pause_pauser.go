@@ -532,8 +532,6 @@ func (p *Pauser) processPauseUploadTokenAsFollower(putId string, put *common.Pau
 
 		p.updateInMemToken(putId, put, "follower")
 
-		p.finishPause(nil)
-
 		return false
 
 	default:
