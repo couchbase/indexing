@@ -466,11 +466,12 @@ func MarshallCreateCommandTokenList(r *CreateCommandTokenList) ([]byte, error) {
 //
 // Generate a token to metakv for recovery purpose
 //
-func PostDeleteCommandToken(defnId c.IndexDefnId, internal bool) error {
+func PostDeleteCommandToken(defnId c.IndexDefnId, internal bool, bucketName string) error {
 
 	commandToken := &DeleteCommandToken{
 		DefnId:   defnId,
 		Internal: internal,
+		Bucket:   bucketName,
 	}
 
 	id := fmt.Sprintf("%v", defnId)

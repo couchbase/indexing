@@ -1195,7 +1195,7 @@ func (si *secondaryIndex) Drop(requestId string) errors.Error {
 		return ErrorIndexEmpty
 	}
 
-	if err := si.gsi.gsiClient.DropIndex(si.defnID); err != nil {
+	if err := si.gsi.gsiClient.DropIndex(si.defnID, si.bucketn); err != nil {
 		return errors.NewError(err, "GSI Drop()")
 	}
 	si.gsi.delIndex(si.Id())

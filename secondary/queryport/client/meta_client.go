@@ -421,8 +421,8 @@ func (b *metadataClient) AlterReplicaCount(action string, defnID uint64, planJSO
 }
 
 // DropIndex implements BridgeAccessor{} interface.
-func (b *metadataClient) DropIndex(defnID uint64) error {
-	err := b.mdClient.DropIndex(common.IndexDefnId(defnID))
+func (b *metadataClient) DropIndex(defnID uint64, bucketName string) error {
+	err := b.mdClient.DropIndex(common.IndexDefnId(defnID), bucketName)
 	if err == nil { // cleanup index local cache.
 		b.safeupdate(nil, false /*force*/)
 	}

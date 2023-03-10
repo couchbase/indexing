@@ -535,7 +535,7 @@ func (api *testServer) doDrop(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = api.client.DropIndex(defnId)
+	err = api.client.DropIndex(defnId, "")
 
 	// make response
 	if err != nil {

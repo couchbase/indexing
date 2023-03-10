@@ -3352,7 +3352,7 @@ func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, boo
 	return schedToken, stopToken, nil
 }
 
-func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
+func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, bucketName string) error {
 
 	var schedToken, stopToken bool
 	var tokenErr error
@@ -3360,7 +3360,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 		// place token for recovery.  Even if the index does not exist, the delete token will
 		// be cleaned up during rebalance.  By placing the delete token, it will make sure that the
 		// outstanding create token will be deleted.
-		if err := mc.PostDeleteCommandToken(defnID, false); err != nil {
+		if err := mc.PostDeleteCommandToken(defnID, false, bucketName); err != nil {
 			return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
 		}
 

@@ -524,7 +524,7 @@ func DropSecondaryIndex2(indexName, bucketName, scopeName, collectionName, serve
 		if (defn.Name == indexName) && (defn.Bucket == bucketName) &&
 			defn.Scope == scopeName && defn.Collection == collectionName {
 			start := time.Now()
-			e := client.DropIndex(uint64(defn.DefnId))
+			e := client.DropIndex(uint64(defn.DefnId), defn.Bucket)
 			elapsed := time.Since(start)
 			if e == nil {
 				log.Printf("Index dropped")
@@ -545,7 +545,7 @@ func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *
 		defn := index.Definition
 		if (defn.Name == indexName) && (defn.Bucket == bucketName) {
 			start := time.Now()
-			e := client.DropIndex(uint64(defn.DefnId))
+			e := client.DropIndex(uint64(defn.DefnId), defn.Bucket)
 			elapsed := time.Since(start)
 			if e == nil {
 				log.Printf("Index dropped")
@@ -571,7 +571,7 @@ func DropAllSecondaryIndexes(server string) error {
 		defn := index.Definition
 		exists := IndexExistsWithClient(defn.Name, defn.Bucket, defn.Scope, defn.Collection, server, client)
 		if exists {
-			e := client.DropIndex(uint64(defn.DefnId))
+			e := client.DropIndex(uint64(defn.DefnId), defn.Bucket)
 			if e != nil {
 				return e
 			}
@@ -588,7 +588,15 @@ func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 		return e
 	}
 
-	e = client.DropIndex(indexDefnID)
+	indexes, _, _, _, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	var bucketName string
+	for _, index := range indexes {
+		if defn := index.Definition; defn != nil && defn.DefnId == c.IndexDefnId(indexDefnID) {
+			bucketName = defn.Bucket
+		}
+	}
+	e = client.DropIndex(indexDefnID, bucketName)
 	if e != nil {
 		return e
 	}
