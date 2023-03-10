@@ -728,6 +728,23 @@ func FetchIndexDefnToBuildCommandTokensMap() (map[c.IndexDefnId]*BuildCommandTok
 	return result, nil
 }
 
+func ListBuildCommandTokens() (result []*BuildCommandToken, err error) {
+	entries, err := c.MetakvList(BuildDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		token := &BuildCommandToken{}
+		if err = json.Unmarshal(entry.Value, token); err != nil {
+			return nil, err
+		}
+		result = append(result, token)
+	}
+
+	return result, nil
+}
+
 //////////////////////////////////////////////////////////////
 // Drop Instance Token Management
 //////////////////////////////////////////////////////////////
@@ -1860,13 +1877,25 @@ func CheckInProgressCommandTokensForBucket(bucketName string) (_ bool, inProgDef
 		for _, idxDefns := range createCmdToken.Definitions {
 			for _, idxDefn := range idxDefns {
 				if idxDefn.Bucket == bucketName {
-					inProgDefns = append(inProgDefns, fmt.Sprintf("DefnId[%v]", idxDefn.DefnId))
+					inProgDefns = append(inProgDefns, fmt.Sprintf("Create idx[%v]", idxDefn.Name))
 				}
 			}
 		}
 	}
 
-	// TODO: List and filter delete tokens - DeleteCommandToken doesn't have BucketUUID
+	// TODO: Drop index is not billable activity and presence of delete token should handled differently
+	// List delete tokens
+	deleteCmdTokens, err := ListDeleteCommandToken()
+	if err != nil {
+		return false, nil, err
+	}
+
+	// Filter deletes for bucket
+	for _, deleteCmdToken := range deleteCmdTokens {
+		if bucketName == deleteCmdToken.Bucket {
+			inProgDefns = append(inProgDefns, fmt.Sprintf("Delete DefnId[%v]", deleteCmdToken.DefnId))
+		}
+	}
 
 	// List drop tokens
 	dropCmdTokens, err := ListAndFetchAllDropInstanceCommandToken(1)
@@ -1877,11 +1906,22 @@ func CheckInProgressCommandTokensForBucket(bucketName string) (_ bool, inProgDef
 	// Filter drops for bucket
 	for _, dropCmdToken := range dropCmdTokens {
 		if bucketName == dropCmdToken.Defn.Bucket {
-			inProgDefns = append(inProgDefns, fmt.Sprintf("DefnId[%v]", dropCmdToken.Defn.DefnId))
+			inProgDefns = append(inProgDefns, fmt.Sprintf("Drop idx[%v]", dropCmdToken.Defn.Name))
 		}
 	}
 
-	// TODO: List and filter build tokens - BuildCommandToken doesn't have BucketUUID
+	// List build tokens
+	buildCmdTokens, err := ListBuildCommandTokens()
+	if err != nil {
+		return false, nil, err
+	}
+
+	// Filter builds for bucket
+	for _, buildCmdToken := range buildCmdTokens {
+		if bucketName == buildCmdToken.Bucket {
+			inProgDefns = append(inProgDefns, fmt.Sprintf("Build DefnId[%v]", buildCmdToken.DefnId))
+		}
+	}
 
 	// Check schedule tokens
 
@@ -1908,7 +1948,7 @@ func CheckInProgressCommandTokensForBucket(bucketName string) (_ bool, inProgDef
 
 		// Match with stop schedule create token
 		if _, matchExists := stopSchCreateTokensMap[schCreateToken.Definition.DefnId]; !matchExists {
-			inProgDefns = append(inProgDefns, fmt.Sprintf("DefnId[%v]", schCreateToken.Definition.DefnId))
+			inProgDefns = append(inProgDefns, fmt.Sprintf("Sch idx[%v]", schCreateToken.Definition.Name))
 		}
 	}
 
