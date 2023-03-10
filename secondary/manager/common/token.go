@@ -655,10 +655,11 @@ func FetchIndexDefnToDeleteCommandTokensMap() (map[c.IndexDefnId]*DeleteCommandT
 //
 // Generate a token to metakv for recovery purpose
 //
-func PostBuildCommandToken(defnId c.IndexDefnId) error {
+func PostBuildCommandToken(defnId c.IndexDefnId, bucketName string) error {
 
 	commandToken := &BuildCommandToken{
 		DefnId: defnId,
+		Bucket: bucketName,
 	}
 
 	id := fmt.Sprintf("%v", defnId)

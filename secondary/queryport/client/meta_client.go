@@ -349,18 +349,17 @@ RETRY:
 // BuildIndexes implements BridgeAccessor{} interface.
 func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	defns := make(map[common.IndexDefnId]*common.IndexDefn)
 
 	for _, defnId := range defnIDs {
-		if _, ok := currmeta.defns[common.IndexDefnId(defnId)]; !ok {
+		if indMeta, ok := currmeta.defns[common.IndexDefnId(defnId)]; !ok {
 			return ErrorIndexNotFound
+		} else {
+			defns[common.IndexDefnId(defnId)] = indMeta.Definition
 		}
 	}
 
-	ids := make([]common.IndexDefnId, len(defnIDs))
-	for i, id := range defnIDs {
-		ids[i] = common.IndexDefnId(id)
-	}
-	return b.mdClient.BuildIndexes(ids)
+	return b.mdClient.BuildIndexes(defns)
 }
 
 // MoveIndex implements BridgeAccessor{} interface.

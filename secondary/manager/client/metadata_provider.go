@@ -1998,7 +1998,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 	if c.IsPartitioned(idxDefn.PartitionScheme) && idxDefn.NumReplica > 0 && wait {
 
 		// place token for index build
-		if err := mc.PostBuildCommandToken(defnID); err != nil {
+		if err := mc.PostBuildCommandToken(defnID, idxDefn.Bucket); err != nil {
 			logging.Errorf("Index is created, but fail to Build Index due to internal errors.  Error=%v", err)
 			return errors.New("Index is created, bu fail to Build Index due to internal errors.  Please use build index statement.")
 		}
@@ -3431,14 +3431,14 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, bucketName string) er
 	return nil
 }
 
-func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
+func (o *MetadataProvider) BuildIndexes(defns map[c.IndexDefnId]*c.IndexDefn) error {
 
 	watcherIndexMap := make(map[c.IndexerId][]c.IndexDefnId)
 	watcherNodeMap := make(map[c.IndexerId]string)
 	defnList := ([]c.IndexDefnId)(nil)
 	buckets := make(map[string]bool)
 
-	for _, id := range defnIDs {
+	for id, _ := range defns {
 
 		if !security.IsToolsConfigUsed() {
 			// Has the index been deleted?
@@ -3523,7 +3523,7 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	if c.IsServerlessDeployment() {
 		for bucket, _ := range buckets {
 			if err := c.CheckIngressLockdown(bucket); err != nil {
-				errMsg := fmt.Sprintf("Fail to Build index due to error %v for %v", err, defnIDs)
+				errMsg := fmt.Sprintf("Fail to Build index due to error %v for %v", err, defns)
 				logging.Errorf("%v", errMsg)
 				if err.Error() == c.ErrNoIngress.Error() {
 					return c.ErrDiskLimitReached
@@ -3537,7 +3537,7 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	if !security.IsToolsConfigUsed() {
 		// place token for recovery.
 		for _, id := range defnList {
-			if err := mc.PostBuildCommandToken(id); err != nil {
+			if err := mc.PostBuildCommandToken(id, defns[id].Bucket); err != nil {
 				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
 			}
 		}
@@ -3701,6 +3701,10 @@ func (o *MetadataProvider) findIndex(id c.IndexDefnId) *IndexMetadata {
 	}
 
 	return nil
+}
+
+func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
+	return o.findIndex(id)
 }
 
 func (o *MetadataProvider) FindServiceForIndexer(id c.IndexerId) (adminport string, queryport string, httpport string, err error) {
