@@ -558,7 +558,7 @@ type taskObj struct {
 	errorMessage string             // only if a failure occurred
 
 	bucket string // bucket name being Paused or Resumed
-	dryRun bool // is task for Resume dry run (cluster capacity check)?
+	dryRun bool   // is task for Resume dry run (cluster capacity check)?
 	region string // region of the object store bucket
 	// ns_server does not differentiate between PreparePause and PrepareResume
 	// this flag is to internally track if the request if for PreparePause/PrepareResume
@@ -1757,7 +1757,10 @@ func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	}
 
 	if opErr != nil {
-		task.errorMessage = opErr.Error()
+		if !m.taskSetFailed(taskId, opErr.Error()) {
+			logging.Errorf("PauseServiceManager::endTask: Failed to find task while setting failed status")
+		}
+
 		logging.Infof("PauseServiceManager::endTask: skipping task cleanup now for task ID: %v", taskId)
 	}
 
