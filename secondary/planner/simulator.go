@@ -361,7 +361,7 @@ func (t *simulator) RunSingleTestPlan(config *RunConfig, spec *WorkloadSpec, p *
 	return plan(config, p, indexes)
 }
 
-func (t *simulator) RunSingleTestTenantAwarePlan(p *Plan, indexSpec *IndexSpec) (Planner, error) {
+func (t *simulator) RunSingleTestTenantAwarePlan(p *Plan, indexSpec *IndexSpec) (Planner, bool, error) {
 
 	return executeTenantAwarePlan(p, indexSpec)
 }

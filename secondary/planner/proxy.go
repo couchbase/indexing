@@ -261,6 +261,8 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		node.Indexes = indexes
 		numIndexes += len(indexes)
 		list = append(list, node)
+
+		node.BucketsInRebalance = make(map[string]bool)
 	}
 
 	if numIndexes != 0 {
@@ -485,401 +487,401 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			logging.Errorf("Planner::getIndexStats: Error from reading indexer version for node %v. Error = %v", nodeId, err)
 			return err
 		}
-		SetStatsInIndexer(indexer,statsMap, clusterVersion, indexerVersion, config)
+		SetStatsInIndexer(indexer, statsMap, clusterVersion, indexerVersion, config)
 	}
 
 	return nil
 }
 
 // SetStatsInIndexer will collect all the relevant stats from statsMap and put them in indexer
-// so that it can be planned in the cluster 
+// so that it can be planned in the cluster
 func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, clusterVersion uint64, indexerVersion int, config common.Config) {
+	/*
+		CpuUsage    uint64 `json:"cpuUsage,omitempty"`
+		DiskUsage   uint64 `json:"diskUsage,omitempty"`
+	*/
+
+	var actualStorageMem uint64
+	// memory_used_storage contains the total storage consumption,
+	// including fdb overhead, main index and back index.  This also
+	// includes overhead (skip list / back index).
+	if memUsedStorage, ok := statsMap["memory_used_storage"]; ok {
+		actualStorageMem = uint64(memUsedStorage.(float64))
+	}
+
+	// memory_used is the memory used by indexer.  This includes
+	// golang in-use heap space, golang idle heap space, and
+	// storage memory manager space (e.g. jemalloc heap space).
+	var actualTotalMem uint64
+	if memUsed, ok := statsMap["memory_used"]; ok {
+		actualTotalMem = uint64(memUsed.(float64))
+	}
+
+	if memRSS, ok := statsMap["memory_rss"]; ok {
+		indexer.ActualRSS = uint64(memRSS.(float64))
+	}
+
+	if mandatoryQuota, ok := statsMap["memory_used_actual"]; ok {
+		indexer.MandatoryQuota = uint64(mandatoryQuota.(float64))
+	}
+
+	if unitsActual, ok := statsMap["units_used_actual"]; ok {
+		indexer.ActualUnits = uint64(unitsActual.(float64))
+	}
+
+	// uptime
+	var elapsed uint64
+	if uptimeStat, ok := statsMap["uptime"]; ok {
+		uptime := uptimeStat.(string)
+		if duration, err := time.ParseDuration(uptime); err == nil {
+			elapsed = uint64(duration.Seconds())
+		}
+	}
+
+	// cpu core in host.   This is the actual num of cpu core, not cpu quota.
+	/*
+		var actualCpuCore uint64
+		if cpuCore, ok := statsMap["num_cpu_core"]; ok {
+			actualCpuCore = uint64(cpuCore.(float64))
+		}
+	*/
+
+	// cpu utilization for the indexer process
+	var actualCpuUtil float64
+	if cpuUtil, ok := statsMap["cpu_utilization"]; ok {
+		actualCpuUtil = cpuUtil.(float64) / 100
+	}
+
+	var totalIndexMemUsed uint64
+	var totalMutation uint64
+	var totalScan uint64
+	for _, index := range indexer.Indexes {
+
 		/*
 			CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`
 		*/
 
-		var actualStorageMem uint64
-		// memory_used_storage contains the total storage consumption,
-		// including fdb overhead, main index and back index.  This also
-		// includes overhead (skip list / back index).
-		if memUsedStorage, ok := statsMap["memory_used_storage"]; ok {
-			actualStorageMem = uint64(memUsedStorage.(float64))
+		// items_count captures number of key per index
+		if itemsCount, ok := GetIndexStat(index, "items_count", statsMap, true, clusterVersion); ok {
+			index.ActualNumDocs = uint64(itemsCount.(float64))
 		}
 
-		// memory_used is the memory used by indexer.  This includes
-		// golang in-use heap space, golang idle heap space, and
-		// storage memory manager space (e.g. jemalloc heap space).
-		var actualTotalMem uint64
-		if memUsed, ok := statsMap["memory_used"]; ok {
-			actualTotalMem = uint64(memUsed.(float64))
+		// build completion
+		if buildProgress, ok := GetIndexStat(index, "build_progress", statsMap, false, clusterVersion); ok {
+			index.ActualBuildPercent = uint64(buildProgress.(float64))
 		}
 
-		if memRSS, ok := statsMap["memory_rss"]; ok {
-			indexer.ActualRSS = uint64(memRSS.(float64))
-		}
-
-		if mandatoryQuota, ok := statsMap["memory_used_actual"]; ok {
-			indexer.MandatoryQuota = uint64(mandatoryQuota.(float64))
-		}
-
-		if unitsActual, ok := statsMap["units_used_actual"]; ok {
-			indexer.ActualUnits = uint64(unitsActual.(float64))
-		}
-
-		// uptime
-		var elapsed uint64
-		if uptimeStat, ok := statsMap["uptime"]; ok {
-			uptime := uptimeStat.(string)
-			if duration, err := time.ParseDuration(uptime); err == nil {
-				elapsed = uint64(duration.Seconds())
-			}
-		}
-
-		// cpu core in host.   This is the actual num of cpu core, not cpu quota.
-		/*
-			var actualCpuCore uint64
-			if cpuCore, ok := statsMap["num_cpu_core"]; ok {
-				actualCpuCore = uint64(cpuCore.(float64))
-			}
-		*/
-
-		// cpu utilization for the indexer process
-		var actualCpuUtil float64
-		if cpuUtil, ok := statsMap["cpu_utilization"]; ok {
-			actualCpuUtil = cpuUtil.(float64) / 100
-		}
-
-		var totalIndexMemUsed uint64
-		var totalMutation uint64
-		var totalScan uint64
-		for _, index := range indexer.Indexes {
-
-			/*
-				CpuUsage    uint64 `json:"cpuUsage,omitempty"`
-				DiskUsage   uint64 `json:"diskUsage,omitempty"`
-			*/
-
-			// items_count captures number of key per index
-			if itemsCount, ok := GetIndexStat(index, "items_count", statsMap, true, clusterVersion); ok {
-				index.ActualNumDocs = uint64(itemsCount.(float64))
-			}
-
-			// build completion
-			if buildProgress, ok := GetIndexStat(index, "build_progress", statsMap, false, clusterVersion); ok {
-				index.ActualBuildPercent = uint64(buildProgress.(float64))
-			}
-
-			// most of the code uses resident ratio of mainstore only and they will continue to use "resident_percent" stat
-			// but for planner we need to use resident ratio combined for mainstore and backstore and hence here we use "combined_resident_percent"
-			if residentPercent, ok := GetIndexStat(index, "combined_resident_percent", statsMap, true, clusterVersion); ok {
+		// most of the code uses resident ratio of mainstore only and they will continue to use "resident_percent" stat
+		// but for planner we need to use resident ratio combined for mainstore and backstore and hence here we use "combined_resident_percent"
+		if residentPercent, ok := GetIndexStat(index, "combined_resident_percent", statsMap, true, clusterVersion); ok {
+			index.ActualResidentPercent = uint64(residentPercent.(float64))
+		} else { // in mixed mode when combined_resident_percent is not available
+			if residentPercent, ok := GetIndexStat(index, "resident_percent", statsMap, true, clusterVersion); ok {
 				index.ActualResidentPercent = uint64(residentPercent.(float64))
-			} else { // in mixed mode when combined_resident_percent is not available
-				if residentPercent, ok := GetIndexStat(index, "resident_percent", statsMap, true, clusterVersion); ok {
-					index.ActualResidentPercent = uint64(residentPercent.(float64))
-				}
 			}
+		}
 
-			// data_size is the total key size of index, including back index.
-			// data_size for MOI is 0.
-			if dataSize, ok := GetIndexStat(index, "data_size", statsMap, true, clusterVersion); ok {
-				index.ActualDataSize = uint64(dataSize.(float64))
-				// From 6.5, data_size stat contains uncompressed data size for plasma
-				// So, no need to consider the compressed version of data so that other
-				// parameters like ActualKeySize, AvgDocKeySize, AvgSecKeySize does not break
-				if indexerVersion >= common.INDEXER_65_VERSION {
-					if index.StorageMode == common.PlasmaDB {
-						if config["indexer.plasma.useCompression"].Bool() {
-							// factor in compression estimation (compression ratio defaulted to 3)
-							index.ActualDataSize = index.ActualDataSize / 3
-						}
-					}
-				}
-			}
-
-			// memory usage per index
-			if memUsed, ok := GetIndexStat(index, "memory_used", statsMap, true, clusterVersion); ok {
-				index.ActualMemStats = uint64(memUsed.(float64))
-				index.ActualMemUsage = index.ActualMemStats
-				totalIndexMemUsed += index.ActualMemUsage
-			} else {
-				// calibrate memory usage based on resident percent
-				// ActualMemUsage will be rewritten later
-				index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
-				// factor in compression estimation (compression ratio defaulted to 3)
+		// data_size is the total key size of index, including back index.
+		// data_size for MOI is 0.
+		if dataSize, ok := GetIndexStat(index, "data_size", statsMap, true, clusterVersion); ok {
+			index.ActualDataSize = uint64(dataSize.(float64))
+			// From 6.5, data_size stat contains uncompressed data size for plasma
+			// So, no need to consider the compressed version of data so that other
+			// parameters like ActualKeySize, AvgDocKeySize, AvgSecKeySize does not break
+			if indexerVersion >= common.INDEXER_65_VERSION {
 				if index.StorageMode == common.PlasmaDB {
 					if config["indexer.plasma.useCompression"].Bool() {
-						index.ActualMemUsage = index.ActualMemUsage * 3
+						// factor in compression estimation (compression ratio defaulted to 3)
+						index.ActualDataSize = index.ActualDataSize / 3
 					}
 				}
-				totalIndexMemUsed += index.ActualMemUsage
 			}
+		}
 
-			if unitsUsed, ok := GetIndexStat(index, "avg_units_usage", statsMap, true, clusterVersion); ok {
-				index.ActualUnitsUsage = uint64(unitsUsed.(float64))
-			}
-
-			// disk usage per index
-			if diskUsed, ok := GetIndexStat(index, "avg_disk_bps", statsMap, true, clusterVersion); ok {
-				index.ActualDiskUsage = uint64(diskUsed.(float64))
-			}
-
-			if numDocsQueued, ok := GetIndexStat(index, "num_docs_queued", statsMap, true, clusterVersion); ok {
-				index.numDocsQueued = int64(numDocsQueued.(float64))
-			}
-
-			if numDocsPending, ok := GetIndexStat(index, "num_docs_pending", statsMap, true, clusterVersion); ok {
-				index.numDocsPending = int64(numDocsPending.(float64))
-			}
-
-			if rollbackTime, ok := GetIndexStat(index, "last_rollback_time", statsMap, true, clusterVersion); ok {
-				if rollback, err := strconv.ParseInt(rollbackTime.(string), 10, 64); err == nil {
-					index.rollbackTime = rollback
-				} else {
-					logging.Errorf("Planner::getIndexStats: Error in converting last_rollback_time %v, err %v", rollbackTime, err)
+		// memory usage per index
+		if memUsed, ok := GetIndexStat(index, "memory_used", statsMap, true, clusterVersion); ok {
+			index.ActualMemStats = uint64(memUsed.(float64))
+			index.ActualMemUsage = index.ActualMemStats
+			totalIndexMemUsed += index.ActualMemUsage
+		} else {
+			// calibrate memory usage based on resident percent
+			// ActualMemUsage will be rewritten later
+			index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
+			// factor in compression estimation (compression ratio defaulted to 3)
+			if index.StorageMode == common.PlasmaDB {
+				if config["indexer.plasma.useCompression"].Bool() {
+					index.ActualMemUsage = index.ActualMemUsage * 3
 				}
 			}
+			totalIndexMemUsed += index.ActualMemUsage
+		}
 
-			if progressStatTime, ok := GetIndexStat(index, "progress_stat_time", statsMap, true, clusterVersion); ok {
-				if progress, err := strconv.ParseInt(progressStatTime.(string), 10, 64); err == nil {
-					index.progressStatTime = progress
-				} else {
-					logging.Errorf("Planner::getIndexStats: Error in converting progress_stat_time %v, err %v", progressStatTime, err)
-				}
-			}
+		if unitsUsed, ok := GetIndexStat(index, "avg_units_usage", statsMap, true, clusterVersion); ok {
+			index.ActualUnitsUsage = uint64(unitsUsed.(float64))
+		}
 
-			// avg_sec_key_size is currently unavailable in 4.5.   To estimate,
-			// the key size, it divides index data_size by items_count.  This
-			// contains sec key size + doc key size + main index overhead (74 bytes).
-			// Subtract 74 bytes to get sec key size.
-			if avgSecKeySize, ok := GetIndexStat(index, "avg_sec_key_size", statsMap, true, clusterVersion); ok {
-				index.AvgSecKeySize = uint64(avgSecKeySize.(float64))
-			} else if !index.IsPrimary {
-				// Approximate AvgSecKeySize.   AvgSecKeySize includes both
-				// sec key len + doc key len
-				if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
-					index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
-				}
-			}
+		// disk usage per index
+		if diskUsed, ok := GetIndexStat(index, "avg_disk_bps", statsMap, true, clusterVersion); ok {
+			index.ActualDiskUsage = uint64(diskUsed.(float64))
+		}
 
-			// These stats are currently unavailable in 4.5.
-			if avgDocKeySize, ok := GetIndexStat(index, "avg_doc_key_size", statsMap, true, clusterVersion); ok {
-				index.AvgDocKeySize = uint64(avgDocKeySize.(float64))
-			} else if index.IsPrimary {
-				// Approximate AvgDocKeySize.  Subtract 74 bytes for main
-				// index overhead
-				if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
-					index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
-				}
-			}
+		if numDocsQueued, ok := GetIndexStat(index, "num_docs_queued", statsMap, true, clusterVersion); ok {
+			index.numDocsQueued = int64(numDocsQueued.(float64))
+		}
 
-			// These stats are currently unavailable in 4.5.
-			if avgArrSize, ok := GetIndexStat(index, "avg_arr_size", statsMap, true, clusterVersion); ok {
-				index.AvgArrSize = uint64(avgArrSize.(float64))
-			}
+		if numDocsPending, ok := GetIndexStat(index, "num_docs_pending", statsMap, true, clusterVersion); ok {
+			index.numDocsPending = int64(numDocsPending.(float64))
+		}
 
-			// These stats are currently unavailable in 4.5.
-			if avgArrKeySize, ok := GetIndexStat(index, "avg_arr_key_size", statsMap, true, clusterVersion); ok {
-				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
-			}
-
-			// avg_drain_rate computes the actual number of rows persisted to storage.
-			// This does not include incoming rows that are filtered out by back-index.
-			// These stats are currently unavailable in 4.5.
-			if avgDrainRate, ok := GetIndexStat(index, "avg_drain_rate", statsMap, true, clusterVersion); ok {
-				index.DrainRate = uint64(avgDrainRate.(float64))
-			}
-
-			// avg_mutation_rate computes the incoming number of docs.
-			// This does not include the individual element in an array index.
-			// These stats are currently unavailable in 4.5.
-			if avgMutationRate, ok := GetIndexStat(index, "avg_mutation_rate", statsMap, true, clusterVersion); ok {
-				index.MutationRate = uint64(avgMutationRate.(float64))
+		if rollbackTime, ok := GetIndexStat(index, "last_rollback_time", statsMap, true, clusterVersion); ok {
+			if rollback, err := strconv.ParseInt(rollbackTime.(string), 10, 64); err == nil {
+				index.rollbackTime = rollback
 			} else {
-				if flushQueuedStat, ok := GetIndexStat(index, "num_flush_queued", statsMap, true, clusterVersion); ok {
-					flushQueued := uint64(flushQueuedStat.(float64))
+				logging.Errorf("Planner::getIndexStats: Error in converting last_rollback_time %v, err %v", rollbackTime, err)
+			}
+		}
 
-					if flushQueued != 0 {
-						index.MutationRate = flushQueued / elapsed
-						totalMutation += index.MutationRate
-					}
+		if progressStatTime, ok := GetIndexStat(index, "progress_stat_time", statsMap, true, clusterVersion); ok {
+			if progress, err := strconv.ParseInt(progressStatTime.(string), 10, 64); err == nil {
+				index.progressStatTime = progress
+			} else {
+				logging.Errorf("Planner::getIndexStats: Error in converting progress_stat_time %v, err %v", progressStatTime, err)
+			}
+		}
+
+		// avg_sec_key_size is currently unavailable in 4.5.   To estimate,
+		// the key size, it divides index data_size by items_count.  This
+		// contains sec key size + doc key size + main index overhead (74 bytes).
+		// Subtract 74 bytes to get sec key size.
+		if avgSecKeySize, ok := GetIndexStat(index, "avg_sec_key_size", statsMap, true, clusterVersion); ok {
+			index.AvgSecKeySize = uint64(avgSecKeySize.(float64))
+		} else if !index.IsPrimary {
+			// Approximate AvgSecKeySize.   AvgSecKeySize includes both
+			// sec key len + doc key len
+			if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
+				index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
+			}
+		}
+
+		// These stats are currently unavailable in 4.5.
+		if avgDocKeySize, ok := GetIndexStat(index, "avg_doc_key_size", statsMap, true, clusterVersion); ok {
+			index.AvgDocKeySize = uint64(avgDocKeySize.(float64))
+		} else if index.IsPrimary {
+			// Approximate AvgDocKeySize.  Subtract 74 bytes for main
+			// index overhead
+			if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
+				index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
+			}
+		}
+
+		// These stats are currently unavailable in 4.5.
+		if avgArrSize, ok := GetIndexStat(index, "avg_arr_size", statsMap, true, clusterVersion); ok {
+			index.AvgArrSize = uint64(avgArrSize.(float64))
+		}
+
+		// These stats are currently unavailable in 4.5.
+		if avgArrKeySize, ok := GetIndexStat(index, "avg_arr_key_size", statsMap, true, clusterVersion); ok {
+			index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
+		}
+
+		// avg_drain_rate computes the actual number of rows persisted to storage.
+		// This does not include incoming rows that are filtered out by back-index.
+		// These stats are currently unavailable in 4.5.
+		if avgDrainRate, ok := GetIndexStat(index, "avg_drain_rate", statsMap, true, clusterVersion); ok {
+			index.DrainRate = uint64(avgDrainRate.(float64))
+		}
+
+		// avg_mutation_rate computes the incoming number of docs.
+		// This does not include the individual element in an array index.
+		// These stats are currently unavailable in 4.5.
+		if avgMutationRate, ok := GetIndexStat(index, "avg_mutation_rate", statsMap, true, clusterVersion); ok {
+			index.MutationRate = uint64(avgMutationRate.(float64))
+		} else {
+			if flushQueuedStat, ok := GetIndexStat(index, "num_flush_queued", statsMap, true, clusterVersion); ok {
+				flushQueued := uint64(flushQueuedStat.(float64))
+
+				if flushQueued != 0 {
+					index.MutationRate = flushQueued / elapsed
+					totalMutation += index.MutationRate
 				}
 			}
+		}
 
-			// In general, drain rate should be greater or equal to mutation rate.
-			// Mutation rate could be greater than drain rate if index is based on field A
-			// which is a slow mutating field.  But there are more rapidly changing field
-			// in the document.  In this case, mutation will still be sent to index A.
-			// Indexer will still spend CPU on mutation, but they will get dropped by the back-index,
-			// since field A has not changed.
+		// In general, drain rate should be greater or equal to mutation rate.
+		// Mutation rate could be greater than drain rate if index is based on field A
+		// which is a slow mutating field.  But there are more rapidly changing field
+		// in the document.  In this case, mutation will still be sent to index A.
+		// Indexer will still spend CPU on mutation, but they will get dropped by the back-index,
+		// since field A has not changed.
+		if index.MutationRate < index.DrainRate {
+			totalMutation += index.DrainRate
+		} else {
+			totalMutation += index.MutationRate
+		}
+
+		// These stats are currently unavailable in 4.5.
+		if avgScanRate, ok := GetIndexStat(index, "avg_scan_rate", statsMap, true, clusterVersion); ok {
+			index.ScanRate = uint64(avgScanRate.(float64))
+			totalScan += index.ScanRate
+		} else if avgScanRate, ok := GetIndexStat(index, "avg_scan_rate", statsMap, false, clusterVersion); ok {
+			index.ScanRate = uint64(avgScanRate.(float64))
+			totalScan += index.ScanRate
+		} else {
+			if rowReturnedStat, ok := GetIndexStat(index, "num_rows_returned", statsMap, true, clusterVersion); ok {
+				rowReturned := uint64(rowReturnedStat.(float64))
+
+				if rowReturned != 0 {
+					index.ScanRate = rowReturned / elapsed
+					totalScan += index.ScanRate
+				}
+			}
+		}
+	}
+
+	// Compute the estimated memory usage for each index.  This also computes the aggregated indexer mem usage.
+	//
+	// The memory usage is computed as follows (per node):
+	// 1) Compute the memory resident data size for each index (based on data_size and resident_percent stats)
+	// 2) Compute the total memory resident data size for all indexes
+	// 3) Compute the utilization ratio of each index based on (resident data size / total resident data size)
+	// 4) Compute memory usage of each index based on indexer memory used (utilization ratio * memory_used_storage)
+	// 5) Compute memory overhead of each index based on indexer memory used (utilization ratio * (memory_used - memory_used_storage))
+	// 6) Calibrate index memory usage and overhead based on build percent
+	//
+	// Mem usage can be 0 if
+	// 1) there is no index stats
+	// 2) index has no data (datasize = 0) (e.g. deferred index)
+	//
+	// Note:
+	// 1) Resident data size is sensitive to scan and mutation traffic.   It is a reflection of the working set
+	//    of the index at the time when the planner is run.
+	//
+	for _, index := range indexer.Indexes {
+		ratio := float64(0)
+		if totalIndexMemUsed != 0 {
+			ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
+		}
+
+		if index.ActualMemStats == 0 {
+			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
+		}
+
+		if actualTotalMem > actualStorageMem {
+			index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)
+		} else {
+			index.ActualMemOverhead = 0
+		}
+
+		// If index is not fully build, estimate memory consumption after it is fully build
+		// at the same resident ratio.
+		if index.ActualBuildPercent != 0 {
+			index.ActualMemUsage = index.ActualMemUsage * 100 / index.ActualBuildPercent
+			index.ActualMemOverhead = index.ActualMemOverhead * 100 / index.ActualBuildPercent
+			index.ActualDataSize = index.ActualDataSize * 100 / index.ActualBuildPercent
+		}
+
+		// compute the minimum memory requirement for the index
+		// 1) If index resident ratio is above 0, then compute memory required for min resident ratio (default:20%)
+		// 2) If index resident ratio is 0, then use sizing equation to estimate key size.
+		// 3) For MOI, min memory is the same as actual memory usage
+
+		minRatio := config["indexer.planner.minResidentRatio"].Float64()
+		if index.StorageMode == common.MemDB || index.StorageMode == common.MemoryOptimized {
+			minRatio = 1.0
+		}
+
+		// If index has resident memory, then compute minimum memory usage using current memory usage.
+		if !index.NoUsageInfo {
+			if index.ActualResidentPercent > 0 {
+				indexTotalMem := index.ActualMemUsage + index.ActualMemOverhead
+				ratio := float64(index.ActualResidentPercent) / 100
+				index.ActualMemMin = uint64(float64(indexTotalMem) / ratio * minRatio)
+
+			} else if index.ActualNumDocs > 0 {
+				// If index has no resident memory but it has keys, then estimate using sizing equation.
+				dataSize := index.ActualDataSize
+				if index.StorageMode == common.PlasmaDB {
+					if config["indexer.plasma.useCompression"].Bool() {
+						dataSize = dataSize * 3
+					}
+				}
+				index.ActualMemMin = uint64(float64(dataSize) * minRatio)
+			}
+		}
+
+		indexer.ActualDataSize += index.ActualDataSize
+		indexer.ActualMemUsage += index.ActualMemUsage
+		indexer.ActualMemOverhead += index.ActualMemOverhead
+		indexer.ActualDiskUsage += index.ActualDiskUsage
+		indexer.ActualMemMin += index.ActualMemMin
+	}
+
+	// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.
+	//
+	// The cpu usage is computed as follows (per node):
+	// 1) Compute the mutation rate for each index (based on avg_mutation_rate stats)
+	// 2) Compute the scan rate for each index (based on avg_scan_rate stats)
+	// 3) Compute the total mutation rate for all indexes
+	// 4) Compute the total scan rate for all indexes
+	// 5) Compute the mutation ratio of each index based on (index mutation rate / total mutation rate)
+	// 6) Compute the scan ratio of each index based on (index scan rate / total scan rate)
+	// 7) Compute an aggregated ratio of each index (mutation rate / 5 + scan rate / 2)
+	// 8) Compute cpu utilization for each index (cpu utilization * aggregated ratio)
+	//
+	// CPU usage can be 0 if
+	// 1) there is no index stats
+	// 2) index has no scan or mutation (e.g. deferred index)
+	//
+	// Note:
+	// 1) Mutation rate and scan rate are computed using running average.   Even though it
+	//    is not based on instantaneous information, running average can quickly converge.
+	// 2) Mutation rate is index storage drain rate (numItemsFlushed).  It reflects num keys flushed in array index.
+	//
+	for _, index := range indexer.Indexes {
+
+		mutationRatio := float64(0)
+		if totalMutation != 0 {
+
+			rate := index.MutationRate
 			if index.MutationRate < index.DrainRate {
-				totalMutation += index.DrainRate
-			} else {
-				totalMutation += index.MutationRate
+				rate = index.DrainRate
 			}
 
-			// These stats are currently unavailable in 4.5.
-			if avgScanRate, ok := GetIndexStat(index, "avg_scan_rate", statsMap, true, clusterVersion); ok {
-				index.ScanRate = uint64(avgScanRate.(float64))
-				totalScan += index.ScanRate
-			} else if avgScanRate, ok := GetIndexStat(index, "avg_scan_rate", statsMap, false, clusterVersion); ok {
-				index.ScanRate = uint64(avgScanRate.(float64))
-				totalScan += index.ScanRate
-			} else {
-				if rowReturnedStat, ok := GetIndexStat(index, "num_rows_returned", statsMap, true, clusterVersion); ok {
-					rowReturned := uint64(rowReturnedStat.(float64))
+			mutationRatio = float64(rate) / float64(totalMutation)
+		}
 
-					if rowReturned != 0 {
-						index.ScanRate = rowReturned / elapsed
-						totalScan += index.ScanRate
-					}
-				}
+		scanRatio := float64(0)
+		if totalScan != 0 {
+			scanRatio = float64(index.ScanRate) / float64(totalScan)
+		}
+
+		ratio := mutationRatio
+		if scanRatio != 0 {
+			if mutationRatio != 0 {
+				// mutation uses 5 times less cpu than scan (using MOI equation)
+				ratio = ((mutationRatio / 5) + scanRatio) / 2
+			} else {
+				ratio = scanRatio
 			}
 		}
 
-		// Compute the estimated memory usage for each index.  This also computes the aggregated indexer mem usage.
-		//
-		// The memory usage is computed as follows (per node):
-		// 1) Compute the memory resident data size for each index (based on data_size and resident_percent stats)
-		// 2) Compute the total memory resident data size for all indexes
-		// 3) Compute the utilization ratio of each index based on (resident data size / total resident data size)
-		// 4) Compute memory usage of each index based on indexer memory used (utilization ratio * memory_used_storage)
-		// 5) Compute memory overhead of each index based on indexer memory used (utilization ratio * (memory_used - memory_used_storage))
-		// 6) Calibrate index memory usage and overhead based on build percent
-		//
-		// Mem usage can be 0 if
-		// 1) there is no index stats
-		// 2) index has no data (datasize = 0) (e.g. deferred index)
-		//
-		// Note:
-		// 1) Resident data size is sensitive to scan and mutation traffic.   It is a reflection of the working set
-		//    of the index at the time when the planner is run.
-		//
-		for _, index := range indexer.Indexes {
-			ratio := float64(0)
-			if totalIndexMemUsed != 0 {
-				ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
-			}
+		usage := float64(actualCpuUtil) * ratio
 
-			if index.ActualMemStats == 0 {
-				index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
-			}
-
-			if actualTotalMem > actualStorageMem {
-				index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)
-			} else {
-				index.ActualMemOverhead = 0
-			}
-
-			// If index is not fully build, estimate memory consumption after it is fully build
-			// at the same resident ratio.
-			if index.ActualBuildPercent != 0 {
-				index.ActualMemUsage = index.ActualMemUsage * 100 / index.ActualBuildPercent
-				index.ActualMemOverhead = index.ActualMemOverhead * 100 / index.ActualBuildPercent
-				index.ActualDataSize = index.ActualDataSize * 100 / index.ActualBuildPercent
-			}
-
-			// compute the minimum memory requirement for the index
-			// 1) If index resident ratio is above 0, then compute memory required for min resident ratio (default:20%)
-			// 2) If index resident ratio is 0, then use sizing equation to estimate key size.
-			// 3) For MOI, min memory is the same as actual memory usage
-
-			minRatio := config["indexer.planner.minResidentRatio"].Float64()
-			if index.StorageMode == common.MemDB || index.StorageMode == common.MemoryOptimized {
-				minRatio = 1.0
-			}
-
-			// If index has resident memory, then compute minimum memory usage using current memory usage.
-			if !index.NoUsageInfo {
-				if index.ActualResidentPercent > 0 {
-					indexTotalMem := index.ActualMemUsage + index.ActualMemOverhead
-					ratio := float64(index.ActualResidentPercent) / 100
-					index.ActualMemMin = uint64(float64(indexTotalMem) / ratio * minRatio)
-
-				} else if index.ActualNumDocs > 0 {
-					// If index has no resident memory but it has keys, then estimate using sizing equation.
-					dataSize := index.ActualDataSize
-					if index.StorageMode == common.PlasmaDB {
-						if config["indexer.plasma.useCompression"].Bool() {
-							dataSize = dataSize * 3
-						}
-					}
-					index.ActualMemMin = uint64(float64(dataSize) * minRatio)
-				}
-			}
-
-			indexer.ActualDataSize += index.ActualDataSize
-			indexer.ActualMemUsage += index.ActualMemUsage
-			indexer.ActualMemOverhead += index.ActualMemOverhead
-			indexer.ActualDiskUsage += index.ActualDiskUsage
-			indexer.ActualMemMin += index.ActualMemMin
+		if usage > 0 {
+			index.ActualCpuUsage = usage
 		}
 
-		// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.
-		//
-		// The cpu usage is computed as follows (per node):
-		// 1) Compute the mutation rate for each index (based on avg_mutation_rate stats)
-		// 2) Compute the scan rate for each index (based on avg_scan_rate stats)
-		// 3) Compute the total mutation rate for all indexes
-		// 4) Compute the total scan rate for all indexes
-		// 5) Compute the mutation ratio of each index based on (index mutation rate / total mutation rate)
-		// 6) Compute the scan ratio of each index based on (index scan rate / total scan rate)
-		// 7) Compute an aggregated ratio of each index (mutation rate / 5 + scan rate / 2)
-		// 8) Compute cpu utilization for each index (cpu utilization * aggregated ratio)
-		//
-		// CPU usage can be 0 if
-		// 1) there is no index stats
-		// 2) index has no scan or mutation (e.g. deferred index)
-		//
-		// Note:
-		// 1) Mutation rate and scan rate are computed using running average.   Even though it
-		//    is not based on instantaneous information, running average can quickly converge.
-		// 2) Mutation rate is index storage drain rate (numItemsFlushed).  It reflects num keys flushed in array index.
-		//
-		for _, index := range indexer.Indexes {
-
-			mutationRatio := float64(0)
-			if totalMutation != 0 {
-
-				rate := index.MutationRate
-				if index.MutationRate < index.DrainRate {
-					rate = index.DrainRate
-				}
-
-				mutationRatio = float64(rate) / float64(totalMutation)
-			}
-
-			scanRatio := float64(0)
-			if totalScan != 0 {
-				scanRatio = float64(index.ScanRate) / float64(totalScan)
-			}
-
-			ratio := mutationRatio
-			if scanRatio != 0 {
-				if mutationRatio != 0 {
-					// mutation uses 5 times less cpu than scan (using MOI equation)
-					ratio = ((mutationRatio / 5) + scanRatio) / 2
-				} else {
-					ratio = scanRatio
-				}
-			}
-
-			usage := float64(actualCpuUtil) * ratio
-
-			if usage > 0 {
-				index.ActualCpuUsage = usage
-			}
-
-			index.ActualDrainRate = index.MutationRate
-			if index.MutationRate < index.DrainRate {
-				index.ActualDrainRate = index.DrainRate
-			}
-			index.ActualScanRate = index.ScanRate
-
-			indexer.ActualCpuUsage += index.ActualCpuUsage
-			indexer.ActualDrainRate += index.ActualDrainRate
-			indexer.ActualScanRate += index.ActualScanRate
+		index.ActualDrainRate = index.MutationRate
+		if index.MutationRate < index.DrainRate {
+			index.ActualDrainRate = index.DrainRate
 		}
+		index.ActualScanRate = index.ScanRate
+
+		indexer.ActualCpuUsage += index.ActualCpuUsage
+		indexer.ActualDrainRate += index.ActualDrainRate
+		indexer.ActualScanRate += index.ActualScanRate
+	}
 }
 
 //
@@ -1089,12 +1091,20 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 				logging.Infof("Planner: Skip index (%v, %v, %v, %v, %v, %v) that is not RState ACTIVE (%v)",
 					index.Bucket, index.Scope, index.Collection, index.Name, index.InstId, index.PartnId,
 					index.Instance.RState)
+				//bucket's indexes are under movement during rebalance or pending cleanup after
+				//a failed rebalance
+				indexer.BucketsInRebalance[index.Bucket] = true
 				continue
 			}
 
 			// find another instance with a higher instance version.
 			// **For pre-spock backup, inst version is always 0. In fact, there should not be another instance (max == inst).
-			max := findMaxVersionInst(indexers, index.DefnId, index.PartnId, index.InstId)
+			max, multiVer := findMaxVersionInst(indexers, index.DefnId, index.PartnId, index.InstId)
+			if multiVer {
+				//bucket's indexes are under movement during rebalance or pending cleanup after
+				//a failed rebalance as there are multiple instance versions
+				indexer.BucketsInRebalance[index.Bucket] = true
+			}
 			if max != index {
 				logging.Infof("Planner:  Skip index (%v, %v, %v, %v, %v, %v) with lower version number %v.",
 					index.Bucket, index.Scope, index.Collection, index.Name, index.InstId, index.PartnId,
@@ -1109,10 +1119,12 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 	}
 }
 
-func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, partnId common.PartitionId, instId common.IndexInstId) *IndexUsage {
+func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, partnId common.PartitionId, instId common.IndexInstId) (*IndexUsage, bool) {
 
 	var max *IndexUsage
+	var multiVer bool //if multiple versions of the same instance exist
 
+	instCount := 0
 	for _, indexer := range indexers {
 		for _, index := range indexer.Indexes {
 
@@ -1129,11 +1141,16 @@ func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, part
 				if max == nil || index.Instance.Version > max.Instance.Version {
 					max = index
 				}
+				instCount++
 			}
 		}
 	}
 
-	return max
+	if instCount > 1 {
+		multiVer = true
+	}
+
+	return max, multiVer
 }
 
 //

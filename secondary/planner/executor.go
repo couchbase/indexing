@@ -2163,30 +2163,30 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 //ExecutePlan2 is the entry point for tenant aware planner
 //for integration with metadata provider.
 func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
-	serverlessIndexLimit uint32) (*Solution, error) {
+	serverlessIndexLimit uint32) (*Solution, bool, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Unable to read index layout "+
+		return nil, false, errors.New(fmt.Sprintf("Unable to read index layout "+
 			"from cluster %v. err = %s", clusterUrl, err))
 	}
 
 	numIndexes := GetNumIndexesPerBucket(plan, indexSpec.Bucket)
 	if numIndexes >= serverlessIndexLimit {
 		errMsg := fmt.Sprintf("%v Limit : %v", common.ErrIndexBucketLimitReached.Error(), serverlessIndexLimit)
-		return nil, errors.New(errMsg)
+		return nil, false, errors.New(errMsg)
 	}
 
 	if err = verifyDuplicateIndex(plan, []*IndexSpec{indexSpec}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	tenantAwarePlanner, err := executeTenantAwarePlan(plan, indexSpec)
+	tenantAwarePlanner, schedIndex, err := executeTenantAwarePlan(plan, indexSpec)
 
 	if tenantAwarePlanner != nil {
-		return tenantAwarePlanner.GetResult(), nil
+		return tenantAwarePlanner.GetResult(), schedIndex, nil
 	} else {
-		return nil, err
+		return nil, schedIndex, err
 	}
 
 }
@@ -2220,7 +2220,7 @@ func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
 //   lower than HWM(High Watermark Threshold).
 //8. No Index can be placed on a node above HWM(High Watermark Threshold).
 
-func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
+func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, error) {
 
 	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan"
 
@@ -2228,19 +2228,24 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 
 	subClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
 	if err != nil {
-		return nil, err
+		if err == common.ErrRebalanceOrCleanupPending {
+			//create index can be scheduled in background
+			return nil, true /*schedIndex*/, nil
+		} else {
+			return nil, false, err
+		}
 	}
 
 	err = validateSubClusterGrouping(subClusters, indexSpec)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	logging.Infof("%v Found SubClusters  %v", _executeTenantAwarePlan, subClusters)
 
 	tenantSubCluster, err := filterCandidateBasedOnTenantAffinity(subClusters, indexSpec)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	logging.Infof("%v Found Candidate Based on Tenant Affinity %v", _executeTenantAwarePlan, tenantSubCluster)
@@ -2261,7 +2266,7 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 			//below LWM.
 			subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 
 			if len(subClustersBelowLWM) != 0 {
@@ -2275,7 +2280,7 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 		//if below HWM.
 		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, plan.UsageThreshold)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(subClusterBelowHWM) != 0 {
 			result = subClusterBelowHWM[0]
@@ -2288,24 +2293,24 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, error) {
 		logging.Infof("%v Found no matching candidate for tenant %v. Error - %v", _executeTenantAwarePlan,
 			indexSpec, errStr)
 		retErr := "Planner not able to find any node for placement - " + errStr
-		return nil, errors.New(retErr)
+		return nil, false, errors.New(retErr)
 	} else {
 		logging.Infof("%v Found Result %v", _executeTenantAwarePlan, result)
 	}
 
 	indexes, err := IndexUsagesFromSpec(nil, []*IndexSpec{indexSpec})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	err = placeIndexOnSubCluster(result, indexes)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
 
-	return tenantAwarePlanner, nil
+	return tenantAwarePlanner, false, nil
 
 }
 
@@ -2354,6 +2359,18 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 
 		//skip empty nodes
 		if len(node.Indexes) == 0 {
+			//Number of indexes can also be 0 in case there are buckets being moved
+			//out of the node(as planner will skip indexes with lower instance version)
+			//or into the node with RState as pending.
+			//Such node should not be considered empty. Return error as planner cannot
+			//determine node grouping in this case as the node is not
+			//empty and should not be paired with any other empty node.
+			if len(node.BucketsInRebalance) != 0 {
+				logging.Infof("%v Cannot group empty node %v due to in progress rebalance "+
+					"for all buckets on the node. %v", _groupIndexNodesIntoSubClusters, node,
+					node.BucketsInRebalance)
+				return nil, common.ErrRebalanceOrCleanupPending
+			}
 			emptyNodesWithoutPairs[node.NodeUUID] = node
 			logging.Debugf("%v Added %v to emptyNodesWithoutPairs %v", _groupIndexNodesIntoSubClusters,
 				node, emptyNodesWithoutPairs)
@@ -2368,6 +2385,11 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 		}
 
 		for _, index := range node.Indexes {
+			if inRebal, ok := node.BucketsInRebalance[index.Bucket]; ok && inRebal {
+				logging.Infof("%v Skip index %v node %v from subCluster grouping. "+
+					"Rebalance in progress.", _groupIndexNodesIntoSubClusters, index, node)
+				continue
+			}
 			subcluster, err = findSubClusterForIndex(indexers, index)
 			if err != nil {
 				return nil, err
@@ -2378,6 +2400,16 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 				break
 			}
 		}
+
+		//empty subcluster means that the indexes were skipped due to all buckets on
+		//the node being in rebalance.
+		if len(subcluster) == 0 {
+			logging.Infof("%v Cannot group node %v due to in progress rebalance "+
+				"for all buckets on the node. %v", _groupIndexNodesIntoSubClusters, node,
+				node.BucketsInRebalance)
+			return nil, common.ErrRebalanceOrCleanupPending
+		}
+
 		if len(subcluster) == 1 {
 			var pairNode *IndexerNode
 			subcluster, pairNode, err = findPairForSingleNodeSubCluster(indexers, subcluster, subClusters)
@@ -2769,10 +2801,6 @@ func getSubClusterPosForNode(subClusters []SubCluster,
 //those are hosting replicas of the same index.
 func findSubClusterForIndex(indexers []*IndexerNode,
 	index *IndexUsage) (SubCluster, error) {
-
-	//TODO Handle cases for in-flight indexes during rebalance. Create Index will
-	//be allowed during rebalance in Elixir.
-	//TODO handle the case if a node is failed over/unhealthy in the cluster.
 
 	var subCluster SubCluster
 	for _, indexer := range indexers {

@@ -1388,7 +1388,7 @@ func tenantAwarePlannerFuncTests(t *testing.T) {
 		FailTestIfError(err, "Fail to read index spec", t)
 
 		s := planner.NewSimulator()
-		p, err := s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
+		p, _, err := s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
 		FailTestIfError(err, "Error in RunSingleTestPlan", t)
 
 		if _, ok := p.(*planner.TenantAwarePlanner); !ok {
@@ -1410,7 +1410,7 @@ func tenantAwarePlannerFuncTests(t *testing.T) {
 		FailTestIfError(err, "Fail to read index spec", t)
 
 		s := planner.NewSimulator()
-		_, err = s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
+		_, _, err = s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
 		FailTestIfNoError(err, "Error in RunSingleTestPlan", t)
 		if strings.Contains(err.Error(), testcase.errStr) {
 			log.Printf("Expected error %v", err)
