@@ -856,7 +856,8 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	//result is ready
 	if success {
 		if createErr != nil {
-			return false, fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+			return false, fmt.Errorf("%v.  Index creation will be retried in background. DefnId: %v, Error: %v",
+				c.ErrTransientError, idxDefn.DefnId, createErr)
 		}
 		return false, nil
 	}
@@ -909,7 +910,8 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
 				if exist {
 					if createErr != nil {
-						return false, fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+						return false, fmt.Errorf("%v.  Index creation will be retried in background. DefnId: %v,  Error: %v",
+							c.ErrTransientError, idxDefn.DefnId, createErr)
 					}
 					return false, nil
 				}
@@ -1381,13 +1383,13 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				if rebalRunning {
 					message = message + " The index will be created in the background after the ongoing rebalance."
 				}
-				logging.Warnf("%v", message)
+				logging.Warnf("%v. DefnId: %v", message, idxDefn.DefnId)
 
 				if c.IsServerlessDeployment() {
-					return c.ErrServerBusy
+					return fmt.Errorf("%v. The index is scheduled for background creation. ", c.ErrTransientError)
 				}
 
-				return fmt.Errorf("%v", message)
+				return fmt.Errorf("%v. %v", c.ErrTransientError, message)
 			} else {
 				if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
 					msg += fmt.Sprintf(" Scheduling of index creation was attempted. Please check for index status later.")
@@ -1500,9 +1502,11 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				return nil
 			}
 
-			message := "The index is scheduled for background creation."
-			logging.Warnf("%v", message)
-			return c.ErrServerBusy
+			message := fmt.Sprintf("The index is scheduled for background creation.")
+			logging.Warnf("%v. DefnId: %v", message, idxDefn.DefnId)
+
+			retErr := fmt.Errorf("%v. %v", c.ErrTransientError, message)
+			return retErr
 		} else {
 			var msg string
 			if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
