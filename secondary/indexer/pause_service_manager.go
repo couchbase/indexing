@@ -810,7 +810,7 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 
 		for _, opt := range opts {
 			if err := m.runPauseCleanupPhase(
-				params.Bucket, opt.PauseId,opt.MasterId == string(m.nodeInfo.NodeID),
+				params.Bucket, opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID),
 			); err != nil {
 				return err
 			}
@@ -2296,6 +2296,7 @@ func (m *PauseServiceManager) taskAdd(task *taskObj) {
 	m.tasksMu.Lock()
 	m.tasks[task.taskId] = task
 	m.tasksMu.Unlock()
+	m.genericMgr.incRev()
 }
 
 // taskAddPreparePause constructs and adds a Pause task to m.tasks.
@@ -2333,6 +2334,7 @@ func (m *PauseServiceManager) taskDelete(taskId string) *taskObj {
 	task := m.tasks[taskId]
 	if task != nil {
 		delete(m.tasks, taskId)
+		m.genericMgr.incRev()
 	}
 	return task
 }
@@ -2364,6 +2366,7 @@ func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
 	task := m.taskFind(taskId)
 	if task != nil {
 		task.TaskObjSetFailed(errMsg)
+		m.genericMgr.incRev()
 		return true
 	}
 	return false
@@ -2376,6 +2379,7 @@ func (m *PauseServiceManager) taskSetMasterAndUpdateType(taskId string, newType 
 		task.setMasterNoLock()
 		task.updateTaskTypeNoLock(newType)
 		task.taskMu.Unlock()
+		m.genericMgr.incRev()
 	}
 	return task
 }
@@ -2760,7 +2764,7 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 				logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to observe bucket (%v) streaming endpoint. err: %v. Retrying (%v)",
 					bucketName, err, i)
 			}
-			
+
 		}
 	}
 	logging.Infof("PauseServiceManager::monitorBucketForPauseResume: exiting bucket monitor for bucket %v; err %v for task ID: %v (for pause? -> %v)",
