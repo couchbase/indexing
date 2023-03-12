@@ -1099,13 +1099,13 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
-				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Index build will be retried in background. Reason = %v", retryList[0])
+				logging.Errorf("LifecycleMgr.processCommitToken() : Build index failed. %v. Index build will be retried in background. Reason = %v", common.ErrTransientError, retryList[0])
 				return true, defn.BucketUUID, defn.ScopeId, defn.CollectionId, retryList[0]
 			}
 
 			if len(errList) != 0 {
 				// It is not a recoverable error.  Do not create commit token and return error.
-				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", errList[0])
+				logging.Errorf("LifecycleMgr.processCommitToken() : Build index failed.  Reason = %v", errList[0])
 				m.DeleteIndex(defnId, true, false, reqCtx)
 				return false, "", "", "", errList[0]
 			}
@@ -1672,17 +1672,17 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
-				return errors.New("Failed to build index.  Index build will be retried in background.")
+				return fmt.Errorf("Build index failed. %v. Index build will be retried in background.", common.ErrTransientError)
 			}
 
 			if len(errList) != 0 {
-				logging.Errorf("LifecycleMgr.CreateIndex() : build index fails.  Reason = %v", errList[0])
+				logging.Errorf("LifecycleMgr.CreateIndex() : Build index failed.  Reason = %v", errList[0])
 				m.DeleteIndex(defn.DefnId, true, false, reqCtx)
 				return errList[0]
 			}
 
 			if len(skipList) != 0 {
-				logging.Errorf("LifecycleMgr.CreateIndex() : build index fails due to internal errors.")
+				logging.Errorf("LifecycleMgr.CreateIndex() : Build index failed due to internal errors.")
 
 				m.DeleteIndex(defn.DefnId, true, false, reqCtx)
 				return errors.New("Failed to create index due to internal build error.  Please retry the operation.")
@@ -2082,7 +2082,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 	var errMsg string
 	if !isRebalOrResume {
 		if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 { // at least one reportable error
-			errMsg = "Build index fails."
+			errMsg = "Build index failed."
 
 			if len(retryList) == 1 {
 				errMsg += fmt.Sprintf(" %v", retryList[0])
@@ -2093,7 +2093,13 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 			}
 
 			if len(retryList) > 1 {
-				errMsg += " Some index will be retried building in the background."
+				if len(errList) == 0 && len(skipList) == 0 {
+					errMsg += fmt.Sprintf(" %v. Some index will be retried building in the background.", common.ErrTransientError)
+				} else {
+					// Other errors present - Do not add "ErrTransientError" as index building
+					// is not successful for all indexes
+					errMsg += fmt.Sprintf(" Some index will be retried building in the background.")
+				}
 			}
 
 			if len(errList) > 1 {
@@ -2228,7 +2234,13 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 				// DDL can not be processed. Set scheduled flag, update build error
 				// and continue. The defn will be added to retry list after all instances
 				// are updated with buildErr
-				buildErr = errors.New(fmt.Sprintf("Index %v %v as rebalance is in progress for bucket: %v", defn.Name, common.ErrRetryIndexBuild, defn.Bucket))
+				if common.IsServerlessDeployment() {
+					buildErr = errors.New(fmt.Sprintf("%v. Index build will be retried in background.", common.ErrTransientError))
+				} else {
+					buildErr = errors.New(fmt.Sprintf("%v. Index %v will retry building in the background as rebalance is in progress for bucket: %v",
+						common.ErrTransientError, defn.Name, defn.Bucket))
+				}
+
 				logging.Warnf("LifecycleMgr::handleBuildIndexes: inst: %v build will be scheduled in the background as rebalance "+
 					"is in progress for bucket: %v", inst.InstId, defn.Bucket)
 				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, buildErr.Error())
@@ -2279,7 +2291,12 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			}
 
 			if m.canRetryBuildError(inst, build_err, isRebalOrResume) {
-				build_err = errors.New(fmt.Sprintf("Index %v %v for reason: %v.", defn.Name, common.ErrRetryIndexBuild, build_err.Error()))
+				if common.IsServerlessDeployment() {
+					build_err = errors.New(fmt.Sprintf("%v. Index build will be retried in background.", common.ErrTransientError))
+				} else {
+					build_err = errors.New(fmt.Sprintf("%v. Index %v will retry building in the background for reason: %v.",
+						common.ErrTransientError, defn.Name, build_err.Error()))
+				}
 
 				logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
@@ -3433,17 +3450,17 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
-				return errors.New("Failed to build index.  Index build will be retried in background.")
+				return fmt.Errorf(" Build index failed. %v. Index build will be retried in background.", common.ErrTransientError)
 			}
 
 			if len(errList) != 0 {
-				logging.Errorf("LifecycleMgr.CreateIndexInstance() : build index fails.  Reason = %v", errList[0])
+				logging.Errorf("LifecycleMgr.CreateIndexInstance() : Build index failed.  Reason = %v", errList[0])
 				m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 				return errList[0]
 			}
 
 			if len(skipList) != 0 {
-				logging.Errorf("LifecycleMgr.CreateIndexInstance() : build index fails due to internal errors.")
+				logging.Errorf("LifecycleMgr.CreateIndexInstance() : Build index failed due to internal errors.")
 				m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 				return errors.New("Failed to create index due to internal build error.  Please retry the operation.")
 			}
