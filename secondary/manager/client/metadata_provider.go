@@ -1104,10 +1104,28 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 	for i := 0; i < tries; i++ {
 		exists, err := mc.ScheduleCreateTokenExist(defnId)
 		if err != nil || !exists {
+
+			// At this point, two outcomes are possible:
+			// a. Indexer posted the schedule create token but client could not
+			//    read the token - Probably due to metaKV issues
+			// b. Before client could read the token, the token was processed and
+			//    deleted by scheduled index creator
+			//
+			// To address (b), check repo before returning an error.
+			// If index metadata were to be created, then metadata provider would be
+			// updated with the same.
+			//
+			// Note: It is possible that the index is created and dropped immediately.
+			//       In such a case, index definition will not be found in meta repo.
+			//       It is ok to return error in such cases.
+
+			if o.repo.hasDefn(defnId) {
+				return nil // Defn exists in repo i.e. schedule token is processed
+			}
+
 			time.Sleep(3 * time.Second)
 			continue
 		}
-
 		return nil
 	}
 
@@ -5085,6 +5103,17 @@ func (r *metadataRepo) mergeSingleIndexPartition(to *mc.IndexInstDistribution, f
 	}
 
 	return to
+}
+
+func (r *metadataRepo) hasDefn(defnId c.IndexDefnId) bool {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	meta, ok := r.indices[defnId]
+	if ok && meta != nil {
+		return true
+	}
+	return false
 }
 
 // Only Consider instance with Active RState.  This function will not check if the index
