@@ -363,7 +363,13 @@ func (t *simulator) RunSingleTestPlan(config *RunConfig, spec *WorkloadSpec, p *
 
 func (t *simulator) RunSingleTestTenantAwarePlan(p *Plan, indexSpec *IndexSpec) (Planner, bool, error) {
 
-	return executeTenantAwarePlan(p, indexSpec)
+	planner, sched, err := executeTenantAwarePlan(p, indexSpec)
+
+	if sched {
+		return nil, false, common.ErrRebalanceOrCleanupPending
+	} else {
+		return planner, sched, err
+	}
 }
 
 func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec) (*SAPlanner, *RunStats, error) {
