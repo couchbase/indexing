@@ -43,6 +43,8 @@ import (
 	"github.com/couchbase/indexing/secondary/transport"
 )
 
+var ErrClientTermination = errors.New("Terminate Request due to client termination")
+
 // TODO:
 // 1) cleanup on create/build index fails for replica
 
@@ -1132,6 +1134,34 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 	return ErrWaitScheduleTimeout
 }
 
+func (o *MetadataProvider) retryableWaitForScheduledIndex(idxDefn *c.IndexDefn) error {
+
+	// For non-serverless deployments, return the error to end-user.
+	// For serverless deployments, retry wait on ErrClientTermination
+	// as end-user is agnostic to rebalance in serverless model
+	if !c.IsServerlessDeployment() {
+		return o.waitForScheduledIndex(idxDefn)
+	} else {
+		for i := 0; i < 10; i++ {
+			err := o.waitForScheduledIndex(idxDefn)
+			if err != nil {
+				if err.Error() == ErrClientTermination.Error() {
+					logging.Errorf("Error in waitForScheduledIndex %v. Retrying(%v)", err, i)
+					continue
+				} else {
+					logging.Errorf("Error in waitForScheduledIndex %v", err)
+					return err
+				}
+			}
+			return nil // err == nil
+		}
+		// At this point, all retries have been exhausted. Return ErrClientTermination
+		// as it is the only possible error by which we can reach this point
+		return ErrClientTermination
+	}
+	return nil
+}
+
 func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
 	//
@@ -1388,7 +1418,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				}
 
 				if o.settings.WaitForScheduledIndex() && wait {
-					err := o.waitForScheduledIndex(idxDefn)
+					err := o.retryableWaitForScheduledIndex(idxDefn)
 					if err != nil {
 						logging.Errorf("Error in waitForScheduledIndex %v", err)
 						return err
@@ -1511,7 +1541,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 		if scheduleErr == nil {
 			if o.settings.WaitForScheduledIndex() {
-				err := o.waitForScheduledIndex(idxDefn)
+				err := o.retryableWaitForScheduledIndex(idxDefn)
 				if err != nil {
 					logging.Errorf("Error in waitForScheduledIndex %v", err)
 					return err
@@ -5870,7 +5900,7 @@ func (r *metadataRepo) notifyIndexerClose(indexerId c.IndexerId) {
 
 		if len(event.topology) == 0 {
 			delete(r.notifiers, defnId)
-			event.notifyCh <- errors.New("Terminate Request due to client termination")
+			event.notifyCh <- ErrClientTermination
 			close(event.notifyCh)
 		}
 	}
