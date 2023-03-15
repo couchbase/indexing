@@ -1292,6 +1292,38 @@ var tenantAwarePlannerFuncTestCases = []tenantAwarePlannerFuncTestCase{
 		false,
 		"",
 	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance in progress(inst version) ",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_e_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance in progress(rstate) ",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_f_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9004": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance in progress(rstate+inst version) ",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_g_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9004": true},
+		false,
+		"",
+	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance pending cleanup",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_h_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9004": true},
+		false,
+		"",
+	},
 	/*
 		{
 			"Place Single Index Instance - 4 nodes - 2 SG - Failed Over Node",
@@ -1349,6 +1381,38 @@ var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
 		false,
 		"No SubCluster Below Low Usage Threshold",
 	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance in progress(inst version) ",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_a_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		false,
+		"Rebalance in progress or cleanup pending from previous rebalance",
+	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance in progress(rstate) ",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_b_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		false,
+		"Rebalance in progress or cleanup pending from previous rebalance",
+	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance in progress(rstate+inst version) ",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_c_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		false,
+		"Rebalance in progress or cleanup pending from previous rebalance",
+	},
+	{
+		"Place Single Index Instance - 4 nodes, rebalance pending cleanup",
+		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_d_rebal.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+		false,
+		"Rebalance in progress or cleanup pending from previous rebalance",
+	},
 }
 
 //
@@ -1388,7 +1452,7 @@ func tenantAwarePlannerFuncTests(t *testing.T) {
 		FailTestIfError(err, "Fail to read index spec", t)
 
 		s := planner.NewSimulator()
-		p, err := s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
+		p, _, err := s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
 		FailTestIfError(err, "Error in RunSingleTestPlan", t)
 
 		if _, ok := p.(*planner.TenantAwarePlanner); !ok {
@@ -1410,7 +1474,7 @@ func tenantAwarePlannerFuncTests(t *testing.T) {
 		FailTestIfError(err, "Fail to read index spec", t)
 
 		s := planner.NewSimulator()
-		_, err = s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
+		_, _, err = s.RunSingleTestTenantAwarePlan(plan, indexSpecs[0])
 		FailTestIfNoError(err, "Error in RunSingleTestPlan", t)
 		if strings.Contains(err.Error(), testcase.errStr) {
 			log.Printf("Expected error %v", err)

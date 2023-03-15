@@ -216,6 +216,9 @@ type IndexerNode struct {
 	indexMovedIn   uint64
 
 	UsageRatio float64 `json:"usageRatio"`
+
+	//for serverless subCluster grouping
+	BucketsInRebalance map[string]bool
 }
 
 // IndexUsage is a description of one instance of an index used by Planner to keep track of which

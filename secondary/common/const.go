@@ -87,6 +87,7 @@ var ErrDiskLimitReached = errors.New("Bucket's disk size limit has been reached.
 var ErrIndexInAsyncRecovery = errors.New("Index is in async recovery. Index drop will be attempted after recovery is complete")
 var ErrIndexDeletedDuringRebal = errors.New("Fail to create index as index is already deleted. Skipping index creation during rebalance")
 var ErrRetryIndexBuild = errors.New("will retry building in the background")
+var ErrRebalanceOrCleanupPending = errors.New("Rebalance in progress or cleanup pending from previous rebalance.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,

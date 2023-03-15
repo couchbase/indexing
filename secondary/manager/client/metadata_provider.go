@@ -1432,6 +1432,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	}
 
+	schedIndex := false
 	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() {
 		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
 			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
@@ -1441,7 +1442,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 			return err
 		}
 	} else {
-		layout, definitions, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
+		layout, definitions, schedIndex, err = o.plan(idxDefn, plan, watcherMap, allowLostReplica, actualNumReplica, enforceLimits)
 
 		if err != nil && (c.IsServerlessDeployment() || (strings.Contains(err.Error(), "Index already exist") || strings.Contains(err.Error(), c.ErrIndexScopeLimitReached.Error()) || strings.Contains(err.Error(), c.ErrIndexBucketLimitReached.Error()))) {
 			o.cancelPrepareIndexRequest(idxDefn, watcherMap, false)
@@ -1459,21 +1460,26 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	}
 
-	//
-	// Commit Phase.  Metadata Provider will send a commit request to at least one indexer.  If at least one indexer
-	// responds with success, then it means there won't be another concurrent create index request.    Even though
-	// the metadata provider may not have full quorum, this create index request can roll forward.
-	//
-	// The first indexer that responds with success will create a token so that it can roll forward even if this
-	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
-	//
-	// In serverless deployments, when DDL operations during rebalance are supported, and if commit
-	// request of an index failes due to rebalance, then the index is scheduled for background creation
-	schedIndex := false
-	schedIndex, err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate, scheduleOnFailure)
-	if err != nil {
-		logging.Errorf("Fail to create index: %v", err)
-		return err
+	//schedIndex can be used by serverless planner to indicate that the index needs to be
+	//scheduled in the background due to in-progress rebalance. In such a case, commit
+	//request in not required to be sent. Prepare Cancel request will be sent as part
+	//of schedule index processing.
+	if !schedIndex {
+		//
+		// Commit Phase.  Metadata Provider will send a commit request to at least one indexer.  If at least one indexer
+		// responds with success, then it means there won't be another concurrent create index request.    Even though
+		// the metadata provider may not have full quorum, this create index request can roll forward.
+		//
+		// The first indexer that responds with success will create a token so that it can roll forward even if this
+		// metadata provider has died.  Other indexer will observe the token and proceed with the request.
+		//
+		// In serverless deployments, when DDL operations during rebalance are supported, and if commit
+		// request of an index failes due to rebalance, then the index is scheduled for background creation
+		schedIndex, err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate, scheduleOnFailure)
+		if err != nil {
+			logging.Errorf("Fail to create index: %v", err)
+			return err
+		}
 	}
 
 	// schedIndex will be true only for serverless deployments
@@ -2438,12 +2444,12 @@ func (o *MetadataProvider) verifyNodeList(nodeList []string, watcherMap map[c.In
 }
 
 func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, watcherMap map[c.IndexerId]int,
-	allowLostReplica bool, actualNumReplica uint32, enforceLimits bool) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
+	allowLostReplica bool, actualNumReplica uint32, enforceLimits bool) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, bool, error) {
 
 	spec := o.prepareIndexSpec(defn)
 	nodes, err := o.prepareNodeList(defn.Nodes, watcherMap)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
@@ -2451,16 +2457,18 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 
 	var solution *planner.Solution
 
+	schedIndex := false
+
 	if c.IsServerlessDeployment() {
-		solution, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, serverlessIndexLimit)
-		if err != nil {
-			return nil, nil, err
+		solution, schedIndex, err = planner.ExecutePlan2(o.clusterUrl, spec, nodes, serverlessIndexLimit)
+		if err != nil || schedIndex {
+			return nil, nil, schedIndex, err
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
 			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 	}
 
@@ -2480,10 +2488,10 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	var definitions map[c.IndexerId][]c.IndexDefn
 	definitions, err = o.getDefinitionsFromLayout(layout, defn, allowLostReplica, actualNumReplica)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 
-	return layout, definitions, nil
+	return layout, definitions, false, nil
 }
 
 func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter, increment int, plan map[string]interface{},
