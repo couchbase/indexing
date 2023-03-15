@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/cbauth"
 	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 	apserver "github.com/couchbase/indexing/secondary/adminport/server"
 	"github.com/couchbase/indexing/secondary/audit"
@@ -917,8 +918,8 @@ func (p *Projector) doStatistics() interface{} {
 // http handlers
 //--------------
 
-func validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := c.IsAuthValid(r)
+func validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -927,15 +928,28 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
 	}
-	return valid
+	return creds, valid
 }
 
 // handle projector statistics
 func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
-	valid := validateAuth(w, r)
+	creds, valid := validateAuth(w, r)
 	if !valid {
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("projector::handleStats not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
+	//TODO: Filter bucket level feed stats
 
 	logging.Infof("%s Request %q\n", p.logPrefix, r.URL.Path)
 
@@ -957,9 +971,21 @@ func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // handle settings
 func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
-	valid := validateAuth(w, r)
+	creds, valid := validateAuth(w, r)
 	if !valid {
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!write")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("projector::handleSettings not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	logging.Infof("%s Request %q %q\n", p.logPrefix, r.Method, r.URL.Path)
@@ -999,9 +1025,21 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // handle internal version request.
 func (p *Projector) handleInternalVersion(w http.ResponseWriter, r *http.Request) {
-	valid := validateAuth(w, r)
+	creds, valid := validateAuth(w, r)
 	if !valid {
 		return
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return
+		} else if !allowed {
+			logging.Verbosef("projector::handleInternalVersion not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(common.HTTP_STATUS_FORBIDDEN)
+			return
+		}
 	}
 
 	logging.Verbosef("%s Request %q\n", p.logPrefix, r.URL.Path)

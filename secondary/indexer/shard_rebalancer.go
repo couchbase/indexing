@@ -2292,7 +2292,7 @@ loop:
 					} else if err != "" {
 						// If index build is scheduled but it could not proceed, then
 						// ignore the error and proceed to drop the index
-						if strings.Contains(err, common.ErrRetryIndexBuild.Error()) {
+						if strings.Contains(err, common.ErrTransientError.Error()) {
 							logging.Infof("ShardRebalancer::dropShardsWhenIdle Ignoring err: %v for inst: %v and "+
 								"proceeding to drop the index", err, instKey)
 							// Continue to drop the index

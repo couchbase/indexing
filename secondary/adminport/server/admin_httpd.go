@@ -126,7 +126,7 @@ const (
 )
 
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := c.IsAuthValid(r)
+	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -134,6 +134,18 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		audit.Audit(c.AUDIT_UNAUTHORIZED, r, "admin_httpd::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(c.HTTP_STATUS_UNAUTHORIZED)
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return false
+		} else if !allowed {
+			logging.Verbosef("admin_httpd::validateAuth not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(c.HTTP_STATUS_FORBIDDEN)
+			return false
+		}
 	}
 	return valid
 }

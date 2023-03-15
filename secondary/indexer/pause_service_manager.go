@@ -1519,8 +1519,12 @@ func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *htt
 	defer logging.Infof("%v returned", _RestHandleFailedTask)
 
 	// Authenticate
-	_, ok := doAuth(r, w, _RestHandleFailedTask)
+	creds, ok := doAuth(r, w, _RestHandleFailedTask)
 	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, _RestHandleFailedTask) {
 		return
 	}
 
@@ -1552,10 +1556,15 @@ func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *htt
 func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Request) {
 
 	// Authenticate
-	if _, ok := doAuth(r, w, "PauseServiceManager::RestHandlePause:"); !ok {
+	creds, ok := doAuth(r, w, "PauseServiceManager::RestHandlePause:")
+	if !ok {
 		err := fmt.Errorf("either invalid credentials or bad request")
 		logging.Errorf("PauseServiceManager::RestHandlePause: Failed to authenticate pause register request,"+
 			" err[%v]", err)
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "PauseServiceManager::RestHandlePause:") {
 		return
 	}
 
@@ -1768,8 +1777,12 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 	defer logging.Infof("%v returned", logPrefix)
 
 	// Authenticate
-	_, ok := doAuth(r, w, logPrefix)
+	creds, ok := doAuth(r, w, logPrefix)
 	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, logPrefix) {
 		return
 	}
 

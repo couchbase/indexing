@@ -2624,9 +2624,13 @@ func (m *RebalanceServiceManager) getTransferTokenOwner(ttid string, tt *c.Trans
 
 func (m *RebalanceServiceManager) handleListRebalanceTokens(w http.ResponseWriter, r *http.Request) {
 
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("RebalanceServiceManager::handleListRebalanceTokens Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "RebalanceServiceManager:handleListRebalanceTokens") {
 		return
 	}
 
@@ -2656,9 +2660,13 @@ func (m *RebalanceServiceManager) handleListRebalanceTokens(w http.ResponseWrite
 func (m *RebalanceServiceManager) handleCleanupRebalance(w http.ResponseWriter, r *http.Request) {
 	const method = "RebalanceServiceManager::handleCleanupRebalance:" // for logging
 
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("%v Validation Failure req: %v", method, c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleCleanupRebalance") {
 		return
 	}
 
@@ -2712,9 +2720,13 @@ func (m *RebalanceServiceManager) handleCleanupRebalance(w http.ResponseWriter, 
 
 func (m *RebalanceServiceManager) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
 
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("RebalanceServiceManager::handleNodeuuid Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "RebalanceServiceManager::handleNodeuuid") {
 		return
 	}
 
@@ -2728,9 +2740,13 @@ func (m *RebalanceServiceManager) handleNodeuuid(w http.ResponseWriter, r *http.
 
 func (m *RebalanceServiceManager) handleRebalanceCleanupStatus(w http.ResponseWriter, r *http.Request) {
 
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("RebalanceServiceManager::handleRebalanceCleanupStatus Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, "RebalanceServiceManager::handleRebalanceCleanupStatus") {
 		return
 	}
 
@@ -2792,9 +2808,13 @@ func (m *RebalanceServiceManager) getCurrRebalTokens() (*RebalTokens, error) {
 func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWriter, r *http.Request) {
 	const method = "RebalanceServiceManager::handleRegisterRebalanceToken:" // for logging
 
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("%v Validation Failure req: %v", method, c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleRegisterRebalanceToken") {
 		return
 	}
 
@@ -3841,9 +3861,13 @@ func (m *RebalanceServiceManager) canAllowDDLDuringRebalance() bool {
 ////////////////////////////////////////////////////////
 
 func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *http.Request) {
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("RebalanceServiceManager::handleLockShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleLockShards") {
 		return
 	}
 
@@ -3875,11 +3899,16 @@ func (m *RebalanceServiceManager) handleLockShards(w http.ResponseWriter, r *htt
 
 func (m *RebalanceServiceManager) handleUnlockShards(w http.ResponseWriter, r *http.Request) {
 
-	_, ok := m.validateAuth(w, r)
+	creds, ok := m.validateAuth(w, r)
 	if !ok {
 		l.Errorf("RebalanceServiceManager::handleUnlockShards Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleUnlockShards") {
+		return
+	}
+
 	if r.Method == "POST" {
 
 		bytes, err := ioutil.ReadAll(r.Body)

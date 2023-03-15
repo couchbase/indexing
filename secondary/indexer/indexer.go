@@ -3444,7 +3444,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
 			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
-				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, instIdList, keyspaceId)
+				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, keyspaceId, instIdList)
 			if idx.enableManager {
 				delete(keyspaceIdIndexList, keyspaceId)
 				continue

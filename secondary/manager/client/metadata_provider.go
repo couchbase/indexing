@@ -43,6 +43,8 @@ import (
 	"github.com/couchbase/indexing/secondary/transport"
 )
 
+var ErrClientTermination = errors.New("Terminate Request due to client termination")
+
 // TODO:
 // 1) cleanup on create/build index fails for replica
 
@@ -856,7 +858,8 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	//result is ready
 	if success {
 		if createErr != nil {
-			return false, fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+			return false, fmt.Errorf("%v.  Index creation will be retried in background. DefnId: %v, Error: %v",
+				c.ErrTransientError, idxDefn.DefnId, createErr)
 		}
 		return false, nil
 	}
@@ -909,7 +912,8 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				exist, _ := mc.CreateCommandTokenExist(idxDefn.DefnId)
 				if exist {
 					if createErr != nil {
-						return false, fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
+						return false, fmt.Errorf("%v.  Index creation will be retried in background. DefnId: %v,  Error: %v",
+							c.ErrTransientError, idxDefn.DefnId, createErr)
 					}
 					return false, nil
 				}
@@ -1102,14 +1106,60 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 	for i := 0; i < tries; i++ {
 		exists, err := mc.ScheduleCreateTokenExist(defnId)
 		if err != nil || !exists {
+
+			// At this point, two outcomes are possible:
+			// a. Indexer posted the schedule create token but client could not
+			//    read the token - Probably due to metaKV issues
+			// b. Before client could read the token, the token was processed and
+			//    deleted by scheduled index creator
+			//
+			// To address (b), check repo before returning an error.
+			// If index metadata were to be created, then metadata provider would be
+			// updated with the same.
+			//
+			// Note: It is possible that the index is created and dropped immediately.
+			//       In such a case, index definition will not be found in meta repo.
+			//       It is ok to return error in such cases.
+
+			if o.repo.hasDefn(defnId) {
+				return nil // Defn exists in repo i.e. schedule token is processed
+			}
+
 			time.Sleep(3 * time.Second)
 			continue
 		}
-
 		return nil
 	}
 
 	return ErrWaitScheduleTimeout
+}
+
+func (o *MetadataProvider) retryableWaitForScheduledIndex(idxDefn *c.IndexDefn) error {
+
+	// For non-serverless deployments, return the error to end-user.
+	// For serverless deployments, retry wait on ErrClientTermination
+	// as end-user is agnostic to rebalance in serverless model
+	if !c.IsServerlessDeployment() {
+		return o.waitForScheduledIndex(idxDefn)
+	} else {
+		for i := 0; i < 10; i++ {
+			err := o.waitForScheduledIndex(idxDefn)
+			if err != nil {
+				if err.Error() == ErrClientTermination.Error() {
+					logging.Errorf("Error in waitForScheduledIndex %v. Retrying(%v)", err, i)
+					continue
+				} else {
+					logging.Errorf("Error in waitForScheduledIndex %v", err)
+					return err
+				}
+			}
+			return nil // err == nil
+		}
+		// At this point, all retries have been exhausted. Return ErrClientTermination
+		// as it is the only possible error by which we can reach this point
+		return ErrClientTermination
+	}
+	return nil
 }
 
 func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
@@ -1368,7 +1418,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				}
 
 				if o.settings.WaitForScheduledIndex() && wait {
-					err := o.waitForScheduledIndex(idxDefn)
+					err := o.retryableWaitForScheduledIndex(idxDefn)
 					if err != nil {
 						logging.Errorf("Error in waitForScheduledIndex %v", err)
 						return err
@@ -1381,13 +1431,13 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				if rebalRunning {
 					message = message + " The index will be created in the background after the ongoing rebalance."
 				}
-				logging.Warnf("%v", message)
+				logging.Warnf("%v. DefnId: %v", message, idxDefn.DefnId)
 
 				if c.IsServerlessDeployment() {
-					return c.ErrServerBusy
+					return fmt.Errorf("%v. The index is scheduled for background creation. ", c.ErrTransientError)
 				}
 
-				return fmt.Errorf("%v", message)
+				return fmt.Errorf("%v. %v", c.ErrTransientError, message)
 			} else {
 				if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
 					msg += fmt.Sprintf(" Scheduling of index creation was attempted. Please check for index status later.")
@@ -1491,7 +1541,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 		if scheduleErr == nil {
 			if o.settings.WaitForScheduledIndex() {
-				err := o.waitForScheduledIndex(idxDefn)
+				err := o.retryableWaitForScheduledIndex(idxDefn)
 				if err != nil {
 					logging.Errorf("Error in waitForScheduledIndex %v", err)
 					return err
@@ -1500,9 +1550,11 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				return nil
 			}
 
-			message := "The index is scheduled for background creation."
-			logging.Warnf("%v", message)
-			return c.ErrServerBusy
+			message := fmt.Sprintf("The index is scheduled for background creation.")
+			logging.Warnf("%v. DefnId: %v", message, idxDefn.DefnId)
+
+			retErr := fmt.Errorf("%v. %v", c.ErrTransientError, message)
+			return retErr
 		} else {
 			var msg string
 			if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
@@ -5083,6 +5135,17 @@ func (r *metadataRepo) mergeSingleIndexPartition(to *mc.IndexInstDistribution, f
 	return to
 }
 
+func (r *metadataRepo) hasDefn(defnId c.IndexDefnId) bool {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	meta, ok := r.indices[defnId]
+	if ok && meta != nil {
+		return true
+	}
+	return false
+}
+
 // Only Consider instance with Active RState.  This function will not check if the index
 // is valid.
 func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.IndexDefnId) bool {
@@ -5837,7 +5900,7 @@ func (r *metadataRepo) notifyIndexerClose(indexerId c.IndexerId) {
 
 		if len(event.topology) == 0 {
 			delete(r.notifiers, defnId)
-			event.notifyCh <- errors.New("Terminate Request due to client termination")
+			event.notifyCh <- ErrClientTermination
 			close(event.notifyCh)
 		}
 	}

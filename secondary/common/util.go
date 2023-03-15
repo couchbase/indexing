@@ -70,11 +70,12 @@ func Crc64Update(checksum uint64, bytes []byte) uint64 {
 
 // ChecksumAndCompress checksums and optionally compresses a byte slice, prepending an 8-byte
 // header comprised of:
-//   header[0] - flags:
-//     bit 0    - compressed?
-//     bits 1-7 - unused bits
-//   header[1-4] - crc32 checksum written in big-endian order
-//   header[5-7] - unused bytes
+//
+//	header[0] - flags:
+//	  bit 0    - compressed?
+//	  bits 1-7 - unused bits
+//	header[1-4] - crc32 checksum written in big-endian order
+//	header[5-7] - unused bytes
 func ChecksumAndCompress(byteSlice []byte, compress bool) []byte {
 	header := make([]byte, 8)
 	if compress {
@@ -952,11 +953,9 @@ func LogOs() string {
 	return fmt.Sprintf("uid: %v; gid: %v; hostname: %v", uid, gid, hostname)
 }
 
-//
 // This method fetch the bucket UUID.  If this method return an error,
 // then it means that the node is not able to connect in order to fetch
 // bucket UUID.
-//
 func GetBucketUUID(cluster, bucket string) (string, error) {
 
 	url, err := ClusterAuthUrl(cluster)
@@ -993,7 +992,6 @@ func GetNumVBuckets(cluster, bucketn string) (int, error) {
 	return binfo.GetNumVBuckets(bucketn)
 }
 
-//
 // This method will fetch the collectionID.  If this method returns an error,
 // then it means that the node is not able to connect in order to fetch
 // the collectionID
@@ -1019,10 +1017,8 @@ func GetCollectionID(cluster, bucket, scope, collection string) (string, error) 
 	return cinfo.GetCollectionID(bucket, scope, collection), nil
 }
 
-//
 // This method will fetch the scopeID.  If this method returns an error,
 // then it means that the node is not able to connect in order to fetch
-//
 func GetScopeID(cluster, bucket, scope string) (string, error) {
 	url, err := ClusterAuthUrl(cluster)
 	if err != nil {
@@ -1045,11 +1041,9 @@ func GetScopeID(cluster, bucket, scope string) (string, error) {
 	return cinfo.GetScopeID(bucket, scope), nil
 }
 
-//
 // This method will fetch the scope and collection ID.  If this method
 // returns an error, then it means that the node is not able to connect
 // in order to fetch
-//
 func GetScopeAndCollectionID(cluster, bucket, scope, collection string) (string, string, error) {
 	url, err := ClusterAuthUrl(cluster)
 	if err != nil {
@@ -1379,7 +1373,7 @@ func GetIPv6FromParam(ipv4, ipv6 string) (bool, error) {
 }
 
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := IsAuthValid(r)
+	creds, valid, err := IsAuthValid(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error() + "\n"))
@@ -1387,6 +1381,18 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		audit.Audit(AUDIT_UNAUTHORIZED, r, "util::validateAuth", "")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write(HTTP_STATUS_UNAUTHORIZED)
+	} else if creds != nil {
+		allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+			return false
+		} else if !allowed {
+			logging.Verbosef("util::validateAuth not enough permissions")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(HTTP_STATUS_FORBIDDEN)
+			return false
+		}
 	}
 	return valid
 }
@@ -1501,10 +1507,11 @@ const LOCK_LOG_DUR = 500 * time.Millisecond // minimum lock wait/hold duration b
 // iff >= LOCK_LOG_DUR. It returns the time at which the lock was acquired.
 //
 // Arguments
-//   lock -- pointer to the mutex to lock
-//   lockName -- name of the mutex (for logging)
-//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
-//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+//
+//	lock -- pointer to the mutex to lock
+//	lockName -- name of the mutex (for logging)
+//	caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//	parent -- name of caller's caller for disambiguation of low-level calls, else ""
 func TraceMutexLOCK(lock *sync.Mutex, lockName, caller, parent string) time.Time {
 
 	lockTryTime := time.Now()
@@ -1521,11 +1528,12 @@ func TraceMutexLOCK(lock *sync.Mutex, lockName, caller, parent string) time.Time
 // iff >= LOCK_LOG_DUR.
 //
 // Arguments
-//   lockGotTime -- time the lock was originally acquired (return value from TraceMutexLOCK)
-//   lock -- pointer to the mutex to unlock
-//   lockName -- name of the mutex (for logging)
-//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
-//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+//
+//	lockGotTime -- time the lock was originally acquired (return value from TraceMutexLOCK)
+//	lock -- pointer to the mutex to unlock
+//	lockName -- name of the mutex (for logging)
+//	caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//	parent -- name of caller's caller for disambiguation of low-level calls, else ""
 func TraceMutexUNLOCK(lockGotTime time.Time, lock *sync.Mutex, lockName, caller, parent string) {
 
 	lock.Unlock()
@@ -1540,11 +1548,12 @@ func TraceMutexUNLOCK(lockGotTime time.Time, lock *sync.Mutex, lockName, caller,
 // iff >= LOCK_LOG_DUR. It returns the time at which the lock was acquired.
 //
 // Arguments
-//   lockType -- LOCK_READ or LOCK_WRITE
-//   lock -- pointer to the mutex to lock
-//   lockName -- name of the mutex (for logging)
-//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
-//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+//
+//	lockType -- LOCK_READ or LOCK_WRITE
+//	lock -- pointer to the mutex to lock
+//	lockName -- name of the mutex (for logging)
+//	caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//	parent -- name of caller's caller for disambiguation of low-level calls, else ""
 func TraceRWMutexLOCK(lockType int, lock *sync.RWMutex, lockName, caller, parent string) time.Time {
 
 	lockTryTime := time.Now()
@@ -1565,12 +1574,13 @@ func TraceRWMutexLOCK(lockType int, lock *sync.RWMutex, lockName, caller, parent
 // iff >= LOCK_LOG_DUR.
 //
 // Arguments
-//   lockGotTime -- time the lock was originally acquired (return value from TraceRWMutexLOCK)
-//   lockType -- LOCK_READ or LOCK_WRITE
-//   lock -- pointer to the mutex to unlock
-//   lockName -- name of the mutex (for logging)
-//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
-//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+//
+//	lockGotTime -- time the lock was originally acquired (return value from TraceRWMutexLOCK)
+//	lockType -- LOCK_READ or LOCK_WRITE
+//	lock -- pointer to the mutex to unlock
+//	lockName -- name of the mutex (for logging)
+//	caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//	parent -- name of caller's caller for disambiguation of low-level calls, else ""
 func TraceRWMutexUNLOCK(lockGotTime time.Time,
 	lockType int, lock *sync.RWMutex, lockName, caller, parent string) {
 
@@ -1594,18 +1604,20 @@ const (
 
 // traceLockLog is a helper for the Trace[RW]MutexLOCK/UNLOCK functions to log long waits/holds.
 // Examples:
-//   util::traceLockLog: Long hold of myMutex.Lock() 784ms in myClass::myMethod:
-//     called by parentClass::parentMethod:
-//   util::traceLockLog: Long wait for myMutex.RLock() 511ms in myClass::myMethod:
-//     called by parentClass::parentMethod:
+//
+//	util::traceLockLog: Long hold of myMutex.Lock() 784ms in myClass::myMethod:
+//	  called by parentClass::parentMethod:
+//	util::traceLockLog: Long wait for myMutex.RLock() 511ms in myClass::myMethod:
+//	  called by parentClass::parentMethod:
 //
 // Arguments
-//   lockAction -- LOCK_WAIT or LOCK_HOLD
-//   lockDur -- duration of the lock hold or wait
-//   lockType -- LOCK_READ or LOCK_WRITE
-//   lockName -- name of the mutex (for logging)
-//   caller -- name of method doing this action (usually fully qualified, like "class::method:")
-//   parent -- name of caller's caller for disambiguation of low-level calls, else ""
+//
+//	lockAction -- LOCK_WAIT or LOCK_HOLD
+//	lockDur -- duration of the lock hold or wait
+//	lockType -- LOCK_READ or LOCK_WRITE
+//	lockName -- name of the mutex (for logging)
+//	caller -- name of method doing this action (usually fully qualified, like "class::method:")
+//	parent -- name of caller's caller for disambiguation of low-level calls, else ""
 func traceLockLog(lockAction int, lockDur time.Duration, lockType int,
 	lockName, caller, parent string) {
 	const method = "util::traceLockLog:" // for logging
