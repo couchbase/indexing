@@ -3,6 +3,7 @@ package queryutil
 import (
 	"errors"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	qexpr "github.com/couchbase/query/expression"
 	qparser "github.com/couchbase/query/expression/parser"
 )
@@ -68,4 +69,29 @@ func GetXATTRNames(exprs []string) (present bool, names []string, err error) {
 	}
 	present, names = qexpr.XattrsNames(parsedExprs, "")
 	return present, names, nil
+}
+
+// IsPartnKeyDocId returns true if there is only one partition key
+// for an index which is either meta().id or its variant like
+// meta(self).id. If there is more than on partition key (or)
+// if the partition key is not based on meta().id (or its variants)
+// then this method returns false
+func IsPartnKeyDocId(partnKeys []string) bool {
+	if len(partnKeys) != 1 {
+		return false
+	}
+
+	partnExpr, err := qparser.Parse(partnKeys[0])
+	if err != nil {
+		logging.Fatalf("IsPartnKeyDocId: Fail to parse partition key", logging.TagUD(partnKeys[0]))
+		return false
+	}
+
+	id := qexpr.NewField(qexpr.NewMeta(), qexpr.NewFieldName("id", false))
+	idself := qexpr.NewField(qexpr.NewMeta(qexpr.NewSelf()), qexpr.NewFieldName("id", false))
+
+	if partnExpr.EquivalentTo(id) || partnExpr.EquivalentTo(idself) {
+		return true
+	}
+	return false
 }
