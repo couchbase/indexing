@@ -586,6 +586,7 @@ func (pm *PauseMetadata) addShardPaths(nodeId service.NodeID, shardPaths map[com
 // For GetTaskList response to ns_server, we convert a taskObj to a service.Task struct (shared
 // with Rebalance).
 type taskObj struct {
+	rev    uint64 // rev - revision of the task
 	taskMu *sync.RWMutex // protects this taskObj; pointer as taskObj may be cloned
 
 	taskType     service.TaskType
@@ -643,6 +644,7 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, region, remotePath st
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &taskObj{
+		rev:         0,
 		taskMu:      &sync.RWMutex{},
 		taskId:      taskId,
 		taskType:    taskType,
@@ -658,6 +660,23 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, region, remotePath st
 	}, nil
 }
 
+func (t *taskObj) GetTaskRev() uint64 {
+	t.taskMu.RLock()
+	rev := t.rev
+	t.taskMu.RUnlock()
+	return rev
+}
+
+func (t *taskObj) incRevNoLock() {
+	t.rev++
+}
+
+func (t *taskObj) IncRev() {
+	t.taskMu.Lock()
+	defer t.taskMu.Unlock()
+	t.incRevNoLock()
+}
+
 // TaskObjSetFailed sets task.status to service.TaskStatusFailed and task.errMessage to errMsg.
 // this applies lock and internally calls TaskObjSetFailedNoLock
 func (this *taskObj) TaskObjSetFailed(errMsg string) {
@@ -671,6 +690,7 @@ func (this *taskObj) TaskObjSetFailed(errMsg string) {
 func (t *taskObj) TaskObjSetFailedNoLock(errMsg string) {
 	t.errorMessage = errMsg
 	t.taskStatus = service.TaskStatusFailed
+	t.incRevNoLock()
 }
 
 func (this *taskObj) setMasterNoLock() {
@@ -691,7 +711,7 @@ func (this *taskObj) taskObjToServiceTask() []service.Task {
 	tasks := make([]service.Task, 0, 2)
 
 	nsTask := service.Task{
-		Rev:          EncodeRev(0),
+		Rev:          EncodeRev(this.rev),
 		ID:           this.taskId,
 		Type:         this.taskType,
 		Status:       this.taskStatus,
