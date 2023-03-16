@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -480,6 +481,9 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		if idxDefn.Desc == nil {
 			idxDefn.Desc = make([]bool, len(idxDefn.SecExprs))
 		}
+
+		// Populate IsPartnKeyDocId on bootstrap (Pre 7.5 indexes does not have this field)
+		idxDefn.IsPartnKeyDocId = queryutil.IsPartnKeyDocId(idxDefn.PartitionKeys)
 
 		for _, inst := range insts {
 

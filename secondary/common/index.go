@@ -240,6 +240,7 @@ type IndexDefn struct {
 	CollectionId           string     `json:"CollectionId,omitempty"`
 	HasArrItemsCount       bool       `json:"hasArrItemsCount,omitempty"`
 	IndexMissingLeadingKey bool       `json:"indexMissingLeadingKey,omitempty"`
+	IsPartnKeyDocId        bool       `json:"isPartnKeyDocId,omitempty"`
 
 	// Sizing info
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -316,6 +317,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tIndexMissingLeadingKey: %v", idx.IndexMissingLeadingKey)
+	str += fmt.Sprintf("\n\t\tIsPartnKeyDocId: %v", idx.IsPartnKeyDocId)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("\n\t\tHashScheme: %v ", idx.HashScheme.String())
 	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
@@ -360,6 +362,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		NumReplica2:            idx.NumReplica2,
 		HasArrItemsCount:       idx.HasArrItemsCount,
 		IndexMissingLeadingKey: idx.IndexMissingLeadingKey,
+		IsPartnKeyDocId:        idx.IsPartnKeyDocId,
 	}
 }
 
