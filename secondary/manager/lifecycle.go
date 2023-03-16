@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/gometa/protocol"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -1457,6 +1458,8 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	}
 
 	replicaId := m.setReplica(defn)
+
+	defn.IsPartnKeyDocId = queryutil.IsPartnKeyDocId(defn.PartitionKeys)
 
 	partitions, versions, numPartitions := m.setPartition(defn)
 
@@ -3082,6 +3085,8 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	}
 
 	replicaId := m.setReplica(defn)
+
+	defn.IsPartnKeyDocId = queryutil.IsPartnKeyDocId(defn.PartitionKeys)
 
 	partitions, versions, numPartitions := m.setPartition(defn)
 
