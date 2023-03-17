@@ -441,6 +441,11 @@ func (psm *PauseServiceManager) copyShardsWithLock(
 	shardIds []common.ShardId, taskId, bucket, destination string,
 	cancelCh <-chan struct{}, progressUpdate func(float64),
 ) (map[common.ShardId]string, error) {
+
+	// for pause resume testing
+	psm.setTestConfigIfEnabled()
+	defer psm.unsetTestConfigIfEnabled()
+
 	err := psm.lockShards(shardIds)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::copyShardsWithLock: locking shards failed. err -> %v for taskId %v", err, taskId)
@@ -515,6 +520,10 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 	taskId, bucket, origin, region string,
 	cancelCh <-chan struct{}, progressUpdate func(incr float64),
 ) (map[common.ShardId]string, error) {
+
+	// for pause resume testing
+	psm.setTestConfigIfEnabled()
+	defer psm.unsetTestConfigIfEnabled()
 
 	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v for taskId %v",
 		shardPaths, taskId)
@@ -3287,11 +3296,12 @@ func generateShardPath(nodeDir string, trimmedShardPath string) string {
 	return strings.Join([]string{nodeDir, trimmedShardPath, ""}, separator)
 }
 
-func generatePlasmaCopierConfig(task *taskObj) *plasma.Config {
+func generatePlasmaCopierConfig(task *taskObj, config common.Config) *plasma.Config {
 	cfg := plasma.DefaultConfig()
 	cfg.CopyConfig.KeyEncoding = true
 	cfg.CopyConfig.KeyPrefix = task.archivePath
 	cfg.CopyConfig.Region = task.region
+	cfg.CopyConfig.EndPoint = config["pause_resume.blob_storage_endpoint"].String()
 	return &cfg
 }
 
@@ -3518,5 +3528,22 @@ func (prrm *PauseResumeRunningMap) ForEveryKey(callb func(*pauseResumeRunningMet
 
 	for id, rMeta := range prrm.runningMap {
 		callb(rMeta, id)
+	}
+}
+
+func (psm *PauseServiceManager) setTestConfigIfEnabled() {
+	if endpoint, ok := psm.config.Load()["pause_resume.blob_storage_endpoint"]; ok {
+		logging.Infof("PauseServiceManager::setTestConfigIfEnabled: setting blob storage endpoint(%v)", endpoint)
+		cfg := plasma.DefaultConfig()
+		cfg.EndPoint = endpoint.String()
+		plasma.UpdateShardCopyConfig(&cfg)
+	}
+}
+
+func (psm *PauseServiceManager) unsetTestConfigIfEnabled() {
+	if endpoint, ok := psm.config.Load()["pause_resume.blob_storage_endpoint"]; ok {
+		logging.Infof("PauseServiceManager::unsetTestConfigIfEnabled: unsetting blob storage endpoint(%v)", endpoint)
+		cfg := plasma.DefaultConfig()
+		plasma.UpdateShardCopyConfig(&cfg)
 	}
 }

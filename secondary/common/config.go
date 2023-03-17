@@ -72,17 +72,19 @@ type ConfigValue struct {
 
 // SystemConfig is default configuration for system and components.
 // configuration parameters follow flat namespacing like,
-//      "maxVbuckets"  for system-level config parameter
-// 	Example:
-// 		"maxVbuckets": ConfigValue{
-//			1024,
-//			"number of vbuckets configured in KV",
-//			1024,
-//			true,  // immutable
-//			false, // case-insensitive
-//		},
-//      "projector.xxx" for projector component.
-//      "projector.adminport.xxx" for adminport under projector component.
+//
+//	     "maxVbuckets"  for system-level config parameter
+//		Example:
+//			"maxVbuckets": ConfigValue{
+//				1024,
+//				"number of vbuckets configured in KV",
+//				1024,
+//				true,  // immutable
+//				false, // case-insensitive
+//			},
+//	     "projector.xxx" for projector component.
+//	     "projector.adminport.xxx" for adminport under projector component.
+//
 // etc...
 var SystemConfig = Config{
 	// system parameters
@@ -3094,6 +3096,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.pause_resume.blob_storage_endpoint": ConfigValue{
+		"",
+		"custom endpoint for blob storage service",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +
@@ -3938,10 +3947,11 @@ func (config Config) GetIndexerMemoryQuota() uint64 {
 
 // GetIndexerNumCpuPrc gets the Indexer's percentage of CPU to use (e.g. 400 means 4 cores). It is
 // the logical minimum min(node, cgroup, GSI) * 100 available CPUs, where:
-//   node  : # CPUs available on the node
-//   cgroup: # CPUs the Indexer cgroup is allocated (if cgroups are supported, else 0);
-//     indexer.cgroup.max_cpu_percent set from sigar num_cpu_prc
-//   GSI   : indexer.settings.max_cpu_percent "Indexer Threads" UI config (if specified, else 0)
+//
+//	node  : # CPUs available on the node
+//	cgroup: # CPUs the Indexer cgroup is allocated (if cgroups are supported, else 0);
+//	  indexer.cgroup.max_cpu_percent set from sigar num_cpu_prc
+//	GSI   : indexer.settings.max_cpu_percent "Indexer Threads" UI config (if specified, else 0)
 func (config Config) GetIndexerNumCpuPrc() int {
 	const _GetIndexerNumCpuPrc = "Config::GetIndexerNumCpuPrc:"
 
