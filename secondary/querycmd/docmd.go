@@ -437,7 +437,7 @@ func HandleCommand(
 			return fmt.Errorf("Index %v/%v/%v/%v unknown", cmd.Bucket, scope, collection, cmd.IndexName)
 		}
 
-		err = client.DropIndex(uint64(index.Definition.DefnId))
+		err = client.DropIndex(uint64(index.Definition.DefnId), index.Definition.Bucket)
 		if err == nil {
 			fmt.Fprintf(w, "Index dropped %v/%v/%v/%v\n", bucket, scope, collection, iname)
 		} else {

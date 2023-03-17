@@ -204,7 +204,7 @@ type BridgeAccessor interface {
 	// DropIndex to drop index specified by `defnID`.
 	// - if index is in deferred build state, it shall be removed
 	//   from deferred list.
-	DropIndex(defnID uint64) error
+	DropIndex(defnID uint64, bucketName string) error
 
 	// GetScanports shall return list of queryports for all indexer in
 	// the cluster.
@@ -628,14 +628,14 @@ func (c *GsiClient) AlterReplicaCount(action string, defnID uint64, with map[str
 }
 
 // DropIndex implements BridgeAccessor{} interface.
-func (c *GsiClient) DropIndex(defnID uint64) error {
+func (c *GsiClient) DropIndex(defnID uint64, bucketName string) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
 
 	logging.Infof("DropIndex %v ...", defnID)
 	begin := time.Now()
-	err := c.bridge.DropIndex(defnID)
+	err := c.bridge.DropIndex(defnID, bucketName)
 	fmsg := "DropIndex %v - elapsed(%v), err(%v)"
 	logging.Infof(fmsg, defnID, time.Since(begin), err)
 	return err

@@ -199,7 +199,7 @@ func (b *cbqClient) AlterReplicaCount(action string, defnID uint64, plan map[str
 }
 
 // DropIndex implement BridgeAccessor{} interface.
-func (b *cbqClient) DropIndex(defnID uint64) error {
+func (b *cbqClient) DropIndex(defnID uint64, _ string) error {
 	var resp *http.Response
 
 	// Construct request body.

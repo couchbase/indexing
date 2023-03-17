@@ -618,6 +618,7 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.lastRollbackTime.AddFilter(stats.PlannerFilter)
 	s.progressStatTime.AddFilter(stats.PlannerFilter)
 	s.indexState.AddFilter(stats.PlannerFilter)
+	s.avgUnitsUsage.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexStats) SetIndexStatusFilters() {

@@ -186,12 +186,12 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 	const method string = "Rebalancer::RemoveDuplicateIndexes:"
 	errMap := make(map[string]map[common.IndexDefnId]error)
 
-	uniqueDefns := make(map[common.IndexDefnId]bool)
+	uniqueDefns := make(map[common.IndexDefnId]*common.IndexDefn)
 	for _, indexes := range hostIndexMap {
 		for _, index := range indexes {
-			// true is set if we are not able to post dropToken, in which case index is not removed
+			// nil is set if we are not able to post dropToken, in which case index is not removed
 			// initially all indexes to be dropped.
-			uniqueDefns[index.DefnId] = false
+			uniqueDefns[index.DefnId] = index
 		}
 	}
 
@@ -199,7 +199,7 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 	// We place the drop tokens for every identified index except for the case of rebalance being canceled/done
 	// If we fail to place drop token even after 3 retries we will not drop that index to avoid any errors in dropIndex
 	// causing metadata consistency and cleanup problems
-	for defnId, _ := range uniqueDefns {
+	for defnId, defn := range uniqueDefns {
 	loop:
 		for i := 0; i < 3; i++ { // 3 retries in case of error on PostDeleteCommandToken
 			select {
@@ -211,9 +211,9 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 				return
 			default:
 				l.Infof("%v posting dropToken for defnid %v", method, defnId)
-				if err := mc.PostDeleteCommandToken(defnId, true); err != nil {
+				if err := mc.PostDeleteCommandToken(defnId, true, defn.Bucket); err != nil {
 					if i == 2 { // all retries have failed to post drop token
-						uniqueDefns[defnId] = true
+						uniqueDefns[defnId] = nil
 						l.Errorf("%v failed to post delete command token after 3 retries, for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
 					} else {
 						l.Warnf("%v failed to post delete command token for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
@@ -237,7 +237,7 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 				l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
 				return
 			default:
-				if uniqueDefns[index.DefnId] == true { // we were not able to post dropToken for this index.
+				if uniqueDefns[index.DefnId] == nil { // we were not able to post dropToken for this index.
 					break // break select move to next index
 				}
 				if err := r.makeDropIndexRequest(index, host); err != nil {

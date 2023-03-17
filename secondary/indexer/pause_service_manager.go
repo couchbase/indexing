@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/plasma"
 )
 
@@ -556,7 +558,7 @@ type taskObj struct {
 	errorMessage string             // only if a failure occurred
 
 	bucket string // bucket name being Paused or Resumed
-	dryRun bool // is task for Resume dry run (cluster capacity check)?
+	dryRun bool   // is task for Resume dry run (cluster capacity check)?
 	region string // region of the object store bucket
 	// ns_server does not differentiate between PreparePause and PrepareResume
 	// this flag is to internally track if the request if for PreparePause/PrepareResume
@@ -752,6 +754,93 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	logging.Infof("%v Called. "+args, _PreparePause, params.ID, params.Bucket, params.RemotePath)
 	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, params.ID, params.Bucket, params.RemotePath)
 
+	// Check if calling prepare before cancelling/cleaning up previous attempt)
+	if bucketTasks := m.taskFindForBucket(params.Bucket); len(bucketTasks) > 0 {
+		logging.Errorf("PauseServiceManager::PreparePause: Previous attempt not cleaned up:"+
+			" err[%v] found tasks[%v] for bucket[%v]", service.ErrConflict, bucketTasks, params.Bucket)
+		return service.ErrConflict
+	}
+
+	// TODO: recover pause state in bootstrap1 and add checks here
+	// Fail Prepare if bootstrap cleanup is still pending
+
+	// If master pauseToken is present, pause is still running, a pause must not be attempted by caller.
+	if opts, exists := m.findPauseTokensForBucket(params.Bucket); exists {
+		// Cleanup anyway and continue.
+
+		logging.Warnf("PauseServiceManager::PreparePause: master pause token already present for"+
+			" bucket[%v] old pts[%v] during prepare pause. Attempting cleanup", params.Bucket, opts)
+
+		for _, opt := range opts {
+			if err := m.runPauseCleanupPhase(opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// TODO: add pauseRunning gometa flag that gets set during prepare
+	// If pauseRunning is set in gometa, pause is still running , a pause must not be attempted by caller.
+	// Cleanup anyway and continue.
+
+	// There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+	if idsToClean, err := m.checkLocalPauseCleanupPending(params.Bucket); err != nil {
+		return err
+	} else if len(idsToClean) > 0 {
+		logging.Warnf("PauseServiceManager::PreparePause: Found tokens for local cleanup, running cleanup:"+
+			" idsToClean[%v]", idsToClean)
+
+		for pauseId, _ := range idsToClean {
+			if err := m.runPauseCleanupPhase(pauseId, false); err != nil {
+				return err
+			}
+		}
+
+		if idsToClean, err = m.checkLocalPauseCleanupPending(params.Bucket); err != nil {
+			return err
+		} else if len(idsToClean) > 0 {
+			err = fmt.Errorf("found tokens for local cleanup, after cleanup: idsToClean[%v]", idsToClean)
+			logging.Errorf("PauseServiceManager::PreparePause: Failed local cleanup: err[%v]", err)
+			return err
+		}
+	}
+
+	// Check for initial or catchup state
+	if ddlRunning, inProgressIndexName := m.checkDDLRunningForBucket(params.Bucket); ddlRunning {
+		err = fmt.Errorf("DDL is running for indexes [%v]", inProgressIndexName)
+		logging.Errorf("PauseServiceManager::PreparePause: Found indexes with DDL in progress: err[%v]", err)
+		return err
+	}
+
+	// Check for DDL command tokens
+	if inProg, inProgDefns, err := mc.CheckInProgressCommandTokensForBucket(params.Bucket); err != nil {
+		return err
+	} else if inProg {
+		err = fmt.Errorf("found in progress DDL command tokens for bucket[%v] defns[%v]",
+			params.Bucket, inProgDefns)
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+
+		return err
+	}
+
+	// Caller is not expected to start Pause if rebalance is running
+	// This check also covers replica repair
+	if rebalanceRunning, err := m.checkRebalanceRunning(); err != nil {
+		return err
+	} else if rebalanceRunning {
+		err = fmt.Errorf("found in-progress rebalance")
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+
+		return err
+	}
+
+	// Make sure all indexes are caught up
+	if caughtUp, indexes := m.checkIndexesCaughtUp(params.Bucket); !caughtUp {
+		err = fmt.Errorf("found indexes[%v]len[%d] with non-zero pending or queued mutations", indexes, len(indexes))
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+
+		return err
+	}
+
 	// TODO: Check remotePath access?
 
 	// Set bst_PREPARE_PAUSE state
@@ -793,16 +882,36 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	}
 
 	if err = m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
-		m.runPauseCleanupPhase(params.ID, task.isMaster())
+		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
 		return err
 	}
 
 	// Create a Pauser object to run the master orchestration loop.
 
-	pauser := NewPauser(m, task, m.pauseTokensById[params.ID], m.pauseDoneCallback)
+	pt, exists := m.getPauseToken(params.ID)
+	if !exists {
+		err := fmt.Errorf("master pause token not found for id[%v] during pause", params.ID)
+
+		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
+		return err
+	}
+
+	pauser := NewPauser(m, task, pt, m.pauseDoneCallback)
 
 	if err = m.setPauser(params.ID, pauser); err != nil {
-		m.runPauseCleanupPhase(params.ID, task.isMaster())
+		if cerr := m.runPauseCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
 		return err
 	}
 
@@ -835,9 +944,9 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string, typ Pau
 	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId, typ)
 	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
 
-	m.pauseTokenMapMu.Lock()
-	m.pauseTokensById[pauseId] = pauseToken
-	m.pauseTokenMapMu.Unlock()
+	if err = m.setPauseToken(pauseId, pauseToken); err != nil {
+		return err
+	}
 
 	// Add to local metadata
 	if err = m.registerLocalPauseToken(pauseToken); err != nil {
@@ -899,7 +1008,8 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 		}
 	}
 
-	_, puts, err := m.getCurrPauseTokens(pauseId)
+	ptFilter, putFilter := getPauseTokenFiltersByPauseId(pauseId)
+	_, puts, err := m.getCurrPauseTokens(ptFilter, putFilter)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::runPauseCleanupPhase Error Fetching Metakv Tokens: err[%v]", err)
 		return err
@@ -921,7 +1031,25 @@ func (m *PauseServiceManager) runPauseCleanupPhase(pauseId string, isMaster bool
 	return nil
 }
 
-func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken, puts map[string]*common.PauseUploadToken,
+type putFilterFn func(*common.PauseUploadToken) bool
+
+func getPauseTokenFiltersByPauseId(pauseId string) (ptFilterFn, putFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.PauseId == pauseId
+		}, func(put *common.PauseUploadToken) bool {
+			return put.PauseId == pauseId
+		}
+}
+
+func getPauseTokenFiltersByBucket(bucketName string) (ptFilterFn, putFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.BucketName == bucketName
+		}, func(put *common.PauseUploadToken) bool {
+			return put.BucketName == bucketName
+		}
+}
+
+func (m *PauseServiceManager) getCurrPauseTokens(ptFilter ptFilterFn, putFilter putFilterFn) (pt *PauseToken, puts map[string]*common.PauseUploadToken,
 	err error) {
 
 	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
@@ -943,7 +1071,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 				return nil, nil, err
 			}
 
-			if mpt.PauseId == pauseId && mpt.Type == PauseTokenPause {
+			if ptFilter(&mpt) && mpt.Type == PauseTokenPause {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
@@ -958,7 +1086,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(pauseId string) (pt *PauseToken
 				return nil, nil, err
 			}
 
-			if put.PauseId == pauseId {
+			if putFilter(put) {
 				if oldPUT, ok := puts[putId]; ok {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseUploadToken for"+
 						" pauseId[%v] oldPUT[%v] PUT[%v] putId[%v]", put.PauseId, oldPUT, put, putId)
@@ -1071,6 +1199,43 @@ func (m *PauseServiceManager) cleanupPauseUploadTokenForFollower(putId string, p
 	return nil
 }
 
+func (m *PauseServiceManager) checkLocalPauseCleanupPending(bucketName string) (map[string]bool, error) {
+
+	ptFilter, putFilter := getPauseTokenFiltersByBucket(bucketName)
+	_, puts, err := m.getCurrPauseTokens(ptFilter, putFilter)
+
+	if err != nil {
+		logging.Errorf("PauseServiceManager::checkLocalPauseCleanupPending: Failed to fetch from Metakv:"+
+			" err[%v]", err)
+
+		return nil, err
+	}
+
+	idsToClean := make(map[string]bool)
+	for _, put := range puts {
+		ownerId := m.getPauseUploadTokenOwner(put)
+		if ownerId == string(m.nodeInfo.NodeID) {
+			logging.Infof("PauseServiceManager::checkLocalPauseCleanupPending: Found local token"+
+				" pending cleanup: put[%v]", put)
+			idsToClean[put.PauseId] = true
+		}
+	}
+
+	return idsToClean, nil
+}
+
+func (m *PauseServiceManager) getPauseUploadTokenOwner(put *common.PauseUploadToken) string {
+
+	switch put.State {
+	case common.PauseUploadTokenPosted, common.PauseUploadTokenInProgess:
+		return put.FollowerId
+	case common.PauseUploadTokenProcessed, common.PauseUploadTokenError:
+		return put.MasterId
+	}
+
+	return ""
+}
+
 // PrepareResume is an external API called by ns_server (via cbauth) on all index nodes before
 // calling Resume on leader only. The Resume call following PrepareResume will be given the SAME
 // dryRun value. The full sequence is:
@@ -1130,6 +1295,86 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	logging.Infof("%v Called. "+args, _PrepareResume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 
+	// Check if calling prepare before cancelling/cleaning up previous attempt
+	if bucketTasks := m.taskFindForBucket(params.Bucket); len(bucketTasks) > 0 {
+		logging.Errorf("PauseServiceManager::PrepareResume: Previous attempt not cleaned up:"+
+			" err[%v] found tasks[%v] for bucket[%v]", service.ErrConflict, bucketTasks, params.Bucket)
+		return service.ErrConflict
+	}
+
+	// TODO: recover resume state in bootstrap1 and add checks here
+	// Fail Prepare if bootstrap cleanup is still pending
+
+	// If master pauseToken is present, pause is still running, a pause must not be attempted by caller.
+	if opts, exists := m.findPauseTokensForBucket(params.Bucket); exists {
+		// Cleanup anyway and continue.
+
+		logging.Warnf("PauseServiceManager::PrepareResume: master pause token already present for"+
+			" bucket[%v] old pts[%v] during prepare resume. Attempting cleanup", params.Bucket, opts)
+
+		for _, opt := range opts {
+			if err := m.runResumeCleanupPhase(opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// TODO: add resumeRunning gometa flag that gets set during prepare
+	// If resumeRunning is set in gometa, resume is still running , a resume must not be attempted by caller.
+	// Cleanup anyway and continue.
+
+	// There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
+	if idsToClean, err := m.checkLocalResumeCleanupPending(params.Bucket); err != nil {
+		return err
+	} else if len(idsToClean) > 0 {
+		logging.Warnf("PauseServiceManager::PrepareResume: Found tokens for local cleanup, running cleanup:"+
+			" idsToClean[%v]", idsToClean)
+
+		for resumeId, _ := range idsToClean {
+			if err := m.runResumeCleanupPhase(resumeId, false); err != nil {
+				return err
+			}
+		}
+
+		if idsToClean, err = m.checkLocalResumeCleanupPending(params.Bucket); err != nil {
+			return err
+		} else if len(idsToClean) > 0 {
+			err = fmt.Errorf("found tokens for local cleanup, after cleanup: idsToClean[%v]", idsToClean)
+			logging.Errorf("PauseServiceManager::PrepareResume: Failed local cleanup: err[%v]", err)
+			return err
+		}
+	}
+
+	// Check for initial or catchup state
+	if ddlRunning, inProgressIndexName := m.checkDDLRunningForBucket(params.Bucket); ddlRunning {
+		err = fmt.Errorf("DDL is running for indexes [%v]", inProgressIndexName)
+		logging.Errorf("PauseServiceManager::PrepareResume: Found indexes with DDL in progress: err[%v]", err)
+		return err
+	}
+
+	// Check for DDL command tokens
+	if inProg, inProgDefns, err := mc.CheckInProgressCommandTokensForBucket(params.Bucket); err != nil {
+		return err
+	} else if inProg {
+		err = fmt.Errorf("found in progress DDL command tokens for bucket[%v] defns[%v]",
+			params.Bucket, inProgDefns)
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	}
+
+	// Caller is not expected to start Resume if rebalance is running
+	if rebalanceRunning, err := m.checkRebalanceRunning(); err != nil {
+		return err
+	} else if rebalanceRunning {
+		err = fmt.Errorf("found in-progress rebalance")
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	}
+
+	// Indexes for this bucket do not exist yet, no need to check if they are caught up
+
 	// TODO: Check remotePath access?
 
 	if !params.DryRun {
@@ -1178,10 +1423,14 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 				err, params.ID)
 			return err
 		}
-	
+
 		if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
 			logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
-			m.runResumeCleanupPhase(params.ID, task.isMaster())
+			if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+				logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+				return cerr
+			}
+
 			return err
 		}
 
@@ -1189,11 +1438,27 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 	// Create a Resumer object to run the master orchestration loop.
 
-	resumer := NewResumer(m, task, m.pauseTokensById[params.ID], m.resumeDoneCallback)
+	pt, exists := m.getPauseToken(params.ID)
+	if !exists {
+		err := fmt.Errorf("master pause token not found for id[%v] during resume", params.ID)
+
+		if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
+		return err
+	}
+
+	resumer := NewResumer(m, task, pt, m.resumeDoneCallback)
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
-		m.runResumeCleanupPhase(params.ID, task.isMaster())
+		if cerr := m.runResumeCleanupPhase(params.ID, task.isMaster()); cerr != nil {
+			logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
+			return cerr
+		}
+
 		return err
 	}
 
@@ -1245,7 +1510,8 @@ func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bo
 		}
 	}
 
-	_, rdts, err := m.getCurrResumeTokens(resumeId)
+	ptFilter, rdtFilter := getResumeTokenFiltersByResumeId(resumeId)
+	_, rdts, err := m.getCurrResumeTokens(ptFilter, rdtFilter)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Error Fetching Metakv Tokens: err[%v]", err)
 		return err
@@ -1267,7 +1533,25 @@ func (m *PauseServiceManager) runResumeCleanupPhase(resumeId string, isMaster bo
 	return nil
 }
 
-func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseToken,
+type rdtFilterFn func(*common.ResumeDownloadToken) bool
+
+func getResumeTokenFiltersByResumeId(resumeId string) (ptFilterFn, rdtFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.PauseId == resumeId
+		}, func(rdt *common.ResumeDownloadToken) bool {
+			return rdt.ResumeId == resumeId
+		}
+}
+
+func getResumeTokenFiltersByBucket(bucketName string) (ptFilterFn, rdtFilterFn) {
+	return func(pt *PauseToken) bool {
+			return pt.BucketName == bucketName
+		}, func(rdt *common.ResumeDownloadToken) bool {
+			return rdt.BucketName == bucketName
+		}
+}
+
+func (m *PauseServiceManager) getCurrResumeTokens(ptFilter ptFilterFn, rdtFilter rdtFilterFn) (pt *PauseToken,
 	rdts map[string]*common.ResumeDownloadToken, err error) {
 
 	metaInfo, err := metakv.ListAllChildren(PauseMetakvDir)
@@ -1289,7 +1573,7 @@ func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseTok
 				return nil, nil, err
 			}
 
-			if mpt.PauseId == resumeId && mpt.Type == PauseTokenResume {
+			if ptFilter(&mpt) && mpt.Type == PauseTokenResume {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for resumeId[%v]"+
 						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
@@ -1304,7 +1588,7 @@ func (m *PauseServiceManager) getCurrResumeTokens(resumeId string) (pt *PauseTok
 				return nil, nil, err
 			}
 
-			if rdt.ResumeId == resumeId {
+			if rdtFilter(rdt) {
 				if oldRDT, ok := rdts[rdtId]; ok {
 					return nil, nil, fmt.Errorf("encountered duplicate ResumeDownloadToken for"+
 						" resumeId[%v] oldRDT[%v] rdt[%v] rdtId[%v]", rdt.ResumeId, oldRDT, rdt, rdtId)
@@ -1419,6 +1703,42 @@ func (m *PauseServiceManager) cleanupResumeDownloadTokenForFollower(rdtId string
 	return nil
 }
 
+func (m *PauseServiceManager) checkLocalResumeCleanupPending(bucketName string) (map[string]bool, error) {
+
+	ptFilter, rdtFilter := getResumeTokenFiltersByBucket(bucketName)
+	_, rdts, err := m.getCurrResumeTokens(ptFilter, rdtFilter)
+	if err != nil {
+		logging.Errorf("PauseServiceManager::checkLocalResumeCleanupPending: Failed to fetch from Metakv:"+
+			" err[%v]", err)
+
+		return nil, err
+	}
+
+	idsToClean := make(map[string]bool)
+	for _, rdt := range rdts {
+		ownerId := m.getResumeDownloadTokenOwner(rdt)
+		if ownerId == string(m.nodeInfo.NodeID) {
+			logging.Infof("PauseServiceManager::checkLocalResumeCleanupPending: Found local token"+
+				" pending cleanup: rdt[%v]", rdt)
+			idsToClean[rdt.ResumeId] = true
+		}
+	}
+
+	return idsToClean, nil
+}
+
+func (m *PauseServiceManager) getResumeDownloadTokenOwner(rdt *common.ResumeDownloadToken) string {
+
+	switch rdt.State {
+	case common.ResumeDownloadTokenPosted, common.ResumeDownloadTokenInProgess:
+		return rdt.FollowerId
+	case common.ResumeDownloadTokenProcessed, common.ResumeDownloadTokenError:
+		return rdt.MasterId
+	}
+
+	return ""
+}
+
 // endTask is the endpoint of pause resume
 func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	var task *taskObj
@@ -1437,7 +1757,10 @@ func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	}
 
 	if opErr != nil {
-		task.errorMessage = opErr.Error()
+		if !m.taskSetFailed(taskId, opErr.Error()) {
+			logging.Errorf("PauseServiceManager::endTask: Failed to find task while setting failed status")
+		}
+
 		logging.Infof("PauseServiceManager::endTask: skipping task cleanup now for task ID: %v", taskId)
 	}
 
@@ -1604,9 +1927,12 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				return
 			}
 
-			m.pauseTokenMapMu.Lock()
-			m.pauseTokensById[pauseToken.PauseId] = &pauseToken
-			m.pauseTokenMapMu.Unlock()
+			if err := m.setPauseToken(pauseToken.PauseId, &pauseToken); err != nil {
+				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set pause token: err[%v]", err)
+				writeError(w, err)
+
+				return
+			}
 
 			if err := m.registerLocalPauseToken(&pauseToken); err != nil {
 				logging.Errorf("PauseServiceManager::RestHandlePause: Failed to store pause token in local"+
@@ -1962,6 +2288,20 @@ func (m *PauseServiceManager) taskFind(taskId string) *taskObj {
 	return m.tasks[taskId]
 }
 
+func (m *PauseServiceManager) taskFindForBucket(bucketName string) map[string]*taskObj {
+	m.tasksMu.RLock()
+	defer m.tasksMu.RUnlock()
+
+	bucketTasks := make(map[string]*taskObj)
+	for taskId, task := range m.tasks {
+		if task.bucket == bucketName {
+			bucketTasks[taskId] = task
+		}
+	}
+
+	return bucketTasks
+}
+
 // taskSetFailed looks up a task by taskId and if found marks it as failed with the given errMsg and
 // returns true, else returns false (not found).
 func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
@@ -2051,6 +2391,8 @@ const PauseTokenTag = "PauseToken"
 const PauseMetakvDir = common.IndexingMetaDir + "pause/"
 const PauseTokenPathPrefix = PauseMetakvDir + PauseTokenTag
 
+type ptFilterFn func(*PauseToken) bool
+
 type PauseTokenType uint8
 
 const (
@@ -2079,6 +2421,47 @@ func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string
 		PauseId:    pauseId,
 		Type:       typ,
 	}
+}
+
+func (m *PauseServiceManager) getPauseToken(id string) (*PauseToken, bool) {
+	m.pauseTokenMapMu.RLock()
+	defer m.pauseTokenMapMu.RUnlock()
+
+	pt, exists := m.pauseTokensById[id]
+
+	return pt, exists
+}
+
+func (m *PauseServiceManager) setPauseToken(id string, pt *PauseToken) error {
+	m.pauseTokenMapMu.Lock()
+	defer m.pauseTokenMapMu.Unlock()
+
+	if oldPT, ok := m.pauseTokensById[id]; ok {
+
+		if pt == nil {
+			delete(m.pauseTokensById, id)
+		} else {
+			return fmt.Errorf("conflict: PauseToken[%v] with id[%v] already present!", oldPT, id)
+		}
+
+	} else {
+		m.pauseTokensById[id] = pt
+	}
+
+	return nil
+}
+
+func (m *PauseServiceManager) findPauseTokensForBucket(bucketName string) (pts []*PauseToken, exists bool) {
+	m.pauseTokenMapMu.RLock()
+	defer m.pauseTokenMapMu.RUnlock()
+
+	for _, pt := range m.pauseTokensById {
+		if pt.BucketName == bucketName {
+			pts = append(pts, pt)
+		}
+	}
+
+	return pts, len(pts) > 0
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2147,9 +2530,9 @@ func (m *PauseServiceManager) cleanupLocalPauseToken(pauseId string) error {
 		common.CrashOnError(err)
 	}
 
-	m.pauseTokenMapMu.Lock()
-	delete(m.pauseTokensById, pauseId)
-	m.pauseTokenMapMu.Unlock()
+	if err := m.setPauseToken(pauseId, nil); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -2308,4 +2691,56 @@ func generatePlasmaCopierConfig(task *taskObj) *plasma.Config {
 	cfg.CopyConfig.KeyPrefix = task.archivePath
 	cfg.CopyConfig.Region = task.region
 	return &cfg
+}
+
+func (m *PauseServiceManager) checkDDLRunningForBucket(bucketName string) (bool, []string) {
+
+	respCh := make(MsgChannel)
+	m.supvMsgch <- &MsgCheckDDLInProgress{respCh: respCh, bucketName: bucketName}
+	msg := <-respCh
+
+	ddlInProgress := msg.(*MsgDDLInProgressResponse).GetDDLInProgress()
+	inProgressIndexNames := msg.(*MsgDDLInProgressResponse).GetInProgressIndexNames()
+
+	return ddlInProgress, inProgressIndexNames
+}
+
+func (m *PauseServiceManager) checkRebalanceRunning() (rebalanceRunning bool, err error) {
+
+	respch := make(MsgChannel)
+	m.supvMsgch <- &MsgClustMgrLocal{
+		mType:  CLUST_MGR_GET_LOCAL,
+		key:    RebalanceRunning,
+		respch: respch,
+	}
+
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err = resp.GetError(); err != nil {
+		if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+			return false, nil
+		}
+
+		logging.Errorf("PauseServiceManager::checkRebalanceRunning: Failed to get rebalanceRunning from"+
+			" local meta: [%v]", err)
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (m *PauseServiceManager) checkIndexesCaughtUp(bucketName string) (_ bool, notCaughtUpIndexes []string) {
+
+	allStats := m.genericMgr.statsMgr.stats.Get()
+
+	for _, idxSts := range allStats.indexes {
+		if idxSts.bucket == bucketName &&
+			(idxSts.numDocsPending.Value() > 0 || idxSts.numDocsQueued.Value() > 0) {
+			notCaughtUpIndexes = append(notCaughtUpIndexes, fmt.Sprintf("bkt[%v]idx[%v]pen[%v]que[%v]",
+				bucketName, idxSts.name, idxSts.numDocsPending.Value(), idxSts.numDocsQueued.Value()))
+		}
+	}
+
+	return len(notCaughtUpIndexes) <= 0, notCaughtUpIndexes
 }

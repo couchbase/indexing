@@ -2348,6 +2348,9 @@ func (m *MsgIndexerState) GetRollbackTimes() map[string]int64 {
 
 type MsgCheckDDLInProgress struct {
 	respCh MsgChannel
+
+	// Used to filter indexes by bucketName. If "", then do not filter.
+	bucketName string
 }
 
 func (m *MsgCheckDDLInProgress) GetMsgType() MsgType {
@@ -2356,6 +2359,10 @@ func (m *MsgCheckDDLInProgress) GetMsgType() MsgType {
 
 func (m *MsgCheckDDLInProgress) GetRespCh() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgCheckDDLInProgress) GetBucketName() string {
+	return m.bucketName
 }
 
 type MsgDDLInProgressResponse struct {

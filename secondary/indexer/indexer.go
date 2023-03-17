@@ -6361,6 +6361,11 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 	} else {
 		ddlInProgress, inProgressIndexNames = idx.checkDDLInProgress()
 	}
+
+	if bucketName := ddlMsg.GetBucketName(); bucketName != "" {
+		ddlInProgress, inProgressIndexNames = filterRunParamsByBucket(ddlInProgress, inProgressIndexNames, bucketName)
+	}
+
 	respCh <- &MsgDDLInProgressResponse{
 		ddlInProgress:        ddlInProgress,
 		inProgressIndexNames: inProgressIndexNames}

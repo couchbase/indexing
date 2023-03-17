@@ -121,9 +121,9 @@ func TestMetadataProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal("Cannot create Index Defn 102 through MetadataProvider" + err.Error())
 	}
-	input := make([]common.IndexDefnId, 1)
-	input[0] = newDefnId
-	if err := provider.BuildIndexes(input); err != nil {
+	defns := make(map[common.IndexDefnId]*common.IndexDefn)
+	defns[newDefnId] = provider.FindIndex(newDefnId).Definition
+	if err := provider.BuildIndexes(defns); err != nil {
 		t.Fatal("Cannot build Index Defn : %v", err)
 	}
 	logging.Infof("done creating index 102")
