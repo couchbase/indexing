@@ -2406,6 +2406,22 @@ loop:
 }
 
 func (sr *ShardRebalancer) finishRebalance(err error) {
+
+	if err == nil && sr.isMaster && sr.topologyChange != nil {
+		// Note that this function tansfers the ownership of only those
+		// tokens, which are not owned by keep nodes. Ownership of other
+		// tokens remains unchanged.
+		keepNodes := make(map[string]bool)
+		for _, node := range sr.topologyChange.KeepNodes {
+			keepNodes[string(node.NodeInfo.NodeID)] = true
+		}
+
+		// Suppress error if any. The background task to handle failover
+		// will do necessary retry for transferring ownership.
+		cfg := sr.config.Load()
+		_ = transferScheduleTokens(keepNodes, cfg["clusterAddr"].String())
+	}
+
 	sr.retErr = err
 	sr.cleanupOnce.Do(sr.doFinish)
 }
