@@ -4206,16 +4206,39 @@ func (m *LifecycleMgr) updateIndexStateAndShardIds(bucket, scope, collection str
 
 func (m *LifecycleMgr) canBuildIndex(bucket, scope, collection string) bool {
 
-	t, _ := m.repo.GetTopologyByCollection(bucket, scope, collection)
-	if t == nil {
-		return true
-	}
+	if common.IsServerlessDeployment() {
+		topologies, _ := m.repo.GetTopologiesByBucket(bucket)
+		if len(topologies) == 0 {
+			return true
+		}
 
-	for i, _ := range t.Definitions {
-		for j, _ := range t.Definitions[i].Instances {
-			if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
-				t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
-				return false
+		parallelCollBuildMap := make(map[string]bool)
+		for _, t := range topologies {
+			for i, _ := range t.Definitions {
+				topoKey := indexTopologyKey(t.Bucket, t.Scope, t.Collection)
+				for j, _ := range t.Definitions[i].Instances {
+					if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
+						t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
+						parallelCollBuildMap[topoKey] = true
+					}
+				}
+			}
+		}
+
+		return len(parallelCollBuildMap) < m.configHolder.Load().GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+	} else {
+
+		t, _ := m.repo.GetTopologyByCollection(bucket, scope, collection)
+		if t == nil {
+			return true
+		}
+
+		for i, _ := range t.Definitions {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
+					t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
+					return false
+				}
 			}
 		}
 	}

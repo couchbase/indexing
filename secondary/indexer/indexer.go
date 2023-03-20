@@ -3440,7 +3440,24 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		// Limit the number of concurrent build streams.
+		inst := idx.indexInstMap[instIdList[0]]
+		collectionId := inst.Defn.CollectionId
+		bucket := inst.Defn.Bucket
+
+		// Limit the number of concurrent build streams at bucket level
+		if ok := idx.checkParallelPerBucketBuilds(bucket, instIdList, clientCh, errMap); !ok {
+			maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
+				" KeyspaceID: %v. Instances in error: %v", maxParallelPerBucketBuilds, keyspaceId, instIdList)
+			if idx.enableManager {
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else {
+				return
+			}
+		}
+
+		// Limit the number of concurrent build streams at indexer level
 		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
 			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
@@ -3452,9 +3469,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				return
 			}
 		}
-
-		inst := idx.indexInstMap[instIdList[0]]
-		collectionId := inst.Defn.CollectionId
 
 		cluster := idx.config["clusterAddr"].String()
 		numVBuckets := idx.bucketNameNumVBucketsMap[inst.Defn.Bucket]
@@ -6286,6 +6300,64 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 				respCh <- &MsgError{
 					err: Error{code: ERROR_INDEX_BUILD_IN_PROGRESS,
 						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// For each bucket, not more than "max_parallel_per_bucket_builds" keyspaces
+// can be built in parallel.  checkParallelBucketBuilds returns false if
+// the current number of keyspaces on which index builds are happening on
+// a bucket is greater than the configuration value "max_parallel_per_bucket_builds"
+
+// The caller should schedule building the indexes in background when this method
+// returns false.
+func (idx *indexer) checkParallelPerBucketBuilds(bucket string,
+	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
+
+	maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+	if maxParallelPerBucketBuilds == 0 {
+		return true
+	}
+
+	parallelCollectionBuildMap := make(map[string]bool)
+	// Find all the keyspaces on which initial build is in progress
+	for _, index := range idx.indexInstMap {
+
+		if (index.State == common.INDEX_STATE_INITIAL ||
+			index.State == common.INDEX_STATE_CATCHUP) &&
+			bucket == index.Defn.Bucket {
+
+			keyspaceId := index.Defn.KeyspaceId(common.INIT_STREAM)
+			if _, ok := parallelCollectionBuildMap[keyspaceId]; !ok {
+				parallelCollectionBuildMap[keyspaceId] = true
+			}
+		}
+	}
+	currParallelCollectionBuilds := len(parallelCollectionBuildMap)
+
+	if currParallelCollectionBuilds >= maxParallelPerBucketBuilds {
+		// These instances can not be built now as the limit on maxParallelPerBucketBuilds
+		// has been reached. Add all the instances to errMap for scheduling their build
+		// in the background
+		errStr := fmt.Sprintf("Build Already In Progress for %v collections.", currParallelCollectionBuilds)
+		logging.Errorf("Indexer::checkParallelPerBucketBuilds %v, %v. "+
+			"Current collection build map: %v", instIdList, bucket, parallelCollectionBuildMap)
+		if idx.enableManager {
+			idx.bulkUpdateError(instIdList, errStr)
+			for _, instId := range instIdList {
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.MaxParallelCollectionBuilds}
+			}
+			return false
+		} else {
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_MAX_PARALLEL_COLLECTION_BUILDS,
+						severity: NORMAL,
 						cause:    errors.New(errStr),
 						category: INDEXER}}
 			}
