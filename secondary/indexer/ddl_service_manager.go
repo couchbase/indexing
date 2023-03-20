@@ -1382,10 +1382,9 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 			}
 
 			path := mc.GetScheduleCreateTokenPathFromDefnId(token.Definition.DefnId)
-
-			logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in GetScheduleCreateTokenPathFromDefnId for %v. req: %v", err, token.Definition.DefnId, common.GetHTTPReqInfo(r))
 			buf, err := json.Marshal(token)
 			if err != nil {
+				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in json.Marshal after GetScheduleCreateTokenPathFromDefnId for %v. req: %v", err, token.Definition.DefnId, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
@@ -1405,7 +1404,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 			buf, err := json.Marshal(token)
 			if err != nil {
-				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in GetScheduleCreateTokenPathFromDefnId for %v. req: %v", err, token.DefnId, common.GetHTTPReqInfo(r))
+				logging.Errorf("DDLServiceMgr::handleListMetadataTokens error %v in json.Marshal after GetScheduleCreateTokenPathFromDefnId for %v. req: %v", err, token.DefnId, common.GetHTTPReqInfo(r))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
