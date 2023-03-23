@@ -518,7 +518,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 	} else {
 		logging.LazyDebug(func() string {
 			return fmt.Sprintf("Flusher::processUpsert Partition Instance not found "+
-				"for Id: %v Skipped Mutation Key: %v", partnId, logging.TagUD(mut.key))
+				"for instId: %v, Id: %v Skipped Mutation Key: %v", mut.uuid, partnId, logging.TagUD(mut.key))
 		})
 	}
 
@@ -527,6 +527,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta) {
 
 	var partnInstMap PartitionInstMap
+	var indexInst common.IndexInst
 	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
 		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
@@ -534,11 +535,38 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 		return
 	}
 
-	for _, partnInst := range partnInstMap {
-		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
-		if err := slice.Delete(docid, meta); err != nil {
-			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-				"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+	if indexInst, ok = f.indexInstMap[mut.uuid]; !ok {
+		logging.Errorf("Flusher:processDelete Missing in Index Instance Map"+
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
+		return
+	}
+
+	isPartnKeyDocId := indexInst.Defn.IsPartnKeyDocId
+
+	// Process delete only for the partition as partnKey is always available
+	// if partnKey is based on meta().id or its variant like meta(self).id
+	if isPartnKeyDocId && len(mut.partnkey) > 0 {
+		partnId := indexInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
+
+		if partnInst, ok := partnInstMap[partnId]; ok {
+			slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
+			if err := slice.Delete(docid, meta); err != nil {
+				logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
+					"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+			}
+		} else {
+			logging.LazyDebug(func() string {
+				return fmt.Sprintf("Flusher::processDelete Partition Instance not found "+
+					"for inst: %v, partnId: %v Skipped Mutation Key: %v", mut.uuid, partnId, logging.TagUD(mut.key))
+			})
+		}
+	} else {
+		for _, partnInst := range partnInstMap {
+			slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
+			if err := slice.Delete(docid, meta); err != nil {
+				logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
+					"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+			}
 		}
 	}
 }

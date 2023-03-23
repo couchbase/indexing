@@ -1091,6 +1091,26 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.serverless.max_parallel_per_bucket_builds": ConfigValue{
+		1,
+		"Maximum number of collections that can be built simultaneously per bucket." +
+			"Note: This setting does not limit the number of indexes that are being " +
+			"built in each collection. Set to '0' to disable this setting. Enabled only " +
+			"for serverless deployments",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.max_parallel_per_bucket_builds": ConfigValue{
+		0,
+		"Maximum number of collections that can be built simultaneously per bucket." +
+			"Note: This setting does not limit the number of indexes that are being " +
+			"built in each collection. Set to '0' to disable this setting. Not enabled " +
+			"for serverless by default",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//fdb specific config
 	"indexer.stream_reader.fdb.syncBatchInterval": ConfigValue{
@@ -3948,6 +3968,7 @@ func (config Config) String() string {
 
 var indexerServerLessConfigMap = map[string]string{
 	"max_parallel_collection_builds": "serverless.max_parallel_collection_builds",
+	"max_parallel_per_bucket_builds": "serverless.max_parallel_per_bucket_builds",
 }
 
 func (config Config) GetDeploymentModelAwareCfgInt(k string) int {

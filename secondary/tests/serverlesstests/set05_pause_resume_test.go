@@ -222,14 +222,47 @@ func TestPauseResume(rootT *testing.T) {
 
 		indexName := "index_eyeColor"
 
-		err = secondaryindex.CreateSecondaryIndex(indexName, BUCKET, indexManagementAddress, "", []string{"eyeColor"}, false, nil, true, defaultIndexActiveTimeout, nil)
+		err = secondaryindex.CreateSecondaryIndex3(indexName, BUCKET, SCOPE, COLLECTION, indexManagementAddress, "",
+			[]string{"eyeColor"}, nil, false, nil, common.SINGLE, nil, true, defaultIndexActiveTimeout, nil)
 		tc.HandleError(err, "Error in creating the index")
 
 		err = mc.DeleteAllCommandTokens()
 		tc.HandleError(err, "Failed to delete all command token during setup")
 
-		// TestMain changes stats_cache_timeout to 500ms, wait till stats refresh
-		time.Sleep(2 * time.Second)
+		statIsZero := func (substr string, stats map[string]interface{}) bool {
+			for stat, val := range stats {
+				if strings.Contains(stat, substr) && val.(float64) < 1 {
+					return true
+				}
+			}
+			return false
+		}
+
+		log.Printf("Waiting for index to catch up to kv")
+
+		for start, i := time.Now(), 0; ; i++ {
+			stats := secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+			for stat, val := range stats {
+				for _, st := range []string{"num_docs_", "items_count"} {
+					if strings.Contains(stat, st) {
+						log.Printf("\ti[%d] stat[%v] val[%v]", i, stat, val)
+					}
+				}
+			}
+
+			if statIsZero("num_docs_pending", stats) && statIsZero("num_docs_queued", stats) {
+				log.Printf("Done waiting, both num_docs_pending and num_docs_queued are 0")
+				break
+			}
+
+			if time.Since(start) > 5 * time.Minute {
+				rootT.Fatalf("Indexes not caught up after 5 Mins!")
+				break
+			}
+
+			time.Sleep(1 * time.Second)
+		}
 
 		log.Printf("Created keyspace %v.%v.%v with %v docs and %v index", BUCKET, SCOPE, COLLECTION, numDocs, indexName)
 	}

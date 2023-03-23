@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/gometa/protocol"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -1566,6 +1567,8 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	}
 
 	replicaId := m.setReplica(defn)
+
+	defn.IsPartnKeyDocId = queryutil.IsPartnKeyDocId(defn.PartitionKeys)
 
 	partitions, versions, numPartitions := m.setPartition(defn)
 
@@ -3336,6 +3339,8 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 
 	replicaId := m.setReplica(defn)
 
+	defn.IsPartnKeyDocId = queryutil.IsPartnKeyDocId(defn.PartitionKeys)
+
 	partitions, versions, numPartitions := m.setPartition(defn)
 
 	if realInstId != 0 {
@@ -4201,16 +4206,39 @@ func (m *LifecycleMgr) updateIndexStateAndShardIds(bucket, scope, collection str
 
 func (m *LifecycleMgr) canBuildIndex(bucket, scope, collection string) bool {
 
-	t, _ := m.repo.GetTopologyByCollection(bucket, scope, collection)
-	if t == nil {
-		return true
-	}
+	if common.IsServerlessDeployment() {
+		topologies, _ := m.repo.GetTopologiesByBucket(bucket)
+		if len(topologies) == 0 {
+			return true
+		}
 
-	for i, _ := range t.Definitions {
-		for j, _ := range t.Definitions[i].Instances {
-			if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
-				t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
-				return false
+		parallelCollBuildMap := make(map[string]bool)
+		for _, t := range topologies {
+			for i, _ := range t.Definitions {
+				topoKey := indexTopologyKey(t.Bucket, t.Scope, t.Collection)
+				for j, _ := range t.Definitions[i].Instances {
+					if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
+						t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
+						parallelCollBuildMap[topoKey] = true
+					}
+				}
+			}
+		}
+
+		return len(parallelCollBuildMap) < m.configHolder.Load().GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+	} else {
+
+		t, _ := m.repo.GetTopologyByCollection(bucket, scope, collection)
+		if t == nil {
+			return true
+		}
+
+		for i, _ := range t.Definitions {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
+					t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
+					return false
+				}
 			}
 		}
 	}
