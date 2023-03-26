@@ -115,7 +115,6 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	SetPauseMgr(m)
 
 	// Internal REST APIs
-	mux.HandleFunc("/pauseMgr/FailedTask", m.RestHandleFailedTask)
 	mux.HandleFunc("/pauseMgr/Pause", m.RestHandlePause)
 
 	// Unit test REST APIs -- THESE MUST STILL DO AUTHENTICATION!!
@@ -684,17 +683,17 @@ func (t *taskObj) IncRev() {
 
 // TaskObjSetFailed sets task.status to service.TaskStatusFailed and task.errMessage to errMsg.
 // this applies lock and internally calls TaskObjSetFailedNoLock
-func (this *taskObj) TaskObjSetFailed(errMsg string) {
+func (this *taskObj) TaskObjSetFailed(errMsg string, status service.TaskStatus) {
 	this.taskMu.Lock()
-	this.TaskObjSetFailedNoLock(errMsg)
+	this.TaskObjSetFailedNoLock(errMsg, status)
 	this.taskMu.Unlock()
 }
 
 // TaskObjSetFailedNoLock sets the status to service.TaskStatusFailed and errorMessage to errMsg
 // callers should hold the lock
-func (t *taskObj) TaskObjSetFailedNoLock(errMsg string) {
+func (t *taskObj) TaskObjSetFailedNoLock(errMsg string, status service.TaskStatus) {
 	t.errorMessage = errMsg
-	t.taskStatus = service.TaskStatusFailed
+	t.taskStatus = status
 	t.incRevNoLock()
 }
 
@@ -1883,7 +1882,13 @@ func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	}
 
 	if opErr != nil {
-		if !m.taskSetFailed(taskId, opErr.Error()) {
+		status := service.TaskStatusFailed
+		errStr := opErr.Error()
+		if !task.isPause && strings.Contains(errStr, "Not Enough Capacity To Place Tenant") ||
+			strings.Contains(errStr, "No SubCluster Below Low Usage Threshold") {
+				status = service.TaskStatusCannotResume
+		}
+		if !m.taskSetFailed(taskId, errStr, status) {
 			logging.Errorf("PauseServiceManager::endTask: Failed to find task while setting failed status")
 		}
 
@@ -1958,46 +1963,6 @@ func (m *PauseServiceManager) RestNotifyPause(otherIndexAddrs []string, task *ta
 // REST orchestration receiver methods. These are all invoked on followers to handle and respond to
 // instructions from the master.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// RestHandleFailedTask handles REST API /pauseMgr/FailedTask by marking the task as failed.
-func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *http.Request) {
-	const _RestHandleFailedTask = "PauseServiceManager::RestHandleFailedTask:"
-
-	logging.Infof("%v called", _RestHandleFailedTask)
-	defer logging.Infof("%v returned", _RestHandleFailedTask)
-
-	// Authenticate
-	creds, ok := doAuth(r, w, _RestHandleFailedTask)
-	if !ok {
-		return
-	}
-
-	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, _RestHandleFailedTask) {
-		return
-	}
-
-	// Parameters
-	id := r.FormValue("id")
-	errMsg := r.FormValue("errMsg")
-
-	task := m.taskFind(id)
-	if task != nil {
-		// Do the work for this task
-		logging.Infof("%v Marking taskId %v (taskType %v) failed. errMsg: %v", _RestHandleFailedTask,
-			id, task.taskType, errMsg)
-		task.TaskObjSetFailed(errMsg)
-		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: id}
-		rhSend(http.StatusOK, w, resp)
-
-		return
-	}
-
-	// Task not found error reply
-	errMsg2 := fmt.Sprintf("%v taskId %v not found", _RestHandleFailedTask, id)
-	logging.Errorf(errMsg2)
-	resp := &TaskResponse{Code: RESP_ERROR, Error: errMsg2}
-	rhSend(http.StatusInternalServerError, w, resp)
-}
 
 // RestHandlePause handles REST API /pauseMgr/Pause by initiating work on the specified taskId on
 // this follower node.
@@ -2433,10 +2398,10 @@ func (m *PauseServiceManager) taskFindForBucket(bucketName string) map[string]*t
 
 // taskSetFailed looks up a task by taskId and if found marks it as failed with the given errMsg and
 // returns true, else returns false (not found).
-func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
+func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string, status service.TaskStatus) bool {
 	task := m.taskFind(taskId)
 	if task != nil {
-		task.TaskObjSetFailed(errMsg)
+		task.TaskObjSetFailed(errMsg, status)
 		m.genericMgr.incRev()
 		return true
 	}
@@ -2499,7 +2464,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	if err != nil {
 		err = fmt.Errorf("%v postWithAuth to url: %v returned error: %v", logPrefix, url, err)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 	defer resp.Body.Close()
@@ -2509,7 +2474,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		err = fmt.Errorf("%v ReadAll(resp.Body) from url: %v returned error: %v", logPrefix,
 			url, err)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 
@@ -2518,7 +2483,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	if err != nil {
 		err = fmt.Errorf("%v Unmarshal from url: %v returned error: %v", logPrefix, url, err)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 
@@ -2527,7 +2492,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		err = fmt.Errorf("%v TaskResponse from url: %v reports error: %v", logPrefix,
 			url, taskResponse.Error)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 }

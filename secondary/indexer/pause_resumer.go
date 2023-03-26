@@ -554,20 +554,6 @@ func (r *Resumer) checkAllTokensDone() bool {
 	return true
 }
 
-// failResume logs an error using the caller's logPrefix and a provided context string and aborts
-// the Resume task. If there is a set of known Indexer nodes, it will also try to notify them.
-func (this *Resumer) failResume(logPrefix string, context string, error error) {
-	// TODO: replace failResume with task status updates
-	logging.Errorf("%v Aborting Resume task %v due to %v error: %v", logPrefix,
-		this.task.taskId, context, error)
-
-	// Mark the task as failed directly here on master node (avoids dependency on loopback REST)
-	this.task.TaskObjSetFailed(error.Error())
-
-	// Notify other Index nodes
-	// this.pauseMgr.RestNotifyFailedTask(this.otherIndexAddrs, this.task, error.Error())
-}
-
 // masterGenerateResumePlan: this method downloads all the metadata, stats from archivePath and
 // plans which nodes resume indexes for given bucket
 func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken, error) {
@@ -639,7 +625,7 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	}
 
 	// Step 3: get replacement node for old paused data
-	resumeNodes := make([]*planner.IndexerNode, len(pauseMetadata.Data))
+	resumeNodes := make([]*planner.IndexerNode, 0, len(pauseMetadata.Data))
 	config := r.pauseMgr.config.Load()
 	clusterVersion := r.pauseMgr.genericMgr.cinfo.GetClusterVersion()
 	// since we don't support mixed mode for pause resume, we can use the current server version
