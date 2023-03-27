@@ -96,7 +96,7 @@ type PauseResumeDoneCallback func(string, error)
 type PauseResumeProgressCallback func(string, float64, map[string]float64)
 
 type PauseResumeCallbacks struct {
-	done PauseResumeDoneCallback
+	done     PauseResumeDoneCallback
 	progress PauseResumeProgressCallback
 }
 
@@ -139,6 +139,9 @@ type Pauser struct {
 	retErr      error
 	cleanupOnce sync.Once
 	cb          PauseResumeCallbacks
+
+	// For progress tracking
+	masterProgress, followerProgress float64Holder
 }
 
 // NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -163,7 +166,12 @@ func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseTo
 		followerTokens: make(map[string]*common.PauseUploadToken),
 
 		cb: PauseResumeCallbacks{done: doneCb, progress: progressCb},
+
+		masterProgress:   float64Holder{},
+		followerProgress: float64Holder{},
 	}
+	pauser.masterProgress.SetFloat64(0.0)
+	pauser.followerProgress.SetFloat64(0.0)
 
 	task.taskMu.Lock()
 	task.pauser = pauser
@@ -210,6 +218,29 @@ func (p *Pauser) initPauseAsync() {
 
 	// Ask observe to continue
 	close(p.waitForTokenPublish)
+
+	p.masterIncrProgress(5.0)
+
+	func() {
+		if p.task.ctx == nil {
+			logging.Infof("Pauser::initResumeAsync: task %v cancelled. skipping to start progress collector", p.task.taskId)
+			return
+		}
+		closeCh := p.task.ctx.Done()
+		followerNodes := make(map[service.NodeID]string)
+		for _, token := range p.masterTokens {
+			nid, _ := p.pauseMgr.genericMgr.cinfo.GetNodeIdByUUID(token.FollowerId)
+			addr, err := p.pauseMgr.genericMgr.cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Warnf("Pauser::initPauseAsync: failed to get service address for %v. err: %v for task ID %v",
+					token.FollowerId, err, p.task.taskId)
+			}
+			followerNodes[service.NodeID(token.FollowerId)] = addr
+		}
+		go collectComputeAndReportProgress("Pauser::collectComputeAndReportProgress:",
+			p.task.taskId, followerNodes, p.cb.progress, &p.masterProgress, 5*time.Second, &p.wg,
+			closeCh)
+	}()
 }
 
 func (p *Pauser) generatePauseUploadTokens() (map[string]*common.PauseUploadToken, error) {
@@ -453,6 +484,8 @@ func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *common.Pause
 
 		p.updateInMemToken(putId, put, "master")
 
+		p.masterIncrProgress(90.0 / float64(len(p.masterTokens)))
+
 		if p.checkAllTokensDone() {
 			// All the followers completed work
 
@@ -461,6 +494,9 @@ func (p *Pauser) processPauseUploadTokenAsMaster(putId string, put *common.Pause
 			logging.Infof("Pauser::processPauseUploadTokenAsMaster: No Tokens Found. Mark Done.")
 
 			err := p.masterUploadPauseMetadata()
+			if err == nil {
+				p.masterIncrProgress(5.0)
+			}
 
 			p.cancelMetakv()
 
@@ -780,6 +816,9 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	if byteSlice == nil {
 		// there are no indexes on this node for bucket. pause is a no-op
 		logging.Infof("Pauser::followerUploadBucketData: pause is a no-op for bucket %v task ID %v", p.task.bucket, p.task.taskId)
+
+		p.followerIncrProgress(100.0)
+
 		return nil, nil
 	}
 
@@ -794,6 +833,9 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		logging.Errorf("Pauser::followerUploadBucketData: metadata upload failed, err: %v to %v%v for task ID: %v", err, p.nodeDir, FILENAME_METADATA, p.task.taskId)
 		return nil, err
 	}
+
+	p.followerIncrProgress(5.0)
+
 	logging.Infof("Pauser::followerUploadBucketData: metadata successfully uploaded to %v%v for taskId %v", p.nodeDir, FILENAME_METADATA, p.task.taskId)
 
 	// Step 3. Gather index stats
@@ -826,10 +868,12 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		return nil, err
 	}
 
+	p.followerIncrProgress(5.0)
+
 	logging.Infof("Pauser::followerUploadBucketData: stats successfully uploaded to %v%v for taskId %v", p.nodeDir, FILENAME_STATS, p.task.taskId)
 
 	// Step 5. Initiate plasma shard transfer
-	getShardIds := func() []common.ShardId {
+	shardIds := func() []common.ShardId {
 		uniqueShardIds := make(map[common.ShardId]bool)
 		for _, topology := range indexMetadata.IndexTopologies {
 			for _, indexDefn := range topology.Definitions {
@@ -850,12 +894,14 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		logging.Tracef("Pauser::followerUploadBucketData::getShardIds: found shard Ids %v for bucket %v", shardIds, p.task.bucket)
 
 		return shardIds
-	}
+	}()
 
 	// TODO: add contextWithCancel to task and reuse it here
 	closeCh := p.task.ctx.Done()
-	shardPaths, err := p.pauseMgr.copyShardsWithLock(getShardIds(), p.task.taskId, p.task.bucket,
-		p.nodeDir, closeCh)
+	shardPaths, err := p.pauseMgr.copyShardsWithLock(shardIds, p.task.taskId, p.task.bucket,
+		p.nodeDir, closeCh,
+		func(incr float64) { p.followerIncrProgress(incr * 90.0 / float64(len(shardIds))) },
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -875,4 +921,163 @@ func (p *Pauser) Cleanup() {
 	p.cleanupNoLocks()
 	p.task.taskMu.Unlock()
 	p.cancelMetakv()
+}
+
+func collectComputeAndReportProgress(method, taskId string, followerNodes map[service.NodeID]string,
+	progressUpdateCallback PauseResumeProgressCallback, masterProgress *float64Holder,
+	progressUpdateDuration time.Duration, wg *sync.WaitGroup, closeCh <-chan struct{}) {
+
+	wg.Add(1)
+	defer wg.Done()
+
+	logging.Infof("%v starting progress collection and reporting for task ID %v", method, taskId)
+
+	var totalNodes float64 = float64(len(followerNodes))
+	perNodeProgress := make(map[string]float64, len(followerNodes))
+	var pnpLock sync.RWMutex
+	progressUpdateCh := make(chan struct {
+		nodeUuid string
+		progress float64
+	}, len(followerNodes))
+
+	// collect from followers
+	go collectPauserResumerProgress(followerNodes, method, taskId, progressUpdateCh, closeCh,
+		progressUpdateDuration)
+
+	// gather updates
+	go func() {
+		for {
+			select {
+			case <-closeCh:
+				return
+			case progressUpdate, ok := <-progressUpdateCh:
+				if !ok {
+					if len(progressUpdateCh) != 0 {
+						pnpLock.Lock()
+						for progressUpdate = range progressUpdateCh {
+							perNodeProgress[progressUpdate.nodeUuid] = progressUpdate.progress
+						}
+						pnpLock.Unlock()
+					}
+					return
+				}
+				pnpLock.Lock()
+				perNodeProgress[progressUpdate.nodeUuid] = progressUpdate.progress
+				pnpLock.Unlock()
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(progressUpdateDuration)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-closeCh:
+			logging.Infof("%v closing progress collection and reporting for task ID %v", method,
+				taskId)
+			return
+		case <-ticker.C:
+			masterProgress := masterProgress.GetFloat64()
+			pnpLock.RLock()
+			for _, progress := range perNodeProgress {
+				masterProgress += progress * (90.0 / totalNodes)
+			}
+			pnpLock.RUnlock()
+			progressUpdateCallback(taskId, masterProgress, perNodeProgress)
+		}
+	}
+}
+
+func (p *Pauser) masterIncrProgress(incr float64) {
+	incrProgress(&p.masterProgress, incr)
+	p.cb.progress(p.task.taskId, p.masterProgress.GetFloat64(), nil)
+}
+
+func (p *Pauser) followerIncrProgress(incr float64) {
+	incrProgress(&p.followerProgress, incr)
+}
+
+func incrProgress(progress *float64Holder, incr float64) {
+	prog := progress.GetFloat64()
+	if prog == 100.0 {
+		// no need to perform Store operations
+		return
+	}
+	prog += incr
+	if prog > 100.0 {
+		prog = 100.0
+	}
+	progress.SetFloat64(prog)
+}
+
+func collectPauserResumerProgress(followerNodes map[service.NodeID]string, method, taskId string,
+	progressUpdateCh chan<- struct {
+		nodeUuid string
+		progress float64
+	}, closeCh <-chan struct{},
+	progressUpdateDuration time.Duration) {
+	hostAddrs := make(map[service.NodeID]string, len(followerNodes))
+	for nodeUuid, addr := range followerNodes {
+		hostAddrs[nodeUuid] = addr
+	}
+	url := fmt.Sprintf("/pauseMgr/Progress?id=%v", taskId)
+
+	// keep collector tick duration less that reporter to ensure we have updates
+	collectorDuration := progressUpdateDuration - (500 * time.Millisecond)
+	if collectorDuration <= 0 {
+		collectorDuration = 500 * time.Millisecond
+	}
+	for {
+		select {
+		case <-closeCh:
+			// only writers close channels in go
+			close(progressUpdateCh)
+			return
+		default:
+			// if node is slow to response, we could have multiple ticks lined up
+			var collectWg sync.WaitGroup
+			for nodeUuid, hostAddr := range hostAddrs {
+				collectWg.Add(1)
+				go func(nodeUuid service.NodeID, hostAddr string) {
+					defer collectWg.Done()
+
+					resp, err := getWithAuth(hostAddr + url)
+					if err != nil {
+						logging.Warnf("%v http request failed for %v. err: %v for task ID %v",
+							method, hostAddr, err, taskId)
+						return
+					}
+					defer resp.Body.Close()
+
+					var progress float64
+					body, err := ioutil.ReadAll(resp.Body)
+					if err != nil {
+						logging.Warnf("%v failed to read response body. err: %v for task ID %v",
+							method, err, taskId)
+						return
+					}
+					err = json.Unmarshal(body, &progress)
+					if err != nil {
+						logging.Warnf("%v couldn't unmarshal response body(%v) to float64. err: %v for task ID %v",
+							method, body, err, taskId)
+						return
+					}
+
+					if progress >= 100.0 {
+						delete(hostAddrs, nodeUuid)
+					}
+
+					progressUpdateCh <- struct {
+						nodeUuid string
+						progress float64
+					}{nodeUuid: string(nodeUuid), progress: progress}
+				}(nodeUuid, hostAddr)
+			}
+			collectWg.Wait()
+			// not using a ticker - if nodes are slow to respond, we could have multiple ticks
+			// on channel, and batch of requests will go consecutively; instead, we want to
+			// wait for collectorDuration after every batch of collection
+			time.Sleep(collectorDuration)
+		}
+	}
 }

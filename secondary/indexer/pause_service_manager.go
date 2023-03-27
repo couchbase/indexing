@@ -116,6 +116,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 
 	// Internal REST APIs
 	mux.HandleFunc("/pauseMgr/Pause", m.RestHandlePause)
+	mux.HandleFunc("/pauseMgr/Progress", m.RestHandleGetProgress)
 
 	// Unit test REST APIs -- THESE MUST STILL DO AUTHENTICATION!!
 	mux.HandleFunc("/test/Pause", m.testPause)
@@ -305,7 +306,10 @@ func (psm *PauseServiceManager) unlockShards(shardIds []common.ShardId) error {
 	return errors.New(errBuilder.String())
 }
 
-func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, taskId, bucket, destination string, cancelCh <-chan struct{}) (map[common.ShardId]string, error) {
+func (psm *PauseServiceManager) copyShardsWithLock(
+	shardIds []common.ShardId, taskId, bucket, destination string,
+	cancelCh <-chan struct{}, progressUpdate func(float64),
+) (map[common.ShardId]string, error) {
 	err := psm.lockShards(shardIds)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::copyShardsWithLock: locking shards failed. err -> %v for taskId %v", err, taskId)
@@ -317,9 +321,12 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 			logging.Errorf("PauseServiceManager::copyShardsWithLock: unlocking shards failed. err -> %v for taskId %v", err, taskId)
 		}
 	}()
-	logging.Infof("PauseServiceManager::copyShardsWithLock: locked shards with id %v for taskId: %v", shardIds, taskId)
+	logging.Infof("PauseServiceManager::copyShardsWithLock: locked shards with id %v for taskId: %v",
+		shardIds, taskId)
 
 	respCh := make(chan Message)
+	progressCh := make(chan *ShardTransferStatistics, 1000)
+	lastReportedProgress := make(map[common.ShardId]int64)
 
 	msg := &MsgStartShardTransfer{
 		shardIds:    shardIds,
@@ -330,45 +337,61 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 		respCh:      respCh,
 		doneCh:      cancelCh, // abort transfer if msg received on done
 		cancelCh:    cancelCh,
-		progressCh:  nil, // TODO: handle progress reporting
+		progressCh:  progressCh,
 	}
 
 	psm.supvMsgch <- msg
 
-	resp, ok := (<-respCh).(*MsgShardTransferResp)
+	for {
+		select {
+		case stats := <-progressCh:
+			if stats.totalBytes == 0 {
+				continue
+			}
+			currProg := (stats.bytesWritten * 100) / stats.totalBytes
+			progressUpdate(float64(currProg-lastReportedProgress[stats.shardId]) / 100.0)
+			lastReportedProgress[stats.shardId] = currProg
+		case respMsg := <-respCh:
+			resp, ok := respMsg.(*MsgShardTransferResp)
+			if !ok || resp == nil {
+				err = fmt.Errorf("either response channel got closed or sent an invalid response")
+				logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId %v",
+					err, taskId)
+				return nil, err
+			}
+			errMap := resp.GetErrorMap()
+			errBuilder := new(strings.Builder)
+			for shardId, errInCopy := range errMap {
+				if errInCopy != nil {
+					errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v",
+						shardId, errInCopy))
+				}
+			}
+			if errBuilder.Len() != 0 {
+				err = errors.New(errBuilder.String())
+				logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId: %v",
+					err, taskId)
+				return nil, err
+			}
 
-	if !ok || resp == nil {
-		// We skip unlocking of shards here. it should get called when pause gets rolled back
-		err = fmt.Errorf("either response channel got closed or sent an invalid response")
-		logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId %v", err, taskId)
-		return nil, err
-	}
-	errMap := resp.GetErrorMap()
-	errBuilder := new(strings.Builder)
-	for shardId, errInCopy := range errMap {
-		if errInCopy != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v", shardId, errInCopy))
+			return resp.GetShardPaths(), nil
 		}
 	}
-	if errBuilder.Len() != 0 {
-		err = errors.New(errBuilder.String())
-		logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId: %v", err, taskId)
-		return nil, err
-	}
-
-	return resp.GetShardPaths(), nil
 }
 
 func (psm *PauseServiceManager) downloadShardsWithoutLock(
 	shardPaths map[common.ShardId]string,
 	taskId, bucket, origin, region string,
-	cancelCh <-chan struct{},
+	cancelCh <-chan struct{}, progressUpdate func(incr float64),
 ) (map[common.ShardId]string, error) {
 
 	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v for taskId %v",
 		shardPaths, taskId)
 
 	respCh := make(chan Message)
+	progressCh := make(chan *ShardTransferStatistics, 1000)
+	lastReportedProgress := make(map[common.ShardId]int64)
+
 	msg := &MsgStartShardRestore{
 		taskType:    common.PauseResumeTask,
 		taskId:      taskId,
@@ -378,31 +401,45 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 		region:      region,
 		cancelCh:    cancelCh,
 		doneCh:      cancelCh,
-		progressCh:  nil,
+		progressCh:  progressCh,
 		respCh:      respCh,
 	}
 
 	psm.supvMsgch <- msg
-	resp, ok := (<-respCh).(*MsgShardTransferResp)
 
-	if !ok || resp == nil {
-		err := fmt.Errorf("either response channel got closed or sent an invalid response")
-		logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
-		return nil, err
-	}
-	errMap := resp.GetErrorMap()
-	errBuilder := new(strings.Builder)
-	for shardId, errInCopy := range errMap {
-		if errInCopy != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to download shard %v, err: %v", shardId, errInCopy))
+	for {
+		select {
+		case stats := <-progressCh:
+			if stats.totalBytes == 0 {
+				continue
+			}
+			currProg := (stats.bytesWritten * 100) / stats.totalBytes
+			progressUpdate(float64(currProg-lastReportedProgress[stats.shardId]) / 100.0)
+			lastReportedProgress[stats.shardId] = currProg
+		case respMsg := <-respCh:
+			resp, ok := respMsg.(*MsgShardTransferResp)
+		
+			if !ok || resp == nil {
+				err := fmt.Errorf("either response channel got closed or sent an invalid response")
+				logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
+				return nil, err
+			}
+			errMap := resp.GetErrorMap()
+			errBuilder := new(strings.Builder)
+			for shardId, errInCopy := range errMap {
+				if errInCopy != nil {
+					errBuilder.WriteString(fmt.Sprintf("Failed to download shard %v, err: %v", shardId, errInCopy))
+				}
+			}
+			if errBuilder.Len() != 0 {
+				err := errors.New(errBuilder.String())
+				logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v",
+					err, taskId)
+				return nil, err
+			}
+			return resp.GetShardPaths(), nil
 		}
 	}
-	if errBuilder.Len() != 0 {
-		err := errors.New(errBuilder.String())
-		logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
-		return nil, err
-	}
-	return resp.GetShardPaths(), nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2099,6 +2136,70 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// RestHandleGetProgress - it is a route to get the low level pauser/resumer follower progress for a task
+func (psm *PauseServiceManager) RestHandleGetProgress(w http.ResponseWriter, r *http.Request) {
+	const method = "PauseServiceManager::RestHandleGetProgress:"
+	// Authenticate
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		err := fmt.Errorf("either invalid credentials or bad request")
+		logging.Errorf("%v Failed to authenticate pause register request err[%v]", method, err)
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, method) {
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Method invalid"))
+		logging.Errorf("%v invalid method %v for /pauseMgr/Progress route", method, r.Method)
+		return
+	}
+
+	taskId := r.URL.Query().Get("id")
+	if taskId == "" {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("`id` not found"))
+		logging.Errorf("%v invalid id %v", method, taskId)
+		return
+	}
+
+	task := psm.taskFind(taskId)
+	if task == nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("`id` not found"))
+		logging.Errorf("%v task for id %v not found", method, taskId)
+		return
+	}
+
+	var progress float64
+	// it is possible that a follower has finished the pause/resume but others are still executing;
+	// in such cases, pauser/resumer could be cleaned up; if a task exists and pauser/resumer
+	// is nil, we can safely assume that the work is finished and return 100.0
+	if (task.isPause && task.pauser == nil) ||
+		(task.resumer == nil) {
+			progress = 100.0
+	} else if task.isPause {
+		progress = task.pauser.followerProgress.GetFloat64()
+	} else {
+		progress = task.resumer.followerProgress.GetFloat64()
+	}
+
+	progressBytes, err := json.Marshal(progress)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(progressBytes)
+
+	logging.Tracef("%v reported progress as %v for task ID %v", method, progress, taskId)
+	return
+}
+
 func (m *PauseServiceManager) observeGlobalPauseToken(pauseToken PauseToken) bool {
 
 	// TODO: Make timeout configurable
@@ -2434,6 +2535,7 @@ func (m *PauseServiceManager) updateProgressCallback(taskId string, progress flo
 
 		if newRev > oldRev {
 			m.genericMgr.incRev()
+			logging.Infof("PauseServiceManager::updateProgressCallback: updated progress to %v-%v for task ID %v", progress, perNodeProgress, taskId)
 		}
 	}
 }
