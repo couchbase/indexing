@@ -235,6 +235,9 @@ type indexer struct {
 	globalRebalPhase    common.RebalancePhase
 	perBucketRebalPhase map[string]common.RebalancePhase
 	slicePendingClosure map[string][]Slice
+
+	//maintains bucket->bucketStateEnum mapping for pause state
+	bucketPauseState map[string]bucketStateEnum
 }
 
 type kvRequest struct {
@@ -338,9 +341,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdResetList:                make(map[string]resetList),
 		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
 
-		pendingReset: make(map[common.IndexInstId]bool),
-		bsRunParams:  &runParams{},
-		instsPerColl: make(map[string]map[string]map[common.IndexInstId]bool),
+		pendingReset:     make(map[common.IndexInstId]bool),
+		bsRunParams:      &runParams{},
+		instsPerColl:     make(map[string]map[string]map[common.IndexInstId]bool),
+		bucketPauseState: make(map[string]bucketStateEnum),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1420,11 +1424,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)
 
-	case INDEXER_PREPARE_UNPAUSE:
-		idx.handlePrepareUnpause(msg)
+	case INDEXER_PREPARE_UNPAUSE_MOI:
+		idx.handlePrepareUnpauseMOI(msg)
 
-	case INDEXER_UNPAUSE:
-		idx.handleUnpause(msg)
+	case INDEXER_UNPAUSE_MOI:
+		idx.handleUnpauseMOI(msg)
 
 	case INDEXER_PREPARE_DONE:
 		idx.handlePrepareDone(msg)
@@ -1502,11 +1506,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case STATS_RESET:
 		idx.handleResetStats()
 
-	case INDEXER_PAUSE:
-		idx.handleIndexerPause(msg)
+	case INDEXER_PAUSE_MOI:
+		idx.handleIndexerPauseMOI(msg)
 
-	case INDEXER_RESUME:
-		idx.handleIndexerResume(msg)
+	case INDEXER_RESUME_MOI:
+		idx.handleIndexerResumeMOI(msg)
 
 	case CLUST_MGR_SET_LOCAL:
 		idx.handleSetLocalMeta(msg)
@@ -1598,6 +1602,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			logging.Fatalf("Indexer::handleWorkerMsgs msg %v should only used in serverless mode", msg)
 			common.CrashOnError(errors.New("Invalid Msg On Worker Channel"))
 		}
+
+	case PAUSE_UPDATE_BUCKET_STATE:
+		idx.handleUpdateBucketPauseState(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -3928,7 +3935,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	}
 
 	is := idx.getIndexerState()
-	if is == common.INDEXER_PREPARE_UNPAUSE {
+	if is == common.INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Errorf("Indexer::handleDropIndex Cannot Process DropIndex "+
 			"In %v state", is)
 
@@ -4061,6 +4068,15 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		return
 	}
 
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip making start stream request
+		if bucketState := idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Indexer::handleInitPrepRecovery %v %v Skip Stream Request due "+
+				"to bucket state %v", streamId, keyspaceId, bucketState)
+			return
+		}
+	}
+
 	//if the stream is inactive(e.g. all indexes get dropped)
 	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
 		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v "+
@@ -4172,20 +4188,20 @@ func (idx *indexer) handleResetStream(msg Message) {
 	}
 }
 
-func (idx *indexer) handlePrepareUnpause(msg Message) {
+func (idx *indexer) handlePrepareUnpauseMOI(msg Message) {
 
-	logging.Infof("Indexer::handlePrepareUnpause %v", idx.getIndexerState())
+	logging.Infof("Indexer::handlePrepareUnpauseMOI %v", idx.getIndexerState())
 
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
 }
 
-func (idx *indexer) handleUnpause(msg Message) {
+func (idx *indexer) handleUnpauseMOI(msg Message) {
 
-	logging.Infof("Indexer::handleUnpause %v", idx.getIndexerState())
+	logging.Infof("Indexer::handleUnpauseMOI %v", idx.getIndexerState())
 
-	idx.doUnpause()
+	idx.doUnpauseMOI()
 
 }
 
@@ -4693,10 +4709,19 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	}
 
 	is := idx.getIndexerState()
-	if is == common.INDEXER_PREPARE_UNPAUSE {
+	if is == common.INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Indexer::handleKVStreamRepair Skipped Repair "+
 			"In %v state", is)
 		return
+	}
+
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip making start stream request
+		if bucketState := idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Indexer::handleKVStreamRepair %v %v Skip Stream Request due "+
+				"to bucket state %v", streamId, keyspaceId, bucketState)
+			return
+		}
 	}
 
 	//repair is not required for inactive/prepare recovery keyspace streams
@@ -5023,7 +5048,7 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	}
 
 	is := idx.getIndexerState()
-	if is == common.INDEXER_PREPARE_UNPAUSE {
+	if is == common.INDEXER_PREPARE_UNPAUSE_MOI {
 		logging.Warnf("Indexer::handleKeyspaceNotFound Skipped KeyspaceId Cleanup "+
 			"In %v state", is)
 		return
@@ -7454,6 +7479,16 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	logging.Infof("Indexer::startKeyspaceIdStream Stream: %v KeyspaceId: %v SessionId %v RestartTS %v",
 		streamId, keyspaceId, sessionId, restartTs)
 
+	bucketState := bst_NIL
+	if common.IsServerlessDeployment() {
+		//if the bucket is going to hibernate, skip making start stream request
+		if bucketState = idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+			logging.Infof("Indexer::startKeyspaceIdStream %v %v Skip Stream Request due to bucket state %v", streamId,
+				keyspaceId, bucketState)
+			return
+		}
+	}
+
 	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, keyspaceId)
 	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, keyspaceId)
 
@@ -7807,6 +7842,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 						}
 						break retryloop
 					} else {
+						if common.IsServerlessDeployment() {
+							if bucketState = idx.getBucketPauseState(keyspaceId); bucketState.IsHibernating() {
+								logging.Infof("Indexer::startKeyspaceIdStream %v %v %v Skip Stream Request retry due "+
+									"to bucket state %v", streamId, keyspaceId, sessionId, bucketState)
+								break retryloop
+							}
+						}
 						logging.Errorf("Indexer::startKeyspaceIdStream Stream %v KeyspaceId %v "+
 							"SessionId %v. Error from Projector %v. Retrying %v.", streamId, keyspaceId,
 							sessionId, respErr.cause, count)
@@ -8183,7 +8225,7 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 		<-idx.storageMgrCmdCh
 	}
 
-	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.keyspaceIdRollbackTimes}
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME_MOI, rollbackTimes: idx.keyspaceIdRollbackTimes}
 	<-idx.scanCoordCmdCh
 
 	// Persist node uuid in Metadata store
@@ -8240,8 +8282,8 @@ func (idx *indexer) bootstrap2() error {
 		err := resp.GetError()
 
 		if err == nil {
-			if val == fmt.Sprintf("%s", common.INDEXER_PAUSED) {
-				idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
+			if val == fmt.Sprintf("%s", common.INDEXER_PAUSED_MOI) {
+				idx.handleIndexerPauseMOI(&MsgIndexerState{mType: INDEXER_PAUSE_MOI})
 			}
 			logging.Infof("Indexer::bootstrap Recovered Indexer State %v", val)
 
@@ -8269,7 +8311,7 @@ func (idx *indexer) bootstrap2() error {
 		mem_used, _, _ := idx.memoryUsed(true)
 		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
 			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
-			idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
+			idx.handleIndexerPauseMOI(&MsgIndexerState{mType: INDEXER_PAUSE_MOI})
 		}
 	}
 
@@ -10500,7 +10542,7 @@ func (idx *indexer) monitorMemUsage() {
 	logging.Infof("Indexer::monitorMemUsage started...")
 
 	var canResume bool
-	if idx.getIndexerState() == common.INDEXER_PAUSED {
+	if idx.getIndexerState() == common.INDEXER_PAUSED_MOI {
 		canResume = true
 	}
 
@@ -10529,7 +10571,7 @@ func (idx *indexer) monitorMemUsage() {
 
 			var mem_used uint64
 			var idle uint64
-			if idx.getIndexerState() == common.INDEXER_PAUSED || gcDone {
+			if idx.getIndexerState() == common.INDEXER_PAUSED_MOI || gcDone {
 				mem_used, idle, _ = idx.memoryUsed(true)
 			} else {
 				mem_used, idle, _ = idx.memoryUsed(false)
@@ -10542,13 +10584,13 @@ func (idx *indexer) monitorMemUsage() {
 			case common.INDEXER_ACTIVE:
 				if float64(mem_used) > (high_mem_mark*float64(memory_quota)) &&
 					!canResume && mem_used > min_oom_mem {
-					idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_PAUSE}
+					idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_PAUSE_MOI}
 					canResume = true
 				}
 
-			case common.INDEXER_PAUSED:
+			case common.INDEXER_PAUSED_MOI:
 				if float64(mem_used) < (low_mem_mark*float64(memory_quota)) && canResume {
-					idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_RESUME}
+					idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_RESUME_MOI}
 					canResume = false
 				}
 			}
@@ -10568,12 +10610,12 @@ func (idx *indexer) monitorMemUsage() {
 	}
 }
 
-func (idx *indexer) handleIndexerPause(msg Message) {
+func (idx *indexer) handleIndexerPauseMOI(msg Message) {
 
-	logging.Infof("Indexer::handleIndexerPause")
+	logging.Infof("Indexer::handleIndexerPauseMOI")
 
 	if idx.getIndexerState() != common.INDEXER_ACTIVE {
-		logging.Infof("Indexer::handleIndexerPause Ignoring request to "+
+		logging.Infof("Indexer::handleIndexerPauseMOI Ignoring request to "+
 			"pause indexer in %v state", idx.getIndexerState())
 		return
 	}
@@ -10582,7 +10624,7 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 	clustMgrMsg := &MsgClustMgrLocal{
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   INDEXER_STATE_KEY,
-		value: fmt.Sprintf("%s", common.INDEXER_PAUSED),
+		value: fmt.Sprintf("%s", common.INDEXER_PAUSED_MOI),
 	}
 
 	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
@@ -10590,14 +10632,14 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		logging.Fatalf("Indexer::handleIndexerPause Unable to set IndexerState In Local"+
+		logging.Fatalf("Indexer::handleIndexerPauseMOI Unable to set IndexerState In Local"+
 			"Meta Storage. Err %v", errMsg)
 		common.CrashOnError(errMsg)
 	}
 
-	idx.setIndexerState(common.INDEXER_PAUSED)
-	idx.stats.indexerState.Set(int64(common.INDEXER_PAUSED))
-	logging.Infof("Indexer::handleIndexerPause Indexer State Changed to "+
+	idx.setIndexerState(common.INDEXER_PAUSED_MOI)
+	idx.stats.indexerState.Set(int64(common.INDEXER_PAUSED_MOI))
+	logging.Infof("Indexer::handleIndexerPauseMOI Indexer State Changed to "+
 		"%v", idx.getIndexerState())
 
 	//Notify Scan Coordinator
@@ -10614,16 +10656,16 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 
 }
 
-func (idx *indexer) handleIndexerResume(msg Message) {
+func (idx *indexer) handleIndexerResumeMOI(msg Message) {
 
-	logging.Infof("Indexer::handleIndexerResume")
+	logging.Infof("Indexer::handleIndexerResumeMOI")
 
-	idx.setIndexerState(common.INDEXER_PREPARE_UNPAUSE)
-	go idx.doPrepareUnpause()
+	idx.setIndexerState(common.INDEXER_PREPARE_UNPAUSE_MOI)
+	go idx.doPrepareUnpauseMOI()
 
 }
 
-func (idx *indexer) doPrepareUnpause() {
+func (idx *indexer) doPrepareUnpauseMOI() {
 
 	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
@@ -10634,21 +10676,21 @@ func (idx *indexer) doPrepareUnpause() {
 		//no recovery, no pending stream request
 		if idx.checkAnyStreamRequestPending() ||
 			idx.checkRecoveryInProgress() {
-			logging.Infof("Indexer::doPrepareUnpause Dropping Request to Unpause Indexer. " +
+			logging.Infof("Indexer::doPrepareUnpauseMOI Dropping Request to Unpause Indexer. " +
 				"Next Try In 1 Second... ")
 			continue
 		}
-		idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_PREPARE_UNPAUSE}
+		idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_PREPARE_UNPAUSE_MOI}
 		return
 	}
 }
 
-func (idx *indexer) doUnpause() {
+func (idx *indexer) doUnpauseMOI() {
 
 	idx.setIndexerState(common.INDEXER_ACTIVE)
 	idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
 
-	msg := &MsgIndexerState{mType: INDEXER_RESUME}
+	msg := &MsgIndexerState{mType: INDEXER_RESUME_MOI}
 
 	//Notify Scan Coordinator
 	idx.scanCoordCmdCh <- msg
@@ -10676,7 +10718,7 @@ func (idx *indexer) doUnpause() {
 
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		logging.Fatalf("Indexer::handleIndexerResume Unable to set IndexerState In Local"+
+		logging.Fatalf("Indexer::handleIndexerResumeMOI Unable to set IndexerState In Local"+
 			"Meta Storage. Err %v", errMsg)
 		common.CrashOnError(errMsg)
 	}
@@ -10784,7 +10826,7 @@ func (idx *indexer) needsGCMoi() bool {
 	var memUsed uint64
 	memQuota := idx.config.GetIndexerMemoryQuota()
 
-	if idx.getIndexerState() == common.INDEXER_PAUSED {
+	if idx.getIndexerState() == common.INDEXER_PAUSED_MOI {
 		memUsed, _, _ = idx.memoryUsed(true)
 	} else {
 		memUsed, _, _ = idx.memoryUsed(false)
@@ -11903,5 +11945,39 @@ func closeSlices(sliceList []Slice, logPrefix string) {
 			logging.Infof("%v IndexInst %v Partition %v Destroy Done",
 				logPrefix, slice.IndexInstId(), slice.IndexPartnId())
 		}(s)
+	}
+}
+
+func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
+
+	req := msg.(*MsgPauseUpdateBucketState)
+	bucket := req.GetBucket()
+	bucketState := req.GetBucketPauseState()
+
+	currState := idx.bucketPauseState[bucket]
+
+	logging.Infof("Indexer::handleUpdateBucketPauseState Updating from %v to %v", currState, bucketState)
+
+	//update indexer book-keeping
+	idx.bucketPauseState[bucket] = bucketState
+
+	//update scan coordinator
+	idx.scanCoordCmdCh <- msg
+	<-idx.scanCoordCmdCh
+
+	//update timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+
+}
+
+func (idx *indexer) getBucketPauseState(keyspaceId string) bucketStateEnum {
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+
+	if state, ok := idx.bucketPauseState[bucket]; ok {
+		return state
+	} else {
+		return bst_NIL
 	}
 }

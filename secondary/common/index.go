@@ -141,8 +141,8 @@ const (
 	//Active(processing mutation and scan)
 	INDEXER_ACTIVE IndexerState = iota
 	//Paused(not processing mutation/scan)
-	INDEXER_PAUSED
-	INDEXER_PREPARE_UNPAUSE
+	INDEXER_PAUSED_MOI
+	INDEXER_PREPARE_UNPAUSE_MOI
 	//Initial Bootstrap
 	INDEXER_BOOTSTRAP
 )
@@ -152,9 +152,9 @@ func (s IndexerState) String() string {
 	switch s {
 	case INDEXER_ACTIVE:
 		return "Active"
-	case INDEXER_PAUSED:
+	case INDEXER_PAUSED_MOI:
 		return "Paused"
-	case INDEXER_PREPARE_UNPAUSE:
+	case INDEXER_PREPARE_UNPAUSE_MOI:
 		return "PrepareUnpause"
 	case INDEXER_BOOTSTRAP:
 		return "Warmup"

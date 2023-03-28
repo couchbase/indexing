@@ -1260,8 +1260,8 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("memory_total", &is.memoryTotal)
 
 	indexerState := common.IndexerState(is.indexerState.Value())
-	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
-		indexerState = common.INDEXER_PAUSED
+	if indexerState == common.INDEXER_PREPARE_UNPAUSE_MOI {
+		indexerState = common.INDEXER_PAUSED_MOI
 	}
 	strst := fmt.Sprintf("%s", indexerState)
 	is.indexerStateHolder.Set(&strst)
@@ -1515,8 +1515,8 @@ func (is *IndexerStats) constructIndexerStats(skipEmpty bool, version string) co
 		addStat("total_indexer_gc_pause_ns", is.pauseTotalNs.Value())
 
 		indexerState := common.IndexerState(is.indexerState.Value())
-		if indexerState == common.INDEXER_PREPARE_UNPAUSE {
-			indexerState = common.INDEXER_PAUSED
+		if indexerState == common.INDEXER_PREPARE_UNPAUSE_MOI {
+			indexerState = common.INDEXER_PAUSED_MOI
 		}
 		addStat("indexer_state", fmt.Sprintf("%s", indexerState))
 	}

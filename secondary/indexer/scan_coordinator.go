@@ -76,6 +76,9 @@ type scanCoordinator struct {
 
 	totalMaintDocsQueued int64
 	numKeyspaces         int64
+
+	//maintains bucket->bucketStateEnum mapping for pause state
+	bucketPauseState map[string]bucketStateEnum
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -100,6 +103,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		indexInstMap:     make(common.IndexInstMap),
 		indexPartnMap:    make(IndexPartnMap),
 		indexDefnMap:     make(map[common.IndexDefnId][]common.IndexInstId),
+		bucketPauseState: make(map[string]bucketStateEnum),
 	}
 
 	s.config.Store(config)
@@ -230,11 +234,11 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
 
-	case INDEXER_PAUSE:
-		s.handleIndexerPause(cmd)
+	case INDEXER_PAUSE_MOI:
+		s.handleIndexerPauseMOI(cmd)
 
-	case INDEXER_RESUME:
-		s.handleIndexerResume(cmd)
+	case INDEXER_RESUME_MOI:
+		s.handleIndexerResumeMOI(cmd)
 
 	case INDEXER_BOOTSTRAP:
 		s.handleIndexerBootstrap(cmd)
@@ -247,6 +251,10 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_NUMVBUCKETS:
 		s.handleUpdateNumVBuckets(cmd)
+
+	case PAUSE_UPDATE_BUCKET_STATE:
+		s.handleUpdateBucketPauseState(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -968,7 +976,7 @@ func isSnapTsConsistentOrAhead(snapTs, reqTs *common.TsVbuuid, strict_chk_thresh
 func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {
 	const _isScanAllowed = "ScanCoordinator::isScanAllowed:"
 
-	if s.getIndexerState() == common.INDEXER_PAUSED {
+	if s.getIndexerState() == common.INDEXER_PAUSED_MOI {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
 
@@ -982,9 +990,9 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest)
 		}
 	}
 
-	if pauseMgr := GetPauseMgr(); pauseMgr != nil {
-		if bucketState := pauseMgr.BucketScansBlocked(scan.Bucket); bucketState != bst_NIL {
-			return fmt.Errorf("%v Bucket '%v' scans blocked while in Pause-Resume state %v", _isScanAllowed,
+	if common.IsServerlessDeployment() {
+		if bucketState := s.getBucketPauseState(scan.Bucket); bucketState.IsHibernating() {
+			return fmt.Errorf("%v Bucket '%v' scans blocked while in Pause/Resume state %v", _isScanAllowed,
 				scan.Bucket, bucketState)
 		}
 	}
@@ -1224,13 +1232,13 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
-func (s *scanCoordinator) handleIndexerPause(cmd Message) {
-	s.setIndexerState(common.INDEXER_PAUSED)
+func (s *scanCoordinator) handleIndexerPauseMOI(cmd Message) {
+	s.setIndexerState(common.INDEXER_PAUSED_MOI)
 	s.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+func (s *scanCoordinator) handleIndexerResumeMOI(cmd Message) {
 
 	msg := cmd.(*MsgIndexerState)
 	rollbackTimes := msg.GetRollbackTimes()
@@ -1281,6 +1289,34 @@ func (s *scanCoordinator) handleSecurityChange(cmd Message) {
 	}
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleUpdateBucketPauseState(cmd Message) {
+
+	req := cmd.(*MsgPauseUpdateBucketState)
+	bucket := req.GetBucket()
+	bucketState := req.GetBucketPauseState()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	//update indexer book-keeping
+	s.bucketPauseState[bucket] = bucketState
+
+	s.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (s *scanCoordinator) getBucketPauseState(bucket string) bucketStateEnum {
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if state, ok := s.bucketPauseState[bucket]; ok {
+		return state
+	} else {
+		return bst_NIL
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////

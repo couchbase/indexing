@@ -341,11 +341,11 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		m.handleConfigUpdate(cmd)
 
-	case INDEXER_PAUSE:
-		m.handleIndexerPause(cmd)
+	case INDEXER_PAUSE_MOI:
+		m.handleIndexerPauseMOI(cmd)
 
-	case INDEXER_RESUME:
-		m.handleIndexerResume(cmd)
+	case INDEXER_RESUME_MOI:
+		m.handleIndexerResumeMOI(cmd)
 
 	case INDEXER_SECURITY_CHANGE:
 		m.handleSecurityChange(cmd)
@@ -1391,23 +1391,23 @@ func (m *mutationMgr) setMaxMemoryFromQuota() {
 	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
 }
 
-func (m *mutationMgr) handleIndexerPause(cmd Message) {
+func (m *mutationMgr) handleIndexerPauseMOI(cmd Message) {
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.indexerState = common.INDEXER_PAUSED
+	m.indexerState = common.INDEXER_PAUSED_MOI
 
 	for streamId := range m.streamReaderMap {
 
 		respMsg := m.sendMsgToStreamReader(streamId, cmd)
 
 		if respMsg.GetMsgType() == MSG_SUCCESS {
-			logging.Infof("MutationMgr::handleIndexerPause Stream "+
+			logging.Infof("MutationMgr::handleIndexerPauseMOI Stream "+
 				"%v Paused", streamId)
 		} else {
 			err := respMsg.(*MsgError).GetError()
-			logging.Errorf("MutationMgr::handleIndexerPause Fatal Error "+
+			logging.Errorf("MutationMgr::handleIndexerPauseMOI Fatal Error "+
 				"Pausing Stream %v %v", streamId, err)
 			common.CrashOnError(err.cause)
 		}
@@ -1417,7 +1417,7 @@ func (m *mutationMgr) handleIndexerPause(cmd Message) {
 
 }
 
-func (m *mutationMgr) handleIndexerResume(cmd Message) {
+func (m *mutationMgr) handleIndexerResumeMOI(cmd Message) {
 
 	m.lock.Lock()
 	defer m.lock.Unlock()

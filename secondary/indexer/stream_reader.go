@@ -332,9 +332,9 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 		return &MsgSuccess{}
 
-	case INDEXER_PAUSE:
-		logging.Infof("MutationStreamReader::handleIndexerPause")
-		r.setIndexerState(common.INDEXER_PAUSED)
+	case INDEXER_PAUSE_MOI:
+		logging.Infof("MutationStreamReader::handleIndexerPauseMOI")
+		r.setIndexerState(common.INDEXER_PAUSED_MOI)
 		return &MsgSuccess{}
 
 	case INDEXER_SECURITY_CHANGE:

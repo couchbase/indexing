@@ -478,6 +478,40 @@ const (
 	bst_RESUMED
 )
 
+func (this bucketStateEnum) IsPausing() bool {
+
+	if this == bst_PREPARE_PAUSE ||
+		this == bst_PAUSING ||
+		this == bst_PAUSED {
+		return true
+	} else {
+		return false
+	}
+
+}
+
+func (this bucketStateEnum) IsResuming() bool {
+
+	if this == bst_PREPARE_RESUME ||
+		this == bst_RESUMING ||
+		this == bst_RESUMED {
+		return true
+	} else {
+		return false
+	}
+
+}
+
+func (this bucketStateEnum) IsHibernating() bool {
+
+	if this.IsPausing() || this.IsResuming() {
+		return true
+	} else {
+		return false
+	}
+
+}
+
 // String converter for bucketStateEnum type.
 func (this bucketStateEnum) String() string {
 	switch this {
@@ -552,6 +586,7 @@ func (pm *PauseMetadata) addShardPaths(nodeId service.NodeID, shardPaths map[com
 // For GetTaskList response to ns_server, we convert a taskObj to a service.Task struct (shared
 // with Rebalance).
 type taskObj struct {
+	rev    uint64 // rev - revision of the task
 	taskMu *sync.RWMutex // protects this taskObj; pointer as taskObj may be cloned
 
 	taskType     service.TaskType
@@ -609,6 +644,7 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, region, remotePath st
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &taskObj{
+		rev:         0,
 		taskMu:      &sync.RWMutex{},
 		taskId:      taskId,
 		taskType:    taskType,
@@ -624,6 +660,23 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, region, remotePath st
 	}, nil
 }
 
+func (t *taskObj) GetTaskRev() uint64 {
+	t.taskMu.RLock()
+	rev := t.rev
+	t.taskMu.RUnlock()
+	return rev
+}
+
+func (t *taskObj) incRevNoLock() {
+	t.rev++
+}
+
+func (t *taskObj) IncRev() {
+	t.taskMu.Lock()
+	defer t.taskMu.Unlock()
+	t.incRevNoLock()
+}
+
 // TaskObjSetFailed sets task.status to service.TaskStatusFailed and task.errMessage to errMsg.
 // this applies lock and internally calls TaskObjSetFailedNoLock
 func (this *taskObj) TaskObjSetFailed(errMsg string) {
@@ -637,6 +690,7 @@ func (this *taskObj) TaskObjSetFailed(errMsg string) {
 func (t *taskObj) TaskObjSetFailedNoLock(errMsg string) {
 	t.errorMessage = errMsg
 	t.taskStatus = service.TaskStatusFailed
+	t.incRevNoLock()
 }
 
 func (this *taskObj) setMasterNoLock() {
@@ -657,7 +711,7 @@ func (this *taskObj) taskObjToServiceTask() []service.Task {
 	tasks := make([]service.Task, 0, 2)
 
 	nsTask := service.Task{
-		Rev:          EncodeRev(0),
+		Rev:          EncodeRev(this.rev),
 		ID:           this.taskId,
 		Type:         this.taskType,
 		Status:       this.taskStatus,
@@ -776,7 +830,7 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 
 		for _, opt := range opts {
 			if err := m.runPauseCleanupPhase(
-				params.Bucket, opt.PauseId,opt.MasterId == string(m.nodeInfo.NodeID),
+				params.Bucket, opt.PauseId, opt.MasterId == string(m.nodeInfo.NodeID),
 			); err != nil {
 				return err
 			}
@@ -852,6 +906,12 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	err = m.bucketStateSet(_PreparePause, params.Bucket, bst_NIL, bst_PREPARE_PAUSE)
 	if err != nil {
 		return err
+	}
+
+	//update supv about bucket pause state
+	m.supvMsgch <- &MsgPauseUpdateBucketState{
+		bucket:           params.Bucket,
+		bucketPauseState: bst_PREPARE_PAUSE,
 	}
 
 	// Record the task in progress
@@ -2256,6 +2316,7 @@ func (m *PauseServiceManager) taskAdd(task *taskObj) {
 	m.tasksMu.Lock()
 	m.tasks[task.taskId] = task
 	m.tasksMu.Unlock()
+	m.genericMgr.incRev()
 }
 
 // taskAddPreparePause constructs and adds a Pause task to m.tasks.
@@ -2293,6 +2354,7 @@ func (m *PauseServiceManager) taskDelete(taskId string) *taskObj {
 	task := m.tasks[taskId]
 	if task != nil {
 		delete(m.tasks, taskId)
+		m.genericMgr.incRev()
 	}
 	return task
 }
@@ -2324,6 +2386,7 @@ func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
 	task := m.taskFind(taskId)
 	if task != nil {
 		task.TaskObjSetFailed(errMsg)
+		m.genericMgr.incRev()
 		return true
 	}
 	return false
@@ -2336,6 +2399,7 @@ func (m *PauseServiceManager) taskSetMasterAndUpdateType(taskId string, newType 
 		task.setMasterNoLock()
 		task.updateTaskTypeNoLock(newType)
 		task.taskMu.Unlock()
+		m.genericMgr.incRev()
 	}
 	return task
 }
@@ -2423,8 +2487,7 @@ type PauseToken struct {
 	BucketName string
 	PauseId    string
 
-	Type PauseTokenType
-
+	Type  PauseTokenType
 	Error string
 }
 
@@ -2721,7 +2784,7 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 				logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to observe bucket (%v) streaming endpoint. err: %v. Retrying (%v)",
 					bucketName, err, i)
 			}
-			
+
 		}
 	}
 	logging.Infof("PauseServiceManager::monitorBucketForPauseResume: exiting bucket monitor for bucket %v; err %v for task ID: %v (for pause? -> %v)",

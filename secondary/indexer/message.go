@@ -127,10 +127,10 @@ const (
 	INDEXER_ROLLBACK
 	STORAGE_ROLLBACK_DONE
 	STREAM_REQUEST_DONE
-	INDEXER_PAUSE
-	INDEXER_RESUME
-	INDEXER_PREPARE_UNPAUSE
-	INDEXER_UNPAUSE
+	INDEXER_PAUSE_MOI
+	INDEXER_RESUME_MOI
+	INDEXER_PREPARE_UNPAUSE_MOI
+	INDEXER_UNPAUSE_MOI
 	INDEXER_BOOTSTRAP
 	INDEXER_SET_LOCAL_META
 	INDEXER_GET_LOCAL_META
@@ -209,6 +209,7 @@ const (
 	RESTORE_AND_UNLOCK_LOCKED_SHARDS
 	METERING_MGR_STOP_WRITE_BILLING
 	METERING_MGR_START_WRITE_BILLING
+	PAUSE_UPDATE_BUCKET_STATE
 )
 
 type Message interface {
@@ -2328,10 +2329,10 @@ func (m *MsgStatsPersister) GetResponseChannel() chan bool {
 	return m.respCh
 }
 
-// INDEXER_PAUSE
-// INDEXER_RESUME
-// INDEXER_PREPARE_UNPAUSE
-// INDEXER_UNPAUSE
+// INDEXER_PAUSE_MOI
+// INDEXER_RESUMEMOI
+// INDEXER_PREPARE_UNPAUSE_MOI
+// INDEXER_UNPAUSE_MOI
 // INDEXER_BOOTSTRAP
 type MsgIndexerState struct {
 	mType         MsgType
@@ -2922,6 +2923,23 @@ func (m *MsgMeteringUpdate) String() string {
 	return str
 }
 
+type MsgPauseUpdateBucketState struct {
+	bucket           string
+	bucketPauseState bucketStateEnum
+}
+
+func (m *MsgPauseUpdateBucketState) GetMsgType() MsgType {
+	return PAUSE_UPDATE_BUCKET_STATE
+}
+
+func (m *MsgPauseUpdateBucketState) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgPauseUpdateBucketState) GetBucketPauseState() bucketStateEnum {
+	return m.bucketPauseState
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3041,14 +3059,14 @@ func (m MsgType) String() string {
 		return "STORAGE_ROLLBACK_DONE"
 	case STREAM_REQUEST_DONE:
 		return "STREAM_REQUEST_DONE"
-	case INDEXER_PAUSE:
-		return "INDEXER_PAUSE"
-	case INDEXER_RESUME:
-		return "INDEXER_RESUME"
-	case INDEXER_PREPARE_UNPAUSE:
-		return "INDEXER_PREPARE_UNPAUSE"
-	case INDEXER_UNPAUSE:
-		return "INDEXER_UNPAUSE"
+	case INDEXER_PAUSE_MOI:
+		return "INDEXER_PAUSE_MOI"
+	case INDEXER_RESUME_MOI:
+		return "INDEXER_RESUME_MOI"
+	case INDEXER_PREPARE_UNPAUSE_MOI:
+		return "INDEXER_PREPARE_UNPAUSE_MOI"
+	case INDEXER_UNPAUSE_MOI:
+		return "INDEXER_UNPAUSE_MOI"
 	case INDEXER_BOOTSTRAP:
 		return "INDEXER_BOOTSTRAP"
 	case INDEXER_SET_LOCAL_META:
@@ -3246,6 +3264,9 @@ func (m MsgType) String() string {
 		return "METERING_MGR_START_WRITE_BILLING"
 	case METERING_MGR_STOP_WRITE_BILLING:
 		return "METERING_MGR_STOP_WRITE_BILLING"
+	case PAUSE_UPDATE_BUCKET_STATE:
+		return "PAUSE_UPDATE_BUCKET_STATE"
+
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
