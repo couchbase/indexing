@@ -722,7 +722,7 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) (retErr 
 	for i, name := range names {
 		index, err := gsi.IndexByName(name)
 		if err != nil {
-			return errors.NewError(err, "BuildIndexes")
+			return errors.NewError(err, "GSI BuildIndexes")
 		}
 
 		// Please note that the gsiKeyspace uses datastore.Index to cache
@@ -741,7 +741,7 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) (retErr 
 	}
 	err := gsi.gsiClient.BuildIndexes(defnIDs)
 	if err != nil {
-		return errors.NewError(err, "BuildIndexes")
+		return errors.NewError(err, "GSI BuildIndexes")
 	}
 	return nil
 }
