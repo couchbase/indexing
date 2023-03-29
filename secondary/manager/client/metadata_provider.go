@@ -726,12 +726,15 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defn *c.IndexDefn, watcherM
 		return
 	}
 
+	var wg sync.WaitGroup
 	defnId := defn.DefnId
 	key := fmt.Sprintf("%d", defnId)
 	for indexerId, _ := range watcherMap {
 
+		wg.Add(1)
 		go func(indexerId c.IndexerId) {
 
+			defer wg.Done()
 			watcher, err := o.findWatcherByIndexerId(indexerId)
 			if err != nil {
 				logging.Errorf("Fail to cancel prepare index creation.  Cannot find watcher for indexerId %v. Error: %v", indexerId, err)
@@ -747,6 +750,8 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defn *c.IndexDefn, watcherM
 			}
 		}(indexerId)
 	}
+
+	wg.Wait()
 }
 
 //
