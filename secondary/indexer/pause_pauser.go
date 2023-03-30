@@ -92,7 +92,13 @@ func setPauseUploadTokenInMetakv(putId string, put *common.PauseUploadToken) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Called at the end of the pause lifecycle. It takes pauseId and any error as input.
-type PauseDoneCallback func(string, error)
+type PauseResumeDoneCallback func(string, error)
+type PauseResumeProgressCallback func(string, float64, map[string]float64)
+
+type PauseResumeCallbacks struct {
+	done PauseResumeDoneCallback
+	progress PauseResumeProgressCallback
+}
 
 // Pauser object holds the state of Pause orchestration
 type Pauser struct {
@@ -132,7 +138,7 @@ type Pauser struct {
 	// For cleanup
 	retErr      error
 	cleanupOnce sync.Once
-	doneCb      PauseDoneCallback
+	cb          PauseResumeCallbacks
 }
 
 // NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -143,7 +149,7 @@ type Pauser struct {
 //	pauseToken - global PauseToken
 //	doneCb - callback that initiates the cleanup phase
 func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken,
-	doneCb PauseDoneCallback) *Pauser {
+	doneCb PauseResumeDoneCallback, progressCb PauseResumeProgressCallback) *Pauser {
 
 	pauser := &Pauser{
 		pauseMgr: pauseMgr,
@@ -156,7 +162,7 @@ func NewPauser(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseTo
 
 		followerTokens: make(map[string]*common.PauseUploadToken),
 
-		doneCb: doneCb,
+		cb: PauseResumeCallbacks{done: doneCb, progress: progressCb},
 	}
 
 	task.taskMu.Lock()
@@ -488,7 +494,7 @@ func (p *Pauser) doFinish() {
 	p.wg.Wait()
 
 	// call done callback to start the cleanup phase
-	p.doneCb(p.pauseToken.PauseId, p.retErr)
+	p.cb.done(p.pauseToken.PauseId, p.retErr)
 }
 
 func (p *Pauser) processPauseUploadTokenAsFollower(putId string, put *common.PauseUploadToken) bool {

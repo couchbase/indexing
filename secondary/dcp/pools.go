@@ -347,7 +347,6 @@ func maybeAddAuth(req *http.Request, ah AuthHandler) {
 func queryRestAPIOnLocalhost(
 	baseURL *url.URL,
 	path string,
-	authHandler AuthHandler,
 	out interface{},
 	reqParams *security.RequestParams) error {
 	u := *baseURL
@@ -530,7 +529,7 @@ func (c *Client) parseURLResponse(path string, out interface{}) error {
 		Timeout:   HttpRequestTimeout,
 		UserAgent: c.UserAgent,
 	}
-	return queryRestAPIOnLocalhost(c.BaseURL, path, c.ah, out, params)
+	return queryRestAPIOnLocalhost(c.BaseURL, path, out, params)
 
 }
 
@@ -557,7 +556,7 @@ func (b *Bucket) parseURLResponse(path string, out interface{}) error {
 			Scheme: "http",
 		}
 
-		err := queryRestAPIOnLocalhost(url, path, b.pool.client.ah, out, &security.RequestParams{Timeout: HttpRequestTimeout})
+		err := queryRestAPIOnLocalhost(url, path, out, &security.RequestParams{Timeout: HttpRequestTimeout})
 		if err == nil {
 			return err
 		}

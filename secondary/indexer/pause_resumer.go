@@ -96,9 +96,6 @@ func setResumeDownloadTokenInMetakv(rdtId string, rdt *c.ResumeDownloadToken) {
 // This is used only on the master node of a task_RESUME task to do the GSI orchestration.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-//  Called at the end of the resume lifecycle. It takes resumeId and any error as input.
-type ResumeDoneCallback func(string, error)
-
 // Resumer object holds the state of Resume orchestration
 type Resumer struct {
 	// otherIndexAddrs is "host:port" to all the known Index Service nodes EXCLUDING this one
@@ -134,7 +131,7 @@ type Resumer struct {
 	// For cleanup
 	retErr      error
 	cleanupOnce sync.Once
-	doneCb      ResumeDoneCallback
+	cb          PauseResumeCallbacks
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -145,7 +142,7 @@ type Resumer struct {
 //	pauseToken - global master PauseToken
 //	doneCb - callback that initiates the cleanup phase
 func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseToken,
-	doneCb ResumeDoneCallback) *Resumer {
+	doneCb PauseResumeDoneCallback, progressCb PauseResumeProgressCallback) *Resumer {
 
 	resumer := &Resumer{
 		pauseMgr: pauseMgr,
@@ -158,7 +155,7 @@ func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseT
 		masterTokens:   make(map[string]*c.ResumeDownloadToken),
 		followerTokens: make(map[string]*c.ResumeDownloadToken),
 
-		doneCb: doneCb,
+		cb: PauseResumeCallbacks{done: doneCb, progress: progressCb},
 	}
 
 	task.taskMu.Lock()
@@ -414,7 +411,7 @@ func (r *Resumer) doFinish() {
 	r.wg.Wait()
 
 	// call done callback to start the cleanup phase
-	r.doneCb(r.pauseToken.PauseId, r.retErr)
+	r.cb.done(r.pauseToken.PauseId, r.retErr)
 }
 
 func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *c.ResumeDownloadToken) bool {

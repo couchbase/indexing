@@ -586,14 +586,15 @@ func (pm *PauseMetadata) addShardPaths(nodeId service.NodeID, shardPaths map[com
 // For GetTaskList response to ns_server, we convert a taskObj to a service.Task struct (shared
 // with Rebalance).
 type taskObj struct {
-	rev    uint64 // rev - revision of the task
+	rev    uint64        // rev - revision of the task
 	taskMu *sync.RWMutex // protects this taskObj; pointer as taskObj may be cloned
 
-	taskType     service.TaskType
-	taskId       string             // opaque ns_server unique ID for this task
-	taskStatus   service.TaskStatus // local analog of service.TaskStatus
-	progress     float64            // completion progress [0.0, 1.0]
-	errorMessage string             // only if a failure occurred
+	taskType        service.TaskType
+	taskId          string             // opaque ns_server unique ID for this task
+	taskStatus      service.TaskStatus // local analog of service.TaskStatus
+	progress        float64            // completion progress [0.0, 1.0]
+	perNodeProgress map[string]float64 // map of service.nodeID to progress
+	errorMessage    string             // only if a failure occurred
 
 	bucket string // bucket name being Paused or Resumed
 	dryRun bool   // is task for Resume dry run (cluster capacity check)?
@@ -691,6 +692,41 @@ func (t *taskObj) TaskObjSetFailedNoLock(errMsg string) {
 	t.errorMessage = errMsg
 	t.taskStatus = service.TaskStatusFailed
 	t.incRevNoLock()
+}
+
+func (t *taskObj) AddTaskProgress(incr float64) {
+	t.taskMu.Lock()
+	defer t.taskMu.Unlock()
+	t.progress += incr
+}
+
+func (t *taskObj) UpdateNodeProgress(nodeId service.NodeID, newProgress float64) {
+	t.taskMu.Lock()
+	defer t.taskMu.Unlock()
+	t.perNodeProgress[string(nodeId)] = newProgress
+}
+
+func (t *taskObj) updateTaskProgressNoLock(progress float64, perNodeProgress map[string]float64) {
+	didUpdate := false
+	if progress > t.progress {
+		t.progress = progress
+		didUpdate = true
+	}
+	for nodeId, nodeProgress := range perNodeProgress {
+		if nodeProgress > t.perNodeProgress[nodeId] {
+			didUpdate = true
+			t.perNodeProgress[nodeId] = nodeProgress
+		}
+	}
+	if didUpdate {
+		t.incRevNoLock()
+	}
+}
+
+func (t *taskObj) UpdateTaskProgress(progress float64, perNodeProgress map[string]float64) {
+	t.taskMu.Lock()
+	defer t.taskMu.Unlock()
+	t.updateTaskProgressNoLock(progress, perNodeProgress)
 }
 
 func (this *taskObj) setMasterNoLock() {
@@ -969,7 +1005,8 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
-	pauser := NewPauser(m, task, pt, m.pauseDoneCallback)
+	pauser := NewPauser(m, task, pt, m.pauseDoneCallback,
+		m.updateProgressCallback)
 
 	if err = m.setPauser(params.ID, pauser); err != nil {
 		if cerr := m.runPauseCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
@@ -1522,7 +1559,8 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 		return err
 	}
 
-	resumer := NewResumer(m, task, pt, m.resumeDoneCallback)
+	resumer := NewResumer(m, task, pt, m.resumeDoneCallback,
+		m.updateProgressCallback)
 
 	if err := m.setResumer(params.ID, resumer); err != nil {
 		logging.Errorf("%v couldn't set resume; err: %v for task ID: %v", _Resume, err, params.ID)
@@ -2030,7 +2068,8 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 					return
 				}
 
-				pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback)
+				pauser := NewPauser(m, task, &pauseToken, m.pauseDoneCallback,
+					m.updateProgressCallback)
 
 				if err := m.setPauser(pauseToken.PauseId, pauser); err != nil {
 					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Pauser in bookkeeping"+
@@ -2051,7 +2090,8 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 					return
 				}
 
-				resumer := NewResumer(m, task, &pauseToken, m.resumeDoneCallback)
+				resumer := NewResumer(m, task, &pauseToken, m.resumeDoneCallback,
+					m.updateProgressCallback)
 
 				if err := m.setResumer(pauseToken.PauseId, resumer); err != nil {
 					logging.Errorf("PauseServiceManager::RestHandlePause: Failed to set Resumer in bookkeeping"+
@@ -2402,6 +2442,24 @@ func (m *PauseServiceManager) taskSetMasterAndUpdateType(taskId string, newType 
 		m.genericMgr.incRev()
 	}
 	return task
+}
+
+func (m *PauseServiceManager) updateProgressCallback(taskId string, progress float64,
+	perNodeProgress map[string]float64) {
+	task := m.taskFind(taskId)
+	if task != nil {
+		task.taskMu.Lock()
+
+		oldRev := task.rev
+		task.updateTaskProgressNoLock(progress, perNodeProgress)
+		newRev := task.rev
+
+		task.taskMu.Unlock()
+
+		if newRev > oldRev {
+			m.genericMgr.incRev()
+		}
+	}
 }
 
 // hasDryRun returns whether this task has the dryRun parameter.

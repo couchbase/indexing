@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -96,7 +97,7 @@ func (instance *serviceNotifierInstance) getNotifyCallback(t NotificationType) f
 			case <-time.After(notifyWaitTimeout):
 				split := strings.Split(id, "_")
 				consumer := split[:len(split)-1]
-				logging.Warnf("serviceChangeNotifier: Consumer (%v) for %v took too long to read notification, making the consumer invalid", strings.Join(consumer, "_"), instance.DebugStr())
+				logging.Warnf("serviceChangeNotifier: Consumer (%v) for %v took too long to read notification, making the consumer invalid", strings.Join(consumer, "_"), instance.id)
 				close(w)
 				delete(instance.waiters, id)
 			}
@@ -146,7 +147,7 @@ func (instance *serviceNotifierInstance) RunPoolObserver() {
 	poolCallback := instance.getNotifyCallback(PoolChangeNotification)
 	err := instance.client.RunObservePool(instance.pool, poolCallback, instance.closeCh)
 	if err != nil {
-		logging.Warnf("serviceChangeNotifier: Connection terminated for pool notifier instance of %s, %s (%v)", instance.DebugStr(), instance.pool, err)
+		logging.Warnf("serviceChangeNotifier: Connection terminated for pool notifier instance of %s (%v)", instance.id, err)
 	}
 	instance.cleanup()
 }
@@ -155,7 +156,7 @@ func (instance *serviceNotifierInstance) RunServicesObserver() {
 	servicesCallback := instance.getNotifyCallback(ServiceChangeNotification)
 	err := instance.client.RunObserveNodeServices(instance.pool, servicesCallback, instance.closeCh)
 	if err != nil {
-		logging.Warnf("serviceChangeNotifier: Connection terminated for services notifier instance of %s, %s (%v)", instance.DebugStr(), instance.pool, err)
+		logging.Warnf("serviceChangeNotifier: Connection terminated for services notifier instance of %s (%v)", instance.id, err)
 	}
 	instance.cleanup()
 }
@@ -164,7 +165,7 @@ func (instance *serviceNotifierInstance) RunObserveCollectionManifestChanges(buc
 	collectionChangeCallback := instance.getNotifyCallback(CollectionManifestChangeNotification)
 	err := instance.client.RunObserveCollectionManifestChanges(instance.pool, bucket, collectionChangeCallback, instance.closeCh)
 	if err != nil {
-		logging.Warnf("serviceChangeNotifier: Connection terminated for collection manifest notifier instance of %s, %s, bucket: %s, (%v)", instance.DebugStr(), instance.pool, bucket, err)
+		logging.Warnf("serviceChangeNotifier: Connection terminated for collection manifest notifier instance of %s, bucket: %s, (%v)", instance.id, bucket, err)
 	}
 	instance.cleanup()
 }
@@ -187,14 +188,13 @@ func (instance *serviceNotifierInstance) cleanup() {
 	close(instance.closeCh)
 }
 
-func (instance *serviceNotifierInstance) DebugStr() string {
-	debugStr := instance.client.BaseURL.Scheme + "://"
-	cred := strings.Split(instance.client.BaseURL.User.String(), ":")
+func URLString(baseURL *url.URL) string {
+	debugStr := baseURL.Scheme + "://"
+	cred := strings.Split(baseURL.User.String(), ":")
 	user := cred[0]
 	debugStr += user + "@"
-	debugStr += instance.client.BaseURL.Host
+	debugStr += baseURL.Host
 	return debugStr
-
 }
 
 type Notification struct {
@@ -233,7 +233,12 @@ func init() {
 func NewServicesChangeNotifier(clusterUrl, pool, consumer string) (*ServicesChangeNotifier, error) {
 	singletonServicesContainer.Lock()
 	defer singletonServicesContainer.Unlock()
-	id := clusterUrl + "-" + pool
+
+	baseUrl, err := couchbase.ParseURL(clusterUrl)
+	if err != nil {
+		return nil, err
+	}
+	id := URLString(baseUrl) + "-" + pool
 
 	if _, ok := singletonServicesContainer.notifiers[id]; !ok {
 		client, err := couchbase.Connect(clusterUrl)
@@ -250,7 +255,7 @@ func NewServicesChangeNotifier(clusterUrl, pool, consumer string) (*ServicesChan
 			buckets:    make(map[string]bool),
 			closeCh:    make(chan bool),
 		}
-		logging.Infof("serviceChangeNotifier: Creating new notifier instance for %s, %s", instance.DebugStr(), pool)
+		logging.Infof("serviceChangeNotifier: Creating new notifier instance for %s", id)
 
 		singletonServicesContainer.notifiers[id] = instance
 		go instance.RunPoolObserver()
