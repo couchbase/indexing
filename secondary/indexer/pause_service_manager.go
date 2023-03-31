@@ -1595,7 +1595,9 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 	// Create a Resumer object to run the master orchestration loop.
 
 	pt, exists := m.getPauseToken(params.ID)
-	if !exists {
+
+	// For DryRun=true, initStartPhase is not run and pauseToken is not generated
+	if !params.DryRun && !exists {
 		err := fmt.Errorf("master pause token not found for id[%v] during resume", params.ID)
 
 		if cerr := m.runResumeCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {

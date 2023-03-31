@@ -530,7 +530,7 @@ func (p *Pauser) doFinish() {
 	p.wg.Wait()
 
 	// call done callback to start the cleanup phase
-	p.cb.done(p.pauseToken.PauseId, p.retErr)
+	p.cb.done(p.task.taskId, p.retErr)
 }
 
 func (p *Pauser) processPauseUploadTokenAsFollower(putId string, put *common.PauseUploadToken) bool {
