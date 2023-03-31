@@ -1261,8 +1261,12 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				// If billable fetch the WUs before committing and increment local counter
 				// to refund if there is a indexer restart. Its ok to refund more.
 				if billable {
-					_, pendingWU, _ := ar.State()
-					atomic.AddUint64(&mdb.meteringStats.writeUnits, pendingWU.Whole())
+					_, pendingWU, pendingBytes := ar.State()
+					wu := pendingWU.Whole()
+					if pendingBytes > 0 {
+						wu += 1
+					}
+					atomic.AddUint64(&mdb.meteringStats.writeUnits, wu)
 				}
 				writeUnits, e := ar.Commit()
 				if e != nil {
@@ -1634,6 +1638,33 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 		return
 	}
 
+	var ar AggregateRecorder
+	// Replica writes are not metered as billable
+	billable := mdb.replicaId == 0
+
+	if mdb.EnableMetering() {
+		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, IndexWriteArrayVariant)
+		defer func() {
+			// If billable fetch the WUs before committing and increment local counter
+			// to refund if there is a indexer restart. Its ok to refund more.
+			if billable {
+				_, pendingWU, pendingBytes := ar.State()
+				wu := pendingWU.Whole()
+				if pendingBytes > 0 {
+					wu += 1
+				}
+				atomic.AddUint64(&mdb.meteringStats.writeUnits, wu)
+			}
+			writeUnits, e := ar.Commit()
+			if e != nil {
+				// TODO: Add logging without flooding
+				return
+			}
+			initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
+			mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole(), initBuild)
+		}()
+	}
+
 	var t0 time.Time
 	// Delete each of indexEntriesToBeDeleted from main index
 	for i, item := range indexEntriesToBeDeleted {
@@ -1659,8 +1690,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 
-			if meterDelete {
-				mdb.RecordWriteUnits(uint64(len(docid)+keyDelSz), IndexWriteArrayVariant)
+			if meterDelete && mdb.EnableMetering() {
+				ar.AddBytes(uint64(len(docid) + keyDelSz))
 				mdb.recordNewOps(0, 0, 1)
 			}
 		}
