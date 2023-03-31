@@ -2380,33 +2380,43 @@ func (r *Rebalancer) updateProgress() {
 	}
 	defer r.wg.Done()
 
-	l.Infof("Rebalancer::updateProgress goroutine started")
+	l.Infof("Rebalancer::updateProgress for RebalID: %v goroutine started", r.rebalToken.RebalId)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	getIndexRespCh := make(chan *IndexStatusResponse, 1)
+
 	for {
+		go r.computeProgressGetIndexStatus(getIndexRespCh, r.cancel, r.done)
 		select {
-		case <-ticker.C:
-			progress := r.computeProgress()
-			r.cb.progress(progress, r.cancel)
+		case statusResp, ok := <-getIndexRespCh:
+			if !ok {
+				return
+			} else if statusResp != nil {
+				progress := r.computeProgress(statusResp)
+				r.cb.progress(progress, r.cancel)
+			}
 		case <-r.cancel:
-			l.Infof("Rebalancer::updateProgress Cancel Received")
+			l.Infof("Rebalancer::updateProgress for RebalID: %v Cancel Received", r.rebalToken.RebalId)
 			return
 		case <-r.done:
-			l.Infof("Rebalancer::updateProgress Done Received")
+			l.Infof("Rebalancer::updateProgress for RebalID: %v Done Received", r.rebalToken.RebalId)
 			return
 		}
+		<-ticker.C
 	}
 }
 
-// computeProgress is a helper for updateProgress called periodically to compute the progress of index builds.
-func (r *Rebalancer) computeProgress() (progress float64) {
-	const method = "Rebalancer::computeProgress:" // for logging
+// computeProgressGetIndexStatus is a helper for updateProgress called as a gorutine to get the Index status used
+// for actual computation by computeProgress.
+func (r *Rebalancer) computeProgressGetIndexStatus(respCh chan *IndexStatusResponse, cancel, done chan struct{}) {
 
 	url := "/getIndexStatus?getAll=true"
 	resp, err := getWithAuth(r.localaddr + url)
 	if err != nil {
-		l.Errorf("Rebalancer::computeProgress Error getting local metadata %v %v", r.localaddr+url, err)
+		l.Errorf("Rebalancer::computeProgressGetIndexStatus for RebalID: %v Error getting local metadata %v %v",
+			r.rebalToken.RebalId, r.localaddr+url, err)
+		respCh <- nil
 		return
 	}
 
@@ -2414,9 +2424,20 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	statusResp := new(IndexStatusResponse)
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	if err := json.Unmarshal(bytes, &statusResp); err != nil {
-		l.Errorf("Rebalancer::computeProgress Error unmarshal response %v %v", r.localaddr+url, err)
+		l.Errorf("Rebalancer::computeProgressGetIndexStatus for RebalID: %v Error unmarshal response %v %v",
+			r.rebalToken.RebalId, r.localaddr+url, err)
+		respCh <- nil
 		return
 	}
+
+	respCh <- statusResp
+
+	return
+}
+
+// computeProgress is a helper for updateProgress called periodically to compute the progress of index builds.
+func (r *Rebalancer) computeProgress(statusResp *IndexStatusResponse) (progress float64) {
+	const method = "Rebalancer::computeProgress:" // for logging
 
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
 	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_READ, &r.bigMutex, "bigMutex", method, "")
@@ -2436,7 +2457,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	}
 
 	progress = (totalProgress / float64(totTokens)) / 100.0
-	l.Infof("Rebalancer::computeProgress %v", progress)
+	l.Infof("Rebalancer::computeProgress for RebalID: %v progress %v", r.rebalToken.RebalId, progress)
 
 	if progress < 0.1 || math.IsNaN(progress) {
 		progress = 0.1
