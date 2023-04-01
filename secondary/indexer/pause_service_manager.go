@@ -1823,7 +1823,20 @@ func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
 		m.endTask(err, resumeId)
 	}
 
-	go m.monitorBucketForPauseResume(resumer.task.bucket, resumer.task.taskId, isMaster, false)
+	if err == nil {
+		//resume successful, update state in supv to resumed
+		m.supvMsgch <- &MsgPauseUpdateBucketState{
+			bucket:           resumer.task.bucket,
+			bucketPauseState: bst_RESUMED,
+		}
+		go m.monitorBucketForPauseResume(resumer.task.bucket, resumer.task.taskId, isMaster, false)
+	} else {
+		//resume has failed, reset bucketPauseState
+		m.supvMsgch <- &MsgPauseUpdateBucketState{
+			bucket:           resumer.task.bucket,
+			bucketPauseState: bst_NIL,
+		}
+	}
 
 	if err := m.runResumeCleanupPhase(resumer.task.bucket, resumeId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to run cleanup: err[%v]", err)
