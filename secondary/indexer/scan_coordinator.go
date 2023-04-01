@@ -1297,11 +1297,13 @@ func (s *scanCoordinator) handleUpdateBucketPauseState(cmd Message) {
 	bucket := req.GetBucket()
 	bucketState := req.GetBucketPauseState()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if common.IsServerlessDeployment() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 
-	//update indexer book-keeping
-	s.bucketPauseState[bucket] = bucketState
+		//update indexer book-keeping
+		s.bucketPauseState[bucket] = bucketState
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 

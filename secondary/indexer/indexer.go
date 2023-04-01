@@ -11516,6 +11516,8 @@ func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 	idx.distributeKeyspaceStatsMapsToWorkers()
+
+	idx.resetBucketPauseState(streamId, keyspaceId)
 }
 
 func (idx *indexer) monitorKVNodes() {
@@ -12125,6 +12127,10 @@ func closeSlices(sliceList []Slice, logPrefix string) {
 
 func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 
+	if !common.IsServerlessDeployment() {
+		return
+	}
+
 	req := msg.(*MsgPauseUpdateBucketState)
 	bucket := req.GetBucket()
 	bucketState := req.GetBucketPauseState()
@@ -12165,6 +12171,9 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 
 func (idx *indexer) getBucketPauseState(keyspaceId string) bucketStateEnum {
 
+	if !common.IsServerlessDeployment() {
+		return bst_NIL
+	}
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
 
 	if state, ok := idx.bucketPauseState[bucket]; ok {
@@ -12172,4 +12181,30 @@ func (idx *indexer) getBucketPauseState(keyspaceId string) bucketStateEnum {
 	} else {
 		return bst_NIL
 	}
+}
+
+func (idx *indexer) resetBucketPauseState(streamId common.StreamId, keyspaceId string) {
+
+	if !common.IsServerlessDeployment() {
+		return
+	}
+
+	logging.Infof("Indexer::resetBucketPauseState %v %v reset bucket state to NIL", streamId, keyspaceId)
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	idx.bucketPauseState[bucket] = bst_NIL
+
+	resetMsg := &MsgPauseUpdateBucketState{
+		bucket:           bucket,
+		bucketPauseState: bst_NIL,
+	}
+
+	//update scan coordinator
+	idx.scanCoordCmdCh <- resetMsg
+	<-idx.scanCoordCmdCh
+
+	//update timekeeper
+	idx.tkCmdCh <- resetMsg
+	<-idx.tkCmdCh
+
 }
