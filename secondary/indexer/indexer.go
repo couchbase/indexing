@@ -3903,40 +3903,6 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 			common.CrashOnError(err)
 		}
 
-		// Compute restartTs for the given keyspaceId
-		allRestartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM, keyspaceId)
-
-		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, keyspaceId)
-
-		if restartTs, ok := allRestartTs[keyspaceId]; ok {
-			sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
-			if restartTs != nil {
-				idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, restartTs, nil, nil,
-					allNilSnaps, false, false, sessionId)
-			} else {
-				idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, nil, nil, nil,
-					allNilSnaps, false, false, sessionId)
-			}
-			idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
-		} else {
-			allKeyspaceIds := make([]string, 0)
-			for kid, _ := range allRestartTs {
-				allKeyspaceIds = append(allKeyspaceIds, kid)
-			}
-			err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
-				"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
-			logging.Errorf("Indexer::handleBuildRecoveredIndexes: err: %v", err)
-			// Not able to compute restartTs is an error
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-						severity: FATAL,
-						cause:    err,
-						category: INDEXER}}
-			}
-			return
-		}
-
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
@@ -12133,15 +12099,15 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 
 	req := msg.(*MsgPauseUpdateBucketState)
 	bucket := req.GetBucket()
-	bucketState := req.GetBucketPauseState()
+	newState := req.GetBucketPauseState()
 
-	currState := idx.bucketPauseState[bucket]
+	oldState := idx.bucketPauseState[bucket]
 
-	logging.Infof("Indexer::handleUpdateBucketPauseState Updating %v state from %v to %v", bucket, currState,
-		bucketState)
+	logging.Infof("Indexer::handleUpdateBucketPauseState Updating %v state from %v to %v", bucket,
+		oldState, newState)
 
 	//update indexer book-keeping
-	idx.bucketPauseState[bucket] = bucketState
+	idx.bucketPauseState[bucket] = newState
 
 	//update scan coordinator
 	idx.scanCoordCmdCh <- msg
@@ -12151,11 +12117,11 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	//if the currState is in any of the pausing states and the new state is online,
+	//if the oldState is in any of the pausing states and the new state is online,
 	//it means the pause has been rolled back. DCP might have disconnected the streams
 	//as part of pause operations and indexer wouldn't retry if bucket is in any of
 	//the pausing states. Initiate recovery to re-establish the DCP streams.
-	if currState.IsPausing() && bucketState == bst_ONLINE {
+	if oldState.IsPausing() && newState == bst_ONLINE {
 		logging.Infof("Indexer::handleUpdateBucketPauseState Detected online state"+
 			"for pausing/paused bucket %v. Initiating recovery of DCP streams. ", bucket)
 
@@ -12167,6 +12133,15 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 			sessionId:  maintSessionId})
 	}
 
+	//if the oldState is bst_RESUMED and the new state is bst_ONLINE,
+	//it means the bucket is now ready to accept DCP connections.
+	//Start the DCP streams for the bucket.
+	if oldState == bst_RESUMED && newState == bst_ONLINE {
+		logging.Infof("Indexer::handleUpdateBucketPauseState Detected online state"+
+			"for resumed bucket %v. Initiating recovery of DCP streams. ", bucket)
+
+		idx.startKeyspaceIdStreamsForResumedIndexes(bucket)
+	}
 }
 
 func (idx *indexer) getBucketPauseState(keyspaceId string) bucketStateEnum {
@@ -12207,4 +12182,32 @@ func (idx *indexer) resetBucketPauseState(streamId common.StreamId, keyspaceId s
 	idx.tkCmdCh <- resetMsg
 	<-idx.tkCmdCh
 
+}
+
+func (idx *indexer) startKeyspaceIdStreamsForResumedIndexes(keyspaceId string) {
+
+	// Compute restartTs for the given keyspaceId
+	allRestartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM, keyspaceId)
+
+	idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, keyspaceId)
+
+	if restartTs, ok := allRestartTs[keyspaceId]; ok {
+		sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
+		if restartTs != nil {
+			idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, restartTs, nil, nil,
+				allNilSnaps, false, false, sessionId)
+		} else {
+			idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, nil, nil, nil,
+				allNilSnaps, false, false, sessionId)
+		}
+		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
+	} else {
+		allKeyspaceIds := make([]string, 0)
+		for kid, _ := range allRestartTs {
+			allKeyspaceIds = append(allKeyspaceIds, kid)
+		}
+		err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
+			"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
+		logging.Errorf("Indexer::startKeyspaceIdStreamsForResumedIndexes : err: %v", err)
+	}
 }
