@@ -12131,7 +12131,8 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 
 	currState := idx.bucketPauseState[bucket]
 
-	logging.Infof("Indexer::handleUpdateBucketPauseState Updating from %v to %v", currState, bucketState)
+	logging.Infof("Indexer::handleUpdateBucketPauseState Updating %v state from %v to %v", bucket, currState,
+		bucketState)
 
 	//update indexer book-keeping
 	idx.bucketPauseState[bucket] = bucketState
@@ -12143,6 +12144,22 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 	//update timekeeper
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
+
+	//if the currState is in any of the pausing states and the new state is online,
+	//it means the pause has been rolled back. DCP might have disconnected the streams
+	//as part of pause operations and indexer wouldn't retry if bucket is in any of
+	//the pausing states. Initiate recovery to re-establish the DCP streams.
+	if currState.IsPausing() && bucketState == bst_ONLINE {
+		logging.Infof("Indexer::handleUpdateBucketPauseState Detected online state"+
+			"for pausing/paused bucket %v. Initiating recovery of DCP streams. ", bucket)
+
+		streamId := common.MAINT_STREAM
+		maintSessionId := idx.getCurrentSessionId(streamId, bucket)
+		idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId:   streamId,
+			keyspaceId: bucket,
+			sessionId:  maintSessionId})
+	}
 
 }
 
