@@ -604,9 +604,9 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	cfg := r.pauseMgr.config.Load()
 	plasmaCfg := generatePlasmaCopierConfig(r.task, cfg)
 
-	copier := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
-	if copier == nil {
-		err := fmt.Errorf("object store not supported")
+	copier, cerr := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
+	if cerr != nil {
+		err := fmt.Errorf("object store not supported (err=%v)", cerr)
 		logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
 		return nil, err
 	}
@@ -772,9 +772,9 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 	cfg := r.pauseMgr.config.Load()
 	plasmaCfg := generatePlasmaCopierConfig(r.task, cfg)
 
-	copier := plasma.MakeFileCopier(nodeDir, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
-	if copier == nil {
-		err = fmt.Errorf("object store not supported")
+	copier, cerr := plasma.MakeFileCopier(nodeDir, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
+	if cerr != nil {
+		err = fmt.Errorf("object store not supported (err=%v)", cerr)
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: %v", err)
 		return
 	}
