@@ -115,8 +115,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	SetPauseMgr(m)
 
 	// Internal REST APIs
-	mux.HandleFunc("/pauseMgr/FailedTask", m.RestHandleFailedTask)
 	mux.HandleFunc("/pauseMgr/Pause", m.RestHandlePause)
+	mux.HandleFunc("/pauseMgr/Progress", m.RestHandleGetProgress)
 
 	// Unit test REST APIs -- THESE MUST STILL DO AUTHENTICATION!!
 	mux.HandleFunc("/test/Pause", m.testPause)
@@ -306,7 +306,10 @@ func (psm *PauseServiceManager) unlockShards(shardIds []common.ShardId) error {
 	return errors.New(errBuilder.String())
 }
 
-func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, taskId, bucket, destination string, cancelCh <-chan struct{}) (map[common.ShardId]string, error) {
+func (psm *PauseServiceManager) copyShardsWithLock(
+	shardIds []common.ShardId, taskId, bucket, destination string,
+	cancelCh <-chan struct{}, progressUpdate func(float64),
+) (map[common.ShardId]string, error) {
 	err := psm.lockShards(shardIds)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::copyShardsWithLock: locking shards failed. err -> %v for taskId %v", err, taskId)
@@ -318,9 +321,12 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 			logging.Errorf("PauseServiceManager::copyShardsWithLock: unlocking shards failed. err -> %v for taskId %v", err, taskId)
 		}
 	}()
-	logging.Infof("PauseServiceManager::copyShardsWithLock: locked shards with id %v for taskId: %v", shardIds, taskId)
+	logging.Infof("PauseServiceManager::copyShardsWithLock: locked shards with id %v for taskId: %v",
+		shardIds, taskId)
 
 	respCh := make(chan Message)
+	progressCh := make(chan *ShardTransferStatistics, 1000)
+	lastReportedProgress := make(map[common.ShardId]int64)
 
 	msg := &MsgStartShardTransfer{
 		shardIds:    shardIds,
@@ -331,45 +337,61 @@ func (psm *PauseServiceManager) copyShardsWithLock(shardIds []common.ShardId, ta
 		respCh:      respCh,
 		doneCh:      cancelCh, // abort transfer if msg received on done
 		cancelCh:    cancelCh,
-		progressCh:  nil, // TODO: handle progress reporting
+		progressCh:  progressCh,
 	}
 
 	psm.supvMsgch <- msg
 
-	resp, ok := (<-respCh).(*MsgShardTransferResp)
+	for {
+		select {
+		case stats := <-progressCh:
+			if stats.totalBytes == 0 {
+				continue
+			}
+			currProg := (stats.bytesWritten * 100) / stats.totalBytes
+			progressUpdate(float64(currProg-lastReportedProgress[stats.shardId]) / 100.0)
+			lastReportedProgress[stats.shardId] = currProg
+		case respMsg := <-respCh:
+			resp, ok := respMsg.(*MsgShardTransferResp)
+			if !ok || resp == nil {
+				err = fmt.Errorf("either response channel got closed or sent an invalid response")
+				logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId %v",
+					err, taskId)
+				return nil, err
+			}
+			errMap := resp.GetErrorMap()
+			errBuilder := new(strings.Builder)
+			for shardId, errInCopy := range errMap {
+				if errInCopy != nil {
+					errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v",
+						shardId, errInCopy))
+				}
+			}
+			if errBuilder.Len() != 0 {
+				err = errors.New(errBuilder.String())
+				logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId: %v",
+					err, taskId)
+				return nil, err
+			}
 
-	if !ok || resp == nil {
-		// We skip unlocking of shards here. it should get called when pause gets rolled back
-		err = fmt.Errorf("either response channel got closed or sent an invalid response")
-		logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId %v", err, taskId)
-		return nil, err
-	}
-	errMap := resp.GetErrorMap()
-	errBuilder := new(strings.Builder)
-	for shardId, errInCopy := range errMap {
-		if errInCopy != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to copy shard %v, err: %v", shardId, errInCopy))
+			return resp.GetShardPaths(), nil
 		}
 	}
-	if errBuilder.Len() != 0 {
-		err = errors.New(errBuilder.String())
-		logging.Errorf("PauseServiceManager::copyShardsWithLock: %v for taskId: %v", err, taskId)
-		return nil, err
-	}
-
-	return resp.GetShardPaths(), nil
 }
 
 func (psm *PauseServiceManager) downloadShardsWithoutLock(
 	shardPaths map[common.ShardId]string,
 	taskId, bucket, origin, region string,
-	cancelCh <-chan struct{},
+	cancelCh <-chan struct{}, progressUpdate func(incr float64),
 ) (map[common.ShardId]string, error) {
 
 	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v for taskId %v",
 		shardPaths, taskId)
 
 	respCh := make(chan Message)
+	progressCh := make(chan *ShardTransferStatistics, 1000)
+	lastReportedProgress := make(map[common.ShardId]int64)
+
 	msg := &MsgStartShardRestore{
 		taskType:    common.PauseResumeTask,
 		taskId:      taskId,
@@ -379,31 +401,45 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 		region:      region,
 		cancelCh:    cancelCh,
 		doneCh:      cancelCh,
-		progressCh:  nil,
+		progressCh:  progressCh,
 		respCh:      respCh,
 	}
 
 	psm.supvMsgch <- msg
-	resp, ok := (<-respCh).(*MsgShardTransferResp)
 
-	if !ok || resp == nil {
-		err := fmt.Errorf("either response channel got closed or sent an invalid response")
-		logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
-		return nil, err
-	}
-	errMap := resp.GetErrorMap()
-	errBuilder := new(strings.Builder)
-	for shardId, errInCopy := range errMap {
-		if errInCopy != nil {
-			errBuilder.WriteString(fmt.Sprintf("Failed to download shard %v, err: %v", shardId, errInCopy))
+	for {
+		select {
+		case stats := <-progressCh:
+			if stats.totalBytes == 0 {
+				continue
+			}
+			currProg := (stats.bytesWritten * 100) / stats.totalBytes
+			progressUpdate(float64(currProg-lastReportedProgress[stats.shardId]) / 100.0)
+			lastReportedProgress[stats.shardId] = currProg
+		case respMsg := <-respCh:
+			resp, ok := respMsg.(*MsgShardTransferResp)
+		
+			if !ok || resp == nil {
+				err := fmt.Errorf("either response channel got closed or sent an invalid response")
+				logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
+				return nil, err
+			}
+			errMap := resp.GetErrorMap()
+			errBuilder := new(strings.Builder)
+			for shardId, errInCopy := range errMap {
+				if errInCopy != nil {
+					errBuilder.WriteString(fmt.Sprintf("Failed to download shard %v, err: %v", shardId, errInCopy))
+				}
+			}
+			if errBuilder.Len() != 0 {
+				err := errors.New(errBuilder.String())
+				logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v",
+					err, taskId)
+				return nil, err
+			}
+			return resp.GetShardPaths(), nil
 		}
 	}
-	if errBuilder.Len() != 0 {
-		err := errors.New(errBuilder.String())
-		logging.Errorf("PauseServiceManager::downloadShardsWithLock: %v for taskId %v", err, taskId)
-		return nil, err
-	}
-	return resp.GetShardPaths(), nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -476,6 +512,8 @@ const (
 	// state and only open such a bucket for business if it gets marked as active. Resume-related
 	// tasks do NOT exist. This state ends when either the bucket is marked active or is dropped.
 	bst_RESUMED
+
+	bst_ONLINE
 )
 
 func (this bucketStateEnum) IsPausing() bool {
@@ -529,6 +567,8 @@ func (this bucketStateEnum) String() string {
 		return "Resuming"
 	case bst_RESUMED:
 		return "Resumed"
+	case bst_ONLINE:
+		return "Online"
 	default:
 		return fmt.Sprintf("undefinedBucketStateEnum_%v", int(this))
 	}
@@ -680,17 +720,17 @@ func (t *taskObj) IncRev() {
 
 // TaskObjSetFailed sets task.status to service.TaskStatusFailed and task.errMessage to errMsg.
 // this applies lock and internally calls TaskObjSetFailedNoLock
-func (this *taskObj) TaskObjSetFailed(errMsg string) {
+func (this *taskObj) TaskObjSetFailed(errMsg string, status service.TaskStatus) {
 	this.taskMu.Lock()
-	this.TaskObjSetFailedNoLock(errMsg)
+	this.TaskObjSetFailedNoLock(errMsg, status)
 	this.taskMu.Unlock()
 }
 
 // TaskObjSetFailedNoLock sets the status to service.TaskStatusFailed and errorMessage to errMsg
 // callers should hold the lock
-func (t *taskObj) TaskObjSetFailedNoLock(errMsg string) {
+func (t *taskObj) TaskObjSetFailedNoLock(errMsg string, status service.TaskStatus) {
 	t.errorMessage = errMsg
-	t.taskStatus = service.TaskStatusFailed
+	t.taskStatus = status
 	t.incRevNoLock()
 }
 
@@ -941,6 +981,7 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	// Set bst_PREPARE_PAUSE state
 	err = m.bucketStateSet(_PreparePause, params.Bucket, bst_NIL, bst_PREPARE_PAUSE)
 	if err != nil {
+		err = m.bucketStateSet(_PreparePause, params.Bucket, bst_ONLINE, bst_PREPARE_PAUSE)
 		return err
 	}
 
@@ -1491,7 +1532,13 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		// Set bst_PREPARE_RESUME state
 		err = m.bucketStateSet(_PrepareResume, params.Bucket, bst_NIL, bst_PREPARE_RESUME)
 		if err != nil {
+			m.bucketStateSet(_PrepareResume, params.Bucket, bst_ONLINE, bst_PREPARE_RESUME)
 			return err
+		}
+
+		m.supvMsgch <- &MsgPauseUpdateBucketState{
+			bucket:           params.Bucket,
+			bucketPauseState: bst_PREPARE_RESUME,
 		}
 
 	}
@@ -1872,7 +1919,13 @@ func (m *PauseServiceManager) endTask(opErr error, taskId string) *taskObj {
 	}
 
 	if opErr != nil {
-		if !m.taskSetFailed(taskId, opErr.Error()) {
+		status := service.TaskStatusFailed
+		errStr := opErr.Error()
+		if !task.isPause && strings.Contains(errStr, "Not Enough Capacity To Place Tenant") ||
+			strings.Contains(errStr, "No SubCluster Below Low Usage Threshold") {
+				status = service.TaskStatusCannotResume
+		}
+		if !m.taskSetFailed(taskId, errStr, status) {
 			logging.Errorf("PauseServiceManager::endTask: Failed to find task while setting failed status")
 		}
 
@@ -1947,46 +2000,6 @@ func (m *PauseServiceManager) RestNotifyPause(otherIndexAddrs []string, task *ta
 // REST orchestration receiver methods. These are all invoked on followers to handle and respond to
 // instructions from the master.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// RestHandleFailedTask handles REST API /pauseMgr/FailedTask by marking the task as failed.
-func (m *PauseServiceManager) RestHandleFailedTask(w http.ResponseWriter, r *http.Request) {
-	const _RestHandleFailedTask = "PauseServiceManager::RestHandleFailedTask:"
-
-	logging.Infof("%v called", _RestHandleFailedTask)
-	defer logging.Infof("%v returned", _RestHandleFailedTask)
-
-	// Authenticate
-	creds, ok := doAuth(r, w, _RestHandleFailedTask)
-	if !ok {
-		return
-	}
-
-	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, _RestHandleFailedTask) {
-		return
-	}
-
-	// Parameters
-	id := r.FormValue("id")
-	errMsg := r.FormValue("errMsg")
-
-	task := m.taskFind(id)
-	if task != nil {
-		// Do the work for this task
-		logging.Infof("%v Marking taskId %v (taskType %v) failed. errMsg: %v", _RestHandleFailedTask,
-			id, task.taskType, errMsg)
-		task.TaskObjSetFailed(errMsg)
-		resp := &TaskResponse{Code: RESP_SUCCESS, TaskId: id}
-		rhSend(http.StatusOK, w, resp)
-
-		return
-	}
-
-	// Task not found error reply
-	errMsg2 := fmt.Sprintf("%v taskId %v not found", _RestHandleFailedTask, id)
-	logging.Errorf(errMsg2)
-	resp := &TaskResponse{Code: RESP_ERROR, Error: errMsg2}
-	rhSend(http.StatusInternalServerError, w, resp)
-}
 
 // RestHandlePause handles REST API /pauseMgr/Pause by initiating work on the specified taskId on
 // this follower node.
@@ -2121,6 +2134,70 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 		writeError(w, fmt.Errorf("PauseServiceManager::RestHandlePause: Unsupported method, use only POST"))
 		return
 	}
+}
+
+// RestHandleGetProgress - it is a route to get the low level pauser/resumer follower progress for a task
+func (psm *PauseServiceManager) RestHandleGetProgress(w http.ResponseWriter, r *http.Request) {
+	const method = "PauseServiceManager::RestHandleGetProgress:"
+	// Authenticate
+	creds, ok := doAuth(r, w, method)
+	if !ok {
+		err := fmt.Errorf("either invalid credentials or bad request")
+		logging.Errorf("%v Failed to authenticate pause register request err[%v]", method, err)
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, method) {
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Method invalid"))
+		logging.Errorf("%v invalid method %v for /pauseMgr/Progress route", method, r.Method)
+		return
+	}
+
+	taskId := r.URL.Query().Get("id")
+	if taskId == "" {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("`id` not found"))
+		logging.Errorf("%v invalid id %v", method, taskId)
+		return
+	}
+
+	task := psm.taskFind(taskId)
+	if task == nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("`id` not found"))
+		logging.Errorf("%v task for id %v not found", method, taskId)
+		return
+	}
+
+	var progress float64
+	// it is possible that a follower has finished the pause/resume but others are still executing;
+	// in such cases, pauser/resumer could be cleaned up; if a task exists and pauser/resumer
+	// is nil, we can safely assume that the work is finished and return 100.0
+	if (task.isPause && task.pauser == nil) ||
+		(task.resumer == nil) {
+			progress = 100.0
+	} else if task.isPause {
+		progress = task.pauser.followerProgress.GetFloat64()
+	} else {
+		progress = task.resumer.followerProgress.GetFloat64()
+	}
+
+	progressBytes, err := json.Marshal(progress)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(progressBytes)
+
+	logging.Tracef("%v reported progress as %v for task ID %v", method, progress, taskId)
+	return
 }
 
 func (m *PauseServiceManager) observeGlobalPauseToken(pauseToken PauseToken) bool {
@@ -2422,10 +2499,10 @@ func (m *PauseServiceManager) taskFindForBucket(bucketName string) map[string]*t
 
 // taskSetFailed looks up a task by taskId and if found marks it as failed with the given errMsg and
 // returns true, else returns false (not found).
-func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string) bool {
+func (m *PauseServiceManager) taskSetFailed(taskId, errMsg string, status service.TaskStatus) bool {
 	task := m.taskFind(taskId)
 	if task != nil {
-		task.TaskObjSetFailed(errMsg)
+		task.TaskObjSetFailed(errMsg, status)
 		m.genericMgr.incRev()
 		return true
 	}
@@ -2458,6 +2535,7 @@ func (m *PauseServiceManager) updateProgressCallback(taskId string, progress flo
 
 		if newRev > oldRev {
 			m.genericMgr.incRev()
+			logging.Infof("PauseServiceManager::updateProgressCallback: updated progress to %v-%v for task ID %v", progress, perNodeProgress, taskId)
 		}
 	}
 }
@@ -2488,7 +2566,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	if err != nil {
 		err = fmt.Errorf("%v postWithAuth to url: %v returned error: %v", logPrefix, url, err)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 	defer resp.Body.Close()
@@ -2498,7 +2576,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		err = fmt.Errorf("%v ReadAll(resp.Body) from url: %v returned error: %v", logPrefix,
 			url, err)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 
@@ -2507,7 +2585,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 	if err != nil {
 		err = fmt.Errorf("%v Unmarshal from url: %v returned error: %v", logPrefix, url, err)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 
@@ -2516,7 +2594,7 @@ func postWithAuthWrapper(logPrefix string, url string, bodyBuf *bytes.Buffer, ta
 		err = fmt.Errorf("%v TaskResponse from url: %v reports error: %v", logPrefix,
 			url, taskResponse.Error)
 		logging.Errorf(err.Error())
-		task.TaskObjSetFailed(err.Error())
+		task.TaskObjSetFailed(err.Error(), service.TaskStatusFailed)
 		return
 	}
 }
@@ -2814,14 +2892,26 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 			bucket)
 		if len(bucket.HibernationState) == 0 {
 			// bucket no more in hibernation
+			if isPause {
+				psm.rollbackPause(bucketName)
+			}
+			psm.startBucketStreams(bucketName)
+			close(closeCh)
 		}
 		switch strings.ToLower(bucket.HibernationState) {
 		case "resuming", "pausing":
 			// no action states
 		case "resumed":
 			// bucket resumed
+			if !isPause {
+				psm.startBucketStreams(bucketName)
+				close(closeCh)
+			}
 		case "paused":
 			// bucket paused
+			if isPause {
+				close(closeCh)
+			}
 		default:
 			logging.Warnf("PauseServiceManager::monitorBucketForPauseResume:processStateUpdate: saw unkown hibernation_state `%v` on bucket `%v`",
 				bucket.HibernationState, bucketName)
@@ -2829,24 +2919,45 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 
 		return nil
 	}
-	for i := 0; err != nil && i < 10; i++ {
+
+	// we could potentially get io.EOF on network drops/server shutdowns too; it is better to retry
+	// on streaming endpoint and encounter a `404` for given bucket to be sure that the bucket is
+	// deleted from ns_server;
+
+	// TODO: verify if we can create a bucket with same name on cluster if the original is hibernated
+	for i := 0; err != nil && (i < 10 || err == io.EOF); i++ {
 		err = client.RunObserveCollectionManifestChanges("default", bucketName, processStateUpdate,
 			closeCh)
 		if err != nil {
-			if err == io.EOF {
+			if strings.Contains(err.Error(), "HTTP error 404") {
 				// bucket deleted
-			} else if strings.Contains(err.Error(), "HTTP error 404") {
-				// bucket didn't exist
+				if !isPause {
+					psm.rollbackResume(bucketName)
+				}
 			} else {
 				// Network error/marshalling error?
 				logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to observe bucket (%v) streaming endpoint. err: %v. Retrying (%v)",
 					bucketName, err, i)
 			}
-
 		}
 	}
 	logging.Infof("PauseServiceManager::monitorBucketForPauseResume: exiting bucket monitor for bucket %v; err %v for task ID: %v (for pause? -> %v)",
 		bucketName, err, taskId, isPause)
+}
+
+func (psm *PauseServiceManager) startBucketStreams(bucketName string) {
+	psm.supvMsgch <- &MsgPauseUpdateBucketState{
+		bucket:           bucketName,
+		bucketPauseState: bst_ONLINE,
+	}
+}
+
+func (psm *PauseServiceManager) rollbackPause(bucketName string) {
+	psm.bucketStateDelete(bucketName)
+}
+
+func (psm *PauseServiceManager) rollbackResume(bucketName string) {
+	psm.bucketStateDelete(bucketName)
 }
 
 func CancellableTaskRunnerWithContext(ctx context.Context, cancelledError error) func(func() error) error {

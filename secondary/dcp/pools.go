@@ -442,7 +442,11 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 		u.Path = path
 	}
 
-	res, err := security.GetWithAuthNonTLS(u.String(), nil)
+	params := &security.RequestParams{
+		UserAgent: "StreamingEndpoint",
+	}
+
+	res, err := security.GetWithAuthNonTLS(u.String(), params)
 	if err != nil {
 		return err
 	}

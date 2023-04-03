@@ -132,6 +132,9 @@ type Resumer struct {
 	retErr      error
 	cleanupOnce sync.Once
 	cb          PauseResumeCallbacks
+
+	// For progress tracking
+	masterProgress, followerProgress float64Holder
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -156,7 +159,12 @@ func NewResumer(pauseMgr *PauseServiceManager, task *taskObj, pauseToken *PauseT
 		followerTokens: make(map[string]*c.ResumeDownloadToken),
 
 		cb: PauseResumeCallbacks{done: doneCb, progress: progressCb},
+
+		masterProgress:   float64Holder{},
+		followerProgress: float64Holder{},
 	}
+	resumer.masterProgress.SetFloat64(0.0)
+	resumer.followerProgress.SetFloat64(0.0)
 
 	task.taskMu.Lock()
 	task.resumer = resumer
@@ -211,6 +219,29 @@ func (r *Resumer) initResumeAsync() {
 
 	// Ask observe to continue
 	close(r.waitForTokenPublish)
+
+	r.masterIncrProgress(10.0)
+
+	func() {
+		if r.task.ctx == nil {
+			logging.Infof("Resumer::initResumeAsync: task %v cancelled. skipping to start progress collector", r.task.taskId)
+			return
+		}
+		closeCh := r.task.ctx.Done()
+		followerNodes := make(map[service.NodeID]string)
+		for _, token := range r.masterTokens {
+			nid, _ := r.pauseMgr.genericMgr.cinfo.GetNodeIdByUUID(token.FollowerId)
+			addr, err := r.pauseMgr.genericMgr.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
+			if err != nil {
+				logging.Warnf("Pauser::initPauseAsync: failed to get service address for %v. err: %v for task ID %v",
+					token.FollowerId, err, r.task.taskId)
+			}
+			followerNodes[service.NodeID(token.FollowerId)] = addr
+		}
+		go collectComputeAndReportProgress("Resumer::collectComputeAndReportProgress:",
+			r.task.taskId, followerNodes, r.cb.progress, &r.masterProgress, 5*time.Second, &r.wg,
+			closeCh)
+	}()
 }
 
 func (r *Resumer) publishResumeDownloadTokens(rdts map[string]*c.ResumeDownloadToken) {
@@ -369,6 +400,8 @@ func (r *Resumer) processResumeDownloadTokenAsMaster(rdtId string, rdt *c.Resume
 				" rdtId[%v] In Meta Storage: err[%v]", rdt, rdtId, err)
 			c.CrashOnError(err)
 		}
+
+		r.masterIncrProgress(90.0 / float64(len(r.masterTokens)))
 
 		r.updateInMemToken(rdtId, rdt, "master")
 
@@ -554,20 +587,6 @@ func (r *Resumer) checkAllTokensDone() bool {
 	return true
 }
 
-// failResume logs an error using the caller's logPrefix and a provided context string and aborts
-// the Resume task. If there is a set of known Indexer nodes, it will also try to notify them.
-func (this *Resumer) failResume(logPrefix string, context string, error error) {
-	// TODO: replace failResume with task status updates
-	logging.Errorf("%v Aborting Resume task %v due to %v error: %v", logPrefix,
-		this.task.taskId, context, error)
-
-	// Mark the task as failed directly here on master node (avoids dependency on loopback REST)
-	this.task.TaskObjSetFailed(error.Error())
-
-	// Notify other Index nodes
-	// this.pauseMgr.RestNotifyFailedTask(this.otherIndexAddrs, this.task, error.Error())
-}
-
 // masterGenerateResumePlan: this method downloads all the metadata, stats from archivePath and
 // plans which nodes resume indexes for given bucket
 func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken, error) {
@@ -639,7 +658,7 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	}
 
 	// Step 3: get replacement node for old paused data
-	resumeNodes := make([]*planner.IndexerNode, len(pauseMetadata.Data))
+	resumeNodes := make([]*planner.IndexerNode, 0, len(pauseMetadata.Data))
 	config := r.pauseMgr.config.Load()
 	clusterVersion := r.pauseMgr.genericMgr.cinfo.GetClusterVersion()
 	// since we don't support mixed mode for pause resume, we can use the current server version
@@ -805,6 +824,8 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 		return err
 	}
 
+	r.followerIncrProgress(10.0)
+
 	logging.Infof(
 		"Resumer::followerResumeBucket: downloaded metadata of %v indexes and stats (count=%v) for task ID %v",
 		len(metadata.IndexDefinitions), len(stats), r.task.taskId,
@@ -817,7 +838,9 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 
 	cancelCh := r.task.ctx.Done()
 	_, err = r.pauseMgr.downloadShardsWithoutLock(shardPaths, r.task.taskId, r.task.bucket,
-		r.task.archivePath, "", cancelCh)
+		r.task.archivePath, "", cancelCh,
+		func(incr float64) { r.followerIncrProgress(incr * 60.0 / float64(len(shardPaths))) },
+	)
 	if err != nil {
 		err = fmt.Errorf("couldn't download plasma shards %v; err: %v for task ID: %v",
 			rdt.ShardPaths, err, r.task.taskId)
@@ -832,6 +855,8 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 	if err != nil {
 		return err
 	}
+
+	r.followerIncrProgress(2.0)
 
 	return nil
 }
@@ -910,6 +935,8 @@ func (r *Resumer) recoverShard(rdtid string,
 
 		}
 
+		r.followerIncrProgress(14.0 / float64(len(rdt.IndexInsts)))
+
 	}
 
 	if len(buildDefnIdList.DefnIds) > 0 {
@@ -940,6 +967,8 @@ func (r *Resumer) recoverShard(rdtid string,
 		if err := r.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts, rdtid, rdt, cancelCh); err != nil {
 			return err
 		}
+
+		r.followerIncrProgress(14.0 / float64(len(buildDefnIdList.DefnIds)))
 	}
 
 	elapsed := time.Since(start).Seconds()
@@ -1159,4 +1188,13 @@ func (r *Resumer) Cleanup() {
 	r.cleanupNoLocks()
 	r.task.taskMu.Unlock()
 	r.cancelMetakv()
+}
+
+func (r *Resumer) masterIncrProgress(incr float64) {
+	incrProgress(&r.masterProgress, incr)
+	r.cb.progress(r.task.taskId, r.masterProgress.GetFloat64(), nil)
+}
+
+func (r *Resumer) followerIncrProgress(incr float64) {
+	incrProgress(&r.followerProgress, incr)
 }
