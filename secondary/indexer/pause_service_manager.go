@@ -1380,7 +1380,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(ptFilter ptFilterFn, putFilter 
 			if ptFilter(&mpt) && mpt.Type == PauseTokenPause {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
-						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+						" pt[%v] mpt[%v]", mpt.PauseId, pt, mpt)
 				}
 
 				pt = &mpt
@@ -1924,7 +1924,7 @@ func (m *PauseServiceManager) getCurrResumeTokens(ptFilter ptFilterFn, rdtFilter
 			if ptFilter(&mpt) && mpt.Type == PauseTokenResume {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for resumeId[%v]"+
-						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+						" pt[%v] mpt[%v]", mpt.PauseId, pt, mpt)
 				}
 
 				pt = &mpt

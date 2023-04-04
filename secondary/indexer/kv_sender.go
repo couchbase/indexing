@@ -281,7 +281,7 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 	sessionId := cmd.(*MsgRestartVbuckets).GetSessionId()
 
 	logging.LazyDebug(func() string {
-		return fmt.Sprintf("KVSender::handleRestartVbuckets %v %v %v %v",
+		return fmt.Sprintf("KVSender::handleRestartVbuckets %v %v %v",
 			streamId, keyspaceId, cmd)
 	})
 
