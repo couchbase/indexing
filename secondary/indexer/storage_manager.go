@@ -786,8 +786,18 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 
 	if updated == false {
 		snapC.Lock()
-		DestroyIndexSnapshot(snapC.snap)
-		snapC.snap = is
+		if snapC.deleted {
+			// Index is deleted and the snapshot is already destroyed. Skip destroying old snapshot
+			// Destroy current snapshot
+			DestroyIndexSnapshot(is)
+			logging.Infof("StorageMgr::updateSnapMapAndNotify - Destroying the last known snapshot for index: %v "+
+				"as index is deleted", is.IndexInstId())
+			snapC.Unlock()
+			return
+		} else { // Destroy old index snapshot and update new index snapshot
+			DestroyIndexSnapshot(snapC.snap)
+			snapC.snap = is
+		}
 		snapC.Unlock()
 	}
 
@@ -2275,7 +2285,9 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 	snapC := indexSnapMap[idxInstId]
 	if snapC != nil {
 		snapC.Lock()
-		DestroyIndexSnapshot(snapC.snap)
+		if !snapC.deleted { // Destroy only if snapshot is not already deleted
+			DestroyIndexSnapshot(snapC.snap)
+		}
 		delete(indexSnapMap, idxInstId)
 		s.indexSnapMap.Set(indexSnapMap)
 		snapC.Unlock()
@@ -2423,7 +2435,9 @@ func destroyIndexSnapMap(ism IndexSnapMap) {
 
 	for _, v := range ism {
 		v.Lock()
-		DestroyIndexSnapshot(v.snap)
+		if !v.deleted { // Destroy only if index is not already deleted
+			DestroyIndexSnapshot(v.snap)
+		}
 		v.Unlock()
 	}
 
