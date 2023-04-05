@@ -143,7 +143,7 @@ func (m *PauseServiceManager) setPauser(pauseId string, p *Pauser) error {
 			return fmt.Errorf("conflict: Pauser[%v] with pauseId[%v] already present!", oldPauser, pauseId)
 		}
 
-	} else {
+	} else if p != nil {
 		m.pausersById[pauseId] = p
 	}
 
@@ -174,7 +174,7 @@ func (m *PauseServiceManager) setResumer(resumeId string, r *Resumer) error {
 			return fmt.Errorf("conflict: Resumer[%v] with resumeId[%v] already present!", oldResumer, resumeId)
 		}
 
-	} else {
+	} else if r != nil {
 		m.resumersById[resumeId] = r
 	}
 
@@ -2661,7 +2661,7 @@ func (m *PauseServiceManager) setPauseToken(id string, pt *PauseToken) error {
 			return fmt.Errorf("conflict: PauseToken[%v] with id[%v] already present!", oldPT, id)
 		}
 
-	} else {
+	} else if pt != nil {
 		m.pauseTokensById[id] = pt
 	}
 
