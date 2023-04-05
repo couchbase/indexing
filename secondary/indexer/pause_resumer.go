@@ -444,7 +444,8 @@ func (r *Resumer) doFinish() {
 	r.wg.Wait()
 
 	// call done callback to start the cleanup phase
-	r.cb.done(r.pauseToken.PauseId, r.retErr)
+	// For DryRun=true, pauseToken is nil, so use ID from task instead
+	r.cb.done(r.task.taskId, r.retErr)
 }
 
 func (r *Resumer) processResumeDownloadTokenAsFollower(rdtId string, rdt *c.ResumeDownloadToken) bool {
