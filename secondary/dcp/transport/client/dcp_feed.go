@@ -86,6 +86,8 @@ type DcpFeed struct {
 	seqOrders map[uint16]transport.SeqOrderState // vb ==> state maintained for checking seq order
 
 	truncName string
+
+	mutationQueue *AtomicMutationQueue
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -111,6 +113,7 @@ func NewDcpFeed(
 		seqOrders: make(map[uint16]transport.SeqOrderState),
 	}
 
+	feed.mutationQueue = NewAtomicMutationQueue()
 	feed.truncName = name
 	newFeedName, err := truncFeedName(name)
 	if err != nil {
@@ -129,6 +132,7 @@ func NewDcpFeed(
 
 	feed.stats.Init()
 	feed.stats.rcvch = rcvch
+	feed.stats.mutationQueue = feed.mutationQueue
 	feed.lastAckTime = time.Now()
 
 	if _, ok := config["collectionsAware"]; ok {
@@ -140,6 +144,7 @@ func NewDcpFeed(
 		feed.osoSnapshot = config["osoSnapshot"].(bool)
 	}
 
+	go feed.DequeueMutations(rcvch, feed.finch)
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
@@ -239,6 +244,20 @@ const (
 	dfCmdCloseStream
 	dfCmdClose
 )
+
+// Intermediate go-routine to dequeue mutations and writes to rcvch
+// If there are no mutations in the queue, then Dequeue would block
+// until mutations arrive
+func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
+	for {
+		pkt, bytes := feed.mutationQueue.Dequeue(abortCh)
+		if pkt != nil {
+			rcvch <- []interface{}{pkt, bytes}
+		} else {
+			return // Exit
+		}
+	}
+}
 
 func (feed *DcpFeed) genServer(
 	opaque uint16, reqch chan []interface{}, finch chan bool,
@@ -1471,6 +1490,8 @@ type DcpStats struct {
 	Dcplatency stats.Average
 	// This stat help to determine the drain rate of dcp feed
 	IncomingMsg stats.Uint64Val
+
+	mutationQueue *AtomicMutationQueue
 }
 
 func (dcpStats *DcpStats) Init() {
@@ -1517,7 +1538,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [24]string
+	var stitems [26]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1544,6 +1565,8 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[21] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
 	stitems[22] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
 	stitems[23] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
+	stitems[24] = `"queuedItems":` + strconv.FormatUint(uint64(stats.mutationQueue.GetItems()), 10)
+	stitems[25] = `"queueSize":` + strconv.FormatUint(uint64(stats.mutationQueue.GetSize()), 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)
@@ -1758,10 +1781,11 @@ loop:
 			start, blocked = time.Now(), true
 		}
 		select {
-		case rcvch <- []interface{}{&pkt, bytes}:
-			feed.stats.IncomingMsg.Add(1)
 		case <-finch:
 			break loop
+		default:
+			feed.mutationQueue.Enqueue(&pkt, bytes)
+			feed.stats.IncomingMsg.Add(1)
 		}
 		if blocked {
 			blockedTs := time.Since(start)
