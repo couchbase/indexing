@@ -1521,6 +1521,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case CLUST_MGR_DEL_LOCAL:
 		idx.handleDelLocalMeta(msg)
 
+	case CLUST_MGR_GET_LOCAL_WITH_PREFIX:
+		idx.handleGetLocalMetaWithPrefix(msg)
+
 	case INDEXER_CHECK_DDL_IN_PROGRESS:
 		idx.handleCheckDDLInProgress(msg)
 
@@ -9810,6 +9813,14 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 	}
 
 	respch <- respMsg
+}
+
+func (idx *indexer) handleGetLocalMetaWithPrefix(msg Message) {
+
+	respMsg, _ := idx.sendMsgToClustMgr(msg)
+	respch := msg.(*MsgClustMgrLocal).GetRespCh()
+	respch <- respMsg
+
 }
 
 func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,

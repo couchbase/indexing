@@ -480,6 +480,28 @@ func (m *IndexManager) GetLocalValue(key string) (string, error) {
 	return m.repo.GetLocalValue(key)
 }
 
+func (m *IndexManager) GetLocalValuesWithKeyPrefix(keyPrefix string) (values []string, err error) {
+
+	itr, err := m.repo.GetLocalValuesIterator()
+	if err != nil {
+		return nil, err
+	}
+	defer itr.Close()
+
+	for {
+		key, content, err := itr.Next()
+		if err != nil {
+			break
+		}
+
+		if strings.HasPrefix(key, keyPrefix) {
+			values = append(values, string(content))
+		}
+	}
+
+	return values, nil
+}
+
 // Get an index definiton by id
 func (m *IndexManager) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDefn, error) {
 	return m.repo.GetIndexDefnById(id)
