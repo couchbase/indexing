@@ -81,6 +81,8 @@ type PauseServiceManager struct {
 	resumersMapMu sync.Mutex
 
 	nodeInfo *service.NodeInfo
+
+	cleanupPending int32
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
@@ -91,7 +93,7 @@ type PauseServiceManager struct {
 //	httpAddr - host:port of the local node for Index Service HTTP calls
 func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvCmdch,
 	supvMsgch MsgChannel, httpAddr string, config common.Config, nodeInfo *service.NodeInfo,
-) *PauseServiceManager {
+	pauseTokens map[string]*PauseToken) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -111,6 +113,11 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	}
 	m.config.Store(config)
 
+	for pauseId, pt := range pauseTokens {
+		m.pauseTokensById[pauseId] = pt
+	}
+	m.setCleanupPending(len(m.pauseTokensById) > 0)
+
 	// Save the singleton
 	SetPauseMgr(m)
 
@@ -127,6 +134,18 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	go m.run()
 
 	return m
+}
+
+func (m *PauseServiceManager) isCleanupPending() bool {
+	return atomic.LoadInt32(&m.cleanupPending) == 1
+}
+
+func (m *PauseServiceManager) setCleanupPending(val bool) {
+	if val {
+		atomic.StoreInt32(&m.cleanupPending, 1)
+	} else {
+		atomic.StoreInt32(&m.cleanupPending, 0)
+	}
 }
 
 // Track Pauser based on pauseId. Pauser can be deleted by calling with nil Pauser. If there is already a Pauser with
@@ -2628,6 +2647,11 @@ type PauseToken struct {
 
 	Type  PauseTokenType
 	Error string
+}
+
+func (pt *PauseToken) String() string {
+	return fmt.Sprintf("PT[pauseId[%s] bucketName[%s] typ[%v] masterIp[%s]]",
+		pt.PauseId, pt.BucketName, pt.Type, pt.MasterIP)
 }
 
 func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string, typ PauseTokenType) *PauseToken {

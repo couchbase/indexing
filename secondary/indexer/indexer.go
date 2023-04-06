@@ -199,6 +199,8 @@ type indexer struct {
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
 
+	pauseTokens map[string]*PauseToken
+
 	mergePartitionList []mergeSpec
 	prunePartitionList []pruneSpec
 	merged             map[common.IndexInstId]common.IndexInst
@@ -308,6 +310,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 		indexInstMap:  make(common.IndexInstMap),
 		indexPartnMap: make(IndexPartnMap),
+
+		pauseTokens: make(map[string]*PauseToken),
 
 		merged: make(map[common.IndexInstId]common.IndexInst),
 		pruned: make(map[common.IndexInstId]common.IndexInst),
@@ -554,7 +558,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// Start Generic Service Manager, which creates Pause and Rebalance Managers it delegates to
 	genericMgr, pauseMgr, rebalMgr := NewGenericServiceManager(httpMux, httpAddr, idx.rebalMgrCmdCh, idx.prMgrCmdCh,
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
-		idx.rebalanceToken, idx.statsMgr)
+		idx.rebalanceToken, idx.pauseTokens, idx.statsMgr)
 
 	serverlessMgr := NewServerlessManager(clusterAddr)
 
@@ -7997,6 +8001,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotReqCh []MsgChannel) error {
 
 	idx.recoverRebalanceState()
+	idx.recoverPauseResumeState()
 
 	start := time.Now()
 	err := idx.recoverIndexInstMap()
@@ -8421,6 +8426,45 @@ func (idx *indexer) recoverRebalanceState() {
 	}
 
 	logging.Infof("Indexer::recoverRebalanceState RebalanceRunning %v RebalanceToken %v", idx.rebalanceRunning, idx.rebalanceToken)
+}
+
+func (idx *indexer) recoverPauseResumeState() {
+
+	clustMgrMsg := &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL_WITH_PREFIX,
+		key:   PauseTokenTag,
+	}
+
+	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err := resp.GetError(); err != nil {
+		logging.Fatalf("Indexer::recoverPauseResumeState: Error Fetching PauseTokens From Local "+
+			"Meta Storage. Err %v", err)
+		return
+	}
+
+	for _, value := range resp.GetValues() {
+
+		var pauseToken PauseToken
+		if err := json.Unmarshal([]byte(value), &pauseToken); err != nil {
+			logging.Errorf("Indexer::recoverPauseResumeState: Error Unmarshalling PauseToken: err[%v]", err)
+			common.CrashOnError(err)
+		}
+
+		if opt, exists := idx.pauseTokens[pauseToken.PauseId]; exists {
+			err := fmt.Errorf("duplicate PauseToken pauseId[%v] pauseToken[%v] opt[%v]",
+				pauseToken.PauseId, pauseToken, opt)
+			logging.Errorf("Indexer::recoverPauseResumeState: err[%v]", err)
+			common.CrashOnError(err)
+		} else {
+			logging.Infof("Indexer::recoverPauseResumeState: Recovered pauseToken[%v] to cleanup", pauseToken)
+			if common.IsServerlessDeployment() {
+				idx.pauseTokens[pauseToken.PauseId] = &pauseToken
+			}
+		}
+
+	}
 }
 
 func (idx *indexer) handleAddIndexInstanceAtWorker(msg Message) {

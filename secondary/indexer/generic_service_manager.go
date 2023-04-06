@@ -62,7 +62,7 @@ type GenericServiceManager struct {
 func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdch,
 	prSupvCmdch MsgChannel, supvMsgch MsgChannel, rebalSupvPrioMsgch MsgChannel,
 	config common.Config, nodeInfo *service.NodeInfo, rebalanceRunning bool,
-	rebalanceToken *RebalanceToken, statsMgr *statsManager) (
+	rebalanceToken *RebalanceToken, pauseTokens map[string]*PauseToken, statsMgr *statsManager) (
 	*GenericServiceManager, *PauseServiceManager, *RebalanceServiceManager) {
 	const _class = "GenericServiceManager"
 	const _NewGenericServiceManager = "GenericServiceManager::NewGenericServiceManager:"
@@ -90,7 +90,7 @@ func NewGenericServiceManager(mux *http.ServeMux, httpAddr string, rebalSupvCmdc
 	var pauseMgr *PauseServiceManager
 	if common.IsServerlessDeployment() {
 		// Create PauseServiceManager singleton
-		pauseMgr = NewPauseServiceManager(m, mux, prSupvCmdch, supvMsgch, httpAddr, config, nodeInfo)
+		pauseMgr = NewPauseServiceManager(m, mux, prSupvCmdch, supvMsgch, httpAddr, config, nodeInfo, pauseTokens)
 		m.pauseMgr = pauseMgr
 	}
 
