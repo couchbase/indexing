@@ -2114,6 +2114,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 	var immutable bool = false
 	var deferred bool = false
+	var whereExprImmutable bool = false
 	var nodes []string = nil
 	var numReplica int = 0
 	var numPartition int = 0
@@ -2139,6 +2140,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		deferred, err, retry = o.getDeferredParam(plan)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		whereExprImmutable, err, retry = o.getWithExprImmutableParam(plan)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -2378,6 +2384,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		PartitionScheme:        partitionScheme,
 		PartitionKeys:          partitionKeys,
 		WhereExpr:              whereExpr,
+		WhereExprImmutable:     whereExprImmutable,
 		Deferred:               deferred,
 		Nodes:                  nodes,
 		Immutable:              immutable,
@@ -2832,6 +2839,31 @@ func (o *MetadataProvider) getXATTRParam(plan map[string]interface{}) (bool, err
 	}
 
 	return xattr, nil, false
+}
+
+func (o *MetadataProvider) getWithExprImmutableParam(plan map[string]interface{}) (bool, error, bool) {
+
+	immutable := false
+
+	immutable2, ok := plan["where_expr_immutable"].(bool)
+	if !ok {
+		immutable_str, ok := plan["where_expr_immutable"].(string)
+		if ok {
+			var err error
+			immutable2, err = strconv.ParseBool(immutable_str)
+			if err != nil {
+				return false, errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."), false
+			}
+			immutable = immutable2
+
+		} else if _, ok := plan["defer_build"]; ok {
+			return false, errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."), false
+		}
+	} else {
+		immutable = immutable2
+	}
+
+	return immutable, nil, false
 }
 
 func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}) (bool, error, bool) {

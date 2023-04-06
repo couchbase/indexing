@@ -487,7 +487,7 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 				// for the given feed
 				processUpsertDel()
 			}
-		} else { // if WHERE is false, broadcast upsertdelete.
+		} else if !instn.GetWhereExprImmutable() { // if WHERE is false, broadcast upsertdelete.
 			// NOTE: downstream can use upsertdelete and immutable flag
 			// to optimize out back-index lookup.
 			processUpsertDel()

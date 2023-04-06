@@ -223,6 +223,7 @@ type IndexDefn struct {
 	//PartitionKey is obsolete
 	PartitionKey           string     `json:"partitionKey,omitempty"`
 	WhereExpr              string     `json:"where,omitempty"`
+	WhereExprImmutable     bool       `json:"whereImmutable,omitempty"`
 	Desc                   []bool     `json:"desc,omitempty"`
 	Deferred               bool       `json:"deferred,omitempty"`
 	Immutable              bool       `json:"immutable,omitempty"`
