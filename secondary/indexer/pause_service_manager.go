@@ -265,14 +265,81 @@ func (psm *PauseServiceManager) handleConfigUpdate(cmd Message) {
 }
 
 func (psm *PauseServiceManager) handleIndexerReady(cmd Message) {
+
 	psm.supvCmdch <- &MsgSuccess{}
 
-	go psm.recoverFromCrash()
+	go psm.recoverPauseResume()
+
 }
 
-func (psm *PauseServiceManager) recoverFromCrash() {
-	// TODO: add recovery logic here
-	logging.Infof("PauseServiceManager::recoverFromCrash: crash recovery called on Pause-Resume service manager")
+func (m *PauseServiceManager) recoverPauseResume() {
+
+	defer logging.Infof("PauseServiceManager::recoverPauseResume: Done cleanup")
+
+	if !m.isCleanupPending() {
+		return
+	}
+
+	// If there are any errors during cleanup, they are ignored. Any subsequent pause/resume may fail due to
+	// conflicts with yet to be cleaned tokens, if they cannot be cleanup during prepare phase. It would be good
+	// to have a janitor that cleans up such orphans so that prepare does not need to.
+
+	for pauseId, pt := range m.pauseTokensById {
+		logging.Infof("PauseServiceManager::recoverPauseResume: Init Pending Cleanup for pauseId[%v] mpt[%v]",
+			pauseId, pt)
+
+		switch pt.Type {
+
+		case PauseTokenPause:
+			ptFilter, putFilter := getPauseTokenFiltersByPauseId(pauseId)
+			mpt, _, err := m.getCurrPauseTokens(ptFilter, putFilter)
+			if err != nil || mpt == nil {
+				logging.Errorf("PauseServiceManager::recoverPauseResume: Error Fetching Pause Metakv Tokens:"+
+					"err[%v]", err)
+				continue
+			}
+
+			if mpt.MasterIP == string(m.nodeInfo.NodeID) {
+				if err := m.runPauseCleanupPhase(mpt.BucketName, mpt.PauseId, true); err != nil {
+					logging.Errorf("PauseServiceManager::recoverPauseResume: Failed to cleanup pause master:"+
+						"err[%v]", err)
+					continue
+				}
+			} else {
+				if err := m.runPauseCleanupPhase(mpt.BucketName, mpt.PauseId, false); err != nil {
+					logging.Errorf("PauseServiceManager::recoverPauseResume: Failed to cleanup pause follower:"+
+						"err[%v]", err)
+					continue
+				}
+			}
+
+		case PauseTokenResume:
+			ptFilter, rdtFilter := getResumeTokenFiltersByResumeId(pauseId)
+			mpt, _, err := m.getCurrResumeTokens(ptFilter, rdtFilter)
+			if err != nil || mpt == nil {
+				logging.Errorf("PauseServiceManager::recoverPauseResume: Error Fetching Resume Metakv Tokens:"+
+					"err[%v]", err)
+				continue
+			}
+
+			if mpt.MasterIP == string(m.nodeInfo.NodeID) {
+				if err := m.runResumeCleanupPhase(mpt.BucketName, mpt.PauseId, true); err != nil {
+					logging.Errorf("PauseServiceManager::recoverPauseResume: Failed to cleanup resume master:"+
+						"err[%v]", err)
+					continue
+				}
+			} else {
+				if err := m.runResumeCleanupPhase(mpt.BucketName, mpt.PauseId, false); err != nil {
+					logging.Errorf("PauseServiceManager::recoverPauseResume: Failed to cleanup resume follower:"+
+						"err[%v]", err)
+					continue
+				}
+			}
+
+		}
+	}
+
+	m.setCleanupPending(false)
 }
 
 func (psm *PauseServiceManager) lockShards(shardIds []common.ShardId) error {
