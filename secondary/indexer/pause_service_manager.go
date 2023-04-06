@@ -981,8 +981,12 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		return service.ErrConflict
 	}
 
-	// TODO: recover pause state in bootstrap1 and add checks here
-	// Fail Prepare if bootstrap cleanup is still pending
+	// Fail Prepare if post bootstrap cleanup is still pending
+	if m.isCleanupPending() {
+		err := fmt.Errorf("cleanup pending from previous failed/aborted pause/resume")
+		logging.Errorf("PauseServiceManager::PreparePause: err[%v]", err)
+		return err
+	}
 
 	// If master pauseToken is present, pause is still running, a pause must not be attempted by caller.
 	if opts, exists := m.findPauseTokensForBucket(params.Bucket); exists {
@@ -1537,8 +1541,12 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		return service.ErrConflict
 	}
 
-	// TODO: recover resume state in bootstrap1 and add checks here
-	// Fail Prepare if bootstrap cleanup is still pending
+	// Fail Prepare if post bootstrap cleanup is still pending
+	if m.isCleanupPending() {
+		err := fmt.Errorf("cleanup pending from previous failed/aborted pause/resume")
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+		return err
+	}
 
 	// If master pauseToken is present, pause is still running, a pause must not be attempted by caller.
 	if opts, exists := m.findPauseTokensForBucket(params.Bucket); exists {
