@@ -706,7 +706,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			return v
 		}
 		if data := v.makeStreamEndData(allEngines); data != nil {
-			worker.broadcast2Endpoints(data, worker.runFinCh)
+			worker.broadcast2Endpoints(data, nil)
 		} else {
 			fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
 			logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
@@ -744,8 +744,8 @@ func (worker *VbucketWorker) broadcast2Endpoints(data interface{}, runFinCh chan
 					return
 				}
 				commands := dkvs.Kv.Commands
-				if len(commands) == 1 && commands[0] == c.Snapshot {
-					logging.Warnf("%v ##%x endpoint(%q).Send failed to send snapshot message: %v", worker.logPrefix, worker.opaque, dkvs.Kv.GetDebugInfo())
+				if len(commands) == 1 && (commands[0] == c.Snapshot || commands[0] == c.StreamEnd) {
+					logging.Warnf("%v ##%x endpoint(%q).Send failed to send message: %v", worker.logPrefix, worker.opaque, dkvs.Kv.GetDebugInfo())
 				}
 				return
 			}
