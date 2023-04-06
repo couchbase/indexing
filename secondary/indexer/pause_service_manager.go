@@ -3046,15 +3046,22 @@ func (m *PauseServiceManager) checkRebalanceRunning() (rebalanceRunning bool, er
 	return true, nil
 }
 
+// checkIndexesCaughtUp will check index stats for num_docs_pending, num_docs_queued and flush_queue_size.
+// If any of them indicate that mutations are still being processed, then indexes are not yet caught up.
 func (m *PauseServiceManager) checkIndexesCaughtUp(bucketName string) (_ bool, notCaughtUpIndexes []string) {
 
 	allStats := m.genericMgr.statsMgr.stats.Get()
 
 	for _, idxSts := range allStats.indexes {
 		if idxSts.bucket == bucketName &&
-			(idxSts.numDocsPending.Value() > 0 || idxSts.numDocsQueued.Value() > 0) {
-			notCaughtUpIndexes = append(notCaughtUpIndexes, fmt.Sprintf("bkt[%v]idx[%v]pen[%v]que[%v]",
-				bucketName, idxSts.name, idxSts.numDocsPending.Value(), idxSts.numDocsQueued.Value()))
+			(idxSts.numDocsPending.Value() > 0 ||
+				idxSts.numDocsQueued.Value() > 0 ||
+				(idxSts.numDocsFlushQueued.Value()-idxSts.numDocsIndexed.Value()) > 0) {
+
+			notCaughtUpIndexes = append(notCaughtUpIndexes, fmt.Sprintf("bkt[%v]idx[%v]pen[%v]que[%v]fqs[%v]",
+				bucketName, idxSts.name, idxSts.numDocsPending.Value(), idxSts.numDocsQueued.Value(),
+				(idxSts.numDocsFlushQueued.Value()-idxSts.numDocsIndexed.Value())))
+
 		}
 	}
 
