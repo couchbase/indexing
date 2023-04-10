@@ -866,8 +866,11 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 						}
 
 						// If index is deferred, but overall index status is active, build the remaining replica/partition.
-						if defn.Deferred && found && status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId && index != nil &&
-							(index.State == common.INDEX_STATE_INITIAL || index.State == common.INDEX_STATE_CATCHUP || index.State == common.INDEX_STATE_ACTIVE) {
+						if defn.Deferred && (!found || (found &&
+							status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId)) &&
+							index != nil && (index.State == common.INDEX_STATE_INITIAL ||
+							index.State == common.INDEX_STATE_CATCHUP || 
+							index.State == common.INDEX_STATE_ACTIVE) {
 							buildMap[defn.DefnId] = true
 						}
 					}
