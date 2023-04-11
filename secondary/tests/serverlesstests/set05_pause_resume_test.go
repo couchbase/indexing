@@ -633,6 +633,9 @@ func TestPauseResume(rootT *testing.T) {
 
 		waitForStatsUpdate()
 
+		err := mc.DeleteAllCommandTokens()
+		tc.HandleError(err, "Failed to delete all command token during setup")
+
 		// Scan the index
 		scanIndexReplicas(indexName, pauseResumeBucket, pauseResumeScope, pauseResumeCollection, []int{0, 1}, numScans, numDocs, 1, rootT)
 	}
