@@ -676,7 +676,7 @@ func IsOperationAllowed(with value.Value, conn *datastore.IndexConnection, keysp
 						return true, nil
 					} else {
 						l.Errorf("%s: The user does not have permission to use these parameters in WITH clause of CREATE PRIMARY INDEX/CREATE INDEX. WITH = %v", method, plan)
-						return false, errors.NewError(err, "User does not permission to perform this operation.")
+						return false, errors.NewError(err, "User does not have permission to perform this operation.")
 					}
 				} else {
 					l.Errorf("%s: The user credential are Invalid.", method)
