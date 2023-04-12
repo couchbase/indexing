@@ -204,7 +204,7 @@ type IndexerNode struct {
 	// input: node status
 	isDelete bool
 	isNew    bool
-	exclude  string
+	Exclude  string
 
 	// input/output: planning
 	meetConstraint bool
@@ -309,7 +309,8 @@ type IndexUsage struct {
 	partnStatPrefix string
 	instStatPrefix  string
 
-	eligible bool
+	eligible        bool
+	overrideExclude bool
 
 	// stats for duplicate index removal logic
 	numDocsQueued    int64
@@ -1478,9 +1479,6 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 		return
 	}
 
-	// numLiveNode = newNode + existing node - (excluded node + ejected node)
-	numLiveNode := s.findNumAvailLiveNode()
-
 	// Check to see if it is needed to add replica
 	for _, indexer := range s.Placement {
 		addCandidates := make(map[*IndexUsage][]*IndexerNode)
@@ -1497,14 +1495,8 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 				missingReplica = int(index.Instance.Defn.NumReplica+1) - numReplica
 			}
 
-			if index.Instance != nil && missingReplica > 0 &&
-				numReplica < numLiveNode && !index.PendingDelete {
-
-				targets := s.FindNodesForReplicaRepair(index, missingReplica)
-				if len(targets) == 0 && !indexer.ExcludeAny(s) {
-					targets = []*IndexerNode{indexer}
-				}
-
+			if index.Instance != nil && missingReplica > 0 && !index.PendingDelete {
+				targets := s.FindNodesForReplicaRepair(index, missingReplica, true)
 				if len(targets) != 0 {
 					addCandidates[index] = targets
 				}
@@ -1518,8 +1510,8 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 				numReplica := s.findNumReplica(index)
 				missing := s.findMissingReplica(index)
 
-				for replicaId, instId := range missing {
-					if numReplica < numLiveNode && len(indexers) != 0 {
+				for replicaId := 0; replicaId < int(index.Instance.Defn.NumReplica+1); replicaId++ {
+					if instId, ok := missing[replicaId]; ok && len(indexers) != 0 {
 
 						indexer := indexers[0]
 						indexers = indexers[1:]
@@ -1541,6 +1533,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							}
 							cloned.InstId = instId
 							cloned.Instance.InstId = instId
+							cloned.overrideExclude = true
 
 							// add the new replica to the solution
 							s.addIndex(indexer, cloned, false)
@@ -1597,7 +1590,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 		var allCloned []*IndexUsage
 
 		for _, indexer := range s.Placement {
-			if !indexer.isDelete && !indexer.ExcludeAny(s) {
+			if !indexer.isDelete {
 				available = append(available, indexer)
 			}
 		}
@@ -1617,6 +1610,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 				cloned := candidate.clone()
 				cloned.PartnId = partitionId
 				cloned.initialNode = nil
+				cloned.overrideExclude = true
 
 				// repair only if there is no replica, otherwise, replica repair would have handle this.
 				if s.findNumReplica(cloned) == 0 {
@@ -1627,7 +1621,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 
 		for _, cloned := range newPartns {
 			// Partition repair always places one replica at a time.
-			indexers := s.FindNodesForReplicaRepair(cloned, 1)
+			indexers := s.FindNodesForReplicaRepair(cloned, 1, true)
 			if len(indexers) < 1 {
 				logging.Warnf("Planner: Cannot repair lost partition (%v,%v,%v,%v,%v,%v)"+
 					" because of unavailaility of appropriate indexer nodes. The nodes "+
@@ -2186,7 +2180,7 @@ func (s *Solution) PrintLayout() {
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes))
 		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v",
-			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint, s.computeUsageRatio(indexer))
+			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer))
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
@@ -3003,7 +2997,7 @@ func (s *Solution) FindIndexerWithReplica(name, bucket, scope, collection string
 // Returns the exact list of nodes which can be directly used to
 // place the lost replicas.
 //
-func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica int) []*IndexerNode {
+func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica int, useExcludeNode bool) []*IndexerNode {
 	// TODO: Make this function aware of equivalent indexes.
 
 	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -3017,7 +3011,11 @@ func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica i
 
 	result := make([]*IndexerNode, 0, len(nodes))
 	for _, indexer := range nodes {
-		if indexer.IsDeleted() || indexer.ExcludeAny(s) {
+		if indexer.IsDeleted() {
+			continue
+		}
+
+		if !useExcludeNode && indexer.ExcludeIn(s) {
 			continue
 		}
 
@@ -3036,10 +3034,12 @@ func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica i
 		}
 	}
 
+	// If there are more nodes than the number of missing replica, then prioritize the nodes based
+	// on server group.
 	if len(result) > numNewReplica {
 		final := make([]*IndexerNode, 0, len(result))
 
-		// Fill all the server groups first
+		// Add a node from each server group that does not have the index
 		for _, indexer := range result {
 			if numNewReplica <= 0 {
 				break
@@ -3053,7 +3053,7 @@ func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica i
 			}
 		}
 
-		// Fill rest of the nodes
+		// Still need more node.  Add nodes from server group that already has the index.
 		for _, indexer := range result {
 			if numNewReplica <= 0 {
 				break
@@ -3902,7 +3902,7 @@ func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUs
 //
 func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsage) ViolationCode {
 
-	if n.ExcludeIn(s) {
+	if n.shouldExcludeIndex(s, u) {
 		return ExcludeNodeViolation
 	}
 
@@ -3961,7 +3961,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 //
 func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *IndexUsage, t *IndexUsage) ViolationCode {
 
-	if n.ExcludeIn(sol) {
+	if n.shouldExcludeIndex(sol, s) {
 		return ExcludeNodeViolation
 	}
 
@@ -4298,7 +4298,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.Indexes = make([]*IndexUsage, len(o.Indexes))
 	r.isDelete = o.isDelete
 	r.isNew = o.isNew
-	r.exclude = o.exclude
+	r.Exclude = o.Exclude
 	r.ActualMemUsage = o.ActualMemUsage
 	r.ActualMemMin = o.ActualMemMin
 	r.ActualMemOverhead = o.ActualMemOverhead
@@ -4612,17 +4612,26 @@ func (o *IndexerNode) SubtractDrainRate(s *Solution, drainRate uint64) {
 }
 
 //
+// This function returns whether the indexer node should exclude the given index
+func (o *IndexerNode) shouldExcludeIndex(s *Solution, n *IndexUsage) bool {
+	if o.ExcludeIn(s) {
+		return o.IsDeleted() || !(n.overrideExclude || n.initialNode == o)
+	}
+	return false
+}
+
+//
 // This function returns whether to exclude this node for taking in new index
 //
 func (o *IndexerNode) ExcludeIn(s *Solution) bool {
-	return s.enableExclude && (o.IsDeleted() || o.exclude == "in" || o.exclude == "inout")
+	return s.enableExclude && (o.IsDeleted() || o.Exclude == "in" || o.Exclude == "inout")
 }
 
 //
 // This function returns whether to exclude this node for rebalance out index
 //
 func (o *IndexerNode) ExcludeOut(s *Solution) bool {
-	return s.enableExclude && (!o.IsDeleted() && (o.exclude == "out" || o.exclude == "inout"))
+	return s.enableExclude && (!o.IsDeleted() && (o.Exclude == "out" || o.Exclude == "inout"))
 }
 
 //
@@ -4643,14 +4652,14 @@ func (o *IndexerNode) ExcludeAll(s *Solution) bool {
 // This function changes the exclude setting of a node
 //
 func (o *IndexerNode) SetExclude(exclude string) {
-	o.exclude = exclude
+	o.Exclude = exclude
 }
 
 //
 // This function changes the exclude setting of a node
 //
 func (o *IndexerNode) UnsetExclude() {
-	o.exclude = ""
+	o.Exclude = ""
 }
 
 //
@@ -5851,9 +5860,6 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 	violateHA := !s.constraint.SatisfyServerGroupConstraint(s, source, exclude.ServerGroup)
 
 	for _, indexer := range s.Placement {
-		if indexer.ExcludeIn(s) {
-			continue
-		}
 
 		if indexer.isDelete {
 			continue
@@ -5898,11 +5904,6 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 
 		// skip if node is the same
 		if indexer.NodeId == node.NodeId {
-			continue
-		}
-
-		// exclude indexer
-		if indexer.ExcludeIn(s) {
 			continue
 		}
 
@@ -6214,7 +6215,9 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 		indexers := ([]*IndexerNode)(nil)
 
 		for _, indexer := range s.Placement {
-			if !indexer.ExcludeIn(s) &&
+			// Call shouldExcludeIndex for shortcut.
+			// getRandomFittedNode() will also check if node is excluded.
+			if !indexer.shouldExcludeIndex(s, index) &&
 				exclude.NodeId != indexer.NodeId &&
 				s.constraint.SatisfyNodeResourceConstraint(s, indexer) &&
 				!indexer.isDelete &&
@@ -6232,7 +6235,9 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 	indexers := ([]*IndexerNode)(nil)
 
 	for _, indexer := range s.Placement {
-		if !indexer.ExcludeIn(s) &&
+		// Call shouldExcludeIndex for shortcut.
+		// getRandomFittedNode() will also check if node is excluded.
+		if !indexer.shouldExcludeIndex(s, index) &&
 			exclude.NodeId != indexer.NodeId &&
 			s.constraint.SatisfyNodeResourceConstraint(s, indexer) &&
 			!indexer.isDelete {
@@ -6323,6 +6328,8 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 
 	candidates := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
+		// This function is used for initial placement (create index).
+		// Do not place index on excluded nodes.
 		if !indexer.ExcludeAny(s) {
 			candidates = append(candidates, indexer)
 		}
@@ -6359,6 +6366,8 @@ func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) error
 
 	candidates := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
+		// This function is used for simulation.
+		// Do not place in excluded nodes.
 		if !indexer.ExcludeAny(s) {
 			candidates = append(candidates, indexer)
 		}
@@ -6406,10 +6415,6 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 
 		if hasMatchingNode(target.NodeId, outNodes) {
-			continue
-		}
-
-		if target.ExcludeIn(s) {
 			continue
 		}
 
@@ -6501,7 +6506,9 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 
 			for _, target := range shuffledTargets {
 
-				if source.NodeId == target.NodeId || target.isDelete || target.ExcludeIn(s) {
+				// Call shouldExcludeIndex for shortcut.
+				// CanSwapIndex() will also check if node is excluded.
+				if source.NodeId == target.NodeId || target.isDelete || target.shouldExcludeIndex(s, sourceIndex) {
 					continue
 				}
 
@@ -6590,7 +6597,9 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 
 			for _, target := range shuffledTargets {
 
-				if source.NodeId == target.NodeId || target.isDelete || (newNodeOnly && !target.isNew) || target.ExcludeIn(s) {
+				// Call shouldExcludeIndex for shortcut.
+				// CanAddIndex() will also check if node is excluded.
+				if source.NodeId == target.NodeId || target.isDelete || (newNodeOnly && !target.isNew) || target.shouldExcludeIndex(s, sourceIndex) {
 					continue
 				}
 

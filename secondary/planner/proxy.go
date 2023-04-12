@@ -255,7 +255,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		node.NodeUUID = localMeta.NodeUUID
 		node.IndexerId = localMeta.IndexerId
 		node.StorageMode = localMeta.StorageMode
-		node.exclude = localMeta.LocalSettings["excludeNode"]
+		node.Exclude = localMeta.LocalSettings["excludeNode"]
 
 		// convert from LocalIndexMetadata to IndexUsage
 		indexes, err := ConvertToIndexUsages(config, localMeta, node, buildTokens, delTokens)

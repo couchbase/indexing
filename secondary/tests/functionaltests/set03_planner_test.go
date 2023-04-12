@@ -58,6 +58,17 @@ type rebalanceTestCase struct {
 	cpuScore       float64
 }
 
+type excludeInTestCase struct {
+	comment        string
+	memQuotaFactor float64
+	cpuQuotaFactor float64
+	plan           string
+	shuffle        int
+	addNode        int
+	deleteNode     int
+	checkMovement  bool
+}
+
 type iterationTestCase struct {
 	comment   string
 	topoSpec  string
@@ -123,6 +134,12 @@ var rebalanceTestCases = []rebalanceTestCase{
 	{"rebalance - 8 identical index, delete 2, 2x", 2, 2, "../testdata/planner/plan/identical-8-0.json", 0, 0, 2, 0, 0},
 	{"rebalance - drop replcia - 3 replica, 3 zone, delete 1, 2x", 2, 2, "../testdata/planner/plan/replica-3-zone.json", 0, 0, 1, 0, 0},
 	{"rebalance - rebuid replica - 3 replica, 3 zone, add 1, delete 1, 1x", 1, 1, "../testdata/planner/plan/replica-3-zone.json", 0, 1, 1, 0, 0},
+}
+
+var excludeInTestCases = []excludeInTestCase{
+	{"scaling with excludeIn - 8 identical index, add 1, 1x", 1, 1, "../testdata/planner/plan/scale-identical-8-0.json", 0, 1, 0, true},
+	{"swap with excludeIn - 8 identical index, add 1, 1x", 1, 1, "../testdata/planner/plan/scale-identical-8-0.json", 0, 1, 1, true},
+	{"replica repair with excludeIn - 3 replica, 4 zone, delete 1, 1x", 1, 1, "../testdata/planner/plan/scale-replica-3-zone.json", 0, 0, 1, false},
 }
 
 var iterationTestCases = []iterationTestCase{
@@ -362,6 +379,7 @@ func TestPlanner(t *testing.T) {
 	rebalanceTest(t)
 	minMemoryTest(t)
 	iterationTest(t)
+	excludeInTest(t)
 }
 
 func TestGreedyPlanner(t *testing.T) {
@@ -504,6 +522,83 @@ func rebalanceTest(t *testing.T) {
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
 			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
+		}
+
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+//
+// This test planner to rebalance indexer nodes with excludeIn nodes:
+// 1) rebalance after randomly shuffle a certain percentage of indexes
+// 2) rebalance after swap in/out of indexer nodes
+//
+func excludeInTest(t *testing.T) {
+
+	for _, testcase := range excludeInTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.MemQuotaFactor = testcase.memQuotaFactor
+		config.CpuQuotaFactor = testcase.cpuQuotaFactor
+		config.Shuffle = testcase.shuffle
+		config.AddNode = testcase.addNode
+		config.DeleteNode = testcase.deleteNode
+		config.Resize = false
+
+		s := planner.NewSimulator()
+
+		plan, err := planner.ReadPlan(testcase.plan)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		solution := p.GetResult()
+
+		// Check there is no index movement
+		if testcase.checkMovement {
+			for _, indexer1 := range solution.Placement { // indexers after rebalance
+				for _, indexer2 := range plan.Placement { // indexers before rebalance
+					if indexer1.NodeId == indexer2.NodeId {
+						for _, index1 := range indexer1.Indexes { // check each index in indexer after rebalance
+							found := false
+							for _, index2 := range indexer2.Indexes {
+								if index1.DefnId == index2.DefnId &&
+									index1.InstId == index2.InstId &&
+									index1.PartnId == index2.PartnId { // no new index added
+									found = true
+									break
+								}
+							}
+
+							if !found {
+								t.Fatalf("new index (%v,%v,%v) found in node %v after rebalance",
+									index1.DefnId, index1.InstId, index1.PartnId, indexer1.NodeId)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// check number of indexes are the same after rebalancing
+		count1 := 0
+		for _, indexer := range solution.Placement {
+			count1 += len(indexer.Indexes)
+		}
+
+		count2 := 0
+		for _, indexer := range plan.Placement {
+			count2 += len(indexer.Indexes)
+		}
+
+		if count1 != count2 {
+			t.Fatalf("number of indexes are different before (%v) and after (%v) rebalance",
+				count2, count1)
 		}
 
 		if err := planner.ValidateSolution(p.GetResult()); err != nil {
