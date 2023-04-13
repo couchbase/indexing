@@ -694,7 +694,7 @@ func TestPauseResume(rootT *testing.T) {
 
 	tuneCluster := func() {
 
-		fmt.Println("=== SETUP   TestPauseResume")
+		fmt.Println("=== SETUP   tuneCluster")
 		err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 		tc.HandleError(err, "DropAllSecondaryIndexes in pause resume setup")
 		log.Printf("Setting up cluster with sample data")
@@ -717,6 +717,11 @@ func TestPauseResume(rootT *testing.T) {
 	}
 
 	setup := func() {
+		fmt.Println("=== SETUP   TestPauseResume")
+
+		// Disable CBO
+		err := ChangeQuerySettings("queryUseCBO", false, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeQuerySettings")
 
 		tuneCluster()
 
@@ -741,6 +746,10 @@ func TestPauseResume(rootT *testing.T) {
 			return nil
 		})
 		log.Printf("Final structure of archivePath: \n%v", dirTree.String())
+
+		// Enable CBO
+		err := ChangeQuerySettings("queryUseCBO", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeQuerySettings")
 
 		deleteBucket()
 	}

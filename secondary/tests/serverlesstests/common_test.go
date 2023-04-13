@@ -1,12 +1,14 @@
 package serverlesstests
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log" //"os"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -161,6 +163,49 @@ func TestMain(m *testing.M) {
 	secondaryindex.SetLogLevel(logging.Fatal)
 
 	os.Exit(m.Run())
+}
+
+func ChangeQuerySettings(configKey string, configValue interface{}, serverUserName, serverPassword,
+	hostaddress string) error {
+
+	host, port, err := net.SplitHostPort(hostaddress)
+	if err != nil {
+		return fmt.Errorf("Failed to split hostport `%s': %s", hostaddress, err)
+	}
+	url := fmt.Sprintf("http://%s:%s/%s", host, port, "settings/querySettings")
+
+	if len(configKey) > 0 {
+		log.Printf("Changing config key %v to value %v\n", configKey, configValue)
+
+		pbody := []byte(fmt.Sprintf("%s=%v", configKey, configValue))
+
+		preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
+		if err != nil {
+			return err
+		}
+
+		preq.SetBasicAuth(serverUserName, serverPassword)
+		preq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		err = preq.ParseForm()
+		if err != nil {
+			return err
+		}
+
+		client := http.Client{}
+		resp, err := client.Do(preq)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
