@@ -1169,6 +1169,11 @@ func (o *MetadataProvider) retryableWaitForScheduledIndex(idxDefn *c.IndexDefn) 
 
 func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 
+	retryWaitOnTransientErr := false
+	if c.IsServerlessDeployment() {
+		retryWaitOnTransientErr = true
+	}
+
 	//
 	// Wait until one of the following events are observed.
 	// 1. StopScheduleCreateToken is posted. Last error for token will be returned.
@@ -1178,144 +1183,152 @@ func (o *MetadataProvider) waitForScheduledIndex(idxDefn *c.IndexDefn) error {
 	// Note that the DeleteCommandToken cleanup is delayed by 24 hours.
 	//
 
-	var states []c.IndexState
-	if idxDefn.Deferred {
-		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_CATCHUP, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
-	} else {
-		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
-	}
+	for {
+		var states []c.IndexState
+		if idxDefn.Deferred {
+			states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_CATCHUP, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+		} else {
+			states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+		}
 
-	tok, err := mc.GetScheduleCreateToken(idxDefn.DefnId)
-	if err != nil {
-		logging.Errorf("MetadataProvider:waitForScheduledIndex error in GetScheduleCreateToken for %v", idxDefn.DefnId)
-		return err
-	}
-
-	//
-	// By this time, the schedule create token has been observed at least once
-	// in waitForScheduleCreateToken. If the token is not present, index creation
-	// or deletion may have already happened. So, it is safe to return from here.
-	//
-	if tok == nil {
-		logging.Infof("MetadataProvider:waitForScheduledIndex schedule create token does not exits for %v", idxDefn.DefnId)
-		return nil
-	}
-
-	// Use nil topolgy as at this point the topology is unknown. This can lead
-	// to false notification in case of restart of unrelated indexer process.
-	e := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil, all: true}
-	if !o.repo.registerEvent(e) {
-		// This means that the event has already occurred.
-		return nil
-	}
-
-	errIndexDel := errors.New("Index is deleted. DeleteCommandToken posted.")
-
-	startTm := time.Now()
-
-	cinfo, err := c.FetchNewClusterInfoCache2(o.clusterUrl, c.DEFAULT_POOL, "waitForScheduledIndex")
-	if err != nil {
-		return err
-	}
-	cinfo.SetMaxRetries(5) // avoid flooding query.log with retry messages if bucket was dropped
-
-	checkValidKeyspace := func() (bool, error) {
-		//
-		// Keyspace validation happens before posting schedule create token.
-		// Here, the purpose of keyspace validation is only to check for
-		// continued keyspace existence. If it no longer exists, waitForScheduledIndex
-		// can terminate.
-		//
-
-		// Fetch bucket info in the ClusterInfoCache
-		err := cinfo.FetchForBucket(idxDefn.Bucket, true, true, false, false)
+		tok, err := mc.GetScheduleCreateToken(idxDefn.DefnId)
 		if err != nil {
-			return false, err
+			logging.Errorf("MetadataProvider:waitForScheduledIndex error in GetScheduleCreateToken for %v", idxDefn.DefnId)
+			return err
 		}
 
-		bucketUUID := cinfo.GetBucketUUID(idxDefn.Bucket)
-		if bucketUUID != tok.BucketUUID {
-			return false, nil
+		//
+		// By this time, the schedule create token has been observed at least once
+		// in waitForScheduleCreateToken. If the token is not present, index creation
+		// or deletion may have already happened. So, it is safe to return from here.
+		//
+		if tok == nil {
+			logging.Infof("MetadataProvider:waitForScheduledIndex schedule create token does not exits for %v", idxDefn.DefnId)
+			return nil
 		}
 
-		scopeId, collId := cinfo.GetScopeAndCollectionID(idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
-		if scopeId != tok.ScopeId || collId != tok.CollectionId {
-			return false, nil
+		// Use nil topolgy as at this point the topology is unknown. This can lead
+		// to false notification in case of restart of unrelated indexer process.
+		e := &event{defnId: idxDefn.DefnId, status: states, notifyCh: make(chan error, 1), topology: nil, all: true}
+		if !o.repo.registerEvent(e) {
+			// This means that the event has already occurred.
+			return nil
 		}
 
-		return true, nil
-	}
+		errIndexDel := errors.New("Index is deleted. DeleteCommandToken posted.")
 
-	checkForTokens := func() {
-		t := time.NewTicker(3 * time.Second)
-		defer t.Stop()
+		startTm := time.Now()
 
-		count := 0
-		for {
-			select {
+		cinfo, err := c.FetchNewClusterInfoCache2(o.clusterUrl, c.DEFAULT_POOL, "waitForScheduledIndex")
+		if err != nil {
+			return err
+		}
+		cinfo.SetMaxRetries(5) // avoid flooding query.log with retry messages if bucket was dropped
 
-			case <-t.C:
-				count++
-				// Check for worst case scenario timeout.
-				if time.Now().Sub(startTm) > time.Duration(4*time.Hour) {
-					timeoutErr := errors.New("Index creation timed out. The operation may" +
-						"have suceeded in the background. Please check for the index state.")
-					o.repo.cancelEvent(idxDefn.DefnId, timeoutErr)
-					return
-				}
+		checkValidKeyspace := func() (bool, error) {
+			//
+			// Keyspace validation happens before posting schedule create token.
+			// Here, the purpose of keyspace validation is only to check for
+			// continued keyspace existence. If it no longer exists, waitForScheduledIndex
+			// can terminate.
+			//
 
-				exists, err := mc.DeleteCommandTokenExist(idxDefn.DefnId)
-				if err != nil {
-					o.repo.cancelEvent(idxDefn.DefnId, err)
-					return
-				}
+			// Fetch bucket info in the ClusterInfoCache
+			err := cinfo.FetchForBucket(idxDefn.Bucket, true, true, false, false)
+			if err != nil {
+				return false, err
+			}
 
-				if exists {
-					o.repo.cancelEvent(idxDefn.DefnId, errIndexDel)
-					return
-				}
+			bucketUUID := cinfo.GetBucketUUID(idxDefn.Bucket)
+			if bucketUUID != tok.BucketUUID {
+				return false, nil
+			}
 
-				token, err1 := mc.GetStopScheduleCreateToken(idxDefn.DefnId)
-				if err1 != nil {
-					o.repo.cancelEvent(idxDefn.DefnId, err1)
-					return
-				}
+			scopeId, collId := cinfo.GetScopeAndCollectionID(idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
+			if scopeId != tok.ScopeId || collId != tok.CollectionId {
+				return false, nil
+			}
 
-				if token != nil {
-					o.repo.cancelEvent(idxDefn.DefnId, fmt.Errorf("%v", token.Reason))
-					return
-				}
+			return true, nil
+		}
 
-				// check for valid keyspace every 30 seconds.
-				if count%10 == 0 {
-					valid, err := checkValidKeyspace()
+		checkForTokens := func() {
+			t := time.NewTicker(3 * time.Second)
+			defer t.Stop()
+
+			count := 0
+			for {
+				select {
+
+				case <-t.C:
+					count++
+					// Check for worst case scenario timeout.
+					if time.Now().Sub(startTm) > time.Duration(4*time.Hour) {
+						timeoutErr := errors.New("Index creation timed out. The operation may" +
+							"have suceeded in the background. Please check for the index state.")
+						o.repo.cancelEvent(idxDefn.DefnId, timeoutErr)
+						return
+					}
+
+					exists, err := mc.DeleteCommandTokenExist(idxDefn.DefnId)
 					if err != nil {
 						o.repo.cancelEvent(idxDefn.DefnId, err)
 						return
 					}
 
-					if !valid {
-						o.repo.cancelEvent(idxDefn.DefnId, nil)
+					if exists {
+						o.repo.cancelEvent(idxDefn.DefnId, errIndexDel)
 						return
+					}
+
+					token, err1 := mc.GetStopScheduleCreateToken(idxDefn.DefnId)
+					if err1 != nil {
+						o.repo.cancelEvent(idxDefn.DefnId, err1)
+						return
+					}
+
+					if token != nil {
+						o.repo.cancelEvent(idxDefn.DefnId, fmt.Errorf("%v", token.Reason))
+						return
+					}
+
+					// check for valid keyspace every 30 seconds.
+					if count%10 == 0 {
+						valid, err := checkValidKeyspace()
+						if err != nil {
+							o.repo.cancelEvent(idxDefn.DefnId, err)
+							return
+						}
+
+						if !valid {
+							o.repo.cancelEvent(idxDefn.DefnId, nil)
+							return
+						}
 					}
 				}
 			}
 		}
-	}
 
-	go checkForTokens()
+		go checkForTokens()
 
-	// Wait for the notification
-	err, _ = <-e.notifyCh
-	if err != nil {
-		if err.Error() == errIndexDel.Error() {
-			return nil
+		// Wait for the notification
+		err, _ = <-e.notifyCh
+		if err != nil {
+			if err.Error() == errIndexDel.Error() {
+				return nil
+			}
+
+			// Incase of transient errors, continue to wait for the index reaching
+			// desired states instead of returning error
+			if retryWaitOnTransientErr && strings.Contains(err.Error(), c.ErrTransientError.Error()) {
+				continue
+			}
+
+			return err
 		}
 
-		return err
+		return nil
 	}
-
-	return nil
 }
 
 // This should be called for the defn, that is not yet persisted in index metadata.
@@ -1596,12 +1609,24 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_CATCHUP, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	}
 
-	err = o.repo.waitForAllEvent(idxDefn.DefnId, states, topologyMap)
-	if err != nil {
-		return fmt.Errorf("%v\n", err)
+	retryWaitOnTransientErr := false
+	if c.IsServerlessDeployment() {
+		retryWaitOnTransientErr = true
 	}
 
-	return nil
+	for {
+		err = o.repo.waitForAllEvent(idxDefn.DefnId, states, topologyMap)
+		if err != nil {
+			// Incase of transient errors, continue to wait for the index reaching
+			// desired states instead of returning error
+			if retryWaitOnTransientErr && strings.Contains(err.Error(), c.ErrTransientError.Error()) {
+				continue
+			}
+			return fmt.Errorf("%v\n", err)
+		}
+
+		return nil
+	}
 }
 
 func (o *MetadataProvider) canSkipPlanner(watcherMap map[c.IndexerId]int,
