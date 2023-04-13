@@ -633,6 +633,46 @@ func TestPauseResume(rootT *testing.T) {
 
 		waitForStatsUpdate()
 
+		err := mc.DeleteAllCommandTokens()
+		tc.HandleError(err, "Failed to delete all command token during setup")
+
+		statIsZero := func (substr string, stats map[string]interface{}) bool {
+			for stat, val := range stats {
+				if strings.Contains(stat, substr) && val.(float64) > 0 {
+					return false
+				}
+			}
+			return true
+		}
+
+		log.Printf("Waiting for index to catch up to kv")
+
+		for start, i := time.Now(), 0; ; i++ {
+			stats := secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+			for stat, val := range stats {
+				for _, st := range []string{"num_docs_", "items_count", "flush_queue_size"} {
+					if strings.Contains(stat, st) {
+						log.Printf("\ti[%d] stat[%v] val[%v]", i, stat, val)
+					}
+				}
+			}
+
+			if statIsZero("num_docs_pending", stats) &&
+				statIsZero("num_docs_queued", stats) &&
+				statIsZero("flush_queue_size", stats) {
+				log.Printf("Done waiting: num_docs_pending, num_docs_queued and flush_queue_size are 0")
+				break
+			}
+
+			if time.Since(start) > 5 * time.Minute {
+				rootT.Fatalf("Indexes not caught up after 5 Mins!")
+				break
+			}
+
+			time.Sleep(1 * time.Second)
+		}
+
 		// Scan the index
 		scanIndexReplicas(indexName, pauseResumeBucket, pauseResumeScope, pauseResumeCollection, []int{0, 1}, numScans, numDocs, 1, rootT)
 	}

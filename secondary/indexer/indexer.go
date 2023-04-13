@@ -4656,6 +4656,10 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 			//store the mergeTs for use in recovery of INIT_STREAM
 			idx.setMinMergeTsForCatchup(streamId, keyspaceId, mergeTs)
+
+			//check for the possibility of partition merge which might
+			//have got skipped if MAINT_STREAM was not running.
+			idx.mergePartitionForIdleKeyspaceIds()
 		} else {
 			//for INIT_STREAM, if MAINT_STREAM is not running
 			//i. all indexes dropped

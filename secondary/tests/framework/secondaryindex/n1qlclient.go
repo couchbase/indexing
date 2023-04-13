@@ -4,6 +4,7 @@ import (
 	e "errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,8 @@ var clientMapLock sync.RWMutex
 
 func init() {
 	n1qlClientMap = make(map[string]datastore.Indexer)
+	log.Default().SetOutput(os.Stdout)
+	log.Default().SetFlags(log.LstdFlags)
 }
 
 func GetOrCreateN1QLClient(server, bucketName string) (datastore.Indexer, error) {
