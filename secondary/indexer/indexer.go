@@ -4692,12 +4692,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
-	useOSOForMagma := idx.useOSOForMagmaStorage(buildStream, keyspaceId)
+	useOSO := idx.useOSOForKeyspaceStream(buildStream, keyspaceId)
 
 	if enableOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
 		buildStream == common.INIT_STREAM &&
-		useOSOForMagma {
+		useOSO {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -6546,14 +6546,14 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		allowOSO = true
 	}
 
-	useOSOForMagma := idx.useOSOForMagmaStorage(streamId, keyspaceId)
+	useOSO := idx.useOSOForKeyspaceStream(streamId, keyspaceId)
 
 	enableOSO := idx.config["build.enableOSO"].Bool()
 	if enableOSO &&
 		allowOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
 		streamId == common.INIT_STREAM &&
-		useOSOForMagma {
+		useOSO {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -10588,8 +10588,27 @@ func (idx *indexer) enablePlasmaInMemCompression() {
 	logging.Infof("Indexer::enablePlasmaInMemCompression done enabling feature for indexer %v", indexerId)
 }
 
-//useOSOForMagmaStorage checks if the input keyspaceId is of magma storage
-//type and enables OSO only for non-default scope/collection in that case.
+// useOSOForStream returns true only for INIT_STREAM on non-default keyspaces
+func (idx *indexer) useOSOForKeyspaceStream(streamId common.StreamId, keyspaceId string) bool {
+	if streamId == common.MAINT_STREAM {
+		//OSO is used only for the INIT_STREAM
+		return false
+	}
+
+	_, scope, collection := SplitKeyspaceId(keyspaceId)
+	if (scope == "" || scope == common.DEFAULT_SCOPE) &&
+		(collection == "" || collection == common.DEFAULT_COLLECTION) {
+
+		// OSO is used only for the non-default keyspaces
+		logging.Infof("Indexer::useOSOForKeyspaceStream %v %v. OSO not supported for default scope/collection.", streamId, keyspaceId)
+		return false
+	}
+
+	return true
+}
+
+// useOSOForMagmaStorage checks if the input keyspaceId is of magma storage
+// type and enables OSO only for non-default scope/collection in that case.
 func (idx *indexer) useOSOForMagmaStorage(streamId common.StreamId, keyspaceId string) bool {
 
 	const _useOSOForMagmaStorage = "Indexer::useOSOForMagmaStorage:"
@@ -10619,5 +10638,4 @@ func (idx *indexer) useOSOForMagmaStorage(streamId common.StreamId, keyspaceId s
 	}
 
 	return useOSO
-
 }
