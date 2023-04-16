@@ -3081,7 +3081,7 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 			if flushTs.GetSnapType() != common.FORCE_COMMIT {
 
 				bucketName, _, _ := SplitKeyspaceId(keyspaceId)
-				_, throttleLatency, err := tk.meteringMgr.CheckQuotaAndSleep(bucketName, "", true, 0)
+				_, throttleLatency, err := tk.meteringMgr.CheckQuotaAndSleep(bucketName, "", true, 0, nil)
 
 				if throttleLatency != 0 {
 					// Remember the time spent in throttling

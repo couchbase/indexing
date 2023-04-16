@@ -27,6 +27,12 @@ import (
 
 const METERING_FILE_VERSION int64 = 0
 
+// Small row scans
+const THROTTLING_SCAN_ITERATIONS_QUANTUM uint64 = 1000
+
+// Large row scans - Say every iteration is 1 RU - 200 Iterations
+const THROTTLING_SCAN_BYTES_QUANTUM uint64 = 256 * 200
+
 type MeteringThrottlingMgr struct {
 	handler   regulator.StatsHttpHandler
 	config    common.ConfigHolder
@@ -422,16 +428,22 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 }
 
 func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWrite bool,
-	timeout time.Duration) (proceed bool, throttleLatency time.Duration, err error) {
+	timeout time.Duration, ctx *regulator.Ctx) (proceed bool, throttleLatency time.Duration, err error) {
 
 	var readOrWrite regulator.UnitType
-	var ctx regulator.Ctx
+
 	if isWrite {
 		readOrWrite = regulator.Write
-		ctx = getNoUserCtx(bucketName)
+		if ctx == nil {
+			c := getNoUserCtx(bucketName)
+			ctx = &c
+		}
 	} else {
 		readOrWrite = regulator.Read
-		ctx = getUserCtx(bucketName, user)
+		if ctx == nil {
+			c := getUserCtx(bucketName, user)
+			ctx = &c
+		}
 	}
 
 	estimatedUnits, err := regulator.NewUnits(regulator.Index, readOrWrite, uint64(0))
@@ -448,7 +460,7 @@ func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWr
 	}
 
 	for {
-		result, throttle, err := regulator.CheckQuota(ctx, &quotaOpts)
+		result, throttle, err := regulator.CheckQuota(*ctx, &quotaOpts)
 		if err != nil {
 			return false, throttleLatency, err
 		}
@@ -573,6 +585,15 @@ func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 
 type AggregateRecorder regulator.AggregateRecorder
 
+type AggregateRecorderWithCtx struct {
+	regulator.AggregateRecorder
+	ctx *regulator.Ctx
+}
+
+func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
+	return agc.ctx
+}
+
 func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable, update bool) AggregateRecorder {
 	ctx := getNoUserCtx(bucketName)
 	options := &regulator.AggregationOptions{
@@ -582,12 +603,12 @@ func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, b
 	return metering.IndexWriteAggregateRecorder(ctx, update, options)
 }
 
-func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) AggregateRecorder {
+func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) *AggregateRecorderWithCtx {
 	ctx := getUserCtx(bucketName, user)
 	options := &regulator.AggregationOptions{
 		Unbilled: !billable,
 	}
-	return metering.IndexReadAggregateRecorder(ctx, options)
+	return &AggregateRecorderWithCtx{metering.IndexReadAggregateRecorder(ctx, options), &ctx}
 }
 
 func getNoUserCtx(bucket string) regulator.Ctx {

@@ -1670,9 +1670,9 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 	return len(indexEntriesToBeDeleted)
 }
 
-//checkFatalDbError checks if the error returned from DB
-//is fatal and stores it. This error will be returned
-//to caller on next DB operation
+// checkFatalDbError checks if the error returned from DB
+// is fatal and stores it. This error will be returned
+// to caller on next DB operation
 func (mdb *plasmaSlice) checkFatalDbError(err error) {
 
 	//panic on all DB errors and recover rather than risk
@@ -2297,8 +2297,8 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	}
 }
 
-//RollbackToZero rollbacks the slice to initial state. Return error if
-//not possible
+// RollbackToZero rollbacks the slice to initial state. Return error if
+// not possible
 func (mdb *plasmaSlice) RollbackToZero(initialBuild bool) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
@@ -2323,11 +2323,11 @@ func (mdb *plasmaSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
 	mdb.lastRollbackTs = ts
 }
 
-//slice insert/delete methods are async. There
-//can be outstanding mutations in internal queue to flush even
-//after insert/delete have return success to caller.
-//This method provides a mechanism to wait till internal
-//queue is empty.
+// slice insert/delete methods are async. There
+// can be outstanding mutations in internal queue to flush even
+// after insert/delete have return success to caller.
+// This method provides a mechanism to wait till internal
+// queue is empty.
 func (mdb *plasmaSlice) waitPersist() {
 
 	if !mdb.checkAllWorkersDone() {
@@ -2348,9 +2348,9 @@ func (mdb *plasmaSlice) waitPersist() {
 
 }
 
-//Commit persists the outstanding writes in underlying
-//forestdb database. If Commit returns error, slice
-//should be rolled back to previous snapshot.
+// Commit persists the outstanding writes in underlying
+// forestdb database. If Commit returns error, slice
+// should be rolled back to previous snapshot.
 func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
 	mdb.waitPersist()
@@ -2390,8 +2390,8 @@ func (mdb *plasmaSlice) FlushDone() {
 	mdb.adjustWriters()
 }
 
-//checkAllWorkersDone return true if all workers have
-//finished processing
+// checkAllWorkersDone return true if all workers have
+// finished processing
 func (mdb *plasmaSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
@@ -2429,8 +2429,8 @@ func (mdb *plasmaSlice) cleanupWritersOnClose() {
 	close(mdb.samplerStopCh)
 }
 
-//Destroy removes the database file from disk.
-//Slice is not recoverable after this.
+// Destroy removes the database file from disk.
+// Slice is not recoverable after this.
 func (mdb *plasmaSlice) Destroy() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
@@ -2447,7 +2447,7 @@ func (mdb *plasmaSlice) Destroy() {
 	}
 }
 
-//Id returns the Id for this Slice
+// Id returns the Id for this Slice
 func (mdb *plasmaSlice) Id() SliceId {
 	return mdb.id
 }
@@ -2457,12 +2457,12 @@ func (mdb *plasmaSlice) Path() string {
 	return mdb.path
 }
 
-//IsActive returns if the slice is active
+// IsActive returns if the slice is active
 func (mdb *plasmaSlice) IsActive() bool {
 	return mdb.isActive
 }
 
-//SetActive sets the active state of this slice
+// SetActive sets the active state of this slice
 func (mdb *plasmaSlice) SetActive(isActive bool) {
 	mdb.isActive = isActive
 }
@@ -2476,18 +2476,18 @@ func (mdb *plasmaSlice) IsCleanupDone() bool {
 	return mdb.isClosed && mdb.isDeleted
 }
 
-//Status returns the status for this slice
+// Status returns the status for this slice
 func (mdb *plasmaSlice) Status() SliceStatus {
 	return mdb.status
 }
 
-//SetStatus set new status for this slice
+// SetStatus set new status for this slice
 func (mdb *plasmaSlice) SetStatus(status SliceStatus) {
 	mdb.status = status
 }
 
-//IndexInstId returns the Index InstanceId this
-//slice is associated with
+// IndexInstId returns the Index InstanceId this
+// slice is associated with
 func (mdb *plasmaSlice) IndexInstId() common.IndexInstId {
 	return mdb.idxInstId
 }
@@ -2496,8 +2496,8 @@ func (mdb *plasmaSlice) IndexPartnId() common.PartitionId {
 	return mdb.idxPartnId
 }
 
-//IndexDefnId returns the Index DefnId this slice
-//is associated with
+// IndexDefnId returns the Index DefnId this slice
+// is associated with
 func (mdb *plasmaSlice) IndexDefnId() common.IndexDefnId {
 	return mdb.idxDefnId
 }
@@ -3460,16 +3460,27 @@ func (s *plasmaSnapshot) StatCountTotal() (uint64, error) {
 }
 
 func (s *plasmaSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
-	if s.slice.idxStats.useArrItemsCount {
-		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
-	}
 	enableMetering := s.slice.EnableMetering()
 	if enableMetering {
+		// Throttle once at beginning for every scan
+		proceed, throttleLatency, err := s.slice.meteringMgr.CheckQuotaAndSleep(s.slice.GetBucketName(),
+			ctx.User(), false, 0, nil)
+		if throttleLatency != 0 {
+			logging.Tracef("plasmaSnapshot::Iterate %v %v %v", proceed, throttleLatency, err)
+		}
+		if err == nil && !proceed {
+			logging.Debugf("plasmaSnapshot::Iterate %v %v %v", proceed, throttleLatency, err)
+			return 0, fmt.Errorf("CheckResultReject received")
+		}
+
 		bytesScanned := 8
 		ru, _ := s.slice.meteringMgr.RecordReadUnits(s.slice.GetBucketName(),
 			ctx.User(), uint64(bytesScanned), !ctx.SkipReadMetering())
 		ctx.RecordReadUnits(ru)
 		s.slice.meteringStats.recordReadUsageStats(ru)
+	}
+	if s.slice.idxStats.useArrItemsCount {
+		return s.info.IndexStats[SNAP_STATS_ARR_ITEMS_COUNT].(uint64), nil
 	}
 	return uint64(s.MainSnap.Count()), nil
 }
@@ -3662,11 +3673,25 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
-	var ar AggregateRecorder
+	var ar *AggregateRecorderWithCtx
+	loopCount := uint64(0)
+	numBytes := uint64(0)
 
 	enableMetering := s.slice.EnableMetering()
 	if enableMetering {
 		ar = s.slice.meteringMgr.StartReadAggregateRecorder(s.slice.GetBucketName(), ctx.User(), !ctx.SkipReadMetering())
+
+		// Throttle once at beginning for every scan
+		proceed, throttleLatency, err := s.slice.meteringMgr.CheckQuotaAndSleep(s.slice.GetBucketName(),
+			ctx.User(), false, 0, ar.GetContext())
+		if throttleLatency != 0 {
+			logging.Tracef("plasmaSnapshot::Iterate %v %v %v", proceed, throttleLatency, err)
+		}
+		if err == nil && !proceed {
+			logging.Debugf("plasmaSnapshot::Iterate %v %v %v", proceed, throttleLatency, err)
+			return fmt.Errorf("CheckResultReject received")
+		}
+
 		defer func() {
 			u, e := ar.Commit()
 			if e != nil {
@@ -3702,7 +3727,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 		// Discard equal keys if low inclusion is requested
 		if inclusion == Neither || inclusion == High {
-			err = s.iterEqualKeys(low, it, cmpFn, nil, nil)
+			err = s.iterEqualKeys(low, it, cmpFn, nil, nil, "", 0, 0)
 			if err != nil {
 				return err
 			}
@@ -3726,7 +3751,29 @@ loop:
 		}
 
 		if enableMetering {
-			ar.AddBytes(uint64(entry.MeteredByteLen()))
+			len := uint64(entry.MeteredByteLen())
+			ar.AddBytes(len)
+			loopCount += 1
+			numBytes += len
+			if loopCount >= THROTTLING_SCAN_ITERATIONS_QUANTUM ||
+				numBytes >= THROTTLING_SCAN_BYTES_QUANTUM {
+				// TODO:
+				// 1. Get timeout value from query and pass it here
+				// 2. Add stats for read throttling
+				// 3. Log error without flooding
+				// 4. Fine tune QUANTUM constants above
+				proceed, throttleLatency, err := s.slice.meteringMgr.CheckQuotaAndSleep(s.slice.GetBucketName(),
+					ctx.User(), false, 0, ar.GetContext())
+				if throttleLatency != 0 {
+					logging.Tracef("plasmaSnapshot::Iterate %v %v %v", proceed, throttleLatency, err)
+				}
+				if err == nil && !proceed {
+					logging.Debugf("plasmaSnapshot::Iterate %v %v %v", proceed, throttleLatency, err)
+					return fmt.Errorf("CheckResultReject received")
+				}
+				loopCount = 0
+				numBytes = 0
+			}
 		}
 
 		it.Next()
@@ -3734,7 +3781,7 @@ loop:
 
 	// Include equal keys if high inclusion is requested
 	if inclusion == Both || inclusion == High {
-		err = s.iterEqualKeys(high, it, cmpFn, callback, ar)
+		err = s.iterEqualKeys(high, it, cmpFn, callback, ar, ctx.User(), loopCount, numBytes)
 		if err != nil {
 			return err
 		}
@@ -3759,7 +3806,8 @@ func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
-	cmpFn CmpEntry, callback func([]byte) error, mt AggregateRecorder) error {
+	cmpFn CmpEntry, callback func([]byte) error, mt *AggregateRecorderWithCtx,
+	user string, loopCount, numBytes uint64) error {
 	var err error
 
 	var entry IndexEntry
@@ -3774,7 +3822,25 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 				}
 			}
 			if mt != nil {
-				mt.AddBytes(uint64(entry.MeteredByteLen()))
+				len := uint64(entry.MeteredByteLen())
+				mt.AddBytes(len)
+				loopCount += 1
+				numBytes += len
+				if loopCount >= THROTTLING_SCAN_ITERATIONS_QUANTUM ||
+					numBytes >= THROTTLING_SCAN_BYTES_QUANTUM {
+
+					proceed, throttleLatency, err := s.slice.meteringMgr.CheckQuotaAndSleep(s.slice.GetBucketName(), user, false,
+						120*time.Second, mt.GetContext())
+					if throttleLatency != 0 {
+						logging.Tracef("plasmaSnapshot::iterEqualKeys %v %v %v", proceed, throttleLatency, err)
+					}
+					if err == nil && !proceed {
+						logging.Debugf("plasmaSnapshot::iterEqualKeys %v %v %v", proceed, throttleLatency, err)
+						return fmt.Errorf("CheckResultReject received")
+					}
+					loopCount = 0
+					numBytes = 0
+				}
 			}
 		} else {
 			break
@@ -3829,16 +3895,12 @@ func hasEqualBackEntry(key []byte, bentry []byte) bool {
 // Writer Auto-Tuning
 ////////////////////////////////////////////////////////////
 
-//
 // Default number of num writers
-//
 func (slice *plasmaSlice) numWritersPerPartition() int {
 	return int(math.Ceil(float64(slice.maxNumWriters) / float64(slice.numPartitions)))
 }
 
-//
 // Get command handler queue size
-//
 func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
 
 	slice.confLock.RLock()
@@ -3854,9 +3916,7 @@ func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
 	return sliceBufSize / uint64(numWriters)
 }
 
-//
 // Allocate array for writers
-//
 func (slice *plasmaSlice) setupWriters() {
 
 	// initialize buffer
@@ -3885,9 +3945,7 @@ func (slice *plasmaSlice) setupWriters() {
 	go slice.runSampler()
 }
 
-//
 // Initialize any field related to numWriters
-//
 func (slice *plasmaSlice) initWriters(numWriters int) {
 
 	curNumWriters := len(slice.cmdCh)
@@ -3940,9 +3998,7 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 	}
 }
 
-//
 // Start the writers by passing in the desired number of writers
-//
 func (slice *plasmaSlice) startWriters(numWriters int) {
 
 	// If slice already have more writers that the desired number, return.
@@ -3960,9 +4016,7 @@ func (slice *plasmaSlice) startWriters(numWriters int) {
 	slice.numWriters = numWriters
 }
 
-//
 // Stop the writers by passing in the desired number of writers
-//
 func (slice *plasmaSlice) stopWriters(numWriters int) {
 
 	// If slice already have fewer writers that the desired number, return.
@@ -3982,9 +4036,7 @@ func (slice *plasmaSlice) stopWriters(numWriters int) {
 	slice.numWriters = numWriters
 }
 
-//
 // Free all writers
-//
 func (slice *plasmaSlice) freeAllWriters() {
 	// Stop all command workers
 	for _, stopCh := range slice.stopCh {
@@ -4009,9 +4061,7 @@ func (slice *plasmaSlice) freeAllWriters() {
 	}
 }
 
-//
 // Logging
-//
 func (slice *plasmaSlice) logSample(numWriters int) {
 
 	logging.Infof("plasmaSlice %v:%v mutation rate %.2f drain rate %.2f saturateCount %v minimum drain rate %.2f",
@@ -4022,9 +4072,7 @@ func (slice *plasmaSlice) logSample(numWriters int) {
 		slice.minimumDrainRate)
 }
 
-//
 // Expand the number of writer
-//
 func (slice *plasmaSlice) expandWriters(needed int) {
 
 	// increment writer one at a 1 to avoid saturation.    This means that
@@ -4058,9 +4106,7 @@ func (slice *plasmaSlice) expandWriters(needed int) {
 	}
 }
 
-//
 // Reduce the number of writer
-//
 func (slice *plasmaSlice) reduceWriters(needed int) {
 
 	//decrement := int(math.Ceil(float64(slice.numWriters-needed) / 2))
@@ -4088,12 +4134,10 @@ func (slice *plasmaSlice) reduceWriters(needed int) {
 	}
 }
 
-//
 // Calculate minimum drain rate
 // Minimum drain rate is calculated everytime when expanding or reducing writers, so it keeps
 // adjusting to the trailing 1 second mean drain rate. If drain rate is trending down,
 // then minimum drain rate will also trending down.
-//
 func (slice *plasmaSlice) computeMinimumDrainRate(lastNumWriters int) float64 {
 
 	// compute expected drain rate based on mean drain rate adjusted based on memory usage
@@ -4107,9 +4151,7 @@ func (slice *plasmaSlice) computeMinimumDrainRate(lastNumWriters int) float64 {
 	return newMean
 }
 
-//
 // Does drain rate meet the minimum level?
-//
 func (slice *plasmaSlice) meetMinimumDrainRate() {
 
 	// If the slice does not meet the minimum drain rate requirement after expanding/reducing writers, increment
@@ -4134,9 +4176,7 @@ func (slice *plasmaSlice) meetMinimumDrainRate() {
 	}
 }
 
-//
 // Adjust number of writers needed
-//
 func (slice *plasmaSlice) adjustNumWritersNeeded(needed int) int {
 
 	// Find a victim to release token if running out of token
@@ -4184,9 +4224,7 @@ func (slice *plasmaSlice) adjustNumWritersNeeded(needed int) int {
 	return needed
 }
 
-//
 // Adjust the number of writer
-//
 func (slice *plasmaSlice) adjustWriters() {
 
 	slice.writerLock.Lock()
@@ -4207,13 +4245,11 @@ func (slice *plasmaSlice) adjustWriters() {
 	}
 }
 
-//
 // Expand the writer when
 // 1) enableWriterTuning is enabled
 // 2) numWriters is fewer than the maxNumWriters
 // 3) numWriters needed is greater than numWriters
 // 4) drain rate has increased since the last expansion
-//
 func (slice *plasmaSlice) canExpandWriters(needed int) bool {
 
 	return slice.enableWriterTuning &&
@@ -4221,12 +4257,10 @@ func (slice *plasmaSlice) canExpandWriters(needed int) bool {
 		needed > slice.numWriters
 }
 
-//
 // Reduce the writer when
 // 1) enableWriterTuning is enabled
 // 2) numWriters is greater than 1
 // 3) numWriters needed is fewer than numWriters
-//
 func (slice *plasmaSlice) canReduceWriters(needed int) bool {
 
 	return slice.enableWriterTuning &&
@@ -4234,12 +4268,10 @@ func (slice *plasmaSlice) canReduceWriters(needed int) bool {
 		needed < slice.numWriters
 }
 
-//
 // Update the sample based on the stats collected in last flush
 // Drain rate and mutation rate is measured based on the
 // number of incoming and written keys.   It does not include
 // the size of the key.
-//
 func (slice *plasmaSlice) updateSample(elapsed int64, needLog bool) {
 
 	slice.writerLock.Lock()
@@ -4278,9 +4310,7 @@ func (slice *plasmaSlice) updateSample(elapsed int64, needLog bool) {
 	}
 }
 
-//
 // Check if it is time to adjust the writer
-//
 func (slice *plasmaSlice) shouldAdjustWriter() bool {
 
 	if !slice.enableWriterTuning {
@@ -4296,13 +4326,11 @@ func (slice *plasmaSlice) shouldAdjustWriter() bool {
 	return false
 }
 
-//
 // Mutation rate is always calculated using adjust interval (100ms), adjusted based on memory utilization.
 // Short interval for mutation rate alllows more responsiveness. Drain rate is calculated at 1s interval to
 // reduce variation.   Therefore, fluctation in mutation rate is more likely to cause writers to expand/reduce
 // than fluctation in drain rate. The implementation attempts to make allocate/de-allocate writers efficiently
 // to faciliate constant expansion/reduction of writers.
-//
 func (slice *plasmaSlice) numWritersNeeded() int {
 
 	mutationRate := slice.adjustedMeanMutationRate()
@@ -4364,9 +4392,7 @@ func (slice *plasmaSlice) runSampler() {
 
 type windowFunc func(sample *common.Sample, count int) float64
 
-//
 // Get mean drain rate adjusted based on memory uasge
-//
 func (slice *plasmaSlice) adjustedMeanDrainRate() float64 {
 
 	return slice.adjustedMeanDrainRateWithInterval(uint64(time.Second))
@@ -4378,27 +4404,21 @@ func (slice *plasmaSlice) adjustedMeanDrainRateWithInterval(interval uint64) flo
 	return slice.computeAdjustedAggregate(window, slice.drainRate, interval)
 }
 
-//
 // Get std dev drain rate adjusted based on memory uasge
-//
 func (slice *plasmaSlice) adjustedStdDevDrainRate() float64 {
 
 	window := func(sample *common.Sample, count int) float64 { return sample.WindowStdDev(count) }
 	return slice.computeAdjustedAggregate(window, slice.drainRate, uint64(time.Second))
 }
 
-//
 // Get mean mutation rate adjusted based on memory uasge
-//
 func (slice *plasmaSlice) adjustedMeanMutationRate() float64 {
 
 	window := func(sample *common.Sample, count int) float64 { return sample.WindowMean(count) }
 	return slice.computeAdjustedAggregate(window, slice.mutationRate, slice.adjustInterval)
 }
 
-//
 // Get std dev mutation rate adjusted based on memory uasge
-//
 func (slice *plasmaSlice) adjustedStdDevMutationRate() float64 {
 
 	window := func(sample *common.Sample, count int) float64 { return sample.WindowStdDev(count) }
@@ -4419,44 +4439,34 @@ func (slice *plasmaSlice) computeAdjustedAggregate(window windowFunc, sample *co
 	return window(sample, count)
 }
 
-//
 // get memory limit
-//
 func (slice *plasmaSlice) memoryLimit() float64 {
 
 	//return float64(slice.indexerStats.memoryQuota.Value())
 	return float64(getMemTotal())
 }
 
-//
 // get available memory left
-//
 func (slice *plasmaSlice) memoryAvail() float64 {
 
 	//return float64(slice.indexerStats.memoryQuota.Value()) - float64(slice.indexerStats.memoryUsed.Value())
 	return float64(getMemFree())
 }
 
-//
 // get memory used
-//
 func (slice *plasmaSlice) memoryUsed() float64 {
 
 	//return float64(slice.indexerStats.memoryUsed.Value())
 	return slice.memoryLimit() - slice.memoryAvail()
 }
 
-//
 // memory full
-//
 func (slice *plasmaSlice) memoryFull() bool {
 
 	return (float64(slice.memoryAvail()) < float64(slice.memoryLimit())*0.05)
 }
 
-//
 // minimum memory  (10M)
-//
 func (slice *plasmaSlice) minimumMemory() bool {
 
 	return (float64(slice.memoryAvail()) <= float64(20*1024*1024))
