@@ -290,7 +290,7 @@ func (m *MeteringThrottlingMgr) handleConfigUpdate(cmd Message) {
 	m.supvCmdch <- &MsgSuccess{}
 }
 
-//handleUpdateIndexInstMap updates the indexInstMap
+// handleUpdateIndexInstMap updates the indexInstMap
 func (m *MeteringThrottlingMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	logging.Tracef("MeteringThrottlingMgr::handleUpdateIndexInstMap %v", cmd)
@@ -303,7 +303,7 @@ func (m *MeteringThrottlingMgr) handleUpdateIndexInstMap(cmd Message) {
 	m.supvCmdch <- &MsgSuccess{}
 }
 
-//handleUpdateIndexPartnMap updates the indexPartnMap
+// handleUpdateIndexPartnMap updates the indexPartnMap
 func (m *MeteringThrottlingMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 	logging.Tracef("MeteringThrottlingMgr::handleUpdateIndexPartnMap %v", cmd)
@@ -419,6 +419,58 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 		return RegulatorErrorToIndexerError(r), d, e
 	}
 	return CheckResultError, time.Duration(0), err
+}
+
+func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWrite bool,
+	timeout time.Duration) (proceed bool, throttleLatency time.Duration, err error) {
+
+	var readOrWrite regulator.UnitType
+	var ctx regulator.Ctx
+	if isWrite {
+		readOrWrite = regulator.Write
+		ctx = getNoUserCtx(bucketName)
+	} else {
+		readOrWrite = regulator.Read
+		ctx = getUserCtx(bucketName, user)
+	}
+
+	estimatedUnits, err := regulator.NewUnits(regulator.Index, readOrWrite, uint64(0))
+	if err != nil {
+		return false, throttleLatency, err
+	}
+
+	quotaOpts := regulator.CheckQuotaOpts{
+		Timeout:           timeout,
+		NoThrottle:        false,
+		NoReject:          isWrite,
+		EstimatedDuration: time.Duration(0),
+		EstimatedUnits:    []regulator.Units{estimatedUnits},
+	}
+
+	for {
+		result, throttle, err := regulator.CheckQuota(ctx, &quotaOpts)
+		if err != nil {
+			return false, throttleLatency, err
+		}
+		throttleLatency += throttle
+
+		switch result {
+		case regulator.CheckResultThrottleRetry:
+			time.Sleep(throttle)
+		case regulator.CheckResultThrottleProceed:
+			time.Sleep(throttle)
+			return true, throttleLatency, nil
+		case regulator.CheckResultProceed:
+			return true, throttleLatency, nil
+		case regulator.CheckResultReject:
+			if isWrite {
+				return false, throttleLatency, fmt.Errorf("CheckResultReject is not expected")
+			}
+			return false, throttleLatency, nil
+		case regulator.CheckResultError:
+			return false, throttleLatency, fmt.Errorf("CheckResultError received from regulator")
+		}
+	}
 }
 
 //

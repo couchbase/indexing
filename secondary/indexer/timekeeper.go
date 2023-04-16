@@ -24,8 +24,8 @@ const (
 	maxStatsRetries = 5
 )
 
-//Timekeeper manages the Stability Timestamp Generation and also
-//keeps track of the HWTimestamp for each keyspaceId
+// Timekeeper manages the Stability Timestamp Generation and also
+// keeps track of the HWTimestamp for each keyspaceId
 type Timekeeper interface {
 	SetMeteringMgr(mtMgr *MeteringThrottlingMgr)
 }
@@ -75,19 +75,19 @@ type InitialBuildInfo struct {
 	flushedUptoMinMergeTs bool //indicates flushTs is past minMergeTs
 }
 
-//timeout in milliseconds to batch the vbuckets
-//together for repair message
+// timeout in milliseconds to batch the vbuckets
+// together for repair message
 const REPAIR_BATCH_TIMEOUT = 1000
 const KV_RETRY_INTERVAL = 5000
 
 //const REPAIR_RETRY_INTERVAL = 5000
 //const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
 
-//NewTimekeeper returns an instance of timekeeper or err message.
-//It listens on supvCmdch for command and every command is followed
-//by a synchronous response of the supvCmdch.
-//Any async response to supervisor is sent to supvRespch.
-//If supvCmdch get closed, storageMgr will shut itself down.
+// NewTimekeeper returns an instance of timekeeper or err message.
+// It listens on supvCmdch for command and every command is followed
+// by a synchronous response of the supvCmdch.
+// Any async response to supervisor is sent to supvRespch.
+// If supvCmdch get closed, storageMgr will shut itself down.
 func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Config,
 	cip common.ClusterInfoProvider, cipLock *sync.RWMutex) (Timekeeper, Message) {
 
@@ -120,8 +120,8 @@ func (tk *timekeeper) SetMeteringMgr(mtMgr *MeteringThrottlingMgr) {
 	}
 }
 
-//run starts the timekeeper loop which listens to messages
-//from it supervisor(indexer)
+// run starts the timekeeper loop which listens to messages
+// from it supervisor(indexer)
 func (tk *timekeeper) run() {
 
 	//main timekeeper loop
@@ -2296,9 +2296,9 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 
 }
 
-//checkInitialBuildDone checks if any of the index in Initial State is past its
-//Build TS based on the Flush Done Message. It generates msg for Build Done
-//and changes the state of the index.
+// checkInitialBuildDone checks if any of the index in Initial State is past its
+// Build TS based on the Flush Done Message. It generates msg for Build Done
+// and changes the state of the index.
 func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	keyspaceId string, flushTs *common.TsVbuuid) bool {
 
@@ -2412,13 +2412,13 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	return false
 }
 
-//checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
-//has reached past the last flushed TS of the MAINT_STREAM for this keyspaceId.
-//In such case, all indexes of the keyspaceId can merged to MAINT_STREAM.
-//If fetchKVSeq is true, this function will fetch latest collection/bucket seqnos
-//from KV for stream merge check(if required). It should only be used if there is
-//no flush activity for INIT_STREAM, as in that case the only way to know about
-//latest KV seq nums is to fetch those.
+// checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
+// has reached past the last flushed TS of the MAINT_STREAM for this keyspaceId.
+// In such case, all indexes of the keyspaceId can merged to MAINT_STREAM.
+// If fetchKVSeq is true, this function will fetch latest collection/bucket seqnos
+// from KV for stream merge check(if required). It should only be used if there is
+// no flush activity for INIT_STREAM, as in that case the only way to know about
+// latest KV seq nums is to fetch those.
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	keyspaceId string, initFlushTs *common.TsVbuuid, fetchKVSeq, forceLog bool) bool {
 	const _checkInitStreamReadyToMerge = "Timekeeper::checkInitStreamReadyToMerge:"
@@ -2837,7 +2837,7 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 	return false
 }
 
-//generates a new StabilityTS. Runs in a go routine per keyspace.
+// generates a new StabilityTS. Runs in a go routine per keyspace.
 func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	keyspaceId string) {
 
@@ -2936,9 +2936,9 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	}
 }
 
-//processPendingTS checks if there is any pending TS for the given stream and
-//keyspace. If any TS is found, it is sent to supervisor (indexer).
-//Caller of this method always holds tk.lock write locked.
+// processPendingTS checks if there is any pending TS for the given stream and
+// keyspace. If any TS is found, it is sent to supervisor (indexer).
+// Caller of this method always holds tk.lock write locked.
 func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId string) bool {
 
 	//if there is a flush already in progress for this stream and keyspaceId
@@ -3080,23 +3080,25 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 		if tk.meteringMgr != nil {
 			if flushTs.GetSnapType() != common.FORCE_COMMIT {
 
-				bucket, _, _ := SplitKeyspaceId(keyspaceId)
-				res, sleepDuration, err := tk.meteringMgr.CheckWriteThrottle(bucket)
+				bucketName, _, _ := SplitKeyspaceId(keyspaceId)
+				_, throttleLatency, err := tk.meteringMgr.CheckQuotaAndSleep(bucketName, "", true, 0)
 
-				if err == nil && res == CheckResultThrottle {
+				if throttleLatency != 0 {
 					// Remember the time spent in throttling
 					tk.lock.Lock()
-					tk.ss.streamKeyspaceIdThrottleDuration[streamId][keyspaceId] += int64(sleepDuration)
+					tk.ss.streamKeyspaceIdThrottleDuration[streamId][keyspaceId] += int64(throttleLatency)
 					tk.lock.Unlock()
 
 					keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 					if keyspaceStats != nil {
 						keyspaceStats.numThrottles.Add(1)
-						keyspaceStats.throttleLat.Add(int64(sleepDuration))
+						keyspaceStats.throttleLat.Add(int64(throttleLatency))
 					}
-					logging.Debugf("Timekeeper::sendNewStabilityTs: Flusher observed write throttles for keyspaceid %v streamId %v duration %v", keyspaceId, streamId, sleepDuration)
-					time.Sleep(sleepDuration)
-				} else {
+					logging.Debugf("Timekeeper::sendNewStabilityTs: Flusher observed write throttles for keyspaceId %v streamId %v duration %v",
+						keyspaceId, streamId, throttleLatency)
+				}
+
+				if err != nil {
 					// avoid log flooding
 					forceLog := false
 					now := uint64(time.Now().UnixNano())
@@ -3111,11 +3113,7 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 					tk.lock.Unlock()
 
 					if forceLog || logging.IsEnabled(logging.Verbose) {
-						if err != nil {
-							logging.Warnf("Timekeeper::sendNewStabilityTs: Flusher observed check throttles error for keyspaceid %v streamId %v error %v ", keyspaceId, streamId, err)
-						} else if res != CheckResultNormal {
-							logging.Warnf("Timekeeper::sendNewStabilityTs: Flusher observed check throttles error return for keyspaceid %v streamId %v error ret %v ", keyspaceId, streamId, res)
-						}
+						logging.Errorf("Timekeeper::sendNewStabilityTs: Flusher observed check throttles error for keyspaceId %v streamId %v error %v ", keyspaceId, streamId, err)
 					}
 				}
 			}
@@ -3180,7 +3178,7 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	}()
 }
 
-//set the snapshot type
+// set the snapshot type
 func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId string,
 	flushTs *common.TsVbuuid) {
 
@@ -3304,8 +3302,8 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 
 }
 
-//checkMergeCandidateTs check if a TS is a candidate for merge with
-//MAINT_STREAM
+// checkMergeCandidateTs check if a TS is a candidate for merge with
+// MAINT_STREAM
 func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 	keyspaceId string, flushTs *common.TsVbuuid) bool {
 
@@ -3326,9 +3324,9 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 	return true
 }
 
-//mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
-//have been received till Snapshot End and the difference is not
-//greater than largeSnapThreshold
+// mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
+// have been received till Snapshot End and the difference is not
+// greater than largeSnapThreshold
 func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 	keyspaceId string, flushTs *common.TsVbuuid) {
 
@@ -3443,8 +3441,8 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 
 }
 
-//changeIndexStateForKeyspaceId changes the state of all indexes in the given keyspaceId
-//to the one provided
+// changeIndexStateForKeyspaceId changes the state of all indexes in the given keyspaceId
+// to the one provided
 func (tk *timekeeper) changeIndexStateForKeyspaceId(keyspaceId string, state common.IndexState) {
 
 	//for all indexes in this keyspaceId, change the state
@@ -3476,7 +3474,7 @@ func (tk *timekeeper) setAddInstPending(streamId common.StreamId, keyspaceId str
 	}
 }
 
-//check if any index for the given keyspaceId is in initial state
+// check if any index for the given keyspaceId is in initial state
 func (tk *timekeeper) checkAnyInitialStateIndex(keyspaceId string) bool {
 
 	for _, buildInfo := range tk.indexBuildInfo {
@@ -3492,8 +3490,8 @@ func (tk *timekeeper) checkAnyInitialStateIndex(keyspaceId string) bool {
 
 }
 
-//checkKeyspaceActiveInStream checks if the given keyspaceId has Active status
-//in stream
+// checkKeyspaceActiveInStream checks if the given keyspaceId has Active status
+// in stream
 func (tk *timekeeper) checkKeyspaceActiveInStream(streamId common.StreamId,
 	keyspaceId string) bool {
 
@@ -3517,7 +3515,7 @@ func (tk *timekeeper) checkKeyspaceActiveInStream(streamId common.StreamId,
 	return true
 }
 
-//helper function to extract Stability Timestamp from TsVbuuid
+// helper function to extract Stability Timestamp from TsVbuuid
 func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	numVbuckets := len(tsVbuuid.Snapshots)
 	ts := NewTimestamp(numVbuckets)
@@ -3527,7 +3525,7 @@ func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	return ts
 }
 
-//helper function to extract Seqnum Timestamp from TsVbuuid
+// helper function to extract Seqnum Timestamp from TsVbuuid
 func getSeqTsFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	numVbuckets := len(tsVbuuid.Snapshots)
 	ts := NewTimestamp(numVbuckets)
@@ -3575,8 +3573,8 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 
 }
 
-//if End Snapshot Seqnum of each vbucket in sourceTs is greater than or equal
-//to Start Snapshot Seqnum in targetTs, return true
+// if End Snapshot Seqnum of each vbucket in sourceTs is greater than or equal
+// to Start Snapshot Seqnum in targetTs, return true
 func compareTsSnapshot(sourceTs, targetTs *common.TsVbuuid) bool {
 
 	for i, snap := range sourceTs.Snapshots {
@@ -3622,7 +3620,6 @@ func (tk *timekeeper) handleStreamCleanup(cmd Message) {
 
 }
 
-//
 // RepairStream decides on the repair action for each vb:
 // 1) StreamEnd
 // 2) ConnErr due to network failure
@@ -3632,44 +3629,50 @@ func (tk *timekeeper) handleStreamCleanup(cmd Message) {
 //
 // Repair action can be:
 // 1) RestartVb
-//    - symptoms: StreamEnd, Failed StreamBegin
-//    - effective when projector's vb is not pending or active
+//   - symptoms: StreamEnd, Failed StreamBegin
+//   - effective when projector's vb is not pending or active
+//
 // 2) ShutdownVb/RestartVb
-//    - symptoms: ConnErr + symptoms of RestartVb
-//    - effective when projector's vb is not pending
+//   - symptoms: ConnErr + symptoms of RestartVb
+//   - effective when projector's vb is not pending
+//
 // 3) Rollabck
-//    - symptoms: KV rollback
-//    - effective when projector's vb rollback
+//   - symptoms: KV rollback
+//   - effective when projector's vb rollback
+//
 // 4) MTR
-//    - symptoms: TopicMissing, InvalidBucket
-//    - effective when projector loses its bookkeeping
+//   - symptoms: TopicMissing, InvalidBucket
+//   - effective when projector loses its bookkeeping
+//
 // 5) Recovery (no rollback)
-//    - symptoms: All other repair actions ineffective
-//    - effective when projector's vb is pending
+//   - symptoms: All other repair actions ineffective
+//   - effective when projector's vb is pending
+//
 // 6) Recovery (rollback)
-//    - symptoms: StreamBegin with rollback
-//    - effective when streamBegin with rollback
+//   - symptoms: StreamBegin with rollback
+//   - effective when streamBegin with rollback
 //
 // escalation policy:
 // 1) RestartVb -> ShutdownVb/RestartVb
-//    - Indexer vb: StreamEnd
-//    - projector vb: Active
-//      - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
-//    - projector vb: Pending
-//      - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
-// 2) ShutdownVb/RestartVb -> MTR
-//    - Indexer vb: ConnErr
-//    - projector vb: Active
-//      - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
-//    - projector vb: Pending
-//      - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
-// 3) MTR -> Recovery
-//    - Indexer vb: ConnErr
-//    - projector vb: Active
-//      - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
-//    - projector vb: Pending
-//      - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
+//   - Indexer vb: StreamEnd
+//   - projector vb: Active
+//   - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
+//   - projector vb: Pending
+//   - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
 //
+// 2) ShutdownVb/RestartVb -> MTR
+//   - Indexer vb: ConnErr
+//   - projector vb: Active
+//   - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
+//   - projector vb: Pending
+//   - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
+//
+// 3) MTR -> Recovery
+//   - Indexer vb: ConnErr
+//   - projector vb: Active
+//   - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
+//   - projector vb: Pending
+//   - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
 func (tk *timekeeper) repairStream(streamId common.StreamId,
 	keyspaceId string) {
 
@@ -4494,7 +4497,7 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 	return false
 }
 
-//check any stream merge that was missed due to stream repair
+// check any stream merge that was missed due to stream repair
 func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 	keyspaceId string, forceLog bool) {
 
@@ -4527,8 +4530,8 @@ func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 
 }
 
-//startTimer starts a per stream/keyspaceId timer to periodically check and
-//generate a new stability timestamp
+// startTimer starts a per stream/keyspaceId timer to periodically check and
+// generate a new stability timestamp
 func (tk *timekeeper) startTimer(streamId common.StreamId,
 	keyspaceId string) {
 
@@ -4553,7 +4556,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 
 }
 
-//stopTimer stops the stream/keyspaceId timer started by startTimer
+// stopTimer stops the stream/keyspaceId timer started by startTimer
 func (tk *timekeeper) stopTimer(streamId common.StreamId, keyspaceId string) {
 
 	logging.Infof("Timekeeper::stopTimer %v %v", streamId, keyspaceId)
@@ -4579,7 +4582,7 @@ func (tk *timekeeper) setBuildTs(streamId common.StreamId, keyspaceId string,
 	}
 }
 
-//setMergeTs sets the mergeTs for catchup state indexes in case of recovery.
+// setMergeTs sets the mergeTs for catchup state indexes in case of recovery.
 func (tk *timekeeper) setMergeTs(streamId common.StreamId, keyspaceId string,
 	mergeTs *common.TsVbuuid) {
 
@@ -4626,8 +4629,8 @@ func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,
 
 }
 
-//hasInitStateIndexNoCatchup returns true if the stream/keyspace has
-//index in initial build except for catchup phase
+// hasInitStateIndexNoCatchup returns true if the stream/keyspace has
+// index in initial build except for catchup phase
 func (tk *timekeeper) hasInitStateIndexNoCatchup(streamId common.StreamId,
 	keyspaceId string) bool {
 
@@ -4653,8 +4656,8 @@ func (tk *timekeeper) hasInitStateIndexNoCatchup(streamId common.StreamId,
 	return false
 }
 
-//calc skip factor for in-mem snapshots based on the
-//number of pending TS to be flushed
+// calc skip factor for in-mem snapshots based on the
+// number of pending TS to be flushed
 func (tk *timekeeper) calcSkipFactorForFastFlush(streamId common.StreamId,
 	keyspaceId string) uint64 {
 	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
@@ -4919,11 +4922,11 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 
 }
 
-//ignoreException flag can be used by callers to instruct indexer to ignore
-//any already recorded exception and always initiate recovery.
-//This is useful in cases where the stream request is going to terminate, and
-//there is no further trigger to initiate recovery which got skipped due to
-//OSO exception.
+// ignoreException flag can be used by callers to instruct indexer to ignore
+// any already recorded exception and always initiate recovery.
+// This is useful in cases where the stream request is going to terminate, and
+// there is no further trigger to initiate recovery which got skipped due to
+// OSO exception.
 func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
 	keyspaceId string, sessionId uint64, ignoreException bool) bool {
 
@@ -4979,7 +4982,7 @@ func getSnapshotTimestampForInst(instId common.IndexInstId, indexPartnMap IndexP
 	return minTs
 }
 
-//Caller must hold timekeeper lock when calling this function
+// Caller must hold timekeeper lock when calling this function
 func (tk *timekeeper) getBucketPauseStateNoLock(keyspaceId string) bucketStateEnum {
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)

@@ -31,7 +31,13 @@ func (m *MeteringThrottlingMgr) RegisterRestEndpoints() {
 
 func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	result CheckResult, throttleTime time.Duration, err error) {
-	panic("MeteringManager::Not implemented for Community Edition")
+	panic("MeteringManager::CheckWriteThrottle Not implemented for Community Edition")
+	return
+}
+
+func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWrite bool,
+	timeout time.Duration) (proceed bool, throttleLatency time.Duration, err error) {
+	panic("MeteringManager::CheckQuotaAndSleep Not implemented for Community Edition")
 	return
 }
 
