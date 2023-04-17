@@ -685,19 +685,20 @@ func NewTaskObj(taskType service.TaskType, taskId, bucket, region, remotePath st
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &taskObj{
-		rev:         0,
-		taskMu:      &sync.RWMutex{},
-		taskId:      taskId,
-		taskType:    taskType,
-		taskStatus:  service.TaskStatusRunning,
-		isPause:     isPause,
-		bucket:      bucket,
-		region:      region,
-		dryRun:      dryRun,
-		archivePath: archivePath,
-		archiveType: archiveType,
-		ctx:         ctx,
-		cancelFunc:  cancel,
+		rev:             0,
+		taskMu:          &sync.RWMutex{},
+		taskId:          taskId,
+		taskType:        taskType,
+		taskStatus:      service.TaskStatusRunning,
+		isPause:         isPause,
+		bucket:          bucket,
+		region:          region,
+		dryRun:          dryRun,
+		archivePath:     archivePath,
+		archiveType:     archiveType,
+		ctx:             ctx,
+		cancelFunc:      cancel,
+		perNodeProgress: make(map[string]float64),
 	}, nil
 }
 
