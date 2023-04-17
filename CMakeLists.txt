@@ -141,3 +141,5 @@ GoModBuild (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/c
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
   GOVERSION 1.20)
+
+INSTALL (FILES secondary/docs/metrics_metadata.json DESTINATION "etc/couchbase/index")
