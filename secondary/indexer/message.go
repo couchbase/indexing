@@ -200,6 +200,7 @@ const (
 	START_SHARD_TRANSFER
 	SHARD_TRANSFER_RESPONSE
 	SHARD_TRANSFER_CLEANUP
+	SHARD_TRANSFER_STAGING_CLEANUP
 	START_SHARD_RESTORE
 	DESTROY_LOCAL_SHARD
 	MONITOR_SLICE_STATUS
@@ -2672,6 +2673,71 @@ func (m *MsgShardTransferCleanup) String() string {
 	return sbp.String()
 }
 
+type MsgShardTransferStagingCleanup struct {
+	respCh      chan Message
+	destination string
+	region      string
+	taskId      string
+	transferId  string
+	taskType    common.TaskType
+}
+
+func (m *MsgShardTransferStagingCleanup) GetMsgType() MsgType {
+	return SHARD_TRANSFER_STAGING_CLEANUP
+}
+
+func (m *MsgShardTransferStagingCleanup) GetRebalanceId() string {
+	switch m.taskType {
+	case common.RebalanceTask:
+		return m.taskId
+	default:
+		return ""
+	}
+}
+
+func (m *MsgShardTransferStagingCleanup) GetTransferTokenId() string {
+	switch m.taskType {
+	case common.RebalanceTask:
+		return m.transferId
+	default:
+		return ""
+	}
+}
+
+func (m *MsgShardTransferStagingCleanup) GetPauseResumeId() string {
+	switch m.taskType {
+	case common.PauseResumeTask:
+		return m.taskId
+	default:
+		return ""
+	}
+}
+
+func (m *MsgShardTransferStagingCleanup) GetBucket() string {
+	switch m.taskType {
+	case common.PauseResumeTask:
+		return m.transferId
+	default:
+		return ""
+	}
+}
+
+func (m *MsgShardTransferStagingCleanup) GetDestination() string {
+	return m.destination
+}
+
+func (m *MsgShardTransferStagingCleanup) GetRegion() string {
+	return m.region
+}
+
+func (m *MsgShardTransferStagingCleanup) GetRespCh() chan Message {
+	return m.respCh
+}
+
+func (m *MsgShardTransferStagingCleanup) GetTaskType() common.TaskType {
+	return m.taskType
+}
+
 type MsgStartShardRestore struct {
 	shardPaths  map[common.ShardId]string
 	taskId      string
@@ -2782,6 +2848,17 @@ func (m *MsgStartShardRestore) GetProgressCh() chan *ShardTransferStatistics {
 
 func (m *MsgStartShardRestore) GetRespCh() chan Message {
 	return m.respCh
+}
+
+func (m *MsgStartShardRestore) ToShardTransferStagingCleanup() *MsgShardTransferStagingCleanup {
+	return &MsgShardTransferStagingCleanup{
+		destination: m.destination,
+		region: m.region,
+		respCh: m.respCh,
+		taskId: m.taskId,
+		transferId: m.transferId,
+		taskType: m.taskType,
+	}
 }
 
 type MsgDestroyLocalShardData struct {

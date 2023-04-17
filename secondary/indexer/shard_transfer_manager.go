@@ -84,6 +84,9 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	case SHARD_TRANSFER_CLEANUP:
 		go stm.processTransferCleanupMessage(cmd)
 
+	case SHARD_TRANSFER_STAGING_CLEANUP:
+		go stm.processShardTransferStagingCleanupMessage(cmd)
+
 	case START_SHARD_RESTORE:
 		go stm.processShardRestoreMessage(cmd)
 
@@ -115,6 +118,7 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 
 	case RESTORE_AND_UNLOCK_LOCKED_SHARDS:
 		go stm.handleRestoreAndUnlockShards(cmd)
+
 	}
 }
 
@@ -346,6 +350,12 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	// Notify the caller that cleanup has been initiated for all shards
 	respCh <- true
 	return
+}
+
+func (stm *ShardTransferManager) processShardTransferStagingCleanupMessage(cmd Message) {
+	stm.cleanupStagingDirOnRestore(cmd)
+	respCh := cmd.(*MsgShardTransferStagingCleanup).GetRespCh()
+	respCh <- &MsgSuccess{}
 }
 
 func (stm *ShardTransferManager) cleanupStagingDirOnRestore(cmd Message) {

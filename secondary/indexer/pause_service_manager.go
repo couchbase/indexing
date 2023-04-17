@@ -342,6 +342,19 @@ func (m *PauseServiceManager) recoverPauseResume() {
 						"err[%v]", err)
 					continue
 				}
+				respCh := make(chan Message)
+				m.supvMsgch <- &MsgShardTransferStagingCleanup{
+					respCh: respCh,
+					destination: pt.ArchivePath,
+					region: pt.Region,
+					taskId: pt.PauseId,
+					transferId: pt.BucketName,
+					taskType: common.PauseResumeTask,
+				}
+				<-respCh
+
+				logging.Infof("PauseServiceManager::recoverPauseResume: Cleaned staging shard dirs for resume id: %v",
+					pt.PauseId)
 			}
 
 		}
@@ -1161,7 +1174,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 		return err
 	}
 
-	if err = m.initStartPhase(params.Bucket, params.ID, PauseTokenPause); err != nil {
+	if err = m.initStartPhase(params.Bucket, params.ID, task.archivePath, task.region, PauseTokenPause); err != nil {
 		if cerr := m.runPauseCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 			logging.Errorf("PauseServiceManager::Pause: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
 			return cerr
@@ -1201,7 +1214,8 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	return nil
 }
 
-func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string, typ PauseTokenType) (err error) {
+func (m *PauseServiceManager) initStartPhase(bucketName, pauseId, archivePath, region string,
+	typ PauseTokenType) (err error) {
 
 	err = m.genericMgr.cinfo.FetchNodesAndSvsInfoWithLock()
 	if err != nil {
@@ -1222,7 +1236,7 @@ func (m *PauseServiceManager) initStartPhase(bucketName, pauseId string, typ Pau
 		return err
 	}
 
-	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId, typ)
+	pauseToken := m.genPauseToken(masterIP, bucketName, pauseId, archivePath, region, typ)
 	logging.Infof("PauseServiceManager::initStartPhase Generated PauseToken[%v]", pauseToken)
 
 	if err = m.setPauseToken(pauseId, pauseToken); err != nil {
@@ -1744,7 +1758,7 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 			return err
 		}
 
-		if err := m.initStartPhase(params.Bucket, params.ID, PauseTokenResume); err != nil {
+		if err := m.initStartPhase(params.Bucket, params.ID, task.archivePath, task.region, PauseTokenResume); err != nil {
 			logging.Errorf("%v couldn't start resume; err: %v for task ID: %v", _Resume, err, params.ID)
 			if cerr := m.runResumeCleanupPhase(params.Bucket, params.ID, task.isMaster()); cerr != nil {
 				logging.Errorf("PauseServiceManager::Resume: Encountered cerr[%v] during cleanup for err[%v]", cerr, err)
@@ -2807,21 +2821,27 @@ type PauseToken struct {
 
 	Type  PauseTokenType
 	Error string
+
+	ArchivePath string
+	Region string
 }
 
 func (pt *PauseToken) String() string {
-	return fmt.Sprintf("PT[pauseId[%s] bucketName[%s] typ[%v] masterIp[%s]]",
-		pt.PauseId, pt.BucketName, pt.Type, pt.MasterIP)
+	return fmt.Sprintf("PT[pauseId[%s] bucketName[%s] typ[%v] masterIp[%s] archivePath[%v] region[%v]]",
+		pt.PauseId, pt.BucketName, pt.Type, pt.MasterIP, pt.ArchivePath, pt.Region)
 }
 
-func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId string, typ PauseTokenType) *PauseToken {
+func (m *PauseServiceManager) genPauseToken(masterIP, bucketName, pauseId, archivePath,
+	region string, typ PauseTokenType) *PauseToken {
 	cfg := m.config.Load()
 	return &PauseToken{
-		MasterId:   cfg["nodeuuid"].String(),
-		MasterIP:   masterIP,
-		BucketName: bucketName,
-		PauseId:    pauseId,
-		Type:       typ,
+		MasterId:    cfg["nodeuuid"].String(),
+		MasterIP:    masterIP,
+		BucketName:  bucketName,
+		PauseId:     pauseId,
+		Type:        typ,
+		ArchivePath: archivePath,
+		Region:      region,
 	}
 }
 
