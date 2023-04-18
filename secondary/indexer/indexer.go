@@ -199,7 +199,8 @@ type indexer struct {
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
 
-	pauseTokens map[string]*PauseToken
+	pauseResumeRunningById *PauseResumeRunningMap
+	pauseTokens            map[string]*PauseToken
 
 	mergePartitionList []mergeSpec
 	prunePartitionList []pruneSpec
@@ -311,7 +312,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		indexInstMap:  make(common.IndexInstMap),
 		indexPartnMap: make(IndexPartnMap),
 
-		pauseTokens: make(map[string]*PauseToken),
+		pauseResumeRunningById: NewPauseResumeRunningMap(),
+		pauseTokens:            make(map[string]*PauseToken),
 
 		merged: make(map[common.IndexInstId]common.IndexInst),
 		pruned: make(map[common.IndexInstId]common.IndexInst),
@@ -8432,11 +8434,45 @@ func (idx *indexer) recoverPauseResumeState() {
 
 	clustMgrMsg := &MsgClustMgrLocal{
 		mType: CLUST_MGR_GET_LOCAL_WITH_PREFIX,
-		key:   PauseTokenTag,
+		key:   PauseResumeRunning,
 	}
 
 	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
 	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err := resp.GetError(); err != nil {
+		logging.Fatalf("Indexer::recoverPauseResumeState: Error Fetching PauseResumeRunning flags From Local "+
+			"Meta Storage. Err %v", err)
+		return
+	}
+
+	for key, metaBytes := range resp.GetValues() {
+
+		_, id := decodePauseResumeRunningKey(key)
+
+		var rMeta *pauseResumeRunningMeta
+		if err := json.Unmarshal([]byte(metaBytes), &rMeta); err != nil {
+			logging.Fatalf("Indexer::recoverPauseResumeState: Error Unmarshaling PauseResumeRunning meta: err[%v]",
+				err)
+			return
+
+		} else {
+			logging.Infof("Indexer::recoverPauseResumeState: Recovered PauseResumeRunning to cleanup: typ[%v]" +
+				"bucketName[%v] id[%v]", rMeta.Typ, rMeta.BucketName, id)
+			if common.IsServerlessDeployment() {
+				idx.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
+			}
+
+		}
+	}
+
+	clustMgrMsg = &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL_WITH_PREFIX,
+		key:   PauseTokenTag,
+	}
+
+	respMsg, _ = idx.sendMsgToClustMgr(clustMgrMsg)
+	resp = respMsg.(*MsgClustMgrLocal)
 
 	if err := resp.GetError(); err != nil {
 		logging.Fatalf("Indexer::recoverPauseResumeState: Error Fetching PauseTokens From Local "+

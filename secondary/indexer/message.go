@@ -2240,7 +2240,7 @@ type MsgClustMgrLocal struct {
 	respch            MsgChannel
 	checkDDL          bool
 	inProgressIndexes []string
-	values            []string
+	values            map[string]string
 }
 
 func (m *MsgClustMgrLocal) GetMsgType() MsgType {
@@ -2271,7 +2271,7 @@ func (m *MsgClustMgrLocal) GetInProgressIndexes() []string {
 	return m.inProgressIndexes
 }
 
-func (m *MsgClustMgrLocal) GetValues() []string {
+func (m *MsgClustMgrLocal) GetValues() map[string]string {
 	return m.values
 }
 
