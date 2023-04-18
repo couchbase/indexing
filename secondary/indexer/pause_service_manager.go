@@ -1008,9 +1008,19 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 		}
 	}
 
-	// TODO: add pauseRunning gometa flag that gets set during prepare
-	// If pauseRunning is set in gometa, pause is still running , a pause must not be attempted by caller.
-	// Cleanup anyway and continue.
+	// Check if PauseResumeRunning is set
+	if running := m.pauseResumeRunningById.IsRunning(params.Bucket, params.ID); len(running) > 0 {
+		// Cleanup anyway and continue.
+
+		logging.Warnf("PauseServiceManager::PreparePause: pauseResumeRunning set for"+
+			" bucket[%v] id[%v] during prepare pause. Attempting cleanup", params.Bucket, params.ID)
+
+		for id, rMeta := range running {
+			if err := m.runPauseCleanupPhase(rMeta.BucketName, id, false); err != nil {
+				return err
+			}
+		}
+	}
 
 	// There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
 	if idsToClean, err := m.checkLocalPauseCleanupPending(params.Bucket); err != nil {
@@ -1580,9 +1590,19 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		}
 	}
 
-	// TODO: add resumeRunning gometa flag that gets set during prepare
-	// If resumeRunning is set in gometa, resume is still running , a resume must not be attempted by caller.
-	// Cleanup anyway and continue.
+	// Check if PauseResumeRunning is set
+	if running := m.pauseResumeRunningById.IsRunning(params.Bucket, params.ID); len(running) > 0 {
+		// Cleanup anyway and continue.
+
+		logging.Warnf("PauseServiceManager::PrepareResume: pauseResumeRunning set for"+
+			" bucket[%v] id[%v] during prepare resume. Attempting cleanup", params.Bucket, params.ID)
+
+		for id, rMeta := range running {
+			if err := m.runResumeCleanupPhase(rMeta.BucketName, id, false); err != nil {
+				return err
+			}
+		}
+	}
 
 	// There maybe some orphaned tokens, for example, due to failover, cleanup and continue.
 	if idsToClean, err := m.checkLocalResumeCleanupPending(params.Bucket); err != nil {
@@ -2174,6 +2194,16 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				err := fmt.Errorf("failed to find task with id[%v]", pauseToken.PauseId)
 				logging.Errorf("PauseServiceManager::RestHandlePause: Node[%v] not in Prepared State for pause"+
 					": err[%v]", string(m.nodeInfo.NodeID), err)
+				writeError(w, err)
+
+				return
+			}
+
+			if running := m.pauseResumeRunningById.IsRunning(pauseToken.BucketName, pauseToken.PauseId);
+				len(running) != 1 {
+
+				err := fmt.Errorf("node[%v] not in prepared state for pause-resume", string(m.nodeInfo.NodeID))
+				logging.Errorf("PauseServiceManager::RestHandlePause: err[%v]", err)
 				writeError(w, err)
 
 				return
@@ -3333,4 +3363,19 @@ func (p *PauseResumeRunningMap) GetMeta(id string) (*pauseResumeRunningMeta) {
 	rMeta, _ := p.runningMap[id]
 
 	return rMeta
+}
+
+func (p *PauseResumeRunningMap) IsRunning(bucketName, id string) map[string]*pauseResumeRunningMeta {
+	running := make(map[string]*pauseResumeRunningMeta)
+
+	p.RLock()
+	defer p.RUnlock()
+
+	for rId, rprrMeta := range p.runningMap {
+		if rId == id || rprrMeta.BucketName == bucketName {
+			running[rId] = rprrMeta
+		}
+	}
+
+	return running
 }
