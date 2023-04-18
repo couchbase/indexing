@@ -2004,6 +2004,21 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
+	if running := idx.pauseResumeRunningById.IsRunning(indexInst.Defn.Bucket, ""); len(running) > 0 {
+		errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Pause-Resume In Progress")
+		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_PAUSE_RESUME_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
 	//check if this is duplicate index instance
 	if ok := idx.checkDuplicateIndex(indexInst, clientCh); !ok {
 		return
@@ -2093,7 +2108,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			&MsgBuildIndex{
 				mType:         CLUST_MGR_BUILD_INDEX_DDL,
 				indexInstList: []common.IndexInstId{indexInst.InstId},
-				respCh:        clientCh})
+				respCh:        clientCh,
+				bucketList:    []string{indexInst.Defn.Bucket}})
 	}
 }
 
@@ -3373,6 +3389,7 @@ func (idx *indexer) updateStreamForRebalance(force bool) {
 func (idx *indexer) handleBuildIndex(msg Message) {
 	instIdList := msg.(*MsgBuildIndex).GetIndexList()
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
+	bucketList := msg.(*MsgBuildIndex).GetBucketList()
 	logging.Infof("Indexer::handleBuildIndex %v", instIdList)
 
 	// NOTE
@@ -3422,6 +3439,25 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				}
 				return
 			}
+		}
+	}
+
+	for _, bucketName := range bucketList {
+		if running := idx.pauseResumeRunningById.IsRunning(bucketName, ""); len(running) > 0 {
+			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Pause-Resume In Progress")
+			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{
+						code:     ERROR_INDEXER_PAUSE_RESUME_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER,
+					},
+				}
+			}
+			return
 		}
 	}
 
@@ -3978,6 +4014,21 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 				return
 			}
 		}
+	}
+
+	if running := idx.pauseResumeRunningById.IsRunning(indexInst.Defn.Bucket, ""); len(running) > 0 {
+		errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Pause-Resume In Progress")
+		logging.Errorf("Indexer::handleDropIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_PAUSE_RESUME_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
 	}
 
 	idx.stats.RemoveIndexStats(indexInst)
@@ -9855,6 +9906,13 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			if err := json.Unmarshal([]byte(value), &rebalToken); err == nil {
 				idx.rebalanceToken = &rebalToken
 			}
+
+		} else if strings.Contains(key, PauseResumeRunning) {
+			_, id := decodePauseResumeRunningKey(key)
+			var rMeta pauseResumeRunningMeta
+			if err := json.Unmarshal([]byte(value), &rMeta); err == nil {
+				idx.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
+			}
 		}
 	}
 
@@ -9889,6 +9947,9 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 			idx.rebalanceRunning = false
 		} else if key == RebalanceTokenTag {
 			idx.rebalanceToken = nil
+		} else if strings.Contains(key,  PauseResumeRunning) {
+			_, id := decodePauseResumeRunningKey(key)
+			idx.pauseResumeRunningById.SetNotRunning(id)
 		}
 	}
 

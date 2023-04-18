@@ -826,6 +826,7 @@ const (
 	MaxParallelCollectionBuilds
 	BucketEphemeralStd
 	ShardRebalanceNotInProgress
+	PauseResumeInProgress
 )
 
 type IndexerError struct {

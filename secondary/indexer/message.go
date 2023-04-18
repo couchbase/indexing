@@ -1396,6 +1396,7 @@ func (m *MsgBuildIndex) GetString() string {
 	str := "\n\tMessage: MsgBuildIndex"
 	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_BUILD_INDEX_DDL)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstList)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucketList)
 	return str
 }
 
