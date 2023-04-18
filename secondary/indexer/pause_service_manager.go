@@ -83,6 +83,8 @@ type PauseServiceManager struct {
 	nodeInfo *service.NodeInfo
 
 	cleanupPending int32
+
+	pauseResumeRunningById *PauseResumeRunningMap
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
@@ -110,6 +112,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		resumersById:    make(map[string]*Resumer),
 
 		nodeInfo: nodeInfo,
+
+		pauseResumeRunningById: NewPauseResumeRunningMap(),
 	}
 	m.config.Store(config)
 
@@ -1069,6 +1073,12 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 
 	// TODO: Check remotePath access?
 
+	// Set PauseResumeRunning flag
+	if err := m.initPreparePhasePauseResume(PauseTokenPause, params.Bucket, params.ID); err != nil {
+		logging.Errorf("PauseServiceManager::PreparePause: Failed to init prepare phase: err[%v]", err)
+		return err
+	}
+
 	// Set bst_PREPARE_PAUSE state
 	err = m.bucketStateSet(_PreparePause, params.Bucket, bst_NIL, bst_PREPARE_PAUSE)
 	if err != nil {
@@ -1263,6 +1273,12 @@ func (m *PauseServiceManager) runPauseCleanupPhase(bucket, pauseId string, isMas
 
 	if err := m.cleanupLocalPauseToken(pauseId); err != nil {
 		logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseToken in local"+
+			" meta: err[%v]", err)
+		return err
+	}
+
+	if err := m.cleanupPauseResumeRunning(pauseId); err != nil {
+		logging.Errorf("PauseServiceManager::runPauseCleanupPhase: Failed to cleanup PauseResumeRunning in local"+
 			" meta: err[%v]", err)
 		return err
 	}
@@ -1624,6 +1640,12 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 
 	if !params.DryRun {
 
+		// Set PauseResumeRunning flag
+		if err := m.initPreparePhasePauseResume(PauseTokenResume, params.Bucket, params.ID); err != nil {
+			logging.Errorf("PauseServiceManager::PrepareResume: Failed to init prepare phase: err[%v]", err)
+			return err
+		}
+
 		// Set bst_PREPARE_RESUME state
 		err = m.bucketStateSet(_PrepareResume, params.Bucket, bst_NIL, bst_PREPARE_RESUME)
 		if err != nil {
@@ -1785,6 +1807,12 @@ func (m *PauseServiceManager) runResumeCleanupPhase(bucket, resumeId string, isM
 
 	if err := m.cleanupLocalPauseToken(resumeId); err != nil {
 		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseToken in local"+
+			" meta: err[%v]", err)
+		return err
+	}
+
+	if err := m.cleanupPauseResumeRunning(resumeId); err != nil {
+		logging.Errorf("PauseServiceManager::runResumeCleanupPhase: Failed to cleanup PauseResumeRunning in local"+
 			" meta: err[%v]", err)
 		return err
 	}
@@ -3165,4 +3193,144 @@ func (m *PauseServiceManager) checkIndexesCaughtUp(bucketName string) (_ bool, n
 	}
 
 	return len(notCaughtUpIndexes) <= 0, notCaughtUpIndexes
+}
+
+// PauseResumeRunning flag
+
+func (m *PauseServiceManager) initPreparePhasePauseResume(typ PauseTokenType, bucketName, id string) error {
+
+	m.pauseResumeRunningById.SetRunning(typ, bucketName, id)
+
+	if err := m.registerPauseResumeRunning(id); err != nil {
+		m.pauseResumeRunningById.SetNotRunning(id)
+		return err
+	}
+
+	// TODO: implement start phase monitor
+
+	return nil
+}
+
+const PauseResumeRunning = "PauseResumeRunning"
+const PauseResumeRunningKepSep = "_"
+
+func buildPauseResumeRunningKey(id string) string {
+	return fmt.Sprintf("%s%s%s", PauseResumeRunning, PauseResumeRunningKepSep, id)
+}
+
+func decodePauseResumeRunningKey(key string) (string, string) {
+	sepIdx := strings.LastIndex(key, PauseResumeRunningKepSep)
+	if sepIdx < 0 {
+		return "", ""
+	}
+
+	return key[:sepIdx], key[sepIdx+1:]
+}
+
+func (m *PauseServiceManager) registerPauseResumeRunning(id string) error {
+
+	respch := make(MsgChannel)
+
+	rMeta := m.pauseResumeRunningById.GetMeta(id)
+	metaBtyes, err := json.Marshal(rMeta)
+	if err != nil {
+		return err
+	}
+
+	m.supvMsgch <- &MsgClustMgrLocal{
+		mType:    CLUST_MGR_SET_LOCAL,
+		key:      buildPauseResumeRunningKey(id),
+		value:    string(metaBtyes),
+		respch:   respch,
+	}
+
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if errMsg := resp.GetError(); errMsg != nil {
+		logging.Errorf("PauseServiceManager::registerPauseResumeRunning: Unable to set PauseResumeRunning In Local"+
+			"Meta Storage. Err %v", errMsg)
+
+		return errMsg
+	}
+
+	// Notify DDL Service Mgr to stop
+	stopDDLProcessing()
+
+	return nil
+}
+
+func (m *PauseServiceManager) cleanupPauseResumeRunning(id string) error {
+
+	logging.Infof("PauseServiceManager::cleanupPauseResumeRunning Cleanup")
+
+	respch := make(MsgChannel)
+	m.supvMsgch <- &MsgClustMgrLocal{
+		mType:  CLUST_MGR_DEL_LOCAL,
+		key:    buildPauseResumeRunningKey(id),
+		respch: respch,
+	}
+
+	respMsg := <-respch
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("PauseServiceManager::cleanupPauseResumeRunning Unable to delete PauseResumeRunning In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
+	m.pauseResumeRunningById.SetNotRunning(id)
+
+	// Notify DDL Service Mgr to resume
+	resumeDDLProcessing()
+
+	return nil
+
+}
+
+type PauseResumeRunningMap struct {
+	sync.RWMutex
+	runningMap map[string]*pauseResumeRunningMeta
+}
+
+type pauseResumeRunningMeta struct {
+	BucketName string
+	Typ        PauseTokenType
+}
+
+func NewPauseResumeRunningMap() *PauseResumeRunningMap {
+	return &PauseResumeRunningMap{
+		runningMap: make(map[string]*pauseResumeRunningMeta),
+	}
+}
+
+func (p *PauseResumeRunningMap) SetRunning(typ PauseTokenType, bucketName, id string) {
+	p.Lock()
+	defer p.Unlock()
+
+	p.runningMap[id] = &pauseResumeRunningMeta{
+		BucketName: bucketName,
+		Typ:        typ}
+}
+
+func (p *PauseResumeRunningMap) SetNotRunning(id string) (PauseTokenType, string) {
+	p.Lock()
+	defer p.Unlock()
+
+	rMeta := p.runningMap[id]
+
+	delete(p.runningMap, id)
+
+	return rMeta.Typ, rMeta.BucketName
+}
+
+func (p *PauseResumeRunningMap) GetMeta(id string) (*pauseResumeRunningMeta) {
+	p.RLock()
+	defer p.RUnlock()
+
+	rMeta, _ := p.runningMap[id]
+
+	return rMeta
 }
