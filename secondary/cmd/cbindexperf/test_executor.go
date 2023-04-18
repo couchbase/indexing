@@ -80,7 +80,10 @@ func randomString(n uint32, low string, high string) []interface{} {
 	if lowLen <= 16 && highLen <= 16 {
 		if lowInt, err := strconv.ParseInt(low, 16, 64); err == nil {
 			if highInt, err := strconv.ParseInt(high, 16, 64); err == nil {
-				randomInt := rand.Intn(int(highInt - lowInt - 2))
+				if (highInt < lowInt ){
+					highInt, lowInt = lowInt, highInt
+				}
+				randomInt := rand.Intn(int(highInt - lowInt + 1)) // diff between lowInt and highInt inclusive of both values
 				lowInt2 := int(lowInt) + randomInt
 				format := fmt.Sprintf("%%%03dx", n)
 				low = fmt.Sprintf(format, lowInt2)
