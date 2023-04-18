@@ -159,11 +159,13 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	mgr.ClusterURL = config["clusterAddr"].String()
 
 	mgr.useCInfoLite = config["use_cinfo_lite"].Bool()
-	mgr.cinfoProviderLock.Lock()
-	defer mgr.cinfoProviderLock.Unlock()
 
-	mgr.cinfoProvider, err = common.NewClusterInfoProvider(mgr.useCInfoLite,
-		mgr.ClusterURL, common.DEFAULT_POOL, "IndexMgr", config)
+	func() {
+		mgr.cinfoProviderLock.Lock()
+		defer mgr.cinfoProviderLock.Unlock()
+		mgr.cinfoProvider, err = common.NewClusterInfoProvider(mgr.useCInfoLite,
+			mgr.ClusterURL, common.DEFAULT_POOL, "IndexMgr", config)
+	}()
 	if err != nil {
 		logging.Errorf("NewIndexManagerInternal: Unable to get new ClusterInfoProvider for IndexMgr err: %v use_cinfo_lite: %v",
 			err, mgr.useCInfoLite)
@@ -173,11 +175,12 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 
 	// Another ClusterInfoClient for RequestHandler to avoid waiting due to locks of cinfoClient.
 	mgr.useCInfoLiteReqHandler = config["use_cinfo_lite"].Bool()
-	mgr.CinfoProviderLockReqHandler.Lock()
-	defer mgr.CinfoProviderLockReqHandler.Unlock()
-
-	mgr.CinfoProviderReqHandler, err = common.NewClusterInfoProvider(mgr.useCInfoLiteReqHandler,
-		mgr.ClusterURL, common.DEFAULT_POOL, "RequestHandler", config)
+	func() {
+		mgr.CinfoProviderLockReqHandler.Lock()
+		defer mgr.CinfoProviderLockReqHandler.Unlock()
+		mgr.CinfoProviderReqHandler, err = common.NewClusterInfoProvider(mgr.useCInfoLiteReqHandler,
+			mgr.ClusterURL, common.DEFAULT_POOL, "RequestHandler", config)
+	}()
 	if err != nil {
 		logging.Errorf("NewIndexManagerInternal: Unable to get new ClusterInfoProvider for RequestHandler err: %v use_cinfo_lite: %v",
 			err, mgr.useCInfoLiteReqHandler)
