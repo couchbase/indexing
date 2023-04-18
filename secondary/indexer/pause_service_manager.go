@@ -95,7 +95,7 @@ type PauseServiceManager struct {
 //	httpAddr - host:port of the local node for Index Service HTTP calls
 func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMux, supvCmdch,
 	supvMsgch MsgChannel, httpAddr string, config common.Config, nodeInfo *service.NodeInfo,
-	pauseTokens map[string]*PauseToken) *PauseServiceManager {
+	pauseResumeRunningById *PauseResumeRunningMap, pauseTokens map[string]*PauseToken) *PauseServiceManager {
 
 	m := &PauseServiceManager{
 		genericMgr: genericMgr,
@@ -121,6 +121,10 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		m.pauseTokensById[pauseId] = pt
 	}
 	m.setCleanupPending(len(m.pauseTokensById) > 0)
+
+	pauseResumeRunningById.ForEveryKey(func (rMeta *pauseResumeRunningMeta, id string) {
+		m.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
+	})
 
 	// Save the singleton
 	SetPauseMgr(m)
@@ -342,6 +346,29 @@ func (m *PauseServiceManager) recoverPauseResume() {
 
 		}
 	}
+
+	m.pauseResumeRunningById.ForEveryKey(func(rMeta *pauseResumeRunningMeta, id string) {
+		logging.Infof("PauseServiceManager::recoverPauseResume: Init Pending Cleanup for id[%v] rMeta[%v]",
+			id, rMeta)
+
+		switch rMeta.Typ {
+
+		case PauseTokenPause:
+			if err := m.runPauseCleanupPhase(rMeta.BucketName, id, false); err != nil {
+				logging.Errorf("PauseServiceManager::recoverPauseResume: Failed to cleanup PauseResummeRunning:"+
+					"err[%v] rMeta[%v] id[%s]", err, rMeta, id)
+				return
+			}
+
+		case PauseTokenResume:
+			if err := m.runResumeCleanupPhase(rMeta.BucketName, id, false); err != nil {
+				logging.Errorf("PauseServiceManager::recoverPauseResume: Failed to cleanup PauseResummeRunning:"+
+					"err[%v] rMeta[%v] id[%s]", err, rMeta, id)
+				return
+			}
+
+		}
+	})
 
 	m.setCleanupPending(false)
 }
@@ -3378,4 +3405,13 @@ func (p *PauseResumeRunningMap) IsRunning(bucketName, id string) map[string]*pau
 	}
 
 	return running
+}
+
+func (prrm *PauseResumeRunningMap) ForEveryKey(callb func(*pauseResumeRunningMeta, string)) {
+	prrm.RLock()
+	defer prrm.RUnlock()
+
+	for id, rMeta := range prrm.runningMap {
+		callb(rMeta, id)
+	}
 }

@@ -560,7 +560,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// Start Generic Service Manager, which creates Pause and Rebalance Managers it delegates to
 	genericMgr, pauseMgr, rebalMgr := NewGenericServiceManager(httpMux, httpAddr, idx.rebalMgrCmdCh, idx.prMgrCmdCh,
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
-		idx.rebalanceToken, idx.pauseTokens, idx.statsMgr)
+		idx.rebalanceToken, idx.pauseResumeRunningById, idx.pauseTokens, idx.statsMgr)
 
 	serverlessMgr := NewServerlessManager(clusterAddr)
 
