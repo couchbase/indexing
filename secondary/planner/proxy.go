@@ -210,17 +210,23 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	}
 
 	var delTokens map[common.IndexDefnId]*mc.DeleteCommandToken
-	delTokens, err = mc.FetchIndexDefnToDeleteCommandTokensMap()
-	if err != nil {
-		logging.Errorf("Planner::getIndexLayout: Error in FetchIndexDefnToDeleteCommandTokensMap %v", err)
-		return nil, err
-	}
-
 	var buildTokens map[common.IndexDefnId]*mc.BuildCommandToken
-	buildTokens, err = mc.FetchIndexDefnToBuildCommandTokensMap()
-	if err != nil {
-		logging.Errorf("Planner::getIndexLayout: Error in FetchIndexDefnToBuildCommandTokensMap %v", err)
-		return nil, err
+
+	if !security.IsToolsConfigUsed() {
+		delTokens, err = mc.FetchIndexDefnToDeleteCommandTokensMap()
+		if err != nil {
+			logging.Errorf("Planner::getIndexLayout: Error in FetchIndexDefnToDeleteCommandTokensMap %v", err)
+			return nil, err
+		}
+
+		buildTokens, err = mc.FetchIndexDefnToBuildCommandTokensMap()
+		if err != nil {
+			logging.Errorf("Planner::getIndexLayout: Error in FetchIndexDefnToBuildCommandTokensMap %v", err)
+			return nil, err
+		}
+	} else {
+		delTokens = nil
+		buildTokens = nil
 	}
 
 	for nid, res := range resp {
@@ -374,7 +380,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				// pendingDelete is false (cannot assert index is to-be-delete).s
 				if delTokens != nil {
 					_, index.PendingDelete = delTokens[defn.DefnId]
-				} else {
+				} else if !security.IsToolsConfigUsed() {
 					pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
 					if err != nil {
 						return nil, err
@@ -385,7 +391,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				var pendingBuild bool
 				if buildTokens != nil {
 					_, pendingBuild = buildTokens[defn.DefnId]
-				} else {
+				} else if !security.IsToolsConfigUsed() {
 					var err error
 					pendingBuild, err = mc.BuildCommandTokenExist(defn.DefnId)
 					if err != nil {

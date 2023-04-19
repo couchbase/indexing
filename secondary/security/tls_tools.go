@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -47,6 +48,7 @@ func SetToolsConfig(user, passwd, cert string, insecureSkipVerify bool, useConfi
 	_toolsConfig.cert = cert
 	_toolsConfig.insecureSkipVerify = insecureSkipVerify
 	_toolsConfig.useConfig = true
+	UpdateSecuritySetting(&SecuritySetting{encryptionEnabled: true}) // EncryptionRequired reads this config to convert http port into https
 	return nil
 }
 
@@ -62,12 +64,36 @@ func IsToolsConfigUsed() bool {
 	return _toolsConfig.useConfig
 }
 
+func MakeClientTools() (*http.Client, error) {
+	var client *http.Client
+	var err error
+	tlsConfig := tls.Config{}
+	if _toolsConfig.cert == "" || _toolsConfig.insecureSkipVerify {
+		tlsConfig.InsecureSkipVerify = true
+	} else {
+		caCert, err := ioutil.ReadFile(_toolsConfig.cert)
+		if err != nil {
+			return nil, err
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	client = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tlsConfig,
+		},
+	}
+	return client, err
+}
+
 func getWithAuthInternalTools(u string, params *RequestParams, eTag string) (*http.Response, error) {
 
 	var url *url.URL
 	var err error
 
-	url, err = GetURL(u)
+	url, err = GetURLTools(u)
 	if err != nil {
 		return nil, err
 	}
@@ -90,25 +116,39 @@ func getWithAuthInternalTools(u string, params *RequestParams, eTag string) (*ht
 		req.Header.Add("User-agent", userAgentPrefix+params.UserAgent)
 	}
 
-	var client *http.Client
+	client, err := MakeClientTools()
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(_toolsConfig.user, _toolsConfig.passwd)
 
-	tlsConfig := tls.Config{}
-	if _toolsConfig.cert == "" || _toolsConfig.insecureSkipVerify {
-		tlsConfig.InsecureSkipVerify = true
-	} else {
-		caCert, err := ioutil.ReadFile(_toolsConfig.cert)
-		if err != nil {
-			return nil, err
-		}
-		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
-		tlsConfig.RootCAs = caCertPool
+	if params != nil && params.Timeout >= time.Duration(0) {
+		client.Timeout = params.Timeout
 	}
 
-	client = &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tlsConfig,
-		},
+	return client.Do(req)
+}
+
+func PostWithAuthTools(u string, bodyType string, body io.Reader, params *RequestParams) (*http.Response, error) {
+	url, err := GetURLTools(u)
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
+	defer func() {
+		logging.Verbosef("PostWithAuthTools: url %v elapsed %v", url.String(), time.Now().Sub(start))
+	}()
+
+	req, err := http.NewRequest("POST", url.String(), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", bodyType)
+
+	client, err := MakeClientTools()
+	if err != nil {
+		return nil, err
 	}
 	req.SetBasicAuth(_toolsConfig.user, _toolsConfig.passwd)
 
@@ -127,10 +167,12 @@ func GetURLTools(u string) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	parsedUrl.Host, _, _, err = EncryptPortFromAddr(parsedUrl.Host)
 	if err != nil {
 		return nil, err
 	}
+
 	parsedUrl.Scheme = "https"
 	return parsedUrl, nil
 }

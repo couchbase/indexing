@@ -422,10 +422,6 @@ func MakeListener(addr string) (net.Listener, error) {
 //
 func GetURL(u string) (*url.URL, error) {
 
-	if IsToolsConfigUsed() {
-		return GetURLTools(u)
-	}
-
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		u = "http://" + u
 	}
@@ -694,6 +690,10 @@ func getWithAuthInternal(u string, params *RequestParams, eTag string, allowTls 
 // panic ("if body == nil" here will return false, but the interface object will contain a nil
 // pointer to its value, causing the panic. See https://github.com/golang/go/issues/44327).
 func PostWithAuth(u string, bodyType string, body io.Reader, params *RequestParams) (*http.Response, error) {
+
+	if IsToolsConfigUsed() {
+		return PostWithAuthTools(u, bodyType, body, params)
+	}
 
 	url, err := GetURL(u)
 	if err != nil {

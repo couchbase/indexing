@@ -34,7 +34,7 @@ const (
 func GetSettingsConfig(cfg Config) (Config, error) {
 	var newConfig Config
 	if security.IsToolsConfigUsed() {
-		return newConfig, nil
+		return cfg, nil
 	}
 	fn := func(r int, err error) error {
 		newConfig = cfg.Clone()

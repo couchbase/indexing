@@ -702,6 +702,9 @@ func HandleCommand(
 			if strings.Contains(line, "-auth") == false {
 				args = append([]string{"-auth", cmd.Auth}, args...)
 			}
+			if cmd.UseTools {
+				args = append(args, "-use_tools", "true")
+			}
 
 			inputCmd, _, _, err := ParseArgs(args)
 			if err != nil {
