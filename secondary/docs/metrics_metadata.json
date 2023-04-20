@@ -1,272 +1,272 @@
 {
     "index_avg_drain_rate": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Average number of documents indexed per second, for this index",
         "uiName": "Index Drain Rate",
-        "labels": ["bucket", "scope", "collection", "index"],
+        "labels": ["bucket", "scope", "collection", "index"]
     },
     "index_avg_item_size": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Average size of the indexed items, for this index",
         "uiName": "Index Item Size",
         "unit": "bytes",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "It is the encoded size of the index data divided by number of indexed items.",
+        "notes": "It is the encoded size of the index data divided by number of indexed items."
     },
     "index_avg_scan_latency": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Average latency observed by the index scans, for this index",
         "uiName": "Index Scan Latency",
         "unit": "Nanoseconds",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric represents the latency observed by the index service, and not by user application. For consistent scans, latency includes request's wait time until a consistent snapshot is available.",
+        "notes": "This metric represents the latency observed by the index service, and not by user application. For consistent scans, latency includes request's wait time until a consistent snapshot is available."
     },
     "index_cache_hits": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of times the required index page is found in memory, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric is valid only for standard GSI indexes.",
+        "notes": "This metric is valid only for standard GSI indexes."
     },
     "index_cache_misses": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of times the required index page is NOT found in memory, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "This metric is valid only for standard GSI indexes."
     },
     "index_data_size": {
-        "type": "guage",
+        "type": "gauge",
         "help": "The approximate size of the valid uncompressed index data, for this index",
         "uiName": "Index Data Size",
         "unit": "bytes",
-        "labels": ["bucket", "scope", "collection", "index"],
+        "labels": ["bucket", "scope", "collection", "index"]
     },
     "index_data_size_on_disk": {
-        "type": "guage",
+        "type": "gauge",
         "help": "The size of the valid compressed index data, for this index",
         "unit": "bytes",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "This metric is valid only for standard GSI indexes."
     },
     "index_disk_size": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Total disk space taken up by this index, after compression. This includes index data files, checkpoints etc.",
         "unit": "bytes",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "For standard GSI indexes, more than one index can share the actual disk files. In such cases, this metric represents the approximate disk size for each index."
     },
     "index_frag_percent": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Percentage of invalid index data, for this index",
         "uiName": "Index Fragmentation",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric is valid only for standard GSI indexes.",
+        "notes": "This metric is valid only for standard GSI indexes."
     },
     "index_items_count": {
-        "type": "guage",
+        "type": "gauge",
         "help": "The actual number of items present in the latest index snapshot, for this index",
         "uiName": "Indexed Items",
-        "labels": ["bucket", "scope", "collection", "index"],
+        "labels": ["bucket", "scope", "collection", "index"]
     },
     "index_log_space_on_disk": {
-        "type": "guage",
+        "type": "gauge",
         "help": "The size of the index data files - including garbage, for this index",
         "unit": "bytes",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "The index data files store the compressed data. This metric is valid only for standard GSI indexes.",
+        "notes": "The index data files store the compressed data. This metric is valid only for standard GSI indexes."
     },
     "index_memory_used": {
-        "type": "guage",
+        "type": "gauge",
         "help": "The memory used by this index",
         "uiName": "Index RAM Used",
         "unit": "bytes",
-        "labels": ["bucket", "scope", "collection", "index"],
+        "labels": ["bucket", "scope", "collection", "index"]
     },
     "index_num_docs_indexed": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of document updates (of type insert, modify, delete) observed by this index",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This is an ever increasing counter, incremented on each insert/delete/modify. Resets to zero on indexer process restart.",
+        "notes": "This is an ever increasing counter, incremented on each insert/delete/modify. Resets to zero on indexer process restart."
     },
     "index_num_docs_pending": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of pending updates that are yet to be received by index service, for this index",
         "uiName": "Index Mutations Remaining",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric includes the user triggered update, internal metadata updates, transaction updates etc.",
+        "notes": "This metric includes the user triggered update, internal metadata updates, transaction updates etc."
     },
     "index_num_docs_queued": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of updates queued (but not yet processed) by index service, for this index",
         "uiName": "Index Write Queue",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric includes the user triggered update, internal metadata updates, transaction updates etc.",
+        "notes": "This metric includes the user triggered update, internal metadata updates, transaction updates etc."
     },
     "index_num_requests": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of scan requests received by the index service, for this index",
         "uiName": "Index Request Rate",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "One n1ql query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)",
+        "notes": "One n1ql query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)"
     },
     "index_num_rows_returned": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of rows/index entries returned as the scan result during index scans, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "As index service supports filters, limits and aggregations, index service may return only a subset of rows/entries that are being scanned."
     },
     "index_num_rows_scanned": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of rows/index entries read during the index scans, for this index",
         "uiName": "Index Scan Items",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "As index service supports filters, limits and aggregations, index service may return only a subset of rows/entries that are being scanned."
     },
     "index_raw_data_size": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Encoded, uncompressed size of the index data, for this index",
         "unit": "bytes",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric does not include storage overheads due to fragmentation, MVCC snapshots etc.",
+        "notes": "This metric does not include storage overheads due to fragmentation, MVCC snapshots etc."
     },
     "index_recs_in_mem": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of index entries cached in memory, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "Valid only for standard GSI indexes.",
+        "notes": "Valid only for standard GSI indexes."
     },
     "index_recs_on_disk": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of index entries stored on disk, which are not cached in memory, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "Valid only for standard GSI indexes.",
+        "notes": "Valid only for standard GSI indexes."
     },
     "index_resident_percent": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Ratio of records in memory to total records, for this index",
         "uiName": "Index Resident Percent",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "Valid only for standard GSI indexes.",
+        "notes": "Valid only for standard GSI indexes."
     },
     "index_scan_bytes_read": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Number of bytes read from the index storage during index scans, for this index",
         "uiName": "Index Scan Bytes",
         "unit": "bytes",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This metric does not includes the index data which not returned as scan result.",
+        "notes": "This metric does not includes the index data which not returned as scan result."
     },
     "index_total_scan_duration": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Total time taken by the scans requests, for this index",
         "unit": "Nanoseconds",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "Total scan duration includes the time taken for index scan, as well as time for which scan request was waiting for a consistent snapshot to be available.",
+        "notes": "Total scan duration includes the time taken for index scan, as well as time for which scan request was waiting for a consistent snapshot to be available."
     },
     "index_memory_used_total": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Total memory used by the indexer process",
         "uiName": "RAM Used",
         "unit": "bytes",
-        "labels": "N/A",
+        "labels": "N/A"
     },
     "index_memory_quota": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Configured memory quota for the index service nodes",
         "uiName": "Index Service RAM Quota",
         "unit": "bytes",
-        "labels": "N/A",
+        "labels": "N/A"
     },
     "index_num_indexes": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Total number of indexes, located on this node",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_num_storage_instances": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Total number of storage instances, located on this node",
         "labels": "N/A",
         "notes": "For partitioned indexes with replicas, for an index, more than one instance can reside on a single node.",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_avg_resident_percent": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Average resident percent across all indexes, located on this node",
         "labels": "N/A",
         "notes": "Valid only for standard GSI indexes.",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_avg_mutation_rate": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of mutation rates of all indexes, located on this node",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
-    "index_avg_drain_rate": {
-        "type": "guage",
+    "index_total_drain_rate": {
+        "type": "gauge",
         "help": "Sum of drain rate of all indexes, located on this node",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_avg_disk_bps": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of disk bytes written per second, of all indexes, located on this node",
         "labels": "N/A",
         "notes": "Valid only for standard GSI indexes.",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_total_data_size": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of data size of all indexes, located on this node",
         "unit": "bytes",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_total_disk_size": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of disk size of all indexes, located on this node",
         "unit": "bytes",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_memory_used_storage": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Amount of memory used by underlying index storage, on this node",
         "unit": "bytes",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_memory_total_storage": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Amount of memory used by the index memory allocator, on this node",
         "unit": "bytes",
         "labels": "N/A",
         "added": "7.2.0",
-        "notes": "Index services uses a memory allocator named "jemalloc". This metric reports the in-use memory by this allocator."
+        "notes": "Index services uses a memory allocator named jemalloc. This metric reports the in-use memory by this allocator."
     },
     "index_total_requests": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of number of requests received by all indexes, located on this node",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_total_rows_returned": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of number of rows returned during index scan across all indexes, located on this node",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_total_rows_scanned": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Sum of number of rows scanned during index scans across all indexes, located on this node",
         "labels": "N/A",
-        "added": "7.2.0",
+        "added": "7.2.0"
     },
     "index_memory_rss": {
-        "type": "guage",
+        "type": "gauge",
         "help": "Resident set size of the indexer process, running on this node",
         "unit": "bytes",
         "labels": "N/A",
-        "added": "7.2.0",
-    },
+        "added": "7.2.0"
+    }
 }
