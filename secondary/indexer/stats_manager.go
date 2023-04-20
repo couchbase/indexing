@@ -2878,7 +2878,7 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("%vnum_storage_instances %v\n", METRICS_PREFIX, is.numStorageInstances.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_resident_percent %v\n", METRICS_PREFIX, is.avgResidentPercent.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_mutation_rate %v\n", METRICS_PREFIX, is.avgMutationRate.Value()))...)
-	out = append(out, []byte(fmt.Sprintf("%vavg_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_data_size %v\n", METRICS_PREFIX, is.totalDataSize.Value()))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_disk_size %v\n", METRICS_PREFIX, is.totalDiskSize.Value()))...)
