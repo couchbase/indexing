@@ -3181,8 +3181,8 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_mutation_rate gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_mutation_rate %v\n", METRICS_PREFIX, is.avgMutationRate.Value()))...)
 
-	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_drain_rate gauge\n", METRICS_PREFIX))...)
-	out = append(out, []byte(fmt.Sprintf("%vavg_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_drain_rate gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_drain_rate %v\n", METRICS_PREFIX, is.avgDrainRate.Value()))...)
 
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vavg_disk_bps gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vavg_disk_bps %v\n", METRICS_PREFIX, is.avgDiskBps.Value()))...)
