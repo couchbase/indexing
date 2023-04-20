@@ -3181,8 +3181,10 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 	// we could potentially get io.EOF on network drops/server shutdowns too; it is better to retry
 	// on streaming endpoint and encounter a `404` for given bucket to be sure that the bucket is
 	// deleted from ns_server;
-
-	// TODO: verify if we can create a bucket with same name on cluster if the original is hibernated
+	err = io.EOF
+	// can users create bucket with same name on cluster if the original is hibernated?
+	// users can have same bucket names in serverless ,but the bucketNames we get from APIS are
+	// actually bucket-ids (usually of the form "<bucket-name>-id") which are expected to be unique
 	for i := 0; err != nil && (i < 10 || err == io.EOF); i++ {
 		err = client.RunObserveCollectionManifestChanges("default", bucketName, processStateUpdate,
 			closeCh)
