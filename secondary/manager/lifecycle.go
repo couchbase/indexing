@@ -5267,6 +5267,7 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 	logMsg := time.Since(s.lastLogTime) > time.Duration(30*time.Second)
 
 	processed := false
+
 	for entry, command := range entries {
 
 		defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
@@ -5284,6 +5285,33 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 				retryList[entry] = command
 				if logMsg {
 					logging.Warnf("builder: Index definition does not exist in repo. Queuing to retry list %v as rebalance is in progress", entry)
+				}
+			} else if common.IsServerlessDeployment() && command.Issuer == mc.INDEX_RESTORE {
+
+				exist1, err1 := mc.StopScheduleCreateTokenExist(command.DefnId)
+				exist2, err2 := mc.ScheduleCreateTokenExist(command.DefnId)
+				exist3, err3 := mc.DeleteCommandTokenExist(command.DefnId)
+				if err1 != nil {
+					logging.Warnf("builder: Error when reading StopScheduleCreateToken for defn %v. Err: %v", command.DefnId, err1)
+					retryList[entry] = command
+				} else if err2 != nil {
+					logging.Warnf("builder: Error when reading ScheduleCreateToken for defn %v. Err: %v", command.DefnId, err2)
+					retryList[entry] = command
+				} else if err3 != nil {
+					logging.Warnf("builder: Error when reading DeleteCommandToken for defn %v. Err: %v", command.DefnId, err3)
+					retryList[entry] = command
+				}
+
+				// ignore build token if scheduleCreateIndex fails with StopScheduleCreate token or DeleteCommandToken exists
+				if exist1 {
+					logging.Infof("builder: skipping build token as StopScheduleCreateToken exists for %v", command.DefnId)
+				} else if exist3 {
+					logging.Infof("builder: skipping build token as DeleteCommandToken exists for %v", command.DefnId)
+				} else if exist2 {
+					retryList[entry] = command
+					if logMsg {
+						logging.Infof("builder: Index definition does not exist in repo. Queuing to retry list %v as it is restore build token", entry)
+					}
 				}
 			}
 
@@ -5304,6 +5332,15 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 		}
 
 		for _, inst := range insts {
+
+			// ScheduleCreateToken from restore has persisted metadata in metadatarepo but index state can still be INDEX_STATE_CREATED, wait until it is INDEX_STATE_READY
+			if inst.State < uint32(common.INDEX_STATE_READY) && common.IsServerlessDeployment() && command.Issuer == mc.INDEX_RESTORE {
+				retryList[entry] = command
+				if logMsg {
+					logging.Infof("builder: Queuing to retry list %v as %v != INDEX_STATE_READY", entry, common.IndexState(inst.State))
+				}
+				continue
+			}
 
 			if inst.State == uint32(common.INDEX_STATE_READY) {
 				logging.Infof("builder: Processing build token %v", entry)

@@ -2038,7 +2038,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 	if c.IsPartitioned(idxDefn.PartitionScheme) && idxDefn.NumReplica > 0 && wait {
 
 		// place token for index build
-		if err := mc.PostBuildCommandToken(defnID, idxDefn.Bucket); err != nil {
+		if err := mc.PostBuildCommandToken(defnID, idxDefn.Bucket, mc.INDEX_BUILD, time.Now()); err != nil {
 			logging.Errorf("Index is created, but fail to Build Index due to internal errors.  Error=%v", err)
 			return errors.New("Index is created, bu fail to Build Index due to internal errors.  Please use build index statement.")
 		}
@@ -3577,7 +3577,7 @@ func (o *MetadataProvider) BuildIndexes(defns map[c.IndexDefnId]*c.IndexDefn) er
 	if !security.IsToolsConfigUsed() {
 		// place token for recovery.
 		for _, id := range defnList {
-			if err := mc.PostBuildCommandToken(id, defns[id].Bucket); err != nil {
+			if err := mc.PostBuildCommandToken(id, defns[id].Bucket, mc.INDEX_BUILD, time.Now()); err != nil {
 				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
 			}
 		}

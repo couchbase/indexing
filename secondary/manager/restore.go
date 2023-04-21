@@ -11,6 +11,7 @@ package manager
 import (
 	"bytes"
 	json "encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -74,6 +75,39 @@ func CreateRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket
 	}
 
 	return context
+}
+
+func (m *RestoreContext) postTokens() error {
+	err := m.convertIndexestoSchedTokens()
+	if err != nil {
+		logging.Errorf("RestoreContext:postTokens err in convertIndexestoSchedTokens %v", err)
+		return err
+	}
+
+	err = m.postBuildTokens()
+	if err != nil {
+		logging.Errorf("RestoreContext:postBuildTokens err in postBuildTokens %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func (m *RestoreContext) postBuildTokens() error {
+
+	for _, indexes := range m.idxToRestore {
+		for _, index := range indexes {
+			if err := mc.PostBuildCommandToken(index.Instance.Defn.DefnId, index.Instance.Defn.Bucket, mc.INDEX_RESTORE, time.Now()); err != nil {
+				return errors.New(fmt.Sprintf("Fail to Post Build Index Token for DefnId:%v due to internal errors.  Error=%v.", index.DefnId, err))
+			}
+		}
+	}
+	for _, token := range m.tokToRestore {
+		if err := mc.PostBuildCommandToken(token.Definition.DefnId, token.Definition.Bucket, mc.INDEX_RESTORE, time.Now()); err != nil {
+			return errors.New(fmt.Sprintf("Fail to Post Build Index Token for DefnId:%v due to internal errors.  Error=%v.", token.Definition.DefnId, err))
+		}
+	}
+	return nil
 }
 
 //
@@ -143,13 +177,9 @@ func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, e
 	}
 
 	if serverless {
-		// post schdule create tokens for restore candidates(idxToRestore+tokToRestore)
-		err = m.convertIndexestoSchedTokens()
-		if err != nil {
-			return nil, err
-		}
-		//TODO: post build tokens for restore candidates
-		return nil, nil
+		// post SchduleCreateToken & BuildCommandToken for each restore candidate (idxToRestore+tokToRestore)
+		err := m.postTokens()
+		return nil, err
 	} else {
 		// invoke placement
 		return m.placeIndex()
