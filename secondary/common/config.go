@@ -2978,6 +2978,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.emptyNodeBuildBatchSize": ConfigValue{
+		20,
+		"Max index builds allowed on empty node during rebalance. 0 disables batching.",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.transferBatchSize": ConfigValue{
 		3,
 		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching.",
