@@ -541,6 +541,10 @@ type MsgStreamUpdate struct {
 	ignoreOSOException bool
 
 	timeBarrier time.Time
+
+	//projector config override
+	projNumVbWorkers int
+	projNumDcpConns  int
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -625,6 +629,14 @@ func (m *MsgStreamUpdate) GetNumVBuckets() int {
 
 func (m *MsgStreamUpdate) GetTimeBarrier() time.Time {
 	return m.timeBarrier
+}
+
+func (m *MsgStreamUpdate) GetProjNumVbWorkers() int {
+	return m.projNumVbWorkers
+}
+
+func (m *MsgStreamUpdate) GetProjNumDcpConns() int {
+	return m.projNumDcpConns
 }
 
 func (m *MsgStreamUpdate) String() string {
