@@ -82,6 +82,9 @@ type Feed struct {
 	collectionsAware bool
 	osoSnapshot      map[string]bool //keyspaceId -> osoSnapshot
 
+	//client override
+	numDcpConnections uint32
+
 	// config params
 	reqTimeout time.Duration
 	endTimeout time.Duration
@@ -903,6 +906,7 @@ func (feed *Feed) start(
 
 	feed.endpointType = req.GetEndpointType()
 	opaque2 := req.GetOpaque2()
+	vbucketWorkers := req.GetNumVbWorkers()
 
 	keyspaceIdMap, err := req.GetKeyspaceIdMap()
 	if err != nil {
@@ -912,6 +916,9 @@ func (feed *Feed) start(
 	feed.collectionsAware = req.GetCollectionAware()
 
 	needsAuth := req.GetNeedsAuth()
+
+	//client override
+	feed.numDcpConnections = req.GetNumDcpConns()
 
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap, needsAuth); err != nil { // :SideEffect:
@@ -959,7 +966,7 @@ func (feed *Feed) start(
 		// open data-path, if not already open.
 		cid := getCollectionIdFromReqTs(ts)
 		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder,
-			opaque, ts, opaque2)
+			opaque, ts, opaque2, int(vbucketWorkers))
 		if e != nil {
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1087,7 +1094,8 @@ func (feed *Feed) restartVbuckets(
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
 		cid := getCollectionIdFromReqTs(ts)
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder, opaque, ts, opaque2)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder,
+			opaque, ts, opaque2, 0 /*use default*/)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1287,7 +1295,8 @@ func (feed *Feed) addBuckets(
 
 		cid := getCollectionIdFromReqTs(ts)
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder, opaque, ts, opaque2)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder,
+			opaque, ts, opaque2, 0 /*use default*/)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1691,10 +1700,19 @@ func (feed *Feed) openFeeder(
 		return nil, err
 	}
 	name := newDCPConnectionName(keyspaceId, feed.topic, uuid.Uint64())
+
+	//override with the client specified numDcpConnections if requested
+	var numConnections int
+	if feed.numDcpConnections > 0 {
+		numConnections = int(feed.numDcpConnections)
+	} else {
+		numConnections = feed.config["dcp.numConnections"].Int()
+	}
+
 	dcpConfig := map[string]interface{}{
 		"genChanSize":      feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize":     feed.config["dcp.dataChanSize"].Int(),
-		"numConnections":   feed.config["dcp.numConnections"].Int(),
+		"numConnections":   numConnections,
 		"latencyTick":      feed.config["dcp.latencyTick"].Int(),
 		"activeVbOnly":     feed.config["dcp.activeVbOnly"].Bool(),
 		"collectionsAware": feed.collectionsAware,
@@ -1892,7 +1910,8 @@ func (feed *Feed) startDataPath(
 	feeder BucketFeeder,
 	opaque uint16,
 	ts *protobuf.TsVbuuid,
-	opaque2 uint64) (*KVData, error) {
+	opaque2 uint64,
+	vbucketWorkers int) (*KVData, error) {
 	var err error
 	mutch := feeder.GetChannel()
 	kvdata, ok := feed.kvdata[keyspaceId]
@@ -1903,7 +1922,8 @@ func (feed *Feed) startDataPath(
 		engs, ends := feed.engines[keyspaceId], feed.endpoints
 		kvdata, err = NewKVData(
 			feed, bucketn, keyspaceId, collectionId, opaque, ts, engs, ends, mutch,
-			feed.kvaddr, feed.config, feed.async, opaque2, feed.collectionsAware)
+			feed.kvaddr, feed.config, feed.async, opaque2, feed.collectionsAware,
+			vbucketWorkers)
 	}
 	return kvdata, err
 }

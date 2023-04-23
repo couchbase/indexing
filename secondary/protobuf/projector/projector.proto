@@ -63,6 +63,8 @@ message MutationTopicRequest {
     optional bool        collectionAware = 9;
     optional bool        osoSnapshot     = 10;
     optional bool        needsAuth       = 11;
+    optional uint32      numVbWorkers    = 12;
+    optional uint32      numDcpConns     = 13;
 }
 
 // Response back for
