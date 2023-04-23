@@ -2964,6 +2964,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.projNumVbWorkers": ConfigValue{
+		8,
+		"Number of projector vbucket workers used for INIT_STREAM during rebalance.",
+		8,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.projNumDcpConns": ConfigValue{
+		1,
+		"Number of DCP connections for INIT_STREAM used by projector during rebalance.",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.transferBatchSize": ConfigValue{
 		3,
 		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching.",

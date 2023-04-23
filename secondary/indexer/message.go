@@ -504,6 +504,10 @@ type MsgStreamUpdate struct {
 	collectionAware    bool
 	enableOSO          bool
 	ignoreOSOException bool
+
+	//projector config override
+	projNumVbWorkers int
+	projNumDcpConns  int
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -580,6 +584,14 @@ func (m *MsgStreamUpdate) IgnoreOSOException() bool {
 
 func (m *MsgStreamUpdate) GetMergeTs() *common.TsVbuuid {
 	return m.mergeTs
+}
+
+func (m *MsgStreamUpdate) GetProjNumVbWorkers() int {
+	return m.projNumVbWorkers
+}
+
+func (m *MsgStreamUpdate) GetProjNumDcpConns() int {
+	return m.projNumDcpConns
 }
 
 func (m *MsgStreamUpdate) String() string {

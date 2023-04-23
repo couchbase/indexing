@@ -111,6 +111,7 @@ type indexer struct {
 	streamKeyspaceIdCollectionId map[common.StreamId]map[string]string
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 	streamKeyspaceIdMinMergeTs   map[common.StreamId]KeyspaceIdMinMergeTs
+	streamKeyspaceIdIsRebalance  map[common.StreamId]map[string]bool
 
 	streamKeyspaceIdPendBuildDone      map[common.StreamId]map[string]*buildDoneSpec
 	streamKeyspaceIdPendStart          map[common.StreamId]map[string]bool
@@ -298,6 +299,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdSessionId:          make(map[common.StreamId]map[string]uint64),
 		streamKeyspaceIdCollectionId:       make(map[common.StreamId]map[string]string),
 		streamKeyspaceIdOSOException:       make(map[common.StreamId]map[string]bool),
+		streamKeyspaceIdIsRebalance:        make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendBuildDone:      make(map[common.StreamId]map[string]*buildDoneSpec),
 		streamKeyspaceIdPendStart:          make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
@@ -2989,8 +2991,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		return
 	}
 
+	reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
-		reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
 		if reqCtx.ReqSource == common.DDLRequestSourceUser {
 			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
 			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
@@ -3101,7 +3103,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		var buildState common.IndexState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
-		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
+		idx.bulkUpdateRState(instIdList, reqCtx)
 
 		logging.Infof("Indexer::handleBuildIndex Added Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
@@ -3121,9 +3123,15 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			common.CrashOnError(err)
 		}
 
+		isRebalBuild := false
+		if reqCtx.ReqSource == common.DDLRequestSourceRebalance {
+			isRebalBuild = true
+			idx.streamKeyspaceIdIsRebalance[buildStream][keyspaceId] = true
+		}
+
 		//send Stream Update to workers
 		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId,
-			reqcid, clusterVer, buildTs, clientCh)
+			reqcid, clusterVer, buildTs, clientCh, isRebalBuild)
 
 		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
 
@@ -4675,10 +4683,9 @@ func (idx *indexer) Shutdown() Message {
 // in the particular case of an index build. (startKeyspaceIdStream does this for
 // all other cases.)
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
-	buildStream common.StreamId, keyspaceId string, cid string,
-	clusterVer uint64, buildTs Timestamp, clientCh MsgChannel) {
+	buildStream common.StreamId, keyspaceId string, cid string, clusterVer uint64,
+	buildTs Timestamp, clientCh MsgChannel, isRebalBuild bool) {
 
-	var cmd Message
 	var indexList []common.IndexInst
 	var bucketUUIDList []string
 	for _, instId := range instIdList {
@@ -4717,7 +4724,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	//collections on upgraded nodes in mixed mode.
 	collectionAware := true
 
-	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
+	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
 		keyspaceId:         keyspaceId,
 		indexList:          indexList,
@@ -4731,6 +4738,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		collectionId:       cid,
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO}
+
+	//override projector config for rebalance stream
+	if isRebalBuild {
+		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
+		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
+	}
 
 	// Create the corresponding KeyspaceStats object before starting the stream
 	idx.stats.AddKeyspaceStats(buildStream, keyspaceId)
@@ -6603,6 +6616,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO}
 
+	//override projector config for rebalance stream
+	isRebalBuild := idx.streamKeyspaceIdIsRebalance[streamId][keyspaceId]
+	if isRebalBuild {
+		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
+		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
+	}
+
 	//For recovery of INIT_STREAM, send the stored mergeTs to timekeeper.
 	//If indexes are in Catchup state, it will be used for merging to MAINT_STREAM.
 	if streamId == common.INIT_STREAM {
@@ -6869,6 +6889,7 @@ func (idx *indexer) initStreamCollectionIdMap() {
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdCollectionId[common.StreamId(i)] = make(map[string]string)
 		idx.streamKeyspaceIdOSOException[common.StreamId(i)] = make(map[string]bool)
+		idx.streamKeyspaceIdIsRebalance[common.StreamId(i)] = make(map[string]bool)
 	}
 }
 
@@ -10174,6 +10195,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdMinMergeTs[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdIsRebalance[streamId], keyspaceId)
 }
 
 func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
