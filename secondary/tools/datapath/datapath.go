@@ -151,7 +151,10 @@ func backFillStream() {
 			_, err := client.InitialTopicRequest(
 				"backfill" /*topic*/, "default", /*pooln*/
 				"dataport" /*endpointType*/, instances,
-				true /*async */, 0 /*opaque2*/)
+				true /*async */, 0, /*opaque2*/
+				false /*needsAuth*/, 0, /*numVBuckets*/
+				0 /*numVbWorkers*/, 0, /*numDcpConns*/
+			)
 			if err != nil {
 				log.Fatal(err)
 			}

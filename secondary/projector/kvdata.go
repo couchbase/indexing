@@ -223,7 +223,8 @@ func NewKVData(
 	config c.Config,
 	async bool,
 	opaque2 uint64,
-	collectionsAware bool) (*KVData, error) {
+	collectionsAware bool,
+	vbucketWorkers int) (*KVData, error) {
 
 	kvdata := &KVData{
 		feed:         feed,
@@ -280,7 +281,8 @@ func NewKVData(
 	}
 
 	// start workers
-	kvdata.workers = kvdata.spawnWorkers(feed, bucket, keyspaceId, config, opaque, opaque2, collectionsAware)
+	kvdata.workers = kvdata.spawnWorkers(feed, bucket, keyspaceId, config, opaque,
+		opaque2, collectionsAware, vbucketWorkers)
 	// Gather stats pointers from all workers
 	kvdata.updateWorkerStats()
 
@@ -756,9 +758,18 @@ func (kvdata *KVData) scatterMutation(m *mc.DcpEvent) (seqno uint64, err error) 
 
 func (kvdata *KVData) spawnWorkers(
 	feed *Feed, bucket, keyspaceId string, config c.Config,
-	opaque uint16, opaque2 uint64, collectionsAware bool) []*VbucketWorker {
+	opaque uint16, opaque2 uint64, collectionsAware bool,
+	vbucketWorkers int) []*VbucketWorker {
 
-	nworkers := config["vbucketWorkers"].Int()
+	var nworkers int
+
+	//use config if vbucketWorkers is not specified
+	if vbucketWorkers > 0 {
+		nworkers = vbucketWorkers
+	} else {
+		nworkers = config["vbucketWorkers"].Int()
+	}
+
 	workers := make([]*VbucketWorker, nworkers)
 	for i := 0; i < nworkers; i++ {
 		workers[i] = NewVbucketWorker(i, feed, bucket,
