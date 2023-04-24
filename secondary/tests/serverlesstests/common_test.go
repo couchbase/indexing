@@ -592,9 +592,10 @@ func doHttpRequestReturnBody(req *http.Request) (resp *http.Response, respbody [
 }
 
 func waitForIndexStatus(bucket, scope, collection, index, indexStatus string, t *testing.T) {
+	waitCh := time.After(time.Duration(3 * time.Minute))
 	for {
 		select {
-		case <-time.After(time.Duration(3 * time.Minute)):
+		case <-waitCh:
 			t.Fatalf("Index: %v, bucket: %v, scope: %v, collection: %v did not become active after 3 minutes",
 				index, bucket, scope, collection)
 			break
