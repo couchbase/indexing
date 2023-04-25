@@ -1,6 +1,7 @@
 package serverlesstests
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"io/ioutil"
@@ -204,6 +205,35 @@ func resume(id, bucket, remotePath string, dryRun bool, t *testing.T) (masterAdd
 	FailTestIfError(err, fmt.Sprintf("%v ioutil.ReadAll %v returned error", _resume, url), t)
 
 	return masterAddr
+}
+
+func destroyShards(pauseMetadata indexer.PauseMetadata, t *testing.T) {
+	indexers, err := secondaryindex.GetIndexerNodes(indexManagementAddress)
+	FailTestIfError(err, "Failed to get indexer nodes for destroying shards", t)
+
+	for _, node := range indexers {
+		if shardPaths, ok := pauseMetadata.Data[service.NodeID(node.NodeUUID)]; ok {
+			shardIds := make([]common.ShardId, 0, len(shardPaths))
+			for shardId := range shardPaths {
+				shardIds = append(shardIds, shardId)
+			}
+
+			body, _ := json.Marshal(shardIds)
+			nodeAddr := secondaryindex.GetIndexHttpAddrOnNode(clusterconfig.Username, clusterconfig.Password, node.Hostname)
+			url := makeUrlForIndexNode(nodeAddr, "/test/DestroyShards")
+
+			resp, err := http.Post(url, common.HTTP_VAL_APPLICATION_JSON, bytes.NewBuffer(body))
+			if err != nil {
+				FailTestIfError(err, "Err in Destroying shard", t)
+			} else if resp.StatusCode != http.StatusOK {
+				msg, _ := ioutil.ReadAll(resp.Body)
+				defer resp.Body.Close()
+				FailTestIfError(fmt.Errorf("%v", string(msg)), "Server did not respond with ok for destroy shard", t)
+			} else {
+				log.Printf("Destroyed shards %v successfully on Node %v", shardIds, node.NodeUUID)
+			}
+		}
+	}
 }
 
 func runPause(t *testing.T, numIndexNodes int, pauseTaskId, remotePath, archivePath string,
@@ -769,8 +799,10 @@ func TestPauseResume(rootT *testing.T) {
 	fmt.Println("=== Cleanup   RemoveIndexes")
 	err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	tc.HandleError(err, "DropAllSecondaryIndexes in pause resume setup")
-	// sleeping for DDLs to finish
-	time.Sleep(5*time.Minute + 1*time.Second)
+
+	// explicitly destroy shards on indexer
+	destroyShards(*pauseMetadata, rootT)
+
 	tc.HandleError(common.MetakvRecurciveDel(mc.DeleteDDLCommandTokenPath), "Couldn't delete DeleteDDLCommandTokens")
 
 	fmt.Println("=== RUN   ResumeOnSameCluster")

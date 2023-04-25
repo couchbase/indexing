@@ -138,6 +138,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	mux.HandleFunc("/test/PreparePause", m.testPreparePause)
 	mux.HandleFunc("/test/PrepareResume", m.testPrepareResume)
 	mux.HandleFunc("/test/Resume", m.testResume)
+	mux.HandleFunc("/test/DestroyShards", m.testDestroyShards)
 
 	go m.run()
 
@@ -2535,6 +2536,55 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 	err = fmt.Errorf("%v %v RPC returned error: %v", logPrefix, taskType, err)
 	resp := &TaskResponse{Code: RESP_ERROR, Error: err.Error()}
 	rhSend(http.StatusInternalServerError, w, resp)
+}
+
+func (psm *PauseServiceManager) testDestroyShards(w http.ResponseWriter, r *http.Request) {
+	const _method = "PauseServiceManager::testDestroyShards"
+
+	logging.Infof("%v called", _method)
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	creds, ok := doAuth(r, w, _method)
+	if !ok {
+		w.Write([]byte("Invalid"))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, _method) {
+		w.Write([]byte("Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var shardIds []common.ShardId
+	err = json.Unmarshal(body, &shardIds)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	respCh := make(chan bool)
+	psm.supvMsgch <- &MsgDestroyLocalShardData{shardIds: shardIds, respCh: respCh}
+	<-respCh
+
+	w.Write([]byte("Ok"))
+	w.WriteHeader(http.StatusOK)
+
+	logging.Infof("%v destroyed shards %v", _method, shardIds)
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
