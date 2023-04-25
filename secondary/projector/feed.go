@@ -92,13 +92,14 @@ type Feed struct {
 
 // NewFeed creates a new topic feed.
 // `config` contains following keys.
-//    clusterAddr: KV cluster address <host:port>.
-//    feedWaitStreamReqTimeout: wait for a response to StreamRequest
-//    feedWaitStreamEndTimeout: wait for a response to StreamEnd
-//    feedChanSize: channel size for feed's control path and back path
-//    mutationChanSize: channel size of projector's data path routine
-//    syncTimeout: timeout, in ms, for sending periodic Sync messages
-//    routerEndpointFactory: endpoint factory
+//
+//	clusterAddr: KV cluster address <host:port>.
+//	feedWaitStreamReqTimeout: wait for a response to StreamRequest
+//	feedWaitStreamEndTimeout: wait for a response to StreamEnd
+//	feedChanSize: channel size for feed's control path and back path
+//	mutationChanSize: channel size of projector's data path routine
+//	syncTimeout: timeout, in ms, for sending periodic Sync messages
+//	routerEndpointFactory: endpoint factory
 func NewFeed(
 	pooln, topic string,
 	projector *Projector,
@@ -889,14 +890,14 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 }
 
 // start a new feed.
-// - return ErrorInconsistentFeed for malformed feed request
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout
-// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
-//   is invalid
+//   - return ErrorInconsistentFeed for malformed feed request
+//   - return ErrorInvalidVbucketBranch for malformed vbuuid.
+//   - return ErrorFeeder if upstream connection has failures.
+//   - return ErrorNotMyVbucket due to rebalances and failures.
+//   - return ErrorStreamRequest if StreamRequest failed for some reason
+//   - return ErrorResponseTimeout if feedback is not completed within timeout
+//   - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//     is invalid
 func (feed *Feed) start(
 	req *protobuf.MutationTopicRequest, opaque uint16) (err error) {
 
@@ -1013,14 +1014,14 @@ func (feed *Feed) start(
 }
 
 // a subset of upstreams are restarted.
-// - return ErrorInvalidBucket if bucket is not added.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout
-// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
-//   is invalid
+//   - return ErrorInvalidBucket if bucket is not added.
+//   - return ErrorInvalidVbucketBranch for malformed vbuuid.
+//   - return ErrorFeeder if upstream connection has failures.
+//   - return ErrorNotMyVbucket due to rebalances and failures.
+//   - return ErrorStreamRequest if StreamRequest failed for some reason
+//   - return ErrorResponseTimeout if feedback is not completed within timeout
+//   - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//     is invalid
 func (feed *Feed) restartVbuckets(
 	req *protobuf.RestartVbucketsRequest, opaque uint16) (err error) {
 
@@ -1133,14 +1134,14 @@ func (feed *Feed) restartVbuckets(
 }
 
 // a subset of upstreams are closed.
-// - return ErrorInvalidBucket if bucket is not added.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamEnd if StreamEnd failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout
-// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
-//   is invalid
+//   - return ErrorInvalidBucket if bucket is not added.
+//   - return ErrorInvalidVbucketBranch for malformed vbuuid.
+//   - return ErrorFeeder if upstream connection has failures.
+//   - return ErrorNotMyVbucket due to rebalances and failures.
+//   - return ErrorStreamEnd if StreamEnd failed for some reason
+//   - return ErrorResponseTimeout if feedback is not completed within timeout
+//   - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//     is invalid
 func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest, opaque uint16) (err error) {
 
@@ -1223,14 +1224,14 @@ func (feed *Feed) shutdownVbuckets(
 
 // upstreams are added for buckets data-path opened and
 // vbucket-routines started.
-// - return ErrorInconsistentFeed for malformed feed request
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout
-// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
-//   is invalid
+//   - return ErrorInconsistentFeed for malformed feed request
+//   - return ErrorInvalidVbucketBranch for malformed vbuuid.
+//   - return ErrorFeeder if upstream connection has failures.
+//   - return ErrorNotMyVbucket due to rebalances and failures.
+//   - return ErrorStreamRequest if StreamRequest failed for some reason
+//   - return ErrorResponseTimeout if feedback is not completed within timeout
+//   - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//     is invalid
 func (feed *Feed) addBuckets(
 	req *protobuf.AddBucketsRequest, opaque uint16) (err error) {
 
@@ -1336,8 +1337,8 @@ func (feed *Feed) addBuckets(
 
 // upstreams are closed for buckets, data-path is closed for downstream,
 // vbucket-routines exits on StreamEnd
-// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
-//   is invalid
+//   - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//     is invalid
 func (feed *Feed) delBuckets(
 	req *protobuf.DelBucketsRequest, opaque uint16) error {
 
@@ -1353,9 +1354,9 @@ func (feed *Feed) delBuckets(
 }
 
 // only data-path shall be updated.
-// - return ErrorInconsistentFeed for malformed feed request
-// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
-//   is invalid
+//   - return ErrorInconsistentFeed for malformed feed request
+//   - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//     is invalid
 func (feed *Feed) addInstances(
 	req *protobuf.AddInstancesRequest,
 	opaque uint16) (*protobuf.TimestampResponse, error) {
@@ -1404,8 +1405,8 @@ func (feed *Feed) addInstances(
 }
 
 // only data-path shall be updated.
-// * if it is the last instance defined on the bucket, then
-//   use delBuckets() API to delete the bucket.
+//   - if it is the last instance defined on the bucket, then
+//     use delBuckets() API to delete the bucket.
 func (feed *Feed) delInstances(
 	req *protobuf.DelInstancesRequest, opaque uint16) error {
 
@@ -1698,6 +1699,7 @@ func (feed *Feed) openFeeder(
 		"activeVbOnly":     feed.config["dcp.activeVbOnly"].Bool(),
 		"collectionsAware": feed.collectionsAware,
 		"osoSnapshot":      feed.osoSnapshot[keyspaceId],
+		"useMutationQueue": feed.config["dcp.useMutationQueue"].Bool(),
 	}
 
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
@@ -2376,6 +2378,7 @@ func FeedConfigParams() []string {
 		"dcp.numConnections",
 		"dcp.latencyTick",
 		"dcp.activeVbOnly",
+		"dcp.useMutationQueue",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",

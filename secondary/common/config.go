@@ -72,9 +72,11 @@ type ConfigValue struct {
 
 // SystemConfig is default configuration for system and components.
 // configuration parameters follow flat namespacing like,
-//      "maxVbuckets"  for system-level config parameter
-//      "projector.xxx" for projector component.
-//      "projector.adminport.xxx" for adminport under projector component.
+//
+//	"maxVbuckets"  for system-level config parameter
+//	"projector.xxx" for projector component.
+//	"projector.adminport.xxx" for adminport under projector component.
+//
 // etc...
 var SystemConfig = Config{
 	// system parameters
@@ -272,6 +274,13 @@ var SystemConfig = Config{
 		4,
 		"connect with N concurrent DCP connection with KV",
 		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.useMutationQueue": ConfigValue{
+		false,
+		"Use atomic mutation queue at dcp_feed.go instead of golang channels",
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -3525,10 +3534,11 @@ func (config Config) GetIndexerMemoryQuota() uint64 {
 
 // GetIndexerNumCpuPrc gets the Indexer's percentage of CPU to use (e.g. 400 means 4 cores). It is
 // the logical minimum min(node, cgroup, GSI) * 100 available CPUs, where:
-//   node  : # CPUs available on the node
-//   cgroup: # CPUs the Indexer cgroup is allocated (if cgroups are supported, else 0);
-//     indexer.cgroup.max_cpu_percent set from sigar num_cpu_prc
-//   GSI   : indexer.settings.max_cpu_percent "Indexer Threads" UI config (if specified, else 0)
+//
+//	node  : # CPUs available on the node
+//	cgroup: # CPUs the Indexer cgroup is allocated (if cgroups are supported, else 0);
+//	  indexer.cgroup.max_cpu_percent set from sigar num_cpu_prc
+//	GSI   : indexer.settings.max_cpu_percent "Indexer Threads" UI config (if specified, else 0)
 func (config Config) GetIndexerNumCpuPrc() int {
 	const _GetIndexerNumCpuPrc = "Config::GetIndexerNumCpuPrc:"
 

@@ -87,7 +87,8 @@ type DcpFeed struct {
 
 	truncName string
 
-	mutationQueue *AtomicMutationQueue
+	mutationQueue          *AtomicMutationQueue
+	useAtomicMutationQueue bool
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -115,6 +116,9 @@ func NewDcpFeed(
 
 	feed.mutationQueue = NewAtomicMutationQueue()
 	feed.truncName = name
+	if val, ok := config["useMutationQueue"]; ok {
+		feed.useAtomicMutationQueue = val.(bool)
+	}
 	newFeedName, err := truncFeedName(name)
 	if err != nil {
 		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v", feed.logPrefix, opaque, name)
@@ -144,10 +148,12 @@ func NewDcpFeed(
 		feed.osoSnapshot = config["osoSnapshot"].(bool)
 	}
 
-	go feed.DequeueMutations(rcvch, feed.finch)
+	if feed.useAtomicMutationQueue {
+		go feed.DequeueMutations(rcvch, feed.finch)
+	}
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
-	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
+	logging.Infof("%v ##%x feed started. useMutationQueue: %v ...", feed.logPrefix, opaque, feed.useAtomicMutationQueue)
 	return feed, nil
 }
 
@@ -1780,12 +1786,22 @@ loop:
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
 		}
-		select {
-		case <-finch:
-			break loop
-		default:
-			feed.mutationQueue.Enqueue(&pkt, bytes)
-			feed.stats.IncomingMsg.Add(1)
+
+		if feed.useAtomicMutationQueue {
+			select {
+			case <-finch:
+				break loop
+			default:
+				feed.mutationQueue.Enqueue(&pkt, bytes)
+				feed.stats.IncomingMsg.Add(1)
+			}
+		} else {
+			select {
+			case rcvch <- []interface{}{&pkt, bytes}:
+				feed.stats.IncomingMsg.Add(1)
+			case <-finch:
+				break loop
+			}
 		}
 		if blocked {
 			blockedTs := time.Since(start)
@@ -1802,13 +1818,12 @@ loop:
 	}
 }
 
-//
 // Truncate Feed Name:
 // The input name should follow following format.
-//     DcpFeedPrefix<keyspaceId>-<topic>-<uuid>/<connectionNumber>
+//
+//	DcpFeedPrefix<keyspaceId>-<topic>-<uuid>/<connectionNumber>
 //
 // truncFeedName removes the keyspaceId from the feed name.
-//
 func truncFeedName(name string) (string, error) {
 	if !strings.HasPrefix(name, DcpFeedPrefix) {
 		return name, nil
