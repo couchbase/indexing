@@ -278,6 +278,21 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.dcp.useMutationQueue": ConfigValue{
+		false,
+		"Use atomic mutation queue at dcp_feed.go instead of golang channels",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.serverless.useMutationQueue": ConfigValue{
+		false,
+		"Use atomic mutation queue at dcp_feed.go instead of golang channels " +
+			"for serverless deployments",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.dcp.latencyTick": ConfigValue{
 		1 * 60 * 1000, // 1 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",

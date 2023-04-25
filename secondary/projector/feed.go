@@ -1700,6 +1700,12 @@ func (feed *Feed) openFeeder(
 		"osoSnapshot":      feed.osoSnapshot[keyspaceId],
 	}
 
+	if common.IsServerlessDeployment() {
+		dcpConfig["useMutationQueue"] = feed.config["dcp.serverless.useMutationQueue"].Bool()
+	} else {
+		dcpConfig["useMutationQueue"] = feed.config["dcp.useMutationQueue"].Bool()
+	}
+
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
 		return nil, err
@@ -2376,6 +2382,8 @@ func FeedConfigParams() []string {
 		"dcp.numConnections",
 		"dcp.latencyTick",
 		"dcp.activeVbOnly",
+		"dcp.useMutationQueue",
+		"dcp.serverless.useMutationQueue",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",
