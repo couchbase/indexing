@@ -101,6 +101,7 @@ const (
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
 	CLUST_MGR_DEL_LOCAL
+	CLUST_MGR_GET_LOCAL_WITH_PREFIX
 	CLUST_MGR_DEL_KEYSPACE
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_REBALANCE_RUNNING
@@ -1395,6 +1396,7 @@ func (m *MsgBuildIndex) GetString() string {
 	str := "\n\tMessage: MsgBuildIndex"
 	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_BUILD_INDEX_DDL)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstList)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucketList)
 	return str
 }
 
@@ -2239,6 +2241,7 @@ type MsgClustMgrLocal struct {
 	respch            MsgChannel
 	checkDDL          bool
 	inProgressIndexes []string
+	values            map[string]string
 }
 
 func (m *MsgClustMgrLocal) GetMsgType() MsgType {
@@ -2267,6 +2270,10 @@ func (m *MsgClustMgrLocal) GetCheckDDL() bool {
 
 func (m *MsgClustMgrLocal) GetInProgressIndexes() []string {
 	return m.inProgressIndexes
+}
+
+func (m *MsgClustMgrLocal) GetValues() map[string]string {
+	return m.values
 }
 
 type MsgConfigUpdate struct {

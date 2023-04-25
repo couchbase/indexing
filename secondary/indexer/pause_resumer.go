@@ -233,7 +233,7 @@ func (r *Resumer) initResumeAsync() {
 			nid, _ := r.pauseMgr.genericMgr.cinfo.GetNodeIdByUUID(token.FollowerId)
 			addr, err := r.pauseMgr.genericMgr.cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE, true)
 			if err != nil {
-				logging.Warnf("Pauser::initPauseAsync: failed to get service address for %v. err: %v for task ID %v",
+				logging.Warnf("Resumer::initResumeAsync: failed to get service address for %v. err: %v for task ID %v",
 					token.FollowerId, err, r.task.taskId)
 			}
 			followerNodes[service.NodeID(token.FollowerId)] = addr

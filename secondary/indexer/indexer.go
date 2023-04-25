@@ -199,6 +199,9 @@ type indexer struct {
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
 
+	pauseResumeRunningById *PauseResumeRunningMap
+	pauseTokens            map[string]*PauseToken
+
 	mergePartitionList []mergeSpec
 	prunePartitionList []pruneSpec
 	merged             map[common.IndexInstId]common.IndexInst
@@ -308,6 +311,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 		indexInstMap:  make(common.IndexInstMap),
 		indexPartnMap: make(IndexPartnMap),
+
+		pauseResumeRunningById: NewPauseResumeRunningMap(),
+		pauseTokens:            make(map[string]*PauseToken),
 
 		merged: make(map[common.IndexInstId]common.IndexInst),
 		pruned: make(map[common.IndexInstId]common.IndexInst),
@@ -554,7 +560,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// Start Generic Service Manager, which creates Pause and Rebalance Managers it delegates to
 	genericMgr, pauseMgr, rebalMgr := NewGenericServiceManager(httpMux, httpAddr, idx.rebalMgrCmdCh, idx.prMgrCmdCh,
 		idx.wrkrRecvCh, idx.wrkrPrioRecvCh, idx.config, idx.nodeInfo, idx.rebalanceRunning,
-		idx.rebalanceToken, idx.statsMgr)
+		idx.rebalanceToken, idx.pauseResumeRunningById, idx.pauseTokens, idx.statsMgr)
 
 	serverlessMgr := NewServerlessManager(clusterAddr)
 
@@ -1521,6 +1527,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case CLUST_MGR_DEL_LOCAL:
 		idx.handleDelLocalMeta(msg)
 
+	case CLUST_MGR_GET_LOCAL_WITH_PREFIX:
+		idx.handleGetLocalMetaWithPrefix(msg)
+
 	case INDEXER_CHECK_DDL_IN_PROGRESS:
 		idx.handleCheckDDLInProgress(msg)
 
@@ -1995,6 +2004,21 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
+	if running := idx.pauseResumeRunningById.IsRunning(indexInst.Defn.Bucket, ""); len(running) > 0 {
+		errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Pause-Resume In Progress")
+		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_PAUSE_RESUME_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
 	//check if this is duplicate index instance
 	if ok := idx.checkDuplicateIndex(indexInst, clientCh); !ok {
 		return
@@ -2084,7 +2108,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			&MsgBuildIndex{
 				mType:         CLUST_MGR_BUILD_INDEX_DDL,
 				indexInstList: []common.IndexInstId{indexInst.InstId},
-				respCh:        clientCh})
+				respCh:        clientCh,
+				bucketList:    []string{indexInst.Defn.Bucket}})
 	}
 }
 
@@ -3364,6 +3389,7 @@ func (idx *indexer) updateStreamForRebalance(force bool) {
 func (idx *indexer) handleBuildIndex(msg Message) {
 	instIdList := msg.(*MsgBuildIndex).GetIndexList()
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
+	bucketList := msg.(*MsgBuildIndex).GetBucketList()
 	logging.Infof("Indexer::handleBuildIndex %v", instIdList)
 
 	// NOTE
@@ -3413,6 +3439,25 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				}
 				return
 			}
+		}
+	}
+
+	for _, bucketName := range bucketList {
+		if running := idx.pauseResumeRunningById.IsRunning(bucketName, ""); len(running) > 0 {
+			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Pause-Resume In Progress")
+			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{
+						code:     ERROR_INDEXER_PAUSE_RESUME_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER,
+					},
+				}
+			}
+			return
 		}
 	}
 
@@ -3969,6 +4014,21 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 				return
 			}
 		}
+	}
+
+	if running := idx.pauseResumeRunningById.IsRunning(indexInst.Defn.Bucket, ""); len(running) > 0 {
+		errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Pause-Resume In Progress")
+		logging.Errorf("Indexer::handleDropIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_PAUSE_RESUME_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
 	}
 
 	idx.stats.RemoveIndexStats(indexInst)
@@ -7994,6 +8054,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotReqCh []MsgChannel) error {
 
 	idx.recoverRebalanceState()
+	idx.recoverPauseResumeState()
 
 	start := time.Now()
 	err := idx.recoverIndexInstMap()
@@ -8418,6 +8479,79 @@ func (idx *indexer) recoverRebalanceState() {
 	}
 
 	logging.Infof("Indexer::recoverRebalanceState RebalanceRunning %v RebalanceToken %v", idx.rebalanceRunning, idx.rebalanceToken)
+}
+
+func (idx *indexer) recoverPauseResumeState() {
+
+	clustMgrMsg := &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL_WITH_PREFIX,
+		key:   PauseResumeRunning,
+	}
+
+	respMsg, _ := idx.sendMsgToClustMgr(clustMgrMsg)
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if err := resp.GetError(); err != nil {
+		logging.Fatalf("Indexer::recoverPauseResumeState: Error Fetching PauseResumeRunning flags From Local "+
+			"Meta Storage. Err %v", err)
+		return
+	}
+
+	for key, metaBytes := range resp.GetValues() {
+
+		_, id := decodePauseResumeRunningKey(key)
+
+		var rMeta *pauseResumeRunningMeta
+		if err := json.Unmarshal([]byte(metaBytes), &rMeta); err != nil {
+			logging.Fatalf("Indexer::recoverPauseResumeState: Error Unmarshaling PauseResumeRunning meta: err[%v]",
+				err)
+			return
+
+		} else {
+			logging.Infof("Indexer::recoverPauseResumeState: Recovered PauseResumeRunning to cleanup: typ[%v]" +
+				"bucketName[%v] id[%v]", rMeta.Typ, rMeta.BucketName, id)
+			if common.IsServerlessDeployment() {
+				idx.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
+			}
+
+		}
+	}
+
+	clustMgrMsg = &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL_WITH_PREFIX,
+		key:   PauseTokenTag,
+	}
+
+	respMsg, _ = idx.sendMsgToClustMgr(clustMgrMsg)
+	resp = respMsg.(*MsgClustMgrLocal)
+
+	if err := resp.GetError(); err != nil {
+		logging.Fatalf("Indexer::recoverPauseResumeState: Error Fetching PauseTokens From Local "+
+			"Meta Storage. Err %v", err)
+		return
+	}
+
+	for _, value := range resp.GetValues() {
+
+		var pauseToken PauseToken
+		if err := json.Unmarshal([]byte(value), &pauseToken); err != nil {
+			logging.Errorf("Indexer::recoverPauseResumeState: Error Unmarshalling PauseToken: err[%v]", err)
+			common.CrashOnError(err)
+		}
+
+		if opt, exists := idx.pauseTokens[pauseToken.PauseId]; exists {
+			err := fmt.Errorf("duplicate PauseToken pauseId[%v] pauseToken[%v] opt[%v]",
+				pauseToken.PauseId, pauseToken, opt)
+			logging.Errorf("Indexer::recoverPauseResumeState: err[%v]", err)
+			common.CrashOnError(err)
+		} else {
+			logging.Infof("Indexer::recoverPauseResumeState: Recovered pauseToken[%v] to cleanup", pauseToken)
+			if common.IsServerlessDeployment() {
+				idx.pauseTokens[pauseToken.PauseId] = &pauseToken
+			}
+		}
+
+	}
 }
 
 func (idx *indexer) handleAddIndexInstanceAtWorker(msg Message) {
@@ -9772,6 +9906,13 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			if err := json.Unmarshal([]byte(value), &rebalToken); err == nil {
 				idx.rebalanceToken = &rebalToken
 			}
+
+		} else if strings.Contains(key, PauseResumeRunning) {
+			_, id := decodePauseResumeRunningKey(key)
+			var rMeta pauseResumeRunningMeta
+			if err := json.Unmarshal([]byte(value), &rMeta); err == nil {
+				idx.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
+			}
 		}
 	}
 
@@ -9806,10 +9947,21 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 			idx.rebalanceRunning = false
 		} else if key == RebalanceTokenTag {
 			idx.rebalanceToken = nil
+		} else if strings.Contains(key,  PauseResumeRunning) {
+			_, id := decodePauseResumeRunningKey(key)
+			idx.pauseResumeRunningById.SetNotRunning(id)
 		}
 	}
 
 	respch <- respMsg
+}
+
+func (idx *indexer) handleGetLocalMetaWithPrefix(msg Message) {
+
+	respMsg, _ := idx.sendMsgToClustMgr(msg)
+	respch := msg.(*MsgClustMgrLocal).GetRespCh()
+	respch <- respMsg
+
 }
 
 func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,

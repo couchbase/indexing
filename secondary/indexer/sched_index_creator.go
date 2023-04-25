@@ -90,15 +90,16 @@ func setSchedIndexCreator(sic *schedIndexCreator) {
 // 4. Similar to DDL service manager, scheduled index creator observes mutual
 //    exclusion with rebalance operation.
 type schedIndexCreator struct {
-	indexerId   common.IndexerId
-	config      common.ConfigHolder
-	provider    *client.MetadataProvider
-	proMutex    sync.Mutex
-	supvCmdch   MsgChannel //supervisor sends commands on this channel
-	supvMsgch   MsgChannel //channel to send any message to supervisor
-	clusterAddr string
-	settings    *ddlSettings
-	killch      chan bool
+	indexerId    common.IndexerId
+	config       common.ConfigHolder
+	oldProviders []*client.MetadataProvider
+	provider     *client.MetadataProvider
+	proMutex     sync.Mutex
+	supvCmdch    MsgChannel //supervisor sends commands on this channel
+	supvMsgch    MsgChannel //channel to send any message to supervisor
+	clusterAddr  string
+	settings     *ddlSettings
+	killch       chan bool
 
 	allowDDL      bool         // allow new DDL to start? false during Rebalance
 	allowDDLMutex sync.RWMutex // protects allowDDL
@@ -300,10 +301,25 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 }
 
 func (m *schedIndexCreator) stopProcessDDL() {
-	m.allowDDLMutex.Lock()
-	defer m.allowDDLMutex.Unlock()
+	func() {
+		m.allowDDLMutex.Lock()
+		defer m.allowDDLMutex.Unlock()
 
-	m.allowDDL = false
+		m.allowDDL = false
+	}()
+
+	func() {
+		m.proMutex.Lock()
+		defer m.proMutex.Unlock()
+
+		// At this point, old provider might be in the middle of
+		// processing a DDL operation. Keep a reference of old
+		// provider so that it can be closed after DDL processing is done
+		m.oldProviders = append(m.oldProviders, m.provider)
+		m.provider = nil
+	}()
+
+	logging.Infof("schedIndexCreator::stopProcessDDL done")
 }
 
 func (m *schedIndexCreator) canProcessDDL(allowDDLAtRebalance bool) bool {
@@ -345,8 +361,14 @@ func (m *schedIndexCreator) startProcessDDL() {
 		m.proMutex.Lock()
 		defer m.proMutex.Unlock()
 
+		// At this point, old provider might be in the middle of
+		// processing a DDL operation. Keep a reference of old
+		// provider so that it can be closed after DDL processing is done
+		m.oldProviders = append(m.oldProviders, m.provider)
 		m.provider = nil
 	}()
+
+	logging.Infof("schedIndexCreator::startProcessDDL done")
 }
 
 func (m *schedIndexCreator) rebalanceDone() {
@@ -364,6 +386,25 @@ func (m *schedIndexCreator) processSchedIndexes() {
 	for {
 		select {
 		case <-ticker.C:
+
+			func() {
+				m.proMutex.Lock()
+				defer m.proMutex.Unlock()
+
+				// Metadata provider is reset (by setting m.provider to nil) at the start
+				// and end of every rebalance. During that time, it is possible that a
+				// DDL operation is on-going. Hence, close all the old metadata providers
+				// after DDL operation to prevent any metadata provider leaks
+				if m.oldProviders != nil {
+					for _, provider := range m.oldProviders {
+						if provider != nil {
+							provider.Close()
+						}
+					}
+					m.oldProviders = nil
+				}
+			}()
+
 			if !m.canProcessDDL(true) {
 				continue
 			}
@@ -558,6 +599,7 @@ func (m *schedIndexCreator) getMetadataProvider() (*client.MetadataProvider, err
 	defer m.proMutex.Unlock()
 
 	if m.provider == nil {
+		logging.Infof("schedIndexCreator: Initializing new metadata provider")
 		provider, _, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "schedIndexCreator")
 		if err != nil {
 			return nil, err
