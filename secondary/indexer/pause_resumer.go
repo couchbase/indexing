@@ -839,7 +839,7 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 
 	cancelCh := r.task.ctx.Done()
 	_, err = r.pauseMgr.downloadShardsWithoutLock(shardPaths, r.task.taskId, r.task.bucket,
-		r.task.archivePath, "", cancelCh,
+		nodeDir, "", cancelCh,
 		func(incr float64) { r.followerIncrProgress(incr * 60.0 / float64(len(shardPaths))) },
 	)
 	if err != nil {
