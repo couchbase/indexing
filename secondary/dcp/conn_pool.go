@@ -229,10 +229,19 @@ func (cp *connectionPool) StartDcpFeed(
 	// Dont' count it against the connection pool capacity
 	<-cp.createsem
 
+	defaultConnBufferSize := DEFAULT_WINDOW_SIZE
+	if val, ok := config["useMutationQueue"]; ok && val.(bool) {
+		if val, ok := config["mutation_queue.connection_buffer_size"]; ok {
+			defaultConnBufferSize = uint32(val.(int))
+		}
+	} else if val, ok := config["connection_buffer_size"]; ok {
+		defaultConnBufferSize = uint32(val.(int))
+	}
+
 	dcpf, err := memcached.NewDcpFeed(mc, string(name), outch, opaque, supvch, config)
 	if err == nil {
 		err = dcpf.DcpOpen(
-			string(name), sequence, flags, DEFAULT_WINDOW_SIZE, opaque,
+			string(name), sequence, flags, defaultConnBufferSize, opaque,
 		)
 		if err == nil {
 			return dcpf, err
