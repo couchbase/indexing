@@ -259,6 +259,21 @@ func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan boo
 		pkt, bytes := feed.mutationQueue.Dequeue(abortCh)
 		if pkt != nil {
 			rcvch <- []interface{}{pkt, bytes}
+			sendAck := false
+			switch pkt.Opcode {
+			case transport.DCP_MUTATION,
+				transport.DCP_DELETION, transport.DCP_EXPIRATION,
+				transport.DCP_STREAMEND, transport.DCP_SNAPSHOT,
+				transport.DCP_SYSTEM_EVENT, transport.DCP_SEQNO_ADVANCED,
+				transport.DCP_OSO_SNAPSHOT:
+				sendAck = true
+			default:
+				sendAck = false
+
+			}
+			if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
+				return // Exit
+			}
 		} else {
 			return // Exit
 		}
@@ -560,8 +575,14 @@ func (feed *DcpFeed) handlePacket(
 	if event != nil {
 		feed.outch <- event
 	}
-	if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
-		return "exit"
+	// When using atomic mutation queue, feed.DequeueMutations() takes care
+	// of sending the buffer-ack as it read the data from KV while the mutations
+	// in rcvch are waiting to get processed by downstream - there by achieving
+	// pipelined parallelism
+	if !feed.useAtomicMutationQueue {
+		if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
+			return "exit"
+		}
 	}
 	return "ok"
 }
@@ -858,6 +879,7 @@ func (feed *DcpFeed) doDcpOpen(
 	// send a DCP control message to set the window size for
 	// this connection
 	if bufsize > 0 {
+		logging.Infof("%v##%x using bufSize: %v", prefix, opaque, bufsize)
 		rq := &transport.MCRequest{
 			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("connection_buffer_size"),
@@ -894,7 +916,13 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, req.Status)
 			return ErrorConnection
 		}
-		feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
+
+		// If atomic mutation queue is enabled, then send buffer-ack for complete buffer
+		if feed.useAtomicMutationQueue {
+			feed.maxAckBytes = bufsize
+		} else {
+			feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
+		}
 	}
 
 	// send a DCP control message to enable_noop
@@ -1227,7 +1255,10 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
 	if sendAck {
 		var err1 error
 		totalBytes := feed.toAckBytes + bytes
-		if totalBytes > feed.maxAckBytes || time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod {
+
+		// Disable periodic buffer-ack when atomic mutation queue is enabled
+		if totalBytes > feed.maxAckBytes ||
+			(!feed.useAtomicMutationQueue && time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod) {
 			bufferAck := &transport.MCRequest{
 				Opcode: transport.DCP_BUFFERACK,
 			}

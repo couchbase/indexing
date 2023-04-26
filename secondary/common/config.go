@@ -284,6 +284,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.dcp.mutation_queue.connection_buffer_size": ConfigValue{
+		2 * 1024 * 1024,
+		"Connection buffer size to be used on DCP connections when atomic mutation queue is used",
+		2 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.connection_buffer_size": ConfigValue{
+		20 * 1024 * 1024,
+		"Connection buffer size to be used on DCP connections",
+		20 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.dcp.latencyTick": ConfigValue{
 		1 * 60 * 1000, // 1 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",

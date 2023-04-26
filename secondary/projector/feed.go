@@ -1702,6 +1702,9 @@ func (feed *Feed) openFeeder(
 		"useMutationQueue": feed.config["dcp.useMutationQueue"].Bool(),
 	}
 
+	dcpConfig["mutation_queue.connection_buffer_size"] = feed.config["dcp.mutation_queue.connection_buffer_size"].Int()
+	dcpConfig["connection_buffer_size"] = feed.config["dcp.connection_buffer_size"].Int()
+
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
 		return nil, err
@@ -2379,6 +2382,8 @@ func FeedConfigParams() []string {
 		"dcp.latencyTick",
 		"dcp.activeVbOnly",
 		"dcp.useMutationQueue",
+		"dcp.connection_buffer_size",
+		"dcp.mutation_queue.connection_buffer_size",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",
