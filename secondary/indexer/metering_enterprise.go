@@ -27,6 +27,12 @@ import (
 
 const METERING_FILE_VERSION int64 = 0
 
+// Small row scans
+const THROTTLING_SCAN_ITERATIONS_QUANTUM uint64 = 1000
+
+// Large row scans - Say every iteration is 1 RU - 200 Iterations
+const THROTTLING_SCAN_BYTES_QUANTUM uint64 = 256 * 200
+
 type MeteringThrottlingMgr struct {
 	handler   regulator.StatsHttpHandler
 	config    common.ConfigHolder
@@ -290,7 +296,7 @@ func (m *MeteringThrottlingMgr) handleConfigUpdate(cmd Message) {
 	m.supvCmdch <- &MsgSuccess{}
 }
 
-//handleUpdateIndexInstMap updates the indexInstMap
+// handleUpdateIndexInstMap updates the indexInstMap
 func (m *MeteringThrottlingMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	logging.Tracef("MeteringThrottlingMgr::handleUpdateIndexInstMap %v", cmd)
@@ -303,7 +309,7 @@ func (m *MeteringThrottlingMgr) handleUpdateIndexInstMap(cmd Message) {
 	m.supvCmdch <- &MsgSuccess{}
 }
 
-//handleUpdateIndexPartnMap updates the indexPartnMap
+// handleUpdateIndexPartnMap updates the indexPartnMap
 func (m *MeteringThrottlingMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 	logging.Tracef("MeteringThrottlingMgr::handleUpdateIndexPartnMap %v", cmd)
@@ -421,6 +427,64 @@ func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	return CheckResultError, time.Duration(0), err
 }
 
+func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWrite bool,
+	timeout time.Duration, ctx *regulator.Ctx) (proceed bool, throttleLatency time.Duration, err error) {
+
+	var readOrWrite regulator.UnitType
+
+	if isWrite {
+		readOrWrite = regulator.Write
+		if ctx == nil {
+			c := getNoUserCtx(bucketName)
+			ctx = &c
+		}
+	} else {
+		readOrWrite = regulator.Read
+		if ctx == nil {
+			c := getUserCtx(bucketName, user)
+			ctx = &c
+		}
+	}
+
+	estimatedUnits, err := regulator.NewUnits(regulator.Index, readOrWrite, uint64(0))
+	if err != nil {
+		return false, throttleLatency, err
+	}
+
+	quotaOpts := regulator.CheckQuotaOpts{
+		Timeout:           timeout,
+		NoThrottle:        false,
+		NoReject:          isWrite,
+		EstimatedDuration: time.Duration(0),
+		EstimatedUnits:    []regulator.Units{estimatedUnits},
+	}
+
+	for {
+		result, throttle, err := regulator.CheckQuota(*ctx, &quotaOpts)
+		if err != nil {
+			return false, throttleLatency, err
+		}
+		throttleLatency += throttle
+
+		switch result {
+		case regulator.CheckResultThrottleRetry:
+			time.Sleep(throttle)
+		case regulator.CheckResultThrottleProceed:
+			time.Sleep(throttle)
+			return true, throttleLatency, nil
+		case regulator.CheckResultProceed:
+			return true, throttleLatency, nil
+		case regulator.CheckResultReject:
+			if isWrite {
+				return false, throttleLatency, fmt.Errorf("CheckResultReject is not expected")
+			}
+			return false, throttleLatency, nil
+		case regulator.CheckResultError:
+			return false, throttleLatency, fmt.Errorf("CheckResultError received from regulator")
+		}
+	}
+}
+
 //
 // Metering API
 //
@@ -521,6 +585,15 @@ func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 
 type AggregateRecorder regulator.AggregateRecorder
 
+type AggregateRecorderWithCtx struct {
+	regulator.AggregateRecorder
+	ctx *regulator.Ctx
+}
+
+func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
+	return agc.ctx
+}
+
 func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable, update bool) AggregateRecorder {
 	ctx := getNoUserCtx(bucketName)
 	options := &regulator.AggregationOptions{
@@ -530,12 +603,12 @@ func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, b
 	return metering.IndexWriteAggregateRecorder(ctx, update, options)
 }
 
-func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) AggregateRecorder {
+func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) *AggregateRecorderWithCtx {
 	ctx := getUserCtx(bucketName, user)
 	options := &regulator.AggregationOptions{
 		Unbilled: !billable,
 	}
-	return metering.IndexReadAggregateRecorder(ctx, options)
+	return &AggregateRecorderWithCtx{metering.IndexReadAggregateRecorder(ctx, options), &ctx}
 }
 
 func getNoUserCtx(bucket string) regulator.Ctx {

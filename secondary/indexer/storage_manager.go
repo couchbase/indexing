@@ -273,6 +273,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		s.handleShardTransfer(cmd)
 
 	case SHARD_TRANSFER_CLEANUP,
+		SHARD_TRANSFER_STAGING_CLEANUP,
 		START_SHARD_RESTORE,
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,

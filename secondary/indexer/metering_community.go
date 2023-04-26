@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/stubs/regulator"
 )
 
 type MeteringThrottlingMgr struct {
@@ -31,7 +32,13 @@ func (m *MeteringThrottlingMgr) RegisterRestEndpoints() {
 
 func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
 	result CheckResult, throttleTime time.Duration, err error) {
-	panic("MeteringManager::Not implemented for Community Edition")
+	panic("MeteringManager::CheckWriteThrottle Not implemented for Community Edition")
+	return
+}
+
+func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWrite bool,
+	timeout time.Duration, ctx *regulator.Ctx) (proceed bool, throttleLatency time.Duration, err error) {
+	panic("MeteringManager::CheckQuotaAndSleep Not implemented for Community Edition")
 	return
 }
 
@@ -81,6 +88,13 @@ func (u *Units) Whole() uint64 {
 type AggregateRecorder struct {
 }
 
+type AggregateRecorderWithCtx struct {
+}
+
+func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
+	return nil
+}
+
 func (ar *AggregateRecorder) AddBytes(bytes uint64) error {
 	return nil
 }
@@ -106,7 +120,7 @@ func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, b
 	return AggregateRecorder{}
 }
 
-func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) AggregateRecorder {
+func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) *AggregateRecorderWithCtx {
 	panic("MeteringManager::StartReadAggregateRecorder Not implemented for Community Edition")
-	return AggregateRecorder{}
+	return nil
 }
