@@ -289,6 +289,8 @@ type TransferToken struct {
 	BuildSource  TokenBuildSource  // unused
 	TransferMode TokenTransferMode // move (rebalance) vs copy (replica repair)
 
+	IsEmptyNodeBatch bool //indicates the token is part of batch for empty node
+
 	//used for logging
 	SourceHost string
 	DestHost   string
