@@ -2985,6 +2985,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.enableEmptyNodeBatching": ConfigValue{
+		true,
+		"Enable empty node batching during rebalance." +
+			"true = enables the special handling of empty nodes and rebalance master will publish " +
+			"all transfer tokens for an empty node in a single batch, one node at a time. " +
+			"false = disables special handling for empty nodes.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.transferBatchSize": ConfigValue{
 		3,
 		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching.",
