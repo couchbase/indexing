@@ -197,7 +197,8 @@ func (p *Pauser) startWorkers() {
 
 func (p *Pauser) initPauseAsync() {
 
-	// TODO: init progress update
+	// Ask observe to continue
+	defer close(p.waitForTokenPublish)
 
 	// Generate PauseUploadTokens
 	puts, err := p.generatePauseUploadTokens()
@@ -215,9 +216,6 @@ func (p *Pauser) initPauseAsync() {
 	// Publish tokens to metaKV
 	// will crash if cannot set in metaKV even after retries.
 	p.publishPauseUploadTokens(puts)
-
-	// Ask observe to continue
-	close(p.waitForTokenPublish)
 
 	p.masterIncrProgress(5.0)
 

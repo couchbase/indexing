@@ -193,7 +193,8 @@ func (r *Resumer) startWorkers() {
 
 func (r *Resumer) initResumeAsync() {
 
-	// TODO: init progress update
+	// Ask observe to continue
+	defer close(r.waitForTokenPublish)
 
 	rdts, err := r.masterGenerateResumePlan()
 	if err != nil {
@@ -211,14 +212,16 @@ func (r *Resumer) initResumeAsync() {
 		return
 	}
 
+	if rdts == nil || len(rdts) == 0 {
+		logging.Infof("Resumer::initResumeAsync: resume is a no-op for task ID: %v", r.task.taskId)
+		r.finishResume(nil)
+		return
+	}
 	r.masterTokens = rdts
 
 	// Publish tokens to metaKV
 	// will crash if cannot set in metaKV even after retries.
 	r.publishResumeDownloadTokens(rdts)
-
-	// Ask observe to continue
-	close(r.waitForTokenPublish)
 
 	r.masterIncrProgress(10.0)
 
@@ -618,6 +621,11 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	if err != nil {
 		logging.Errorf("Resumer::masterGenerateResumePlan: couldn't unmarshal pause metadata err: %v for resume task ID: %v", err, r.task.taskId)
 		return nil, err
+	}
+
+	// Pause could be a no-op for indexer; if that is the case, no need to execute planner
+	if pauseMetadata.Data == nil || len(pauseMetadata.Data) == 0 {
+		return nil, nil
 	}
 
 	// Step 2: Download metadata and stats for all nodes in pause metadata
