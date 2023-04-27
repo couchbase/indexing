@@ -47,26 +47,6 @@ type MeteringThrottlingMgr struct {
 	indexerReady     bool
 }
 
-// redefine regulator result constants and create a mapping function
-// so that we dont need to import regulator module elsewhere
-var errorMap map[regulator.CheckResult]CheckResult
-
-func RegulatorErrorToIndexerError(err regulator.CheckResult) CheckResult {
-	err1, ok := errorMap[err]
-	if !ok {
-		return CheckResultError
-	}
-	return err1
-}
-
-func init() {
-	errorMap = make(map[regulator.CheckResult]CheckResult)
-	errorMap[regulator.CheckResultNormal] = CheckResultNormal
-	errorMap[regulator.CheckResultThrottle] = CheckResultThrottle
-	errorMap[regulator.CheckResultReject] = CheckResultReject
-	errorMap[regulator.CheckResultError] = CheckResultError
-}
-
 func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChannel) (*MeteringThrottlingMgr, Message) {
 
 	settings := regulator.InitSettings{
@@ -407,26 +387,7 @@ func (m *MeteringThrottlingMgr) GetWritesUnitsFromSlices() map[string]uint64 {
 // Throttling API
 //
 
-// wrappers for checkQuota/throttle/metering etc which will use config and may be stream status
-// to determine how to record a certain operation
-func (m *MeteringThrottlingMgr) CheckWriteThrottle(bucket string) (
-	result CheckResult, throttleTime time.Duration, err error) {
-	ctx := getNoUserCtx(bucket)
-	estimatedUnits, err := regulator.NewUnits(regulator.Index, regulator.Write, uint64(0))
-	if err == nil {
-		quotaOpts := regulator.CheckQuotaOpts{
-			MaxThrottle:       time.Duration(0),
-			NoThrottle:        false,
-			NoReject:          true,
-			EstimatedDuration: time.Duration(0),
-			EstimatedUnits:    []regulator.Units{estimatedUnits},
-		}
-		r, d, e := regulator.CheckQuota(ctx, &quotaOpts)
-		return RegulatorErrorToIndexerError(r), d, e
-	}
-	return CheckResultError, time.Duration(0), err
-}
-
+// CheckQuotaAndSleep is wrapper for regulator.CheckQuota and sleep based on output
 func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWrite bool,
 	timeout time.Duration, ctx *regulator.Ctx) (proceed bool, throttleLatency time.Duration, err error) {
 
@@ -452,11 +413,11 @@ func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWr
 	}
 
 	quotaOpts := regulator.CheckQuotaOpts{
-		Timeout:           timeout,
-		NoThrottle:        false,
-		NoReject:          isWrite,
-		EstimatedDuration: time.Duration(0),
-		EstimatedUnits:    []regulator.Units{estimatedUnits},
+		Timeout:             timeout,
+		NoThrottle:          false,
+		NoReject:            isWrite,
+		EstimatedDuration:   time.Duration(0),
+		EstimatedUnitsMulti: []regulator.Units{estimatedUnits},
 	}
 
 	for {

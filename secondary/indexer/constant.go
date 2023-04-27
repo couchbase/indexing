@@ -8,11 +8,11 @@
 
 package indexer
 
-//Max number of vbuckets supported in the system
+// Max number of vbuckets supported in the system
 const MAX_NUM_VBUCKETS = 1024
 
-//Supervisor's channel capacity to buffer requests
-//from workers
+// Supervisor's channel capacity to buffer requests
+// from workers
 const WORKER_MSG_QUEUE_LEN = 1000000
 
 // Intermediate message buffer channel size
@@ -22,29 +22,29 @@ const WORKER_RECV_QUEUE_LEN = 10000
 // This can ONLY be used for indexer main as default value for command line argument.
 const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
 
-//Maintenance Topic Name
+// Maintenance Topic Name
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
 
-//Catchup Topic Name
+// Catchup Topic Name
 const CATCHUP_TOPIC = "CATCHUP_STREAM_TOPIC"
 
-//Initial Stream Topic Name
+// Initial Stream Topic Name
 const INIT_TOPIC = "INIT_STREAM_TOPIC"
 
-//Default Pool Name
+// Default Pool Name
 const DEFAULT_POOL = "default"
 
-//Max number of snapshot to be retained per index.
-//Older snapshots are deleted.
+// Max number of snapshot to be retained per index.
+// Older snapshots are deleted.
 const MAX_SNAPSHOTS_PER_INDEX = 5
 
-//Slab Manager Specific constants
+// Slab Manager Specific constants
 const DEFAULT_START_CHUNK_SIZE = 256
 const DEFAULT_SLAB_SIZE = DEFAULT_START_CHUNK_SIZE * 1024
 const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
 
-//Internal Buffer Size for Each Slice to store incoming
-//requests
+// Internal Buffer Size for Each Slice to store incoming
+// requests
 const SLICE_COMMAND_BUFFER_SIZE = 20000
 
 const MAX_DOCID_LEN = 256
@@ -91,13 +91,6 @@ const SNAP_STATS_WRITE_UNITS_COUNT = "write_units_count"
 // redefine regulator constants
 // so that we dont need to import regulator module elsewhere
 type CheckResult uint
-
-const (
-	CheckResultNormal = CheckResult(iota)
-	CheckResultThrottle
-	CheckResultReject
-	CheckResultError
-)
 
 const DEFAULT_TIME_BARRIER = 2
 
