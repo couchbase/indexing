@@ -3058,6 +3058,21 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.serverless.perNodeTransferBatchSize": ConfigValue{
+		2,
+		"Number of transfer tokens that can be transferred per node. It can be either of " +
+			"2 uploads (or) 2 downloads (or) 1 upload and 1 download",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.serverless.scheduleVersion": ConfigValue{
+		"v2",
+		"v2 means to use per node transfer batch. v1 is used for global transfer",
+		"v2",
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.serverless.transferRetries": ConfigValue{
 		3,
 		"Number of times source node will attempt to retry transfer if transfer has " +
