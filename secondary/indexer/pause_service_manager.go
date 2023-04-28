@@ -2858,7 +2858,8 @@ type ptFilterFn func(*PauseToken) bool
 type PauseTokenType uint8
 
 const (
-	PauseTokenPause PauseTokenType = iota
+	PauseTokenInvalid PauseTokenType = iota
+	PauseTokenPause
 	PauseTokenResume
 )
 
@@ -3446,7 +3447,10 @@ func (p *PauseResumeRunningMap) SetNotRunning(id string) (PauseTokenType, string
 	p.Lock()
 	defer p.Unlock()
 
-	rMeta := p.runningMap[id]
+	rMeta, ok := p.runningMap[id]
+	if !ok {
+		return PauseTokenInvalid, ""
+	}
 
 	delete(p.runningMap, id)
 
