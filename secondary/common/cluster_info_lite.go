@@ -2504,6 +2504,12 @@ func (cicl *ClusterInfoCacheLiteClient) ValidateBucket(bucketName string, uuids 
 			return false
 		}
 
+		if len(bi.bucket.HibernationState) != 0 {
+			logging.Infof("ValidateBucket: Bucket(%v) in hibernation state %v",
+				bucketName, bi.bucket.HibernationState)
+			return true
+		}
+
 		if nids, err := bi.GetNodesByBucket(bucketName); err == nil && len(nids) != 0 {
 			// verify UUID
 			currentUUID := bi.GetBucketUUID(bucketName)

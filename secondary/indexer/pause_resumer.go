@@ -669,6 +669,13 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	// Step 3: get replacement node for old paused data
 	resumeNodes := make([]*planner.IndexerNode, 0, len(pauseMetadata.Data))
 	config := r.pauseMgr.config.Load()
+
+	err = r.pauseMgr.genericMgr.cinfo.FetchNodesAndSvsInfoWithLock()
+	if err != nil {
+		logging.Errorf("Resumer::masterGenerateResumePlan: cluster info cache sync failed; err - %v",
+			err)
+		return nil, err
+	}
 	clusterVersion := r.pauseMgr.genericMgr.cinfo.GetClusterVersion()
 	// since we don't support mixed mode for pause resume, we can use the current server version
 	// as the indexer version
