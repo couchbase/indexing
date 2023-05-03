@@ -2263,8 +2263,15 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 			errStr = "Unable to find any valid SubCluster"
 		} else {
 			//No subCluster found with matching tenant. Choose any subCluster
-			//below LWM.
-			subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
+			//below LWM for memory. Ignore units usage as regulator will throttle
+			//beyond tenant limit.
+
+			usageThreshold := *plan.UsageThreshold
+
+			usageThreshold.UnitsHighThreshold = 100 //ignore units usage
+			usageThreshold.UnitsLowThreshold = 100  //ignore units usage
+
+			subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, &usageThreshold)
 			if err != nil {
 				return nil, false, err
 			}
@@ -2277,8 +2284,14 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 		}
 	} else {
 		//Found subCluster with matching tenant. Choose this subCluster
-		//if below HWM.
-		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, plan.UsageThreshold)
+		//if below HWM for memory. Units usage can be high. It will be throttled
+		//as per tenant limit.
+		usageThreshold := *plan.UsageThreshold
+
+		usageThreshold.UnitsHighThreshold = 100 //ignore units usage
+		usageThreshold.UnitsLowThreshold = 100  //ignore units usage
+
+		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, &usageThreshold)
 		if err != nil {
 			return nil, false, err
 		}
