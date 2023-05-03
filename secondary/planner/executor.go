@@ -2540,6 +2540,14 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 			} else {
 				sgMap[indexer.ServerGroup] = true
 			}
+
+			//all nodes must belong to a single subcluster only
+			result := findSubClustersForNode(subClusters, indexer)
+			if len(result) > 1 {
+				errStr := fmt.Sprintf(" Node %v belongs to multiple subclusters %v.", indexer, result)
+				logging.Errorf("%v %v", _validateSubClusterGrouping, errStr)
+				return errors.New(common.ErrPlannerConstraintViolation.Error() + errStr)
+			}
 		}
 	}
 
@@ -2777,6 +2785,25 @@ func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
 	}
 
 	return false
+}
+
+//findSubClustersForNode returns the list of subClusters
+//an input node belongs.
+func findSubClustersForNode(subClusters []SubCluster,
+	node *IndexerNode) []SubCluster {
+
+	var result []SubCluster
+
+	for _, subCluster := range subClusters {
+
+		for _, subNode := range subCluster {
+			if node.NodeUUID == subNode.NodeUUID {
+				result = append(result, subCluster)
+			}
+		}
+	}
+
+	return result
 }
 
 // getSubClusterPosForNode returns the position of "node"
