@@ -1382,6 +1382,14 @@ var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
 		"No SubCluster Below Low Usage Threshold",
 	},
 	{
+		"Place Single Index Instance - 6 nodes - 3 SG - New Tenant Units Above LWM",
+		"../testdata/planner/tenantaware/topology/6_non_empty_nodes_3_sg_f.json",
+		"../testdata/planner/tenantaware/new_index_2.json",
+		map[string]bool{"127.0.0.1:9003": true, "127.0.0.1:9006": true},
+		false,
+		"Planner Constraint Violation",
+	},
+	{
 		"Place Single Index Instance - 4 nodes, rebalance in progress(inst version) ",
 		"../testdata/planner/tenantaware/topology/4_non_empty_nodes_2_sg_a_rebal.json",
 		"../testdata/planner/tenantaware/new_index_2.json",
