@@ -2263,8 +2263,15 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 			errStr = "Unable to find any valid SubCluster"
 		} else {
 			//No subCluster found with matching tenant. Choose any subCluster
-			//below LWM.
-			subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, plan.UsageThreshold)
+			//below LWM for memory. Ignore units usage as regulator will throttle
+			//beyond tenant limit.
+
+			usageThreshold := *plan.UsageThreshold
+
+			usageThreshold.UnitsHighThreshold = 100 //ignore units usage
+			usageThreshold.UnitsLowThreshold = 100  //ignore units usage
+
+			subClustersBelowLWM, err := findSubClustersBelowLowThreshold(subClusters, &usageThreshold)
 			if err != nil {
 				return nil, false, err
 			}
@@ -2277,8 +2284,14 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 		}
 	} else {
 		//Found subCluster with matching tenant. Choose this subCluster
-		//if below HWM.
-		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, plan.UsageThreshold)
+		//if below HWM for memory. Units usage can be high. It will be throttled
+		//as per tenant limit.
+		usageThreshold := *plan.UsageThreshold
+
+		usageThreshold.UnitsHighThreshold = 100 //ignore units usage
+		usageThreshold.UnitsLowThreshold = 100  //ignore units usage
+
+		subClusterBelowHWM, err := findSubClustersBelowHighThreshold([]SubCluster{tenantSubCluster}, &usageThreshold)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2540,6 +2553,14 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 			} else {
 				sgMap[indexer.ServerGroup] = true
 			}
+
+			//all nodes must belong to a single subcluster only
+			result := findSubClustersForNode(subClusters, indexer)
+			if len(result) > 1 {
+				errStr := fmt.Sprintf(" Node %v belongs to multiple subclusters %v.", indexer, result)
+				logging.Errorf("%v %v", _validateSubClusterGrouping, errStr)
+				return errors.New(common.ErrPlannerConstraintViolation.Error() + errStr)
+			}
 		}
 	}
 
@@ -2777,6 +2798,25 @@ func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
 	}
 
 	return false
+}
+
+//findSubClustersForNode returns the list of subClusters
+//an input node belongs.
+func findSubClustersForNode(subClusters []SubCluster,
+	node *IndexerNode) []SubCluster {
+
+	var result []SubCluster
+
+	for _, subCluster := range subClusters {
+
+		for _, subNode := range subCluster {
+			if node.NodeUUID == subNode.NodeUUID {
+				result = append(result, subCluster)
+			}
+		}
+	}
+
+	return result
 }
 
 // getSubClusterPosForNode returns the position of "node"
