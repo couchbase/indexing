@@ -2214,11 +2214,11 @@ func GetNumIndexesPerBucket(plan *Plan, Bucket string) uint32 {
 //3. All indexes will be created with 1 replica.
 //4. Index(and its replica) follow symmetrical distribution in a sub-cluster.
 //5. Indexes belonging to a tenant(bucket) will be mapped to a single sub-cluster.
-//6. Index of a new tenant can be placed on a sub-cluster with usage
+//6. Index of a new tenant can be placed on a sub-cluster with memory usage
 //   lower than LWM(Low Watermark Threshold).
-//7. Index of an existing tenant can be placed on a sub-cluster with usage
+//7. Index of an existing tenant can be placed on a sub-cluster with memory usage
 //   lower than HWM(High Watermark Threshold).
-//8. No Index can be placed on a node above HWM(High Watermark Threshold).
+//8. No Index can be placed on a node with memory usage above HWM(High Watermark Threshold).
 
 func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, error) {
 
