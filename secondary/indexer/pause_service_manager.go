@@ -138,6 +138,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	mux.HandleFunc("/test/PreparePause", m.testPreparePause)
 	mux.HandleFunc("/test/PrepareResume", m.testPrepareResume)
 	mux.HandleFunc("/test/Resume", m.testResume)
+	mux.HandleFunc("/test/DestroyShards", m.testDestroyShards)
 
 	go m.run()
 
@@ -1380,7 +1381,7 @@ func (m *PauseServiceManager) getCurrPauseTokens(ptFilter ptFilterFn, putFilter 
 			if ptFilter(&mpt) && mpt.Type == PauseTokenPause {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for pauseId[%v]"+
-						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+						" pt[%v] mpt[%v]", mpt.PauseId, pt, mpt)
 				}
 
 				pt = &mpt
@@ -1924,7 +1925,7 @@ func (m *PauseServiceManager) getCurrResumeTokens(ptFilter ptFilterFn, rdtFilter
 			if ptFilter(&mpt) && mpt.Type == PauseTokenResume {
 				if pt != nil {
 					return nil, nil, fmt.Errorf("encountered duplicate PauseToken for resumeId[%v]"+
-						" oldPT[%v] PT[%v]", mpt.PauseId, pt)
+						" pt[%v] mpt[%v]", mpt.PauseId, pt, mpt)
 				}
 
 				pt = &mpt
@@ -2537,6 +2538,55 @@ func (m *PauseServiceManager) testPauseOrResume(w http.ResponseWriter, r *http.R
 	rhSend(http.StatusInternalServerError, w, resp)
 }
 
+func (psm *PauseServiceManager) testDestroyShards(w http.ResponseWriter, r *http.Request) {
+	const _method = "PauseServiceManager::testDestroyShards"
+
+	logging.Infof("%v called", _method)
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	creds, ok := doAuth(r, w, _method)
+	if !ok {
+		w.Write([]byte("Invalid"))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, _method) {
+		w.Write([]byte("Unauthorized"))
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var shardIds []common.ShardId
+	err = json.Unmarshal(body, &shardIds)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	respCh := make(chan bool)
+	psm.supvMsgch <- &MsgDestroyLocalShardData{shardIds: shardIds, respCh: respCh}
+	<-respCh
+
+	w.Write([]byte("Ok"))
+	w.WriteHeader(http.StatusOK)
+
+	logging.Infof("%v destroyed shards %v", _method, shardIds)
+
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // General methods and functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2808,7 +2858,8 @@ type ptFilterFn func(*PauseToken) bool
 type PauseTokenType uint8
 
 const (
-	PauseTokenPause PauseTokenType = iota
+	PauseTokenInvalid PauseTokenType = iota
+	PauseTokenPause
 	PauseTokenResume
 )
 
@@ -3130,8 +3181,10 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 	// we could potentially get io.EOF on network drops/server shutdowns too; it is better to retry
 	// on streaming endpoint and encounter a `404` for given bucket to be sure that the bucket is
 	// deleted from ns_server;
-
-	// TODO: verify if we can create a bucket with same name on cluster if the original is hibernated
+	err = io.EOF
+	// can users create bucket with same name on cluster if the original is hibernated?
+	// users can have same bucket names in serverless ,but the bucketNames we get from APIS are
+	// actually bucket-ids (usually of the form "<bucket-name>-id") which are expected to be unique
 	for i := 0; err != nil && (i < 10 || err == io.EOF); i++ {
 		err = client.RunObserveCollectionManifestChanges("default", bucketName, processStateUpdate,
 			closeCh)
@@ -3396,7 +3449,10 @@ func (p *PauseResumeRunningMap) SetNotRunning(id string) (PauseTokenType, string
 	p.Lock()
 	defer p.Unlock()
 
-	rMeta := p.runningMap[id]
+	rMeta, ok := p.runningMap[id]
+	if !ok {
+		return PauseTokenInvalid, ""
+	}
 
 	delete(p.runningMap, id)
 

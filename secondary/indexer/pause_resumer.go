@@ -193,7 +193,8 @@ func (r *Resumer) startWorkers() {
 
 func (r *Resumer) initResumeAsync() {
 
-	// TODO: init progress update
+	// Ask observe to continue
+	defer close(r.waitForTokenPublish)
 
 	rdts, err := r.masterGenerateResumePlan()
 	if err != nil {
@@ -211,14 +212,16 @@ func (r *Resumer) initResumeAsync() {
 		return
 	}
 
+	if rdts == nil || len(rdts) == 0 {
+		logging.Infof("Resumer::initResumeAsync: resume is a no-op for task ID: %v", r.task.taskId)
+		r.finishResume(nil)
+		return
+	}
 	r.masterTokens = rdts
 
 	// Publish tokens to metaKV
 	// will crash if cannot set in metaKV even after retries.
 	r.publishResumeDownloadTokens(rdts)
-
-	// Ask observe to continue
-	close(r.waitForTokenPublish)
 
 	r.masterIncrProgress(10.0)
 
@@ -620,6 +623,11 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 		return nil, err
 	}
 
+	// Pause could be a no-op for indexer; if that is the case, no need to execute planner
+	if pauseMetadata.Data == nil || len(pauseMetadata.Data) == 0 {
+		return nil, nil
+	}
+
 	// Step 2: Download metadata and stats for all nodes in pause metadata
 	indexMetadataPerNode := make(map[service.NodeID]*planner.LocalIndexMetadata)
 	statsPerNode := make(map[service.NodeID]map[string]interface{})
@@ -839,7 +847,7 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 
 	cancelCh := r.task.ctx.Done()
 	_, err = r.pauseMgr.downloadShardsWithoutLock(shardPaths, r.task.taskId, r.task.bucket,
-		r.task.archivePath, "", cancelCh,
+		nodeDir, "", cancelCh,
 		func(incr float64) { r.followerIncrProgress(incr * 60.0 / float64(len(shardPaths))) },
 	)
 	if err != nil {

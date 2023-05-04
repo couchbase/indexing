@@ -14,6 +14,7 @@ import (
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	manager "github.com/couchbase/indexing/secondary/manager"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
@@ -48,6 +49,24 @@ func GetIndexerNodesHttpAddresses(hostaddress string) ([]string, error) {
 	}
 
 	return indexNodes, nil
+}
+
+func GetIndexerNodes(clusterAddr string) ([]couchbase.Node, error) {
+	clusterUrl, err := c.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	cinfo, err := c.NewClusterInfoCache(clusterUrl, "default")
+	if err != nil {
+		return nil, err
+	}
+
+	if err = cinfo.Fetch(); err != nil {
+		return nil, err
+	}
+
+	return cinfo.GetActiveIndexerNodes(), nil
 }
 
 func GetStatsForIndexerHttpAddress(indexerHttpAddr, serverUserName, serverPassword string) map[string]interface{} {

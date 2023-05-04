@@ -87,7 +87,7 @@ func (api *testServer) authorize(r *http.Request, w http.ResponseWriter, creds c
 	indexes, _, _, _, err := api.client.Refresh()
 	if err != nil {
 		log.Errorf("Fail to authorize.  Reason: unable to fetch index metadata.  %v", err)
-		http.Error(w, jsonstr("Authroziation check fails", err), http.StatusBadRequest)
+		http.Error(w, jsonstr("Authorization check fails %v", err), http.StatusBadRequest)
 		return false
 	}
 

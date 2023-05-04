@@ -180,6 +180,22 @@ const (
 	REPAIR_RECOVERY
 )
 
+func (s RepairState) String() string {
+	switch s {
+	case REPAIR_NONE:
+		return "REPAIR_NONE"
+	case REPAIR_RESTART_VB:
+		return "REPAIR_RESTART_VB"
+	case REPAIR_SHUTDOWN_VB:
+		return "REPAIR_SHUTDOWN_VB"
+	case REPAIR_MTR:
+		return "REPAIR_MTR"
+	case REPAIR_RECOVERY:
+		return "REPAIR_RECOVERY"
+	}
+	return "REPAIR_INVALID_STATE"
+}
+
 func InitStreamState(config common.Config) *StreamState {
 
 	ss := &StreamState{

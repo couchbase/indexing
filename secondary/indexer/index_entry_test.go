@@ -190,6 +190,6 @@ func TestLongDocIdEntry(t *testing.T) {
 		return
 	}
 	if e.lenDocId() != 258 {
-		t.Errorf("Expected lenght to be 258 but instead got ", e.lenDocId())
+		t.Errorf("Expected lenght to be 258 but instead got %v", e.lenDocId())
 	}
 }

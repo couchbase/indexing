@@ -667,7 +667,7 @@ func newIndexCompaction(instId common.IndexInstId, partnId common.PartitionId, s
 }
 
 func indexCompactionName(instId common.IndexInstId, partitionId common.PartitionId) string {
-	return fmt.Sprint("%v:%v", instId, partitionId)
+	return fmt.Sprintf("%v:%v", instId, partitionId)
 }
 
 func computeGarbage(stats *IndexStats) int64 {
