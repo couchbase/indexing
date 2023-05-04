@@ -691,31 +691,36 @@ func (s *plasmaSlice) isWriteBillingStopped() bool {
 	return atomic.LoadUint32(&s.stopWUBilling) == 1
 }
 
-func (s *plasmaSlice) RecordWriteUnits(bytes uint64) {
+// RecordWriteUnits records WUs of a given write variant if its not init build
+// for initial build writeVariant will be overwritten to IndexWriteBuildVariant
+func (s *plasmaSlice) RecordWriteUnits(bytes uint64, writeVariant UnitType) {
 	if !s.EnableMetering() {
 		return
 	}
 
-	var err error
-	var wu uint64
-	if s.isMeteringMaster() {
-		// If billable fetch the number of WUs and add to local counter
-		// before recording in regulator so that we can refund if there
-		// is a restart. Its fine to refund more.
-		wu, err = s.meteringMgr.IndexWriteToWU(bytes)
-		if err == nil {
+	initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
+	if initBuild {
+		writeVariant = IndexWriteBuildVariant
+	}
+
+	writeUnits, err := s.meteringMgr.IndexWriteToWU(bytes, writeVariant)
+	if err == nil {
+		wu := writeUnits.Whole()
+		var wuBilling bool
+		if s.isMeteringMaster() {
+			// If billable fetch the number of WUs and add to local counter
+			// before recording in regulator so that we can refund if there
+			// is a restart. Its fine to refund more.
 			atomic.AddUint64(&s.meteringStats.writeUnits, wu)
-			wuBilling := !s.isWriteBillingStopped()
-			err = s.meteringMgr.RecordWriteUnitsComputed(s.idxDefn.Bucket,
-				wu, wuBilling, false)
-			initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
-			s.meteringStats.recordWriteUsageStats(wu, initBuild)
+			wuBilling = !s.isWriteBillingStopped()
+		} else {
+			wuBilling = false
 		}
-	} else {
-		wu, err = s.meteringMgr.RecordWriteUnits(s.idxDefn.Bucket, bytes, false, false)
-		initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
+
+		err = s.meteringMgr.RecordWriteUnits(s.idxDefn.Bucket, writeUnits, wuBilling)
 		s.meteringStats.recordWriteUsageStats(wu, initBuild)
 	}
+
 	if err != nil {
 		// TODO: Handle error graciously
 	}
@@ -1039,7 +1044,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		if err == nil {
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
-			mdb.RecordWriteUnits(uint64(len(docid)))
+			mdb.RecordWriteUnits(uint64(len(docid)), IndexWriteInsertVariant)
 			mdb.recordNewOps(1, 0, 0)
 		}
 		mdb.isDirty = true
@@ -1115,9 +1120,11 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 		}
 
 		if itemInserted == true {
-			// for an update operation deleteSecIndex has already accounted 1 WCU
-			// so we will only count 1 WCU here.
-			mdb.RecordWriteUnits(uint64(len(docid) + len(key)))
+			writeVariant := IndexWriteUpdateVariant
+			if ndel == 0 {
+				writeVariant = IndexWriteInsertVariant
+			}
+			mdb.RecordWriteUnits(uint64(len(docid)+len(key)), writeVariant)
 		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1241,7 +1248,12 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	billable := mdb.replicaId == 0
 
 	if mdb.EnableMetering() {
-		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, false)
+		initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
+		writeVariant := IndexWriteArrayVariant
+		if initBuild {
+			writeVariant = IndexWriteBuildVariant
+		}
+		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, writeVariant)
 		defer func() {
 			if abortErr == nil {
 				// If billable fetch the WUs before committing and increment local counter
@@ -1255,7 +1267,6 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					// TODO: Add logging without flooding
 					return
 				}
-				initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
 				mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole(), initBuild)
 			} else {
 				ar.Abort()
@@ -1489,7 +1500,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 		if err1 == nil {
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
-			mdb.RecordWriteUnits(uint64(len(docid)))
+			mdb.RecordWriteUnits(uint64(len(docid)), IndexWriteDeleteVariant)
 			mdb.recordNewOps(0, 0, 1)
 		}
 
@@ -1553,7 +1564,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 
 		if meterDelete && itemDeleted == true {
 			keylen := getKeyLenFromEntry(entry)
-			mdb.RecordWriteUnits(uint64(len(docid) + keylen))
+			mdb.RecordWriteUnits(uint64(len(docid)+keylen), IndexWriteDeleteVariant)
 			mdb.recordNewOps(0, 0, 1)
 		}
 	}
@@ -1647,7 +1658,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 
 			if meterDelete {
-				mdb.RecordWriteUnits(uint64(len(docid) + keyDelSz))
+				mdb.RecordWriteUnits(uint64(len(docid)+keyDelSz), IndexWriteArrayVariant)
 				mdb.recordNewOps(0, 0, 1)
 			}
 		}
