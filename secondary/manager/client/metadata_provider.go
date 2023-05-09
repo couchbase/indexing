@@ -1550,8 +1550,9 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	}
 
-	// schedIndex will be true only for serverless deployments
-	if schedIndex {
+	// schedIndex will be true only for serverless deployments. Schedule only if index is not
+	// already scheduled
+	if schedIndex && !asyncCreate {
 
 		// Cancel the previously sent prepare request
 		o.cancelPrepareIndexRequest(idxDefn, watcherMap, schedIndex)
