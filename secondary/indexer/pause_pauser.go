@@ -142,6 +142,9 @@ type Pauser struct {
 
 	// For progress tracking
 	masterProgress, followerProgress float64Holder
+
+	// for cleanup after pause
+	shardIds []common.ShardId
 }
 
 // NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -893,6 +896,8 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 
 		return shardIds
 	}()
+
+	p.shardIds = shardIds
 
 	// TODO: add contextWithCancel to task and reuse it here
 	closeCh := p.task.ctx.Done()

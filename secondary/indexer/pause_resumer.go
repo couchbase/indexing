@@ -135,6 +135,9 @@ type Resumer struct {
 
 	// For progress tracking
 	masterProgress, followerProgress float64Holder
+
+	// for cleanup after resume
+	shardIds []c.ShardId
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -847,10 +850,13 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 		len(metadata.IndexDefinitions), len(stats), r.task.taskId,
 	)
 
+	shardIds := make([]c.ShardId, 0, len(rdt.ShardPaths))
 	shardPaths := rdt.ShardPaths
 	for shardId, shardPath := range shardPaths {
 		shardPaths[shardId] = generateShardPath(nodeDir, shardPath)
+		shardIds = append(shardIds, shardId)
 	}
+	r.shardIds = shardIds
 
 	cancelCh := r.task.ctx.Done()
 	_, err = r.pauseMgr.downloadShardsWithoutLock(shardPaths, r.task.taskId, r.task.bucket,
