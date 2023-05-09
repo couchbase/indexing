@@ -1320,6 +1320,20 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.plasma.LSSCleanerFlushInterval": ConfigValue{
+		10,
+		"Minimum elapsed time for logCleaner to sync LSS (Minute)",
+		10,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.LSSCleanerMinReclaimSize": ConfigValue{
+		64 * 1024 * 1024,
+		"Minimum disk reclaim space at which logCleaner will sync LSS (bytes)",
+		64 * 1024 * 1024,
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.AutoTuneLSSCleaner": ConfigValue{
 		false,
 		"Enable auto tuning of lss cleaning thresholds based on available free space",
