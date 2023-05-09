@@ -324,6 +324,8 @@ func (slice *plasmaSlice) initStores() error {
 		cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
 		cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
 		cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
+		cfg.LSSCleanerFlushInterval = time.Duration(slice.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
+		cfg.LSSCleanerMinReclaimSize = int64(slice.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
 		cfg.AutoTuneDiskQuota = int64(slice.sysconf["plasma.AutoTuneDiskQuota"].Uint64())
 		cfg.AutoTuneCleanerTargetFragRatio = slice.sysconf["plasma.AutoTuneCleanerTargetFragRatio"].Int()
@@ -2479,6 +2481,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.mainIndex.LSSFragMinFileSize"].Int())
+	mdb.mainstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
+	mdb.mainstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 	mdb.mainstore.EnablePeriodicEvict = mdb.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
 	mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
@@ -2551,6 +2555,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.backIndex.LSSFragMinFileSize"].Int())
+		mdb.backstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
+		mdb.backstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 		mdb.backstore.EnablePeriodicEvict = mdb.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
 		mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
