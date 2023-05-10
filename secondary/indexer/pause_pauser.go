@@ -142,6 +142,9 @@ type Pauser struct {
 
 	// For progress tracking
 	masterProgress, followerProgress float64Holder
+
+	// for cleanup after pause
+	shardIds []common.ShardId
 }
 
 // NewPauser creates a Pauser instance to execute the given task. It saves a pointer to itself in
@@ -744,7 +747,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 	data = common.ChecksumAndCompress(data, compression)
 
 	ctx := p.task.ctx
-	plasmaCfg := generatePlasmaCopierConfig(p.task)
+	plasmaCfg := generatePlasmaCopierConfig(p.task, cfg)
 	copier := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
 		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported", p.task.archivePath)
@@ -794,7 +797,7 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		logging.Infof("Pauser::followerUploadBucketData: compression is disabled. will upload raw data")
 	}
 
-	plasmaCfg := generatePlasmaCopierConfig(p.task)
+	plasmaCfg := generatePlasmaCopierConfig(p.task, cfg)
 	copier := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
 		err := fmt.Errorf("couldn't create a copier object. archive path %v is unsupported", p.task.archivePath)
@@ -893,6 +896,8 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 
 		return shardIds
 	}()
+
+	p.shardIds = shardIds
 
 	// TODO: add contextWithCancel to task and reuse it here
 	closeCh := p.task.ctx.Done()

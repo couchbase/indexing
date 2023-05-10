@@ -135,6 +135,9 @@ type Resumer struct {
 
 	// For progress tracking
 	masterProgress, followerProgress float64Holder
+
+	// for cleanup after resume
+	shardIds []c.ShardId
 }
 
 // NewResumer creates a Resumer instance to execute the given task. It saves a pointer to itself in
@@ -597,7 +600,9 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	// Step 1: download PauseMetadata
 	logging.Infof("Resumer::masterGenerateResumePlan: downloading pause metadata from %v for resume task ID: %v", r.task.archivePath, r.task.taskId)
 	ctx := r.task.ctx
-	plasmaCfg := generatePlasmaCopierConfig(r.task)
+
+	cfg := r.pauseMgr.config.Load()
+	plasmaCfg := generatePlasmaCopierConfig(r.task, cfg)
 
 	copier := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
@@ -669,6 +674,13 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	// Step 3: get replacement node for old paused data
 	resumeNodes := make([]*planner.IndexerNode, 0, len(pauseMetadata.Data))
 	config := r.pauseMgr.config.Load()
+
+	err = r.pauseMgr.genericMgr.cinfo.FetchNodesAndSvsInfoWithLock()
+	if err != nil {
+		logging.Errorf("Resumer::masterGenerateResumePlan: cluster info cache sync failed; err - %v",
+			err)
+		return nil, err
+	}
 	clusterVersion := r.pauseMgr.genericMgr.cinfo.GetClusterVersion()
 	// since we don't support mixed mode for pause resume, we can use the current server version
 	// as the indexer version
@@ -756,7 +768,9 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 	}()
 
 	ctx := r.task.ctx
-	plasmaCfg := generatePlasmaCopierConfig(r.task)
+
+	cfg := r.pauseMgr.config.Load()
+	plasmaCfg := generatePlasmaCopierConfig(r.task, cfg)
 
 	copier := plasma.MakeFileCopier(nodeDir, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
 	if copier == nil {
@@ -840,10 +854,13 @@ func (r *Resumer) followerResumeBuckets(rdtId string, rdt *c.ResumeDownloadToken
 		len(metadata.IndexDefinitions), len(stats), r.task.taskId,
 	)
 
+	shardIds := make([]c.ShardId, 0, len(rdt.ShardPaths))
 	shardPaths := rdt.ShardPaths
 	for shardId, shardPath := range shardPaths {
 		shardPaths[shardId] = generateShardPath(nodeDir, shardPath)
+		shardIds = append(shardIds, shardId)
 	}
+	r.shardIds = shardIds
 
 	cancelCh := r.task.ctx.Done()
 	_, err = r.pauseMgr.downloadShardsWithoutLock(shardPaths, r.task.taskId, r.task.bucket,

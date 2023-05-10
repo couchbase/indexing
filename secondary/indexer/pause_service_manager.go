@@ -122,7 +122,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	}
 	m.setCleanupPending(len(m.pauseTokensById) > 0)
 
-	pauseResumeRunningById.ForEveryKey(func (rMeta *pauseResumeRunningMeta, id string) {
+	pauseResumeRunningById.ForEveryKey(func(rMeta *pauseResumeRunningMeta, id string) {
 		m.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
 	})
 
@@ -345,12 +345,12 @@ func (m *PauseServiceManager) recoverPauseResume() {
 				}
 				respCh := make(chan Message)
 				m.supvMsgch <- &MsgShardTransferStagingCleanup{
-					respCh: respCh,
+					respCh:      respCh,
 					destination: pt.ArchivePath,
-					region: pt.Region,
-					taskId: pt.PauseId,
-					transferId: pt.BucketName,
-					taskType: common.PauseResumeTask,
+					region:      pt.Region,
+					taskId:      pt.PauseId,
+					transferId:  pt.BucketName,
+					taskType:    common.PauseResumeTask,
 				}
 				<-respCh
 
@@ -441,6 +441,11 @@ func (psm *PauseServiceManager) copyShardsWithLock(
 	shardIds []common.ShardId, taskId, bucket, destination string,
 	cancelCh <-chan struct{}, progressUpdate func(float64),
 ) (map[common.ShardId]string, error) {
+
+	// for pause resume testing
+	psm.setTestConfigIfEnabled()
+	defer psm.unsetTestConfigIfEnabled()
+
 	err := psm.lockShards(shardIds)
 	if err != nil {
 		logging.Errorf("PauseServiceManager::copyShardsWithLock: locking shards failed. err -> %v for taskId %v", err, taskId)
@@ -515,6 +520,10 @@ func (psm *PauseServiceManager) downloadShardsWithoutLock(
 	taskId, bucket, origin, region string,
 	cancelCh <-chan struct{}, progressUpdate func(incr float64),
 ) (map[common.ShardId]string, error) {
+
+	// for pause resume testing
+	psm.setTestConfigIfEnabled()
+	defer psm.unsetTestConfigIfEnabled()
 
 	logging.Infof("PauseServiceManager::downloadShardsWithoutLock: downloading shards %v for taskId %v",
 		shardPaths, taskId)
@@ -1279,7 +1288,7 @@ func (m *PauseServiceManager) pauseDoneCallback(pauseId string, err error) {
 		m.endTask(err, pauseId)
 	}
 
-	go m.monitorBucketForPauseResume(pauser.task.bucket, pauser.task.taskId, isMaster, true)
+	go m.monitorBucketForPauseResume(pauser.task.bucket, pauser.task.taskId, isMaster, true, pauser.shardIds)
 
 	if err := m.runPauseCleanupPhase(pauser.task.bucket, pauseId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::pauseDoneCallback: Failed to run cleanup: err[%v]", err)
@@ -1823,7 +1832,20 @@ func (m *PauseServiceManager) resumeDoneCallback(resumeId string, err error) {
 		m.endTask(err, resumeId)
 	}
 
-	go m.monitorBucketForPauseResume(resumer.task.bucket, resumer.task.taskId, isMaster, false)
+	if err == nil {
+		//resume successful, update state in supv to resumed
+		m.supvMsgch <- &MsgPauseUpdateBucketState{
+			bucket:           resumer.task.bucket,
+			bucketPauseState: bst_RESUMED,
+		}
+		go m.monitorBucketForPauseResume(resumer.task.bucket, resumer.task.taskId, isMaster, false, resumer.shardIds)
+	} else {
+		//resume has failed, reset bucketPauseState
+		m.supvMsgch <- &MsgPauseUpdateBucketState{
+			bucket:           resumer.task.bucket,
+			bucketPauseState: bst_NIL,
+		}
+	}
 
 	if err := m.runResumeCleanupPhase(resumer.task.bucket, resumeId, isMaster); err != nil {
 		logging.Errorf("PauseServiceManager::resumeDoneCallback: Failed to run cleanup: err[%v]", err)
@@ -2241,8 +2263,7 @@ func (m *PauseServiceManager) RestHandlePause(w http.ResponseWriter, r *http.Req
 				return
 			}
 
-			if running := m.pauseResumeRunningById.IsRunning(pauseToken.BucketName, pauseToken.PauseId);
-				len(running) != 1 {
+			if running := m.pauseResumeRunningById.IsRunning(pauseToken.BucketName, pauseToken.PauseId); len(running) != 1 {
 
 				err := fmt.Errorf("node[%v] not in prepared state for pause-resume", string(m.nodeInfo.NodeID))
 				logging.Errorf("PauseServiceManager::RestHandlePause: err[%v]", err)
@@ -2874,7 +2895,7 @@ type PauseToken struct {
 	Error string
 
 	ArchivePath string
-	Region string
+	Region      string
 }
 
 func (pt *PauseToken) String() string {
@@ -3117,7 +3138,7 @@ func (m *PauseServiceManager) registerGlobalPauseToken(pauseToken *PauseToken) (
 //
 // not a part of Pauser/Resumer object as it can be garbage collected while this is running
 func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId string,
-	isMaster, isPause bool) {
+	isMaster, isPause bool, shardIds []common.ShardId) {
 	// this function should not have any panics as this could get called during bootstrap on crash
 	// recovery. If the panic cannot be resolved, indexer will go in crash loop
 	defer func() {
@@ -3140,6 +3161,7 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 	}
 
 	closeCh := make(chan bool)
+	deleteShards := false
 
 	processStateUpdate := func(data interface{}) error {
 		bucket, ok := data.(*couchbase.Bucket)
@@ -3169,6 +3191,7 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 			// bucket paused
 			if isPause {
 				close(closeCh)
+				deleteShards = true
 			}
 		default:
 			logging.Warnf("PauseServiceManager::monitorBucketForPauseResume:processStateUpdate: saw unkown hibernation_state `%v` on bucket `%v`",
@@ -3194,12 +3217,27 @@ func (psm *PauseServiceManager) monitorBucketForPauseResume(bucketName, taskId s
 				if !isPause {
 					psm.rollbackResume(bucketName)
 				}
+				// delete shards for the bucket
+				deleteShards = true
 			} else {
 				// Network error/marshalling error?
 				logging.Errorf("PauseServiceManager::monitorBucketForPauseResume: failed to observe bucket (%v) streaming endpoint. err: %v. Retrying (%v)",
 					bucketName, err, i)
 			}
 		}
+	}
+	if deleteShards {
+		start := time.Now()
+
+		respCh := make(chan bool)
+		psm.supvMsgch <- &MsgDestroyLocalShardData{
+			shardIds: shardIds,
+			respCh:   respCh,
+		}
+
+		<-respCh
+
+		logging.Infof("PauseServiceManager::monitorBucketForPauseResume: destroyed shards %v for bucket %v (time taken %v)", shardIds, bucketName, time.Since(start).Seconds())
 	}
 	logging.Infof("PauseServiceManager::monitorBucketForPauseResume: exiting bucket monitor for bucket %v; err %v for task ID: %v (for pause? -> %v)",
 		bucketName, err, taskId, isPause)
@@ -3258,11 +3296,12 @@ func generateShardPath(nodeDir string, trimmedShardPath string) string {
 	return strings.Join([]string{nodeDir, trimmedShardPath, ""}, separator)
 }
 
-func generatePlasmaCopierConfig(task *taskObj) *plasma.Config {
+func generatePlasmaCopierConfig(task *taskObj, config common.Config) *plasma.Config {
 	cfg := plasma.DefaultConfig()
 	cfg.CopyConfig.KeyEncoding = true
 	cfg.CopyConfig.KeyPrefix = task.archivePath
 	cfg.CopyConfig.Region = task.region
+	cfg.CopyConfig.EndPoint = config["pause_resume.blob_storage_endpoint"].String()
 	return &cfg
 }
 
@@ -3368,10 +3407,10 @@ func (m *PauseServiceManager) registerPauseResumeRunning(id string) error {
 	}
 
 	m.supvMsgch <- &MsgClustMgrLocal{
-		mType:    CLUST_MGR_SET_LOCAL,
-		key:      buildPauseResumeRunningKey(id),
-		value:    string(metaBtyes),
-		respch:   respch,
+		mType:  CLUST_MGR_SET_LOCAL,
+		key:    buildPauseResumeRunningKey(id),
+		value:  string(metaBtyes),
+		respch: respch,
 	}
 
 	respMsg := <-respch
@@ -3459,7 +3498,7 @@ func (p *PauseResumeRunningMap) SetNotRunning(id string) (PauseTokenType, string
 	return rMeta.Typ, rMeta.BucketName
 }
 
-func (p *PauseResumeRunningMap) GetMeta(id string) (*pauseResumeRunningMeta) {
+func (p *PauseResumeRunningMap) GetMeta(id string) *pauseResumeRunningMeta {
 	p.RLock()
 	defer p.RUnlock()
 
@@ -3489,5 +3528,22 @@ func (prrm *PauseResumeRunningMap) ForEveryKey(callb func(*pauseResumeRunningMet
 
 	for id, rMeta := range prrm.runningMap {
 		callb(rMeta, id)
+	}
+}
+
+func (psm *PauseServiceManager) setTestConfigIfEnabled() {
+	if endpoint, ok := psm.config.Load()["pause_resume.blob_storage_endpoint"]; ok {
+		logging.Infof("PauseServiceManager::setTestConfigIfEnabled: setting blob storage endpoint(%v)", endpoint)
+		cfg := plasma.DefaultConfig()
+		cfg.EndPoint = endpoint.String()
+		plasma.UpdateShardCopyConfig(&cfg)
+	}
+}
+
+func (psm *PauseServiceManager) unsetTestConfigIfEnabled() {
+	if endpoint, ok := psm.config.Load()["pause_resume.blob_storage_endpoint"]; ok {
+		logging.Infof("PauseServiceManager::unsetTestConfigIfEnabled: unsetting blob storage endpoint(%v)", endpoint)
+		cfg := plasma.DefaultConfig()
+		plasma.UpdateShardCopyConfig(&cfg)
 	}
 }

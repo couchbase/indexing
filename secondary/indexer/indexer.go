@@ -2196,7 +2196,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 	}()
 
 	if !valid {
-		logging.Errorf("Indexer::handleRecoverIndex Bucket %v Not Found")
+		logging.Errorf("Indexer::handleRecoverIndex Bucket %v Not Found", indexInst.Defn.Bucket)
 
 		if clientCh != nil {
 			clientCh <- &MsgError{
@@ -3901,40 +3901,6 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 						category: INDEXER}}
 			}
 			common.CrashOnError(err)
-		}
-
-		// Compute restartTs for the given keyspaceId
-		allRestartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM, keyspaceId)
-
-		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, keyspaceId)
-
-		if restartTs, ok := allRestartTs[keyspaceId]; ok {
-			sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
-			if restartTs != nil {
-				idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, restartTs, nil, nil,
-					allNilSnaps, false, false, sessionId)
-			} else {
-				idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, nil, nil, nil,
-					allNilSnaps, false, false, sessionId)
-			}
-			idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
-		} else {
-			allKeyspaceIds := make([]string, 0)
-			for kid, _ := range allRestartTs {
-				allKeyspaceIds = append(allKeyspaceIds, kid)
-			}
-			err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
-				"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
-			logging.Errorf("Indexer::handleBuildRecoveredIndexes: err: %v", err)
-			// Not able to compute restartTs is an error
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-						severity: FATAL,
-						cause:    err,
-						category: INDEXER}}
-			}
-			return
 		}
 
 		//store updated state and streamId in meta store
@@ -8509,7 +8475,7 @@ func (idx *indexer) recoverPauseResumeState() {
 			return
 
 		} else {
-			logging.Infof("Indexer::recoverPauseResumeState: Recovered PauseResumeRunning to cleanup: typ[%v]" +
+			logging.Infof("Indexer::recoverPauseResumeState: Recovered PauseResumeRunning to cleanup: typ[%v]"+
 				"bucketName[%v] id[%v]", rMeta.Typ, rMeta.BucketName, id)
 			if common.IsServerlessDeployment() {
 				idx.pauseResumeRunningById.SetRunning(rMeta.Typ, rMeta.BucketName, id)
@@ -9948,7 +9914,7 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 			idx.rebalanceRunning = false
 		} else if key == RebalanceTokenTag {
 			idx.rebalanceToken = nil
-		} else if strings.Contains(key,  PauseResumeRunning) {
+		} else if strings.Contains(key, PauseResumeRunning) {
 			_, id := decodePauseResumeRunningKey(key)
 			idx.pauseResumeRunningById.SetNotRunning(id)
 		}
@@ -11516,6 +11482,8 @@ func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 	idx.distributeKeyspaceStatsMapsToWorkers()
+
+	idx.resetBucketPauseState(streamId, keyspaceId)
 }
 
 func (idx *indexer) monitorKVNodes() {
@@ -11998,11 +11966,11 @@ func (idx *indexer) useOSOForMagmaStorage(streamId common.StreamId, keyspaceId s
 	return useOSO
 }
 
-//setStreamOpenTimeBarrier set the minimum time delay required for initiating
-//the next stream request to projector, once the dataport has been
-//shutdown. This is a workaround to allow projector endpoint to detect
-//dataport shutdown and finish cleanup. Otherwise there can be race conditions
-//due to async endpoint cleanup at projector (see MB-54101).
+// setStreamOpenTimeBarrier set the minimum time delay required for initiating
+// the next stream request to projector, once the dataport has been
+// shutdown. This is a workaround to allow projector endpoint to detect
+// dataport shutdown and finish cleanup. Otherwise there can be race conditions
+// due to async endpoint cleanup at projector (see MB-54101).
 func (idx *indexer) setStreamOpenTimeBarrier(streamId common.StreamId) {
 	if streamId == common.INIT_STREAM {
 		t0 := time.Now()
@@ -12125,16 +12093,21 @@ func closeSlices(sliceList []Slice, logPrefix string) {
 
 func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 
+	if !common.IsServerlessDeployment() {
+		return
+	}
+
 	req := msg.(*MsgPauseUpdateBucketState)
 	bucket := req.GetBucket()
-	bucketState := req.GetBucketPauseState()
+	newState := req.GetBucketPauseState()
 
-	currState := idx.bucketPauseState[bucket]
+	oldState := idx.bucketPauseState[bucket]
 
-	logging.Infof("Indexer::handleUpdateBucketPauseState Updating from %v to %v", currState, bucketState)
+	logging.Infof("Indexer::handleUpdateBucketPauseState Updating %v state from %v to %v", bucket,
+		oldState, newState)
 
 	//update indexer book-keeping
-	idx.bucketPauseState[bucket] = bucketState
+	idx.bucketPauseState[bucket] = newState
 
 	//update scan coordinator
 	idx.scanCoordCmdCh <- msg
@@ -12144,15 +12117,97 @@ func (idx *indexer) handleUpdateBucketPauseState(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
+	//if the oldState is in any of the pausing states and the new state is online,
+	//it means the pause has been rolled back. DCP might have disconnected the streams
+	//as part of pause operations and indexer wouldn't retry if bucket is in any of
+	//the pausing states. Initiate recovery to re-establish the DCP streams.
+	if oldState.IsPausing() && newState == bst_ONLINE {
+		logging.Infof("Indexer::handleUpdateBucketPauseState Detected online state"+
+			"for pausing/paused bucket %v. Initiating recovery of DCP streams. ", bucket)
+
+		streamId := common.MAINT_STREAM
+		maintSessionId := idx.getCurrentSessionId(streamId, bucket)
+		idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId:   streamId,
+			keyspaceId: bucket,
+			sessionId:  maintSessionId})
+	}
+
+	//if the oldState is bst_RESUMED and the new state is bst_ONLINE,
+	//it means the bucket is now ready to accept DCP connections.
+	//Start the DCP streams for the bucket.
+	if oldState == bst_RESUMED && newState == bst_ONLINE {
+		logging.Infof("Indexer::handleUpdateBucketPauseState Detected online state"+
+			"for resumed bucket %v. Initiating recovery of DCP streams. ", bucket)
+
+		idx.startKeyspaceIdStreamsForResumedIndexes(bucket)
+	}
 }
 
 func (idx *indexer) getBucketPauseState(keyspaceId string) bucketStateEnum {
 
+	if !common.IsServerlessDeployment() {
+		return bst_NIL
+	}
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
 
 	if state, ok := idx.bucketPauseState[bucket]; ok {
 		return state
 	} else {
 		return bst_NIL
+	}
+}
+
+func (idx *indexer) resetBucketPauseState(streamId common.StreamId, keyspaceId string) {
+
+	if !common.IsServerlessDeployment() {
+		return
+	}
+
+	logging.Infof("Indexer::resetBucketPauseState %v %v reset bucket state to NIL", streamId, keyspaceId)
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	idx.bucketPauseState[bucket] = bst_NIL
+
+	resetMsg := &MsgPauseUpdateBucketState{
+		bucket:           bucket,
+		bucketPauseState: bst_NIL,
+	}
+
+	//update scan coordinator
+	idx.scanCoordCmdCh <- resetMsg
+	<-idx.scanCoordCmdCh
+
+	//update timekeeper
+	idx.tkCmdCh <- resetMsg
+	<-idx.tkCmdCh
+
+}
+
+func (idx *indexer) startKeyspaceIdStreamsForResumedIndexes(keyspaceId string) {
+
+	// Compute restartTs for the given keyspaceId
+	allRestartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM, keyspaceId)
+
+	idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, keyspaceId)
+
+	if restartTs, ok := allRestartTs[keyspaceId]; ok {
+		sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
+		if restartTs != nil {
+			idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, restartTs, nil, nil,
+				allNilSnaps, false, false, sessionId)
+		} else {
+			idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, nil, nil, nil,
+				allNilSnaps, false, false, sessionId)
+		}
+		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
+	} else {
+		allKeyspaceIds := make([]string, 0)
+		for kid, _ := range allRestartTs {
+			allKeyspaceIds = append(allKeyspaceIds, kid)
+		}
+		err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
+			"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
+		logging.Errorf("Indexer::startKeyspaceIdStreamsForResumedIndexes : err: %v", err)
 	}
 }

@@ -958,9 +958,7 @@ func (c *ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err e
 	return
 }
 
-//
 // Return UUID of a given bucket.
-//
 func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
 	// This function retuns an error if bucket not found
@@ -969,6 +967,10 @@ func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 		return BUCKET_UUID_NIL
 	}
 	defer b.Close()
+
+	if len(b.HibernationState) != 0 {
+		return b.UUID
+	}
 
 	// This node recognize this bucket.   Make sure its vb is resided in at least one node.
 	for i := range c.nodes {
@@ -1706,6 +1708,10 @@ func (cic *ClusterInfoClient) ValidateBucket(bucket string, uuids []string) bool
 				}
 			}
 			return true
+		} else if b, err := cinfo.pool.GetBucket(bucket); err == nil && len(b.HibernationState) != 0 {
+			defer b.Close()
+			logging.Infof("ValidateBucket: Bucket(%v) in Hibernation state (%v)", bucket, b.HibernationState)
+			return true
 		} else {
 			logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
 			return false
@@ -1804,12 +1810,19 @@ func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {
 
 	getBucketUUID := func() (string, error) {
 		nids, err := cinfo.GetNodesByBucket(bucket)
+		b, err1 := cinfo.pool.GetBucket(bucket)
 
 		if err == nil && len(nids) != 0 {
 			// verify UUID
 			return cinfo.GetBucketUUID(bucket), nil
+		} else if err1 == nil && len(b.HibernationState) != 0 {
+			logging.Infof("Bucket(%v) in Hibernation state %v", bucket, b.HibernationState)
+			return b.UUID, nil
 		} else if err == nil {
 			logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+		} else if err1 == nil {
+			logging.Fatalf("Error Fetching Bucket Info: %v", err1)
+			err = err1
 		}
 
 		return BUCKET_UUID_NIL, err

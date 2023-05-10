@@ -4738,17 +4738,20 @@ func (tk *timekeeper) handleIndexerResumeMOI(cmd Message) {
 
 func (tk *timekeeper) handleUpdateBucketPauseState(cmd Message) {
 
-	logging.Infof("Timekeeper::handleUpdateBucketPauseState")
-
 	req := cmd.(*MsgPauseUpdateBucketState)
 	bucket := req.GetBucket()
 	bucketState := req.GetBucketPauseState()
 
-	tk.lock.Lock()
-	defer tk.lock.Unlock()
+	logging.Infof("Timekeeper::handleUpdateBucketPauseState %v %v", bucket, bucketState)
 
-	//update indexer book-keeping
-	tk.bucketPauseState[bucket] = bucketState
+	if common.IsServerlessDeployment() {
+
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+
+		//update book-keeping
+		tk.setBucketPauseStateNoLock(bucket, bucketState)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -4992,4 +4995,12 @@ func (tk *timekeeper) getBucketPauseStateNoLock(keyspaceId string) bucketStateEn
 	} else {
 		return bst_NIL
 	}
+}
+
+//Caller must hold timekeeper lock when calling this function
+func (tk *timekeeper) setBucketPauseStateNoLock(keyspaceId string, bucketState bucketStateEnum) {
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	tk.bucketPauseState[bucket] = bucketState
+
 }
