@@ -3690,6 +3690,13 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
+	// Snapshot became invalid due to rollback
+	if err == plasma.ErrInvalidSnapshot {
+		return ErrIndexRollback
+	}
+
+	defer it.Close()
+
 	var ar *AggregateRecorderWithCtx
 	loopCount := uint64(0)
 	numBytes := uint64(0)
@@ -3720,13 +3727,6 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 			s.slice.meteringStats.recordReadUsageStats(ru)
 		}()
 	}
-
-	// Snapshot became invalid due to rollback
-	if err == plasma.ErrInvalidSnapshot {
-		return ErrIndexRollback
-	}
-
-	defer it.Close()
 
 	endKey := high.Bytes()
 	if len(endKey) > 0 {
