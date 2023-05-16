@@ -880,8 +880,9 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 			if schedIndex {
 				if rebalanceRunning {
 					// If atleast one node has failed commit failure due to rebalance running,
-					// then schedule based on "AllowScheduleCreateRebal" setting
-					if o.settings.AllowScheduleCreateRebal() {
+					// then schedule based on "AllowScheduleCreateRebal" setting if scheduleOnFailure
+					// is enabled
+					if scheduleOnFailure && o.settings.AllowScheduleCreateRebal() {
 						return true, nil
 					} else {
 						return false, fmt.Errorf("Index creation failed due to rebalance in progress. err: %v", createErr)
@@ -1550,12 +1551,18 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	}
 
-	// schedIndex will be true only for serverless deployments. Schedule only if index is not
-	// already scheduled
-	if schedIndex && !asyncCreate {
+	// schedIndex will be true only for serverless deployments.
+	// Schedule happens only if index is not already scheduled
+	if schedIndex {
 
 		// Cancel the previously sent prepare request
 		o.cancelPrepareIndexRequest(idxDefn, watcherMap, schedIndex)
+
+		// schedOnFailure will be set to true only for the first index schedule
+		if !scheduleOnFailure {
+			return fmt.Errorf("Fail to create index due to rebalancing, another concurrent request, network partition, or node failed. " +
+				"The operation may have succeed.  If not, please retry the operation at later time.")
+		}
 
 		scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 		if scheduleErr == nil {
