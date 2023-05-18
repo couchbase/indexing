@@ -1373,6 +1373,20 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.plasma.LSSCleanerFlushInterval": ConfigValue{
+		10,
+		"Minimum elapsed time for logCleaner to sync LSS (Minute)",
+		10,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.LSSCleanerMinReclaimSize": ConfigValue{
+		64 * 1024 * 1024,
+		"Minimum disk reclaim space at which logCleaner will sync LSS (bytes)",
+		64 * 1024 * 1024,
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.AutoTuneLSSCleaner": ConfigValue{
 		false,
 		"Enable auto tuning of lss cleaning thresholds based on available free space",
@@ -3055,6 +3069,21 @@ var SystemConfig = Config{
 		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching." +
 			"Keep this even as both tokens of a subcluster must move in same batch",
 		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.serverless.perNodeTransferBatchSize": ConfigValue{
+		2,
+		"Number of transfer tokens that can be transferred per node. It can be either of " +
+			"2 uploads (or) 2 downloads (or) 1 upload and 1 download",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.serverless.scheduleVersion": ConfigValue{
+		"v2",
+		"v2 means to use per node transfer batch. v1 is used for global transfer",
+		"v2",
 		false, // mutable
 		false, // case-insensitive
 	},

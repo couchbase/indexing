@@ -23,6 +23,7 @@ import (
 	"github.com/couchbase/regulator"
 	"github.com/couchbase/regulator/factory"
 	"github.com/couchbase/regulator/metering"
+	"github.com/couchbase/regulator/variants"
 )
 
 const METERING_FILE_VERSION int64 = 0
@@ -32,6 +33,31 @@ const THROTTLING_SCAN_ITERATIONS_QUANTUM uint64 = 1000
 
 // Large row scans - Say every iteration is 1 RU - 200 Iterations
 const THROTTLING_SCAN_BYTES_QUANTUM uint64 = 256 * 200
+
+type Units regulator.Units
+
+func (u *Units) Whole() uint64 {
+	return regulator.Units(*u).Whole()
+}
+
+type UnitType regulator.UnitType
+
+const (
+	IndexWriteBuildVariant  = UnitType(variants.IndexWriteBuildVariant)
+	IndexWriteUpdateVariant = UnitType(variants.IndexWriteUpdateVariant)
+	IndexWriteInsertVariant = UnitType(variants.IndexWriteUpdateInsertOnlyVariant)
+	IndexWriteDeleteVariant = UnitType(variants.IndexWriteUpdateInsertOnlyVariant)
+
+	// Using the costlier variant out of Update, Insert for Array indexes
+	IndexWriteArrayVariant = UnitType(variants.IndexWriteUpdateVariant)
+)
+
+type AggregateRecorder regulator.AggregateRecorder
+
+type AggregateRecorderWithCtx struct {
+	regulator.AggregateRecorder
+	ctx *regulator.Ctx
+}
 
 type MeteringThrottlingMgr struct {
 	handler   regulator.StatsHttpHandler
@@ -69,7 +95,7 @@ func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChanne
 	fileName := "metering_data"
 	newFileName := "metering_data_new"
 	mtMgr.persister = NewFlatFilePersister(statsDir, chunkSz, fileName, newFileName)
-	mtMgr.RetrieveMeteringData()
+	mtMgr.retrieveMeteringData()
 
 	// main loop
 	go mtMgr.run()
@@ -82,7 +108,7 @@ func NewMeteringManager(nodeID string, config common.Config, supvCmdCh MsgChanne
 // units for every bucket on recovery. This data is persisted when control
 // plane calls metering endpoint. It is used to account for duplicate units on
 // index recovery.
-func (m *MeteringThrottlingMgr) RetrieveMeteringData() error {
+func (m *MeteringThrottlingMgr) retrieveMeteringData() error {
 	persistedStats, err := m.persister.ReadPersistedStats()
 	if err != nil {
 		logging.Warnf("Encountered error while reading persisted stats. Skipping read. Error: %v", err)
@@ -115,10 +141,10 @@ func (m *MeteringThrottlingMgr) RetrieveMeteringData() error {
 
 func (m *MeteringThrottlingMgr) RegisterRestEndpoints() {
 	mux := GetHTTPMux()
-	mux.HandleFunc(regulator.MeteringEndpoint, m.MeteringEndpointHandler)
+	mux.HandleFunc(regulator.MeteringEndpoint, m.meteringEndpointHandler)
 }
 
-func (m *MeteringThrottlingMgr) MeteringEndpointHandler(w http.ResponseWriter,
+func (m *MeteringThrottlingMgr) meteringEndpointHandler(w http.ResponseWriter,
 	r *http.Request) {
 
 	creds, valid, err := common.IsAuthValid(r)
@@ -150,7 +176,7 @@ func (m *MeteringThrottlingMgr) MeteringEndpointHandler(w http.ResponseWriter,
 	meteringEPBuf := m.handler.AppendMetrics([]byte{})
 
 	if m.indexerReady {
-		m.PersistMeteringData()
+		m.persistMeteringData()
 	}
 
 	w.WriteHeader(200)
@@ -160,7 +186,7 @@ func (m *MeteringThrottlingMgr) MeteringEndpointHandler(w http.ResponseWriter,
 // PersistMeteringData persisted the Write Units for every bucket. Its gets the
 // data by Getting write units from every slice in partn map and accumulates at
 // bucket level. Is used to account for duplicate units on index recovery.
-func (m *MeteringThrottlingMgr) PersistMeteringData() {
+func (m *MeteringThrottlingMgr) persistMeteringData() {
 	dataMap := m.getMeteringDataMap()
 	if err := m.persister.PersistStats(dataMap); err != nil {
 		logging.Warnf("MeteringThrottlingMgr::Persister Error persisting stats: %v", err)
@@ -179,7 +205,7 @@ func (m *MeteringThrottlingMgr) getMeteringDataMap() map[string]interface{} {
 	header["version"] = METERING_FILE_VERSION
 
 	dataMap := make(map[string]interface{})
-	dataMap["meteringData"] = m.GetWritesUnitsFromSlices()
+	dataMap["meteringData"] = m.getWriteUnitsFromSlices()
 	dataMap["header"] = header
 
 	return dataMap
@@ -310,18 +336,20 @@ func (m *MeteringThrottlingMgr) handleIndexerReady() {
 	// we can get the WUs from slices for all buckets and WUs for bucket that
 	// got persisted in metering endpoint handler before recovery.
 	if m.recoveredWUMap != nil {
-		unitsToRefund, unitsToMeter := m.AdjustWriteUnitsOnRecovery()
+		unitsToRefund, unitsToMeter := m.adjustWriteUnitsOnRecovery()
 
 		// Update regulator with the difference
 		for bucketName, diffWUs := range unitsToRefund {
-			m.RefundWriteUnitsComputed(bucketName, diffWUs, true)
+			m.RefundWriteUnitsComputed(bucketName, diffWUs)
+			logging.Infof("MeteringThrottlingMgr:handleIndexerReady Refunding Write Units: %v", diffWUs)
 		}
 
 		for bucketName, diffWUs := range unitsToMeter {
-			m.RecordWriteUnitsComputed(bucketName, diffWUs, true, true)
+			m.RecordWriteUnitsComputed(bucketName, diffWUs, true)
+			logging.Infof("MeteringThrottlingMgr:handleIndexerReady Recoding Write Units: %v", diffWUs)
 		}
 
-		m.PersistMeteringData()
+		m.persistMeteringData()
 		m.recoveredWUMap = nil
 	}
 
@@ -334,10 +362,10 @@ func (m *MeteringThrottlingMgr) handleIndexerReady() {
 //
 
 // AdjustWriteUnitsOnRecovery accounts for duplicate write units during recovery
-func (m *MeteringThrottlingMgr) AdjustWriteUnitsOnRecovery() (unitsToRefund,
+func (m *MeteringThrottlingMgr) adjustWriteUnitsOnRecovery() (unitsToRefund,
 	unitsToMeter map[string]uint64) {
 	// Get the sum of all write units from the slice snapshots at bucket level
-	snapshotWUMap := m.GetWritesUnitsFromSlices()
+	snapshotWUMap := m.getWriteUnitsFromSlices()
 
 	logging.Infof("MeteringThrottlingMgr::handleIndexerReady Write units in the current snapshot: %v", snapshotWUMap)
 
@@ -359,7 +387,7 @@ func (m *MeteringThrottlingMgr) AdjustWriteUnitsOnRecovery() (unitsToRefund,
 
 // GetWritesUnitsFromSlices gets write units from all slices in indexPartnMap
 // and accumulated write units at bucket level
-func (m *MeteringThrottlingMgr) GetWritesUnitsFromSlices() map[string]uint64 {
+func (m *MeteringThrottlingMgr) getWriteUnitsFromSlices() map[string]uint64 {
 	indexInstMap := m.indexInstMap.Get()
 	indexPartnMap := m.indexPartnMap.Get()
 
@@ -453,7 +481,7 @@ func (m *MeteringThrottlingMgr) CheckQuotaAndSleep(bucketName, user string, isWr
 func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint64, billable bool) (uint64, error) {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
-	units, err := metering.IndexReadToRU(bytes)
+	units, err := metering.ByteOperationToUnits(regulator.Index, bytes, regulator.Read)
 	if err == nil {
 		ctx := getUserCtx(bucket, user)
 		if billable {
@@ -465,37 +493,27 @@ func (m *MeteringThrottlingMgr) RecordReadUnits(bucket, user string, bytes uint6
 	return 0, err
 }
 
-func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, bytes uint64, update bool, billable bool) (uint64, error) {
-	// caller not expected to fail for metering errors
-	// hence returning errors for debugging and logging purpose only
-	units, err := metering.IndexWriteToWU(bytes, update)
-	if err == nil {
-		ctx := getNoUserCtx(bucket)
-		if billable {
-			return units.Whole(), regulator.RecordUnits(ctx, units)
-		} else {
-			return units.Whole(), regulator.RecordUnbillableUnits(ctx, units)
-		}
-	}
-	return 0, err
-}
-
-func (m *MeteringThrottlingMgr) IndexWriteToWU(bytes uint64) (uint64, error) {
-	units, err := metering.IndexWriteToWU(bytes, false)
+func (m *MeteringThrottlingMgr) IndexWriteToWU(bytes uint64, writeVariant UnitType) (Units, error) {
+	units, err := metering.ByteOperationToUnits(regulator.Index, bytes, regulator.UnitType(writeVariant))
 	if err != nil {
 		return 0, err
 	}
-	return units.Whole(), err
+	return Units(units), err
+}
+
+func (m *MeteringThrottlingMgr) RecordWriteUnits(bucket string, units Units, billable bool) error {
+	// caller not expected to fail for metering errors
+	// hence returning errors for debugging and logging purpose only
+	ctx := getNoUserCtx(bucket)
+	if billable {
+		return regulator.RecordUnits(ctx, regulator.Units(units))
+	} else {
+		return regulator.RecordUnbillableUnits(ctx, regulator.Units(units))
+	}
 }
 
 // RecordWriteUnitsComputed records given number of billable write units
-func (m *MeteringThrottlingMgr) RecordWriteUnitsComputed(bucket string,
-	writeUnits uint64, billable bool, log bool) error {
-
-	if log {
-		logging.Infof("MeteringThrottlingMgr:RecordWriteUnitsComputed Recoding Write Units: %v", writeUnits)
-	}
-
+func (m *MeteringThrottlingMgr) RecordWriteUnitsComputed(bucket string, writeUnits uint64, billable bool) error {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
 	units, err := regulator.NewUnits(regulator.Index, regulator.Write, writeUnits)
@@ -512,13 +530,7 @@ func (m *MeteringThrottlingMgr) RecordWriteUnitsComputed(bucket string,
 }
 
 // RefundWriteUnitsComputed will refund given number of billable write units
-func (m *MeteringThrottlingMgr) RefundWriteUnitsComputed(bucket string,
-	writeUnits uint64, log bool) error {
-
-	if log {
-		logging.Infof("MeteringThrottlingMgr:RefundWriteUnitsComputed Refunding Write Units: %v", writeUnits)
-	}
-
+func (m *MeteringThrottlingMgr) RefundWriteUnitsComputed(bucket string, writeUnits uint64) error {
 	// caller not expected to fail for metering errors
 	// hence returning errors for debugging and logging purpose only
 	units, err := regulator.NewUnits(regulator.Index, regulator.Write, writeUnits)
@@ -529,47 +541,32 @@ func (m *MeteringThrottlingMgr) RefundWriteUnitsComputed(bucket string,
 	return regulator.RefundUnits(ctx, units)
 }
 
-func (m *MeteringThrottlingMgr) RefundWriteUnits(bucket string, bytes uint64) error {
-	// caller not expected to fail for metering errors
-	// hence returning errors for debugging and logging purpose only
-	units, err := metering.IndexWriteToWU(bytes, false)
-	if err == nil {
-		ctx := getNoUserCtx(bucket)
-		return regulator.RefundUnits(ctx, units)
-	}
-	return err
-}
-
 func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 	return m.handler.WriteMetrics(w)
-}
-
-type AggregateRecorder regulator.AggregateRecorder
-
-type AggregateRecorderWithCtx struct {
-	regulator.AggregateRecorder
-	ctx *regulator.Ctx
 }
 
 func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
 	return agc.ctx
 }
 
-func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable, update bool) AggregateRecorder {
+func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable bool,
+	writeVariant UnitType) AggregateRecorder {
 	ctx := getNoUserCtx(bucketName)
 	options := &regulator.AggregationOptions{
 		Unbilled:         !billable,
 		DeferredMetering: true,
 	}
-	return metering.IndexWriteAggregateRecorder(ctx, update, options)
+	return regulator.StartAggregateRecorder(ctx, regulator.Index, regulator.UnitType(writeVariant), options)
 }
 
-func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string, billable bool) *AggregateRecorderWithCtx {
+func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string,
+	billable bool) *AggregateRecorderWithCtx {
 	ctx := getUserCtx(bucketName, user)
 	options := &regulator.AggregationOptions{
 		Unbilled: !billable,
 	}
-	return &AggregateRecorderWithCtx{metering.IndexReadAggregateRecorder(ctx, options), &ctx}
+	ag := regulator.StartAggregateRecorder(ctx, regulator.Index, regulator.Read, options)
+	return &AggregateRecorderWithCtx{ag, &ctx}
 }
 
 func getNoUserCtx(bucket string) regulator.Ctx {

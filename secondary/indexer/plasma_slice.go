@@ -386,6 +386,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
 		cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
 		cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
+		cfg.LSSCleanerFlushInterval = time.Duration(slice.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
+		cfg.LSSCleanerMinReclaimSize = int64(slice.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
 		cfg.AutoTuneDiskQuota = int64(slice.sysconf["plasma.AutoTuneDiskQuota"].Uint64())
 		cfg.AutoTuneCleanerTargetFragRatio = slice.sysconf["plasma.AutoTuneCleanerTargetFragRatio"].Int()
@@ -691,31 +693,36 @@ func (s *plasmaSlice) isWriteBillingStopped() bool {
 	return atomic.LoadUint32(&s.stopWUBilling) == 1
 }
 
-func (s *plasmaSlice) RecordWriteUnits(bytes uint64) {
+// RecordWriteUnits records WUs of a given write variant if its not init build
+// for initial build writeVariant will be overwritten to IndexWriteBuildVariant
+func (s *plasmaSlice) RecordWriteUnits(bytes uint64, writeVariant UnitType) {
 	if !s.EnableMetering() {
 		return
 	}
 
-	var err error
-	var wu uint64
-	if s.isMeteringMaster() {
-		// If billable fetch the number of WUs and add to local counter
-		// before recording in regulator so that we can refund if there
-		// is a restart. Its fine to refund more.
-		wu, err = s.meteringMgr.IndexWriteToWU(bytes)
-		if err == nil {
+	initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
+	if initBuild {
+		writeVariant = IndexWriteBuildVariant
+	}
+
+	writeUnits, err := s.meteringMgr.IndexWriteToWU(bytes, writeVariant)
+	if err == nil {
+		wu := writeUnits.Whole()
+		var wuBilling bool
+		if s.isMeteringMaster() {
+			// If billable fetch the number of WUs and add to local counter
+			// before recording in regulator so that we can refund if there
+			// is a restart. Its fine to refund more.
 			atomic.AddUint64(&s.meteringStats.writeUnits, wu)
-			wuBilling := !s.isWriteBillingStopped()
-			err = s.meteringMgr.RecordWriteUnitsComputed(s.idxDefn.Bucket,
-				wu, wuBilling, false)
-			initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
-			s.meteringStats.recordWriteUsageStats(wu, initBuild)
+			wuBilling = !s.isWriteBillingStopped()
+		} else {
+			wuBilling = false
 		}
-	} else {
-		wu, err = s.meteringMgr.RecordWriteUnits(s.idxDefn.Bucket, bytes, false, false)
-		initBuild := atomic.LoadInt32(&s.isInitialBuild) == 1
+
+		err = s.meteringMgr.RecordWriteUnits(s.idxDefn.Bucket, writeUnits, wuBilling)
 		s.meteringStats.recordWriteUsageStats(wu, initBuild)
 	}
+
 	if err != nil {
 		// TODO: Handle error graciously
 	}
@@ -1039,7 +1046,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		if err == nil {
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
-			mdb.RecordWriteUnits(uint64(len(docid)))
+			mdb.RecordWriteUnits(uint64(len(docid)), IndexWriteInsertVariant)
 			mdb.recordNewOps(1, 0, 0)
 		}
 		mdb.isDirty = true
@@ -1115,9 +1122,11 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
 		}
 
 		if itemInserted == true {
-			// for an update operation deleteSecIndex has already accounted 1 WCU
-			// so we will only count 1 WCU here.
-			mdb.RecordWriteUnits(uint64(len(docid) + len(key)))
+			writeVariant := IndexWriteUpdateVariant
+			if ndel == 0 {
+				writeVariant = IndexWriteInsertVariant
+			}
+			mdb.RecordWriteUnits(uint64(len(docid)+len(key)), writeVariant)
 		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -1241,7 +1250,12 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	billable := mdb.replicaId == 0
 
 	if mdb.EnableMetering() {
-		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, false)
+		initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
+		writeVariant := IndexWriteArrayVariant
+		if initBuild {
+			writeVariant = IndexWriteBuildVariant
+		}
+		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, writeVariant)
 		defer func() {
 			if abortErr == nil {
 				// If billable fetch the WUs before committing and increment local counter
@@ -1255,7 +1269,6 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					// TODO: Add logging without flooding
 					return
 				}
-				initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
 				mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole(), initBuild)
 			} else {
 				ar.Abort()
@@ -1489,7 +1502,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 		if err1 == nil {
 			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
-			mdb.RecordWriteUnits(uint64(len(docid)))
+			mdb.RecordWriteUnits(uint64(len(docid)), IndexWriteDeleteVariant)
 			mdb.recordNewOps(0, 0, 1)
 		}
 
@@ -1553,7 +1566,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte,
 
 		if meterDelete && itemDeleted == true {
 			keylen := getKeyLenFromEntry(entry)
-			mdb.RecordWriteUnits(uint64(len(docid) + keylen))
+			mdb.RecordWriteUnits(uint64(len(docid)+keylen), IndexWriteDeleteVariant)
 			mdb.recordNewOps(0, 0, 1)
 		}
 	}
@@ -1647,7 +1660,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 
 			if meterDelete {
-				mdb.RecordWriteUnits(uint64(len(docid) + keyDelSz))
+				mdb.RecordWriteUnits(uint64(len(docid)+keyDelSz), IndexWriteArrayVariant)
 				mdb.recordNewOps(0, 0, 1)
 			}
 		}
@@ -2806,6 +2819,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.mainIndex.LSSFragMinFileSize"].Int())
+	mdb.mainstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
+	mdb.mainstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 	mdb.mainstore.EnablePeriodicEvict = mdb.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
 	mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
@@ -2908,6 +2923,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMinSize = int64(mdb.sysconf["plasma.backIndex.LSSFragMinFileSize"].Int())
+		mdb.backstore.LSSCleanerFlushInterval = time.Duration(mdb.sysconf["plasma.LSSCleanerFlushInterval"].Int()) * time.Minute
+		mdb.backstore.LSSCleanerMinReclaimSize = int64(mdb.sysconf["plasma.LSSCleanerMinReclaimSize"].Int())
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 		mdb.backstore.EnablePeriodicEvict = mdb.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
 		mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
@@ -3673,6 +3690,13 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
+	// Snapshot became invalid due to rollback
+	if err == plasma.ErrInvalidSnapshot {
+		return ErrIndexRollback
+	}
+
+	defer it.Close()
+
 	var ar *AggregateRecorderWithCtx
 	loopCount := uint64(0)
 	numBytes := uint64(0)
@@ -3703,13 +3727,6 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 			s.slice.meteringStats.recordReadUsageStats(ru)
 		}()
 	}
-
-	// Snapshot became invalid due to rollback
-	if err == plasma.ErrInvalidSnapshot {
-		return ErrIndexRollback
-	}
-
-	defer it.Close()
 
 	endKey := high.Bytes()
 	if len(endKey) > 0 {

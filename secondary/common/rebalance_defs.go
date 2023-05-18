@@ -549,3 +549,10 @@ const (
 	BlockDDLDuringRebalance DDLDuringRebalanceVersion = iota
 	AllowDDLDuringRebalance_v1
 )
+
+type ShardRebalanceSchedulingVersion string
+
+const (
+	GLOBAL_TRANSFER_LIMIT   ShardRebalanceSchedulingVersion = "v1"
+	PER_NODE_TRANSFER_LIMIT                                 = "v2"
+)
