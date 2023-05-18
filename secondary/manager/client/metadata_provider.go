@@ -697,13 +697,19 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	}
 
 	var mutex sync.Mutex
-	var cond *sync.Cond = sync.NewCond(&mutex)
 	var accept bool
-	var count int32
 
 	errorMap := make(map[string]bool)
 
 	key := fmt.Sprintf("%d", idxDefn.DefnId)
+
+	// wait for result
+	var success bool
+	var count int32
+
+	lenWmap := len(watcherMap)
+	doneCh := make(chan bool, lenWmap)
+
 	for indexerId, _ := range watcherMap {
 
 		w, err := o.findWatcherByIndexerId(indexerId)
@@ -715,12 +721,10 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		atomic.AddInt32(&count, 1)
 
 		go func(w *watcher) {
-			defer func() {
-				atomic.AddInt32(&count, -1)
 
-				cond.L.Lock()
-				defer cond.L.Unlock()
-				cond.Signal()
+			defer func(){
+				atomic.AddInt32(&count, -1)
+				doneCh <- true
 			}()
 
 			logging.Infof("send commit create request to watcher %v defnID %v", w.getAdminAddr(), idxDefn.DefnId)
@@ -745,23 +749,21 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				accept = response.Accept || accept
 			}
 			mutex.Unlock()
+
 		}(w)
 	}
 
-	// wait for result
-	var success bool
+LOOP:
 	for {
-		cond.L.Lock()
-		cond.Wait()
-		success = accept
-		cond.L.Unlock()
+		select {
+			case <- doneCh:
+				mutex.Lock()
+				success = accept
+				mutex.Unlock()
 
-		if success {
-			break
-		}
-
-		if atomic.LoadInt32(&count) == 0 {
-			break
+				if success || atomic.LoadInt32(&count) == 0 {
+					break LOOP
+				}
 		}
 	}
 
