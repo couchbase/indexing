@@ -522,8 +522,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 }
 
 func (o *MetadataProvider) GetNumIndexesPerScope(bucket, scope string) uint32 {
-	o.mutex.RLock()
-	defer o.mutex.RUnlock()
+	o.repo.mutex.RLock()
+	defer o.repo.mutex.RUnlock()
 	var numIndexes uint32 = 0
 	for _, metadata := range o.repo.indices {
 		if metadata.Definition.Bucket == bucket && metadata.Definition.Scope == scope {
@@ -551,8 +551,8 @@ func (o *MetadataProvider) GetIndexScopeLimit(bucket, scope string) (uint32, err
 }
 
 func (o *MetadataProvider) GetNumIndexesPerBucket(bucket string) uint32 {
-	o.mutex.RLock()
-	defer o.mutex.RUnlock()
+	o.repo.mutex.RLock()
+	defer o.repo.mutex.RUnlock()
 	var numIndexes uint32 = 0
 	for _, metadata := range o.repo.indices {
 		if metadata.Definition.Bucket == bucket {
