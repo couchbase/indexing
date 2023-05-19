@@ -542,7 +542,7 @@ func (m *MeteringThrottlingMgr) RefundWriteUnitsComputed(bucket string, writeUni
 }
 
 func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
-	return m.handler.WriteMetrics(w)
+	return m.handler.WriteStats(w)
 }
 
 func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
