@@ -1,0 +1,220 @@
+{
+	"placement": [
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "af33bb1cf058349f6fafffa6a843a979",
+			"serverGroup": "Index1",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 262144000,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 4311133052450780820,
+					"instId": 3660231233502846268,
+					"name": "country",
+					"bucket": "default",
+					"host": [
+						"934d23a204d25a4970e0262fa63920ba",
+						"af33bb1cf058349f6fafffa6a843a979",
+						"929bb73f8aaeb55422bdc071cf2dfbfc"
+					],
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 3660231233502846268,
+						"Defn": {
+							"defnId": 4311133052450780820,
+							"name": "country",
+							"using": "memory_optimized",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`country`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"nodes": [
+								"934d23a204d25a4970e0262fa63920ba",
+								"af33bb1cf058349f6fafffa6a843a979",
+								"929bb73f8aaeb55422bdc071cf2dfbfc"
+							],
+							"numReplica": 2
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 1
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "929bb73f8aaeb55422bdc071cf2dfbfc",
+			"serverGroup": "Index2",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 262144000,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 4311133052450780820,
+					"instId": 16260874128120548912,
+					"name": "country",
+					"bucket": "default",
+					"host": [
+						"934d23a204d25a4970e0262fa63920ba",
+						"af33bb1cf058349f6fafffa6a843a979",
+						"929bb73f8aaeb55422bdc071cf2dfbfc"
+					],
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 16260874128120548912,
+						"Defn": {
+							"defnId": 4311133052450780820,
+							"name": "country",
+							"using": "memory_optimized",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`country`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"nodes": [
+								"934d23a204d25a4970e0262fa63920ba",
+								"af33bb1cf058349f6fafffa6a843a979",
+								"929bb73f8aaeb55422bdc071cf2dfbfc"
+							],
+							"numReplica": 2
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 2
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9003",
+			"nodeUUID": "empty node",
+			"serverGroup": "Index4",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"exclude":"in",
+			"indexes": []
+		},
+		{
+			"nodeId": "127.0.0.1:9004",
+			"nodeUUID": "934d23a204d25a4970e0262fa63920ba",
+			"serverGroup": "Index3",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 262144000,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 4311133052450780820,
+					"instId": 15666909274590857692,
+					"name": "country",
+					"bucket": "default",
+					"host": [
+						"934d23a204d25a4970e0262fa63920ba",
+						"af33bb1cf058349f6fafffa6a843a979",
+						"929bb73f8aaeb55422bdc071cf2dfbfc"
+					],
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 15666909274590857692,
+						"Defn": {
+							"defnId": 4311133052450780820,
+							"name": "country",
+							"using": "memory_optimized",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`country`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"nodes": [
+								"934d23a204d25a4970e0262fa63920ba",
+								"af33bb1cf058349f6fafffa6a843a979",
+								"929bb73f8aaeb55422bdc071cf2dfbfc"
+							],
+							"numReplica": 2
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 0
+					}
+				}
+			]
+		}
+	],
+	"memQuota": 268435456,
+	"cpuQuota": 8,
+	"isLive": true
+}

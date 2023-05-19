@@ -1,0 +1,190 @@
+{
+	"placement": [
+		{
+			"nodeId": "2596996162",
+			"nodeUUID": "tempNodeUUID_2596996162",
+			"memUsage": 5200000,
+			"cpuUsage": 2,
+			"memOverhead": 420236400,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 1522347298803511198,
+					"instId": 0,
+					"name": "index1",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				},
+				{
+					"defnId": 6878021168627736007,
+					"instId": 0,
+					"name": "index8",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				}
+			]
+		},
+		{
+			"nodeId": "4039455774",
+			"nodeUUID": "tempNodeUUID_4039455774",
+			"memUsage": 5200000,
+			"cpuUsage": 2,
+			"memOverhead": 420236400,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 11996412607000438373,
+					"instId": 0,
+					"name": "index3",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				},
+				{
+					"defnId": 6509725303504193425,
+					"instId": 0,
+					"name": "index7",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				}
+			]
+		},
+		{
+			"nodeId": "2854263694",
+			"nodeUUID": "tempNodeUUID_2854263694",
+			"memUsage": 5200000,
+			"cpuUsage": 2,
+			"memOverhead": 420236400,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 284940127770738167,
+					"instId": 0,
+					"name": "index6",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				},
+				{
+					"defnId": 6900007813128435436,
+					"instId": 0,
+					"name": "index5",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				}
+			]
+		},
+		{
+			"nodeId": "1879968118",
+			"nodeUUID": "tempNodeUUID_1879968118",
+			"memUsage": 5200000,
+			"cpuUsage": 2,
+			"memOverhead": 420236400,
+			"exclude":"in",
+			"indexes": [
+				{
+					"defnId": 9434241402766055145,
+					"instId": 0,
+					"name": "index4",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				},
+				{
+					"defnId": 11798384399789030363,
+					"instId": 0,
+					"name": "index2",
+					"bucket": "bucket2",
+					"host": null,
+					"isMOI": true,
+					"avgSecKeySize": 200,
+					"avgDocKeySize": 200,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 5000,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 2600000,
+					"cpuUsage": 1,
+					"memOverhead": 165423720
+				}
+			]
+		}
+	],
+	"memQuota": 530294000,
+	"cpuQuota": 2
+}
