@@ -792,11 +792,19 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		}
 
 		// compute the minimum memory requirement for the index
-		// 1) If index resident ratio is above 0, then compute memory required for min resident ratio (default:20%)
+		// 1) If index resident ratio is above 0, then compute memory required for min resident ratio (default:10%)
+		// 	 1.1) If cluster compatibility < 7.1.0 and the config is at default 10% value, use 20% as minRatio
+		//		due to lack of plasma in-memory compression pre 7.1.0
 		// 2) If index resident ratio is 0, then use sizing equation to estimate key size.
 		// 3) For MOI, min memory is the same as actual memory usage
 
 		minRatio := config["indexer.planner.minResidentRatio"].Float64()
+		if (clusterVersion < common.INDEXER_71_VERSION) && (minRatio == 0.1) {
+			// Note: corner case of overriding customer value, where customer themselves set config to 10% and are
+			// running some nodes on version pre 7.1.0
+			minRatio = 0.2
+		}
+
 		if index.StorageMode == common.MemDB || index.StorageMode == common.MemoryOptimized {
 			minRatio = 1.0
 		}

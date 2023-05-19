@@ -3269,9 +3269,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.planner.minResidentRatio": ConfigValue{
-		0.2,
+		0.1,
 		"minimum resident ratio for index.  Use for enforcing minimum memory check. Set to 0 to disable memory check.",
-		0.2,
+		0.1,
 		false, // mutable
 		false, // case-insensitive
 	},
