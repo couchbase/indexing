@@ -263,8 +263,23 @@ func (m *GenericServiceManager) testGetTaskList(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Call GetTaskList with nils to force immediate return of current task list.
-	taskList, err := m.GetTaskList(nil, nil)
+	if r.Method != http.MethodGet {
+		rhSend(http.StatusMethodNotAllowed, w, []byte{})
+		return
+	}
+
+	revStr := r.URL.Query().Get("rev")
+	var rev service.Revision = nil
+	if len(revStr) != 0 {
+		i, e := strconv.ParseUint(revStr, 10, 64)
+		if e != nil {
+			rhSend(http.StatusBadRequest, w, []byte(e.Error()))
+			return
+		}
+		rev = EncodeRev(i)
+	}
+
+	taskList, err := m.GetTaskList(rev, nil)
 	if err == nil {
 		resp := &GetTaskListResponse{Code: RESP_SUCCESS, TaskList: taskList}
 		rhSend(http.StatusOK, w, resp)
