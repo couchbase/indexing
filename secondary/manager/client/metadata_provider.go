@@ -522,8 +522,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 }
 
 func (o *MetadataProvider) GetNumIndexesPerScope(bucket, scope string) uint32 {
-	o.mutex.RLock()
-	defer o.mutex.RUnlock()
+	o.repo.mutex.RLock()
+	defer o.repo.mutex.RUnlock()
 	var numIndexes uint32 = 0
 	for _, metadata := range o.repo.indices {
 		if metadata.Definition.Bucket == bucket && metadata.Definition.Scope == scope {
@@ -551,8 +551,8 @@ func (o *MetadataProvider) GetIndexScopeLimit(bucket, scope string) (uint32, err
 }
 
 func (o *MetadataProvider) GetNumIndexesPerBucket(bucket string) uint32 {
-	o.mutex.RLock()
-	defer o.mutex.RUnlock()
+	o.repo.mutex.RLock()
+	defer o.repo.mutex.RUnlock()
 	var numIndexes uint32 = 0
 	for _, metadata := range o.repo.indices {
 		if metadata.Definition.Bucket == bucket {
@@ -776,9 +776,8 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	}
 
 	var mutex sync.Mutex
-	var cond *sync.Cond = sync.NewCond(&mutex)
 	var accept bool
-	var count int32
+
 	rebalanceRunning := false
 	schedIndex := true
 	numRespReceived := 0
@@ -786,6 +785,14 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	errorMap := make(map[string]bool)
 
 	key := fmt.Sprintf("%d", idxDefn.DefnId)
+
+	// wait for result
+	var success bool
+	var count int32
+
+	lenWmap := len(watcherMap)
+	doneCh := make(chan bool, lenWmap)
+
 	for indexerId, _ := range watcherMap {
 
 		w, err := o.findWatcherByIndexerId(indexerId)
@@ -797,12 +804,10 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		atomic.AddInt32(&count, 1)
 
 		go func(w *watcher) {
-			defer func() {
-				atomic.AddInt32(&count, -1)
 
-				cond.L.Lock()
-				defer cond.L.Unlock()
-				cond.Signal()
+			defer func(){
+				atomic.AddInt32(&count, -1)
+				doneCh <- true
 			}()
 
 			logging.Infof("send commit create request to watcher %v defnID %v", w.getAdminAddr(), idxDefn.DefnId)
@@ -829,25 +834,22 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 				schedIndex = schedIndex && (response.Msg == RespRebalanceRunning || response.Msg == RespAnotherIndexCreation)
 				numRespReceived++
 			}
-
 			mutex.Unlock()
+
 		}(w)
 	}
 
-	// wait for result
-	var success bool
+LOOP:
 	for {
-		cond.L.Lock()
-		cond.Wait()
-		success = accept
-		cond.L.Unlock()
+		select {
+			case <- doneCh:
+				mutex.Lock()
+				success = accept
+				mutex.Unlock()
 
-		if success {
-			break
-		}
-
-		if atomic.LoadInt32(&count) == 0 {
-			break
+				if success || atomic.LoadInt32(&count) == 0 {
+					break LOOP
+				}
 		}
 	}
 
@@ -880,8 +882,9 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 			if schedIndex {
 				if rebalanceRunning {
 					// If atleast one node has failed commit failure due to rebalance running,
-					// then schedule based on "AllowScheduleCreateRebal" setting
-					if o.settings.AllowScheduleCreateRebal() {
+					// then schedule based on "AllowScheduleCreateRebal" setting if scheduleOnFailure
+					// is enabled
+					if scheduleOnFailure && o.settings.AllowScheduleCreateRebal() {
 						return true, nil
 					} else {
 						return false, fmt.Errorf("Index creation failed due to rebalance in progress. err: %v", createErr)
@@ -1550,12 +1553,18 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		}
 	}
 
-	// schedIndex will be true only for serverless deployments. Schedule only if index is not
-	// already scheduled
-	if schedIndex && !asyncCreate {
+	// schedIndex will be true only for serverless deployments.
+	// Schedule happens only if index is not already scheduled
+	if schedIndex {
 
 		// Cancel the previously sent prepare request
 		o.cancelPrepareIndexRequest(idxDefn, watcherMap, schedIndex)
+
+		// schedOnFailure will be set to true only for the first index schedule
+		if !scheduleOnFailure {
+			return fmt.Errorf("Fail to create index due to rebalancing, another concurrent request, network partition, or node failed. " +
+				"The operation may have succeed.  If not, please retry the operation at later time.")
+		}
 
 		scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 		if scheduleErr == nil {
