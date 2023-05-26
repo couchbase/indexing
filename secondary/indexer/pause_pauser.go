@@ -680,34 +680,19 @@ func (p *Pauser) checkAllTokensDone() bool {
 // self-loopback to get the index metadata for the current node and the task's bucket (tenant). This
 // verifies it can be unmarshaled, but it returns a checksummed and optionally compressed byte slice
 // version of the data rather than the unmarshaled object.
-func (this *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *manager.LocalIndexMetadata, error) {
-	const _restGetLocalIndexMetadataBinary = "Pauser::restGetLocalIndexMetadataBinary:"
+func (p *Pauser) restGetLocalIndexMetadataBinary(compress bool) ([]byte, *manager.LocalIndexMetadata, error) {
 
-	url := fmt.Sprintf("%v/getLocalIndexMetadata?useETag=false&bucket=%v",
-		this.pauseMgr.httpAddr, this.task.bucket)
-	resp, err := getWithAuth(url)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	byteSlice, err := ioutil.ReadAll(resp.Body)
+	metadata, bs, err := p.pauseMgr.restGetLocalIndexMetadata(p.task.bucket)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Verify response can be unmarshaled
-	metadata := new(manager.LocalIndexMetadata)
-	err = json.Unmarshal(byteSlice, metadata)
-	if err != nil {
-		return nil, nil, err
-	}
 	if len(metadata.IndexDefinitions) == 0 {
 		return nil, nil, nil
 	}
 
 	// Return checksummed and optionally compressed byte slice, not the unmarshaled object
-	return common.ChecksumAndCompress(byteSlice, compress), metadata, nil
+	return common.ChecksumAndCompress(bs, compress), metadata, nil
 }
 
 // masterUploadPauseMetadata is master's method to upload PauseMetadata to object store

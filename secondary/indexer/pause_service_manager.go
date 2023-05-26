@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/plasma"
 )
@@ -1705,6 +1706,19 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		return err
 	}
 
+	// Indexes for this bucket must not exist, assert this in gometa
+	if insts, err := m.findIndexesInMeta(params.Bucket); err != nil {
+		err = fmt.Errorf("could not get metadata")
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	} else if len(insts) > 0 {
+		err = fmt.Errorf("found indexes in metadata: insts[%v] bucket[%v]", insts, params.Bucket)
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	}
+
 	// Indexes for this bucket do not exist yet, no need to check if they are caught up
 
 	// TODO: Check remotePath access?
@@ -1734,6 +1748,48 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	// Record the task in progress
 	return m.taskAddPrepare(params.ID, params.Bucket, params.BlobStorageRegion, params.RemotePath,
 		false, params.DryRun)
+}
+
+func (m *PauseServiceManager) restGetLocalIndexMetadata(bucketName string) (*manager.LocalIndexMetadata, []byte, error) {
+
+	url := fmt.Sprintf("%v/getLocalIndexMetadata?useETag=false&bucket=%v", m.httpAddr, bucketName)
+	resp, err := getWithAuth(url)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	bs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Verify response can be unmarshaled
+	var metadata manager.LocalIndexMetadata
+	err = json.Unmarshal(bs, &metadata)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &metadata, bs, nil
+}
+
+func (m *PauseServiceManager) findIndexesInMeta(bucketName string) (instNames []string, err error) {
+
+	metadata, _, err := m.restGetLocalIndexMetadata(bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, defn := range metadata.IndexDefinitions {
+		if defn.Bucket != bucketName {
+			err = fmt.Errorf("expected [%v], got [%v] from getLocalIndexMetadata", bucketName, defn.Bucket)
+		}
+
+		instNames = append(instNames, defn.Name)
+	}
+
+	return instNames, nil
 }
 
 // Resume is an external API called by ns_server (via cbauth) only on the GSI master node to
