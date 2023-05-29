@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/plasma"
 )
@@ -85,6 +86,9 @@ type PauseServiceManager struct {
 	cleanupPending int32
 
 	pauseResumeRunningById *PauseResumeRunningMap
+
+	// test action status tracker variables
+	actionStatus *TestActionStatus
 }
 
 // NewPauseServiceManager is the constructor for the PauseServiceManager class.
@@ -114,6 +118,8 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 		nodeInfo: nodeInfo,
 
 		pauseResumeRunningById: NewPauseResumeRunningMap(),
+
+		actionStatus: &TestActionStatus{},
 	}
 	m.config.Store(config)
 
@@ -139,6 +145,7 @@ func NewPauseServiceManager(genericMgr *GenericServiceManager, mux *http.ServeMu
 	mux.HandleFunc("/test/PrepareResume", m.testPrepareResume)
 	mux.HandleFunc("/test/Resume", m.testResume)
 	mux.HandleFunc("/test/DestroyShards", m.testDestroyShards)
+	mux.HandleFunc("/test/TestActionStatus", m.testHandleTestActionStatus)
 
 	go m.run()
 
@@ -1028,6 +1035,8 @@ func (m *PauseServiceManager) PreparePause(params service.PauseParams) (err erro
 	logging.Infof("%v Called. "+args, _PreparePause, params.ID, params.Bucket, params.RemotePath)
 	defer logging.Infof("%v Returned %v. "+args, _PreparePause, err, params.ID, params.Bucket, params.RemotePath)
 
+	m.tryTestSleepHook("PreparePause")
+
 	// Check if calling prepare before cancelling/cleaning up previous attempt)
 	if bucketTasks := m.taskFindForBucket(params.Bucket); len(bucketTasks) > 0 {
 		logging.Errorf("PauseServiceManager::PreparePause: Previous attempt not cleaned up:"+
@@ -1171,6 +1180,7 @@ func (m *PauseServiceManager) Pause(params service.PauseParams) (err error) {
 	logging.Infof("%v Called. "+args, _Pause, params.ID, params.Bucket, params.RemotePath)
 	defer logging.Infof("%v Returned %v. "+args, _Pause, err, params.ID, params.Bucket, params.RemotePath)
 
+	m.tryTestSleepHook("Pause")
 	// Update the task to set this node as master
 	task := m.taskSetMasterAndUpdateType(params.ID, service.TaskTypeBucketPause)
 	if task == nil || !task.isPause {
@@ -1611,6 +1621,7 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 	logging.Infof("%v Called. "+args, _PrepareResume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 	defer logging.Infof("%v Returned %v. "+args, _PrepareResume, err, params.ID, params.Bucket, params.RemotePath, params.DryRun)
 
+	m.tryTestSleepHook("PrepareResume")
 	// Check if calling prepare before cancelling/cleaning up previous attempt
 	if bucketTasks := m.taskFindForBucket(params.Bucket); len(bucketTasks) > 0 {
 		logging.Errorf("PauseServiceManager::PrepareResume: Previous attempt not cleaned up:"+
@@ -1705,6 +1716,19 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		return err
 	}
 
+	// Indexes for this bucket must not exist, assert this in gometa
+	if insts, err := m.findIndexesInMeta(params.Bucket); err != nil {
+		err = fmt.Errorf("could not get metadata")
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	} else if len(insts) > 0 {
+		err = fmt.Errorf("found indexes in metadata: insts[%v] bucket[%v]", insts, params.Bucket)
+		logging.Errorf("PauseServiceManager::PrepareResume: err[%v]", err)
+
+		return err
+	}
+
 	// Indexes for this bucket do not exist yet, no need to check if they are caught up
 
 	// TODO: Check remotePath access?
@@ -1736,6 +1760,48 @@ func (m *PauseServiceManager) PrepareResume(params service.ResumeParams) (err er
 		false, params.DryRun)
 }
 
+func (m *PauseServiceManager) restGetLocalIndexMetadata(bucketName string) (*manager.LocalIndexMetadata, []byte, error) {
+
+	url := fmt.Sprintf("%v/getLocalIndexMetadata?useETag=false&bucket=%v", m.httpAddr, bucketName)
+	resp, err := getWithAuth(url)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	bs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Verify response can be unmarshaled
+	var metadata manager.LocalIndexMetadata
+	err = json.Unmarshal(bs, &metadata)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &metadata, bs, nil
+}
+
+func (m *PauseServiceManager) findIndexesInMeta(bucketName string) (instNames []string, err error) {
+
+	metadata, _, err := m.restGetLocalIndexMetadata(bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, defn := range metadata.IndexDefinitions {
+		if defn.Bucket != bucketName {
+			err = fmt.Errorf("expected [%v], got [%v] from getLocalIndexMetadata", bucketName, defn.Bucket)
+		}
+
+		instNames = append(instNames, defn.Name)
+	}
+
+	return instNames, nil
+}
+
 // Resume is an external API called by ns_server (via cbauth) only on the GSI master node to
 // initiate a resume (formerly unhibernate or rehydrate) of a bucket in the serverless offering.
 //
@@ -1749,6 +1815,8 @@ func (m *PauseServiceManager) Resume(params service.ResumeParams) error {
 
 	const args = "taskId: %v, bucket: %v, remotePath: %v, dryRun: %v"
 	logging.Infof("%v Called. "+args, _Resume, params.ID, params.Bucket, params.RemotePath, params.DryRun)
+
+	m.tryTestSleepHook("Resume")
 	// Update the task to set this node as master
 	task := m.taskSetMasterAndUpdateType(params.ID, service.TaskTypeBucketResume)
 	if task == nil || task.isPause {
@@ -2606,6 +2674,31 @@ func (psm *PauseServiceManager) testDestroyShards(w http.ResponseWriter, r *http
 
 	logging.Infof("%v destroyed shards %v", _method, shardIds)
 
+}
+
+func (psm *PauseServiceManager) testHandleTestActionStatus(w http.ResponseWriter, r *http.Request) {
+	const _method = "PauseServiceManager::testHandleTestActionStatus"
+
+	if r.Method != http.MethodGet {
+		rhSendHttpError(w, fmt.Sprintf("%v method not allowed", r.Method), http.StatusMethodNotAllowed)
+		return
+	}
+
+	creds, ok := doAuth(r, w, _method)
+	if !ok {
+		rhSendHttpError(w, "invalid auth", http.StatusBadRequest)
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!read"}, r, w, _method) {
+		rhSendHttpError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	lastStage, sleepUntil := psm.actionStatus.getStatusAndSleepUntilLocked()
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("{\"lastStageExecuted\": \"%v\", \"sleepUntil\": \"%v\"}", lastStage, sleepUntil)))
+	w.Header().Set("Content-type", "application/json")
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3546,4 +3639,49 @@ func (psm *PauseServiceManager) unsetTestConfigIfEnabled() {
 		cfg := plasma.DefaultConfig()
 		plasma.UpdateShardCopyConfig(&cfg)
 	}
+}
+
+type TestActionStatus struct {
+	sync.RWMutex
+
+	lastStage  string // the stage that action was last performed at
+	sleepUntil uint64 // tiemstamp when sleep ended for the last action; (in ns)
+}
+
+func (tas *TestActionStatus) setStageAndSleepUntilLocked(newStage string, sleepUntil uint64) {
+	tas.Lock()
+	defer tas.Unlock()
+
+	tas.lastStage = newStage
+	tas.sleepUntil = sleepUntil
+}
+
+func (tas *TestActionStatus) getStatusAndSleepUntilLocked() (string, uint64) {
+	tas.RLock()
+	defer tas.RUnlock()
+
+	return tas.lastStage, tas.sleepUntil
+}
+
+func (psm *PauseServiceManager) tryTestSleepHook(stage string) {
+	cfg := psm.config.Load()
+
+	if skip := cfg["pause_resume.test_action.enabled"].Bool(); !skip {
+		return
+	}
+
+	sleepInt := cfg["pause_resume.test_action.sleep_interval"].Int()
+	if sleepInt >= 55 {
+		sleepInt = 55
+	}
+
+	logging.Infof("PauseServiceManager::tryTestSleepHook: sleeping for %vs", sleepInt)
+
+	sleepUntil := time.Now().Add(time.Duration(sleepInt)*time.Second)
+	psm.actionStatus.setStageAndSleepUntilLocked(stage, uint64(sleepUntil.UnixNano()))
+
+	time.Sleep(time.Second * time.Duration(sleepInt))
+
+	logging.Infof("PauseServiceManager::tryTestSleepHook: out of sleep for %v", stage)
+
 }

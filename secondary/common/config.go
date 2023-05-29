@@ -3132,6 +3132,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.pause_resume.test_action.enabled": ConfigValue{
+		false,
+		"flag to enable test path. used for testing purposes only",
+		false,
+		false, // mutable
+		false, //case-insensitive
+	},
+	"indexer.pause_resume.test_action.sleep_interval": ConfigValue{
+		0,
+		"sleep interval for test actions. used for testing purposes only",
+		0,
+		false,
+		false,
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +

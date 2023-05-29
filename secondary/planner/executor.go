@@ -2390,8 +2390,8 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 			continue
 		}
 
-		logging.Infof("%v Index Node %v SG %v Memory %v Units %v", _groupIndexNodesIntoSubClusters,
-			node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits)
+		logging.Infof("%v Index Node %v SG %v Memory %v Units %v Tenants %v", _groupIndexNodesIntoSubClusters,
+			node.NodeId, node.ServerGroup, node.MandatoryQuota, node.ActualUnits, node.NumTenants)
 
 		if checkIfNodeBelongsToAnySubCluster(subClusters, node) {
 			continue

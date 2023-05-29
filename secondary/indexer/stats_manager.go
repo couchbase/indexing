@@ -925,6 +925,7 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.cpuUtilization.AddFilter(stats.PlannerFilter)
 	s.unitsQuota.AddFilter(stats.PlannerFilter)
 	s.unitsUsedActual.AddFilter(stats.PlannerFilter)
+	s.numTenants.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexerStats) SetSummaryFilters() {

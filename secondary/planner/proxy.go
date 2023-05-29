@@ -535,6 +535,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		indexer.ActualUnits = uint64(unitsActual.(float64))
 	}
 
+	if numTenants, ok := statsMap["num_tenants"]; ok {
+		indexer.NumTenants = uint64(numTenants.(float64))
+	}
+
 	// uptime
 	var elapsed uint64
 	if uptimeStat, ok := statsMap["uptime"]; ok {

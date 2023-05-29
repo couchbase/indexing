@@ -197,6 +197,7 @@ type IndexerNode struct {
 	ActualRSS         uint64  `json:"actualRSS"`
 	ActualUnits       uint64  `json:"actualUnits"`
 	MandatoryQuota    uint64  `json:"mandatoryQuota"`
+	NumTenants        uint64  `json:"numTenants"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
