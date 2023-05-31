@@ -278,6 +278,35 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.dcp.useMutationQueue": ConfigValue{
+		false,
+		"Use atomic mutation queue at dcp_feed.go instead of golang channels",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.serverless.useMutationQueue": ConfigValue{
+		false,
+		"Use atomic mutation queue at dcp_feed.go instead of golang channels " +
+			"for serverless deployments",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.mutation_queue.connection_buffer_size": ConfigValue{
+		2 * 1024 * 1024,
+		"Connection buffer size to be used on DCP connections when atomic mutation queue is used",
+		2 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.connection_buffer_size": ConfigValue{
+		20 * 1024 * 1024,
+		"Connection buffer size to be used on DCP connections",
+		20 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.dcp.latencyTick": ConfigValue{
 		1 * 60 * 1000, // 1 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",
@@ -3613,10 +3642,18 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
-	"indexer.plasma.serverless.shardCopy.dbg": ConfigValue{
+	"indexer.plasma.shardCopy.dbg": ConfigValue{
 		false,
 		"Enable debug during shard transfer and restore",
 		false,
+		false,
+		false,
+	},
+	"indexer.plasma.shardCopy.maxRetries": ConfigValue{
+		2,
+		"Maximum retry attempts for transient network errors." +
+			"For e.g, connection resets on downloads are not retried by the aws sdk",
+		2,
 		false,
 		false,
 	},
@@ -3637,9 +3674,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.serverless.shardCopy.s3MaxRetries": ConfigValue{
-		3,
+		4,
 		"Maximum HTTP level retry attempts for an S3 request. This is aws sdk default as well.",
-		3,
+		4,
 		false,
 		false,
 	},

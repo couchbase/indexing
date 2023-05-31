@@ -86,6 +86,9 @@ type DcpFeed struct {
 	seqOrders map[uint16]transport.SeqOrderState // vb ==> state maintained for checking seq order
 
 	truncName string
+
+	mutationQueue          *AtomicMutationQueue
+	useAtomicMutationQueue bool
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -111,7 +114,11 @@ func NewDcpFeed(
 		seqOrders: make(map[uint16]transport.SeqOrderState),
 	}
 
+	feed.mutationQueue = NewAtomicMutationQueue()
 	feed.truncName = name
+	if val, ok := config["useMutationQueue"]; ok {
+		feed.useAtomicMutationQueue = val.(bool)
+	}
 	newFeedName, err := truncFeedName(name)
 	if err != nil {
 		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v", feed.logPrefix, opaque, name)
@@ -129,6 +136,7 @@ func NewDcpFeed(
 
 	feed.stats.Init()
 	feed.stats.rcvch = rcvch
+	feed.stats.mutationQueue = feed.mutationQueue
 	feed.lastAckTime = time.Now()
 
 	if _, ok := config["collectionsAware"]; ok {
@@ -140,9 +148,12 @@ func NewDcpFeed(
 		feed.osoSnapshot = config["osoSnapshot"].(bool)
 	}
 
+	if feed.useAtomicMutationQueue {
+		go feed.DequeueMutations(rcvch, feed.finch)
+	}
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
-	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
+	logging.Infof("%v ##%x feed started. useMutationQueue: %v ...", feed.logPrefix, opaque, feed.useAtomicMutationQueue)
 	return feed, nil
 }
 
@@ -239,6 +250,35 @@ const (
 	dfCmdCloseStream
 	dfCmdClose
 )
+
+// Intermediate go-routine to dequeue mutations and writes to rcvch
+// If there are no mutations in the queue, then Dequeue would block
+// until mutations arrive
+func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
+	for {
+		pkt, bytes := feed.mutationQueue.Dequeue(abortCh)
+		if pkt != nil {
+			rcvch <- []interface{}{pkt, bytes}
+			sendAck := false
+			switch pkt.Opcode {
+			case transport.DCP_MUTATION,
+				transport.DCP_DELETION, transport.DCP_EXPIRATION,
+				transport.DCP_STREAMEND, transport.DCP_SNAPSHOT,
+				transport.DCP_SYSTEM_EVENT, transport.DCP_SEQNO_ADVANCED,
+				transport.DCP_OSO_SNAPSHOT:
+				sendAck = true
+			default:
+				sendAck = false
+
+			}
+			if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
+				return // Exit
+			}
+		} else {
+			return // Exit
+		}
+	}
+}
 
 func (feed *DcpFeed) genServer(
 	opaque uint16, reqch chan []interface{}, finch chan bool,
@@ -535,8 +575,14 @@ func (feed *DcpFeed) handlePacket(
 	if event != nil {
 		feed.outch <- event
 	}
-	if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
-		return "exit"
+	// When using atomic mutation queue, feed.DequeueMutations() takes care
+	// of sending the buffer-ack as it read the data from KV while the mutations
+	// in rcvch are waiting to get processed by downstream - there by achieving
+	// pipelined parallelism
+	if !feed.useAtomicMutationQueue {
+		if err := feed.sendBufferAck(sendAck, uint32(bytes)); err != nil {
+			return "exit"
+		}
 	}
 	return "ok"
 }
@@ -833,6 +879,7 @@ func (feed *DcpFeed) doDcpOpen(
 	// send a DCP control message to set the window size for
 	// this connection
 	if bufsize > 0 {
+		logging.Infof("%v##%x using bufSize: %v", prefix, opaque, bufsize)
 		rq := &transport.MCRequest{
 			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("connection_buffer_size"),
@@ -869,7 +916,13 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, req.Status)
 			return ErrorConnection
 		}
-		feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
+
+		// If atomic mutation queue is enabled, then send buffer-ack for complete buffer
+		if feed.useAtomicMutationQueue {
+			feed.maxAckBytes = bufsize
+		} else {
+			feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
+		}
 	}
 
 	// send a DCP control message to enable_noop
@@ -1202,7 +1255,10 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
 	if sendAck {
 		var err1 error
 		totalBytes := feed.toAckBytes + bytes
-		if totalBytes > feed.maxAckBytes || time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod {
+
+		// Disable periodic buffer-ack when atomic mutation queue is enabled
+		if totalBytes > feed.maxAckBytes ||
+			(!feed.useAtomicMutationQueue && time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod) {
 			bufferAck := &transport.MCRequest{
 				Opcode: transport.DCP_BUFFERACK,
 			}
@@ -1471,6 +1527,8 @@ type DcpStats struct {
 	Dcplatency stats.Average
 	// This stat help to determine the drain rate of dcp feed
 	IncomingMsg stats.Uint64Val
+
+	mutationQueue *AtomicMutationQueue
 }
 
 func (dcpStats *DcpStats) Init() {
@@ -1517,7 +1575,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [24]string
+	var stitems [26]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1544,6 +1602,8 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[21] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
 	stitems[22] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
 	stitems[23] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
+	stitems[24] = `"queuedItems":` + strconv.FormatUint(uint64(stats.mutationQueue.GetItems()), 10)
+	stitems[25] = `"queueSize":` + strconv.FormatUint(uint64(stats.mutationQueue.GetSize()), 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)
@@ -1757,11 +1817,22 @@ loop:
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
 		}
-		select {
-		case rcvch <- []interface{}{&pkt, bytes}:
-			feed.stats.IncomingMsg.Add(1)
-		case <-finch:
-			break loop
+
+		if feed.useAtomicMutationQueue {
+			select {
+			case <-finch:
+				break loop
+			default:
+				feed.mutationQueue.Enqueue(&pkt, bytes)
+				feed.stats.IncomingMsg.Add(1)
+			}
+		} else {
+			select {
+			case rcvch <- []interface{}{&pkt, bytes}:
+				feed.stats.IncomingMsg.Add(1)
+			case <-finch:
+				break loop
+			}
 		}
 		if blocked {
 			blockedTs := time.Since(start)

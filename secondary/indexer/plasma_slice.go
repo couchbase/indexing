@@ -448,7 +448,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 
 			cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.serverless.LSSSegmentFileSize"].Int())
 
-			cfg.CPdbg = slice.sysconf["plasma.serverless.shardCopy.dbg"].Bool()
+			cfg.CPdbg = slice.sysconf["plasma.shardCopy.dbg"].Bool()
+			cfg.CPMaxRetries = int64(slice.sysconf["plasma.shardCopy.maxRetries"].Int())
 			cfg.S3HttpDbg = int64(slice.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
 			cfg.S3PartSize = int64(slice.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
 			cfg.S3MaxRetries = int64(slice.sysconf["plasma.serverless.shardCopy.s3MaxRetries"].Int())
@@ -2932,7 +2933,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.mainIndex.evictMinThreshold"].Float64()
 		mdb.mainstore.UseMultipleContainers = mdb.sysconf["plasma.serverless.useMultipleContainers"].Bool()
 
-		mdb.mainstore.CPdbg = mdb.sysconf["plasma.serverless.shardCopy.dbg"].Bool()
+		mdb.mainstore.CPdbg = mdb.sysconf["plasma.shardCopy.dbg"].Bool()
+		mdb.mainstore.CPMaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
 		mdb.mainstore.S3HttpDbg = int64(mdb.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
 		mdb.mainstore.S3PartSize = int64(mdb.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
 		mdb.mainstore.S3MaxRetries = int64(mdb.sysconf["plasma.serverless.shardCopy.s3MaxRetries"].Int())
@@ -3037,7 +3039,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
 			mdb.backstore.UseMultipleContainers = mdb.sysconf["plasma.serverless.useMultipleContainers"].Bool()
 
-			mdb.backstore.CPdbg = mdb.sysconf["plasma.serverless.shardCopy.dbg"].Bool()
+			mdb.backstore.CPdbg = mdb.sysconf["plasma.shardCopy.dbg"].Bool()
+			mdb.backstore.CPMaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
 			mdb.backstore.S3HttpDbg = int64(mdb.sysconf["plasma.serverless.shardCopy.s3dbg"].Int())
 			mdb.backstore.S3PartSize = int64(mdb.sysconf["plasma.serverless.shardCopy.s3PartSize"].Int())
 			mdb.backstore.S3MaxRetries = int64(mdb.sysconf["plasma.serverless.shardCopy.s3MaxRetries"].Int())

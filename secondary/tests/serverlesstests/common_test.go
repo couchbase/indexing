@@ -110,7 +110,7 @@ func TestMain(m *testing.M) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.rebalance.blob_storage_scheme", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_scheme")
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.plasma.serverless.shardCopy.dbg", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err = secondaryindex.ChangeIndexerSettings("indexer.plasma.shardCopy.dbg", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in change setting for indexer.settings.rebalance.blob_storage_prefix")
 
 	err = secondaryindex.ChangeIndexerSettings("indexer.rebalance.serverless.transferBatchSize", 2, clusterconfig.Username, clusterconfig.Password, kvaddress)
