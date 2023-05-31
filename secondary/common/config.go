@@ -279,17 +279,17 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dcp.useMutationQueue": ConfigValue{
-		false,
+		true,
 		"Use atomic mutation queue at dcp_feed.go instead of golang channels",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"projector.dcp.serverless.useMutationQueue": ConfigValue{
-		false,
+		true,
 		"Use atomic mutation queue at dcp_feed.go instead of golang channels " +
 			"for serverless deployments",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
