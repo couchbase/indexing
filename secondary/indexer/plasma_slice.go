@@ -1242,21 +1242,56 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	}
 
-	mdb.recordNewOpsArrIndex(int64(len(indexEntriesToBeAdded)), int64(len(indexEntriesToBeDeleted)))
-
 	nmut = 0
 
-	var ar AggregateRecorder
-	// Replica writes are not metered as billable
-	billable := mdb.replicaId == 0
+	var ar *AggregateRecorder
+	initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
+	recordArrWriteUnits := func(secIdxEntryLen uint64, done bool) {
+		if !mdb.EnableMetering() {
+			return
+		}
+
+		if done {
+			ar.FinishAddsInVarRatio()
+			return
+		}
+
+		if initBuild {
+			ar.AddBytesOfVarType(secIdxEntryLen, IndexWriteBuildVariant)
+			return
+		}
+
+		ar.AddBytesInVarRatio(secIdxEntryLen)
+	}
 
 	if mdb.EnableMetering() {
-		initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
-		writeVariant := IndexWriteArrayVariant
-		if initBuild {
-			writeVariant = IndexWriteBuildVariant
+		// Report number of updates and inserts for tenant management
+		var numAdds, numDels uint64
+		for _, item := range indexEntriesToBeDeleted {
+			if item != nil {
+				numDels++
+			}
 		}
-		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, writeVariant)
+		for _, item := range indexEntriesToBeAdded {
+			if item != nil {
+				numAdds++
+			}
+		}
+
+		// Replica writes are not metered as billable
+		billable := mdb.replicaId == 0
+
+		// Create an aggregate recorder instance
+		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable)
+
+		// Get the ratio of Inserts to Updates for every bytes recorded update
+		// in this ratio. Remaining in the inserts.
+		newInserts, newUpdates := mdb.recordNewOpsArrIndex(numAdds, numDels)
+		variantRatio := make(map[UnitType]uint64)
+		variantRatio[IndexWriteUpdateVariant] = newUpdates
+		variantRatio[IndexWriteInsertVariant] = newInserts
+		ar.SetVarRatio(variantRatio)
+
 		defer func() {
 			if abortErr == nil {
 				// If billable fetch the WUs before committing and increment local counter
@@ -1346,8 +1381,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.idxStats.arrItemsCount.Add(0 - int64(oldKeyCount[i]))
 				if mdb.EnableMetering() {
 					secIdxEntry, _ := BytesToSecondaryIndexEntry(keyToBeDeleted)
-					secIdxEntryLen := secIdxEntry.lenKey() + secIdxEntry.lenDocId()
-					ar.AddBytes(uint64(secIdxEntryLen))
+					secIdxEntryLen := uint64(secIdxEntry.lenKey() + secIdxEntry.lenDocId())
+					recordArrWriteUnits(secIdxEntryLen, false)
 				}
 			}
 			nmut++
@@ -1382,8 +1417,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.idxStats.arrItemsCount.Add(int64(newKeyCount[i]))
 				if mdb.EnableMetering() {
 					secIdxEntry, _ := BytesToSecondaryIndexEntry(keyToBeAdded)
-					secIdxEntryLen := secIdxEntry.lenKey() + secIdxEntry.lenDocId()
-					ar.AddBytes(uint64(secIdxEntryLen))
+					secIdxEntryLen := uint64(secIdxEntry.lenKey() + secIdxEntry.lenDocId())
+					recordArrWriteUnits(secIdxEntryLen, false)
+
 				}
 			}
 
@@ -1392,6 +1428,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			}
 			nmut++
 		}
+	}
+
+	if mdb.EnableMetering() {
+		recordArrWriteUnits(0, true)
 	}
 
 	// If a field value changed from "existing" to "missing" (ie, key = nil),
@@ -1639,12 +1679,13 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 		return
 	}
 
-	var ar AggregateRecorder
+	var ar *AggregateRecorder
 	// Replica writes are not metered as billable
 	billable := mdb.replicaId == 0
+	initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
 
-	if mdb.EnableMetering() {
-		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable, IndexWriteArrayVariant)
+	if meterDelete && mdb.EnableMetering() {
+		ar = mdb.meteringMgr.StartWriteAggregateRecorder(mdb.GetBucketName(), billable)
 		defer func() {
 			// If billable fetch the WUs before committing and increment local counter
 			// to refund if there is a indexer restart. Its ok to refund more.
@@ -1661,7 +1702,6 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 				// TODO: Add logging without flooding
 				return
 			}
-			initBuild := atomic.LoadInt32(&mdb.isInitialBuild) == 1
 			mdb.meteringStats.recordWriteUsageStats(writeUnits.Whole(), initBuild)
 		}()
 	}
@@ -1692,7 +1732,12 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 			mdb.idxStats.arrItemsCount.Add(0 - int64(keyCount[i]))
 
 			if meterDelete && mdb.EnableMetering() {
-				ar.AddBytes(uint64(len(docid) + keyDelSz))
+				logging.Tracef("plasmaSlice::deleteSecArrayIndex Adding bytes: %v", uint64(len(docid)+keyDelSz))
+				writeVariant := IndexWriteDeleteVariant
+				if initBuild {
+					writeVariant = IndexWriteBuildVariant
+				}
+				ar.AddBytesOfVarType(uint64(len(docid)+keyDelSz), writeVariant)
 				mdb.recordNewOps(0, 0, 1)
 			}
 		}
@@ -3163,16 +3208,12 @@ func (mdb *plasmaSlice) recordNewOps(newInserts,
 	atomic.AddInt64(&ms.numDeletes, newDeletes)
 }
 
-func (mdb *plasmaSlice) recordNewOpsArrIndex(indexEntriesToBeAdded int64,
-	indexEntriesToBeDeleted int64) {
-
-	if !mdb.EnableMetering() {
-		return
-	}
+func (mdb *plasmaSlice) recordNewOpsArrIndex(indexEntriesToBeAdded uint64,
+	indexEntriesToBeDeleted uint64) (uint64, uint64) {
 
 	//count the entries that need to be deleted as updates, rest
 	//are counted as inserts
-	var newInserts, newUpdates int64
+	var newInserts, newUpdates uint64
 	if indexEntriesToBeAdded >= indexEntriesToBeDeleted {
 		newInserts = indexEntriesToBeAdded - indexEntriesToBeDeleted
 		newUpdates = indexEntriesToBeDeleted
@@ -3181,7 +3222,8 @@ func (mdb *plasmaSlice) recordNewOpsArrIndex(indexEntriesToBeAdded int64,
 		newInserts = indexEntriesToBeAdded
 	}
 
-	mdb.recordNewOps(newInserts, newUpdates, 0)
+	mdb.recordNewOps(int64(newInserts), int64(newUpdates), 0)
+	return newInserts, newUpdates
 }
 
 func (mdb *plasmaSlice) updateUsageStats() {

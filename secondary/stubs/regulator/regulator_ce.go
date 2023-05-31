@@ -15,6 +15,10 @@ func (ar *AggregateRecorder) AddBytes(bytes uint64) error {
 	return nil
 }
 
+func (ar *AggregateRecorder) AddBytesWithType(bytes uint64, variant UnitType) error {
+	return nil
+}
+
 func (ar *AggregateRecorder) State() (metered, pending Units, bytesPending uint64) {
 	return
 }
