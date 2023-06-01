@@ -1872,6 +1872,10 @@ func (s *storageMgr) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	s.config = cfgUpdate.GetConfig()
 
+	if s.stm != nil { // Pass on the config change to shard tranfser manager
+		s.stm.ProcessCommand(cmd)
+	}
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 

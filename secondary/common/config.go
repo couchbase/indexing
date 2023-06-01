@@ -3131,6 +3131,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.serverless.maxDiskBW": ConfigValue{
+		200, // 200 MB/s
+		"Maximum disk bandwidth to use in MB/sec for rebalance operation. " +
+			"Setting to '0' will enable rebalance to use complete disk bandwidth",
+		200,   // 200 MB/s
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.shardRebalance.execTestAction": ConfigValue{
 		false,
 		"Option to execute a test action. Used only for CI testing. Not a production setting",
