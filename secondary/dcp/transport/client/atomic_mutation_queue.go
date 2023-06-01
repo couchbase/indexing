@@ -20,13 +20,15 @@ type AtomicMutationQueue struct {
 
 	activeMutCh chan bool
 
-	size  int64 // Represents the current size of the queue (in bytes)
-	items int64 // Represents the count of mutations in the queue
+	size     int64 // Represents the current size of the queue (in bytes)
+	items    int64 // Represents the current count of mutations in the queue
+	totalEnq int64 // Represents the total number of mutations queued so far
+	totalDeq int64 // Represents the total number of mutations de-queued so far
 }
 
 func NewAtomicMutationQueue() *AtomicMutationQueue {
 	q := &AtomicMutationQueue{
-		activeMutCh: make(chan bool),
+		activeMutCh: make(chan bool, 1),
 	}
 	node := &node{} // sentinal node
 	q.head = unsafe.Pointer(node)
@@ -54,6 +56,7 @@ func (q *AtomicMutationQueue) Enqueue(pkt *transport.MCRequest, bytes int) {
 
 	atomic.AddInt64(&q.size, int64(bytes))
 	atomic.AddInt64(&q.items, 1)
+	atomic.AddInt64(&q.totalEnq, 1)
 
 	q.updateMutCh() // Notify waiting consumer that mutations are available
 }
@@ -62,7 +65,7 @@ func (q *AtomicMutationQueue) Enqueue(pkt *transport.MCRequest, bytes int) {
 // will block until the mutation arrives. This atomic mutation queue is designed
 // for single reader and single writer - So, LoadPointer & StorePointer are sufficient
 // instead of CAS
-func (q *AtomicMutationQueue) Dequeue(abortCh chan bool) (*transport.MCRequest, int) {
+func (q *AtomicMutationQueue) Dequeue(abortCh chan bool, closeCh chan bool) (*transport.MCRequest, int) {
 
 	for {
 		headPtr := (atomic.LoadPointer(&q.head))
@@ -77,12 +80,15 @@ func (q *AtomicMutationQueue) Dequeue(abortCh chan bool) (*transport.MCRequest, 
 			atomic.StorePointer(&q.head, unsafe.Pointer(head.next))
 			atomic.AddInt64(&q.size, 0-int64(bytes)) // Decrement the size
 			atomic.AddInt64(&q.items, -1)
+			atomic.AddInt64(&q.totalDeq, 1)
 
 			return pkt, bytes
 		} else {
 			select {
 			case <-q.activeMutCh: // Wait for mutations
 			case <-abortCh:
+				return nil, 0
+			case <-closeCh:
 				return nil, 0
 			}
 		}
@@ -96,6 +102,14 @@ func (q *AtomicMutationQueue) GetSize() int64 {
 
 func (q *AtomicMutationQueue) GetItems() int64 {
 	return atomic.LoadInt64(&q.items)
+}
+
+func (q *AtomicMutationQueue) GetTotalEnq() int64 {
+	return atomic.LoadInt64(&q.totalEnq)
+}
+
+func (q *AtomicMutationQueue) GetTotalDeq() int64 {
+	return atomic.LoadInt64(&q.totalDeq)
 }
 
 // Writes to activeMutCh if there are any mutations.

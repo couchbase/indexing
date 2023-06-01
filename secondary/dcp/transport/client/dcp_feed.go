@@ -89,6 +89,7 @@ type DcpFeed struct {
 
 	mutationQueue          *AtomicMutationQueue
 	useAtomicMutationQueue bool
+	closeMutQueue          chan bool
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -109,9 +110,10 @@ func NewDcpFeed(
 		supvch:    supvch,
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
-		logPrefix: fmt.Sprintf("DCPT[%s]", name),
-		stats:     &DcpStats{},
-		seqOrders: make(map[uint16]transport.SeqOrderState),
+		logPrefix:     fmt.Sprintf("DCPT[%s]", name),
+		stats:         &DcpStats{},
+		seqOrders:     make(map[uint16]transport.SeqOrderState),
+		closeMutQueue: make(chan bool),
 	}
 
 	feed.mutationQueue = NewAtomicMutationQueue()
@@ -255,8 +257,10 @@ const (
 // If there are no mutations in the queue, then Dequeue would block
 // until mutations arrive
 func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
+	defer close(rcvch)
+
 	for {
-		pkt, bytes := feed.mutationQueue.Dequeue(abortCh)
+		pkt, bytes := feed.mutationQueue.Dequeue(abortCh, feed.closeMutQueue)
 		if pkt != nil {
 			rcvch <- []interface{}{pkt, bytes}
 			sendAck := false
@@ -1257,7 +1261,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
 		totalBytes := feed.toAckBytes + bytes
 
 		// Disable periodic buffer-ack when atomic mutation queue is enabled
-		if totalBytes > feed.maxAckBytes ||
+		if totalBytes >= feed.maxAckBytes ||
 			(!feed.useAtomicMutationQueue && time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod) {
 			bufferAck := &transport.MCRequest{
 				Opcode: transport.DCP_BUFFERACK,
@@ -1575,7 +1579,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [26]string
+	var stitems [28]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1604,6 +1608,8 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[23] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
 	stitems[24] = `"queuedItems":` + strconv.FormatUint(uint64(stats.mutationQueue.GetItems()), 10)
 	stitems[25] = `"queueSize":` + strconv.FormatUint(uint64(stats.mutationQueue.GetSize()), 10)
+	stitems[26] = `"totalEnq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalEnq()), 10)
+	stitems[27] = `"totalDeq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalDeq()), 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)
@@ -1711,7 +1717,12 @@ func computeLatency(stream *DcpStream) int64 {
 // receive loop
 func (feed *DcpFeed) doReceive(
 	rcvch chan []interface{}, finch chan bool, conn *Client) {
-	defer close(rcvch)
+
+	if !feed.useAtomicMutationQueue {
+		defer close(rcvch)
+	}
+
+	defer close(feed.closeMutQueue)
 
 	var headerBuf [transport.HDR_LEN]byte
 	var duration time.Duration
