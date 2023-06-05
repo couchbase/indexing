@@ -4017,8 +4017,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
 		indexInst.State == common.INDEX_STATE_READY ||
-		indexInst.State == common.INDEX_STATE_RECOVERED ||
-		indexInst.State == common.INDEX_STATE_DELETED {
+		indexInst.State == common.INDEX_STATE_RECOVERED {
 
 		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
 		logging.Infof("Indexer::handleDropIndex Cleanup Successful for "+
@@ -4034,19 +4033,25 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//Second step, is the actual cleanup of index instance from internal maps
 	//and purging of physical slice files.
 
-	indexInst.State = common.INDEX_STATE_DELETED
-	idx.indexInstMap[indexInst.InstId] = indexInst
+	// When index drop races with bucket/collection drop, it is possible that the
+	// index is already marked DELETED but deletion could not proceed due to on-going
+	// flush. In such case, skip marking the index as DELETED and then proceed to
+	// clean-up the index data
+	if indexInst.State != common.INDEX_STATE_DELETED {
+		indexInst.State = common.INDEX_STATE_DELETED
+		idx.indexInstMap[indexInst.InstId] = indexInst
 
-	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+		msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
 
-	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
-		clientCh <- &MsgError{
-			err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-				severity: FATAL,
-				cause:    err,
-				category: INDEXER}}
-		common.CrashOnError(err)
+		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    err,
+					category: INDEXER}}
+			common.CrashOnError(err)
+		}
 	}
 
 	//check if there is already a drop request waiting on this bucket
