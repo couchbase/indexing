@@ -372,7 +372,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	httpAddr := net.JoinHostPort(host, port) // "127.0.0.1:<indexer_http_port"> (eg 9102, 9108, ...)
 
 	// CPU throttling is disabled until CpuThrottle.SetCpuThrottling(true) is called
-	idx.cpuThrottle = NewCpuThrottle(idx.config["cpu.throttle.target"].Float64())
+	throttleVal := idx.config["cpu.throttle.target"].Float64()
+	if common.IsServerlessDeployment() {
+		throttleVal = idx.config["serverless.cpu.throttle.target"].Float64()
+	}
+	idx.cpuThrottle = NewCpuThrottle(throttleVal)
 	autofailoverMgr := NewAutofailoverServiceManager(httpAddr, idx.cpuThrottle)
 
 	// Initialize auditing
@@ -1767,7 +1771,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	memdb.Debug(newConfig["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
-	idx.cpuThrottle.SetCpuTarget(newConfig["cpu.throttle.target"].Float64())
+	throttleVal := newConfig["cpu.throttle.target"].Float64()
+	if common.IsServerlessDeployment() {
+		throttleVal = newConfig["serverless.cpu.throttle.target"].Float64()
+	}
+	idx.cpuThrottle.SetCpuTarget(throttleVal)
 
 	idx.config = newConfig
 
