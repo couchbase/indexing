@@ -302,12 +302,17 @@ func (ie *IndexEvaluator) StreamEndData(
 }
 
 func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
-	docval qvalue.AnnotatedValue, context qexpr.Context) (npkey, opkey, nkey, okey, newBuf []byte,
+	docval qvalue.AnnotatedValue, context qexpr.Context,
+	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, newBuf []byte,
 	where bool, opcode mcd.CommandCode, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%v", r)
+			errStr := fmt.Sprintf("processEvent: %v", r)
+			err = fmt.Errorf(errStr)
+			if pl != nil {
+				pl.TryLogStackTrace(logging.Error, errStr)
+			}
 		}
 	}()
 
@@ -368,7 +373,7 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	numIndexes int, opaque2 uint64, oso bool) ([]byte, int, error) {
+	numIndexes int, opaque2 uint64, oso bool, pl *logging.TimedNStackTraces) ([]byte, int, error) {
 
 	var err error
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
@@ -378,13 +383,13 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	forceUpsertDeletion := false
 	npkey, opkey, nkey, okey, newBuf, where, opcode, err = ie.processEvent(m,
-		encodeBuf, docval, context)
+		encodeBuf, docval, context, pl)
 	if err != nil {
 		forceUpsertDeletion = true
 	}
 
 	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey,
-		where, opcode, opaque2, forceUpsertDeletion, oso)
+		where, opcode, opaque2, forceUpsertDeletion, oso, pl)
 
 	if err == nil && err1 != nil {
 		err = err1
@@ -403,11 +408,15 @@ func (ie *IndexEvaluator) TransformRoute(
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
 	nkey, okey []byte, where bool, opcode mcd.CommandCode, opaque2 uint64,
-	forceUpsertDeletion bool, oso bool) (err error) {
+	forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%v", r)
+			errStr := fmt.Sprintf("populateData: %v", r)
+			err = fmt.Errorf(errStr)
+			if pl != nil {
+				pl.TryLogStackTrace(logging.Error, errStr)
+			}
 		}
 	}()
 
