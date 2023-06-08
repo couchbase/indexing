@@ -8,6 +8,7 @@ import (
 	qvalue "github.com/couchbase/query/value"
 
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 
 	c "github.com/couchbase/indexing/secondary/common"
 )
@@ -107,10 +108,10 @@ func (engine *Engine) StreamEndData(
 func (engine *Engine) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	numIndexes int, opaque2 uint64, oso bool) ([]byte, int, error) {
+	numIndexes int, opaque2 uint64, oso bool, pl *logging.TimedNStackTraces) ([]byte, int, error) {
 
 	return engine.evaluator.TransformRoute(
-		vbuuid, m, data, encodeBuf, docval, context, numIndexes, opaque2, oso,
+		vbuuid, m, data, encodeBuf, docval, context, numIndexes, opaque2, oso, pl,
 	)
 }
 

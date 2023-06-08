@@ -80,6 +80,8 @@ type VbucketWorker struct {
 
 	encodeBuf []byte
 	stats     *WorkerStats
+
+	panicLgr *logging.TimedNStackTraces
 }
 
 type WorkerStats struct {
@@ -140,6 +142,7 @@ func NewVbucketWorker(
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
+	worker.panicLgr = logging.NewTimedNStackTraces(5, 1*time.Hour)
 
 	go worker.genServer(worker.sbch)
 	go worker.run(worker.datach)
@@ -583,7 +586,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				// therefore reduces the garbage generated.
 				newBuf, newKeyLen, err := engine.TransformRoute(
 					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-					len(collEngines), worker.opaque2, worker.osoSnapshot,
+					len(collEngines), worker.opaque2, worker.osoSnapshot, worker.panicLgr,
 				)
 				if err != nil {
 					fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
