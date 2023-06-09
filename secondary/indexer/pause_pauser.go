@@ -733,7 +733,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 
 	ctx := p.task.ctx
 	plasmaCfg := generatePlasmaCopierConfig(p.task, cfg)
-	copier, cerr := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
+	copier, cerr := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, nil, plasmaCfg.CopyConfig)
 	if cerr != nil {
 		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported (err=%v)", p.task.archivePath, cerr)
 		logging.Errorf("Pauser::masterUploadPauseMetadata: %v", err)
@@ -783,7 +783,7 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 	}
 
 	plasmaCfg := generatePlasmaCopierConfig(p.task, cfg)
-	copier, cerr := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, plasmaCfg.CopyConfig)
+	copier, cerr := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, nil, plasmaCfg.CopyConfig)
 	if cerr != nil {
 		err := fmt.Errorf("couldn't create a copier object. archive path %v is unsupported (err=%v)", p.task.archivePath, cerr)
 		logging.Errorf("Pauser::followerUploadBucketData: %v", err)
