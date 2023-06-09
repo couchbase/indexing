@@ -50,6 +50,7 @@ const APPROX_METRIC_COUNT = 25
 
 var METRICS_PREFIX = "index_"
 var PLASMA_METRICS_PREFIX = METRICS_PREFIX + "storage_"
+var PLASMA_TENANT_METRICS_PREFIX = PLASMA_METRICS_PREFIX + "tenant_"
 
 // 0-2ms, 2ms-5ms, 5ms-10ms, 10ms-20ms, 20ms-30ms, 30ms-50ms, 50ms-100ms, 100ms-Inf
 var latencyDist = []int64{0, 2, 5, 10, 20, 30, 50, 100}
@@ -2458,6 +2459,36 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	return st
 }
 
+func populatePlasmaTenantMetrics(st []byte) []byte {
+
+	if common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
+		return st
+	}
+
+	fmtStr := "%v%v{tenant=\"%v\"} %v\n"
+	plasmaTenantStats := plasma.GetTenantStats()
+
+	for tenant, stats := range plasmaTenantStats {
+
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "quota", tenant, stats.Quota))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "mandatory_quota", tenant, stats.MandatoryQuota))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "discretionary_quota", tenant, stats.DiscretionaryQuota))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "resident_quota", tenant, stats.ResidentQuota))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "mutation_quota", tenant, stats.MutationQuota))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "idle_quota", tenant, stats.IdleQuota))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "working_set", tenant, stats.WorkingSet))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "mem_in_use", tenant, stats.MemInUse))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "mem_index", tenant, stats.MemIndex))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "total_records", tenant, stats.TotalRecord))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "avg_key_size", tenant, stats.AvgKeySize))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "resident_ratio", tenant, stats.ResidentRatio))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "total_ops", tenant, stats.Ops))...)
+		st = append(st, []byte(fmt.Sprintf(fmtStr, PLASMA_TENANT_METRICS_PREFIX, "compacts", tenant, stats.Compacts))...)
+	}
+
+	return st
+}
+
 // MarshalJSON reworks the layout of the stats in child call GetStats, then marshals the result to a
 // byte slice.
 func (is *IndexerStats) MarshalJSON(spec *statsSpec, creds cbauth.Creds) ([]byte, error) {
@@ -3376,6 +3407,8 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 			out = append(out, []byte(str)...)
 		}
 	}()
+
+	out = populatePlasmaTenantMetrics(out)
 
 	w.WriteHeader(200)
 	w.Write(out)
