@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/system"
 )
 
 // NOTE:
@@ -2592,6 +2593,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.percentage_memory_quota": ConfigValue{
+		uint64(0),
+		"Percentage memory of the Total System memory used by indexer buffercache." +
+			" Overrides the memory_quota value. 0 disables percentage memory quota",
+		uint64(0),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.cgroup.memory_quota": ConfigValue{
 		uint64(0),
 		"Linux cgroup override of indexer.settings.memory_quota;" +
@@ -4028,11 +4037,31 @@ func (config Config) getIndexerConfigUint64(strippedKey string) uint64 {
 	return config.getIndexerConfig(strippedKey).Uint64()
 }
 
-// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes as logical
-// min(indexer.settings.memory_quota, indexer.cgroup.memory_quota).
+// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes.
+// percentage mem quota override the absolute memory_quota specified.
+// Value returned is the min(gsiMemQuota, indexer.cgroup.memory_quota)
 // The latter is from sigar memory_max and only included if cgroups are supported.
 func (config Config) GetIndexerMemoryQuota() uint64 {
+	const _GetIndexerMemQuota = "Config::GetIndexerMemQuota:"
+
 	gsiMemQuota := config.getIndexerConfigUint64("settings.memory_quota")
+
+	if percMemQuota := config.getIndexerConfigUint64("settings.percentage_memory_quota"); percMemQuota > 0 {
+		stats, err := system.NewSystemStats()
+		if err != nil {
+			logging.Errorf("%v Not able to initialise SystemStats, reverting to use memory_quota Err=%v",
+				_GetIndexerMemQuota, err)
+		} else {
+			totalSysMem, err := stats.SystemTotalMem()
+			if err != nil {
+				logging.Errorf("%v Failed to get Total System Memory. Reverting to"+
+					" use Memory Quota value %v", _GetIndexerMemQuota, gsiMemQuota)
+			} else {
+				gsiMemQuota = uint64(float64(percMemQuota) * (float64(totalSysMem) / 100))
+			}
+		}
+	}
+
 	cgroupMemQuota := config.getIndexerConfigUint64("cgroup.memory_quota")
 	if cgroupMemQuota > 0 && cgroupMemQuota < gsiMemQuota {
 		gsiMemQuota = cgroupMemQuota

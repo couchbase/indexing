@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -39,7 +40,7 @@ func (mgr *MemManager) runStatsCollection() {
 			}
 			mgr.updateRSS(rss)
 
-			total, free, cgroupValues, err := mgr.stats.GetTotalAndFreeMem(true)
+			total, free, cgroupValues, err := mgr.stats.GetTotalAndFreeMem(true, common.SIGAR_CGROUP_SUPPORTED)
 			if err != nil {
 				logging.Debugf("Fail to get total and free mem. Err=%v", err)
 				continue
@@ -130,7 +131,7 @@ func (mgr *MemManager) ProcessRSS() error {
 }
 
 func (mgr *MemManager) ProcessTotalAndFreeMem() error {
-	total, free, _, err := mgr.stats.GetTotalAndFreeMem(true)
+	total, free, _, err := mgr.stats.GetTotalAndFreeMem(true, common.SIGAR_CGROUP_SUPPORTED)
 	if err != nil {
 		logging.Debugf("Fail to get RSS. Err=%v", err)
 		return err
@@ -151,7 +152,7 @@ func (mgr *MemManager) ProcessFreeMem() error {
 }
 
 func (mgr *MemManager) ProcessTotalMem() error {
-	total, free, _, err := memMgr.stats.GetTotalAndFreeMem(true)
+	total, free, _, err := memMgr.stats.GetTotalAndFreeMem(true, common.SIGAR_CGROUP_SUPPORTED)
 	if err != nil {
 		logging.Debugf("Fail to get total and free memory. Err=%v", err)
 		return err

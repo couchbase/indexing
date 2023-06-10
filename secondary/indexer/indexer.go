@@ -1704,8 +1704,10 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	idx.updateStorageMode(newConfig)
 
-	if newConfig["settings.memory_quota"].Uint64() !=
-		oldConfig["settings.memory_quota"].Uint64() {
+	if (newConfig["settings.memory_quota"].Uint64() !=
+		oldConfig["settings.memory_quota"].Uint64()) ||
+		(newConfig["settings.percentage_memory_quota"].Uint64() !=
+			oldConfig["settings.percentage_memory_quota"].Uint64()) {
 
 		memQuota := int64(newConfig.GetIndexerMemoryQuota())
 		idx.stats.memoryQuota.Set(memQuota)
