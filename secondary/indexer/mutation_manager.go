@@ -21,6 +21,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 	Stats "github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/indexing/secondary/system"
 )
 
 //MutationManager handles messages from Indexer to manage Mutation Streams
@@ -1379,7 +1380,7 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 //Calculate mutation queue length from memory quota
 func (m *mutationMgr) setMaxMemoryFromQuota() {
 
-	memQuota := m.config.GetIndexerMemoryQuota()
+	memQuota := m.config.GetIndexerMemoryQuota(system.UpdateSysMemObject("MutationMgr::setMaxMemoryFromQuota"))
 	fracQueueMem := getMutationQueueMemFrac(m.config)
 
 	maxMem := int64(fracQueueMem * float64(memQuota))

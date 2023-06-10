@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -68,6 +69,32 @@ type ConfigValue struct {
 	DefaultVal    interface{}
 	Immutable     bool
 	Casesensitive bool
+}
+
+// singleton container, whenever get is called, it returns the SysMemWithErr
+// if not already present, or initialises
+var sysMemWithErrContainer struct {
+	sync.Mutex
+	sysMemObj *SysMemWithErr
+}
+
+// Store info from systemStats using sigar, populates the totalSysMem
+// as well as any error generated while calling systemStats
+type SysMemWithErr struct {
+	TotalSysMem uint64
+	Err         error
+}
+
+func GetSysMemWithErr() *SysMemWithErr {
+	sysMemWithErrContainer.Lock()
+	defer sysMemWithErrContainer.Unlock()
+	if sysMemWithErrContainer.sysMemObj == nil {
+		sysMemWithErrContainer.sysMemObj = &SysMemWithErr{
+			TotalSysMem: 0,
+			Err:         nil,
+		}
+	}
+	return sysMemWithErrContainer.sysMemObj
 }
 
 // SystemConfig is default configuration for system and components.
@@ -2477,6 +2504,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.percentage_memory_quota": ConfigValue{
+		uint64(0),
+		"Percentage memory of the Total System memory used by indexer buffercache." +
+			" Overrides the memory_quota value. 0 disables percentage memory quota",
+		uint64(0),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.cgroup.memory_quota": ConfigValue{
 		uint64(0),
 		"Linux cgroup override of indexer.settings.memory_quota;" +
@@ -3579,11 +3614,24 @@ func (config Config) getIndexerConfigUint64(strippedKey string) uint64 {
 	return config.getIndexerConfig(strippedKey).Uint64()
 }
 
-// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes as logical
-// min(indexer.settings.memory_quota, indexer.cgroup.memory_quota).
+// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes.
+// percentage mem quota override the absolute memory_quota specified.
+// Value returned is the min(gsiMemQuota, indexer.cgroup.memory_quota).
 // The latter is from sigar memory_max and only included if cgroups are supported.
-func (config Config) GetIndexerMemoryQuota() uint64 {
+func (config Config) GetIndexerMemoryQuota(sysMemObj *SysMemWithErr) uint64 {
+	const _GetIndexerMemQuota = "Config::GetIndexerMemQuota:"
+
 	gsiMemQuota := config.getIndexerConfigUint64("settings.memory_quota")
+	percMemQuota := config.getIndexerConfigUint64("settings.percentage_memory_quota")
+
+	if sysMemObj != nil && percMemQuota > 0 {
+		if sysMemObj.Err != nil {
+			logging.Errorf("%v Err = %v.\nReverting to use Memory Quota value %v", _GetIndexerMemQuota, sysMemObj.Err, gsiMemQuota)
+		} else if sysMemObj.TotalSysMem > 0 {
+			gsiMemQuota = uint64(float64(percMemQuota) * (float64(sysMemObj.TotalSysMem) / 100))
+		}
+	}
+
 	cgroupMemQuota := config.getIndexerConfigUint64("cgroup.memory_quota")
 	if cgroupMemQuota > 0 && cgroupMemQuota < gsiMemQuota {
 		gsiMemQuota = cgroupMemQuota

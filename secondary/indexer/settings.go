@@ -520,7 +520,7 @@ func (s *settingsManager) setGlobalSettings(oldCfg, newCfg common.Config) {
 
 	// Set number of CPU cores to use to min(node, cgroup, GSI)
 	ncpu := common.SetNumCPUs(newCfg.GetIndexerNumCpuPrc())
-	memoryQuota := float64(newCfg.GetIndexerMemoryQuota())
+	memoryQuota := float64(newCfg.GetIndexerMemoryQuota(system.UpdateSysMemObject(_setGlobalSettings)))
 	logging.Infof(
 		"%v Indexer # CPU cores: %v, memory quota: %.0f bytes (%.3f KB, %.3f MB, %.3f GB)",
 		_setGlobalSettings, ncpu, memoryQuota, memoryQuota/1024, memoryQuota/(1024*1024),

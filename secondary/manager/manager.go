@@ -30,6 +30,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/system"
 	"github.com/couchbase/indexing/secondary/transport"
 )
 
@@ -1079,7 +1080,7 @@ func (m *IndexManager) stopMasterService() {
 //Calculate forestdb  buffer cache from memory quota
 func (m *IndexManager) calcBufCacheFromMemQuota(config common.Config) uint64 {
 
-	totalQuota := config.GetIndexerMemoryQuota()
+	totalQuota := config.GetIndexerMemoryQuota(system.UpdateSysMemObject("IndexManager.calcBufCacheFromMemQuota()"))
 
 	//calculate queue memory
 	fracQueueMem := config["mutation_manager.fdb.fracMutationQueueMem"].Float64()

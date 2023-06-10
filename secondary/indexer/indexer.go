@@ -41,6 +41,7 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/system"
 )
 
 type Indexer interface {
@@ -680,7 +681,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 func (idx *indexer) initFromConfig() {
 
 	// Read memquota setting
-	memQuota := int64(idx.config.GetIndexerMemoryQuota())
+	memQuota := int64(idx.config.GetIndexerMemoryQuota(system.UpdateSysMemObject("Indexer::initFromConfig")))
 	idx.stats.memoryQuota.Set(memQuota)
 	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
@@ -1581,10 +1582,12 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	idx.updateStorageMode(newConfig)
 
-	if newConfig["settings.memory_quota"].Uint64() !=
-		oldConfig["settings.memory_quota"].Uint64() {
+	if (newConfig["settings.memory_quota"].Uint64() !=
+		oldConfig["settings.memory_quota"].Uint64()) ||
+		(newConfig["settings.percentage_memory_quota"].Uint64() !=
+			oldConfig["settings.percentage_memory_quota"].Uint64()) {
 
-		memQuota := int64(newConfig.GetIndexerMemoryQuota())
+		memQuota := int64(newConfig.GetIndexerMemoryQuota(system.UpdateSysMemObject("Indexer::handleConfigUpdate")))
 		idx.stats.memoryQuota.Set(memQuota)
 		plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 
@@ -7276,7 +7279,7 @@ func (idx *indexer) bootstrap2() error {
 		}
 
 		//check if Paused state is required
-		memory_quota := idx.config.GetIndexerMemoryQuota()
+		memory_quota := idx.config.GetIndexerMemoryQuota(system.UpdateSysMemObject("Indexer::bootstrap"))
 		high_mem_mark := idx.config["high_mem_mark"].Float64()
 
 		//free memory after bootstrap before deciding to pause
@@ -9418,7 +9421,7 @@ func (idx *indexer) monitorMemUsage() {
 
 		if common.GetStorageMode() == common.MOI && pause_if_oom {
 
-			memory_quota := idx.config.GetIndexerMemoryQuota()
+			memory_quota := idx.config.GetIndexerMemoryQuota(system.UpdateSysMemObject("Indexer::monitorMemUsage"))
 			high_mem_mark := idx.config["high_mem_mark"].Float64()
 			low_mem_mark := idx.config["low_mem_mark"].Float64()
 			min_oom_mem := idx.config["min_oom_memory"].Uint64()
@@ -9688,7 +9691,7 @@ func (idx *indexer) updateMemstats() {
 func (idx *indexer) needsGCMoi() bool {
 
 	var memUsed uint64
-	memQuota := idx.config.GetIndexerMemoryQuota()
+	memQuota := idx.config.GetIndexerMemoryQuota(system.UpdateSysMemObject("Indexer::needsGCMoi"))
 
 	if idx.getIndexerState() == common.INDEXER_PAUSED {
 		memUsed, _, _ = idx.memoryUsed(true)
@@ -9714,7 +9717,7 @@ func (idx *indexer) needsGCMoi() bool {
 func (idx *indexer) needsGCFdb() bool {
 
 	var memUsed uint64
-	memQuota := idx.config.GetIndexerMemoryQuota()
+	memQuota := idx.config.GetIndexerMemoryQuota(nil)
 
 	//ignore till 1GB
 	ignoreThreshold := idx.config["min_oom_memory"].Uint64() * 4

@@ -219,3 +219,25 @@ func (h *SystemStats) GetControlGroupInfo() *SigarControlGroupInfo {
 		UsageUsec:     uint64(info.usage_usec),
 	}
 }
+
+func UpdateSysMemObject(caller string) *common.SysMemWithErr {
+
+	sM := common.GetSysMemWithErr()
+	// Retry updating the object when TotalSysMem retrieved is zero or error is present
+	if sM.TotalSysMem == 0 || sM.Err != nil {
+		sysStats, err := NewSystemStats()
+		if err != nil {
+			sM.Err = fmt.Errorf("%v Not able to initialise SystemStats, Err= %v", caller, err)
+		} else {
+			defer sysStats.Close()
+			totalSysMem, err := sysStats.SystemTotalMem()
+			if err != nil {
+				sM.Err = fmt.Errorf("%v Failed to get Total System Memory. Err= %v", caller, err)
+			} else {
+				sM.TotalSysMem = totalSysMem
+			}
+		}
+	}
+
+	return sM
+}
