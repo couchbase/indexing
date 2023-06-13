@@ -277,6 +277,13 @@ type IndexDefn struct {
 	InstStateAtRebal IndexState `json:"instStateAtRebal,omitempty"`
 
 	ShardIdsForDest []ShardId `json:"shardIdsForDest,omitempty"`
+
+	// The value of this field is decided by planner at the time
+	// of creating the index. The same value will be persisted in
+	// index meta. This will be a slice of size "2" where the 0th
+	// entry corresponds alternateShardId of main index and 1st
+	// entry corresponds to alternateShardId of back index
+	AlternateShardIds []string `json:"alternateShardIds,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)
@@ -304,26 +311,28 @@ type IndexInstMap map[IndexInstId]IndexInst
 type IndexInstList []IndexInst
 
 func (idx IndexDefn) String() string {
+	var str strings.Builder
 	secExprs, _, _ := GetUnexplodedExprs(idx.SecExprs, idx.Desc)
-	str := fmt.Sprintf("DefnId: %v ", idx.DefnId)
-	str += fmt.Sprintf("Name: %v ", idx.Name)
-	str += fmt.Sprintf("Using: %v ", idx.Using)
-	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
-	str += fmt.Sprintf("Scope/Id: %v/%v ", idx.Scope, idx.ScopeId)
-	str += fmt.Sprintf("Collection/Id: %v/%v ", idx.Collection, idx.CollectionId)
-	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
-	str += fmt.Sprintf("NumReplica: %v ", idx.GetNumReplica())
-	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
-	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
-	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
-	str += fmt.Sprintf("\n\t\tIndexMissingLeadingKey: %v", idx.IndexMissingLeadingKey)
-	str += fmt.Sprintf("\n\t\tIsPartnKeyDocId: %v", idx.IsPartnKeyDocId)
-	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
-	str += fmt.Sprintf("\n\t\tHashScheme: %v ", idx.HashScheme.String())
-	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
-	str += fmt.Sprintf("WhereExpr: %v ", logging.TagUD(idx.WhereExpr))
-	str += fmt.Sprintf("RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)
-	return str
+	fmt.Fprintf(&str, "DefnId: %v ", idx.DefnId)
+	fmt.Fprintf(&str, "Name: %v ", idx.Name)
+	fmt.Fprintf(&str, "Using: %v ", idx.Using)
+	fmt.Fprintf(&str, "Bucket: %v ", idx.Bucket)
+	fmt.Fprintf(&str, "Scope/Id: %v/%v ", idx.Scope, idx.ScopeId)
+	fmt.Fprintf(&str, "Collection/Id: %v/%v ", idx.Collection, idx.CollectionId)
+	fmt.Fprintf(&str, "IsPrimary: %v ", idx.IsPrimary)
+	fmt.Fprintf(&str, "NumReplica: %v ", idx.GetNumReplica())
+	fmt.Fprintf(&str, "InstVersion: %v ", idx.InstVersion)
+	fmt.Fprintf(&str, "\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
+	fmt.Fprintf(&str, "\n\t\tDesc: %v", idx.Desc)
+	fmt.Fprintf(&str, "\n\t\tIndexMissingLeadingKey: %v", idx.IndexMissingLeadingKey)
+	fmt.Fprintf(&str, "\n\t\tIsPartnKeyDocId: %v", idx.IsPartnKeyDocId)
+	fmt.Fprintf(&str, "\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
+	fmt.Fprintf(&str, "\n\t\tHashScheme: %v ", idx.HashScheme.String())
+	fmt.Fprintf(&str, "PartitionKeys: %v ", idx.PartitionKeys)
+	fmt.Fprintf(&str, "WhereExpr: %v ", logging.TagUD(idx.WhereExpr))
+	fmt.Fprintf(&str, "RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)
+	fmt.Fprintf(&str, "\n\t\tAlternateShardIds: %v ", idx.AlternateShardIds)
+	return str.String()
 
 }
 
@@ -363,6 +372,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		HasArrItemsCount:       idx.HasArrItemsCount,
 		IndexMissingLeadingKey: idx.IndexMissingLeadingKey,
 		IsPartnKeyDocId:        idx.IsPartnKeyDocId,
+		AlternateShardIds:      idx.AlternateShardIds,
 	}
 }
 
