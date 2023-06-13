@@ -511,7 +511,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// indexer is now ready to take security change
 	close(idx.enableSecurityChange)
 
-	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
+	logging.Infof("Indexer::indexer version %v with priority %v", common.INDEXER_CUR_VERSION, common.INDEXER_PRIORITY)
 	idx.genIndexerId()
 
 	// we need to initialize metering manager after the genIndexerId as we need to get indexerId.
@@ -552,9 +552,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	// Construct nodeInfo, which never changes in the future
+	priority := common.INDEXER_PRIORITY.GetVersion()
+	if priority == 0 {
+		priority = common.INDEXER_CUR_VERSION * 1000_000
+		logging.Infof("Indexer::NewIndexer unable to get priority for Server %v, setting it to %v", common.INDEXER_PRIORITY, priority)
+	}
 	idx.nodeInfo = &service.NodeInfo{
 		NodeID:   service.NodeID(idx.config["nodeuuid"].String()),
-		Priority: service.Priority(common.INDEXER_CUR_VERSION),
+		Priority: service.Priority(priority),
 	}
 
 	// Start Generic Service Manager, which creates Pause and Rebalance Managers it delegates to
