@@ -83,6 +83,16 @@ type LifecycleMgr struct {
 	droppedInstsInAsyncRecovery map[common.IndexInstId]bool
 
 	rebalMutex sync.RWMutex
+
+	// Maintains a mapping between alternateShardId and actual shard UUID
+	// As per the design, there should be a 1-1 mapping between alternate
+	// ShardId and shard UUID
+	alternateShardMappings map[string]common.ShardId
+
+	// Maintains a mapping between actual shardUUID and alternateShardId
+	// As per the design, there should be a 1-1 mapping between alternate
+	// ShardId and shard UUID
+	shardMappings map[common.ShardId]string
 }
 
 type requestHolder struct {
@@ -212,6 +222,9 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 
 		instsInAsyncRecovery:        make(map[common.IndexInstId]bool),
 		droppedInstsInAsyncRecovery: make(map[common.IndexInstId]bool),
+
+		alternateShardMappings: make(map[string]common.ShardId),
+		shardMappings:          make(map[common.ShardId]string),
 	}
 
 	mgr.configHolder.Store(config)
@@ -1646,6 +1659,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
 		return nil
 	}
+
+	m.assertShardMappings(defn.AlternateShardIds, partnShardIdMap, instId)
+
 	/////////////////////////////////////////////////////
 	// Update Index State
 	/////////////////////////////////////////////////////
@@ -2575,6 +2591,8 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	state := inst.State
 	scheduled := inst.Scheduled
 
+	m.assertShardMappings(defn.AlternateShardIds, change.ShardIdMap, defn.InstId)
+
 	// update the index instance
 	if err := m.UpdateIndexInstance(change.Bucket, change.Scope, change.Collection,
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
@@ -3428,6 +3446,8 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	if reqCtx.ReqSource == common.DDLRequestSourceShardRebalance {
 		return nil
 	}
+
+	m.assertShardMappings(defn.AlternateShardIds, partnShardIdMap, instId)
 
 	/////////////////////////////////////////////////////
 	// Update Index State
@@ -4628,6 +4648,53 @@ func (m *LifecycleMgr) canProcessDDL(bucket string) bool {
 		return false
 	}
 	return true
+}
+
+func (m *LifecycleMgr) assertShardMappings(alternateShardIds map[common.PartitionId][]string, shardIdMap common.PartnShardIdMap, instId common.IndexInstId) {
+
+	for partnId, shardIds := range shardIdMap {
+		alternateIds, ok := alternateShardIds[partnId]
+		if !ok {
+			// Partition is created without alternate shardIds. Skip the assertion
+			continue
+		}
+
+		if len(alternateIds) != len(shardIds) || len(alternateIds) > 2 || len(shardIds) > 2 {
+			logging.Fatalf("LifecycleMgr::assertShardMappings Mismatch in number of alternate shardIds and shardUUIDs, "+
+				"alternateShardIds: %v, shardIds: %v, partn: %v, instId: %v", alternateIds, shardIds, partnId, instId)
+			continue
+		}
+
+		// Check if this alternate shardId already has a mapping from earlier index creations
+		for i, alternateId := range alternateIds {
+			shardIdExpected, ok := m.alternateShardMappings[alternateId]
+			if !ok {
+				m.alternateShardMappings[alternateId] = shardIds[i]
+				continue
+			}
+
+			if shardIdExpected != shardIds[i] {
+				logging.Fatalf("LifecycleMgr::assertShardMappings Mismatch in shard mapping. Expected shard mapping: %v for alternateId: %v. "+
+					"New mapping is created with shardId: %v, partn: %v, instId: %v", shardIdExpected, alternateId, shardIds[i], partnId, instId)
+				continue
+			}
+		}
+
+		for i, shardId := range shardIds {
+			alternateIdExpected, ok := m.shardMappings[shardId]
+			if !ok {
+				m.shardMappings[shardId] = alternateIds[i]
+				continue
+			}
+
+			if alternateIdExpected != alternateIds[i] {
+				logging.Fatalf("LifecycleMgr::assertShardMappings Mismatch in alternateId mapping. Expected alternateId mapping: %v for shard: %v. "+
+					"New mapping is created with alternateId: %v, partn: %v, instId: %v", alternateIdExpected, shardId, alternateIds[i], partnId, instId)
+				continue
+			}
+		}
+
+	}
 }
 
 //////////////////////////////////////////////////////////////
