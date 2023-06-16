@@ -9950,9 +9950,10 @@ func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,
 func (idx *indexer) updateError(instId common.IndexInstId,
 	errStr string) {
 
-	idxInst := idx.indexInstMap[instId]
-	idxInst.Error = errStr
-	idx.indexInstMap[instId] = idxInst
+	if idxInst, ok := idx.indexInstMap[instId]; ok {
+		idxInst.Error = errStr
+		idx.indexInstMap[instId] = idxInst
+	}
 
 }
 
