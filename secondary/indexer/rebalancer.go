@@ -2593,6 +2593,13 @@ loop:
 					logging.Infof("%v Index: %v:%v:%v:%v BuildDone", _waitForIndexBuildBatch, defn.Bucket,
 						defn.Scope, defn.Collection, defn.Name)
 					tokenBuildDone[ttid] = true
+					//Indicate that this token is ready for switch to rstate active
+					//This flag is used during recovery. If this flag is set to true,
+					//the index can be moved to rstate=ACTIVE on destination.
+					//Otherwise, the index will be cleaned up on the destination and
+					//retained on the source node.
+					tt.IsPendingReady = true
+					setTransferTokenInMetakv(ttid, tt)
 				}
 			}
 

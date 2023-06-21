@@ -1304,8 +1304,27 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 	switch tt.State {
 
 	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
-		c.TransferTokenInitiate, c.TransferTokenInProgress:
+		c.TransferTokenInitiate:
 		return cleanup()
+
+	case c.TransferTokenInProgress:
+		//IsPendingReady indicates that this token is part of empty node batch,
+		//index has moved to Active state and is eligible to be moved to rstate active.
+		//Try to proceed with rstate change (partition index needs merging as well).
+		//On success, move the token to TransferTokenReady/TransferTokenCommit.
+		//In case of any failure, cleanup the index.
+		if tt.IsEmptyNodeBatch && tt.IsPendingReady {
+
+			logging.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Found empty node batch token" +
+				" with IsPendingReady as true. Attempt to move to TransferTokenReady/TransferTokenCommit.")
+			err := m.destTokenToMergeOrReady(ttid, tt)
+			if err != nil {
+				return cleanup()
+			}
+
+		} else {
+			return cleanup()
+		}
 
 	case c.TransferTokenMerge:
 		// the proxy instance could have been deleted after it has gone to MERGED state
@@ -1793,6 +1812,68 @@ func (m *RebalanceServiceManager) cleanupLocalRToken() error {
 	}
 
 	m.rebalanceToken = nil
+	return nil
+}
+
+// destTokenToMergeOrReady handles dest TT transitions from TransferTokenInProgress,
+// possibly through TransferTokenMerge, and then to TransferTokenReady (move
+// case) or TransferTokenCommit (non-move case == replica repair; no source
+// index to delete). TransferTokenMerge state is for partitioned indexes where
+// a partn is being moved to a node that already has another partn of the same
+// index. There cannot be two IndexDefns of the same index, so in this situation
+// the moving partition (called a "proxy") gets a "fake" IndexDefn that later
+// must "merge" with the "real" IndexDefn once it has completed its move.
+func (m *RebalanceServiceManager) destTokenToMergeOrReady(ttid string, tt *c.TransferToken) error {
+
+	// There is no proxy (no merge needed)
+	if tt.RealInstId == 0 {
+
+		respch := make(chan error)
+		m.supvMsgch <- &MsgUpdateIndexRState{
+			instId: tt.InstId,
+			rstate: c.REBAL_ACTIVE,
+			respch: respch}
+		err := <-respch
+		if err != nil {
+			//cleanup the index
+			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
+			return err
+		}
+
+		if tt.TransferMode == c.TokenTransferModeMove {
+			tt.State = c.TransferTokenReady
+		} else {
+			tt.State = c.TransferTokenCommit // no source to delete in non-move case
+		}
+		setTransferTokenInMetakv(ttid, tt)
+	} else {
+		// There is a proxy (merge needed). The proxy partitions need to be move
+		// to the real index instance before Token can move to Ready state.
+		tt.State = c.TransferTokenMerge
+		setTransferTokenInMetakv(ttid, tt)
+
+		respch := make(chan error)
+		m.supvMsgch <- &MsgMergePartition{
+			srcInstId:  tt.InstId,
+			tgtInstId:  tt.RealInstId,
+			rebalState: c.REBAL_ACTIVE,
+			respCh:     respch}
+
+		err := <-respch
+		if err != nil {
+			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
+			return err
+		}
+
+		// There is no error from merging index instance. Update token in metakv.
+		if tt.TransferMode == c.TokenTransferModeMove {
+			tt.State = c.TransferTokenReady
+		} else {
+			tt.State = c.TransferTokenCommit // no source to delete in non-move case
+		}
+		setTransferTokenInMetakv(ttid, tt)
+	}
+
 	return nil
 }
 
