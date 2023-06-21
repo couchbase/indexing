@@ -131,6 +131,10 @@ type TransferToken struct {
 
 	IsEmptyNodeBatch bool //indicates the token is part of batch for empty node
 
+	//indicates the token is pending ready as the full batch is not complete.
+	//used only for empty node batching.
+	IsPendingReady bool
+
 	//used for logging
 	SourceHost string
 	DestHost   string
