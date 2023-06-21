@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,10 +23,8 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
-//
 // Indexing tools setting.
 // Caution: These functions need to be used only for indexing tools & not couchbase-server processes.
-//
 type ToolsConfig struct {
 	user               string
 	passwd             string
@@ -83,6 +82,16 @@ func MakeClientTools() (*http.Client, error) {
 	client = &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tlsConfig,
+			Proxy:           http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+				DualStack: true,
+			}).DialContext,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   60 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		},
 	}
 	return client, err
