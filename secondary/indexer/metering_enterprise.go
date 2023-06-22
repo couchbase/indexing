@@ -46,13 +46,18 @@ const (
 	IndexWriteBuildVariant  = UnitType(variants.IndexWriteBuildVariant)
 	IndexWriteUpdateVariant = UnitType(variants.IndexWriteUpdateVariant)
 	IndexWriteInsertVariant = UnitType(variants.IndexWriteUpdateInsertOnlyVariant)
-	IndexWriteDeleteVariant = UnitType(variants.IndexWriteUpdateInsertOnlyVariant)
 
-	// Using the costlier variant out of Update, Insert for Array indexes
-	IndexWriteArrayVariant = UnitType(variants.IndexWriteUpdateVariant)
+	// Deletes are not normalized with numInserts while tenant management
+	IndexWriteDeleteVariant = UnitType(variants.IndexWriteUpdateVariant)
 )
 
-type AggregateRecorder regulator.AggregateRecorder
+type AggregateRecorder struct {
+	regulator.AggregateRecorder
+
+	bytesToMeter uint64
+	sumOfOps     uint64
+	variantRatio map[UnitType]uint64
+}
 
 type AggregateRecorderWithCtx struct {
 	regulator.AggregateRecorder
@@ -545,18 +550,90 @@ func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 	return m.handler.WriteStats(w)
 }
 
+// AddBytesOfVarType records numbers of bytes of given variant type. Given variant
+// must be a sub type of variant given when creating the aggregator. If the initial
+// aggregator was of write variant you cannot record read variant in it.
+func (ag *AggregateRecorder) AddBytesOfVarType(bytes uint64, variant UnitType) {
+	ag.AddVariantBytes(bytes, regulator.UnitType(variant))
+	logging.Tracef("AggregateRecorder::AddBytesOfVarType adding %v bytes of %s variant",
+		bytes, regulator.UnitType(variant))
+}
+
+// SetVarRatio sets the variant ratio to divide the bytes recorded by function
+// AddBytesInVarRatio to variants in given ratio. Say if you want to record 100
+// bytes in update:insert ratio of 2:1 you can set the variant ratio here
+// as {[UPDATE]->2, [INSERT]->2}. Should trigger FinishAddsInVarRatio at the end
+// to record the last remaining number of bytes. All variants should of the same
+// base types as that of the recorder.
+func (ag *AggregateRecorder) SetVarRatio(variantRatio map[UnitType]uint64) {
+	ag.variantRatio = variantRatio
+	ag.sumOfOps = 0
+	for _, r := range variantRatio {
+		ag.sumOfOps += r
+	}
+	logging.Tracef("AggregateRecorder::SetVarRatio varRatioMap: %v sumOfOps: %v",
+		ag.variantRatio, ag.sumOfOps)
+}
+
+// AddBytesInVarRatio records the bytes and divides them in the ratio set using
+// SetVarRatio. Say you are recording 92 bytes and ratio set is 2:1 here we record
+// 60 bytes to update variant and 30 bytes to insert variant. Remaining 2 bytes
+// will be adjusted in FinishAddsInVarRatio.
+func (ag *AggregateRecorder) AddBytesInVarRatio(bytesToMeter uint64) {
+	if ag.variantRatio == nil || bytesToMeter == 0 {
+		return
+	}
+
+	ag.bytesToMeter += bytesToMeter
+	if ag.bytesToMeter < ag.sumOfOps {
+		return
+	}
+
+	m := ag.bytesToMeter / ag.sumOfOps
+	logging.Tracef("AggregateRecorder::AddBytesInVarRatio distributing %v bytes with given varRatio and a multiple of %v",
+		ag.bytesToMeter, m)
+	for varType, contrib := range ag.variantRatio {
+		numVarBytes := m * contrib
+		ag.AddBytesOfVarType(numVarBytes, varType)
+	}
+	ag.bytesToMeter = ag.bytesToMeter % ag.sumOfOps
+	logging.Tracef("AggregateRecorder::AddBytesInVarRatio add %v bytes after recording remaining %v",
+		bytesToMeter, ag.bytesToMeter)
+}
+
+// FinishAddsInVarRatio records the remainder bytes in the ratio set by SetVarRatio
+func (ag *AggregateRecorder) FinishAddsInVarRatio() {
+	if ag.variantRatio == nil || ag.bytesToMeter == 0 {
+		return
+	}
+
+	i := 0
+	remaining := ag.bytesToMeter
+	for varType, contrib := range ag.variantRatio {
+		if i == len(ag.variantRatio)-1 {
+			ag.AddBytesOfVarType(remaining, varType)
+			break
+		}
+		numVarBytes := (ag.bytesToMeter * contrib) / ag.sumOfOps
+		ag.AddBytesOfVarType(numVarBytes, varType)
+		remaining -= numVarBytes
+		i++
+	}
+
+}
+
 func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
 	return agc.ctx
 }
 
-func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable bool,
-	writeVariant UnitType) AggregateRecorder {
+func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable bool) *AggregateRecorder {
 	ctx := getNoUserCtx(bucketName)
 	options := &regulator.AggregationOptions{
 		Unbilled:         !billable,
 		DeferredMetering: true,
 	}
-	return regulator.StartAggregateRecorder(ctx, regulator.Index, regulator.UnitType(writeVariant), options)
+	ag := regulator.StartAggregateRecorder(ctx, regulator.Index, regulator.Write, options)
+	return &AggregateRecorder{ag, 0, 0, nil}
 }
 
 func (m *MeteringThrottlingMgr) StartReadAggregateRecorder(bucketName, user string,

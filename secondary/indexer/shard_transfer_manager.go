@@ -28,6 +28,8 @@ type ShardTransferManager struct {
 	lockedShards map[common.ShardId]bool
 	mu           sync.Mutex
 
+	maxDiskBW int
+
 	sliceList          []Slice
 	sliceCloseNotifier map[common.ShardId]MsgChannel
 }
@@ -77,6 +79,17 @@ func (stm *ShardTransferManager) ProcessCommand(cmd Message) {
 func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
+
+	case CONFIG_SETTINGS_UPDATE:
+		cfgUpdate := cmd.(*MsgConfigUpdate)
+		if val, ok := cfgUpdate.cfg["rebalance.serverless.maxDiskBW"]; ok {
+			newDiskBw := val.Int() * 1024 * 1024 // Convert to bytes/sec as plasma expects in bytes/sec
+			if newDiskBw != stm.maxDiskBW {
+				logging.Infof("ShardTransferManager::ConfigUpdate - Updating maxDiskBw to %v, prev value: %v", newDiskBw, stm.maxDiskBW)
+				stm.maxDiskBW = newDiskBw
+				plasma.SetOpRateLimit(plasma.GSIRebalanceId, int64(stm.maxDiskBW))
+			}
+		}
 
 	case START_SHARD_TRANSFER:
 		go stm.processShardTransferMessage(cmd)

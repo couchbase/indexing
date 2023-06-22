@@ -131,6 +131,8 @@ const INDEXER_71_VERSION = 6
 const INDEXER_72_VERSION = 7
 const INDEXER_CUR_VERSION = INDEXER_72_VERSION
 
+const INDEXER_PRIORITY = ServerPriority("7.6.0")
+
 // ##### IMPORTANT ##### When updating the above, also update util.go func GetVersion.
 
 const DEFAULT_POOL = "default"

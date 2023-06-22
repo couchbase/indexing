@@ -171,10 +171,8 @@ func TestBuildDeferredIndexesAfterRebalance(t *testing.T) {
 	index := indexes[1]
 	for _, bucket := range buckets {
 		for _, collection := range collections {
-			err := secondaryindex.BuildIndexes2([]string{index}, bucket, scope, collection, indexManagementAddress, defaultIndexActiveTimeout)
-			if err != nil {
-				t.Fatalf("Error observed while building indexes: %v", index)
-			}
+			n1qlStatement := fmt.Sprintf("build index on `%v`.`%v`.`%v`(%v)", bucket, scope, collection, index)
+			execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, "Ready", t)
 		}
 	}
 

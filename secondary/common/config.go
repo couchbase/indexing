@@ -279,17 +279,17 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dcp.useMutationQueue": ConfigValue{
-		false,
+		true,
 		"Use atomic mutation queue at dcp_feed.go instead of golang channels",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"projector.dcp.serverless.useMutationQueue": ConfigValue{
-		false,
+		true,
 		"Use atomic mutation queue at dcp_feed.go instead of golang channels " +
 			"for serverless deployments",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -3128,6 +3128,14 @@ var SystemConfig = Config{
 		5000, // 5000 ms
 		"Duration after which the the list of transfer tokens are refetched from metaKV",
 		5000,  // 5000ms
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.serverless.maxDiskBW": ConfigValue{
+		200, // 200 MB/s
+		"Maximum disk bandwidth to use in MB/sec for rebalance operation. " +
+			"Setting to '0' will enable rebalance to use complete disk bandwidth",
+		200,   // 200 MB/s
 		false, // mutable
 		false, // case-insensitive
 	},

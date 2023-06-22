@@ -94,12 +94,27 @@ func (m *MeteringThrottlingMgr) WriteMetrics(w http.ResponseWriter) int {
 	panic("MeteringManager::WriteMetrics Not implemented for Community Edition")
 }
 
+func (ag *AggregateRecorder) AddBytesOfVarType(bytes uint64, variant UnitType) {
+	panic("MeteringManager::AddBytesOfVarType Not implemented for Community Edition")
+}
+
+func (ag *AggregateRecorder) SetVarRatio(variantRatio map[UnitType]uint64) {
+	panic("MeteringManager::SetVarRatio Not implemented for Community Edition")
+}
+
+func (ag *AggregateRecorder) AddBytesInVarRatio(bytesToMeter uint64) {
+	panic("MeteringManager::AddBytesInVarRatio Not implemented for Community Edition")
+}
+
+func (ag *AggregateRecorder) FinishAddsInVarRatio() {
+	panic("MeteringManager::FinishAddsInVarRatio Not implemented for Community Edition")
+}
+
 func (agc *AggregateRecorderWithCtx) GetContext() *regulator.Ctx {
 	return nil
 }
 
-func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable,
-	writeVariant UnitType) AggregateRecorder {
+func (m *MeteringThrottlingMgr) StartWriteAggregateRecorder(bucketName string, billable bool) AggregateRecorder {
 	panic("MeteringManager::StartWriteAggregateRecorder Not implemented for Community Edition")
 	return AggregateRecorder{}
 }
