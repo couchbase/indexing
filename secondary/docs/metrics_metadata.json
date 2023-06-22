@@ -22,13 +22,13 @@
         "notes": "This metric represents the latency observed by the index service, and not by user application. For consistent scans, latency includes request's wait time until a consistent snapshot is available."
     },
     "index_cache_hits": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of times the required index page is found in memory, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "This metric is valid only for standard GSI indexes."
     },
     "index_cache_misses": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of times the required index page is NOT found in memory, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "This metric is valid only for standard GSI indexes."
@@ -82,7 +82,7 @@
         "labels": ["bucket", "scope", "collection", "index"]
     },
     "index_num_docs_indexed": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of document updates (of type insert, modify, delete) observed by this index",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "This is an ever increasing counter, incremented on each insert/delete/modify. Resets to zero on indexer process restart."
@@ -102,20 +102,20 @@
         "notes": "This metric includes the user triggered update, internal metadata updates, transaction updates etc."
     },
     "index_num_requests": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of scan requests received by the index service, for this index",
         "uiName": "Index Request Rate",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "One n1ql query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)"
     },
     "index_num_rows_returned": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of rows/index entries returned as the scan result during index scans, for this index",
         "labels": ["bucket", "scope", "collection", "index"],
         "notes": "As index service supports filters, limits and aggregations, index service may return only a subset of rows/entries that are being scanned."
     },
     "index_num_rows_scanned": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of rows/index entries read during the index scans, for this index",
         "uiName": "Index Scan Items",
         "labels": ["bucket", "scope", "collection", "index"],
@@ -148,7 +148,7 @@
         "notes": "Valid only for standard GSI indexes."
     },
     "index_scan_bytes_read": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Number of bytes read from the index storage during index scans, for this index",
         "uiName": "Index Scan Bytes",
         "unit": "bytes",
@@ -166,52 +166,44 @@
         "type": "gauge",
         "help": "Total memory used by the indexer process",
         "uiName": "RAM Used",
-        "unit": "bytes",
-        "labels": "N/A"
+        "unit": "bytes"
     },
     "index_memory_quota": {
         "type": "gauge",
         "help": "Configured memory quota for the index service nodes",
         "uiName": "Index Service RAM Quota",
-        "unit": "bytes",
-        "labels": "N/A"
+        "unit": "bytes"
     },
     "index_num_indexes": {
         "type": "gauge",
         "help": "Total number of indexes, located on this node",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_num_storage_instances": {
         "type": "gauge",
         "help": "Total number of storage instances, located on this node",
-        "labels": "N/A",
         "notes": "For partitioned indexes with replicas, for an index, more than one instance can reside on a single node.",
         "added": "7.2.0"
     },
     "index_avg_resident_percent": {
         "type": "gauge",
         "help": "Average resident percent across all indexes, located on this node",
-        "labels": "N/A",
         "notes": "Valid only for standard GSI indexes.",
         "added": "7.2.0"
     },
     "index_avg_mutation_rate": {
         "type": "gauge",
         "help": "Sum of mutation rates of all indexes, located on this node",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_total_drain_rate": {
         "type": "gauge",
         "help": "Sum of drain rate of all indexes, located on this node",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_avg_disk_bps": {
         "type": "gauge",
         "help": "Sum of disk bytes written per second, of all indexes, located on this node",
-        "labels": "N/A",
         "notes": "Valid only for standard GSI indexes.",
         "added": "7.2.0"
     },
@@ -219,54 +211,46 @@
         "type": "gauge",
         "help": "Sum of data size of all indexes, located on this node",
         "unit": "bytes",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_total_disk_size": {
         "type": "gauge",
         "help": "Sum of disk size of all indexes, located on this node",
         "unit": "bytes",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_memory_used_storage": {
         "type": "gauge",
         "help": "Amount of memory used by underlying index storage, on this node",
         "unit": "bytes",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_memory_total_storage": {
         "type": "gauge",
         "help": "Amount of memory used by the index memory allocator, on this node",
         "unit": "bytes",
-        "labels": "N/A",
         "added": "7.2.0",
         "notes": "Index services uses a memory allocator named jemalloc. This metric reports the in-use memory by this allocator."
     },
     "index_total_requests": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Sum of number of requests received by all indexes, located on this node",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_total_rows_returned": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Sum of number of rows returned during index scan across all indexes, located on this node",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_total_rows_scanned": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Sum of number of rows scanned during index scans across all indexes, located on this node",
-        "labels": "N/A",
         "added": "7.2.0"
     },
     "index_memory_rss": {
         "type": "gauge",
         "help": "Resident set size of the indexer process, running on this node",
         "unit": "bytes",
-        "labels": "N/A",
         "added": "7.2.0"
     }
 }
