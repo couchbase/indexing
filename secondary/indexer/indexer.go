@@ -475,6 +475,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// indexer is now ready to take security change
 	close(idx.enableSecurityChange)
 
+	logging.Infof("Indexer::NewIndexer version %v with priority %v", common.INDEXER_CUR_VERSION, common.INDEXER_PRIORITY)
+
 	//bootstrap phase 1
 	idx.bootstrap1(snapshotNotifych, snapshotReqCh)
 
@@ -6942,7 +6944,6 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 
 func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotReqCh []MsgChannel) error {
 
-	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
 
 	idx.recoverRebalanceState()

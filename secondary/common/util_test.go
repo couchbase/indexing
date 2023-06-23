@@ -1,12 +1,14 @@
 package common
 
-import "testing"
-import "os"
-import "reflect"
-import "strings"
-import "path/filepath"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
 
 var _ = fmt.Sprintf("dummy")
 
@@ -279,6 +281,31 @@ func TestCopyDir(t *testing.T) {
 		t.Fatal(err)
 	} else if ref := "third world"; string(data) != ref {
 		t.Fatalf("expected %v, got %v", ref, string(data))
+	}
+}
+
+func TestServerVersion(t *testing.T) {
+	verMismatchStr := "expected version %v, but got %v"
+
+	for _, tcase := range []struct {
+		v int
+		s ServerPriority
+	}{
+		{v: 7020100, s: ServerPriority("7.2.1")},
+		{v: 7200100, s: ServerPriority("7.20.1")},
+		{v: 7020101, s: ServerPriority("7.2.1-mp1")},
+		{v: 8020000, s: ServerPriority("8.2")},
+		{v: 10000000, s: ServerPriority("10")},
+		{v: 7000001, s: ServerPriority("7-mp1")},
+		{v: 7020000, s: ServerPriority("7.2.100")},
+		{v: 7020100, s: ServerPriority("7.2.1-mp100")},
+		{v: 0, s: ServerPriority("")},
+		{v: 0, s: ServerPriority("7.0.0-mp")},
+		{v: 0, s: ServerPriority("7.0.")},
+	} {
+		if tcase.v != int(tcase.s.GetVersion()) {
+			t.Fatalf(verMismatchStr, tcase.v, tcase.s.GetVersion())
+		}
 	}
 }
 

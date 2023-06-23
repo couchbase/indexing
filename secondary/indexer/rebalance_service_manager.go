@@ -173,9 +173,16 @@ func NewRebalanceServiceManager(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
 
+	priority := c.INDEXER_PRIORITY.GetVersion()
+	if priority == 0 {
+		priority = common.INDEXER_CUR_VERSION * 1000_000
+		logging.Infof("RebalanceServiceManager::NewRebalanceServiceManager: unable to get priority for Server %v, setting it to %v",
+			common.INDEXER_PRIORITY, priority)
+
+	}
 	mgr.nodeInfo = &service.NodeInfo{
 		NodeID:   service.NodeID(config["nodeuuid"].String()),
-		Priority: service.Priority(c.INDEXER_CUR_VERSION),
+		Priority: service.Priority(priority),
 	}
 
 	mgr.rebalanceRunning = rebalanceRunning
