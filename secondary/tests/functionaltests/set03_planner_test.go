@@ -55,6 +55,19 @@ type rebalanceTestCase struct {
 	cpuScore       float64
 }
 
+type heterogenousRebalTestCase struct {
+	comment                   string
+	memQuotaFactor            float64
+	cpuQuotaFactor            float64
+	plan                      string
+	shuffle                   int
+	addNode                   int
+	deleteNode                int
+	checkMovement             bool
+	keepNodesByNodeID         []string
+	excludeValueOnDeleteNodes string
+}
+
 type excludeInTestCase struct {
 	comment        string
 	memQuotaFactor float64
@@ -131,6 +144,10 @@ var rebalanceTestCases = []rebalanceTestCase{
 	{"rebalance - 8 identical index, delete 2, 2x", 2, 2, "../testdata/planner/plan/identical-8-1.json", 0, 0, 2, 0, 0},
 	{"rebalance - drop replcia - 3 replica, 3 zone, delete 1, 2x", 2, 2, "../testdata/planner/plan/replica-3-zone.json", 0, 0, 1, 0, 0},
 	{"rebalance - rebuid replica - 3 replica, 3 zone, add 1, delete 1, 1x", 1, 1, "../testdata/planner/plan/replica-3-zone.json", 0, 1, 1, 0, 0},
+}
+
+var heterogenousRebalTestCases = []heterogenousRebalTestCase{
+	{"heterogenous rebalance - keep vertically scaled Node, swap 1, 1x", 1, 1, "../testdata/planner/plan/heterogenous-small-6-2.json", 0, 1, 1, true, []string{"2596996162"}, "in"},
 }
 
 var excludeInTestCases = []excludeInTestCase{
@@ -377,6 +394,7 @@ func TestPlanner(t *testing.T) {
 	minMemoryTest(t)
 	iterationTest(t)
 	excludeInTest(t)
+	heterogenousRebalanceTest(t)
 }
 
 func TestGreedyPlanner(t *testing.T) {
@@ -499,7 +517,7 @@ func rebalanceTest(t *testing.T) {
 		plan, err := planner.ReadPlan(testcase.plan)
 		FailTestIfError(err, "Fail to read plan", t)
 
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
@@ -542,7 +560,89 @@ func excludeInTest(t *testing.T) {
 		plan, err := planner.ReadPlan(testcase.plan)
 		FailTestIfError(err, "Fail to read plan", t)
 
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
+		FailTestIfError(err, "Error in planner test", t)
+
+		solution := p.GetResult()
+
+		// Check there is no index movement
+		if testcase.checkMovement {
+			for _, indexer1 := range solution.Placement { // indexers after rebalance
+				for _, indexer2 := range plan.Placement { // indexers before rebalance
+					if indexer1.NodeId == indexer2.NodeId {
+						for _, index1 := range indexer1.Indexes { // check each index in indexer after rebalance
+							found := false
+							for _, index2 := range indexer2.Indexes {
+								if index1.DefnId == index2.DefnId &&
+									index1.InstId == index2.InstId &&
+									index1.PartnId == index2.PartnId { // no new index added
+									found = true
+									break
+								}
+							}
+
+							if !found {
+								t.Fatalf("new index (%v,%v,%v) found in node %v after rebalance",
+									index1.DefnId, index1.InstId, index1.PartnId, indexer1.NodeId)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// check number of indexes are the same after rebalancing
+		count1 := 0
+		for _, indexer := range solution.Placement {
+			count1 += len(indexer.Indexes)
+		}
+
+		count2 := 0
+		for _, indexer := range plan.Placement {
+			count2 += len(indexer.Indexes)
+		}
+
+		if count1 != count2 {
+			t.Fatalf("number of indexes are different before (%v) and after (%v) rebalance",
+				count2, count1)
+		}
+
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+
+//
+// This test planner to rebalance indexer nodes in a heterogenous configuration:
+// 1) Some nodes are vertically scaled up and its actual memory consumption will be much higher
+// 2) swap-only rebalance is performed by removing 1 old node and adding 1 new. Memory violations are ommitted
+//
+// NOTE: Omitting the memScore and cpuScore in these tests, as reaching a valid solution is important,
+// where no movement except for index movement from outNode to addNode happens.
+// The scores migh not be optimal due to the vertically scaled nodes.
+//
+func heterogenousRebalanceTest(t *testing.T) {
+
+	for _, testcase := range heterogenousRebalTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.MemQuotaFactor = testcase.memQuotaFactor
+		config.CpuQuotaFactor = testcase.cpuQuotaFactor
+		config.Shuffle = testcase.shuffle
+		config.AddNode = testcase.addNode
+		config.DeleteNode = testcase.deleteNode
+		config.Resize = false
+
+		s := planner.NewSimulator()
+
+		plan, err := planner.ReadPlan(testcase.plan)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, testcase.keepNodesByNodeID, testcase.excludeValueOnDeleteNodes)
 		FailTestIfError(err, "Error in planner test", t)
 
 		solution := p.GetResult()
@@ -620,7 +720,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if the indexers have equal number of indexes
@@ -642,7 +742,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if index violates memory constraint
@@ -673,7 +773,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if the indexers have equal number of indexes
@@ -694,7 +794,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check the total number of indexes
@@ -718,7 +818,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check the total number of indexes
@@ -746,7 +846,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		if count1 != len(p.GetResult().Placement[0].Indexes) {
@@ -777,7 +877,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 
 		if len(p.GetResult().Placement) != 1 {
@@ -859,7 +959,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		_, _, err = s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
+		_, _, err = s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
 		FailTestIfError(err, "Error in planner test", t)
 	}()
 
@@ -995,7 +1095,7 @@ func iterationTest(t *testing.T) {
 		config1.Threshold = testcase.threshold
 
 		s1 := planner.NewSimulator()
-		p1, _, err := s1.RunSingleTestRebal(config1, planner.CommandRebalance, nil, newPlan, nil)
+		p1, _, err := s1.RunSingleTestRebal(config1, planner.CommandRebalance, nil, newPlan, nil, nil, "")
 
 		// p1.Print()
 

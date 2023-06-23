@@ -353,6 +353,10 @@ type Solution struct {
 
 	// constraint check
 	enforceConstraint bool
+
+	// flag for ignoring constraint check during heterogenous swap
+	// rebalance while upgrading
+	swapOnlyRebalance bool
 }
 
 type Violations struct {
@@ -1295,6 +1299,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	s.numNewNode = s.findNumEmptyNodes()
 	s.markNewNodes()
 	s.initializeServerGroupMap()
+	s.markSwapOnlyRebalance()
 
 	// if there is deleted node and all nodes are excluded to take in new indexes,
 	// then do not enable node exclusion
@@ -1685,6 +1690,7 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		eligIndexSGMap:       make(ServerGroupMap),
 		eligReplicaMap:       make(ReplicaMap),
 		eligUsedReplicaIdMap: make(UsedReplicaIdMap),
+		swapOnlyRebalance:    false,
 	}
 
 	// initialize list of indexers
@@ -1925,6 +1931,7 @@ func (s *Solution) clone() *Solution {
 	r.scanMean = s.scanMean
 	r.drainMean = s.drainMean
 	r.enforceConstraint = s.enforceConstraint
+	r.swapOnlyRebalance = s.swapOnlyRebalance
 	r.indexSGMap = s.indexSGMap
 	r.replicaMap = s.replicaMap
 	r.usedReplicaIdMap = s.usedReplicaIdMap
@@ -2030,6 +2037,19 @@ func (s *Solution) getDeleteNodes() []*IndexerNode {
 	result := ([]*IndexerNode)(nil)
 	for _, indexer := range s.Placement {
 		if indexer.isDelete {
+			result = append(result, indexer)
+		}
+	}
+
+	return result
+}
+
+//find list of new nodes i.e. nodes without any index
+func (s *Solution) getNewNodes() []*IndexerNode {
+
+	result := ([]*IndexerNode)(nil)
+	for _, indexer := range s.Placement {
+		if indexer.isNew {
 			result = append(result, indexer)
 		}
 	}
@@ -2696,6 +2716,12 @@ func (s *Solution) ignoreResourceConstraint() bool {
 		if s.canRunEstimation() {
 			return false
 		}
+	}
+
+	// TODO: Add checks for DDL during a transient heterogenous state in swap-only rebalance
+	// Check for Swap-only Rebalance during upgrade
+	if s.swapOnlyRebalance {
+		return true
 	}
 
 	return !s.enforceConstraint
@@ -3567,6 +3593,36 @@ func (s *Solution) demoteEligIndex(index *IndexUsage) {
 
 		s.usedReplicaIdMap[index.DefnId][index.Instance.ReplicaId] = used
 	}()
+}
+
+// Check for Swap-only Rebalance
+// We mark if cluster has
+// 1. only 1 add node
+// 2. 1 deleted node with Node.Exclude="in"
+// 3. and the remaining nodes have ExcludeNode="inout"
+func (s *Solution) markSwapOnlyRebalance() {
+
+	if s.command == CommandRebalance && s.numDeletedNode == 1 && s.numNewNode == 1 {
+		deletedNode := s.getDeleteNodes()[0]
+		newNode := s.getNewNodes()[0]
+		if deletedNode.Exclude == "in" {
+			inoutEnabledOnRemaining := true
+			for _, node := range s.Placement {
+				if node.NodeId == deletedNode.NodeId || node.NodeId == newNode.NodeId {
+					continue
+				}
+				if node.Exclude != "inout" {
+					inoutEnabledOnRemaining = false
+					break
+				}
+			}
+			if inoutEnabledOnRemaining {
+				s.swapOnlyRebalance = true
+				return
+			}
+		}
+	}
+	s.swapOnlyRebalance = false
 }
 
 //////////////////////////////////////////////////////////////

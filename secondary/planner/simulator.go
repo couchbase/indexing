@@ -167,7 +167,7 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 	}
 
 	for i := 0; i < count; i++ {
-		p, s, err := t.RunSingleTestRebal(config, command, spec, plan, indexSpecs)
+		p, s, err := t.RunSingleTestRebal(config, command, spec, plan, indexSpecs, nil, "")
 		if err != nil {
 			if _, ok := err.(*Violations); ok {
 				logging.Infof("Cluster Violations: number of retry %v", p.Try)
@@ -361,7 +361,7 @@ func (t *simulator) RunSingleTestPlan(config *RunConfig, spec *WorkloadSpec, p *
 	return plan(config, p, indexes)
 }
 
-func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec) (*SAPlanner, *RunStats, error) {
+func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec, keepNodesByNodeId []string, excludeValueOnDeleteNodes string) (*SAPlanner, *RunStats, error) {
 
 	var indexes []*IndexUsage
 	var err error
@@ -379,7 +379,7 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 			return nil, nil, errors.New("missing argument: either workload or plan must be present")
 		}
 
-		deletedNodes, err := t.findNodesToDelete(config, p)
+		deletedNodes, err := t.findNodesToDelete(config, p, keepNodesByNodeId, excludeValueOnDeleteNodes)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -402,21 +402,33 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 // Topology Change
 /////////////////////////////////////////////////////////////
 
-func (t *simulator) findNodesToDelete(config *RunConfig, plan *Plan) ([]string, error) {
+// keepNodesByNodeId forces the mentioned Nodes to not get picked for deletion
+// excludeValueOnDeleteNodes(if a valid value) will set the Exclude field of the to be deleted Node
+func (t *simulator) findNodesToDelete(config *RunConfig, plan *Plan, keepNodesByNodeId []string, excludeValueOnDeleteNodes string) ([]string, error) {
 
 	outNodeIds := ([]string)(nil)
 	outNodes := ([]*IndexerNode)(nil)
 
 	if config.DeleteNode != 0 {
 
-		if config.DeleteNode > len(plan.Placement) {
+		if config.DeleteNode+len(keepNodesByNodeId) > len(plan.Placement) {
 			return nil, errors.New("The number of node in cluster is smaller than the number of node to be deleted.")
 		}
 
 		for config.DeleteNode > len(outNodeIds) {
-
+			keep := false
 			candidate := getRandomNode(t.rs, plan.Placement)
-			if !hasMatchingNode(candidate.NodeId, outNodes) {
+
+			for _, keepNodeId := range keepNodesByNodeId {
+				if candidate.NodeId == keepNodeId {
+					keep = true
+					break
+				}
+			}
+			if !keep && !hasMatchingNode(candidate.NodeId, outNodes) {
+				if excludeValueOnDeleteNodes == "in" || excludeValueOnDeleteNodes == "inout" || excludeValueOnDeleteNodes == "out" {
+					candidate.Exclude = excludeValueOnDeleteNodes
+				}
 				outNodes = append(outNodes, candidate)
 				outNodeIds = append(outNodeIds, candidate.String())
 			}
