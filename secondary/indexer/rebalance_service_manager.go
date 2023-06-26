@@ -1201,7 +1201,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 				m.cleanupShardTokenForDest(t.ttid, t.tt, tokenMap, cleanupFailedShards, &updateTokenMap)
 			}
 		} else {
-			l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt)
+			l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
 			if t.tt.MasterId == string(m.nodeInfo.NodeID) {
 				m.cleanupTransferTokensForMaster(t.ttid, t.tt)
 			}
@@ -1241,7 +1241,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForMaster(ttid string, tt
 	switch tt.State {
 
 	case c.TransferTokenCommit, c.TransferTokenDeleted:
-		l.Infof("RebalanceServiceManager::cleanupTransferTokensForMaster Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokensForMaster Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		err := c.MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
@@ -1261,7 +1261,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt
 
 	case c.TransferTokenReady:
 		var err error
-		l.Infof("RebalanceServiceManager::cleanupTransferTokensForSource Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokensForSource Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		defn := tt.IndexInst.Defn
 		defn.InstId = tt.InstId
 		defn.RealInstId = tt.RealInstId
@@ -1284,7 +1284,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 
 	cleanup := func() error {
 		var err error
-		l.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt)
+		l.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		defn := tt.IndexInst.Defn
 		defn.InstId = tt.InstId
 		defn.RealInstId = tt.RealInstId

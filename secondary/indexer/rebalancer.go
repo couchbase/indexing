@@ -2890,7 +2890,7 @@ func decodeTransferToken(path string, value []byte, prefix string) (string, *c.T
 	if tt.IsShardTransferToken() && tt.ShardTransferTokenState != c.ShardTokenCreated {
 		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
 	} else {
-		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt)
+		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
 	}
 
 	return ttid, tt, nil
