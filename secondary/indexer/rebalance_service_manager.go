@@ -2048,6 +2048,12 @@ func (m *RebalanceServiceManager) cancelPrepareTaskLOCKED() error {
 		m.monitorStopCh = nil
 	}
 
+	if m.rebalancerF != nil {
+		logging.Infof("RebalanceServiceManager::cancelPrepareTaskLOCKED Initiating cleanup on rebalance follower")
+		m.rebalancerF.Cancel()
+		m.onRebalanceDoneLOCKED(nil, false)
+	}
+
 	m.cleanupRebalanceRunning()
 
 	m.updateState(func(s *state) {
