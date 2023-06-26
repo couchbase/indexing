@@ -2859,7 +2859,7 @@ func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.
 		return "", nil, err
 	}
 
-	l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt)
+	l.Infof("Rebalancer::decodeTransferToken TransferToken %v %v", ttid, tt.LessVerboseString())
 
 	return ttid, tt, nil
 

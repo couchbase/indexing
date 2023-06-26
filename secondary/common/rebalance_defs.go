@@ -187,3 +187,36 @@ func (tt *TransferToken) String() string {
 
 	return sb.String()
 }
+
+func (tt *TransferToken) LessVerboseString() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " MasterId: %v ", tt.MasterId)
+	fmt.Fprintf(sbp, "SourceId: %v ", tt.SourceId)
+	if len(tt.SourceHost) != 0 {
+		fmt.Fprintf(sbp, "(%v) ", tt.SourceHost)
+	}
+	fmt.Fprintf(sbp, "DestId: %v ", tt.DestId)
+	if len(tt.DestHost) != 0 {
+		fmt.Fprintf(sbp, "(%v) ", tt.DestHost)
+	}
+	fmt.Fprintf(sbp, "RebalId: %v ", tt.RebalId)
+
+	fmt.Fprintf(sbp, "State: %v ", tt.State)
+
+	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
+	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
+	if tt.Error != "" {
+		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
+	}
+
+	fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
+	fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
+	fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
+	fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
+
+	fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+	fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
+	return sb.String()
+}
