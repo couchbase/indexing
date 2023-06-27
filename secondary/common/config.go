@@ -3761,6 +3761,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.useSharedLSS": ConfigValue{
+		false,
+		"use shared LSS for plasma slices",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.serverless.scan.throttle.queued_threshold": ConfigValue{
 		500,
 		"Pause scan if queued mutation exceed threshold per bucket",

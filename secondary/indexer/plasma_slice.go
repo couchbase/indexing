@@ -578,7 +578,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		if len(slice.idxDefn.AlternateShardIds) > 0 {
 			alternateShardId = slice.idxDefn.AlternateShardIds[MAIN_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 		}
-		shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment()
+
+		shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment() || slice.sysconf["plasma.useSharedLSS"].Bool()
 		slice.mainstore, mErr = plasma.New6(tenant, alternateShardId, *mCfg, shared, slice.newBorn, MAIN_INDEX, isInitialBuild, nil)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
@@ -597,7 +598,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			if len(slice.idxDefn.AlternateShardIds) > 0 {
 				alternateShardId = slice.idxDefn.AlternateShardIds[BACK_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 			}
-			shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment()
+
+			shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment() || slice.sysconf["plasma.useSharedLSS"].Bool()
 			slice.backstore, bErr = plasma.New6(tenant, alternateShardId, *bCfg, shared, slice.newBorn, BACK_INDEX, isInitialBuild, nil)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
