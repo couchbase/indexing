@@ -2098,6 +2098,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.useSharedLSS": ConfigValue{
+		false,
+		"use shared LSS for plasma slices",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.stats.runInterval": ConfigValue{
 		uint64(15 * 60),
 		"stats logger run interval (second)",

@@ -462,7 +462,8 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New3(*mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX)
+		shared := slice.idxDefn.IndexOnCollection() || slice.sysconf["plasma.useSharedLSS"].Bool()
+		slice.mainstore, mErr = plasma.New3(*mCfg, shared, slice.newBorn, MAIN_INDEX)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -474,7 +475,8 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New3(*bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX)
+			shared := slice.idxDefn.IndexOnCollection() || slice.sysconf["plasma.useSharedLSS"].Bool()
+			slice.backstore, bErr = plasma.New3(*bCfg, shared, slice.newBorn, BACK_INDEX)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
