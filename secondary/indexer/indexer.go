@@ -372,7 +372,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	httpAddr := net.JoinHostPort(host, port) // "127.0.0.1:<indexer_http_port"> (eg 9102, 9108, ...)
 
 	// CPU throttling is disabled until CpuThrottle.SetCpuThrottling(true) is called
-	idx.cpuThrottle = NewCpuThrottle(idx.config["cpu.throttle.target"].Float64())
+	throttleVal := idx.config["cpu.throttle.target"].Float64()
+	if common.IsServerlessDeployment() {
+		throttleVal = idx.config["serverless.cpu.throttle.target"].Float64()
+	}
+	idx.cpuThrottle = NewCpuThrottle(throttleVal)
 	autofailoverMgr := NewAutofailoverServiceManager(httpAddr, idx.cpuThrottle)
 
 	// Initialize auditing
@@ -1767,7 +1771,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 	memdb.Debug(newConfig["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
-	idx.cpuThrottle.SetCpuTarget(newConfig["cpu.throttle.target"].Float64())
+	throttleVal := newConfig["cpu.throttle.target"].Float64()
+	if common.IsServerlessDeployment() {
+		throttleVal = newConfig["serverless.cpu.throttle.target"].Float64()
+	}
+	idx.cpuThrottle.SetCpuTarget(throttleVal)
 
 	idx.config = newConfig
 
@@ -4009,8 +4017,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
 		indexInst.State == common.INDEX_STATE_READY ||
-		indexInst.State == common.INDEX_STATE_RECOVERED ||
-		indexInst.State == common.INDEX_STATE_DELETED {
+		indexInst.State == common.INDEX_STATE_RECOVERED {
 
 		idx.cleanupIndexData([]common.IndexInst{indexInst}, clientCh)
 		logging.Infof("Indexer::handleDropIndex Cleanup Successful for "+
@@ -4026,19 +4033,25 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//Second step, is the actual cleanup of index instance from internal maps
 	//and purging of physical slice files.
 
-	indexInst.State = common.INDEX_STATE_DELETED
-	idx.indexInstMap[indexInst.InstId] = indexInst
+	// When index drop races with bucket/collection drop, it is possible that the
+	// index is already marked DELETED but deletion could not proceed due to on-going
+	// flush. In such case, skip marking the index as DELETED and then proceed to
+	// clean-up the index data
+	if indexInst.State != common.INDEX_STATE_DELETED {
+		indexInst.State = common.INDEX_STATE_DELETED
+		idx.indexInstMap[indexInst.InstId] = indexInst
 
-	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+		msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
 
-	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
-		clientCh <- &MsgError{
-			err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-				severity: FATAL,
-				cause:    err,
-				category: INDEXER}}
-		common.CrashOnError(err)
+		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    err,
+					category: INDEXER}}
+			common.CrashOnError(err)
+		}
 	}
 
 	//check if there is already a drop request waiting on this bucket
@@ -9950,9 +9963,10 @@ func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,
 func (idx *indexer) updateError(instId common.IndexInstId,
 	errStr string) {
 
-	idxInst := idx.indexInstMap[instId]
-	idxInst.Error = errStr
-	idx.indexInstMap[instId] = idxInst
+	if idxInst, ok := idx.indexInstMap[instId]; ok {
+		idxInst.Error = errStr
+		idx.indexInstMap[instId] = idxInst
+	}
 
 }
 

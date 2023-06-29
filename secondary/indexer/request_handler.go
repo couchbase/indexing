@@ -2243,6 +2243,7 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 	context := manager.CreateRestoreContext(image, m.clusterUrl, bucket, nil, "", nil)
 	hostIndexMap, err := context.ComputeIndexLayout()
 	if err != nil {
+		logging.Errorf("RequestHandler::handleRestoreIndexMetadataRequest: err in ComputeIndexLayout %v", err)
 		rhSend(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Unable to restore metadata.  Error=%v", err)})
 	}
 

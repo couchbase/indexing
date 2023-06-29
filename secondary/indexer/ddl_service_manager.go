@@ -512,6 +512,33 @@ func (m *DDLServiceMgr) cleanupBuildCommand(provider *client.MetadataProvider) {
 				continue
 			}
 
+			if common.IsServerlessDeployment() && command.Issuer == mc.INDEX_RESTORE {
+				exist1, err1 := mc.StopScheduleCreateTokenExist(command.DefnId)
+				exist2, err2 := mc.ScheduleCreateTokenExist(command.DefnId)
+				exist3, err3 := mc.DeleteCommandTokenExist(command.DefnId)
+
+				// Do not cleanup build token if there is error reading tokens
+				if err1 != nil {
+					logging.Warnf("DDLServiceMgr:cleanupBuildCommand Error when reading StopScheduleCreateToken for defn: %v. Err: %v", command.DefnId, err1)
+					continue
+				} else if err2 != nil {
+					logging.Warnf("DDLServiceMgr:cleanupBuildCommand Error when reading ScheduleCreateToken for defn: %v. Err: %v", command.DefnId, err2)
+					continue
+				} else if err3 != nil {
+					logging.Warnf("DDLServiceMgr:cleanupBuildCommand Error when reading DeleteCommandToken for defn: %v. Err: %v", command.DefnId, err3)
+					continue
+				}
+
+				if exist1 {
+					logging.Infof("DDLServiceMgr:cleanupBuildCommand StopScheduleCreateToken exists. Proceed to clean up restore build token %v.", entry.Path)
+				} else if exist3 {
+					logging.Infof("DDLServiceMgr:cleanupBuildCommand DeleteCommandToken exists. Proceed to clean up restore build token %v.", entry.Path)
+				} else if exist2 {
+					// Do not cleanup build token if schedule create token of restore operation exists
+					continue
+				}
+			}
+
 			//
 			// At this point, metadata provider has been connected to all indexer at least once.
 			// So it has a snapshot of the metadata from each indexer at some point in time.

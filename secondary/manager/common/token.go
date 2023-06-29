@@ -59,6 +59,26 @@ const StopScheduleCreateTokenPath = CommandMetakvDir + StopScheduleCreateTokenTa
 const PlasmaInMemoryCompressionTokenTag = "PlasmaInMemoryCompression"
 const PlasmaInMemoryCompressionFeaturePath = c.IndexingSettingsFeaturesMetaPath + PlasmaInMemoryCompressionTokenTag
 
+// Opeatation that Issued Token
+type TokenIssuer byte
+
+const (
+    INDEX_BUILD TokenIssuer = iota
+    INDEX_RESTORE
+)
+
+func (s TokenIssuer) String() string {
+
+    switch s {
+    case INDEX_BUILD:
+        return "INDEX_BUILD"
+    case INDEX_RESTORE:
+        return "INDEX_RESTORE"
+    default:
+        return "ISSUER_UNKNOWN"
+    }
+}
+
 //////////////////////////////////////////////////////////////
 // Concrete Type
 //
@@ -95,9 +115,11 @@ type DeleteCommandToken struct {
 }
 
 type BuildCommandToken struct {
-	Name   string
-	Bucket string
-	DefnId c.IndexDefnId
+	Name      string
+	Bucket    string
+	DefnId    c.IndexDefnId
+	Issuer    TokenIssuer
+	Timestamp time.Time
 }
 
 type DropInstanceCommandTokenList struct {
@@ -655,11 +677,13 @@ func FetchIndexDefnToDeleteCommandTokensMap() (map[c.IndexDefnId]*DeleteCommandT
 //
 // Generate a token to metakv for recovery purpose
 //
-func PostBuildCommandToken(defnId c.IndexDefnId, bucketName string) error {
+func PostBuildCommandToken(defnId c.IndexDefnId, bucketName string, issuer TokenIssuer, timestamp time.Time) error {
 
-	commandToken := &BuildCommandToken{
-		DefnId: defnId,
-		Bucket: bucketName,
+    commandToken := &BuildCommandToken{
+        DefnId:    defnId,
+        Bucket:    bucketName,
+        Issuer:    issuer,
+        Timestamp: timestamp,
 	}
 
 	id := fmt.Sprintf("%v", defnId)
