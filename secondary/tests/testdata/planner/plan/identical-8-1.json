@@ -3,7 +3,7 @@
 		{
 			"nodeId": "2596996162",
 			"nodeUUID": "tempNodeUUID_2596996162",
-			"memUsage": 520000000,
+			"memUsage": 5200000,
 			"cpuUsage": 2,
 			"memOverhead": 420236400,
 			"indexes": [
@@ -18,10 +18,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				},
@@ -36,10 +36,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				}
@@ -48,7 +48,7 @@
 		{
 			"nodeId": "4039455774",
 			"nodeUUID": "tempNodeUUID_4039455774",
-			"memUsage": 520000000,
+			"memUsage": 5200000,
 			"cpuUsage": 2,
 			"memOverhead": 420236400,
 			"indexes": [
@@ -63,10 +63,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				},
@@ -81,10 +81,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				}
@@ -93,7 +93,7 @@
 		{
 			"nodeId": "2854263694",
 			"nodeUUID": "tempNodeUUID_2854263694",
-			"memUsage": 520000000,
+			"memUsage": 5200000,
 			"cpuUsage": 2,
 			"memOverhead": 420236400,
 			"indexes": [
@@ -108,10 +108,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				},
@@ -126,10 +126,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				}
@@ -138,7 +138,7 @@
 		{
 			"nodeId": "1879968118",
 			"nodeUUID": "tempNodeUUID_1879968118",
-			"memUsage": 520000000,
+			"memUsage": 5200000,
 			"cpuUsage": 2,
 			"memOverhead": 420236400,
 			"indexes": [
@@ -153,10 +153,10 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				},
@@ -171,16 +171,16 @@
 					"avgDocKeySize": 200,
 					"avgArrSize": 0,
 					"avgArrKeySize": 0,
-					"numOfDocs": 500000,
+					"numOfDocs": 5000,
 					"mutationRate": 0,
 					"scanRate": 0,
-					"memUsage": 260000000,
+					"memUsage": 2600000,
 					"cpuUsage": 1,
 					"memOverhead": 165423720
 				}
 			]
 		}
 	],
-	"memQuota": 930294000,
+	"memQuota": 530294000,
 	"cpuQuota": 2
 }
