@@ -59,6 +59,9 @@ const StopScheduleCreateTokenPath = CommandMetakvDir + StopScheduleCreateTokenTa
 const PlasmaInMemoryCompressionTokenTag = "PlasmaInMemoryCompression"
 const PlasmaInMemoryCompressionFeaturePath = c.IndexingSettingsFeaturesMetaPath + PlasmaInMemoryCompressionTokenTag
 
+const PlasmaEnablePageBloomFilterBackIndexTokenTag = "PlasmaEnablePageBloomFilterBackIndex"
+const PlasmaEnablePageBloomFilterBackIndexPath = c.IndexingSettingsFeaturesMetaPath + PlasmaEnablePageBloomFilterBackIndexTokenTag
+
 // Opeatation that Issued Token
 type TokenIssuer byte
 
@@ -199,6 +202,10 @@ type CommandListener struct {
 }
 
 type PlasmaInMemoryCompresisonToken struct {
+	enabled bool
+}
+
+type PlasmaEnablePageBloomFilterBackIndexToken struct {
 	enabled bool
 }
 
@@ -1808,6 +1815,23 @@ func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []
 	}
 
 	m.AddNewStopScheduleCreateToken(path, token)
+}
+
+// Generate a token to metakv for enabling bloom filter for plasma back index
+func PostEnablePageBloomFilterPlasmaBackIndexToken() error {
+
+	commandToken := &PlasmaEnablePageBloomFilterBackIndexToken{
+		enabled: true,
+	}
+
+	return c.MetakvSet(PlasmaEnablePageBloomFilterBackIndexPath, commandToken)
+}
+
+// Check if EnablePageBloomFilter for PlasmaBackIndex feature is enabled in metakv
+func EnablePageBloomFilterPlasmaBackIndexTokenExist() (bool, error) {
+
+	commandToken := &PlasmaEnablePageBloomFilterBackIndexToken{}
+	return c.MetakvGet(PlasmaEnablePageBloomFilterBackIndexPath, commandToken)
 }
 
 // Generate a token to metakv for enabling PlasmaInMemoryCompression feature
