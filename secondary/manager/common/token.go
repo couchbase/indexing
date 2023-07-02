@@ -63,20 +63,20 @@ const PlasmaInMemoryCompressionFeaturePath = c.IndexingSettingsFeaturesMetaPath 
 type TokenIssuer byte
 
 const (
-    INDEX_BUILD TokenIssuer = iota
-    INDEX_RESTORE
+	INDEX_BUILD TokenIssuer = iota
+	INDEX_RESTORE
 )
 
 func (s TokenIssuer) String() string {
 
-    switch s {
-    case INDEX_BUILD:
-        return "INDEX_BUILD"
-    case INDEX_RESTORE:
-        return "INDEX_RESTORE"
-    default:
-        return "ISSUER_UNKNOWN"
-    }
+	switch s {
+	case INDEX_BUILD:
+		return "INDEX_BUILD"
+	case INDEX_RESTORE:
+		return "INDEX_RESTORE"
+	default:
+		return "ISSUER_UNKNOWN"
+	}
 }
 
 //////////////////////////////////////////////////////////////
@@ -206,9 +206,7 @@ type PlasmaInMemoryCompresisonToken struct {
 // Create Token Management
 //////////////////////////////////////////////////////////////
 
-//
 // Generate a token to metakv for recovery purpose
-//
 func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID, scopeId, collectionId string,
 	requestId uint64, defns map[c.IndexerId][]c.IndexDefn) error {
 
@@ -230,9 +228,7 @@ func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID, scopeId, collectio
 	return c.MetakvBigValueSet(CreateDDLCommandTokenPath+id, commandToken)
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
 	id := fmt.Sprintf("%v", defnId)
@@ -240,9 +236,7 @@ func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 	return c.MetakvBigValueGet(CreateDDLCommandTokenPath+id, commandToken)
 }
 
-//
 // Delete create command token
-//
 func DeleteCreateCommandToken(defnId c.IndexDefnId, requestId uint64) error {
 
 	var id string
@@ -254,9 +248,7 @@ func DeleteCreateCommandToken(defnId c.IndexDefnId, requestId uint64) error {
 	return c.MetakvBigValueDel(CreateDDLCommandTokenPath + id)
 }
 
-//
 // Delete all create command token
-//
 func DeleteAllCreateCommandToken(defnId c.IndexDefnId) error {
 
 	tokens, err := ListAndFetchCreateCommandToken(defnId)
@@ -271,10 +263,8 @@ func DeleteAllCreateCommandToken(defnId c.IndexDefnId) error {
 	return nil
 }
 
-//
 // Fetch create command token
 // This function take metakv path
-//
 func FetchCreateCommandToken(defnId c.IndexDefnId, requestId uint64) (*CreateCommandToken, error) {
 
 	token := &CreateCommandToken{}
@@ -458,9 +448,7 @@ func GetDefnIdFromCreateCommandTokenPath(path string) (c.IndexDefnId, uint64, er
 	return c.IndexDefnId(defnId), requestId, nil
 }
 
-//
 // Unmarshall
-//
 func UnmarshallCreateCommandTokenList(data []byte) (*CreateCommandTokenList, error) {
 
 	r := new(CreateCommandTokenList)
@@ -485,9 +473,7 @@ func MarshallCreateCommandTokenList(r *CreateCommandTokenList) ([]byte, error) {
 // Delete Token Management
 //////////////////////////////////////////////////////////////
 
-//
 // Generate a token to metakv for recovery purpose
-//
 func PostDeleteCommandToken(defnId c.IndexDefnId, internal bool, bucketName string) error {
 
 	commandToken := &DeleteCommandToken{
@@ -504,9 +490,7 @@ func PostDeleteCommandToken(defnId c.IndexDefnId, internal bool, bucketName stri
 	return nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func DeleteCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
 	commandToken := &DeleteCommandToken{}
@@ -541,10 +525,8 @@ func CheckDeleteCommandTokenWithTimeout(defnId common.IndexDefnId, durationInMil
 	}
 }
 
-//
 // ListDeleteCommandToken returns all delete tokens for this indexer host.
 // Result is nil if no tokens.
-//
 func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
 	entries, err := c.MetakvList(DeleteDDLCommandTokenPath)
 	if err != nil {
@@ -567,11 +549,9 @@ func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
 	return result, nil
 }
 
-//
 // ListDeleteCommandTokenPaths returns the metakv paths (keys)
 // of all delete tokens for this indexer host. It does not
 // bother unmarhsalling the values as caller doesn't need them.
-//
 func ListDeleteCommandTokenPaths() ([]string, error) {
 	entries, err := c.MetakvList(DeleteDDLCommandTokenPath)
 	if err != nil {
@@ -584,9 +564,7 @@ func ListDeleteCommandTokenPaths() ([]string, error) {
 	return result, nil
 }
 
-//
 // Unmarshall
-//
 func UnmarshallDeleteCommandToken(data []byte) (*DeleteCommandToken, error) {
 
 	r := new(DeleteCommandToken)
@@ -674,16 +652,14 @@ func FetchIndexDefnToDeleteCommandTokensMap() (map[c.IndexDefnId]*DeleteCommandT
 // Build Token Management
 //////////////////////////////////////////////////////////////
 
-//
 // Generate a token to metakv for recovery purpose
-//
 func PostBuildCommandToken(defnId c.IndexDefnId, bucketName string, issuer TokenIssuer, timestamp time.Time) error {
 
-    commandToken := &BuildCommandToken{
-        DefnId:    defnId,
-        Bucket:    bucketName,
-        Issuer:    issuer,
-        Timestamp: timestamp,
+	commandToken := &BuildCommandToken{
+		DefnId:    defnId,
+		Bucket:    bucketName,
+		Issuer:    issuer,
+		Timestamp: timestamp,
 	}
 
 	id := fmt.Sprintf("%v", defnId)
@@ -694,9 +670,7 @@ func PostBuildCommandToken(defnId c.IndexDefnId, bucketName string, issuer Token
 	return nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func BuildCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
 	commandToken := &BuildCommandToken{}
@@ -704,9 +678,7 @@ func BuildCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 	return c.MetakvGet(BuildDDLCommandTokenPath+id, commandToken)
 }
 
-//
 // Unmarshall
-//
 func UnmarshallBuildCommandToken(data []byte) (*BuildCommandToken, error) {
 
 	r := new(BuildCommandToken)
@@ -717,9 +689,7 @@ func UnmarshallBuildCommandToken(data []byte) (*BuildCommandToken, error) {
 	return r, nil
 }
 
-//
 // Marshall
-//
 func MarshallBuildCommandToken(r *BuildCommandToken) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
@@ -773,9 +743,7 @@ func ListBuildCommandTokens() (result []*BuildCommandToken, err error) {
 // Drop Instance Token Management
 //////////////////////////////////////////////////////////////
 
-//
 // Generate a token to metakv for recovery purpose
-//
 func PostDropInstanceCommandToken(defnId c.IndexDefnId, instId c.IndexInstId, replicaId int, defn c.IndexDefn) error {
 
 	commandToken := &DropInstanceCommandToken{
@@ -793,9 +761,7 @@ func PostDropInstanceCommandToken(defnId c.IndexDefnId, instId c.IndexInstId, re
 	return nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func DropInstanceCommandTokenExist(defnId c.IndexDefnId, instId c.IndexInstId) (bool, error) {
 
 	commandToken := &DropInstanceCommandToken{}
@@ -803,9 +769,7 @@ func DropInstanceCommandTokenExist(defnId c.IndexDefnId, instId c.IndexInstId) (
 	return c.MetakvBigValueGet(DropInstanceDDLCommandTokenPath+id, commandToken)
 }
 
-//
 // Return the list of drop instance command token for a given index
-//
 func ListAndFetchDropInstanceCommandToken(defnId c.IndexDefnId) ([]*DropInstanceCommandToken, error) {
 
 	id := fmt.Sprintf("%v/", defnId)
@@ -912,9 +876,7 @@ func FetchIndexDefnToDropInstanceCommandTokenMap() (map[c.IndexDefnId][]*DropIns
 	return result, nil
 }
 
-//
 // Unmarshall
-//
 func UnmarshallDropInstanceCommandToken(data []byte) (*DropInstanceCommandToken, error) {
 
 	r := new(DropInstanceCommandToken)
@@ -985,9 +947,7 @@ func GetDropInstanceTokenFromPath(path string) (*DropInstanceCommandToken, error
 // Version Management
 //////////////////////////////////////////////////////////////
 
-//
 // Generate a token to metakv for indexer version
-//
 func PostIndexerVersionToken(version uint64) error {
 
 	token := &IndexerVersionToken{
@@ -1002,9 +962,7 @@ func PostIndexerVersionToken(version uint64) error {
 	return nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func GetIndexerVersionToken() (uint64, error) {
 
 	token := &IndexerVersionToken{}
@@ -1021,9 +979,7 @@ func GetIndexerVersionToken() (uint64, error) {
 	return token.Version, nil
 }
 
-//
 // Unmarshall
-//
 func UnmarshallIndexerVersionToken(data []byte) (*IndexerVersionToken, error) {
 
 	r := new(IndexerVersionToken)
@@ -1048,9 +1004,7 @@ func MarshallIndexerVersionToken(r *IndexerVersionToken) ([]byte, error) {
 // Storage Mode Management
 //////////////////////////////////////////////////////////////
 
-//
 // Generate a token to metakv for indexer storage mode
-//
 func PostIndexerStorageModeOverride(nodeUUID string, override string) error {
 
 	if len(nodeUUID) == 0 {
@@ -1078,9 +1032,7 @@ func PostIndexerStorageModeOverride(nodeUUID string, override string) error {
 	return nil
 }
 
-//
 // Generate a token to metakv for indexer storage mode
-//
 func PostIndexerLocalStorageMode(nodeUUID string, storageMode c.StorageMode) error {
 
 	if len(nodeUUID) == 0 {
@@ -1109,9 +1061,7 @@ func PostIndexerLocalStorageMode(nodeUUID string, storageMode c.StorageMode) err
 	return nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func GetIndexerStorageModeToken(nodeUUID string) (*IndexerStorageModeToken, error) {
 
 	if len(nodeUUID) == 0 {
@@ -1132,9 +1082,7 @@ func GetIndexerStorageModeToken(nodeUUID string) (*IndexerStorageModeToken, erro
 	return token, nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func GetIndexerStorageModeOverride(nodeUUID string) (string, error) {
 
 	if len(nodeUUID) == 0 {
@@ -1154,9 +1102,7 @@ func GetIndexerStorageModeOverride(nodeUUID string) (string, error) {
 	return "", nil
 }
 
-//
 // Does token exist? Return true only if token exist and there is no error.
-//
 func GetIndexerLocalStorageMode(nodeUUID string) (c.StorageMode, error) {
 
 	if len(nodeUUID) == 0 {
@@ -1176,10 +1122,7 @@ func GetIndexerLocalStorageMode(nodeUUID string) (c.StorageMode, error) {
 	return c.NOT_SET, nil
 }
 
-//
-//
 // Unmarshall
-//
 func UnmarshallIndexerStorageModeToken(data []byte) (*IndexerStorageModeToken, error) {
 
 	r := new(IndexerStorageModeToken)
@@ -1867,9 +1810,7 @@ func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []
 	m.AddNewStopScheduleCreateToken(path, token)
 }
 
-//
 // Generate a token to metakv for enabling PlasmaInMemoryCompression feature
-//
 func PostEnablePlasmaInMemoryCompressionToken() error {
 
 	commandToken := &PlasmaInMemoryCompresisonToken{
@@ -1879,9 +1820,7 @@ func PostEnablePlasmaInMemoryCompressionToken() error {
 	return c.MetakvSet(PlasmaInMemoryCompressionFeaturePath, commandToken)
 }
 
-//
 // Check PlasmaInMemoryCompression feature is enabled in metakv
-//
 func EnablePlasmaInMemoryCompressionTokenExist() (bool, error) {
 
 	commandToken := &PlasmaInMemoryCompresisonToken{}
