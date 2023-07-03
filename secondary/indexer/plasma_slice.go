@@ -127,7 +127,11 @@ type plasmaSlice struct {
 	sysconf  common.Config // system configuration settings
 	confLock sync.RWMutex  // protects sysconf
 
-	isPersistorActive int32
+	persistorLock     sync.RWMutex
+	isPersistorActive bool
+	stopPersistor     bool
+	persistorQueue    *plasmaSnapshot
+	snapCount         uint64
 
 	isInitialBuild int32
 
@@ -1815,6 +1819,7 @@ type plasmaSnapshotInfo struct {
 }
 
 type plasmaSnapshot struct {
+	id         uint64
 	slice      *plasmaSlice
 	idxDefnId  common.IndexDefnId
 	idxInstId  common.IndexInstId
@@ -1839,6 +1844,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	snapInfo := info.(*plasmaSnapshotInfo)
 	snapInfo.Count = mainSnap.Count()
 
+	mdb.snapCount++
 	s := &plasmaSnapshot{slice: mdb,
 		idxDefnId:  mdb.idxDefnId,
 		idxInstId:  mdb.idxInstId,
@@ -1847,6 +1853,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		ts:         snapInfo.Timestamp(),
 		committed:  info.IsCommitted(),
 		MainSnap:   mainSnap,
+		id:         mdb.snapCount,
 	}
 
 	if !mdb.isPrimary {
@@ -1891,113 +1898,151 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 var plasmaPersistenceMutex sync.Mutex
 
-func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
-	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		s.MainSnap.Open()
+func (mdb *plasmaSlice) persistSnapshot(s *plasmaSnapshot) {
+	logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
+		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+	t0 := time.Now()
+
+	s.info.Version = SNAPSHOT_META_VERSION_PLASMA_1
+	s.info.InstId = mdb.idxInstId
+	s.info.PartnId = mdb.idxPartnId
+
+	meta, err := json.Marshal(s.info)
+	common.CrashOnError(err)
+	timeHdr := make([]byte, 8)
+	binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
+	meta = append(timeHdr, meta...)
+
+	// To prevent persistence from eating up all the disk bandwidth
+	// and slowing down query, we wish to ensure that only 1 instance
+	// gets persisted at once across all instances on this node.
+	// Since both main and back snapshots are open, we wish to ensure
+	// that serialization of the main and back index persistence happens
+	// only via this callback to ensure that neither of these snapshots
+	// are held open until the other completes recovery point creation.
+	tokenCh := make(chan bool, 1) // To locally serialize main & back
+	tokenCh <- true
+	serializePersistence := func(s *plasma.Plasma) error {
+		<-tokenCh
+		plasmaPersistenceMutex.Lock()
+		return nil
+	}
+
+	mdb.confLock.RLock()
+	persistenceCPUPercent := mdb.sysconf["plasma.persistenceCPUPercent"].Int()
+	mdb.confLock.RUnlock()
+
+	var concurr int = int(float32(runtime.GOMAXPROCS(0))*float32(persistenceCPUPercent)/(100*2) + 0.75)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		mErr := mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
+			concurr, serializePersistence)
+
+		if mErr != nil {
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
+				"Failed to create mainstore recovery point: %v",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, mErr)
+		}
+
+		tokenCh <- true
+		plasmaPersistenceMutex.Unlock()
+		wg.Done()
+	}()
+
+	if !mdb.isPrimary {
+		bErr := mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
+			serializePersistence)
+
+		if bErr != nil {
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v: "+
+				"Failed to create backstore recovery point: %v",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, bErr)
+		}
+
+		tokenCh <- true
+		plasmaPersistenceMutex.Unlock()
+	}
+	wg.Wait()
+
+	dur := time.Since(t0)
+	logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
+		"Created recovery point (took %v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id, dur)
+
+	mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+
+	// In case there is an error creating one of recovery
+	// points, the successful one has to be cleaned up.
+	mdb.removeNotCommonRecoveryPoints()
+
+	mdb.cleanupOldRecoveryPoints(s.info)
+
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+
+	queuedS := mdb.persistorQueue
+	if !mdb.stopPersistor && queuedS != nil {
+		mdb.persistorQueue = nil
+		go mdb.persistSnapshot(queuedS)
+		return
+	}
+	if queuedS != nil {
+		mdb.closeQueuedSnapNoLock()
+	}
+
+	mdb.stopPersistor = false
+	mdb.isPersistorActive = false
+}
+
+func (mdb *plasmaSlice) closeQueuedSnapNoLock() {
+	deQueuedS := mdb.persistorQueue
+	if deQueuedS != nil {
+		deQueuedS.MainSnap.Close()
 		if !mdb.isPrimary {
-			s.BackSnap.Open()
+			deQueuedS.BackSnap.Close()
 		}
-		snapshotStats := make(map[string]interface{})
-		snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
-		snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
-		snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
-		snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
-		snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
-		if mdb.idxStats.useArrItemsCount {
-			snapshotStats[SNAP_STATS_ARR_ITEMS_COUNT] = mdb.idxStats.arrItemsCount.Value()
-		}
-		snapshotStats[SNAP_STATS_MAX_WRITE_UNITS_USAGE] = mdb.idxStats.currMaxWriteUsage.Value()
-		snapshotStats[SNAP_STATS_MAX_READ_UNITS_USAGE] = mdb.idxStats.currMaxReadUsage.Value()
-		snapshotStats[SNAP_STATS_AVG_UNITS_USAGE] = mdb.idxStats.avgUnitsUsage.Value()
-		snapshotStats[SNAP_STATS_WRITE_UNITS_COUNT] = atomic.LoadUint64(&mdb.meteringStats.writeUnits)
-		s.info.IndexStats = snapshotStats
+		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v DeQueuing SnapshotId %v ondisk"+
+			" snapshot.", mdb.id, mdb.idxInstId, mdb.idxPartnId, deQueuedS.id)
+	}
+	mdb.persistorQueue = nil
+}
 
-		go func() {
-			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
+func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
+	snapshotStats := make(map[string]interface{})
+	snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
+	snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
+	snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+	snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
+	snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
+	if mdb.idxStats.useArrItemsCount {
+		snapshotStats[SNAP_STATS_ARR_ITEMS_COUNT] = mdb.idxStats.arrItemsCount.Value()
+	}
+	snapshotStats[SNAP_STATS_MAX_WRITE_UNITS_USAGE] = mdb.idxStats.currMaxWriteUsage.Value()
+	snapshotStats[SNAP_STATS_MAX_READ_UNITS_USAGE] = mdb.idxStats.currMaxReadUsage.Value()
+	snapshotStats[SNAP_STATS_AVG_UNITS_USAGE] = mdb.idxStats.avgUnitsUsage.Value()
+	snapshotStats[SNAP_STATS_WRITE_UNITS_COUNT] = atomic.LoadUint64(&mdb.meteringStats.writeUnits)
 
-			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-				"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId)
-			t0 := time.Now()
+	s.info.IndexStats = snapshotStats
 
-			s.info.Version = SNAPSHOT_META_VERSION_PLASMA_1
-			s.info.InstId = mdb.idxInstId
-			s.info.PartnId = mdb.idxPartnId
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
 
-			meta, err := json.Marshal(s.info)
-			common.CrashOnError(err)
-			timeHdr := make([]byte, 8)
-			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
-			meta = append(timeHdr, meta...)
+	s.MainSnap.Open()
+	if !mdb.isPrimary {
+		s.BackSnap.Open()
+	}
 
-			// To prevent persistence from eating up all the disk bandwidth
-			// and slowing down query, we wish to ensure that only 1 instance
-			// gets persisted at once across all instances on this node.
-			// Since both main and back snapshots are open, we wish to ensure
-			// that serialization of the main and back index persistence happens
-			// only via this callback to ensure that neither of these snapshots
-			// are held open until the other completes recovery point creation.
-			tokenCh := make(chan bool, 1) // To locally serialize main & back
-			tokenCh <- true
-			serializePersistence := func(s *plasma.Plasma) error {
-				<-tokenCh
-				plasmaPersistenceMutex.Lock()
-				return nil
-			}
-
-			mdb.confLock.RLock()
-			persistenceCPUPercent := mdb.sysconf["plasma.persistenceCPUPercent"].Int()
-			mdb.confLock.RUnlock()
-
-			var concurr int = int(float32(runtime.GOMAXPROCS(0))*float32(persistenceCPUPercent)/(100*2) + 0.75)
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				mErr := mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
-					concurr, serializePersistence)
-
-				if mErr != nil {
-					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: "+
-						"Failed to create mainstore recovery point: %v",
-						mdb.id, mdb.idxInstId, mdb.idxPartnId, mErr)
-				}
-
-				tokenCh <- true
-				plasmaPersistenceMutex.Unlock()
-				wg.Done()
-			}()
-
-			if !mdb.isPrimary {
-				bErr := mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
-					serializePersistence)
-
-				if bErr != nil {
-					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: "+
-						"Failed to create backstore recovery point: %v",
-						mdb.id, mdb.idxInstId, mdb.idxPartnId, bErr)
-				}
-
-				tokenCh <- true
-				plasmaPersistenceMutex.Unlock()
-			}
-			wg.Wait()
-
-			dur := time.Since(t0)
-			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-				"Created recovery point (took %v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dur)
-
-			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
-
-			// In case there is an error creating one of recovery
-			// points, the successful one has to be cleaned up.
-			mdb.removeNotCommonRecoveryPoints()
-
-			mdb.cleanupOldRecoveryPoints(s.info)
-
-		}()
+	if !mdb.isPersistorActive {
+		mdb.isPersistorActive = true
+		go mdb.persistSnapshot(s)
 	} else {
-		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
-			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)
+		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v EnQueuing SnapshotId %v ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
+
+		mdb.closeQueuedSnapNoLock()
+
+		mdb.persistorQueue = s
 	}
 }
 
@@ -3546,9 +3591,29 @@ func (s *plasmaSnapshot) Close() error {
 	return nil
 }
 
+func (mdb *plasmaSlice) isPersistorRunning() bool {
+	mdb.persistorLock.Lock()
+	defer mdb.persistorLock.Unlock()
+
+	return mdb.isPersistorActive
+}
+
+// waitForPersistorThread will gracefully stop the persistor. User is expected
+// to perform the necessary action and call doPersistSnapshot and not concurrently
+// to action which needs persistor to be stopped
 func (mdb *plasmaSlice) waitForPersistorThread() {
-	for atomic.LoadInt32(&mdb.isPersistorActive) == 1 {
+	persistorActive := func() bool {
+		mdb.persistorLock.Lock()
+		defer mdb.persistorLock.Unlock()
+		if mdb.isPersistorActive {
+			mdb.stopPersistor = true
+		}
+		return mdb.isPersistorActive
+	}()
+
+	for persistorActive {
 		time.Sleep(time.Second)
+		persistorActive = mdb.isPersistorRunning()
 	}
 }
 
