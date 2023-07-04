@@ -1969,6 +1969,30 @@ func filterIndexesToRemove(indexes []*IndexUsage, indexDefnIdToRemove map[common
 	return toKeep
 }
 
+//setExcludeInForNonEmptyNodes sets the Exclude parameter to "in"
+//for all the non-empty/non-deleted nodes in the cluster.
+//For rebalance, it means that any new/empty node
+//would be the only eligible node(s) to receive new indexes.
+//This helps to reduce the shuffling of indexes between existing nodes
+//of the cluster.
+//Important to note that replica repair can happen on any node in the cluster
+//and is not restricted due to using the Exclude parameter.
+func setExcludeInForNonEmptyNodes(s *Solution) {
+
+	for _, indexer := range s.Placement {
+		if len(indexer.Indexes) == 0 && !indexer.isDelete {
+			//empty node skip
+		} else {
+			//non empty node. If Exclude is already set, skip.
+			if indexer.Exclude == "" {
+				logging.Infof("Planner::setExcludeInForNonEmptyNodes Set Exclude=in for %v", indexer.NodeId)
+				indexer.SetExclude("in")
+			}
+		}
+	}
+
+}
+
 func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNodes []string, isInternal bool) (
 	*SAPlanner, *RunStats, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
@@ -2009,6 +2033,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	outIndexes, err = changeTopology(config, solution, deletedNodes)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	//if there is any empty node in the cluster, set ExcludeIn to true
+	//for all the non-empty nodes.
+	if solution.findNumEmptyNodes() > 0 {
+		setExcludeInForNonEmptyNodes(solution)
 	}
 
 	//

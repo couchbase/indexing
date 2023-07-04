@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -144,7 +143,7 @@ func (s *SystemStats) SystemTotalMem() (uint64, error) {
 // Return Values: (TotalMem, FreeMem, cGroupValues, error)
 // cGroupValues => true if the limits of the container are returned
 //              => false if the system limits are returned
-func (s *SystemStats) GetTotalAndFreeMem(actual bool) (uint64, uint64, bool, error) {
+func (s *SystemStats) GetTotalAndFreeMem(actual bool, sigar_cgroup_supported uint8) (uint64, uint64, bool, error) {
 	var sysTotal, sysFree uint64
 	var cGroupTotal uint64
 	var err error
@@ -156,7 +155,7 @@ func (s *SystemStats) GetTotalAndFreeMem(actual bool) (uint64, uint64, bool, err
 	}
 
 	cgroupInfo := s.GetControlGroupInfo()
-	if cgroupInfo.Supported == common.SIGAR_CGROUP_SUPPORTED {
+	if cgroupInfo.Supported == sigar_cgroup_supported {
 		cGroupTotal = cgroupInfo.MemoryMax
 		cGroupCurr := cgroupInfo.MemoryCurrent
 		// cGroupTotal is with-in valid system limits

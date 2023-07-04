@@ -73,7 +73,7 @@ func Init(statsCollectionInterval int64, stats *system.SystemStats) error {
 	// as they can be transient
 	memMgr.ProcessCpuPercent()
 	memMgr.ProcessRSS()
-	total, free, _, _ := memMgr.stats.GetTotalAndFreeMem(true)
+	total, free, _, _ := memMgr.stats.GetTotalAndFreeMem(true, common.SIGAR_CGROUP_SUPPORTED)
 	memMgr.updateMemTotal(total)
 	memMgr.updateMemFree(free)
 

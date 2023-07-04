@@ -59,6 +59,15 @@ type Rebalancer struct {
 	// as the source node's resources for an index are not freed up until it is dropped.
 	buildingTTsByDestId map[string]map[string]*c.TransferToken
 
+	//tracks if first batch has been published by the rebalance master
+	firstBatchPublished bool
+
+	//all the empty nodes which have an index pending to build
+	toBuildEmptyNodes map[string]bool
+
+	//empty node for which index build is in progress
+	currBuildingEmptyNode string
+
 	// acceptedTokens is a destination node's map by [ttid] of its TTs; these never reach state TransferTokenDeleted
 	acceptedTokens map[string]*c.TransferToken
 
@@ -534,7 +543,7 @@ func (r *Rebalancer) doRebalance() {
 		default:
 			// Start the rebalance master work
 			r.publishDeferredTokens() // won't be built so these can all go at once
-			r.publishTransferTokenBatch(true)
+			r.publishFirstTransferBatch()
 			close(r.waitForTokenPublish)
 			go r.observeRebalance()
 		}
@@ -543,6 +552,163 @@ func (r *Rebalancer) doRebalance() {
 		r.finishRebalance(nil)
 		return
 	}
+}
+
+//publishFirstTransferBatch publishes the first batch of transfer tokens.
+//Based on the config, it can either choose to publish the first batch for
+//empty node or default to regular processing.
+func (r *Rebalancer) publishFirstTransferBatch() {
+
+	cfg := r.config.Load()
+	enableEmptyNodeBatching := cfg["rebalance.enableEmptyNodeBatching"].Bool()
+
+	hasEmptyNodeBatch := false
+	if enableEmptyNodeBatching {
+		//publish tokens for empty node
+		hasEmptyNodeBatch = r.publishFirstEmptyNodeBatch()
+	}
+
+	//if there is no empty batch, default to regular batches
+	if !hasEmptyNodeBatch {
+		r.firstBatchPublished = true
+		r.publishTransferTokenBatch(true)
+	}
+
+}
+
+//publishNextTransferBatch publishes the subsequent batch of transfer tokens
+//after the first batch is done. Based on the config, it can choose to publish
+//the tokens for empty nodes separately before regular processing of tokens.
+func (r *Rebalancer) publishNextTransferBatch() {
+
+	cfg := r.config.Load()
+	enableEmptyNodeBatching := cfg["rebalance.enableEmptyNodeBatching"].Bool()
+
+	hasEmptyNodeBatch := false
+	if enableEmptyNodeBatching {
+		//publish tokens for empty node
+		hasEmptyNodeBatch = r.publishNextEmptyNodeBatch()
+	}
+
+	//if there is no empty batch, default to regular batches
+	if !hasEmptyNodeBatch {
+		r.publishTransferTokenBatch(!r.firstBatchPublished)
+		r.firstBatchPublished = true
+	}
+
+}
+
+//publishFirstEmptyNodeBatch publishes the first batch for empty
+//node. If there are no empty nodes, it returns without any action.
+//Empty nodes are determined based on the metadata.
+func (r *Rebalancer) publishFirstEmptyNodeBatch() bool {
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex",
+		"publishFirstEmptyNodeBatch", "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex",
+		"publishFirstEmptyNodeBatch", "")
+
+	emptyNodes := func() map[string]bool {
+		if r.globalTopology == nil {
+			return nil
+		}
+
+		emptyNodes := make(map[string]bool)
+		for _, metadata := range r.globalTopology.Metadata {
+			if len(metadata.IndexDefinitions) == 0 {
+				emptyNodes[metadata.NodeUUID] = true
+			}
+		}
+		return emptyNodes
+	}()
+
+	if len(emptyNodes) == 0 {
+		return false
+	}
+
+	logging.Infof("Rebalancer::publishFirstEmptyNodeBatch Found empty nodes %v", emptyNodes)
+
+	r.toBuildEmptyNodes = emptyNodes
+
+	r.mapTransferTokensByDestIdLOCKED() // init r.toBuildTTsByDestId and r.buildingTTsByDestId
+
+	var publishedIds strings.Builder
+	published := 0
+	for destId := range r.toBuildEmptyNodes {
+		//if there are any TTs for the dest
+		if destTTs, ok := r.toBuildTTsByDestId[destId]; ok && len(destTTs) != 0 {
+			for ttid, tt := range destTTs {
+				tt.IsEmptyNodeBatch = true
+				r.moveTokenToBuildingLOCKED(ttid, tt)
+				setTransferTokenInMetakv(ttid, tt)
+				fmt.Fprintf(&publishedIds, " %v", ttid)
+				published++
+			}
+		}
+		if published > 0 {
+			l.Infof("Rebalancer::publishFirstEmptyNodeBatch Published %v empty node "+
+				"tokens: %v", published, publishedIds.String())
+
+			delete(r.toBuildEmptyNodes, destId)
+			r.currBuildingEmptyNode = destId
+			return true
+		}
+	}
+	r.currBuildingEmptyNode = ""
+	return false //nothing published
+}
+
+//publishNextEmptyNodeBatch check if the currently building
+//empty node batch is done and, if so, publishes the next
+//empty node batch. Returns true if any new batch gets published.
+func (r *Rebalancer) publishNextEmptyNodeBatch() bool {
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex",
+		"publishNextEmptyNodeBatch", "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex",
+		"publishNextEmptyNodeBatch", "")
+
+	//if there is any empty node batch in progress, check if all tokens are done
+
+	if r.currBuildingEmptyNode == "" {
+		return false
+	}
+
+	currDestId := r.currBuildingEmptyNode
+	if destTTs, ok := r.buildingTTsByDestId[currDestId]; ok && len(destTTs) != 0 {
+		for ttid, _ := range destTTs {
+			tt := r.transferTokens[ttid]
+			if tt.State != common.TransferTokenDeleted {
+				//all tokens in the batch not done
+				return true
+			}
+		}
+	}
+
+	var publishedIds strings.Builder
+	published := 0
+	for destId := range r.toBuildEmptyNodes {
+		//if there are any TTs for the dest
+		if destTTs, ok := r.toBuildTTsByDestId[destId]; ok && len(destTTs) != 0 {
+			for ttid, tt := range destTTs {
+				tt.IsEmptyNodeBatch = true
+				r.moveTokenToBuildingLOCKED(ttid, tt)
+				setTransferTokenInMetakv(ttid, tt)
+				fmt.Fprintf(&publishedIds, " %v", ttid)
+				published++
+			}
+		}
+		if published > 0 {
+			l.Infof("Rebalancer::publishNextEmptyNodeBatch Published %v empty node "+
+				"tokens: %v", published, publishedIds.String())
+
+			delete(r.toBuildEmptyNodes, destId)
+			r.currBuildingEmptyNode = destId
+			return true
+		}
+	}
+	r.currBuildingEmptyNode = ""
+	return false //nothing published
 }
 
 // publishDeferredTokens publishes all transfer tokens that are for user-deferred index builds.
@@ -580,10 +746,19 @@ func (r *Rebalancer) mapTransferTokensByDestId() {
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
 
+	r.mapTransferTokensByDestIdLOCKED()
+}
+
+func (r *Rebalancer) mapTransferTokensByDestIdLOCKED() {
 	r.toBuildTTsByDestId = make(map[string]map[string]*c.TransferToken)
 	r.buildingTTsByDestId = make(map[string]map[string]*c.TransferToken)
 	for ttid, tt := range r.transferTokens {
 		if tt.IsUserDeferred() { // rebalance will not build this index
+			continue
+		}
+		if tt.State == common.TransferTokenDeleted {
+			//state can already be deleted in case this token
+			//already got processed for empty node.
 			continue
 		}
 		destId := tt.DestId
@@ -1805,7 +1980,22 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			if !r.addToWaitGroup() {
 				return true
 			}
-			go r.buildAcceptedIndexes(buildTokens)
+
+			//Determine if the build tokens belong to an empty node batch.
+			//In such a case, all build tokens will have the IsEmptyNodeBatch flag set.
+			isEmptyNodeBatch := false
+			for _, tt := range buildTokens {
+				isEmptyNodeBatch = tt.IsEmptyNodeBatch
+				break
+			}
+
+			cfg := r.config.Load()
+			emptyNodeBuildBatchSize := cfg["rebalance.emptyNodeBuildBatchSize"].Int()
+			if emptyNodeBuildBatchSize > 0 && isEmptyNodeBatch {
+				go r.buildAcceptedIndexesInBatches(buildTokens, emptyNodeBuildBatchSize)
+			} else {
+				go r.buildAcceptedIndexes(buildTokens)
+			}
 		}
 
 	case c.TransferTokenInProgress:
@@ -2005,6 +2195,164 @@ cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 	return
 }
 
+//buildAcceptedIndexesInBatches accepts a map of build tokens and batch size.
+//Input tokens are grouped by keyspace and built in batches with each batch
+//having a max number of tokens as the input batchSize. Only 1 keyspace's
+//batch is built at a time. This is done to limit the backfill pressure on KV
+//during index rebalance.
+func (r *Rebalancer) buildAcceptedIndexesInBatches(buildTokens map[string]*common.TransferToken,
+	batchSize int) {
+
+	const method string = "Rebalancer::buildAcceptedIndexesInBatches:" // for logging
+
+	defer r.wg.Done()
+
+	//group the tokens based on per DCP stream required to build the index
+	tokensGroupedByKeyspace := func(buildTokens map[string]*common.TransferToken) map[string][]string {
+
+		groupedTokens := make(map[string][]string) //(map[keyspaceId]slice of ttid)
+		for ttid, tt := range buildTokens {
+			keyspaceId := fmt.Sprintf("%s:%s:%s", tt.IndexInst.Defn.Bucket,
+				tt.IndexInst.Defn.Scope, tt.IndexInst.Defn.Collection)
+			if ttlist, ok := groupedTokens[keyspaceId]; ok {
+				ttlist = append(ttlist, ttid)
+				groupedTokens[keyspaceId] = ttlist
+			} else {
+				ttlist := []string{ttid}
+				groupedTokens[keyspaceId] = ttlist
+			}
+		}
+
+		return groupedTokens
+
+	}(buildTokens)
+
+	var err error
+	for keyspaceId, ttlist := range tokensGroupedByKeyspace {
+
+		logging.Infof("%v Building batch %v %v", method, keyspaceId, ttlist)
+
+		batchTokenMap := make(map[string]*common.TransferToken)
+		for i, ttid := range ttlist {
+			batchTokenMap[ttid] = buildTokens[ttid]
+			if (i+1)%batchSize == 0 {
+				err = r.buildAcceptedIndexesBatch(batchTokenMap)
+				if err != nil {
+					logging.Errorf("%v Aborting batch err %v", method, err)
+					return
+				}
+				batchTokenMap = make(map[string]*common.TransferToken)
+			}
+		}
+		if len(batchTokenMap) != 0 {
+			err = r.buildAcceptedIndexesBatch(batchTokenMap)
+			if err != nil {
+				logging.Errorf("%v Aborting batch err %v", method, err)
+				return
+			}
+		}
+	}
+
+	//switch all tokens to ready together
+	r.moveDestTokenToMergeOrReady(buildTokens)
+
+}
+
+//buildAcceptedIndexesBatch submits a request to the Index to build
+//all the indexes for the input buildTokens. The builds occur asynchronously
+//in Indexer handleBuildIndex. This function calls waitForIndexBuildBatch
+//to wait for the builds to finish.
+func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.TransferToken) error {
+	const method string = "Rebalancer::buildAcceptedIndexesBatch:" // for logging
+
+	var idList client.IndexIdList // defnIds of the indexes to build
+	for _, tt := range buildTokens {
+		idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
+	}
+
+	if len(idList.DefnIds) == 0 {
+		l.Infof("%v Nothing to build", method)
+		return nil
+	}
+
+	response := new(IndexResponse)
+	url := "/buildIndexRebalance"
+	var errStr string
+
+	resp, err := postWithHandleEOF(idList, r.localaddr, url, method)
+	if err != nil {
+		errStr = err.Error()
+		goto cleanup
+	}
+
+	if err := convertResponse(resp, response); err != nil {
+		l.Errorf("%v Error unmarshal response %v %v", method, r.localaddr+url, err)
+		errStr = err.Error()
+		goto cleanup
+	}
+	if response.Code == RESP_ERROR {
+		// Error from index processing code. For rebalance this returns either ErrMarshalFailed.Error
+		// or a JSON string of a marshaled map[IndexInstId]string of error messages per instance ID. The
+		// keys for any entries having magic error string ErrIndexNotFoundRebal.Error are the submitted
+		// defnIds instead of instIds, as the metadata could not be found for these.
+		l.Errorf("%v Error cloning index %v %v", method, r.localaddr+url, response.Error)
+		errStr = response.Error
+		if errStr == common.ErrMarshalFailed.Error() { // no detailed error info available
+			goto cleanup
+		}
+
+		// Unmarshal the detailed error info
+		var errMap map[c.IndexInstId]string
+		err = json.Unmarshal([]byte(errStr), &errMap)
+		if err != nil {
+			errStr = c.ErrUnmarshalFailed.Error()
+			goto cleanup
+		}
+
+		// Deal with the individual errors
+		for id, errStr := range errMap {
+			if isMissingBSC(errStr) {
+				// id is an instId. Move the TT for this instId to TransferTokenCommit
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+				for ttid, tt := range buildTokens {
+					if id == tt.IndexInst.InstId {
+						l.Infof("%v Build destination index failed due to bucket/scope/collection dropped. Skipping. tt %v.", method, tt)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+						break
+					}
+				}
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", method, "")
+			} else if isIndexNotFoundRebal(errStr) {
+				// id is a defnId. Move all TTs for this defnId to TransferTokenCommit
+				defnId := c.IndexDefnId(id)
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+				for ttid, tt := range buildTokens {
+					if defnId == tt.IndexInst.Defn.DefnId {
+						l.Infof("%v Build destination index failed due to index metadata missing; bucket/scope/collection likely dropped. Skipping. tt %v.", method, tt)
+						tt.State = c.TransferTokenCommit
+						setTransferTokenInMetakv(ttid, tt)
+					}
+				}
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", method, "")
+			} else {
+				goto cleanup // unrecoverable error
+			}
+		}
+	}
+
+	r.waitForIndexBuildBatch(buildTokens)
+	return nil
+
+cleanup: // fail the rebalance; mark all accepted transfer tokens with error
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
+	for ttid, tt := range r.acceptedTokens {
+		r.setTransferTokenError(ttid, tt, errStr)
+	}
+	c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
+	return err
+}
+
 // waitForIndexBuild waits for the most recently submitted (by parent buildAcceptedIndexes) set of
 // rebalance-initiated index builds to complete in order to move each of their transfer token states
 // forward in child destTokenToMergeOrReadyLOCKED. Its primary purpose is thus to update the TT
@@ -2124,6 +2472,184 @@ loop:
 		} // select
 		time.Sleep(1 * time.Second)
 	} // for
+}
+
+// waitForIndexBuildBatch waits for all the indexes in the input token list to finish
+// building. It doesn't change the RState or merge partitions.
+func (r *Rebalancer) waitForIndexBuildBatch(buildTokens map[string]*common.TransferToken) {
+	const _waitForIndexBuildBatch string = "Rebalancer::waitForIndexBuildBatch:"
+
+	buildStartTime := time.Now()
+	cfg := r.config.Load()
+	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
+
+	tokenBuildDone := make(map[string]bool)
+
+	lastLogTime := time.Now() // last time we logged generic loop msg; init to now to delay 1st msg
+loop:
+	for {
+		select {
+		case <-r.cancel:
+			l.Infof("%v Cancel Received", _waitForIndexBuildBatch)
+			break loop
+		case <-r.done:
+			l.Infof("%v Done Received", _waitForIndexBuildBatch)
+			break loop
+
+		default:
+			allStats := r.statsMgr.stats.Get()
+
+			indexerState := allStats.indexerStateHolder.GetValue().(string)
+			if indexerState == "Paused" {
+				l.Errorf("%v Paused state detected for %v", _waitForIndexBuildBatch, r.localaddr)
+				lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", _waitForIndexBuildBatch, "")
+				for ttid, tt := range r.acceptedTokens {
+					l.Errorf("%v Token State Changed to Error %v %v", _waitForIndexBuildBatch, ttid, tt)
+					r.setTransferTokenError(ttid, tt, "Indexer In Paused State")
+				}
+				c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "1 bigMutex", _waitForIndexBuildBatch, "")
+				break
+			}
+
+			localMeta, err := getLocalMeta(r.localaddr)
+			if err != nil {
+				l.Errorf("%v Error Fetching Local Meta %v %v", _waitForIndexBuildBatch, r.localaddr, err)
+				break
+			}
+
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuildBatch, "")
+			allBuildsDone := true
+
+			for ttid, tt := range buildTokens {
+
+				//token can get moved to commit state
+				//if bucket/scope/collection gets dropped.
+				//Add such tokens to tokenBuildDone
+				if tt.State == c.TransferTokenCommit {
+					if ok := tokenBuildDone[ttid]; !ok {
+						tokenBuildDone[ttid] = true
+					}
+				}
+
+				if done, ok := tokenBuildDone[ttid]; ok && done {
+					//skip checking for already done builds
+					continue
+				}
+
+				allBuildsDone = false
+
+				indexState, err := getIndexStatusFromMeta(tt, localMeta)
+				if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
+					l.Infof("%v Could not get index status; bucket/scope/collection likely dropped."+
+						" Skipping. indexState %v, err %v, tt %v.", _waitForIndexBuildBatch, indexState, err, tt)
+					tt.State = c.TransferTokenCommit // skip forward instead of failing rebalance
+					setTransferTokenInMetakv(ttid, tt)
+				} else if err != "" {
+					l.Errorf("%v Error Fetching Index Status %v %v", _waitForIndexBuildBatch, r.localaddr, err)
+					break
+				}
+
+				defn := tt.IndexInst.Defn
+				defn.SetCollectionDefaults()
+				defnKey := getStatsDefnKey(tt)
+				defnStats := allStats.indexes[defnKey] // stats for current defn
+				if defnStats == nil {
+					l.Infof("%v Missing defnStats for instId %v. Retrying...", _waitForIndexBuildBatch, defnKey)
+					break
+				}
+
+				// Processing rate calculation and check is to ensure the destination index is not
+				// far behind in mutation processing when we redirect traffic from the old source.
+				// Indexes become active when they merge to MAINT_STREAM but may still be behind.
+				numDocsPending := defnStats.numDocsPending.GetValue().(int64)
+				numDocsQueued := defnStats.numDocsQueued.GetValue().(int64)
+				numDocsProcessed := defnStats.numDocsProcessed.GetValue().(int64)
+
+				elapsed := time.Since(buildStartTime).Seconds()
+				if elapsed == 0 {
+					elapsed = 1
+				}
+				processing_rate := float64(numDocsProcessed) / elapsed
+				tot_remaining := numDocsPending + numDocsQueued
+				remainingBuildTime := maxRemainingBuildTime
+				if processing_rate != 0 {
+					remainingBuildTime = uint64(float64(tot_remaining) / processing_rate)
+				}
+				if tot_remaining == 0 {
+					remainingBuildTime = 0
+				}
+
+				now := time.Now()
+				if now.Sub(lastLogTime) > 30*time.Second {
+					lastLogTime = now
+					l.Infof("%v Index: %v:%v:%v:%v State: %v"+
+						" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
+						" Remaining: %v EstTime: %v Partns: %v DestAddr: %v", _waitForIndexBuildBatch,
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
+						numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
+						tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
+				}
+				if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
+					logging.Infof("%v Index: %v:%v:%v:%v BuildDone", _waitForIndexBuildBatch, defn.Bucket,
+						defn.Scope, defn.Collection, defn.Name)
+					tokenBuildDone[ttid] = true
+					//Indicate that this token is ready for switch to rstate active
+					//This flag is used during recovery. If this flag is set to true,
+					//the index can be moved to rstate=ACTIVE on destination.
+					//Otherwise, the index will be cleaned up on the destination and
+					//retained on the source node.
+					tt.IsPendingReady = true
+					setTransferTokenInMetakv(ttid, tt)
+				}
+			}
+
+			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "2 bigMutex", _waitForIndexBuildBatch, "")
+
+			if allBuildsDone {
+				l.Infof("%v Batch Build Done", _waitForIndexBuildBatch)
+				break loop
+			}
+		} // select
+		time.Sleep(1 * time.Second)
+	} // for
+}
+
+//once all builds are done, move the token to merge or ready state
+func (r *Rebalancer) moveDestTokenToMergeOrReady(buildTokens map[string]*common.TransferToken) {
+	const _moveDestTokenToMergeOrReady string = "Rebalancer::moveDestTokenToMergeOrReady:"
+
+loop:
+	for {
+		select {
+		case <-r.cancel:
+			l.Infof("%v Cancel Received", _moveDestTokenToMergeOrReady)
+			break loop
+		case <-r.done:
+			l.Infof("%v Done Received", _moveDestTokenToMergeOrReady)
+			break loop
+
+		default:
+			lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", _moveDestTokenToMergeOrReady, "")
+			allTokensReady := true
+			for ttid, tt := range buildTokens {
+				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
+					continue
+				}
+				allTokensReady = false
+
+				if tt.State == c.TransferTokenMerge {
+					continue
+				}
+				r.destTokenToMergeOrReadyLOCKED(ttid, tt)
+			}
+			c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", _moveDestTokenToMergeOrReady, "")
+			if allTokensReady {
+				l.Infof("%v All Tokens Ready", _moveDestTokenToMergeOrReady)
+				break loop
+			}
+		} //select
+		time.Sleep(1 * time.Second)
+	} //for
 }
 
 // destTokenToMergeOrReadyLOCKED handles dest TT transitions from TransferTokenInProgress,
@@ -2292,7 +2818,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 			r.cancelMetakv()
 			go r.finishRebalance(nil)
 		} else {
-			r.publishTransferTokenBatch(false)
+			r.publishNextTransferBatch()
 		}
 
 	default:
@@ -2364,7 +2890,7 @@ func decodeTransferToken(path string, value []byte, prefix string) (string, *c.T
 	if tt.IsShardTransferToken() && tt.ShardTransferTokenState != c.ShardTokenCreated {
 		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
 	} else {
-		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt)
+		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
 	}
 
 	return ttid, tt, nil

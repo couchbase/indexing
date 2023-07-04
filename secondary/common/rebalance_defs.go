@@ -289,6 +289,12 @@ type TransferToken struct {
 	BuildSource  TokenBuildSource  // unused
 	TransferMode TokenTransferMode // move (rebalance) vs copy (replica repair)
 
+	IsEmptyNodeBatch bool //indicates the token is part of batch for empty node
+
+	//indicates the token is pending ready as the full batch is not complete.
+	//used only for empty node batching.
+	IsPendingReady bool
+
 	//used for logging
 	SourceHost string
 	DestHost   string
@@ -485,7 +491,6 @@ func (tt *TransferToken) LessVerboseString() string {
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
 		fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
 		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
-		fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
 	}
 
 	return sb.String()

@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/system"
 )
@@ -49,7 +50,7 @@ func StartCpuCollector() error {
 	// skip the first one
 	collector.stats.ProcessCpuPercent()
 	collector.stats.ProcessRSS()
-	collector.stats.GetTotalAndFreeMem(false)
+	collector.stats.GetTotalAndFreeMem(false, common.SIGAR_CGROUP_SUPPORTED)
 
 	// start stats collection
 	go collector.runCollectStats()
@@ -84,7 +85,7 @@ func (c *cpuCollector) runCollectStats() {
 		}
 		updateRSS(rss)
 
-		total, free, cGroupValues, err := c.stats.GetTotalAndFreeMem(false)
+		total, free, cGroupValues, err := c.stats.GetTotalAndFreeMem(false, common.SIGAR_CGROUP_SUPPORTED)
 		if err != nil {
 			logging.Debugf("Fail to get total and free memory. Err=%v", err)
 			continue

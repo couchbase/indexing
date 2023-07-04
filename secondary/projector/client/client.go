@@ -260,7 +260,9 @@ func (client *Client) InitialTopicRequest(
 	collectionAware bool,
 	enableOSO bool,
 	needsAuth bool,
-	numVBuckets int) (*protobuf.TopicResponse, error) {
+	numVBuckets int,
+	numVbWorkers uint32,
+	numDcpConns uint32) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
 	for _, instance := range instances {
@@ -268,7 +270,8 @@ func (client *Client) InitialTopicRequest(
 	}
 
 	req := protobuf.NewMutationTopicRequest(topic, endpointType,
-		instances, async, opaque2, collectionAware, enableOSO, needsAuth)
+		instances, async, opaque2, collectionAware, enableOSO,
+		needsAuth, numVbWorkers, numDcpConns)
 	for bucketn := range buckets {
 		ts, err := client.InitialRestartTimestamp(pooln, bucketn, numVBuckets)
 		if err != nil {
@@ -331,11 +334,13 @@ func (client *Client) MutationTopicRequest(
 	keyspaceIds []string,
 	collectionAware bool,
 	enableOSO bool,
-	needsAuth bool) (*protobuf.TopicResponse, error) {
+	needsAuth bool,
+	numVbWorkers uint32,
+	numDcpConns uint32) (*protobuf.TopicResponse, error) {
 
 	req := protobuf.NewMutationTopicRequest(topic,
 		endpointType, instances, async, opaque2, collectionAware,
-		enableOSO, needsAuth)
+		enableOSO, needsAuth, numVbWorkers, numDcpConns)
 	req.ReqTimestamps = reqTimestamps
 	req.KeyspaceIds = keyspaceIds
 

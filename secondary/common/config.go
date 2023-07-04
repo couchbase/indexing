@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/system"
 )
 
 // NOTE:
@@ -2592,6 +2593,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.percentage_memory_quota": ConfigValue{
+		uint64(0),
+		"Percentage memory of the Total System memory used by indexer buffercache." +
+			" Overrides the memory_quota value. 0 disables percentage memory quota",
+		uint64(0),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.cgroup.memory_quota": ConfigValue{
 		uint64(0),
 		"Linux cgroup override of indexer.settings.memory_quota;" +
@@ -3083,6 +3092,37 @@ var SystemConfig = Config{
 		1,
 		"wait time for rebalancer to start drop index after all indexes are built (sec)",
 		1,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.projNumVbWorkers": ConfigValue{
+		8,
+		"Number of projector vbucket workers used for INIT_STREAM during rebalance.",
+		8,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.projNumDcpConns": ConfigValue{
+		1,
+		"Number of DCP connections for INIT_STREAM used by projector during rebalance.",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.emptyNodeBuildBatchSize": ConfigValue{
+		20,
+		"Max index builds allowed on empty node during rebalance. 0 disables batching.",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.enableEmptyNodeBatching": ConfigValue{
+		true,
+		"Enable empty node batching during rebalance." +
+			"true = enables the special handling of empty nodes and rebalance master will publish " +
+			"all transfer tokens for an empty node in a single batch, one node at a time. " +
+			"false = disables special handling for empty nodes.",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -4028,11 +4068,31 @@ func (config Config) getIndexerConfigUint64(strippedKey string) uint64 {
 	return config.getIndexerConfig(strippedKey).Uint64()
 }
 
-// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes as logical
-// min(indexer.settings.memory_quota, indexer.cgroup.memory_quota).
+// GetIndexerMemoryQuota gets the Indexer's memory quota in bytes.
+// percentage mem quota override the absolute memory_quota specified.
+// Value returned is the min(gsiMemQuota, indexer.cgroup.memory_quota)
 // The latter is from sigar memory_max and only included if cgroups are supported.
 func (config Config) GetIndexerMemoryQuota() uint64 {
+	const _GetIndexerMemQuota = "Config::GetIndexerMemQuota:"
+
 	gsiMemQuota := config.getIndexerConfigUint64("settings.memory_quota")
+
+	if percMemQuota := config.getIndexerConfigUint64("settings.percentage_memory_quota"); percMemQuota > 0 {
+		stats, err := system.NewSystemStats()
+		if err != nil {
+			logging.Errorf("%v Not able to initialise SystemStats, reverting to use memory_quota Err=%v",
+				_GetIndexerMemQuota, err)
+		} else {
+			totalSysMem, err := stats.SystemTotalMem()
+			if err != nil {
+				logging.Errorf("%v Failed to get Total System Memory. Reverting to"+
+					" use Memory Quota value %v", _GetIndexerMemQuota, gsiMemQuota)
+			} else {
+				gsiMemQuota = uint64(float64(percMemQuota) * (float64(totalSysMem) / 100))
+			}
+		}
+	}
+
 	cgroupMemQuota := config.getIndexerConfigUint64("cgroup.memory_quota")
 	if cgroupMemQuota > 0 && cgroupMemQuota < gsiMemQuota {
 		gsiMemQuota = cgroupMemQuota
