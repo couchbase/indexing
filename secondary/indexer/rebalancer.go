@@ -2248,7 +2248,7 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 		return nil
 	}
 
-	response := new(IndexResponse)
+	response := new(manager.IndexResponse)
 	url := "/buildIndexRebalance"
 	var errStr string
 
@@ -2263,7 +2263,7 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 		errStr = err.Error()
 		goto cleanup
 	}
-	if response.Code == RESP_ERROR {
+	if response.Code == manager.RESP_ERROR {
 		// Error from index processing code. For rebalance this returns either ErrMarshalFailed.Error
 		// or a JSON string of a marshaled map[IndexInstId]string of error messages per instance ID. The
 		// keys for any entries having magic error string ErrIndexNotFoundRebal.Error are the submitted
