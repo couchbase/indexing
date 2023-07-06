@@ -2326,6 +2326,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.timekeeper.maxTsQueueLen": ConfigValue{
+		1000,
+		"Maximum number of timestamps that can be queued by timekeeper per stream." +
+			"Once the queue size exceeds this threshold, the timestamps are merged to " +
+			"reduce the number of timestamps in the queue.",
+		1000,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.enableAsyncOpenStream": ConfigValue{
 		true,
 		"Enable async stream open operation between indexer and projector",

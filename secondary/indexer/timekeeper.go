@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"math"
@@ -55,6 +56,10 @@ type timekeeper struct {
 
 	cinfoProvider     common.ClusterInfoProvider
 	cinfoProviderLock *sync.RWMutex
+
+	maxTsQueueLen       int //max ts queue len per stream(not per keyspace)
+	currInitTsQueueLen  int //sum of ts queue for all the keyspaces in init stream
+	currMaintTsQueueLen int //sum of ts queue for all the keyspaces in maint stream
 }
 
 type InitialBuildInfo struct {
@@ -93,6 +98,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
 		cinfoProvider:     cip,
 		cinfoProviderLock: cipLock,
+		maxTsQueueLen:     config["timekeeper.maxTsQueueLen"].Int(),
 	}
 
 	tk.indexInstMap.Init()
@@ -570,6 +576,7 @@ func (tk *timekeeper) removeKeyspaceFromStream(streamId common.StreamId,
 	} else {
 		tk.stopTimer(streamId, keyspaceId)
 		tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
+		tk.resetTsQueueStats(streamId)
 	}
 
 }
@@ -715,6 +722,7 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 
 	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 	tsList.Init()
+	tk.resetTsQueueStats(streamId)
 
 	state := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
 
@@ -2255,6 +2263,7 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//there is no further processing for this keyspace.
 		tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 		tsList.Init()
+		tk.resetTsQueueStats(streamId)
 
 	} else {
 
@@ -2594,6 +2603,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				_checkInitStreamReadyToMerge, streamId, keyspaceId)
 			tk.stopTimer(streamId, keyspaceId)
 			tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
+			tk.resetTsQueueStats(streamId)
 			return true
 		}
 	}
@@ -2845,6 +2855,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			})
 			tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 			tsList.PushBack(tsElem)
+			tk.incrTsQueueStats(streamId)
 			keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 			if keyspaceStats != nil {
 				keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
@@ -2942,6 +2953,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 						keyspaceId, streamId)
 				})
 				tsList.Init()
+				tk.resetTsQueueStats(streamId)
 				return false
 			}
 
@@ -3463,6 +3475,7 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 
 		tk.stopTimer(streamId, keyspaceId)
 		tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
+		tk.resetTsQueueStats(streamId)
 
 		//send message for recovery
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
@@ -4739,4 +4752,183 @@ func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
 		return true
 	}
 	return false
+}
+
+//resetTsQueueStats recomputes the ts queue len stats for all the
+//keyspaces in the given streamId. Caller must hold timekeeper lock.
+func (tk *timekeeper) resetTsQueueStats(streamId common.StreamId) {
+
+	newTsQueueLen := 0
+	for _, tsList := range tk.ss.streamKeyspaceIdTsListMap[streamId] {
+		newTsQueueLen += tsList.Len()
+	}
+
+	logging.Infof("Timekeeper::resetTsQueueStats Stream %v CurrInit %v "+
+		"CurrMaint %v New %v", streamId, tk.currInitTsQueueLen, tk.currMaintTsQueueLen,
+		newTsQueueLen)
+
+	if streamId == common.INIT_STREAM {
+		tk.currInitTsQueueLen = newTsQueueLen
+	}
+
+	if streamId == common.MAINT_STREAM {
+		tk.currMaintTsQueueLen = newTsQueueLen
+	}
+}
+
+//Incr ts queue len stats when new TS is generated.
+//Caller must hold timekeeper lock.
+func (tk *timekeeper) incrTsQueueStats(streamId common.StreamId) {
+
+	if streamId == common.INIT_STREAM {
+		tk.currInitTsQueueLen++
+	} else if streamId == common.MAINT_STREAM {
+		tk.currMaintTsQueueLen++
+	}
+
+	tk.mergeTsQueue(streamId)
+}
+
+//Decr ts queue len stats when TS is removed from queue.
+//Caller must hold timekeeper lock.
+func (tk *timekeeper) decrTsQueueStats(streamId common.StreamId) {
+
+	if streamId == common.INIT_STREAM {
+		if tk.currInitTsQueueLen > 0 {
+			tk.currInitTsQueueLen--
+		}
+	} else if streamId == common.MAINT_STREAM {
+		if tk.currMaintTsQueueLen > 0 {
+			tk.currMaintTsQueueLen--
+		}
+	}
+
+}
+
+func (tk *timekeeper) mergeTsQueue(streamId common.StreamId) {
+
+	if streamId == common.INIT_STREAM {
+		tk.mergeInitTsQueue()
+	}
+
+	if streamId == common.MAINT_STREAM {
+		tk.mergeMaintTsQueue()
+	}
+}
+
+//mergeMaintTsQueue merges the pending ts in the queue
+//by dropping alternate TS in the queue. Logically this
+//has the same affect if the TK clock was running at
+//half the speed when generating TS for continuous
+//stream of mutations.
+func (tk *timekeeper) mergeMaintTsQueue() {
+
+	if tk.currMaintTsQueueLen <= tk.maxTsQueueLen {
+		return
+	}
+
+	for keyspaceId, tsList := range tk.ss.streamKeyspaceIdTsListMap[common.MAINT_STREAM] {
+
+		totalCount := tsList.Len()
+		skippedCount := 0
+		for e := tsList.Front(); e != nil; {
+
+			var toRemove *list.Element
+
+			//decide between curr and the next TS
+			currElem := e
+			currVal := e.Value.(*TsListElem)
+			e = e.Next()
+
+			if e == nil {
+				//if there is no next, nothing to be done.
+				//The last ts shouldn't be skipped
+				//as it has the latest mutation information.
+			} else {
+				//if the curr TS is not snap aligned, drop that.
+				if !currVal.ts.IsSnapAligned() {
+					toRemove = currElem
+				} else {
+					//if the curr is snap aligned, drop the next
+					//one if it is non aligned
+					nextElem := e
+					nextVal := e.Value.(*TsListElem)
+					if !nextVal.ts.IsSnapAligned() {
+						toRemove = nextElem
+					} else {
+						//if both are aligned, drop the curr TS
+						toRemove = currElem
+					}
+				}
+			}
+			if toRemove != nil {
+				e = e.Next() //move to next before removing
+				tsList.Remove(toRemove)
+				skippedCount++
+			}
+		}
+		logging.Infof("Timekeeper::mergeMaintTsQueue %v %v TotalCount %v SkippedCount %v",
+			common.MAINT_STREAM, keyspaceId, totalCount, skippedCount)
+	}
+	tk.resetTsQueueStats(common.MAINT_STREAM)
+}
+
+//mergeMaintTsQueue merges the pending ts in the queue
+//by dropping alternate TS in the queue. Logically this
+//has the same affect if the TK clock was running at
+//half the speed when generating TS for continuous
+//stream of mutations.
+func (tk *timekeeper) mergeInitTsQueue() {
+
+	if tk.currInitTsQueueLen <= tk.maxTsQueueLen {
+		return
+	}
+
+	for keyspaceId, tsList := range tk.ss.streamKeyspaceIdTsListMap[common.INIT_STREAM] {
+
+		totalCount := tsList.Len()
+		skippedCount := 0
+		for e := tsList.Front(); e != nil; {
+
+			var toRemove *list.Element
+
+			//decide between curr and the next TS
+			currElem := e
+			currVal := e.Value.(*TsListElem)
+			e = e.Next()
+
+			if e == nil {
+				//if there is no next, nothing to be done.
+				//The last ts shouldn't be skipped
+				//as it has the latest mutation information.
+			} else {
+				//if the curr TS is not snap aligned or
+				//has Open OSO snap, drop that.
+				if !currVal.ts.IsSnapAligned() ||
+					currVal.ts.HasOpenOSOSnap() {
+					toRemove = currElem
+				} else {
+					//if the curr is snap aligned, drop the next
+					//one if it is non aligned or has open OSO snap
+					nextElem := e
+					nextVal := e.Value.(*TsListElem)
+					if !nextVal.ts.IsSnapAligned() ||
+						nextVal.ts.HasOpenOSOSnap() {
+						toRemove = nextElem
+					} else {
+						//if both are aligned, drop the curr TS
+						toRemove = currElem
+					}
+				}
+			}
+			if toRemove != nil {
+				e = e.Next() //move to next before removing
+				tsList.Remove(toRemove)
+				skippedCount++
+			}
+		}
+		logging.Infof("Timekeeper::mergeInitTsQueue %v %v TotalCount %v SkippedCount %v",
+			common.INIT_STREAM, keyspaceId, totalCount, skippedCount)
+	}
+	tk.resetTsQueueStats(common.INIT_STREAM)
 }
