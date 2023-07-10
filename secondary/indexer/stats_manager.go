@@ -797,6 +797,7 @@ type IndexerStats struct {
 	memoryTotalStorage stats.Int64Val
 	memoryUsedQueue    stats.Int64Val
 	memoryUsedActual   stats.Int64Val //mandatory memory for plasma
+	memoryQuotaQueue   stats.Int64Val
 	needsRestart       stats.BoolVal
 	statsResponse      stats.TimingStat
 	notFoundError      stats.Int64Val
@@ -851,6 +852,7 @@ func (s *IndexerStats) Init() {
 	s.memoryUsedStorage.Init()
 	s.memoryTotalStorage.Init()
 	s.memoryUsedQueue.Init()
+	s.memoryQuotaQueue.Init()
 	s.memoryUsedActual.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()

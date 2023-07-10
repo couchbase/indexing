@@ -1601,6 +1601,8 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Seqnos[i] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+				//record that the small snap's mutations were not considered. This will be used in ensureMonotonicTs.
+				ts.SetSmallSnapDropped(true)
 			}
 			if lastSnap.Seqnos[i] != lastSnap.Snapshots[i][1] {
 				logging.Warnf("StreamState::alignSnapBoundary Received Partial Last Snapshot in HWT "+
@@ -1765,6 +1767,7 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 
 func (ss *StreamState) UpdateConfig(cfg common.Config) {
 	ss.config = cfg
+	logging.Infof("StreamState::UpdateConfig %v", cfg["settings.smallSnapshotThreshold"].Uint64())
 }
 
 //helper function to update Seqnos in TsVbuuid to
