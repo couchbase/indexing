@@ -2637,11 +2637,11 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.minVbQueueLength": ConfigValue{
-		uint64(50),
+		uint64(30),
 		"Minimum Length of Mutation Queue Per Vbucket. This " +
-			"allocation is done per bucket. Must be greater " +
-			"than smallSnapshotThreshold.",
-		uint64(50),
+			"allocation is done per bucket. Must be equal to or " +
+			"greater than smallSnapshotThreshold.",
+		uint64(30),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2658,7 +2658,7 @@ var SystemConfig = Config{
 	"indexer.settings.smallSnapshotThreshold": ConfigValue{
 		uint64(30), //please see minVbQueueLength before changing this
 		"Threshold For Considering a DCP Snapshot as Small. Must be" +
-			"smaller than minVbQueueLength.",
+			"smaller than or equal to minVbQueueLength.",
 		uint64(30),
 		false, // mutable
 		false, // case-insensitive
