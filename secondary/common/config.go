@@ -2317,6 +2317,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.maxHeapThreshold": ConfigValue{
+		20,
+		"Max percentage of memory quota which can be used for heap." +
+			"Based on this threshold and current heap usage, Indexer will " +
+			"adjust the mutation queue allocation. Setting the value to 0 " +
+			"disables the heap control.",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.timekeeper.monitor_flush": ConfigValue{
 		true,
 		"Debug option to enable monitoring flush in timekeeper." +

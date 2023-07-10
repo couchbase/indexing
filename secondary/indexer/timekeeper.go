@@ -3328,6 +3328,19 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 					needsLog = false
 				}
 
+				//Due to dynamic changing of smallSnapshotThreshold, it is possible that
+				//some of the later TS has lower seqno than the previous one e.g.
+				//smallSnapshotThreshold=30, s[0]=0,s[1]=25,seq=15
+				//TS1=[0-0,0] - qualifies for smallSnapThreshold
+				//Now smallSnapThreshold changes to 20
+				//TS2=[0-25,15] - doesn't qualify for smallSnapThreshold
+				//smallSnapThreshold changes to 30 again
+				//TS3=[0-0,0] - qualifies for smallSnapThreshold again
+				//TS3 is smaller than TS2
+				if flushTs.IsSmallSnapDropped() {
+					needsLog = false
+				}
+
 				if needsLog {
 					hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 					lastSnap := tk.ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]

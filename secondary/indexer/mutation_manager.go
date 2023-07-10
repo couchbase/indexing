@@ -1373,6 +1373,7 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 
 	m.setMaxMemoryFromQuota()
 	m.setEnableAuth()
+	m.setMinVbQueueLength()
 
 	m.supvCmdch <- &MsgSuccess{}
 }
@@ -1390,7 +1391,25 @@ func (m *mutationMgr) setMaxMemoryFromQuota() {
 	}
 
 	atomic.StoreInt64(&m.maxMemory, maxMem)
+	stats := m.stats.Get()
+	if stats != nil {
+		stats.memoryQuotaQueue.Set(atomic.LoadInt64(&maxMem))
+	}
+
 	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
+}
+
+func (m *mutationMgr) setMinVbQueueLength() {
+
+	minVbQueueLen := m.config["settings.minVbQueueLength"].Uint64()
+	logging.Infof("MutationManager::setMinVbQueueLength %v", minVbQueueLen)
+	for _, keyspaceIdQueueMap := range m.streamKeyspaceIdQueueMap {
+
+		for _, queue := range keyspaceIdQueueMap {
+			queue.queue.SetMinVbQueueLength(minVbQueueLen)
+		}
+
+	}
 }
 
 func (m *mutationMgr) handleIndexerPause(cmd Message) {

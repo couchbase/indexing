@@ -724,6 +724,7 @@ type IndexerStats struct {
 	memoryUsedStorage  stats.Int64Val
 	memoryTotalStorage stats.Int64Val
 	memoryUsedQueue    stats.Int64Val
+	memoryQuotaQueue   stats.Int64Val
 	needsRestart       stats.BoolVal
 	statsResponse      stats.TimingStat
 	notFoundError      stats.Int64Val
@@ -771,6 +772,7 @@ func (s *IndexerStats) Init() {
 	s.memoryUsedStorage.Init()
 	s.memoryTotalStorage.Init()
 	s.memoryUsedQueue.Init()
+	s.memoryQuotaQueue.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()
 	s.indexerState.Init()
