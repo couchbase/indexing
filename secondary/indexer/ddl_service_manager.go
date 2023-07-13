@@ -80,6 +80,8 @@ type ddlSettings struct {
 	allowPartialQuorum uint32
 	useGreedyPlanner   uint32
 
+	isShardAffinityEnabled uint32
+
 	//serverless configs
 	memHighThreshold int32
 	memLowThreshold  int32
@@ -2056,6 +2058,10 @@ func (s *ddlSettings) ServerlessIndexLimit() uint32 {
 	return atomic.LoadUint32(&s.indexLimit)
 }
 
+func (s *ddlSettings) IsShardAffinityEnabled() bool {
+	return atomic.LoadUint32(&s.isShardAffinityEnabled) == 1
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2089,6 +2095,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
 	if useGreedyPlanner {
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
+	}
+
+	isShardAffinityEnabled := config["planner.enableShardAffinity"].Bool()
+	if isShardAffinityEnabled {
+		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
 	}
 
 	memHighThreshold := int32(config["settings.thresholds.mem_high"].Int())
