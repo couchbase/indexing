@@ -1504,7 +1504,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	schedIndex := false
-	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() {
+	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() &&
+		o.ShouldMaintainShardAffinity() {
 		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
 			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
@@ -1522,8 +1523,12 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	if err != nil {
-		logging.Errorf("Encounter planner error for index.  Use round robin strategy for planning. Error: %v: Index:%v, %v, %v, %v",
+		logging.Errorf("Encounter planner error for index. Error: %v: Index:%v, %v, %v, %v",
 			err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+		if o.ShouldMaintainShardAffinity() {
+			return err
+		}
+		logging.Infof("Using round robin planner for index: %v", idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
 		if err != nil {
 			logging.Errorf("Fail to create index: %v", err)
@@ -1685,6 +1690,12 @@ func (o *MetadataProvider) canSkipPlanner(watcherMap map[c.IndexerId]int,
 
 func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.IndexerId]int,
 	idxDefn *c.IndexDefn, allowLostReplica bool, actualNumReplica uint32) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
+
+	if o.ShouldMaintainShardAffinity() {
+		errMsg := "round robin planner is disabled"
+		logging.Errorf("MetadataProvider::getIndexLayoutWithoutPlanner %v", errMsg)
+		return nil, nil, errors.New(errMsg)
+	}
 
 	var watchers []*watcher
 	if len(idxDefn.Nodes) == 0 {
@@ -1954,6 +1965,12 @@ func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn,
 // This function create index using old protocol (spock).
 //
 func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
+
+	if o.ShouldMaintainShardAffinity() {
+		errMsg := "round robin planner is disabled"
+		logging.Errorf("MetadataProvider::getIndexLayoutWithoutPlanner %v", errMsg)
+		return errors.New(errMsg)
+	}
 
 	logging.Infof("Using old protocol for create index")
 
@@ -7160,6 +7177,13 @@ func (w *watcher) excludeIn() bool {
 	}
 
 	return false
+}
+
+func (provider *MetadataProvider) ShouldMaintainShardAffinity() bool {
+	storageMode := strings.ToLower(provider.settings.StorageMode())
+	return provider.settings.IsShardAffinityEnabled() &&
+		!provider.internalVersion.LessThan(c.MIN_VER_SHARD_AFFINITY) &&
+		storageMode == c.PlasmaDB
 }
 
 func extractDefnIdFromKey(key string) (c.IndexDefnId, error) {

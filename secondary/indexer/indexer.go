@@ -511,7 +511,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	// Start internal version monitor only after starting http server.
-	go common.MonitorInternalVersion(int64(common.INDEXER_71_VERSION), common.MIN_VER_SRV_AUTH,
+	go common.MonitorInternalVersion(int64(common.INDEXER_76_VERSION), common.MIN_VER_SHARD_AFFINITY,
 		idx.config["clusterAddr"].String())
 
 	// indexer is now ready to take security change
