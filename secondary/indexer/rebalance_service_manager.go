@@ -3338,6 +3338,14 @@ func (m *RebalanceServiceManager) doHandleMoveIndex(req *IndexRequest) (int, str
 
 	l.Infof("RebalanceServiceManager::doHandleMoveIndex %v", l.TagUD(req))
 
+	cfg := m.config.Load()
+	if c.ShouldMaintainShardAffinity(cfg) {
+		// move index is disabled since 7.6 if shard affinity is enabled for planner
+		errMsg := "move index is disabled"
+		l.Errorf("RebalanceServiceManager::dohandleMoveIndex %v", errMsg)
+		return http.StatusBadRequest, errMsg
+	}
+
 	nodes, err := validateMoveIndexReq(req)
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::doHandleMoveIndex %v", err)

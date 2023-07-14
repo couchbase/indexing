@@ -1767,3 +1767,13 @@ func (sv ServerPriority) GetVersion() uint64 {
 func (sv ServerPriority) String() string {
 	return string(sv)
 }
+
+// ShouldMaintainShardAfffinty - if shard affinity is enabled, cluster is on or ahead of 7.6
+// and storage mode is Plasma.
+// Should only be called from *indexer* and not from client/metadata_provider
+func ShouldMaintainShardAffinity(config Config) bool {
+	intVer := GetInternalVersion()
+	isShardAffinityEnabled := config.getIndexerConfig("planner.enableShardAffinity").Bool()
+	isStoragePlasma := GetClusterStorageMode() == PLASMA
+	return !intVer.LessThan(MIN_VER_SHARD_AFFINITY) && isShardAffinityEnabled && isStoragePlasma
+}

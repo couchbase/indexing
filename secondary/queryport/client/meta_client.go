@@ -365,6 +365,10 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 // MoveIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{}) error {
 
+	if b.mdClient.ShouldMaintainShardAffinity() {
+		return errors.New("move index is disabled")
+	}
+
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
 	if _, ok := currmeta.defns[common.IndexDefnId(defnID)]; !ok {
