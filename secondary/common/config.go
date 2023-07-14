@@ -2337,11 +2337,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.timekeeper.maxTsQueueLen": ConfigValue{
-		1000,
+		2500,
 		"Maximum number of timestamps that can be queued by timekeeper per stream." +
 			"Once the queue size exceeds this threshold, the timestamps are merged to " +
 			"reduce the number of timestamps in the queue.",
-		1000,
+		2500,
 		false, // mutable
 		false, // case-insensitive
 	},

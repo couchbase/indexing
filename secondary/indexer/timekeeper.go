@@ -98,11 +98,12 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel, config common.Co
 		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
 		cinfoProvider:     cip,
 		cinfoProviderLock: cipLock,
-		maxTsQueueLen:     config["timekeeper.maxTsQueueLen"].Int(),
 	}
 
 	tk.indexInstMap.Init()
 	tk.indexPartnMap.Init()
+
+	tk.setMaxTsQueueLen()
 
 	//start timekeeper loop which listens to commands from its supervisor
 	go tk.run()
@@ -2178,6 +2179,8 @@ func (tk *timekeeper) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	tk.config = cfgUpdate.GetConfig()
 	tk.ss.UpdateConfig(tk.config)
+
+	tk.setMaxTsQueueLen()
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -4944,4 +4947,35 @@ func (tk *timekeeper) mergeInitTsQueue() {
 			common.INIT_STREAM, keyspaceId, totalCount, skippedCount)
 	}
 	tk.resetTsQueueStats(common.INIT_STREAM)
+}
+
+func (tk *timekeeper) setMaxTsQueueLen() {
+
+	//Calculate maxTsQueueLen based on the memory quota
+	//Each TsVbuuid is 40KB in size.
+	//memoryQuota <= 4GB, maxTsQueueLen=1000 => overhead 40MB
+	//memoryQuota <= 16GB, maxTsQueueLen=2000 => overhead 80MB
+	//memoryQuota > 16GB, maxTsQueueLen=2500 => overhead 100MB
+
+	stats := tk.stats.Get()
+	if stats != nil {
+		memQuota := stats.memoryQuota.Value()
+
+		var tsQueueLen int
+		if memQuota <= 4*1024*1024*1024 {
+			tsQueueLen = 1000
+		} else if memQuota <= 16*1024*1024*1024 {
+			tsQueueLen = 2000
+		} else {
+			tsQueueLen = 2500
+		}
+
+		maxTsQueueLen := tk.config["timekeeper.maxTsQueueLen"].Int()
+		if tsQueueLen > maxTsQueueLen {
+			tsQueueLen = maxTsQueueLen
+		}
+
+		logging.Infof("Timekeeper::setMaxTsQueueLen %v", tsQueueLen)
+		tk.maxTsQueueLen = tsQueueLen
+	}
 }
