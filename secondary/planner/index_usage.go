@@ -20,6 +20,10 @@ type IndexUsage struct {
 	Hosts      []string           `json:"host"`
 	ShardIds   []common.ShardId   `json:"shardIds,omitempty"`
 
+	// For all indexes created from 7.6+ version of planner and on
+	// 7.6+ version of indexer, alternateShardIds will be non-nil
+	AlternateShardIds []string `json:"alternateShardIds,omitempty"`
+
 	// input: index sizing
 	IsPrimary     bool    `json:"isPrimary,omitempty"`
 	StorageMode   string  `json:"storageMode,omitempty"`

@@ -58,11 +58,12 @@ type IndexInstDistribution struct {
 }
 
 type IndexPartDistribution struct {
-	PartId          uint64                      `json:"partId,omitempty"`
-	Version         uint64                      `json:"version,omitempty"`
-	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
-	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
-	ShardIds        []common.ShardId            `json:"shardIds,omitempty"`
+	PartId            uint64                      `json:"partId,omitempty"`
+	Version           uint64                      `json:"version,omitempty"`
+	SinglePartition   IndexSinglePartDistribution `json:"singlePartition,omitempty"`
+	KeyPartition      IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
+	ShardIds          []common.ShardId            `json:"shardIds,omitempty"`
+	AlternateShardIds []string                    `json:"alternateShardIds,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {
@@ -80,9 +81,7 @@ type IndexSliceLocator struct {
 	IndexerId string `json:"indexerId,omitempty"`
 }
 
-//
 // topologyChange captures changes in a topology
-//
 type changeRecord struct {
 	definition *IndexDefnDistribution
 	instance   *IndexInstDistribution
@@ -122,14 +121,13 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Topology Maintenance
 ////////////////////////////////////////////////////////////////////////
 
-//
 // Add an index definition to Topology.
-//
 func (t *IndexTopology) AddIndexDefinition(bucket, scope, collection, name string,
 	defnId uint64, instId uint64, state uint32, indexerId string,
 	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId,
 	versions []int, numPartitions uint32,
-	scheduled bool, storageMode string, realInstId uint64) {
+	scheduled bool, storageMode string, realInstId uint64,
+	alternateShardIds map[common.PartitionId][]string) {
 
 	t.RemoveIndexDefinitionById(common.IndexDefnId(defnId))
 
@@ -154,6 +152,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket, scope, collection, name strin
 		part.PartId = uint64(partnId)
 		part.Version = uint64(versions[i])
 		part.SinglePartition.Slices = append(part.SinglePartition.Slices, *slice)
+		part.AlternateShardIds = alternateShardIds[partnId]
 		inst.Partitions = append(inst.Partitions, *part)
 	}
 
@@ -170,7 +169,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket, scope, collection, name strin
 
 func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
 	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, versions []int, numPartitions uint32,
-	scheduled bool, storageMode string, realInstId uint64) {
+	scheduled bool, storageMode string, realInstId uint64, alternateShardIds map[common.PartitionId][]string) {
 
 	inst := IndexInstDistribution{}
 	inst.InstId = instId
@@ -193,6 +192,7 @@ func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint
 		part.PartId = uint64(partnId)
 		part.Version = uint64(versions[i])
 		part.SinglePartition.Slices = append(part.SinglePartition.Slices, slice)
+		part.AlternateShardIds = alternateShardIds[partnId]
 		inst.Partitions = append(inst.Partitions, part)
 	}
 
@@ -219,9 +219,7 @@ func (t *IndexTopology) RemoveIndexDefinitionById(id common.IndexDefnId) (cleanT
 	return len(t.Definitions) == 0
 }
 
-//
 // Get all index instance Id's for a specific defnition
-//
 func (t *IndexTopology) FindIndexDefinition(bucket, scope, collection, name string) *IndexDefnDistribution {
 
 	for _, defnRef := range t.Definitions {
@@ -233,9 +231,7 @@ func (t *IndexTopology) FindIndexDefinition(bucket, scope, collection, name stri
 	return nil
 }
 
-//
 // Get all index instance Id's for a specific defnition
-//
 func (t *IndexTopology) FindIndexDefinitionById(id common.IndexDefnId) *IndexDefnDistribution {
 
 	for _, defnRef := range t.Definitions {
@@ -246,9 +242,7 @@ func (t *IndexTopology) FindIndexDefinitionById(id common.IndexDefnId) *IndexDef
 	return nil
 }
 
-//
 // Update Index Status on instance
-//
 func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId, instId common.IndexInstId) *IndexInstDistribution {
 
 	for i, _ := range t.Definitions {
@@ -264,9 +258,7 @@ func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId, instId com
 	return nil
 }
 
-//
 // Update Index Status on instance
-//
 func (t *IndexTopology) UpdateStateForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState) bool {
 
 	for i, _ := range t.Definitions {
@@ -312,9 +304,7 @@ func (t *IndexTopology) UpdateShardIdsForIndexPartn(defnId common.IndexDefnId, i
 	return changed
 }
 
-//
 // Set scheduled flag
-//
 func (t *IndexTopology) UpdateScheduledFlagForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, scheduled bool) bool {
 
 	for i, _ := range t.Definitions {
@@ -334,9 +324,7 @@ func (t *IndexTopology) UpdateScheduledFlagForIndexInst(defnId common.IndexDefnI
 	return false
 }
 
-//
 // Update Index Rebalance Status on instance
-//
 func (t *IndexTopology) UpdateRebalanceStateForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, state common.RebalanceState) bool {
 
 	for i, _ := range t.Definitions {
@@ -356,9 +344,7 @@ func (t *IndexTopology) UpdateRebalanceStateForIndexInst(defnId common.IndexDefn
 	return false
 }
 
-//
 // Update Storage Mode on instance
-//
 func (t *IndexTopology) UpdateStorageModeForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, storageMode string) bool {
 
 	for i, _ := range t.Definitions {
@@ -378,9 +364,7 @@ func (t *IndexTopology) UpdateStorageModeForIndexInst(defnId common.IndexDefnId,
 	return false
 }
 
-//
 // Update Old Storage Mode on instance
-//
 func (t *IndexTopology) UpdateOldStorageModeForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, storageMode string) bool {
 
 	for i, _ := range t.Definitions {
@@ -400,9 +384,7 @@ func (t *IndexTopology) UpdateOldStorageModeForIndexInst(defnId common.IndexDefn
 	return false
 }
 
-//
 // Update StreamId on instance
-//
 func (t *IndexTopology) UpdateStreamForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, stream common.StreamId) bool {
 
 	for i, _ := range t.Definitions {
@@ -422,9 +404,7 @@ func (t *IndexTopology) UpdateStreamForIndexInst(defnId common.IndexDefnId, inst
 	return false
 }
 
-//
 // Update Version on instance
-//
 func (t *IndexTopology) UpdateVersionForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, version uint64) bool {
 
 	for i, _ := range t.Definitions {
@@ -605,9 +585,7 @@ func (t *IndexTopology) DeleteAllPartitionsForIndexInst(defnId common.IndexDefnI
 	return true
 }
 
-//
 // Set Error on instance
-//
 func (t *IndexTopology) SetErrorForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, errorStr string) bool {
 
 	for i, _ := range t.Definitions {
@@ -629,9 +607,7 @@ func (t *IndexTopology) SetErrorForIndexInst(defnId common.IndexDefnId, instId c
 	return false
 }
 
-//
 // Update Index Status on instance
-//
 func (t *IndexTopology) ChangeStateForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, fromState, toState common.IndexState) {
 
 	for i, _ := range t.Definitions {
@@ -723,9 +699,7 @@ func (t *IndexTopology) RemoveIndexInstanceById(defnId common.IndexDefnId, instI
 	}
 }
 
-//
 // Update Index Status on instance
-//
 func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []IndexInstDistribution {
 
 	for i, _ := range t.Definitions {
@@ -865,6 +839,7 @@ func transformPartnDist(partitions *IndexPartDistribution) *mc.IndexPartDistribu
 	partn.SinglePartition = *transformSinglePartn(&partitions.SinglePartition)
 	partn.KeyPartition = *transformKeyPartitions(&partitions.KeyPartition)
 	partn.ShardIds = partitions.ShardIds
+	partn.AlternateShardIds = partitions.AlternateShardIds
 
 	return partn
 }

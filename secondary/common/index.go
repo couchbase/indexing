@@ -280,10 +280,11 @@ type IndexDefn struct {
 
 	// The value of this field is decided by planner at the time
 	// of creating the index. The same value will be persisted in
-	// index meta. This will be a slice of size "2" where the 0th
-	// entry corresponds alternateShardId of main index and 1st
-	// entry corresponds to alternateShardId of back index
-	AlternateShardIds []string `json:"alternateShardIds,omitempty"`
+	// index meta.
+	// As each partition can go to different shard, the key to the map
+	// is the partition and the value represents the alternate shardIds
+	// for main and back index shards
+	AlternateShardIds map[PartitionId][]string `json:"alternateShardIds,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)

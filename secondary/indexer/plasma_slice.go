@@ -575,8 +575,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 
 		tenant := slice.GetTenantName()
 		var alternateShardId string
-		if len(slice.idxDefn.AlternateShardIds) > 0 {
-			alternateShardId = slice.idxDefn.AlternateShardIds[MAIN_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
+		if len(slice.idxDefn.AlternateShardIds) > 0 && len(slice.idxDefn.AlternateShardIds[slice.idxPartnId]) > 0 {
+			alternateShardId = slice.idxDefn.AlternateShardIds[slice.idxPartnId][MAIN_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 		}
 
 		shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment() || slice.sysconf["plasma.useSharedLSS"].Bool()
@@ -595,8 +595,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 
 			tenant := slice.GetTenantName()
 			var alternateShardId string
-			if len(slice.idxDefn.AlternateShardIds) > 0 {
-				alternateShardId = slice.idxDefn.AlternateShardIds[BACK_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
+			if len(slice.idxDefn.AlternateShardIds) > 0 && len(slice.idxDefn.AlternateShardIds[slice.idxPartnId]) > 0 {
+				alternateShardId = slice.idxDefn.AlternateShardIds[slice.idxPartnId][BACK_INDEX-1] // "-1" because MAIN_INDEX is "1" and back-index is "2"
 			}
 
 			shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment() || slice.sysconf["plasma.useSharedLSS"].Bool()

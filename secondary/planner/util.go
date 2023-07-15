@@ -26,9 +26,7 @@ import (
 // Utility
 //////////////////////////////////////////////////////////////
 
-//
 // Format memory into friendly string
-//
 func formatMemoryStr(memory uint64) string {
 	mem := float64(memory)
 
@@ -55,9 +53,7 @@ func formatMemoryStr(memory uint64) string {
 	return strconv.FormatFloat(mem, 'g', 6, 64) + "T"
 }
 
-//
 // Format time into friendly string
-//
 func formatTimeStr(time uint64) string {
 	if time < 1000 {
 		return strconv.FormatUint(time, 10) + "ns"
@@ -77,9 +73,7 @@ func formatTimeStr(time uint64) string {
 	return strconv.FormatUint(time, 10) + "s"
 }
 
-//
 // This function calculates the load of indexer as percentage of quota
-//
 func computeIndexerUsage(s *Solution, indexer *IndexerNode) float64 {
 
 	memUsage := float64(indexer.GetMemTotal(s.UseLiveData())) / float64(s.constraint.GetMemQuota())
@@ -88,9 +82,7 @@ func computeIndexerUsage(s *Solution, indexer *IndexerNode) float64 {
 	return memUsage + cpuUsage
 }
 
-//
 // This function calculates the free resource of indexer as percentage of quota
-//
 func computeIndexerFreeQuota(s *Solution, indexer *IndexerNode) float64 {
 
 	memUsage := (float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))) / float64(s.constraint.GetMemQuota())
@@ -106,9 +98,7 @@ func computeIndexerFreeQuota(s *Solution, indexer *IndexerNode) float64 {
 	return memUsage + cpuUsage
 }
 
-//
 // This function calculates the load of index as percentage of quota
-//
 func computeIndexUsage(s *Solution, index *IndexUsage) float64 {
 
 	memUsage := float64(index.GetMemTotal(s.UseLiveData())) / float64(s.constraint.GetMemQuota())
@@ -117,9 +107,7 @@ func computeIndexUsage(s *Solution, index *IndexUsage) float64 {
 	return memUsage + cpuUsage
 }
 
-//
 // Find a random node
-//
 func getRandomNode(rs *rand.Rand, indexers []*IndexerNode) *IndexerNode {
 
 	numOfNodes := len(indexers)
@@ -131,9 +119,7 @@ func getRandomNode(rs *rand.Rand, indexers []*IndexerNode) *IndexerNode {
 	return nil
 }
 
-//
 // Tell if an indexer node holds the given index
-//
 func hasIndex(indexer *IndexerNode, candidate *IndexUsage) bool {
 
 	for _, index := range indexer.Indexes {
@@ -145,9 +131,7 @@ func hasIndex(indexer *IndexerNode, candidate *IndexUsage) bool {
 	return false
 }
 
-//
 // Compute the loads on a list of nodes
-//
 func computeLoads(s *Solution, indexers []*IndexerNode) ([]int64, int64) {
 
 	loads := ([]int64)(nil)
@@ -165,11 +149,9 @@ func computeLoads(s *Solution, indexers []*IndexerNode) ([]int64, int64) {
 	return loads, total
 }
 
-//
 // This function get a random node.
 // The first priority is given to the deleted nodes. Then based on the load,
 // an indexer is chosen from the rest of indexer nodes.
-//
 func getWeightedRandomNode(rs *rand.Rand, deleted, indexers []*IndexerNode, loads []int64, total int64) *IndexerNode {
 
 	if len(deleted) > 0 {
@@ -191,14 +173,12 @@ func getWeightedRandomNode(rs *rand.Rand, deleted, indexers []*IndexerNode, load
 	return nil
 }
 
-//
 // This function sorts the indexer node by usage in ascending order.
 // For indexer usage, it will consider both cpu and memory.
 // For indexer nodes that have the same usage, it will sort by
 // the number of indexes with unknown usage info (index.NoUsageInfo=true).
 // Two indexers could have the same usage if the indexers are empty
 // or holding deferred index (no usage stats).
-//
 func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 
 	numOfIndexers := len(indexers)
@@ -234,10 +214,8 @@ func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 	return result
 }
 
-//
 // This function sorts the indexer node by number of NoUsageInfo indexes
 // in ascending order.
-//
 func sortNodeByNoUsageInfoIndexCount(indexers []*IndexerNode) []*IndexerNode {
 
 	numOfIndexers := len(indexers)
@@ -263,10 +241,8 @@ func sortNodeByNoUsageInfoIndexCount(indexers []*IndexerNode) []*IndexerNode {
 	return result
 }
 
-//
 // This function sorts the index by usage in descending order.  Index
 // with no usage will be placed at the end (0 usage).
-//
 func sortIndexByUsage(s *Solution, indexes []*IndexUsage) []*IndexUsage {
 
 	numOfIndexes := len(indexes)
@@ -291,9 +267,7 @@ func sortIndexByUsage(s *Solution, indexes []*IndexUsage) []*IndexUsage {
 	return result
 }
 
-//
 // This function gets a list of eligible index to move.
-//
 func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*IndexUsage {
 
 	result := ([]*IndexUsage)(nil)
@@ -310,9 +284,7 @@ func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*Index
 	return result
 }
 
-//
 // This function checks is the index is an eligible index
-//
 func isEligibleIndex(index *IndexUsage, eligibles map[*IndexUsage]bool) bool {
 
 	if index.eligible {
@@ -322,9 +294,7 @@ func isEligibleIndex(index *IndexUsage, eligibles map[*IndexUsage]bool) bool {
 	return eligibles[index]
 }
 
-//
 // Find a random index
-//
 func getRandomIndex(rs *rand.Rand, indexes []*IndexUsage) *IndexUsage {
 
 	numOfIndexes := len(indexes)
@@ -336,9 +306,7 @@ func getRandomIndex(rs *rand.Rand, indexes []*IndexUsage) *IndexUsage {
 	return nil
 }
 
-//
 // Find a matching node
-//
 func hasMatchingNode(indexerId string, indexers []*IndexerNode) bool {
 
 	for _, idx := range indexers {
@@ -350,9 +318,7 @@ func hasMatchingNode(indexerId string, indexers []*IndexerNode) bool {
 	return false
 }
 
-//
 // compute Index memory stats
-//
 func computeIndexMemStats(indexes []*IndexUsage, useLive bool) (float64, float64) {
 
 	// Compute mean memory usage
@@ -376,9 +342,7 @@ func computeIndexMemStats(indexes []*IndexUsage, useLive bool) (float64, float64
 	return meanMemUsage, stdDevMemUsage
 }
 
-//
 // compute index cpu stats
-//
 func computeIndexCpuStats(indexes []*IndexUsage, useLive bool) (float64, float64) {
 
 	// Compute mean cpu usage
@@ -402,9 +366,7 @@ func computeIndexCpuStats(indexes []*IndexUsage, useLive bool) (float64, float64
 	return meanCpuUsage, stdDevCpuUsage
 }
 
-//
 // Convert memory string from string to int
-//
 func ParseMemoryStr(mem string) (int64, error) {
 	if mem == "" {
 		return -1, nil
@@ -441,17 +403,13 @@ func ParseMemoryStr(mem string) (int64, error) {
 	return size, nil
 }
 
-//
 // Is same indexer node?
-//
 func isSameIndexer(indexer1 *IndexerNode, indexer2 *IndexerNode) bool {
 
 	return indexer1.NodeId == indexer2.NodeId
 }
 
-//
 // Shuffle a list of indexer node
-//
 func shuffleNode(rs *rand.Rand, indexers []*IndexerNode) []*IndexerNode {
 
 	numOfNodes := len(indexers)
@@ -471,9 +429,7 @@ func shuffleNode(rs *rand.Rand, indexers []*IndexerNode) []*IndexerNode {
 	return result
 }
 
-//
 // Shuffle a list of indexes
-//
 func shuffleIndex(rs *rand.Rand, indexes []*IndexUsage) []*IndexUsage {
 
 	numOfIndexes := len(indexes)
@@ -493,9 +449,7 @@ func shuffleIndex(rs *rand.Rand, indexes []*IndexUsage) []*IndexUsage {
 	return result
 }
 
-//
 // Validate solution
-//
 func ValidateSolution(s *Solution) error {
 
 	for _, indexer := range s.Placement {
@@ -533,9 +487,7 @@ func ValidateSolution(s *Solution) error {
 	return nil
 }
 
-//
 // Reverse list of nodes
-//
 func reverseNode(indexers []*IndexerNode) []*IndexerNode {
 
 	numOfNodes := len(indexers)
@@ -548,9 +500,7 @@ func reverseNode(indexers []*IndexerNode) []*IndexerNode {
 	return indexers
 }
 
-//
 // Find the number of indexes that has no stats or sizing information.
-//
 func numIndexWithNoUsageInfo(indexer *IndexerNode) int {
 
 	count := 0
@@ -576,30 +526,30 @@ func stopCPUProfile() {
 	pprof.StopCPUProfile()
 }
 
-//
 // Make index usage from definition
-//
 func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId,
-	partnId common.PartitionId, numPartition uint64, shardIds []common.ShardId) *IndexUsage {
+	partnId common.PartitionId, numPartition uint64,
+	shardIds []common.ShardId, alternateShardIds []string) *IndexUsage {
 
 	index := &IndexUsage{
-		DefnId:        defn.DefnId,
-		InstId:        instId,
-		PartnId:       partnId,
-		Name:          defn.Name,
-		Bucket:        defn.Bucket,
-		Scope:         defn.Scope,
-		Collection:    defn.Collection,
-		ShardIds:      shardIds,
-		IsPrimary:     defn.IsPrimary,
-		StorageMode:   common.IndexTypeToStorageMode(defn.Using).String(),
-		NumOfDocs:     defn.NumDoc / numPartition,
-		AvgSecKeySize: defn.SecKeySize,
-		AvgDocKeySize: defn.DocKeySize,
-		AvgArrSize:    defn.ArrSize,
-		AvgArrKeySize: defn.SecKeySize,
-		ResidentRatio: defn.ResidentRatio,
-		NoUsageInfo:   defn.Deferred, // This value will be reset in IndexUsage.ComputeSizing()
+		DefnId:            defn.DefnId,
+		InstId:            instId,
+		PartnId:           partnId,
+		Name:              defn.Name,
+		Bucket:            defn.Bucket,
+		Scope:             defn.Scope,
+		Collection:        defn.Collection,
+		ShardIds:          shardIds,
+		AlternateShardIds: alternateShardIds,
+		IsPrimary:         defn.IsPrimary,
+		StorageMode:       common.IndexTypeToStorageMode(defn.Using).String(),
+		NumOfDocs:         defn.NumDoc / numPartition,
+		AvgSecKeySize:     defn.SecKeySize,
+		AvgDocKeySize:     defn.DocKeySize,
+		AvgArrSize:        defn.ArrSize,
+		AvgArrKeySize:     defn.SecKeySize,
+		ResidentRatio:     defn.ResidentRatio,
+		NoUsageInfo:       defn.Deferred, // This value will be reset in IndexUsage.ComputeSizing()
 	}
 
 	if defn.ResidentRatio == 0 {
@@ -614,11 +564,9 @@ func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId,
 	return index
 }
 
-//
 // GetIndexStat function relies on the format of the stat returned by the
 // indexer. If the indexer stats format changes, this function will hide
 // the stats format details from the consumer of the stats.
-//
 func GetIndexStat(index *IndexUsage, stat string, stats map[string]interface{},
 	isPartn bool, clusterVersion uint64) (interface{}, bool) {
 
