@@ -2713,6 +2713,19 @@ func (s *Solution) findNumExcludeInNodes() int {
 	return count
 }
 
+// find list of nodes that have node.Exclude = "out" set
+func (s *Solution) getExcludedOutNodes() []*IndexerNode {
+
+	result := ([]*IndexerNode)(nil)
+	for _, indexer := range s.Placement {
+		if indexer.Exclude == "out" {
+			result = append(result, indexer)
+		}
+	}
+
+	return result
+}
+
 //
 // Find num of empty node
 //
@@ -3690,18 +3703,30 @@ func (s *Solution) demoteEligIndex(index *IndexUsage) {
 
 // Check for Swap-only Rebalance
 // We mark if cluster has
-// 1. only 1 add node
+// 1. only 1 add node OR only 1 Node with ExcludeNode="out" set with no add Nodes
 // 2. 1 deleted node with Node.Exclude="in"
 // 3. and the remaining nodes have ExcludeNode="inout"
 func (s *Solution) markSwapOnlyRebalance() {
 
-	if s.command == CommandRebalance && s.numDeletedNode == 1 && s.numNewNode == 1 {
+	s.swapOnlyRebalance = false
+	if s.command == CommandRebalance && s.numDeletedNode == 1 {
+		scaledNode := (*IndexerNode)(nil)
 		deletedNode := s.getDeleteNodes()[0]
-		newNode := s.getNewNodes()[0]
-		if deletedNode.Exclude == "in" {
+		if s.numNewNode == 1 {
+			scaledNode = s.getNewNodes()[0]
+		} else if s.numNewNode == 0 {
+			excludedOutNodes := s.getExcludedOutNodes()
+			if len(excludedOutNodes) == 1 && excludedOutNodes[0] != deletedNode {
+				scaledNode = excludedOutNodes[0]
+			} else {
+				return
+			}
+		}
+
+		if scaledNode != nil && deletedNode.Exclude == "in" {
 			inoutEnabledOnRemaining := true
 			for _, node := range s.Placement {
-				if node.NodeId == deletedNode.NodeId || node.NodeId == newNode.NodeId {
+				if node.NodeId == deletedNode.NodeId || node.NodeId == scaledNode.NodeId {
 					continue
 				}
 				if node.Exclude != "inout" {
@@ -3715,7 +3740,6 @@ func (s *Solution) markSwapOnlyRebalance() {
 			}
 		}
 	}
-	s.swapOnlyRebalance = false
 }
 
 //////////////////////////////////////////////////////////////

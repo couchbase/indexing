@@ -10,9 +10,12 @@ package indexer
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
+	"net"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
@@ -20,6 +23,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
@@ -492,6 +496,113 @@ func (s *settingsManager) handleIndexerReady() {
 		}
 	}
 
+	// enable bloomFilter for plasma back indexes
+	go s.enablePageBloomFilterPlasmaBackIndex()
+}
+
+// Note: We are enabling bloom filter for all the active indexer nodes on first node addition
+// In mixed mode cluster
+// * If all the indexers have support for bloom filter we will have overhead on all the
+// . nodes due to bloom filter and should not impact planner
+// * If few indexers are having support and few indexers does not have support we are
+// . assuming that the overhead is not huge and should not impact planner
+func (s *settingsManager) enablePageBloomFilterPlasmaBackIndex() {
+	selfRestart := func() {
+		time.Sleep(5 * time.Second)
+		go s.enablePageBloomFilterPlasmaBackIndex()
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("settingsManager::enablePageBloomFilterPlasmaBackIndex crashed: %v\n", r)
+			logging.Errorf("settingsManager::enablePageBloomFilterPlasmaBackIndex recovered from exception at %s", logging.StackTrace())
+			selfRestart()
+		}
+	}()
+
+	// Checks if Plasma BloomFilter is enabled for back index or not
+	checkBloomFilterEnabled := func() bool {
+		isPythonCaseCfgSet := s.config["indexer.settings.enable_page_bloom_filter"].Bool()
+		isCamelCaseCfgSet := s.config["indexer.plasma.backIndex.enablePageBloomFilter"].Bool()
+
+		// even if one of the entry is enabled, someone has already enabled/disabled the feature
+		logging.Debugf("Indexer::enablePageBloomFilterPlasmaBackIndex setting value enable_page_bloom_filter: %v, enablePageBloomFilter:%v",
+			isPythonCaseCfgSet, isCamelCaseCfgSet)
+		if isPythonCaseCfgSet || isCamelCaseCfgSet {
+			return true
+		}
+		return false
+	}
+
+	// send settings request to local http url
+	postRequestFn := func() error {
+		url := "/settings"
+
+		clusterAddr := s.config["indexer.clusterAddr"].String() // "127.0.0.1:<cluster_admin_port>" (eg 8091)
+		host, _, _ := net.SplitHostPort(clusterAddr)
+		port := s.config["indexer.httpPort"].String()
+		addr := net.JoinHostPort(host, port) // "127.0.0.1:<indexer_http_port"> (eg 9102, 9108, ...)
+
+		logging.Debugf("Indexer::enablePageBloomFilterPlasmaBackIndex addr : %v .", addr)
+
+		enablePageBloomFilterPlasmaBackIndex := struct {
+			Settings1 bool `json:"indexer.settings.enable_page_bloom_filter"`
+			Settings2 bool `json:"indexer.plasma.backIndex.enablePageBloomFilter"`
+		}{true, true}
+
+		body, err := json.Marshal(enablePageBloomFilterPlasmaBackIndex)
+		if err != nil {
+			logging.Errorf("Indexer::enablePageBloomFilterPlasmaBackIndex error in marshalling settings request, err: %v", err)
+			return err
+		}
+
+		bodybuf := bytes.NewBuffer(body)
+
+		resp, err := postWithAuth(addr+url, "application/json", bodybuf)
+		if err != nil {
+			logging.Errorf("Indexer::enablePageBloomFilterPlasmaBackIndex error in posting http request for settings change on %v, err: %v",
+				addr+url, err)
+			return err
+		}
+		ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil
+	}
+
+	enabled := checkBloomFilterEnabled()
+	if enabled {
+		logging.Debugf("Indexer::enablePageBloomFilterPlasmaBackIndex setting is already enabled")
+		return
+	}
+
+	// add random delay so that not all indexers will try together
+	time.Sleep(time.Second * time.Duration(rand.Intn(30)))
+
+	// get the metakv value
+	exists, err := mc.EnablePageBloomFilterPlasmaBackIndexTokenExist()
+	if err != nil {
+		logging.Errorf("Indexer::enablePageBloomFilterPlasmaBackIndex error in getting feature value from metakv, err: %v ", err)
+		selfRestart()
+		return
+	}
+	if exists {
+		logging.Infof("Indexer::enablePageBloomFilterPlasmaBackIndex feature is already enabled")
+		return
+	}
+	logging.Infof("Indexer::enablePageBloomFilterPlasmaBackIndex trying to enable feature")
+
+	err = postRequestFn()
+	if err != nil {
+		selfRestart()
+		return
+	}
+	// update metakv that we are done
+	if err := mc.PostEnablePageBloomFilterPlasmaBackIndexToken(); err != nil {
+		logging.Errorf("Indexer::enablePageBloomFilterPlasmaBackIndex error in setting feature value in metakv. err: %v", err)
+		selfRestart()
+		return
+	}
+	logging.Infof("Indexer::enablePageBloomFilterPlasmaBackIndex done enabling feature")
 }
 
 func setLogger(config common.Config) {

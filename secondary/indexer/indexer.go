@@ -8326,6 +8326,7 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 	go idx.monitorMemUsage()
 	go idx.logMemstats()
 	go idx.collectProgressStats(true)
+	go idx.runHeapController()
 
 	idx.statsMgrCmdCh <- &MsgStatsPersister{
 		mType: STATS_PERSISTER_START,
@@ -12252,5 +12253,101 @@ func (idx *indexer) startKeyspaceIdStreamsForResumedIndexes(keyspaceId string) {
 		err := fmt.Errorf("KeyspaceId: %v not found when computing the restartTs. "+
 			"All available keyspaces: %v", keyspaceId, allKeyspaceIds)
 		logging.Errorf("Indexer::startKeyspaceIdStreamsForResumedIndexes : err: %v", err)
+	}
+}
+
+//HeapController tries to control the heapUsage by dynamically
+//changing the config for smallSnapshotThreshold and minVbQueueLength.
+//These two config control the minimum allocation for the mutation
+//queue and override the maxQueueMem. The main implication of setting
+//these thresholds lower is that it can lead to more non-aligned snapshots
+//being generated, which are not available for scans. The tradeoff is
+//that higher heap usage leads to plasma reducing its memory quota, which
+//causes more resources to be spent on evictions etc and also lower RR for
+//indexed data.
+//The current policy for heap control is as follows:
+//a. If heapUsage > maxHeapThreshold:
+//Set smallSnapshotThreshold/minVbQueueLength to 10.
+//b. If heapUsage > maxHeapThreshold/2:
+//Set smallSnapshotThreshold/minVbQueueLength to 20.
+//c. If heapUsage <= maxHeapThreshold/2:
+//Set smallSnapshotThreshold/minVbQueueLength to 30.
+//HeapController inspects the heap usage every minute.
+func (idx *indexer) runHeapController() {
+
+	//disable for serverless deployment
+	if common.IsServerlessDeployment() {
+		return
+	}
+
+	for {
+
+		maxHeapThreshold := idx.config["maxHeapThreshold"].Int()
+
+		if common.GetStorageMode() == common.PLASMA &&
+			maxHeapThreshold != 0 {
+
+			var memUsedQueue int64
+			var memQuotaQueue int64
+			var memoryQuota int64
+
+			//fetch the queue memory quota/usage
+			if idx.stats != nil {
+				memUsedQueue = idx.stats.memoryUsedQueue.Value()
+				memQuotaQueue = idx.stats.memoryQuotaQueue.Value()
+				memoryQuota = idx.stats.memoryQuota.Value()
+			}
+
+			//Get the current heap usage. Account for idle heap as well.
+			//Plasma reduces its quota based on RSS(which includes idle heap).
+			total, _, storage := idx.memoryUsed(false)
+			currHeapUsage := int64(total - storage)
+
+			//	if memUsedQueue >= memQuotaQueue {
+			var newMinVbQueueLength uint64
+			currMinVbQueueLength := idx.config["settings.minVbQueueLength"].Uint64()
+			if currHeapUsage > (memoryQuota*int64(maxHeapThreshold))/100 {
+				//Set smallSnapshotThreshold/minVbQueueLength to 10
+				if currMinVbQueueLength != 10 {
+					newMinVbQueueLength = 10
+				}
+			} else if currHeapUsage > (memoryQuota*int64((maxHeapThreshold/2)))/100 {
+				//Set smallSnapshotThreshold/minVbQueueLength to 20
+				if currMinVbQueueLength != 20 {
+					newMinVbQueueLength = 20
+				}
+			} else {
+				//Set smallSnapshotThreshold/minVbQueueLength to 30
+				if currMinVbQueueLength != 30 {
+					newMinVbQueueLength = 30
+				}
+			}
+			if newMinVbQueueLength != 0 {
+				newCfg := idx.config.Clone()
+				const minVbKey = "settings.minVbQueueLength"
+				const smallSnapKey = "settings.smallSnapshotThreshold"
+				const initSmallSnapKey = "init_stream.smallSnapshotThreshold"
+
+				value := newCfg[minVbKey]
+				value.Value = newMinVbQueueLength
+				newCfg[minVbKey] = value
+				value = newCfg[smallSnapKey]
+				value.Value = newMinVbQueueLength
+				newCfg[smallSnapKey] = value
+				value = newCfg[initSmallSnapKey]
+				value.Value = newMinVbQueueLength
+				newCfg[initSmallSnapKey] = value
+
+				logging.Infof("Indexer::runHeapController Adjusting minVbQueueLength "+
+					"%v -> %v. HeapUsage %v, memUsedQueue %v, memQuotaQueue %v",
+					currMinVbQueueLength, newMinVbQueueLength, currHeapUsage,
+					memUsedQueue, memQuotaQueue)
+				idx.internalRecvCh <- &MsgConfigUpdate{
+					cfg: newCfg,
+				}
+			}
+			//	}
+		}
+		time.Sleep(time.Minute)
 	}
 }

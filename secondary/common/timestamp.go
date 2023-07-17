@@ -45,6 +45,8 @@ type TsVbuuid struct {
 	DisableAlign bool
 	OpenOSOSnap  bool
 	NumVBuckets  int
+
+	SmallSnapDropped bool `json:"-"` //excluded from json marshal
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -171,6 +173,7 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 	ts.ScopeId = ""
 	ts.CollectionId = ""
 	ts.OpenOSOSnap = false
+	ts.SmallSnapDropped = false
 	return ts
 }
 
@@ -417,6 +420,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs.CollectionId = ts.CollectionId
 	newTs.OpenOSOSnap = ts.OpenOSOSnap
 	newTs.NumVBuckets = ts.NumVBuckets
+	newTs.SmallSnapDropped = ts.SmallSnapDropped
 	return newTs
 }
 
@@ -434,6 +438,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	ts.CollectionId = src.CollectionId
 	ts.OpenOSOSnap = src.OpenOSOSnap
 	ts.NumVBuckets = src.NumVBuckets
+	ts.SmallSnapDropped = src.SmallSnapDropped
 }
 
 // Equal returns whether `ts` and `other` compare equal.
@@ -541,6 +546,7 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	other.CollectionId = ts.CollectionId
 	other.SnapAligned = ts.SnapAligned
 	other.OpenOSOSnap = ts.OpenOSOSnap
+	other.SmallSnapDropped = ts.SmallSnapDropped
 
 	return other
 }
@@ -643,4 +649,17 @@ func (ts *TsVbuuid) IsSnapAligned() bool {
 //SetSnapAligned sets the SnapAligned flag
 func (ts *TsVbuuid) SetSnapAligned(snapAligned bool) {
 	ts.SnapAligned = snapAligned
+}
+
+func (ts *TsVbuuid) IsSmallSnapDropped() bool {
+
+	if ts == nil {
+		return true
+	}
+
+	return ts.SmallSnapDropped
+}
+
+func (ts *TsVbuuid) SetSmallSnapDropped(smallSnapDropped bool) {
+	ts.SmallSnapDropped = smallSnapDropped
 }

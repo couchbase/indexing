@@ -797,6 +797,7 @@ type IndexerStats struct {
 	memoryTotalStorage stats.Int64Val
 	memoryUsedQueue    stats.Int64Val
 	memoryUsedActual   stats.Int64Val //mandatory memory for plasma
+	memoryQuotaQueue   stats.Int64Val
 	needsRestart       stats.BoolVal
 	statsResponse      stats.TimingStat
 	notFoundError      stats.Int64Val
@@ -851,6 +852,7 @@ func (s *IndexerStats) Init() {
 	s.memoryUsedStorage.Init()
 	s.memoryTotalStorage.Init()
 	s.memoryUsedQueue.Init()
+	s.memoryQuotaQueue.Init()
 	s.memoryUsedActual.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()
@@ -3234,13 +3236,13 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_total_storage gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_total_storage %v\n", METRICS_PREFIX, is.memoryTotalStorage.Value()))...)
 
-	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_requests gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_requests counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_requests %v\n", METRICS_PREFIX, is.TotalRequests.Value()))...)
 
-	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_returned gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_returned counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_returned %v\n", METRICS_PREFIX, is.TotalRowsReturned.Value()))...)
 
-	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_scanned gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_rows_scanned counter\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vtotal_rows_scanned %v\n", METRICS_PREFIX, is.TotalRowsScanned.Value()))...)
 
 	is.memoryRss.Set(getRSS())

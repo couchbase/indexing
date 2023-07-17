@@ -2368,16 +2368,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.mutation_manager.fdb.fracMutationQueueMem": ConfigValue{
-		0.2,
+		0.01,
 		"Fraction of memory_quota allocated to Mutation Queue",
-		0.2,
+		0.01,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.mutation_manager.moi.fracMutationQueueMem": ConfigValue{
-		0.1,
+		0.01,
 		"Fraction of memory_quota allocated to Mutation Queue",
-		0.1,
+		0.01,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2406,12 +2406,31 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.maxHeapThreshold": ConfigValue{
+		20,
+		"Max percentage of memory quota which can be used for heap." +
+			"Based on this threshold and current heap usage, Indexer will " +
+			"adjust the mutation queue allocation. Setting the value to 0 " +
+			"disables the heap control.",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.timekeeper.monitor_flush_interval": ConfigValue{
 		5,
 		"Debug option to enable monitoring flush in timekeeper." +
 			"If a flush doesn't complete for the interval specified(in seconds), additional debug info " +
 			"will be logged. 0 disables flush monitoring.",
 		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.timekeeper.maxTsQueueLen": ConfigValue{
+		2500,
+		"Maximum number of timestamps that can be queued by timekeeper per stream." +
+			"Once the queue size exceeds this threshold, the timestamps are merged to " +
+			"reduce the number of timestamps in the queue.",
+		2500,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2717,11 +2736,11 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.minVbQueueLength": ConfigValue{
-		uint64(50),
+		uint64(30),
 		"Minimum Length of Mutation Queue Per Vbucket. This " +
-			"allocation is done per bucket. Must be greater " +
-			"than smallSnapshotThreshold.",
-		uint64(50),
+			"allocation is done per bucket. Must be equal to or " +
+			"greater than smallSnapshotThreshold.",
+		uint64(30),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2738,7 +2757,7 @@ var SystemConfig = Config{
 	"indexer.settings.smallSnapshotThreshold": ConfigValue{
 		uint64(30), //please see minVbQueueLength before changing this
 		"Threshold For Considering a DCP Snapshot as Small. Must be" +
-			"smaller than minVbQueueLength.",
+			"smaller than or equal to minVbQueueLength.",
 		uint64(30),
 		false, // mutable
 		false, // case-insensitive
@@ -2771,10 +2790,10 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.sliceBufSize": ConfigValue{
-		uint64(runtime.GOMAXPROCS(0) * 200),
+		uint64(runtime.GOMAXPROCS(0) * 20),
 		"Buffer for each slice to queue mutations before flush " +
 			"to storage.",
-		uint64(runtime.GOMAXPROCS(0) * 200),
+		uint64(runtime.GOMAXPROCS(0) * 20),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -3741,6 +3760,13 @@ var SystemConfig = Config{
 		false,
 		false,
 		false,
+	},
+	"indexer.plasma.useSharedLSS": ConfigValue{
+		false,
+		"use shared LSS for plasma slices",
+		false,
+		false, // mutable
+		false, // case-insensitive
 	},
 	"indexer.serverless.scan.throttle.queued_threshold": ConfigValue{
 		500,

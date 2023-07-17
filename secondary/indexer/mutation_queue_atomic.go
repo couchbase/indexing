@@ -47,6 +47,9 @@ type MutationQueue interface {
 	//returns the numbers of vbuckets for the queue
 	GetNumVbuckets() uint16
 
+	//set the minVbQueueLength config
+	SetMinVbQueueLength(minLength uint64)
+
 	//destroy the resources
 	Destroy()
 }
@@ -449,8 +452,9 @@ func (q *atomicMutationQueue) checkMemAndAlloc(vbucket Vbucket) *node {
 	currMem := atomic.LoadInt64(q.memUsed)
 	maxMem := atomic.LoadInt64(q.maxMemory)
 	currLen := atomic.LoadInt64(&q.size[vbucket])
+	minQueueLen := atomic.LoadUint64(&q.minQueueLen)
 
-	if currMem < maxMem || currLen < int64(q.minQueueLen) {
+	if currMem < maxMem || currLen < int64(minQueueLen) {
 		//get node from freelist
 		n := q.popFreeList(vbucket)
 		if n != nil {
@@ -509,6 +513,10 @@ func (q *atomicMutationQueue) Destroy() {
 		close(mutch)
 	}
 
+}
+
+func (q *atomicMutationQueue) SetMinVbQueueLength(minLength uint64) {
+	atomic.StoreUint64(&q.minQueueLen, minLength)
 }
 
 func getAllocPollInterval(config common.Config) uint64 {

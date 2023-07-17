@@ -491,6 +491,8 @@ func (tt *TransferToken) LessVerboseString() string {
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
 		fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
 		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
+		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
 	}
 
 	return sb.String()

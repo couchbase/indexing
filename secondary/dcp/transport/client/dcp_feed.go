@@ -90,6 +90,7 @@ type DcpFeed struct {
 	mutationQueue          *AtomicMutationQueue
 	useAtomicMutationQueue bool
 	closeMutQueue          chan bool
+	dequeueDoneCh          chan bool // DequeueMutations will close this channel upon exit
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -114,6 +115,7 @@ func NewDcpFeed(
 		stats:         &DcpStats{},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
 		closeMutQueue: make(chan bool),
+		dequeueDoneCh: make(chan bool),
 	}
 
 	feed.mutationQueue = NewAtomicMutationQueue()
@@ -258,6 +260,7 @@ const (
 // until mutations arrive
 func (feed *DcpFeed) DequeueMutations(rcvch chan []interface{}, abortCh chan bool) {
 	defer close(rcvch)
+	defer close(feed.dequeueDoneCh)
 
 	for {
 		pkt, bytes := feed.mutationQueue.Dequeue(abortCh, feed.closeMutQueue)
@@ -296,6 +299,12 @@ func (feed *DcpFeed) genServer(
 			feed.sendStreamEnd(feed.outch)
 		}
 		close(feed.finch)
+		// Wait for DequeueMutations() to exit before closing connection
+		// as DequeueMutations() will sendAck on connection
+		if feed.useAtomicMutationQueue {
+			<-feed.dequeueDoneCh
+		}
+
 		feed.conn.Close()
 		feed.conn = nil
 		atomic.StoreUint32(&feed.done, 1)
