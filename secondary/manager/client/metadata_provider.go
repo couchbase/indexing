@@ -60,6 +60,7 @@ type Settings interface {
 	AllowScheduleCreateRebal() bool
 	WaitForScheduledIndex() bool
 	UseGreedyPlanner() bool
+	AllowDDLDuringScaleUp() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -848,9 +849,7 @@ func (o *MetadataProvider) scheduleIndexCreation(idxDefn *c.IndexDefn,
 	nodes := make(map[string]*watcher)
 	watchers := o.getAllWatchers()
 	for _, w := range watchers {
-		if w.serviceMap.ExcludeNode == "in" ||
-			w.serviceMap.ExcludeNode == "inout" {
-
+		if w.excludeIn() {
 			continue
 		}
 
@@ -1401,8 +1400,7 @@ func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.Indexer
 
 		o.mutex.Lock()
 		for _, watcher := range o.watchers {
-			if watcher.serviceMap.ExcludeNode != "in" &&
-				watcher.serviceMap.ExcludeNode != "inout" {
+			if !watcher.excludeIn() {
 				nodeAddr := strings.ToLower(watcher.getNodeAddr())
 				encryptedNodeAddr, _ := security.EncryptPortInAddr(nodeAddr)
 				if !security.EncryptionEnabled() {
@@ -4166,8 +4164,7 @@ func (o *MetadataProvider) getAllAvailWatchers() []*watcher {
 
 	result := make([]*watcher, 0, len(o.watchers))
 	for _, watcher := range o.watchers {
-		if watcher.serviceMap.ExcludeNode != "in" &&
-			watcher.serviceMap.ExcludeNode != "inout" {
+		if !watcher.excludeIn() {
 			result = append(result, watcher)
 		}
 	}
@@ -4200,8 +4197,8 @@ func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher, checkServer
 			}
 		}
 
-		if watcher.serviceMap.ExcludeNode == "in" ||
-			watcher.serviceMap.ExcludeNode == "inout" {
+		if watcher.excludeIn() {
+			// found is set to true if the watcher is NOT the next available watcher.
 			found = true
 		}
 
@@ -6731,6 +6728,20 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 	}
 
 	return false, nil, nil
+}
+
+// Use watcher's serviceMap to check if the excludeNode param is set.
+// If the allow_ddl_during_scaleup is set, then serviceMap parameter is ignored.
+func (w *watcher) excludeIn() bool {
+	if w.provider.settings.AllowDDLDuringScaleUp() {
+		return false
+	}
+
+	if w.serviceMap.ExcludeNode == "in" || w.serviceMap.ExcludeNode == "inout" {
+		return true
+	}
+
+	return false
 }
 
 func extractDefnIdFromKey(key string) (c.IndexDefnId, error) {

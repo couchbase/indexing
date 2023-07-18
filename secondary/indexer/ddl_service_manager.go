@@ -78,6 +78,8 @@ type ddlSettings struct {
 
 	allowPartialQuorum uint32
 	useGreedyPlanner   uint32
+
+	allowDDLDuringScaleUp uint32
 }
 
 //////////////////////////////////////////////////////////////
@@ -1973,6 +1975,10 @@ func (s *ddlSettings) UseGreedyPlanner() bool {
 	return atomic.LoadUint32(&s.useGreedyPlanner) == 1
 }
 
+func (s *ddlSettings) AllowDDLDuringScaleUp() bool {
+	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2006,6 +2012,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
 	if useGreedyPlanner {
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
+	}
+
+	allowDDLDuringScaleUp := config["allow_ddl_during_scaleup"].Bool()
+	if allowDDLDuringScaleUp {
+		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
 	}
 }
 

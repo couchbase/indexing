@@ -47,6 +47,8 @@ type ClientSettings struct {
 	waitForScheduledIndex    uint32
 
 	useGreedyPlanner uint32
+
+	allowDDLDuringScaleUp uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -303,6 +305,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		level := logging.Level(logLevel)
 		logging.SetLogLevel(level)
 	}
+
+	allowDDLDuringScaleUp, ok := config["indexer.allow_ddl_during_scaleup"]
+	if ok {
+		if allowDDLDuringScaleUp.Bool() {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+		} else {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing indexer.allow_ddl_during_scaleup")
+		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -379,4 +394,8 @@ func (s *ClientSettings) WaitForScheduledIndex() bool {
 
 func (s *ClientSettings) UseGreedyPlanner() bool {
 	return atomic.LoadUint32(&s.useGreedyPlanner) == 1
+}
+
+func (s *ClientSettings) AllowDDLDuringScaleUp() bool {
+	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
 }
