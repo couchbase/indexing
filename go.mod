@@ -46,7 +46,7 @@ require (
 	github.com/couchbase/plasma v0.0.0-00010101000000-000000000000
 	github.com/couchbase/query v0.0.0-00010101000000-000000000000
 	github.com/couchbase/regulator v0.0.0-00010101000000-000000000000
-	github.com/golang/protobuf v1.5.2
+	github.com/golang/protobuf v1.5.3
 	github.com/golang/snappy v0.0.4
 	github.com/mschoch/smat v0.2.0
 	github.com/prataprc/collatejson v0.0.0-20210210112148-85df4e1659d0
@@ -57,16 +57,23 @@ require (
 )
 
 require (
-	github.com/aws/aws-sdk-go v1.44.170 // indirect
+	github.com/aws/aws-sdk-go v1.44.299 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/cespare/xxhash/v2 v2.1.2 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/couchbase/clog v0.1.0 // indirect
 	github.com/couchbase/go_json v0.0.0-20220330123059-4473a21887c8 // indirect
 	github.com/couchbase/gocb/v2 v2.5.4 // indirect
-	github.com/couchbase/gocbcore/v10 v10.2.4-0.20230511103754-8dd1a95f5f33 // indirect
+	github.com/couchbase/gocbcore/v10 v10.2.6-0.20230628164442-47b8f45095ec // indirect
 	github.com/couchbase/gocbcore/v9 v9.1.8 // indirect
 	github.com/couchbase/gomemcached v0.2.2-0.20230407174933-7d7ce13da8cc // indirect
-	github.com/couchbase/tools-common v0.0.0-20230525144302-671fb9dd857e // indirect
+	github.com/couchbase/tools-common/cloud v1.0.0 // indirect
+	github.com/couchbase/tools-common/core v1.0.0 // indirect
+	github.com/couchbase/tools-common/fs v1.0.0 // indirect
+	github.com/couchbase/tools-common/strings v1.0.0 // indirect
+	github.com/couchbase/tools-common/sync v1.0.0 // indirect
+	github.com/couchbase/tools-common/testing v1.0.0 // indirect
+	github.com/couchbase/tools-common/types v1.0.0 // indirect
+	github.com/couchbase/tools-common/utils v1.0.0 // indirect
 	github.com/couchbasedeps/go-curl v0.0.0-20190830233031-f0b2afc926ec // indirect
 	github.com/couchbaselabs/c-forestdb v0.0.0-20160212203508-1b1267468faa // indirect
 	github.com/couchbaselabs/c-snappy v0.0.0-20160212203049-a52f87e8ffc5 // indirect
@@ -84,15 +91,15 @@ require (
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
 	github.com/stretchr/objx v0.5.0 // indirect
-	github.com/stretchr/testify v1.8.2 // indirect
+	github.com/stretchr/testify v1.8.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20201027041543-1326539a0a0a // indirect
-	golang.org/x/crypto v0.7.0 // indirect
-	golang.org/x/exp v0.0.0-20221229233502-02c3fc3b3eb4 // indirect
-	golang.org/x/net v0.8.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
-	golang.org/x/text v0.8.0 // indirect
+	golang.org/x/crypto v0.11.0 // indirect
+	golang.org/x/exp v0.0.0-20230711153332-06a737ee72cb // indirect
+	golang.org/x/net v0.12.0 // indirect
+	golang.org/x/sys v0.10.0 // indirect
+	golang.org/x/text v0.11.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	google.golang.org/protobuf v1.28.1 // indirect
+	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/couchbase/gocbcore.v7 v7.1.18 // indirect
 	gopkg.in/couchbaselabs/gocbconnstr.v1 v1.0.4 // indirect
 	gopkg.in/couchbaselabs/jsonx.v1 v1.0.1 // indirect
