@@ -495,6 +495,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 		DiskUsage   uint64 `json:"diskUsage,omitempty"`
 	*/
+	indexer.NodeVersion = indexerVersion
 
 	var actualStorageMem uint64
 	// memory_used_storage contains the total storage consumption,
@@ -551,11 +552,20 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		actualCpuUtil = cpuUtil.(float64) / 100
 	}
 
+	if memQuota, ok := statsMap["memory_quota"]; ok {
+		indexer.memQuota = uint64(memQuota.(float64))
+	} else { // Assume a minimum memory quota of 256MB
+		logging.Warnf("SetStatsInIndexer: memory_quota is not available for indexer node: %v. "+
+			"Defaulting to 256M of memory quota for this node", indexer.String())
+		indexer.memQuota = 256 * 1024 * 1024
+	}
+
+	indexer.ComputeMinShardCapacity(config)
+
 	var totalIndexMemUsed uint64
 	var totalMutation uint64
 	var totalScan uint64
 	for _, index := range indexer.Indexes {
-
 		/*
 			CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`

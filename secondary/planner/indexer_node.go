@@ -1,6 +1,16 @@
 package planner
 
+import (
+	"math"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+)
+
 const tempNodeUUID = "tempNodeUUID_"
+
+// Keep this consistent with indexer.go
+const PLASMA_MEMQUOTA_FRAC = 0.9
 
 // Indexer Node is a description of one index node used by Planner to track which indexes are
 // planned to reside on this node.
@@ -55,6 +65,23 @@ type IndexerNode struct {
 
 	//for serverless subCluster grouping
 	BucketsInRebalance map[string]bool
+
+	// Planner will not generate alternate shardIds if the
+	// NodeVersion is < 7.6
+	NodeVersion int `json:"nodeVersion,omitempty"`
+	// Shard level statistics
+
+	// Current number of shards on the node
+	// Derived from index grouping based on alternate shardId
+	numShards int
+
+	// Minium number of shards that can be created on the node
+	// before trying to place indexes on existing shards
+	// Derived from memory quota, flush buffer size and percentage of memory
+	// required for flush buffers
+	MinShardCapacity int `json:"minShardCapacity,omitempty"`
+
+	memQuota uint64 // Indexer memory quota for this node
 }
 
 // This function creates a new indexer node
@@ -154,6 +181,10 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.indexMovedIn = o.indexMovedIn
 	r.totalData = o.totalData
 	r.totalIndex = o.totalIndex
+	r.NodeVersion = o.NodeVersion
+	r.numShards = o.numShards
+	r.MinShardCapacity = o.MinShardCapacity
+	r.memQuota = o.memQuota
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
@@ -578,5 +609,26 @@ func (o *IndexerNode) AddIndexes2(indexes []*IndexUsage) {
 func (o *IndexerNode) ComputeSizing(sizing SizingMethod) {
 	if sizing != nil {
 		sizing.ComputeIndexerSize(o)
+	}
+}
+
+func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
+	flushBufferSz := config["indexer.plasma.sharedFlushBufferSize"].Int()
+	flushBufferQuota := config["indexer.plasma.flushBufferQuota"].Float64()
+
+	if flushBufferQuota == 0 || flushBufferSz == 0 {
+		// Do not limit the number of shards. Each index will be created on a new shards
+		logging.Warnf("IndexerNode::ComputeMinShardCapacity Disabling the maxShards. "+
+			"FlushBufferQuota: %v, FlushBufferSize: %v", flushBufferQuota, flushBufferSz)
+		o.MinShardCapacity = math.MaxInt
+		return
+	}
+
+	o.MinShardCapacity = int((float64(o.memQuota) * PLASMA_MEMQUOTA_FRAC * (flushBufferQuota / 100.0)) / float64(flushBufferSz))
+
+	// As each index requires 2 shards - one for main store and one for back store, always
+	// make the maxShards value even
+	if o.MinShardCapacity%2 != 0 {
+		o.MinShardCapacity++
 	}
 }

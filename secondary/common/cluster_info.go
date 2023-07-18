@@ -1350,7 +1350,9 @@ func getServerVersionFromVersionString(v string) (int, error) {
 		}
 	}
 	if version == 7 {
-		if minorVersion >= 2 {
+		if minorVersion >= 6 {
+			return INDEXER_76_VERSION, nil
+		} else if minorVersion == 2 {
 			return INDEXER_72_VERSION, nil
 		} else if minorVersion == 1 {
 			return INDEXER_71_VERSION, nil

@@ -1319,6 +1319,14 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.flushBufferQuota": ConfigValue{
+		4.0,
+		"Percentage of indexer memory quota that can be used for plasma flush " +
+			"buffer allocations. Default is 4.0% i.e. 0.04 * memory_quota",
+		4.0,
+		false, // mutable
+		false, // case in-sensitive
+	},
 	"indexer.plasma.useMemMgmt": ConfigValue{
 		true,
 		"Use jemalloc based manual memory management",
