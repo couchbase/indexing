@@ -86,6 +86,8 @@ type ddlSettings struct {
 	memHighThreshold int32
 	memLowThreshold  int32
 	indexLimit       uint32
+
+	allowDDLDuringScaleUp uint32
 }
 
 //////////////////////////////////////////////////////////////
@@ -2062,6 +2064,10 @@ func (s *ddlSettings) IsShardAffinityEnabled() bool {
 	return atomic.LoadUint32(&s.isShardAffinityEnabled) == 1
 }
 
+func (s *ddlSettings) AllowDDLDuringScaleUp() bool {
+	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2121,6 +2127,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.indexLimit, indexLimit)
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for indexLimit = %v", indexLimit)
+	}
+
+	allowDDLDuringScaleUp := config["allow_ddl_during_scaleup"].Bool()
+	if allowDDLDuringScaleUp {
+		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
 	}
 }
 

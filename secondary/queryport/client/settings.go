@@ -54,6 +54,8 @@ type ClientSettings struct {
 	memHighThreshold int32
 	memLowThreshold  int32
 	indexLimit       uint32
+
+	allowDDLDuringScaleUp uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -356,6 +358,18 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.indexLimit, 200)
 	}
 
+	allowDDLDuringScaleUp, ok := config["indexer.allow_ddl_during_scaleup"]
+	if ok {
+		if allowDDLDuringScaleUp.Bool() {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+		} else {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing indexer.allow_ddl_during_scaleup")
+		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -448,4 +462,8 @@ func (s *ClientSettings) ServerlessIndexLimit() uint32 {
 
 func (s *ClientSettings) IsShardAffinityEnabled() bool {
 	return atomic.LoadUint32(&s.isShardAffinityEnabled) == 1
+}
+
+func (s *ClientSettings) AllowDDLDuringScaleUp() bool {
+	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
 }
