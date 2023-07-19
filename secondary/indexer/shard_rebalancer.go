@@ -2432,7 +2432,8 @@ loop:
 				defnStats := allStats.indexes[instKey] // stats for current defn
 				if defnStats == nil {
 					l.Infof("ShardRebalancer::dropShardsWhenIdle Missing defnStats for instId %v. Considering the index as dropped", instKey)
-					continue // If index is deleted, then it is validated from localMeta
+					droppedIndexes[instKey] = true
+					continue // If index is deleted, then it is already validated from localMeta
 				}
 
 				var pending, numRequests, numCompletedRequests int64
