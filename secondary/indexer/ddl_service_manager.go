@@ -85,6 +85,8 @@ type ddlSettings struct {
 	indexLimit       uint32
 
 	allowDDLDuringScaleUp uint32
+
+	allowNodesClause uint32
 }
 
 //////////////////////////////////////////////////////////////
@@ -2053,6 +2055,10 @@ func (s *ddlSettings) AllowDDLDuringScaleUp() bool {
 	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
 }
 
+func (s *ddlSettings) ShouldHonourNodesClause() bool {
+	return atomic.LoadUint32(&s.allowNodesClause) == 1
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -2120,6 +2126,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	allowDDLDuringScaleUp := config["allow_ddl_during_scaleup"].Bool()
 	if allowDDLDuringScaleUp {
 		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+	}
+
+	allowNodesClause := config["planner.honourNodesInDefn"].Bool()
+	if allowNodesClause {
+		atomic.StoreUint32(&s.allowNodesClause, 1)
 	}
 }
 

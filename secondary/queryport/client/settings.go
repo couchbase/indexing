@@ -57,6 +57,8 @@ type ClientSettings struct {
 	indexLimit       uint32
 
 	allowDDLDuringScaleUp uint32
+
+	allowNodesClause uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -374,6 +376,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: missing indexer.allow_ddl_during_scaleup")
 		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
 	}
+
+	allowNodesClause, ok := config["indexer.planner.honourNodesInDefn"]
+	if ok {
+		if allowNodesClause.Bool() {
+			atomic.StoreUint32(&s.allowNodesClause, 1)
+		} else {
+			atomic.StoreUint32(&s.allowNodesClause, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Warnf("ClientSettings: missing indexer.planner.honourNodesInDefn. considering it to be false")
+		atomic.StoreUint32(&s.allowNodesClause, 0)
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -474,4 +489,8 @@ func (s *ClientSettings) GetBinSize() uint64 {
 
 func (s *ClientSettings) AllowDDLDuringScaleUp() bool {
 	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
+}
+
+func (s *ClientSettings) ShouldHonourNodesClause() bool {
+	return atomic.LoadUint32(&s.allowNodesClause) == 1
 }
