@@ -142,7 +142,7 @@ type IndexSpec struct {
 	ScanRate      uint64  `json:"scanRate,omitempty"`
 }
 
-//Resource Usage Thresholds for serverless model
+// Resource Usage Thresholds for serverless model
 type UsageThreshold struct {
 	MemHighThreshold int32 `json:memHighThreshold,omitempty"`
 	MemLowThreshold  int32 `json:memLowThreshold,omitempty"`
@@ -694,14 +694,18 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				}
 			}
 
+			if len(token.IndexInsts[sliceIndex].Defn.ShardIdsForDest) == 0 {
+				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+			}
+
 			// For indexes marked pendingCreate, shardIds do not exist yet
 			// Explicitly set the ShardIdsForDest to nil. Rebalancer will
 			// use this information to create a new index instead of
 			// recovering the index from restored shard
 			if index.pendingCreate {
-				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest = nil
+				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest[index.PartnId] = nil
 			} else {
-				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest = index.ShardIds
+				token.IndexInsts[sliceIndex].Defn.ShardIdsForDest[index.PartnId] = index.ShardIds
 			}
 
 			token.IndexInsts[sliceIndex].Defn.InstStateAtRebal = token.IndexInsts[sliceIndex].State
@@ -1969,14 +1973,14 @@ func filterIndexesToRemove(indexes []*IndexUsage, indexDefnIdToRemove map[common
 	return toKeep
 }
 
-//setExcludeInForNonEmptyNodes sets the Exclude parameter to "in"
-//for all the non-empty/non-deleted nodes in the cluster.
-//For rebalance, it means that any new/empty node
-//would be the only eligible node(s) to receive new indexes.
-//This helps to reduce the shuffling of indexes between existing nodes
-//of the cluster.
-//Important to note that replica repair can happen on any node in the cluster
-//and is not restricted due to using the Exclude parameter.
+// setExcludeInForNonEmptyNodes sets the Exclude parameter to "in"
+// for all the non-empty/non-deleted nodes in the cluster.
+// For rebalance, it means that any new/empty node
+// would be the only eligible node(s) to receive new indexes.
+// This helps to reduce the shuffling of indexes between existing nodes
+// of the cluster.
+// Important to note that replica repair can happen on any node in the cluster
+// and is not restricted due to using the Exclude parameter.
 func setExcludeInForNonEmptyNodes(s *Solution) {
 
 	for _, indexer := range s.Placement {
@@ -2190,8 +2194,8 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 	return planner, original, result, err
 }
 
-//ExecutePlan2 is the entry point for tenant aware planner
-//for integration with metadata provider.
+// ExecutePlan2 is the entry point for tenant aware planner
+// for integration with metadata provider.
 func ExecutePlan2(clusterUrl string, indexSpec *IndexSpec, nodes []string,
 	serverlessIndexLimit uint32) (*Solution, bool, error) {
 
@@ -2357,9 +2361,9 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 
 }
 
-//solutionFromPlan2 creates a Solution from the input Plan.
-//This function does a shallow copy of the Placement from the Plan
-//to create a Solution.
+// solutionFromPlan2 creates a Solution from the input Plan.
+// This function does a shallow copy of the Placement from the Plan
+// to create a Solution.
 func solutionFromPlan2(plan *Plan) *Solution {
 
 	s := &Solution{
@@ -2377,10 +2381,10 @@ func solutionFromPlan2(plan *Plan) *Solution {
 
 }
 
-//groupIndexNodesIntoSubClusters groups index nodes into sub-clusters.
-//Nodes are considered to be part of a sub-cluster if those are hosting
-//replicas of the same index. Empty nodes can be paired into a sub-cluster
-//if those belong to a different server group.
+// groupIndexNodesIntoSubClusters groups index nodes into sub-clusters.
+// Nodes are considered to be part of a sub-cluster if those are hosting
+// replicas of the same index. Empty nodes can be paired into a sub-cluster
+// if those belong to a different server group.
 func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, error) {
 
 	const _groupIndexNodesIntoSubClusters = "Planner::groupIndexNodesIntoSubClusters"
@@ -2530,9 +2534,9 @@ func groupIndexNodesIntoSubClusters(indexers []*IndexerNode) ([]SubCluster, erro
 	return subClusters, nil
 }
 
-//validateServerGroupForEmptyNodes validates if the input nodes can form sub-cluster
-//without violating server group constraint. Each node in odd position is considered
-//to be a pair with the next even position node starting with 0 index.
+// validateServerGroupForEmptyNodes validates if the input nodes can form sub-cluster
+// without violating server group constraint. Each node in odd position is considered
+// to be a pair with the next even position node starting with 0 index.
 func validateServerGroupForEmptyNodes(emptyNodePermutations []*IndexerNode) bool {
 
 	if len(emptyNodePermutations) == 1 {
@@ -2556,8 +2560,8 @@ func validateServerGroupForEmptyNodes(emptyNodePermutations []*IndexerNode) bool
 
 }
 
-//validateSubClusterGrouping validates the constraints for
-//sub-cluster grouping.
+// validateSubClusterGrouping validates the constraints for
+// sub-cluster grouping.
 func validateSubClusterGrouping(subClusters []SubCluster,
 	indexSpec *IndexSpec) error {
 
@@ -2597,8 +2601,8 @@ func validateSubClusterGrouping(subClusters []SubCluster,
 	return nil
 }
 
-//filterCandidateBasedOnTenantAffinity finds candidate sub-cluster
-//on which input index can be placed based on tenant affinity
+// filterCandidateBasedOnTenantAffinity finds candidate sub-cluster
+// on which input index can be placed based on tenant affinity
 func filterCandidateBasedOnTenantAffinity(subClusters []SubCluster,
 	indexSpec *IndexSpec) (SubCluster, error) {
 
@@ -2627,9 +2631,9 @@ func filterCandidateBasedOnTenantAffinity(subClusters []SubCluster,
 
 }
 
-//findLeastLoadedSubCluster finds the least loaded sub-cluster from the input
-//list of sub-clusters. Load is calculated based on the actual RSS of the indexer
-//process on the node.
+// findLeastLoadedSubCluster finds the least loaded sub-cluster from the input
+// list of sub-clusters. Load is calculated based on the actual RSS of the indexer
+// process on the node.
 func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 
 	//TODO This code assumes identically loaded nodes in the sub-cluster.
@@ -2652,9 +2656,9 @@ func findLeastLoadedSubCluster(subClusters []SubCluster) SubCluster {
 
 }
 
-//findCandidateSubClustersBasedOnUsage finds candidates sub-clusters for
-//placement based on resource usage. All sub-clusters below High Threshold
-//are potential candidates for index placement.
+// findCandidateSubClustersBasedOnUsage finds candidates sub-clusters for
+// placement based on resource usage. All sub-clusters below High Threshold
+// are potential candidates for index placement.
 func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
@@ -2671,9 +2675,9 @@ func findCandidateSubClustersBasedOnUsage(subClusters []SubCluster,
 	return candidates, nil
 }
 
-//findSubClustersBelowLowThreshold finds sub-clusters with usage lower than
-//LWM(Low Watermark Threshold). A subCluster is considered below LWM if usage for
-//both units and memory is below threshold.
+// findSubClustersBelowLowThreshold finds sub-clusters with usage lower than
+// LWM(Low Watermark Threshold). A subCluster is considered below LWM if usage for
+// both units and memory is below threshold.
 func findSubClustersBelowLowThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
@@ -2712,9 +2716,9 @@ func findSubClustersBelowLowThreshold(subClusters []SubCluster,
 	return result, nil
 }
 
-//findSubClustersBelowHighThreshold finds sub-clusters with usage lower than
-//HWT(High Watermark Threshold). A subCluster is considered below high
-//threhsold if both units and memory usage is below HWM.
+// findSubClustersBelowHighThreshold finds sub-clusters with usage lower than
+// HWT(High Watermark Threshold). A subCluster is considered below high
+// threhsold if both units and memory usage is below HWM.
 func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
@@ -2753,9 +2757,9 @@ func findSubClustersBelowHighThreshold(subClusters []SubCluster,
 	return result, nil
 }
 
-//findSubClusterForEmptyNode finds another empty node in the cluster to
-//pair with the input single node subCluster to form a sub-cluster. If excludeNodes is specified,
-//those nodes are excluded while finding the pair.
+// findSubClusterForEmptyNode finds another empty node in the cluster to
+// pair with the input single node subCluster to form a sub-cluster. If excludeNodes is specified,
+// those nodes are excluded while finding the pair.
 func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubCluster,
 	excludeNodes []SubCluster) (SubCluster, *IndexerNode, error) {
 
@@ -2782,9 +2786,9 @@ func findPairForSingleNodeSubCluster(indexers []*IndexerNode, subCluster SubClus
 	return subCluster, nil, nil
 }
 
-//findSubClusterForEmptyNode finds another empty node in the cluster to
-//pair with the input node to form a sub-cluster. If excludeNodes is specified,
-//those nodes are excluded while finding the pair.
+// findSubClusterForEmptyNode finds another empty node in the cluster to
+// pair with the input node to form a sub-cluster. If excludeNodes is specified,
+// those nodes are excluded while finding the pair.
 func findSubClusterForEmptyNode(indexers []*IndexerNode,
 	node *IndexerNode, excludeNodes []SubCluster) (SubCluster, error) {
 
@@ -2813,8 +2817,8 @@ func findSubClusterForEmptyNode(indexers []*IndexerNode,
 	return subCluster, nil
 }
 
-//checkIfNodeBelongsToAnySubCluster checks if the given node belongs
-//to the list of input sub-cluster based on its NodeUUID
+// checkIfNodeBelongsToAnySubCluster checks if the given node belongs
+// to the list of input sub-cluster based on its NodeUUID
 func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
 	node *IndexerNode) bool {
 
@@ -2830,8 +2834,8 @@ func checkIfNodeBelongsToAnySubCluster(subClusters []SubCluster,
 	return false
 }
 
-//findSubClustersForNode returns the list of subClusters
-//an input node belongs.
+// findSubClustersForNode returns the list of subClusters
+// an input node belongs.
 func findSubClustersForNode(subClusters []SubCluster,
 	node *IndexerNode) []SubCluster {
 
@@ -2866,9 +2870,9 @@ func getSubClusterPosForNode(subClusters []SubCluster,
 	return -1
 }
 
-//findSubClusterForIndex finds the sub-cluster for a given index.
-//Nodes are considered to be part of a sub-cluster if
-//those are hosting replicas of the same index.
+// findSubClusterForIndex finds the sub-cluster for a given index.
+// Nodes are considered to be part of a sub-cluster if
+// those are hosting replicas of the same index.
 func findSubClusterForIndex(indexers []*IndexerNode,
 	index *IndexUsage) (SubCluster, error) {
 
@@ -2888,7 +2892,7 @@ func findSubClusterForIndex(indexers []*IndexerNode,
 	return subCluster, nil
 }
 
-//placeIndexOnSubCluster places the input list of indexes on the given sub-cluster
+// placeIndexOnSubCluster places the input list of indexes on the given sub-cluster
 func placeIndexOnSubCluster(subCluster SubCluster, indexes []*IndexUsage) error {
 
 	for i, indexer := range subCluster {
@@ -3213,10 +3217,8 @@ func computeQuota(config *RunConfig, sizing SizingMethod, indexes []*IndexUsage,
 	return memQuota, cpuQuota
 }
 
-//
 // This function is only called during placement to make existing index as
 // eligible candidate for planner.
-//
 func filterPinnedIndexes(config *RunConfig, indexes []*IndexUsage) []*IndexUsage {
 
 	result := ([]*IndexUsage)(nil)
@@ -3234,9 +3236,7 @@ func filterPinnedIndexes(config *RunConfig, indexes []*IndexUsage) []*IndexUsage
 	return result
 }
 
-//
 // Find all partitioned index in teh solution
-//
 func findAllPartitionedIndex(solution *Solution) []*IndexUsage {
 
 	result := ([]*IndexUsage)(nil)
@@ -3276,9 +3276,7 @@ func findAllPartitionedIndexExcluding(solution *Solution, excludes []*IndexUsage
 	return result
 }
 
-//
 // This function should only be called if there are new indexes to be placed.
-//
 func computeNewIndexSizingInfo(s *Solution, indexes []*IndexUsage) {
 
 	for _, index := range indexes {
@@ -3342,18 +3340,14 @@ func changeTopology(config *RunConfig, solution *Solution, deletedNodes []string
 // RunStats
 /////////////////////////////////////////////////////////////
 
-//
 // Set stats for index to be placed
-//
 func setIndexPlacementStats(s *RunStats, indexes []*IndexUsage, useLive bool) {
 	s.AvgIndexSize, s.StdDevIndexSize = computeIndexMemStats(indexes, useLive)
 	s.AvgIndexCpu, s.StdDevIndexCpu = computeIndexCpuStats(indexes, useLive)
 	s.IndexCount = uint64(len(indexes))
 }
 
-//
 // Set stats for initial layout
-//
 func setInitialLayoutStats(s *RunStats,
 	config *RunConfig,
 	constraint ConstraintMethod,
@@ -3618,9 +3612,9 @@ func ReadDefragUtilStats(statsFile string) (map[string]map[string]interface{}, e
 	return nil, nil
 }
 
-//ExecuteTenantAwareRebalance is the entry point for tenant aware rebalancer.
-//Given an input cluster url and the requested topology change, it will return
-//the set of transfer tokens for the desired index movements.
+// ExecuteTenantAwareRebalance is the entry point for tenant aware rebalancer.
+// Given an input cluster url and the requested topology change, it will return
+// the set of transfer tokens for the desired index movements.
 func ExecuteTenantAwareRebalance(clusterUrl string,
 	topologyChange service.TopologyChange,
 	masterId string) (map[string]*common.TransferToken,
@@ -3681,7 +3675,7 @@ func ExecuteTenantAwareRebalanceInternal(clusterUrl string,
 	return transferTokens, nil, nil
 }
 
-//executeTenantAwareRebal is the actual implementation of tenant aware rebalancer
+// executeTenantAwareRebal is the actual implementation of tenant aware rebalancer
 func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []string) (
 	*TenantAwarePlanner, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
@@ -3768,9 +3762,9 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 	return tenantAwarePlanner, nil, nil
 }
 
-//findSubClusterAboveHighThreshold finds sub-clusters with usage higher than
-//HWM(High Watermark Threshold). If either memory or units is above HWM, then
-//the subcluster is considered to be above HWM.
+// findSubClusterAboveHighThreshold finds sub-clusters with usage higher than
+// HWM(High Watermark Threshold). If either memory or units is above HWM, then
+// the subcluster is considered to be above HWM.
 func findSubClusterAboveHighThreshold(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) ([]SubCluster, error) {
 
@@ -3803,9 +3797,9 @@ func findSubClusterAboveHighThreshold(subClusters []SubCluster,
 	return result, nil
 }
 
-//findCandidateTenantsToMoveOut computes the tenants that
-//can be moved out of the list of input SubClusters to bring down its
-//memory/units usage less than or equal to LWM threshold.
+// findCandidateTenantsToMoveOut computes the tenants that
+// can be moved out of the list of input SubClusters to bring down its
+// memory/units usage less than or equal to LWM threshold.
 func findCandidateTenantsToMoveOut(subClusters []SubCluster,
 	usageThreshold *UsageThreshold) [][]*TenantUsage {
 
@@ -3820,9 +3814,9 @@ func findCandidateTenantsToMoveOut(subClusters []SubCluster,
 	return candidates
 }
 
-//findTenantsToMoveOutFromSubCluster computes the tenants that
-//can be moved out of the input SubCluster to bring down its
-//memory/units usage less than or equal to LWM threshold.
+// findTenantsToMoveOutFromSubCluster computes the tenants that
+// can be moved out of the input SubCluster to bring down its
+// memory/units usage less than or equal to LWM threshold.
 func findTenantsToMoveOutFromSubCluster(subCluster SubCluster,
 	usageThreshold *UsageThreshold) []*TenantUsage {
 
@@ -3967,9 +3961,9 @@ func findTenantsToMoveOutFromSubCluster(subCluster SubCluster,
 
 }
 
-//computeUsageByTenant computes the actual memory and units usage
-//per tenant on a given indexer node. Returns a map of TenantUsage
-//indexed by tenantId.
+// computeUsageByTenant computes the actual memory and units usage
+// per tenant on a given indexer node. Returns a map of TenantUsage
+// indexed by tenantId.
 func computeUsageByTenant(indexerNode *IndexerNode) map[string]*TenantUsage {
 
 	usagePerTenant := make(map[string]*TenantUsage)
@@ -3991,8 +3985,8 @@ func computeUsageByTenant(indexerNode *IndexerNode) map[string]*TenantUsage {
 	return usagePerTenant
 }
 
-//sortTenantUsageByMemory sorts the input map of TenantUsage indexed by tenantId into
-//a slice of TenantUsage sorted by memory in the ascending order.
+// sortTenantUsageByMemory sorts the input map of TenantUsage indexed by tenantId into
+// a slice of TenantUsage sorted by memory in the ascending order.
 func sortTenantUsageByMemory(usagePerTenant map[string]*TenantUsage) []*TenantUsage {
 
 	usageSortedByMemory := make([]*TenantUsage, 0)
@@ -4011,8 +4005,8 @@ func sortTenantUsageByMemory(usagePerTenant map[string]*TenantUsage) []*TenantUs
 
 }
 
-//sortTenantUsageByUnits sorts the input map of TenantUsage indexed by tenantId into
-//a slice of TenantUsage sorted by units in the ascending order.
+// sortTenantUsageByUnits sorts the input map of TenantUsage indexed by tenantId into
+// a slice of TenantUsage sorted by units in the ascending order.
 func sortTenantUsageByUnits(usagePerTenant map[string]*TenantUsage) []*TenantUsage {
 
 	usageSortedByUnits := make([]*TenantUsage, 0)
@@ -4030,8 +4024,8 @@ func sortTenantUsageByUnits(usagePerTenant map[string]*TenantUsage) []*TenantUsa
 	return usageSortedByUnits
 }
 
-//moveTenantsToLowUsageSubCluster moves the list of input tenants from source subclusters
-//to the target subClusters.
+// moveTenantsToLowUsageSubCluster moves the list of input tenants from source subclusters
+// to the target subClusters.
 func moveTenantsToLowUsageSubCluster(solution *Solution, tenantsToBeMoved [][]*TenantUsage,
 	targetSubClusters []SubCluster, sourceSubClusters []SubCluster,
 	usageThreshold *UsageThreshold) bool {
@@ -4073,9 +4067,9 @@ func moveTenantsToLowUsageSubCluster(solution *Solution, tenantsToBeMoved [][]*T
 	//TODO Elixir consider building state indexes also during planning
 }
 
-//findTenantPlacement finds the placement for a tenant based on the available resources
-//from the given list of SubClusters below LWM threshold usage. Returns false if no
-//placement can be found.
+// findTenantPlacement finds the placement for a tenant based on the available resources
+// from the given list of SubClusters below LWM threshold usage. Returns false if no
+// placement can be found.
 func findTenantPlacement(solution *Solution, tenant *TenantUsage, targetSubClusters []SubCluster,
 	sourceSubClusters []SubCluster, usageThreshold *UsageThreshold) bool {
 
@@ -4096,8 +4090,8 @@ func findTenantPlacement(solution *Solution, tenant *TenantUsage, targetSubClust
 	return false
 }
 
-//checkIfTenantCanBePlacedOnTarget check if input tenant can be placed on the given
-//SubCluster based on its memory/units usage and limit thresholds.
+// checkIfTenantCanBePlacedOnTarget check if input tenant can be placed on the given
+// SubCluster based on its memory/units usage and limit thresholds.
 func checkIfTenantCanBePlacedOnTarget(tenant *TenantUsage, target SubCluster, usageThreshold *UsageThreshold) bool {
 
 	//check if tenant can be placed without exceeding subCluster's memory and units
@@ -4126,8 +4120,8 @@ func checkIfTenantCanBePlacedOnTarget(tenant *TenantUsage, target SubCluster, us
 
 }
 
-//findSourceForTenant finds the source subCluster for the input tenant from
-//the list of subClusters provided.
+// findSourceForTenant finds the source subCluster for the input tenant from
+// the list of subClusters provided.
 func findSourceForTenant(tenant *TenantUsage, subClustersOverHWM []SubCluster) SubCluster {
 
 	//find source node
@@ -4143,8 +4137,8 @@ func findSourceForTenant(tenant *TenantUsage, subClustersOverHWM []SubCluster) S
 
 }
 
-//placeTenantOnTarget places the input tenant on target subCluster
-//and removes it from the source subCluster.
+// placeTenantOnTarget places the input tenant on target subCluster
+// and removes it from the source subCluster.
 func placeTenantOnTarget(solution *Solution, tenant *TenantUsage,
 	source SubCluster, target SubCluster) {
 
@@ -4167,8 +4161,8 @@ func placeTenantOnTarget(solution *Solution, tenant *TenantUsage,
 	}
 }
 
-//updateTargetSubClusterUsage add the tenantUsage memory/units to input subcluster's
-//node statistics.
+// updateTargetSubClusterUsage add the tenantUsage memory/units to input subcluster's
+// node statistics.
 func updateTargetSubClusterUsage(subCluster SubCluster, tenant *TenantUsage) {
 
 	//update the target subCluster statistics
@@ -4178,8 +4172,8 @@ func updateTargetSubClusterUsage(subCluster SubCluster, tenant *TenantUsage) {
 	}
 }
 
-//updateTargetSubClusterUsage subtracts the tenantUsage memory/units from input subcluster's
-//node statistics.
+// updateTargetSubClusterUsage subtracts the tenantUsage memory/units from input subcluster's
+// node statistics.
 func updateSourceSubClusterUsage(source SubCluster, tenant *TenantUsage) {
 
 	for _, indexerNode := range source {
@@ -4197,8 +4191,8 @@ func updateSourceSubClusterUsage(source SubCluster, tenant *TenantUsage) {
 	}
 }
 
-//sortSubClustersByMemUsage sorts the input slice of subClusters into ascending
-//order based on memory usage and returns the new sorted slice
+// sortSubClustersByMemUsage sorts the input slice of subClusters into ascending
+// order based on memory usage and returns the new sorted slice
 func sortSubClustersByMemUsage(subClusters []SubCluster) []SubCluster {
 
 	findMaxMemUsageInSubCluster := func(subCluster SubCluster) uint64 {
@@ -4220,8 +4214,8 @@ func sortSubClustersByMemUsage(subClusters []SubCluster) []SubCluster {
 	return subClusters
 }
 
-//getIndexesForTenant returns the list of indexes for the specified tenant
-//from the input indexer node.
+// getIndexesForTenant returns the list of indexes for the specified tenant
+// from the input indexer node.
 func getIndexesForTenant(indexerNode *IndexerNode, tenant *TenantUsage) []*IndexUsage {
 
 	var indexes []*IndexUsage
@@ -4235,7 +4229,7 @@ func getIndexesForTenant(indexerNode *IndexerNode, tenant *TenantUsage) []*Index
 	return indexes
 }
 
-//Stringer from TenantUsage
+// Stringer from TenantUsage
 func (t *TenantUsage) String() string {
 
 	str := fmt.Sprintf("TenantUsage - ")
@@ -4247,7 +4241,7 @@ func (t *TenantUsage) String() string {
 
 }
 
-//repairMissingReplica repairs the missing replicas in the subCluster
+// repairMissingReplica repairs the missing replicas in the subCluster
 func repairMissingReplica(solution *Solution, allSubClusters []SubCluster) {
 
 	const _repairMissingReplica = "Planner::repairMissingReplica"
@@ -4268,8 +4262,8 @@ func repairMissingReplica(solution *Solution, allSubClusters []SubCluster) {
 	}
 }
 
-//findMissingReplicaForIndexerNode checks if there is any missing index
-//on the input indexer node which doesn't have a replica in the given subCluster.
+// findMissingReplicaForIndexerNode checks if there is any missing index
+// on the input indexer node which doesn't have a replica in the given subCluster.
 func findMissingReplicaForIndexerNode(indexer *IndexerNode, subCluster SubCluster) []*IndexUsage {
 
 	const _findMissingReplicaForIndexerNode = "Planner::findMissingReplicaForIndexerNode"
@@ -4297,8 +4291,8 @@ func findMissingReplicaForIndexerNode(indexer *IndexerNode, subCluster SubCluste
 
 }
 
-//placeMissingReplicaOnTarget places the repaired replica on the input target node and
-//adds it to the solution.
+// placeMissingReplicaOnTarget places the repaired replica on the input target node and
+// adds it to the solution.
 func placeMissingReplicaOnTarget(index *IndexUsage, target *IndexerNode, solution *Solution) {
 
 	const _placeMissingReplicaOnTarget = "Planner::placeMissingReplicaOnTarget"
@@ -4329,9 +4323,9 @@ func placeMissingReplicaOnTarget(index *IndexUsage, target *IndexerNode, solutio
 	}
 }
 
-//findMissingReplicaId returns the replicaId of the missing replica
-//based on the replicaId of the input index. This function only works
-//for serverless model with fixed NumReplica=1.
+// findMissingReplicaId returns the replicaId of the missing replica
+// based on the replicaId of the input index. This function only works
+// for serverless model with fixed NumReplica=1.
 func findMissingReplicaId(index *IndexUsage) int {
 
 	if index.Instance.ReplicaId == 0 {
@@ -4341,9 +4335,8 @@ func findMissingReplicaId(index *IndexUsage) int {
 	}
 }
 
-//
-//findNumReplicaForSubCluster returns the number of replicas for the given index
-//in the input subcluster including self..
+// findNumReplicaForSubCluster returns the number of replicas for the given index
+// in the input subcluster including self..
 func findNumReplicaForSubCluster(u *IndexUsage, subCluster SubCluster) int {
 
 	count := 0
@@ -4360,8 +4353,8 @@ func findNumReplicaForSubCluster(u *IndexUsage, subCluster SubCluster) int {
 	return count
 }
 
-//findPairNodeUsingIndex finds the pair node in the subCluster using the index
-//of the input node.
+// findPairNodeUsingIndex finds the pair node in the subCluster using the index
+// of the input node.
 func findPairNodeUsingIndex(subCluster SubCluster, index int) *IndexerNode {
 
 	if index == 0 {
@@ -4372,10 +4365,10 @@ func findPairNodeUsingIndex(subCluster SubCluster, index int) *IndexerNode {
 
 }
 
-//findPlacementForDeletedNodes finds the placement of indexes which belong to a
-//deleted node. Once the right placement is found, the indexes are moved to the
-//new target node in the input solution. It returns the list of non ejected/deleted
-//nodes remaining in the cluster.
+// findPlacementForDeletedNodes finds the placement of indexes which belong to a
+// deleted node. Once the right placement is found, the indexes are moved to the
+// new target node in the input solution. It returns the list of non ejected/deleted
+// nodes remaining in the cluster.
 func findPlacementForDeletedNodes(solution *Solution, usageThreshold *UsageThreshold) error {
 
 	const _findPlacementForDeletedNodes = "Planner::findPlacementForDeletedNodes"
@@ -4407,22 +4400,22 @@ func findPlacementForDeletedNodes(solution *Solution, usageThreshold *UsageThres
 	return nil
 }
 
-//moveTenantsFromDeletedNodes moves the tenants from the deleted nodes
-//to remaining nodes in the cluster based on the following rules:
-//1. Ignore empty deleted nodes as nothing needs to be done.
-//2. Find candidate node for deleted node to which indexes of this deleted
-//node can be swapped to. It is important to swap the indexes from
-//deleted nodes entirely to the candidate node to maintain sub-cluster affinity.
-//This will work well if a single or both nodes of the sub-cluster are
-//getting deleted.
-//3. If deleted nodes are equal to new nodes, then swap one for one.
-//4. If deleted nodes are less than new nodes,
-//pick any new nodes which can match the server group constraint.
-//5. If deleted nodes are more than new nodes, then:
-//5a. If new nodes are non-zero, return error as planner cannot determine
-//which nodes to place the indexes on.
-//5b. If new nodes are zero, it is treated as a case of failed swap rebalance.
-//Indexes from deleted nodes are placed to maintain tenant affinity in subcluster.
+// moveTenantsFromDeletedNodes moves the tenants from the deleted nodes
+// to remaining nodes in the cluster based on the following rules:
+// 1. Ignore empty deleted nodes as nothing needs to be done.
+// 2. Find candidate node for deleted node to which indexes of this deleted
+// node can be swapped to. It is important to swap the indexes from
+// deleted nodes entirely to the candidate node to maintain sub-cluster affinity.
+// This will work well if a single or both nodes of the sub-cluster are
+// getting deleted.
+// 3. If deleted nodes are equal to new nodes, then swap one for one.
+// 4. If deleted nodes are less than new nodes,
+// pick any new nodes which can match the server group constraint.
+// 5. If deleted nodes are more than new nodes, then:
+// 5a. If new nodes are non-zero, return error as planner cannot determine
+// which nodes to place the indexes on.
+// 5b. If new nodes are zero, it is treated as a case of failed swap rebalance.
+// Indexes from deleted nodes are placed to maintain tenant affinity in subcluster.
 func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 	newNodes []*IndexerNode, solution *Solution, usageThreshold *UsageThreshold) error {
 
@@ -4621,8 +4614,8 @@ func moveTenantsFromDeletedNodes(deletedNodes []*IndexerNode,
 	return nil
 }
 
-//findPairNodeForIndexer finds the sub-cluster pair for the input indexer node
-//from all the nodes in the cluster. Returns nil if pair node cannot be found.
+// findPairNodeForIndexer finds the sub-cluster pair for the input indexer node
+// from all the nodes in the cluster. Returns nil if pair node cannot be found.
 func findPairNodeForIndexer(node *IndexerNode, allIndexers []*IndexerNode) *IndexerNode {
 
 	for _, index := range node.Indexes {
@@ -4644,8 +4637,8 @@ func findPairNodeForIndexer(node *IndexerNode, allIndexers []*IndexerNode) *Inde
 	return nil
 }
 
-//swapTenantsFromDeleteNodes swaps the indexes from deletedNodes
-//to newNodes.
+// swapTenantsFromDeleteNodes swaps the indexes from deletedNodes
+// to newNodes.
 func swapTenantsFromDeleteNodes(deletedNodes []*IndexerNode,
 	newNodes []*IndexerNode, solution *Solution) {
 
@@ -4661,9 +4654,9 @@ func swapTenantsFromDeleteNodes(deletedNodes []*IndexerNode,
 
 }
 
-//validateServerGroupForPairNode validates if nodes in deletedNodes can be paired with nodes
-//in newNodes based on server group mapping. Two nodes can only be paired if both belong
-//to different server group.
+// validateServerGroupForPairNode validates if nodes in deletedNodes can be paired with nodes
+// in newNodes based on server group mapping. Two nodes can only be paired if both belong
+// to different server group.
 func validateServerGroupForPairNode(deletedNodes []*IndexerNode,
 	pairForDeletedNodes []*IndexerNode, newNodes []*IndexerNode) bool {
 
@@ -4714,8 +4707,8 @@ func validateServerGroupForPairNode(deletedNodes []*IndexerNode,
 
 }
 
-//permuteNodes returns all the permutation of the input slice
-//of indexer nodes.
+// permuteNodes returns all the permutation of the input slice
+// of indexer nodes.
 func permuteNodes(nodes []*IndexerNode) [][]*IndexerNode {
 
 	var perm func([]*IndexerNode, int)
@@ -4746,9 +4739,9 @@ func permuteNodes(nodes []*IndexerNode) [][]*IndexerNode {
 	return result
 }
 
-//findCandidateTenantsToMoveOut computes the tenants that
-//can be moved out of the list of input SubClusters to bring down its
-//memory/units usage less than or equal to LWM threshold.
+// findCandidateTenantsToMoveOut computes the tenants that
+// can be moved out of the list of input SubClusters to bring down its
+// memory/units usage less than or equal to LWM threshold.
 func getTenantUsageForSubClusters(subClusters []SubCluster) [][]*TenantUsage {
 
 	var tenantUsage [][]*TenantUsage
@@ -4762,9 +4755,9 @@ func getTenantUsageForSubClusters(subClusters []SubCluster) [][]*TenantUsage {
 	return tenantUsage
 }
 
-//findTenantsToMoveOutFromSubCluster computes the tenants that
-//can be moved out of the input SubCluster to bring down its
-//memory/units usage less than or equal to LWM threshold.
+// findTenantsToMoveOutFromSubCluster computes the tenants that
+// can be moved out of the input SubCluster to bring down its
+// memory/units usage less than or equal to LWM threshold.
 func getTenantUsageForSubCluster(subCluster SubCluster) []*TenantUsage {
 
 	const _getTenantUsageForSubCluster = "Planner::getTenantUsageForSubCluster"
@@ -4843,8 +4836,8 @@ func getTenantUsageForSubCluster(subCluster SubCluster) []*TenantUsage {
 
 }
 
-//GetDefragmentedUtilization is the entry method for planner to compute the utilization
-//stats in the given cluster after rebalance.
+// GetDefragmentedUtilization is the entry method for planner to compute the utilization
+// stats in the given cluster after rebalance.
 func GetDefragmentedUtilization(clusterUrl string) (map[string]map[string]interface{}, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
@@ -4854,8 +4847,8 @@ func GetDefragmentedUtilization(clusterUrl string) (map[string]map[string]interf
 	return getDefragmentedUtilization(plan)
 }
 
-//getDefragmentedUtilization runs the actual rebalance algorithm to generate the new placement
-//plan and compute the utilization stats from it.
+// getDefragmentedUtilization runs the actual rebalance algorithm to generate the new placement
+// plan and compute the utilization stats from it.
 func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, error) {
 
 	p, _, err := executeTenantAwareRebal(CommandRebalance, plan, nil)
@@ -4870,13 +4863,13 @@ func getDefragmentedUtilization(plan *Plan) (map[string]map[string]interface{}, 
 	return defragUtilStats, nil
 }
 
-//getDefragmentedUtilization computes the utilization stats from the new placement plan generated
-//by the planner after executing the rebalance algorithm.
-//Following per-node stats are returned currently:
-//1. "memory_used_actual"
-//2. "units_used_actual"
-//3. "num_tenants"
-//4. "num_index_repaired"
+// getDefragmentedUtilization computes the utilization stats from the new placement plan generated
+// by the planner after executing the rebalance algorithm.
+// Following per-node stats are returned currently:
+// 1. "memory_used_actual"
+// 2. "units_used_actual"
+// 3. "num_tenants"
+// 4. "num_index_repaired"
 func genDefragUtilStats(placement []*IndexerNode, deletedNodes []string) map[string]map[string]interface{} {
 
 	defragUtilStats := make(map[string]map[string]interface{})
@@ -4904,7 +4897,7 @@ func genDefragUtilStats(placement []*IndexerNode, deletedNodes []string) map[str
 	return defragUtilStats
 }
 
-//getNumTenantsForNode computes the number of tenants on an indexer node
+// getNumTenantsForNode computes the number of tenants on an indexer node
 func getNumTenantsForNode(indexerNode *IndexerNode) uint64 {
 
 	numTenants := make(map[string]bool)
@@ -4916,8 +4909,8 @@ func getNumTenantsForNode(indexerNode *IndexerNode) uint64 {
 	return uint64(len(numTenants))
 }
 
-//evaluateSolutionForScaleIn checks if there is enough excess capacity to allow some
-//nodes to be removed from the cluster based on usage thresholds.
+// evaluateSolutionForScaleIn checks if there is enough excess capacity to allow some
+// nodes to be removed from the cluster based on usage thresholds.
 func evaluateSolutionForScaleIn(solution *Solution, usageThreshold *UsageThreshold) (*Solution, []string) {
 
 	const _evaluateSolutionForScaleIn = "Planner::evaluateSolutionForScaleIn"
@@ -5005,7 +4998,7 @@ func computeUsageThresholdForScaleIn(usageThreshold *UsageThreshold) *UsageThres
 
 }
 
-//getNumIndexRepaired returns the count of repaired replicas for the given indexer node
+// getNumIndexRepaired returns the count of repaired replicas for the given indexer node
 func getNumIndexRepaired(indexerNode *IndexerNode) uint64 {
 
 	var numIndexRepaired uint64
@@ -5028,9 +5021,9 @@ func filterPartialSubClusters(subClusters []SubCluster) []SubCluster {
 	return subClusters
 }
 
-//ExecuteTenantAwarePlanForResume provides index placement planning on a tenant resume .
-//Given an input cluster url and slice of index metadata for resume nodes, it will return
-//the set of resume tokens.
+// ExecuteTenantAwarePlanForResume provides index placement planning on a tenant resume .
+// Given an input cluster url and slice of index metadata for resume nodes, it will return
+// the set of resume tokens.
 func ExecuteTenantAwarePlanForResume(clusterUrl string, resumeId, masterId, bucket string,
 	resumeNodes []*IndexerNode) (map[string]*common.ResumeDownloadToken, error) {
 
@@ -5126,8 +5119,8 @@ func executeTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*T
 	return tenantAwarePlanner, nil
 }
 
-//findDestSubClusterForResumedTenant finds the dest subCluster for the resumed tenant.
-//In V1, resumed tenant can be planced on a single subcluster only.
+// findDestSubClusterForResumedTenant finds the dest subCluster for the resumed tenant.
+// In V1, resumed tenant can be planced on a single subcluster only.
 func findDestSubClusterForResumedTenant(solution *Solution, bucket string) SubCluster {
 
 	//There is only one tenant resumed at a time. Find resumed nodes based on matching bucket name.
@@ -5145,7 +5138,7 @@ func findDestSubClusterForResumedTenant(solution *Solution, bucket string) SubCl
 	return destSubCluster
 }
 
-//generate resume download tokens from solution
+// generate resume download tokens from solution
 func genResumeDownloadToken(solution *Solution,
 	destSubCluster SubCluster, bucket, resumeId,
 	masterId string) (map[string]*common.ResumeDownloadToken, error) {

@@ -276,7 +276,9 @@ type IndexDefn struct {
 	// Otherwise, index would recover as INDEX_STATE_RECOVERED
 	InstStateAtRebal IndexState `json:"instStateAtRebal,omitempty"`
 
-	ShardIdsForDest []ShardId `json:"shardIdsForDest,omitempty"`
+	// As each partition of an index can go to different shard, track the
+	// shardIds for each partition
+	ShardIdsForDest map[PartitionId][]ShardId `json:"shardIdsForDest,omitempty"`
 
 	// The value of this field is decided by planner at the time
 	// of creating the index. The same value will be persisted in
@@ -340,7 +342,7 @@ func (idx IndexDefn) String() string {
 // This function makes a copy of index definition, excluding any transient
 // field.  It is a shallow copy (e.g. does not clone field 'Nodes').
 func (idx IndexDefn) Clone() *IndexDefn {
-	return &IndexDefn{
+	clone := &IndexDefn{
 		DefnId:                 idx.DefnId,
 		Name:                   idx.Name,
 		Using:                  idx.Using,
@@ -373,8 +375,19 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		HasArrItemsCount:       idx.HasArrItemsCount,
 		IndexMissingLeadingKey: idx.IndexMissingLeadingKey,
 		IsPartnKeyDocId:        idx.IsPartnKeyDocId,
-		AlternateShardIds:      idx.AlternateShardIds,
 	}
+
+	clone.ShardIdsForDest = make(map[PartitionId][]ShardId)
+	for k, v := range idx.ShardIdsForDest {
+		clone.ShardIdsForDest[k] = v
+	}
+
+	clone.AlternateShardIds = make(map[PartitionId][]string)
+	for k, v := range idx.AlternateShardIds {
+		clone.AlternateShardIds[k] = v
+	}
+
+	return clone
 }
 
 func (idx *IndexDefn) HasDescending() bool {

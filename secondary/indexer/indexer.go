@@ -2078,9 +2078,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
+
 	// For pendingCreate indexes, the ReqSource would be DDLRequestSourceRebalance but
-	// for shard rebalance, the ShardIdsForDest will be > 0
-	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance) && (len(indexInst.Defn.ShardIdsForDest) > 0)
+	// for shard rebalance, the ShardIdsForDest will be > 0. Since ShardIdsPerDest is per
+	// partition, initPartnInstance will decide the shardIds based on partnId
+	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 
 	//allocate partition/slice
 	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal)
@@ -6116,9 +6118,10 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			return nil, nil, nil, err1
 		}
 
+		partnId := partnInst.Defn.GetPartitionId()
 		var shardIds []common.ShardId
-		if shardRebalance {
-			shardIds = indexInst.Defn.ShardIdsForDest
+		if shardRebalance && len(indexInst.Defn.ShardIdsForDest) > 0 {
+			shardIds = indexInst.Defn.ShardIdsForDest[partnId]
 		}
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
 			idx.meteringMgr, numVBuckets, shardIds)
@@ -12256,23 +12259,23 @@ func (idx *indexer) startKeyspaceIdStreamsForResumedIndexes(keyspaceId string) {
 	}
 }
 
-//HeapController tries to control the heapUsage by dynamically
-//changing the config for smallSnapshotThreshold and minVbQueueLength.
-//These two config control the minimum allocation for the mutation
-//queue and override the maxQueueMem. The main implication of setting
-//these thresholds lower is that it can lead to more non-aligned snapshots
-//being generated, which are not available for scans. The tradeoff is
-//that higher heap usage leads to plasma reducing its memory quota, which
-//causes more resources to be spent on evictions etc and also lower RR for
-//indexed data.
-//The current policy for heap control is as follows:
-//a. If heapUsage > maxHeapThreshold:
-//Set smallSnapshotThreshold/minVbQueueLength to 10.
-//b. If heapUsage > maxHeapThreshold/2:
-//Set smallSnapshotThreshold/minVbQueueLength to 20.
-//c. If heapUsage <= maxHeapThreshold/2:
-//Set smallSnapshotThreshold/minVbQueueLength to 30.
-//HeapController inspects the heap usage every minute.
+// HeapController tries to control the heapUsage by dynamically
+// changing the config for smallSnapshotThreshold and minVbQueueLength.
+// These two config control the minimum allocation for the mutation
+// queue and override the maxQueueMem. The main implication of setting
+// these thresholds lower is that it can lead to more non-aligned snapshots
+// being generated, which are not available for scans. The tradeoff is
+// that higher heap usage leads to plasma reducing its memory quota, which
+// causes more resources to be spent on evictions etc and also lower RR for
+// indexed data.
+// The current policy for heap control is as follows:
+// a. If heapUsage > maxHeapThreshold:
+// Set smallSnapshotThreshold/minVbQueueLength to 10.
+// b. If heapUsage > maxHeapThreshold/2:
+// Set smallSnapshotThreshold/minVbQueueLength to 20.
+// c. If heapUsage <= maxHeapThreshold/2:
+// Set smallSnapshotThreshold/minVbQueueLength to 30.
+// HeapController inspects the heap usage every minute.
 func (idx *indexer) runHeapController() {
 
 	//disable for serverless deployment

@@ -1214,7 +1214,12 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn, ttid string, tt *c.TransferToken, isDeferred, pendingCreate bool) (bool, error) {
 
 	// TODO: Use ShardIds for desintaion when changing the shardIds
-	defn.ShardIdsForDest = tt.ShardIds
+	if len(defn.ShardIdsForDest) == 0 {
+		defn.ShardIdsForDest = make(map[c.PartitionId][]c.ShardId)
+	}
+	for _, partnId := range defn.Partitions {
+		defn.ShardIdsForDest[partnId] = tt.ShardIds
+	}
 
 	if !pendingCreate {
 
@@ -1357,7 +1362,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		return nonDeferredInsts, buildDefnIdList, currIndex
 	}
 
-	pendingCreateDefnList := make([]c.IndexDefn, 0)
+	pendingCreateDefnList := make(map[common.IndexDefnId]*c.IndexDefn, 0)
 
 	for cid, defns := range groupedDefns {
 		buildDefnIdList := make([]client.IndexIdList, 3)
@@ -1368,9 +1373,19 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// built in a batch
 		for _, defn := range defns {
 
-			if defn.ShardIdsForDest == nil { // Process pendingCreate indexes at the end
-				pendingCreateDefnList = append(pendingCreateDefnList, defn)
-				continue
+			for i, partnId := range defn.Partitions {
+				if len(defn.ShardIdsForDest[partnId]) == 0 {
+					if _, ok := pendingCreateDefnList[defn.DefnId]; !ok {
+						clone := defn.Clone()
+						clone.Partitions = nil                                      // reset partitions list
+						clone.Versions = nil                                        // reset versions list
+						clone.ShardIdsForDest = make(map[c.PartitionId][]c.ShardId) // reset shardIds list
+						clone.AlternateShardIds = make(map[c.PartitionId][]string)  // reset alternate shardIds list
+						pendingCreateDefnList[defn.DefnId] = clone
+					}
+					pendingCreateDefnList[defn.DefnId].Partitions = append(pendingCreateDefnList[defn.DefnId].Partitions, partnId)
+					pendingCreateDefnList[defn.DefnId].Versions = append(pendingCreateDefnList[defn.DefnId].Versions, defn.Versions[i])
+				}
 			}
 
 			isDeferred := defn.Deferred &&
@@ -1450,7 +1465,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	// DDL service manager will take care of building the indexes after
 	// rebalance is done
 	for _, defn := range pendingCreateDefnList {
-		if skip, err := sr.createDeferredIndex(&defn, ttid, tt, false, true); err != nil {
+		if skip, err := sr.createDeferredIndex(defn, ttid, tt, false, true); err != nil {
 			setErrInTransferToken(err)
 			return
 		} else if skip {
