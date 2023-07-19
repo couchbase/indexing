@@ -6120,7 +6120,10 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		partnId := partnInst.Defn.GetPartitionId()
 		var shardIds []common.ShardId
-		if shardRebalance && len(indexInst.Defn.ShardIdsForDest) > 0 {
+		shardRebalance = shardRebalance &&
+			len(indexInst.Defn.ShardIdsForDest) > 0 &&
+			len(indexInst.Defn.ShardIdsForDest[partnId]) > 0
+		if shardRebalance {
 			shardIds = indexInst.Defn.ShardIdsForDest[partnId]
 		}
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,

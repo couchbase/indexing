@@ -1372,9 +1372,13 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// of this collection. Once all indexes are recovered, they can be
 		// built in a batch
 		for _, defn := range defns {
-
+			var partitions []common.PartitionId
+			var versions []int
 			for i, partnId := range defn.Partitions {
 				if len(defn.ShardIdsForDest[partnId]) == 0 {
+					logging.Infof("ShardRebalancer::StartShardRecovery: Skipping partition for defnId: %v, partnId: %v, all partitions: %v "+
+						"for later processing", defn.DefnId, partnId, defn.Partitions)
+
 					if _, ok := pendingCreateDefnList[defn.DefnId]; !ok {
 						clone := defn.Clone()
 						clone.Partitions = nil                                      // reset partitions list
@@ -1383,16 +1387,28 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 						clone.AlternateShardIds = make(map[c.PartitionId][]string)  // reset alternate shardIds list
 						pendingCreateDefnList[defn.DefnId] = clone
 					}
+
 					pendingCreateDefnList[defn.DefnId].Partitions = append(pendingCreateDefnList[defn.DefnId].Partitions, partnId)
 					pendingCreateDefnList[defn.DefnId].Versions = append(pendingCreateDefnList[defn.DefnId].Versions, defn.Versions[i])
+				} else {
+					partitions = append(partitions, defn.Partitions[i])
+					versions = append(versions, defn.Versions[i])
 				}
+			}
+
+			// All partitions are pendingCreate - They will be processed later
+			if len(partitions) == 0 {
+				continue
+			} else {
+				defn.Partitions = partitions
+				defn.Versions = versions
 			}
 
 			isDeferred := defn.Deferred &&
 				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 					defn.InstStateAtRebal == c.INDEX_STATE_READY)
 
-			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, defn.ShardIdsForDest == nil); err != nil {
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false); err != nil {
 				setErrInTransferToken(err)
 				return
 			} else if skip {

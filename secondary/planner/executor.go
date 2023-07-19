@@ -593,7 +593,16 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 
 	initInstInToken := func(token *common.TransferToken, index *IndexUsage) error {
 
-		token.IndexInsts = append(token.IndexInsts, *index.Instance)
+		tempInst := *index.Instance
+
+		// Reset pertitions and versions in definitions
+		// transfer token generator will later populate these fields
+		tempInst.Defn.Partitions = nil
+		tempInst.Defn.Versions = nil
+		tempInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+		tempInst.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
+
+		token.IndexInsts = append(token.IndexInsts, tempInst)
 
 		instId, realInstId, err := getInstIds(index)
 		if err != nil {
