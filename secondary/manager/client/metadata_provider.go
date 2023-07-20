@@ -96,34 +96,32 @@ type MetadataProvider struct {
 	limitsCfg          *c.LimitsCache
 }
 
-//
-// 1) Each index definition has a logical identifer (IndexDefnId).
-// 2) The logical definition can have multiple instances or replica.
-//    Each index instance is identified by IndexInstId.
-// 3) Each instance may reside in different nodes for HA or
-//    load balancing purpose.
-// 4) Each instance can have different version.  Many versions can
-//    co-exist in the cluster at a given time, but only one version can be
-//    active (State == active) and valid (RState = active).
-// 5) In steady state, there should be only one version for each instance, but
-//    during rebalance, index can be moved from one node to another, with
-//    multiple versions representing the same index instance being "in-transit"
-//    (occupying both source and destination nodes during rebalancing).
-// 6) A definition can have multiple physical identical copies, residing
-//    along with each instance.  The physical copies will have the same
-//    definition id as well as definition/structure.
-// 7) An observer (metadataRepo) can only determine the "consistent" state of
-//    metadata with a full participation.  Full participation means that the obsever
-//    see the local metadata state of each indexer node.
-// 8) At full participation, if an index definiton does not have any instance, the
-//    index definition is considered as deleted.    The side effect is an index
-//    could be implicitly dropped if it loses all its replica.
-// 9) For partitioned index, each index instance will be distributed across many
-//    nodes.  An index instance is well-formed if the observer can account for
-//    all the partitions for the instance.
-// 10) For partitioned index, each partition will have its own version.  Each
+//  1. Each index definition has a logical identifer (IndexDefnId).
+//  2. The logical definition can have multiple instances or replica.
+//     Each index instance is identified by IndexInstId.
+//  3. Each instance may reside in different nodes for HA or
+//     load balancing purpose.
+//  4. Each instance can have different version.  Many versions can
+//     co-exist in the cluster at a given time, but only one version can be
+//     active (State == active) and valid (RState = active).
+//  5. In steady state, there should be only one version for each instance, but
+//     during rebalance, index can be moved from one node to another, with
+//     multiple versions representing the same index instance being "in-transit"
+//     (occupying both source and destination nodes during rebalancing).
+//  6. A definition can have multiple physical identical copies, residing
+//     along with each instance.  The physical copies will have the same
+//     definition id as well as definition/structure.
+//  7. An observer (metadataRepo) can only determine the "consistent" state of
+//     metadata with a full participation.  Full participation means that the obsever
+//     see the local metadata state of each indexer node.
+//  8. At full participation, if an index definiton does not have any instance, the
+//     index definition is considered as deleted.    The side effect is an index
+//     could be implicitly dropped if it loses all its replica.
+//  9. For partitioned index, each index instance will be distributed across many
+//     nodes.  An index instance is well-formed if the observer can account for
+//     all the partitions for the instance.
+//  10. For partitioned index, each partition will have its own version.  Each
 //     partition will be rebalanced separately.
-//
 type metadataRepo struct {
 	provider    *MetadataProvider
 	definitions map[c.IndexDefnId]*c.IndexDefn
@@ -395,11 +393,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId, numExpectedWat
 	o.repo.incrementVersion()
 }
 
-//
 // Since this function holds the lock, it ensure that
 // neither WatchMetadata or UnwatchMetadata is being called.
 // It also ensure safety of calling CheckIndexerStatusNoLock.
-//
 func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
@@ -407,10 +403,8 @@ func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
 	return o.CheckIndexerStatusNoLock()
 }
 
-//
 // It is important the caller of this function holds a lock to ensure
 // this function is mutual exclusive.
-//
 func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 
 	status := make([]IndexerStatus, len(o.watchers))
@@ -564,9 +558,7 @@ func (o *MetadataProvider) GetNumIndexesPerBucket(bucket string) uint32 {
 	return numIndexes
 }
 
-//
 // This function makes a call to create index using new protocol (vulcan).
-//
 func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string,
 	bucket, scope, collection string, nodes []string, partitionScheme c.PartitionScheme,
 	numReplica int, checkDuplicateIndex bool, ctime int64) (map[c.IndexerId]int, error, bool, bool) {
@@ -715,9 +707,7 @@ func (o *MetadataProvider) getCancelPrepareRequest(defn *c.IndexDefn, sched bool
 
 }
 
-//
 // This function clean up prepare index request
-//
 func (o *MetadataProvider) cancelPrepareIndexRequest(defn *c.IndexDefn, watcherMap map[c.IndexerId]int, sched bool) {
 
 	request := o.getCancelPrepareRequest(defn, sched)
@@ -756,9 +746,7 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defn *c.IndexDefn, watcherM
 	wg.Wait()
 }
 
-//
 // This function makes a call to create index using new protocol (vulcan).
-//
 func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxDefn *c.IndexDefn, requestId uint64,
 	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int,
 	asyncCreate, scheduleOnFailure bool) (bool, error) {
@@ -807,7 +795,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 
 		go func(w *watcher) {
 
-			defer func(){
+			defer func() {
 				atomic.AddInt32(&count, -1)
 				doneCh <- true
 			}()
@@ -844,14 +832,14 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 LOOP:
 	for {
 		select {
-			case <- doneCh:
-				mutex.Lock()
-				success = accept
-				mutex.Unlock()
+		case <-doneCh:
+			mutex.Lock()
+			success = accept
+			mutex.Unlock()
 
-				if success || atomic.LoadInt32(&count) == 0 {
-					break LOOP
-				}
+			if success || atomic.LoadInt32(&count) == 0 {
+				break LOOP
+			}
 		}
 	}
 
@@ -1343,9 +1331,7 @@ func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
 	return o.recoverableCreateIndex(idxDefn, plan, false, true, ctime, true)
 }
 
-//
 // This function create index using new protocol (vulcan).
-//
 func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	plan map[string]interface{}, scheduleOnFailure bool, asyncCreate bool, ctime int64,
 	allowLostReplica bool) error {
@@ -1752,10 +1738,8 @@ func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.Indexer
 	return layout, definitions, nil
 }
 
-//
 // This fuction returns list of index definitions required by commit phase
 // given the index layout generated by round robin index placement.
-//
 func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.IndexerId][]c.PartitionId,
 	defn *c.IndexDefn, allowLostReplica bool, actualNumReplica uint32) (map[c.IndexerId][]c.IndexDefn, error) {
 
@@ -1768,6 +1752,10 @@ func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.Indexer
 
 		for indexerId, partitions := range indexerPartitionMap {
 			temp := *defn
+
+			// Reset alternate shardIds. getAlternateShardIdsFromIndexUsage will
+			// populate the shardIds
+			temp.AlternateShardIds = nil
 
 			temp.InstId = instId
 			temp.ReplicaId = replicaId
@@ -1783,6 +1771,32 @@ func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.Indexer
 	}
 
 	return definitions, nil
+}
+
+// Planner would populate alternate shardIds for each index that is going to be
+// created on the node. Retrieve the alternateShardIds from IndexUsage structure
+// and populate them in "definitions" so that indexer can create the indexes with
+// the alternate shardId as decided by planner
+func (o *MetadataProvider) getAlternateShardIdsFromIndexUsage(solution *planner.Solution, definitions map[c.IndexerId][]c.IndexDefn) map[c.IndexerId][]c.IndexDefn {
+	for _, indexer := range solution.Placement {
+		if defns, ok := definitions[c.IndexerId(indexer.IndexerId)]; !ok {
+			continue
+		} else {
+			for _, index := range indexer.Indexes {
+				for i, defn := range defns {
+					if index.DefnId != defn.DefnId || index.Instance.ReplicaId != defn.ReplicaId {
+						continue
+					}
+
+					if len(definitions[c.IndexerId(indexer.IndexerId)][i].AlternateShardIds) == 0 {
+						definitions[c.IndexerId(indexer.IndexerId)][i].AlternateShardIds = make(map[c.PartitionId][]string)
+					}
+					definitions[c.IndexerId(indexer.IndexerId)][i].AlternateShardIds[index.PartnId] = index.AlternateShardIds
+				}
+			}
+		}
+	}
+	return definitions
 }
 
 func (o *MetadataProvider) validateNodes(nodes []string) (bool, error) {
@@ -1821,9 +1835,7 @@ func (o *MetadataProvider) validateNodes(nodes []string) (bool, error) {
 	return true, nil
 }
 
-//
 // This function builds the index layout using round robin.
-//
 func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn,
 	watchers []*watcher) map[int]map[c.IndexerId][]c.PartitionId {
 
@@ -1961,9 +1973,7 @@ func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn,
 	return layout
 }
 
-//
 // This function create index using old protocol (spock).
-//
 func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
 
 	if o.ShouldMaintainShardAffinity() {
@@ -1994,9 +2004,7 @@ func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]int
 	return o.makeCreateIndexRequest(idxDefn, layout)
 }
 
-//
 // This function makes a call to create index using old protocol (spock).
-//
 func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout map[int]map[c.IndexerId][]c.PartitionId) error {
 
 	defnID := idxDefn.DefnId
@@ -2113,9 +2121,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 	return nil
 }
 
-//
 // This function send a create index request
-//
 func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn *c.IndexDefn, scheduled bool) error {
 
 	watcher, err := o.findWatcherByIndexerId(indexerId)
@@ -2142,9 +2148,7 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 	return nil
 }
 
-//
 // Create Index Defnition from DDL
-//
 func (o *MetadataProvider) PrepareIndexDefn(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
@@ -2519,9 +2523,7 @@ func (o *MetadataProvider) prepareNodeList(nodeList []string, watcherMap map[c.I
 	return nodes, nil
 }
 
-//
 // Verify watchers matching the given node list
-//
 func (o *MetadataProvider) verifyNodeList(nodeList []string, watcherMap map[c.IndexerId]int) (bool, error) {
 
 	if len(nodeList) != len(watcherMap) {
@@ -2597,6 +2599,10 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	definitions, err = o.getDefinitionsFromLayout(layout, defn, allowLostReplica, actualNumReplica)
 	if err != nil {
 		return nil, nil, false, err
+	}
+
+	if o.settings.IsShardAffinityEnabled() {
+		definitions = o.getAlternateShardIdsFromIndexUsage(solution, definitions)
 	}
 
 	return layout, definitions, false, nil
@@ -3744,9 +3750,7 @@ func (o *MetadataProvider) ListIndex() ([]*IndexMetadata, uint64) {
 	return result, version
 }
 
-//
 // Find an index with at least one valid instance.  Note that the instance may not be well-formed.
-//
 func (o *MetadataProvider) findIndex(id c.IndexDefnId) *IndexMetadata {
 
 	indices, _ := o.repo.listDefnWithValidInst()
@@ -3806,12 +3810,10 @@ func (o *MetadataProvider) findIndexByName(name, bucket, scope, collection strin
 	return nil
 }
 
-//
 // Get the list of nodes from a healthy cluster.  This function depends on ns-server
 // to provide cluster info, and since cluster info is eventual consistent, this
 // function cannot always return immedidate cluster status.  This function can only
 // provides a snapshot of healthy cluster nodes at a point in time.
-//
 func (o *MetadataProvider) getNodesInHealthyCluster() ([]string, error) {
 
 	// Lock down metadata provider while checking cluster.  This will block any watchMetadata()
@@ -3841,10 +3843,8 @@ func (o *MetadataProvider) getNodesInHealthyCluster() ([]string, error) {
 	return nodes, nil
 }
 
-//
 // The caller must acquire locks on indexer before calling this method. This ensures that there is
 // no concurrent create/alter index running in parallel.
-//
 func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name, bucket, scope, collection string,
 	watcherMap map[c.IndexerId]int) (*c.Counter, error) {
 
@@ -4007,9 +4007,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	return nil
 }
 
-//
 // This function adds replica count of an index.
-//
 func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int, numReplica c.Counter,
 	increment int, plan map[string]interface{}) error {
 
@@ -4064,9 +4062,7 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 	return nil
 }
 
-//
 // This function removes replica count of an index.
-//
 func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int, numReplica c.Counter, decrement int,
 	numPartition int, dropReplicaId int, plan map[string]interface{}) error {
 
@@ -4145,11 +4141,9 @@ func (o *MetadataProvider) Close() {
 	}
 }
 
-//
 // Since this function holds the lock, it ensure that
 // neither WatchMetadata or UnwatchMetadata is being called.
 // It also ensure safety of calling CheckIndexerStatusNoLock.
-//
 func (o *MetadataProvider) AllWatchersAlive() bool {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
@@ -4159,9 +4153,7 @@ func (o *MetadataProvider) AllWatchersAlive() bool {
 	return o.AllWatchersAliveNoLock()
 }
 
-//
 // Find out if a watcher is alive
-//
 func (o *MetadataProvider) IsWatcherAlive(nodeUUID string) bool {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
@@ -4175,12 +4167,10 @@ func (o *MetadataProvider) IsWatcherAlive(nodeUUID string) bool {
 	return false
 }
 
-//
 // The caller of this function must hold lock to ensure
 // mutual exclusiveness.  The lock is used to prevent
 // concurrent WatchMetadata/UnwatchMetadata being called,
 // as well as to protect CheckIndexerStatusNoLock.
-//
 func (o *MetadataProvider) AllWatchersAliveNoLock() bool {
 
 	if !o.allWatchersRunningNoLock() {
@@ -4201,11 +4191,9 @@ func (o *MetadataProvider) AllWatchersAliveNoLock() bool {
 	return true
 }
 
-//
 // Are all watchers running?   If numExpctedWatcher does
 // not match numWatcher, it could mean cluster is under
 // topology change or current process is under bootstrap.
-//
 func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 
 	// This only check watchers have started successfully.
@@ -4218,16 +4206,12 @@ func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 	return expected == actual
 }
 
-//
 // Get number of watchers
-//
 func (o *MetadataProvider) getNumWatchers() int32 {
 	return atomic.LoadInt32(&o.numWatcher)
 }
 
-//
 // Get the storage mode
-//
 func (o *MetadataProvider) GetStorageMode() c.StorageMode {
 
 	o.mutex.Lock()
@@ -4252,9 +4236,7 @@ func (o *MetadataProvider) GetStorageMode() c.StorageMode {
 	return storageMode
 }
 
-//
 // Get the Indexer Version
-//
 func (o *MetadataProvider) GetIndexerVersion() uint64 {
 
 	latestVersion := atomic.LoadUint64(&o.indexerVersion)
@@ -4265,9 +4247,7 @@ func (o *MetadataProvider) GetIndexerVersion() uint64 {
 	return c.INDEXER_CUR_VERSION
 }
 
-//
 // Get the Cluster Version
-//
 func (o *MetadataProvider) GetClusterVersion() uint64 {
 
 	clusterVersion := atomic.LoadUint64(&o.clusterVersion)
@@ -4278,12 +4258,10 @@ func (o *MetadataProvider) GetClusterVersion() uint64 {
 	return c.INDEXER_CUR_VERSION
 }
 
-//
 // Refresh the indexer version.  This will look at both
 // metakv and indexers to figure out the latest version.
 // This function still be 0 if (1) there are failed nodes and,
 // (2) during upgrade to 5.0.
-//
 func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 
 	// Find the version from metakv.  If token not found or error, fromMetakv is 0.
@@ -4484,12 +4462,10 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 	return s, readych
 }
 
-//
 // This function returns the index regardless of its state or well-formed (all partitions).
 // This function will not return the index if it does not have any valid instance or partition.
 // In other words, this function will return the index if it has at least one non-DELETED
 // instance with Active RState.
-//
 func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 
 	indices, _ := o.repo.listAllDefn()
@@ -4500,12 +4476,10 @@ func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadat
 	return nil
 }
 
-//
 // This function returns the index regardless of its state or well-formed (all partitions).
 // This function will not return the index if it does not have any valid instance or partition.
 // In other words, this function will return the index if it has at least one non-DELETED
 // instance with Active RState.
-//
 func (o *MetadataProvider) FindIndexInstanceIgnoreStatus(id c.IndexDefnId, instId c.IndexInstId) *IndexMetadata {
 
 	indices, _ := o.repo.listAllDefn()
@@ -4696,10 +4670,8 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 	return nil
 }
 
-//
 // This function returns true if all partitons belong active watcher (watcher has
 // not been unwatched).
-//
 func (o *MetadataProvider) allPartitionsFromActiveIndexerNoLock(inst *InstanceDefn) bool {
 
 	for _, indexerId := range inst.IndexerId {
@@ -4711,10 +4683,8 @@ func (o *MetadataProvider) allPartitionsFromActiveIndexerNoLock(inst *InstanceDe
 	return true
 }
 
-//
 // This function returns true as long as there is a valid index instance
 // belong to an active indexer/watcher (watcher has not been unwatched).
-//
 func (o *MetadataProvider) isValidIndexFromActiveIndexer(meta *IndexMetadata) bool {
 	o.mutex.RLock()
 	defer o.mutex.RUnlock()
@@ -4747,10 +4717,8 @@ func (o *MetadataProvider) isValidIndexFromActiveIndexerNoLock(meta *IndexMetada
 	return false
 }
 
-//
 // This function notifies metadata provider and its caller that new version of
 // metadata is available.
-//
 func (o *MetadataProvider) needRefresh() {
 
 	if o.metaNotifyCh != nil {
@@ -4761,10 +4729,8 @@ func (o *MetadataProvider) needRefresh() {
 	}
 }
 
-//
 // This function notifies metadata provider and its caller that new version of
 // metadata is available.
-//
 func (o *MetadataProvider) refreshStats(stats map[c.IndexInstId]map[c.PartitionId]c.Statistics) {
 
 	if o.statsNotifyCh != nil {
@@ -4775,12 +4741,10 @@ func (o *MetadataProvider) refreshStats(stats map[c.IndexInstId]map[c.PartitionI
 	}
 }
 
-//
 // Refresh cluster info. Check for failed and unhealthy node.
 // This function depends on ns-server for getting cluster info.
 // Since cluster info is eventual consistent, this does not
 // necessarily reflect immediate cluster status.
-//
 func (o *MetadataProvider) checkClusterHealth() (bool, error) {
 
 	cinfo, err := c.FetchNewClusterInfoCache(o.clusterUrl, c.DEFAULT_POOL, "checkClusterHealth")
@@ -4809,13 +4773,11 @@ func (o *MetadataProvider) checkClusterHealth() (bool, error) {
 	return o.isClusterHealthy(), nil
 }
 
-//
 // 1) Check cluster health (see checkClusterHealth)
 // 2) Check if number of watchers matching number of active nodes
 // 3) Check if all watchers are ready to receive requests
-//    - connected to indexer
-//    - not in the middle of synchronization with indexer
-//
+//   - connected to indexer
+//   - not in the middle of synchronization with indexer
 func (o *MetadataProvider) checkProviderHealthNoLock() (bool, error) {
 
 	healthy, err := o.checkClusterHealth()
@@ -4832,11 +4794,9 @@ func (o *MetadataProvider) checkProviderHealthNoLock() (bool, error) {
 	return o.AllWatchersAliveNoLock(), nil
 }
 
-//
 // This function checks if cluster is healthy
 // 1) no failed node
 // 2) no unhealthy node
-//
 func (o *MetadataProvider) isClusterHealthy() bool {
 	return atomic.LoadInt32(&o.numFailedNode) == 0 &&
 		atomic.LoadInt32(&o.numUnhealthyNode) == 0
@@ -4851,10 +4811,8 @@ func (o *MetadataProvider) getUsageThresholdForPlanner() *planner.UsageThreshold
 	return usageThreshold
 }
 
-//
 // This function returns true as long as there is a
 // valid index instance for this index definition.
-//
 func isValidIndex(meta *IndexMetadata) bool {
 
 	if meta.Definition == nil {
@@ -4883,9 +4841,7 @@ func isValidIndex(meta *IndexMetadata) bool {
 	return false
 }
 
-//
 // This function returns true if it is a valid index instance.
-//
 func isValidIndexInst(inst *InstanceDefn) bool {
 
 	// RState for InstanceDefn is always ACTIVE -- so no need to check
@@ -4893,9 +4849,7 @@ func isValidIndexInst(inst *InstanceDefn) bool {
 		inst.State != c.INDEX_STATE_DELETED && inst.State != c.INDEX_STATE_ERROR
 }
 
-//
 // This function return true if the index instance has all the partitions
-//
 func isWellFormed(defn *c.IndexDefn, inst *InstanceDefn) bool {
 
 	if !c.IsPartitioned(defn.PartitionScheme) {
@@ -5036,11 +4990,9 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	}
 }
 
-//
 // This function returns the an index instance which is an ensemble of different index partitions.
 // Each index partition has the highest version with active RState, and each one can be residing on
 // different indexer node.  This function will not check if the index instance has all the partitions.
-//
 func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*mc.IndexInstDistribution {
 
 	var result []*mc.IndexInstDistribution
@@ -5089,11 +5041,9 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 	return result
 }
 
-//
 // This function returns the an index instance which is an ensemble of different index partitions.
 // Each index partition has the highest version with the specific RState. Each partition can be residing on
 // different indexer node.   This function will not check if all the indexes have all the partitions.
-//
 func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexInstId, activeInst *InstanceDefn, rstate uint32) *mc.IndexInstDistribution {
 
 	var result *mc.IndexInstDistribution
@@ -5135,9 +5085,7 @@ func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexI
 	return result
 }
 
-//
 // This function return if an indexer contains at least one partition of the given index instance.
-//
 func (r *metadataRepo) hasIndexerContainingPartition(indexerId c.IndexerId, inst *InstanceDefn) bool {
 
 	if inst != nil {
@@ -5151,9 +5099,7 @@ func (r *metadataRepo) hasIndexerContainingPartition(indexerId c.IndexerId, inst
 	return false
 }
 
-//
 // This function merges multiple index instance per partition.
-//
 func (r *metadataRepo) mergeSingleIndexPartition(to *mc.IndexInstDistribution, from *mc.IndexInstDistribution,
 	partId c.PartitionId) *mc.IndexInstDistribution {
 
@@ -5371,15 +5317,14 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket,
 }
 
 // Removing an index with no index instance:
-// 1) All the index instances have been deleted.
-// 2) If indexer is partitioned away from metadata provider (unhealthy indexer), the correpsonding instance will be removed.
-//    If all instances are removed, the defn will be removed.  The index will be materialized again when those indexers are
-//    reconnected to metadata provider (through watchMetadata).
-//   - If indexer is temporalily disconnected from metadata provider (e.g. indexer crash), index will not be removed.
-//   - An indexer under heavy load (max out cpu) will exhibit symptoms of network partition
-// 3) If indexer node has failed over or rebalanced out of the cluster, the corresponding instance will be removed.
-//    If all instances are removed, the defn will be removed.
-//
+//  1. All the index instances have been deleted.
+//  2. If indexer is partitioned away from metadata provider (unhealthy indexer), the correpsonding instance will be removed.
+//     If all instances are removed, the defn will be removed.  The index will be materialized again when those indexers are
+//     reconnected to metadata provider (through watchMetadata).
+//     - If indexer is temporalily disconnected from metadata provider (e.g. indexer crash), index will not be removed.
+//     - An indexer under heavy load (max out cpu) will exhibit symptoms of network partition
+//  3. If indexer node has failed over or rebalanced out of the cluster, the corresponding instance will be removed.
+//     If all instances are removed, the defn will be removed.
 func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket, scope, collection string) {
 
 	deleteDefn := ([]c.IndexDefnId)(nil)
@@ -5597,7 +5542,6 @@ func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 	}
 }
 
-//
 // This materializes an IndexMetadata.  It can be one of the following after materialization:
 // 1) A new index with no instance created yet (State=CREATED, len(instances) == 0).
 // 2) A new index with one or more instances in CREATED state (State=CREATED, len(instances) != 0)
@@ -5607,7 +5551,6 @@ func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 //
 // Under rebalance, indexer will make copy of instance under rebalance.  IndexMetadata will also contain copies under rebalance.
 // In addition, those copies can be promoted to "active" instance if there is no correpsonding active instance.
-//
 func (r *metadataRepo) updateIndexMetadataNoLock(defnId c.IndexDefnId) {
 
 	meta, ok := r.indices[defnId]
@@ -5701,13 +5644,11 @@ func (r *metadataRepo) copyInstanceDefn(source *InstanceDefn) *InstanceDefn {
 	return idxInst
 }
 
-//
 // This function finds if there is any instance of the given index being under rebalance.
 // 1) The instance must have a greater version than an active instance.
 // 2) If there is no active instance, it must have a version greater than 0.
 // 3) If there are multiple versions under rebalance, the highest version is chosen.
 // 4) The highest version active instance can be promoted to active if there is no active instance.
-//
 func (r *metadataRepo) updateRebalanceInstancesInIndexMetadata(defnId c.IndexDefnId, meta *IndexMetadata) {
 
 	meta.InstsInRebalance = nil
@@ -6245,12 +6186,10 @@ RETRY2:
 	return true, false
 }
 
-//
-//  This function cannot hold lock since it waits for channel.
-//  We don't want to block the watcher for potential deadlock.
-//  It is important the caller of this function holds the lock
-//  as to ensure this function is mutual exclusive.
-//
+// This function cannot hold lock since it waits for channel.
+// We don't want to block the watcher for potential deadlock.
+// It is important the caller of this function holds the lock
+// as to ensure this function is mutual exclusive.
 func (w *watcher) isAliveNoLock() bool {
 
 	for len(w.pingch) > 0 {
@@ -6376,9 +6315,9 @@ func (w *watcher) updateIndexStatsNoLock(indexerId c.IndexerId, indexStats *Inde
 }
 
 // updateIndexStats2NoLock does two things:
-//   1. Update the local w.clientStats cache with the indexStats2 that was just received from periodic broadcast iff it
-//      is a complete copy. Incomplete copies are never cached. The cache is only referenced for bucket-index layouts.
-//   2. Return the most recent bucket-level stats for indexerId (multiplexed to [instId][partitionId]) from indexStats2.
+//  1. Update the local w.clientStats cache with the indexStats2 that was just received from periodic broadcast iff it
+//     is a complete copy. Incomplete copies are never cached. The cache is only referenced for bucket-index layouts.
+//  2. Return the most recent bucket-level stats for indexerId (multiplexed to [instId][partitionId]) from indexStats2.
 //
 // #1 is silently skipped if the received indexStats2 is incomplete. This occurs whenever no buckets or indexes have
 // been created or dropped since the prior broadcast. In this case all DedupedIndexStats.Indexes map entries of the
