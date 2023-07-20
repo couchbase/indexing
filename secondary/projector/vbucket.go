@@ -101,7 +101,7 @@ func (v *Vbucket) makeSyncData(engines map[uint32]EngineMap) (data interface{}) 
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data = engine.SyncData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			data = engine.SyncData(v.vbno, v.vbuuid, v.seqno, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
@@ -172,7 +172,7 @@ func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint32]EngineM
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data := engine.SystemEventData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			data := engine.SystemEventData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
@@ -206,7 +206,7 @@ func (v *Vbucket) makeUpdateSeqnoData(m *mc.DcpEvent, engines map[uint32]EngineM
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data := engine.UpdateSeqnoData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			data := engine.UpdateSeqnoData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
@@ -239,7 +239,7 @@ func (v *Vbucket) makeSeqnoAdvancedEvent(m *mc.DcpEvent, engines map[uint32]Engi
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data := engine.SeqnoAdvancedData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			data := engine.SeqnoAdvancedData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
@@ -272,7 +272,7 @@ func (v *Vbucket) makeOSOSnapshotEvent(m *mc.DcpEvent, engines map[uint32]Engine
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data := engine.OSOSnapshotData(m, v.vbno, v.vbuuid, v.opaque2)
+			data := engine.OSOSnapshotData(m, v.vbno, v.vbuuid, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}

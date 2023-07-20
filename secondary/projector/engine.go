@@ -49,9 +49,10 @@ func (engine *Engine) StreamBeginData(
 
 // SyncData from this engine.
 func (engine *Engine) SyncData(
-	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) interface{} {
+	vbno uint16, vbuuid, seqno uint64,
+	opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.SyncData(vbno, vbuuid, seqno, opaque2)
+	return engine.evaluator.SyncData(vbno, vbuuid, seqno, opaque2, oso)
 }
 
 // SnapshotData from this engine.
@@ -66,32 +67,33 @@ func (engine *Engine) SnapshotData(
 // SystemEventData from this engine.
 func (engine *Engine) SystemEventData(
 	m *mc.DcpEvent, vbno uint16, vbuuid,
-	seqno uint64, opaque2 uint64) interface{} {
+	seqno uint64, opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.SystemEventData(m, vbno, vbuuid, seqno, opaque2)
+	return engine.evaluator.SystemEventData(m, vbno, vbuuid, seqno, opaque2, oso)
 }
 
 // UpdateSeqnoData from this engine.
 func (engine *Engine) UpdateSeqnoData(
 	m *mc.DcpEvent, vbno uint16, vbuuid,
-	seqno uint64, opaque2 uint64) interface{} {
+	seqno uint64, opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.UpdateSeqnoData(m, vbno, vbuuid, seqno, opaque2)
+	return engine.evaluator.UpdateSeqnoData(m, vbno, vbuuid, seqno, opaque2, oso)
 }
 
 // SeqnoAdvancedData from this engine.
 func (engine *Engine) SeqnoAdvancedData(
 	m *mc.DcpEvent, vbno uint16, vbuuid,
-	seqno uint64, opaque2 uint64) interface{} {
+	seqno uint64, opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.SeqnoAdvancedData(m, vbno, vbuuid, seqno, opaque2)
+	return engine.evaluator.SeqnoAdvancedData(m, vbno, vbuuid, seqno, opaque2, oso)
 }
 
 // OSOSnapshot from this engine.
 func (engine *Engine) OSOSnapshotData(
-	m *mc.DcpEvent, vbno uint16, vbuuid, opaque2 uint64) interface{} {
+	m *mc.DcpEvent, vbno uint16, vbuuid,
+	opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.OSOSnapshotData(m, vbno, vbuuid, opaque2)
+	return engine.evaluator.OSOSnapshotData(m, vbno, vbuuid, opaque2, oso)
 }
 
 // StreamEndData from this engine.
