@@ -434,7 +434,15 @@ loop:
 					logging.Errorf(fmsg, kvdata.logPrefix, kvdata.opaque, m.Opcode, err)
 					break loop
 				}
-				kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
+
+				// For these two events, seqno. would be zero. Setting seqno. to "0"
+				// can lead to incorrect computation of numDocsProcessed and
+				// numDocsPending stats. For StreamEnd, seqno. will be zero - Since
+				// projector will not be processing mutations, set seqno. to "0" for
+				// the vbucket
+				if m.Opcode != mcd.DCP_SNAPSHOT && m.Opcode != mcd.DCP_OSO_SNAPSHOT {
+					kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
+				}
 
 			// Incase genServer() terminates first, it will close runScatterFinCh to
 			// terminate runScatter() go-routine
