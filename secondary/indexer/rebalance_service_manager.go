@@ -1142,7 +1142,28 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		ttList = append(ttList, ttListElement{ttid, tt})
 	}
 
-	ttList = append(ttList, ttListRealInst...)
+	ttPrependRealInst := []ttListElement{}
+	ttAppendRealInst := []ttListElement{}
+	for _, ttElem := range ttListRealInst {
+		//if emptyNodeBatching is enabled and instance is ready, then
+		//the realInst RState needs to change before the proxy. This is
+		//required so that proxy merge can proceed.
+		if ttElem.tt.State == c.TransferTokenInProgress &&
+			ttElem.tt.IsEmptyNodeBatch &&
+			ttElem.tt.IsPendingReady {
+			ttPrependRealInst = append(ttPrependRealInst, ttElem)
+			logging.Infof("RebalanceServiceManager::cleanupTransferTokens Prepend RealInst %v", ttElem.tt.RealInstId)
+
+		} else {
+			logging.Infof("RebalanceServiceManager::cleanupTransferTokens Append RealInst %v", ttElem.tt.RealInstId)
+			ttAppendRealInst = append(ttAppendRealInst, ttElem)
+		}
+	}
+
+	if len(ttPrependRealInst) != 0 {
+		ttList = append(ttPrependRealInst, ttList...)
+	}
+	ttList = append(ttList, ttAppendRealInst...)
 
 	// cleanup transfer token
 	for _, t := range ttList {
