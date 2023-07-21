@@ -1491,7 +1491,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 
 	schedIndex := false
 	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() &&
-		o.ShouldMaintainShardAffinity() {
+		o.ShouldMaintainShardAffinity() == false {
 		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
 			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
@@ -1785,6 +1785,10 @@ func (o *MetadataProvider) getAlternateShardIdsFromIndexUsage(solution *planner.
 			for _, index := range indexer.Indexes {
 				for i, defn := range defns {
 					if index.DefnId != defn.DefnId || index.Instance.ReplicaId != defn.ReplicaId {
+						continue
+					}
+
+					if len(index.AlternateShardIds) == 0 {
 						continue
 					}
 

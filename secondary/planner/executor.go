@@ -28,6 +28,9 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 )
 
+type PartnDistMap map[common.PartitionId]map[int]map[*IndexerNode]*IndexUsage
+type ReplicaDistMap map[int]map[*IndexerNode]*IndexUsage
+
 //////////////////////////////////////////////////////////////
 // Concrete Type/Struct
 /////////////////////////////////////////////////////////////
@@ -1597,6 +1600,11 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 		if err := genCreateIndexDDL(config.GenStmt, planner.GetResult()); err != nil {
 			return nil, nil, err
 		}
+	}
+
+	if config.EnableShardAffinity {
+		PopulateAlternateShardIds(planner.GetResult(), indexes)
+		UngroupIndexes(planner.GetResult())
 	}
 
 	return planner, s, nil
@@ -5388,4 +5396,173 @@ func genResumeDownloadToken(solution *Solution,
 	logResumeDownloadTokens()
 
 	return result, nil
+}
+
+func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
+
+	targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
+
+	// Get the list of indexer nodes on to which the "indexes" are going to
+	// be placed on
+	for _, newIndex := range indexes {
+		for _, indexer := range solution.Placement {
+			for _, index := range indexer.Indexes {
+
+				if index.IsShardProxy == false && index.DefnId == newIndex.DefnId &&
+					index.Instance.ReplicaId == newIndex.Instance.ReplicaId {
+					if _, ok := targetNodes[indexer]; !ok {
+						targetNodes[indexer] = make(map[*IndexUsage]bool)
+					}
+					targetNodes[indexer][index] = true
+				}
+
+			}
+		}
+	}
+
+	targetNodes = pruneIndexers(targetNodes) // Prune indexers that are <7.6 version
+
+	// Group indexes for each partition
+	// partnId -> replicaId -> indexerNode to corresponding index usage
+	allPartnDist := getPartnDistribution(targetNodes)
+
+	for _, partnDist := range allPartnDist {
+		for _, replicaMap := range partnDist {
+
+			// Re-group indexes on the target nodes so that the index can use the grouping
+			// done from earlier iteration
+			for indexer := range targetNodes {
+				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes)
+			}
+
+			// If a new shard can be created for this partition across all indexer nodes,
+			// then generate new shardIds and populate the IndexUsage structure
+			if canCreateNewShards(replicaMap) {
+
+				// If there is an error in generating alternateID's, do not fail
+				// index creation. Ignore the error so that the index can still be
+				// created without alternateId
+				genAlterntateShardIds(replicaMap)
+
+			} else {
+				// Atleast one indexer node has reached the capacity of shards
+				// Try placing the index on existing shards. If no such placement
+				// if possible across the nodes, then force create new shards
+
+				// TODO: Update the logic to place indexes on existing shards
+
+			}
+		}
+	}
+}
+
+func pruneIndexers(nodes map[*IndexerNode]map[*IndexUsage]bool) map[*IndexerNode]map[*IndexUsage]bool {
+	resp := make(map[*IndexerNode]map[*IndexUsage]bool)
+	for indexer, indexUsageMap := range nodes {
+		if indexer.NodeVersion < common.INDEXER_76_VERSION {
+			continue
+		}
+
+		resp[indexer] = indexUsageMap
+	}
+
+	return resp
+}
+
+// Generates a distribution map for each partition across all definitions
+// Mapping contains defnId -> partnId -> replicaId -> indexerNode to corresponding index usage
+func getPartnDistribution(nodes map[*IndexerNode]map[*IndexUsage]bool) map[common.IndexDefnId]PartnDistMap {
+	allPartnDist := make(map[common.IndexDefnId]PartnDistMap)
+
+	for indexer, indexUsageMap := range nodes {
+		for indexUsage, _ := range indexUsageMap {
+			defnId := indexUsage.DefnId
+			partnId := indexUsage.PartnId
+			replicaId := indexUsage.Instance.ReplicaId
+
+			if _, ok := allPartnDist[defnId]; !ok {
+				allPartnDist[defnId] = make(PartnDistMap)
+			}
+
+			if _, ok := allPartnDist[defnId][partnId]; !ok {
+				allPartnDist[defnId][partnId] = make(ReplicaDistMap)
+			}
+
+			if _, ok := allPartnDist[defnId][partnId][replicaId]; !ok {
+				allPartnDist[defnId][partnId][replicaId] = make(map[*IndexerNode]*IndexUsage)
+			}
+
+			allPartnDist[defnId][partnId][replicaId][indexer] = indexUsage
+		}
+	}
+
+	return allPartnDist
+}
+
+func canCreateNewShards(replicaMap ReplicaDistMap) bool {
+	for _, indexerMap := range replicaMap {
+		for indexer := range indexerMap {
+
+			// One of the indexer nodes has reached the minimum number of shards limit
+			// Return false so that planner will try populating existing shards
+			// instead of creating new shards
+			if indexer.numShards >= indexer.MinShardCapacity {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
+
+	// All replicas share same slotId. Hence, generate a single slotId
+	// and re-use the slotId for all replicas
+	var alternateId *common.AlternateShardId
+	var err error
+	retry := 0
+	for retry < 10 {
+		alternateId, err = common.NewAlternateId()
+		if err == nil {
+			break
+		}
+
+		logging.Errorf("genAlternateShardIds: Error observed while generating alternateShardId, err: %v", err)
+		time.Sleep(10 * time.Millisecond)
+		retry++
+	}
+	if alternateId == nil || err != nil {
+		return err
+	}
+
+	for replicaId, indexerMap := range replicaMap {
+		for indexerNode, indexUsage := range indexerMap {
+
+			alternateId.SetReplicaGroup(uint8(replicaId))
+			if indexUsage.IsPrimary {
+				alternateId.SetInstaceGroup(0)
+				logging.Infof("genAlternateShardIds: Generating new alternageShardId: %v for primary index "+
+					"name: %v, defnId: %v, replicaId: %v, partnId: %v",
+					alternateId.String(), indexUsage.Name, indexUsage.DefnId,
+					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
+
+				indexUsage.AlternateShardIds = []string{alternateId.String()}
+				indexerNode.numShards += 1 // Increment new shard count as more shards are getting created
+			} else {
+				alternateId.SetInstaceGroup(0)
+				msAltId := alternateId.String() // compute mainstore alternate ID
+				alternateId.SetInstaceGroup(1)
+				bsAltId := alternateId.String() // compute backstore alternate ID
+
+				logging.Infof("genAlternateShardIds: Generating new alternateShardIds: [%v, %v] for index "+
+					"name: %v, defnId: %v, replicaId: %v, partnId: %v",
+					msAltId, bsAltId, indexUsage.Name, indexUsage.DefnId,
+					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
+
+				indexUsage.AlternateShardIds = []string{msAltId, bsAltId}
+				indexerNode.numShards += 2
+			}
+		}
+	}
+	return nil
 }

@@ -2009,3 +2009,21 @@ func GroupIndexes(indexes []*IndexUsage) ([]*IndexUsage, int, error) {
 
 	return result, numShards, nil
 }
+
+func UngroupIndexes(solution *Solution) {
+	for _, indexer := range solution.Placement {
+		allIndexes := indexer.Indexes
+		indexer.Indexes = []*IndexUsage{}
+
+		for _, indexUsage := range allIndexes {
+			if indexUsage.IsShardProxy == false {
+				indexer.Indexes = append(indexer.Indexes, indexUsage)
+				continue
+			}
+
+			for _, groupedIndex := range indexUsage.GroupedIndexes {
+				indexer.Indexes = append(indexer.Indexes, groupedIndex)
+			}
+		}
+	}
+}
