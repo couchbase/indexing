@@ -2248,7 +2248,9 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 		return nil
 	}
 
+	var cancelled bool
 	response := new(manager.IndexResponse)
+
 	url := "/buildIndexRebalance"
 	var errStr string
 
@@ -2314,8 +2316,13 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 		}
 	}
 
-	r.waitForIndexBuildBatch(buildTokens)
-	return nil
+	cancelled = r.waitForIndexBuildBatch(buildTokens)
+	if cancelled {
+		return errors.New("Aborted due to cancel.")
+	} else {
+		return nil
+
+	}
 
 cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "3 bigMutex", method, "")
@@ -2449,7 +2456,7 @@ loop:
 
 // waitForIndexBuildBatch waits for all the indexes in the input token list to finish
 // building. It doesn't change the RState or merge partitions.
-func (r *Rebalancer) waitForIndexBuildBatch(buildTokens map[string]*common.TransferToken) {
+func (r *Rebalancer) waitForIndexBuildBatch(buildTokens map[string]*common.TransferToken) bool {
 	const _waitForIndexBuildBatch string = "Rebalancer::waitForIndexBuildBatch:"
 
 	buildStartTime := time.Now()
@@ -2459,11 +2466,14 @@ func (r *Rebalancer) waitForIndexBuildBatch(buildTokens map[string]*common.Trans
 	tokenBuildDone := make(map[string]bool)
 
 	lastLogTime := time.Now() // last time we logged generic loop msg; init to now to delay 1st msg
+
+	cancelled := false
 loop:
 	for {
 		select {
 		case <-r.cancel:
 			l.Infof("%v Cancel Received", _waitForIndexBuildBatch)
+			cancelled = true
 			break loop
 		case <-r.done:
 			l.Infof("%v Done Received", _waitForIndexBuildBatch)
@@ -2585,6 +2595,7 @@ loop:
 		} // select
 		time.Sleep(1 * time.Second)
 	} // for
+	return cancelled
 }
 
 //once all builds are done, move the token to merge or ready state
