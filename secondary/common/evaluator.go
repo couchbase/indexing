@@ -23,22 +23,22 @@ type Evaluator interface {
 		status, code byte, opaque2 uint64, oso bool) (data interface{})
 
 	// Sync is generated for downstream.
-	SyncData(vbno uint16, vbuuid, seqno, opaque2 uint64) (data interface{})
+	SyncData(vbno uint16, vbuuid, seqno, opaque2 uint64, oso bool) (data interface{})
 
 	// SnapshotData is generated for downstream.
 	SnapshotData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64, oso bool) interface{}
 
 	// SystemEventData is generated for downstream.
-	SystemEventData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
+	SystemEventData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64, oso bool) interface{}
 
 	// UpdateSeqnoData is generated for downstream.
-	UpdateSeqnoData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
+	UpdateSeqnoData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64, oso bool) interface{}
 
 	// SeqnoAdvancedData is generated for downstream.
-	SeqnoAdvancedData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
+	SeqnoAdvancedData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64, oso bool) interface{}
 
 	// OSOSnapshotData is generated for downstream.
-	OSOSnapshotData(m *mc.DcpEvent, vbno uint16, vbuuid, opaque2 uint64) interface{}
+	OSOSnapshotData(m *mc.DcpEvent, vbno uint16, vbuuid, opaque2 uint64, oso bool) interface{}
 
 	// StreamEnd is generated for downstream.
 	StreamEndData(vbno uint16, vbuuid, seqno, opaque2 uint64, oso bool) (data interface{})

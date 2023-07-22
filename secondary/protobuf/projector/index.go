@@ -225,12 +225,13 @@ func (ie *IndexEvaluator) StreamBeginData(
 
 // SyncData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SyncData(
-	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
+	vbno uint16, vbuuid, seqno uint64,
+	opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddSync()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // SnapshotData implement Evaluator{} interface.
@@ -247,46 +248,46 @@ func (ie *IndexEvaluator) SnapshotData(
 // SystemEventData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SystemEventData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
-	opaque2 uint64) (data interface{}) {
+	opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	cid := strconv.FormatUint(uint64(m.CollectionID), 16) //transmit as base-16 string
 	kv.AddSystemEvent(m.EventType, m.ManifestUID, m.ScopeID, []byte(cid))
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // UpdateSeqnoData implement Evaluator{} interface.
 func (ie *IndexEvaluator) UpdateSeqnoData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
-	opaque2 uint64) (data interface{}) {
+	opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, m.Key, 1, 0)
 	kv.AddUpdateSeqno()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // SeqnoAdvancedData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SeqnoAdvancedData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
-	opaque2 uint64) (data interface{}) {
+	opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0)
 	kv.AddSeqnoAdvanced()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // SeqnoAdvancedData implement Evaluator{} interface.
 func (ie *IndexEvaluator) OSOSnapshotData(
 	m *mc.DcpEvent, vbno uint16, vbuuid,
-	opaque2 uint64) (data interface{}) {
+	opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(0 /*seqno*/, nil, 1, 0)
 	kv.AddOSOSnapshot(m.EventType)
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // StreamEndData implement Evaluator{} interface.

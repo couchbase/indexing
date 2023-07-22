@@ -48,6 +48,8 @@ type ClientSettings struct {
 
 	useGreedyPlanner uint32
 
+	isShardAffinityEnabled uint32
+
 	//serverless configs
 	memHighThreshold int32
 	memLowThreshold  int32
@@ -298,6 +300,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
 	}
 
+	isShardAffinityEnabled, ok := config["indexer.planner.enableShardAffinity"]
+	if ok {
+		if isShardAffinityEnabled.Bool() {
+			atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
+		} else {
+			atomic.StoreUint32(&s.isShardAffinityEnabled, 0)
+		}
+	} else {
+		// Use default config on error
+		logging.Errorf("ClientSettings: missing indexer.planner.enableShardAffinity")
+		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -429,4 +444,8 @@ func (s *ClientSettings) MemLowThreshold() int32 {
 
 func (s *ClientSettings) ServerlessIndexLimit() uint32 {
 	return atomic.LoadUint32(&s.indexLimit)
+}
+
+func (s *ClientSettings) IsShardAffinityEnabled() bool {
+	return atomic.LoadUint32(&s.isShardAffinityEnabled) == 1
 }

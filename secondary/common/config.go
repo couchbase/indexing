@@ -3364,6 +3364,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.enableShardAffinity": ConfigValue{
+		false,
+		"This is a boolean flag to control if planner creates a" +
+			"solution to maintain shard-index affinity in the cluster",
+		false,
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",

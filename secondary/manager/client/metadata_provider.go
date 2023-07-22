@@ -62,6 +62,7 @@ type Settings interface {
 	AllowScheduleCreateRebal() bool
 	WaitForScheduledIndex() bool
 	UseGreedyPlanner() bool
+	IsShardAffinityEnabled() bool
 	MemHighThreshold() int32
 	MemLowThreshold() int32
 	ServerlessIndexLimit() uint32
