@@ -487,6 +487,14 @@ func ValidateSolution(s *Solution) error {
 	return nil
 }
 
+// Returns the value for allowDDLDuringScaleup flag
+func configureAllowDDLDuringScaleup(command CommandType, configVal bool) bool {
+	if command != CommandPlan {
+		return false
+	}
+	return configVal
+}
+
 // Reverse list of nodes
 func reverseNode(indexers []*IndexerNode) []*IndexerNode {
 

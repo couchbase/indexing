@@ -150,7 +150,7 @@ var rebalanceTestCases = []rebalanceTestCase{
 }
 
 var heterogenousRebalTestCases = []heterogenousRebalTestCase{
-	{"heterogenous rebalance - keep vertically scaled Node, swap 1, 1x", 1, 1, "../testdata/planner/plan/heterogenous-small-6-2.json", 0, 1, 1, true, []string{"2596996162"}, "in"},
+	{"heterogenous rebalance - keep vertically scaled Node, swap 1, 1x", 1, 1, "../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json", 0, 1, 1, true, []string{"127.0.0.1:9000"}, "in"},
 }
 
 var excludeInTestCases = []excludeInTestCase{
@@ -385,6 +385,62 @@ var greedyPlannerIdxDistTestCases = []greedyPlannerIdxDistTestCase{
 	},
 }
 
+var ddlHeterogenousPlannerFuncTestCases = []greedyPlannerFuncTestCase{
+	// Place single index instace
+	{
+		"Place Single Index Instance - 3 non-empty heterogenous nodes with 1 Scaled up - 1 SG",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		map[string]bool{"127.0.0.1:9001": true},
+	},
+	// Place index with 1 replica
+	{
+		"Place Index with 1 replica - 3 non-empty heterogenous nodes with 1 Scaled up - 1 SG",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	// Place index with 2 replica
+	{
+		"Place Index with 2 replicas - 3 non-empty heterogenous nodes with 1 Scaled up - 1 SG",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_with_2_replicas.json",
+		map[string]bool{"127.0.0.1:9000": true, "127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	// Place index with 1 replica across server groups
+	{
+		"Place Index With 1 Replica - 3 non-empty heterogenous nodes with 1 Scaled up - 2 SG - Placed on Scaled up node",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_2-sg_scaled-alone.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9000": true, "127.0.0.1:9001": true},
+	},
+	{
+		"Place Index With 1 Replica - 3 non-empty heterogenous nodes with 1 Scaled up - 2 SG - Placed on older nodes",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_2-sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	// Place equivalent indexes
+	{
+		"Place Equivalent Index Without any replica - 3 non-empty heterogenous nodes with 1 Scaled up - 1 SG",
+		"../testdata/planner/scaleup/heterogenous_3_nodes_equiv_index.json",
+		"../testdata/planner/greedy/new_equiv_index.json",
+		map[string]bool{"127.0.0.1:9002": true},
+	},
+	{
+		"Place Equivalent Index With 1 Replica - 3 non-empty heterogenous nodes with 1 Scaled up - 1 SG - Use least loaded node",
+		"../testdata/planner/scaleup/heterogenous_3_nodes_equiv_index.json",
+		"../testdata/planner/greedy/new_equiv_index_1_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
+	},
+	{
+		"Place Equivalent Index With 1 Replica - 3 non-empty heterogenous nodes with 1 Scaled up - 1 SG - Use ScaleUp Node ",
+		"../testdata/planner/scaleup/heterogenous_3_nodes_equiv_index_1.json",
+		"../testdata/planner/greedy/new_equiv_index_1_replica.json",
+		map[string]bool{"127.0.0.1:9000": true, "127.0.0.1:9002": true},
+	},
+}
+
 func TestPlanner(t *testing.T) {
 	log.Printf("In TestPlanner()")
 
@@ -416,6 +472,17 @@ func TestTenantAwarePlanner(t *testing.T) {
 	defer logging.SetLogLevel(logging.Warn)
 
 	tenantAwarePlannerTests(t)
+}
+
+func TestPlanDuringHeterogenousScaleup(t *testing.T) {
+	log.Printf("In TestPlanDuringHeterogenousScaleup()")
+
+	logging.SetLogLevel(logging.Info)
+	defer logging.SetLogLevel(logging.Warn)
+
+	heterogenousScaleupGreedyPlannerTests(t)
+	// TO-DO: ScaleupSAPlannerTests
+
 }
 
 //
@@ -704,6 +771,47 @@ func heterogenousRebalanceTest(t *testing.T) {
 		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+
+func heterogenousScaleupGreedyPlannerTests(t *testing.T) {
+
+	ddlScaleUpGreedyFuncTestCase(t)
+	// TO-DO: Replica Repair and Alter Index
+}
+
+func ddlScaleUpGreedyFuncTestCase(t *testing.T) {
+
+	for _, testcase := range ddlHeterogenousPlannerFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.Resize = false
+		config.AddNode = -1
+		config.AllowSwap = false
+		config.AllowMove = false
+		config.UseLive = true
+		config.UseGreedyPlanner = true
+		config.AllowDDLDuringScaleup = true
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.index)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
+		FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+		if _, ok := p.(*planner.GreedyPlanner); !ok {
+			t.Fatalf("Greedy planner was not chosen for index placement.")
+			continue
+		}
+
+		validateGreedyPlacementFunc(t, p, indexSpecs, testcase.targetNodes)
 	}
 }
 

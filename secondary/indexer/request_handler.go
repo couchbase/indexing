@@ -225,6 +225,8 @@ type requestHandlerContext struct {
 	stReqFailCount   uint64
 	stReqRecCount    uint64
 	useGreedyPlanner bool
+
+	allowDDLDuringScaleUp bool
 }
 
 // requestHandlerContext is the singleton object containing state for the HTTP(S) server.
@@ -291,6 +293,7 @@ func RegisterRequestHandler(mgr *manager.IndexManager, mux *http.ServeMux, confi
 		// Misc other configurations
 		handlerContext.schedTokenMon = newSchedTokenMonitor(mgr)
 		handlerContext.useGreedyPlanner = config["planner.useGreedyPlanner"].Bool()
+		handlerContext.allowDDLDuringScaleUp = config["allow_ddl_during_scaleup"].Bool()
 	})
 }
 
@@ -2359,7 +2362,7 @@ func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 		return "", fmt.Errorf("%v: Fail to read index spec from request. err: %v", method, err)
 	}
 
-	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner)
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp)
 	if err != nil {
 		return "", fmt.Errorf("%v: Fail to plan index. err: %v", method, err)
 	}

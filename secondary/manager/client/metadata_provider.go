@@ -2564,6 +2564,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
+	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
 
 	var solution *planner.Solution
 
@@ -2576,7 +2577,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
-			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits)
+			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp)
 		if err != nil {
 			return nil, nil, false, err
 		}

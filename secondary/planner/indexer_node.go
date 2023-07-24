@@ -413,12 +413,12 @@ func (o *IndexerNode) shouldExcludeIndex(s *Solution, n *IndexUsage) bool {
 
 // This function returns whether to exclude this node for taking in new index
 func (o *IndexerNode) ExcludeIn(s *Solution) bool {
-	return s.enableExclude && (o.IsDeleted() || o.Exclude == "in" || o.Exclude == "inout")
+	return !s.AllowDDLDuringScaleUp() && s.enableExclude && (o.IsDeleted() || o.Exclude == "in" || o.Exclude == "inout")
 }
 
 // This function returns whether to exclude this node for rebalance out index
 func (o *IndexerNode) ExcludeOut(s *Solution) bool {
-	return s.enableExclude && (!o.IsDeleted() && (o.Exclude == "out" || o.Exclude == "inout"))
+	return !s.AllowDDLDuringScaleUp() && s.enableExclude && (!o.IsDeleted() && (o.Exclude == "out" || o.Exclude == "inout"))
 }
 
 // This function returns whether to exclude this node for rebalance in or out any index

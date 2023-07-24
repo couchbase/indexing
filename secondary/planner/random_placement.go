@@ -813,7 +813,8 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 	candidates := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
 		// This function is used for initial placement (create index).
-		// Do not place index on excluded nodes.
+		// Do not place index on excluded nodes unless overridden by
+		// allowDDLDuringScaleUp flag
 		if !indexer.ExcludeAny(s) {
 			candidates = append(candidates, indexer)
 		}
@@ -847,7 +848,8 @@ func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) error
 	candidates := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
 		// This function is used for simulation.
-		// Do not place in excluded nodes.
+		// Do not place in excluded nodes unless overridden by
+		// allowDDLDuringScaleUp flag
 		if !indexer.ExcludeAny(s) {
 			candidates = append(candidates, indexer)
 		}
