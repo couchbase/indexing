@@ -5566,3 +5566,70 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 	}
 	return nil
 }
+
+type ReplicaLoad struct {
+	ReplicaId int
+	node      *IndexerNode
+	usage     *IndexUsage
+}
+
+func (r *ReplicaLoad) String() string {
+	var out string
+	out += fmt.Sprintf("[replicaId: %v, node: %v, numShards: %v, minShardCap: %v, diskSize: %v, numInsts: %v], ",
+		r.ReplicaId, r.node.NodeId, r.node.numShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
+	return out
+}
+
+// ShardLoad
+// Captures the load of a shard "slot" across all nodes in the cluster
+type ShardLoad struct {
+	slotId uint64
+
+	replicas []*ReplicaLoad
+
+	// Maximum number of instances the shard with "slotId" holds
+	// on any node in the cluster
+	maxInstances uint64
+
+	// Disk size of the shard with "slotId" across all nodes in
+	// the cluster
+	totalDiskSize uint64
+}
+
+func (s *ShardLoad) String() string {
+	var out string
+	out += fmt.Sprintf("Slot: %v, ReplicaDist:\n", s.slotId)
+	for _, v := range s.replicas {
+		out += fmt.Sprintf("\t\t%v,", v.String())
+	}
+	out += fmt.Sprintf("TotalDiskSize: %v, MaxInstances: %v ", s.totalDiskSize, s.maxInstances)
+	return out
+}
+
+// Returns the shard distribution for nodes
+func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
+
+	shardDist := make(map[uint64]*ShardLoad)
+	for indexer := range nodes {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy == false {
+				continue
+			}
+
+			alternateId, _ := common.ParseAlternateId(index.AlternateShardIds[0])
+			slotId, replicaId := alternateId.SlotId, int(alternateId.ReplicaId)
+
+			if _, ok := shardDist[slotId]; !ok {
+				shardDist[slotId] = &ShardLoad{
+					slotId: slotId,
+				}
+			}
+
+			shardDist[slotId].replicas = append(shardDist[slotId].replicas, &ReplicaLoad{replicaId, indexer, index})
+			shardDist[slotId].totalDiskSize += index.ActualDiskSize
+			shardDist[slotId].maxInstances = max(shardDist[slotId].maxInstances, index.NumInstances)
+		}
+	}
+
+	return shardDist
+}
