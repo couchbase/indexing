@@ -110,6 +110,21 @@ type IndexUsage struct {
 	numDocsPending   int64
 	rollbackTime     int64
 	progressStatTime int64
+
+	// Maximum instances that can be assigned to a shard
+	MaxInstances uint64
+
+	// When index is used as shard proxy, this field represents the
+	// maximum amount of data each shard can hold
+	MaxDiskSize uint64
+
+	// When index is used as shard proxy, this field represents the
+	// percentage of MaxDiskSize that can be used as a cut-off to
+	// decide if the shard can be used for new indexes.
+	// If the 'ActualDiskUsage' of a shard is greater than
+	// 'DiskSizeThreshold'* 'MaxDiskSize', then the shard will not be
+	// used for placing new indexes
+	DiskSizeThreshold float64
 }
 
 // This function makes a copy of a index usage

@@ -2188,6 +2188,15 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.diskUsageThreshold": ConfigValue{
+		50.0,
+		"Disk utilisation as percentage of maximum disk usage upto which the " +
+			"shard can take new indexes. If the shard's disk usage exceeds this " +
+			"value, it will not be considered for new index placement",
+		50.0,
+		false,
+		false,
+	},
 	"indexer.plasma.minNumShard": ConfigValue{
 		Plasma_minNumShard,
 		"Minimum number of shard",

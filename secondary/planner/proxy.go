@@ -496,6 +496,9 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		DiskUsage   uint64 `json:"diskUsage,omitempty"`
 	*/
 	indexer.NodeVersion = indexerVersion
+	indexer.MaxInstancesPerShard = config["indexer.plasma.maxInstancePerShard"].Uint64()
+	indexer.MaxDiskUsagePerShard = config["indexer.plasma.maxDiskUsagePerShard"].Uint64()
+	indexer.DiskUsageThreshold = config["indexer.plasma.diskUsageThreshold"].Float64()
 
 	var actualStorageMem uint64
 	// memory_used_storage contains the total storage consumption,

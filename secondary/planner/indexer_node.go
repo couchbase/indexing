@@ -82,6 +82,11 @@ type IndexerNode struct {
 	MinShardCapacity int `json:"minShardCapacity,omitempty"`
 
 	memQuota uint64 // Indexer memory quota for this node
+
+	// shard-level resource utilisation thresholds
+	MaxInstancesPerShard uint64  `json:"maxInstancesPerShard,omitempty"`
+	MaxDiskUsagePerShard uint64  `json:"maxDiskUsagePerShard,omitempty"`
+	DiskUsageThreshold   float64 `json:"diskUsageThreshold,omitempty"`
 }
 
 // This function creates a new indexer node
@@ -185,6 +190,9 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.numShards = o.numShards
 	r.MinShardCapacity = o.MinShardCapacity
 	r.memQuota = o.memQuota
+	r.MaxInstancesPerShard = o.MaxInstancesPerShard
+	r.MaxDiskUsagePerShard = o.MaxDiskUsagePerShard
+	r.DiskUsageThreshold = o.DiskUsageThreshold
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
