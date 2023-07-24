@@ -62,6 +62,10 @@ type IndexUsage struct {
 	ActualMemMin          uint64 `json:"actualMemMin"`
 	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
 
+	// Available from 7.6+ version of server
+	// This field captures the actual size of the index on disk (including fragmentation)
+	ActualDiskSize uint64 `json:"actualDiskSize,omitempty"`
+
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
 	EstimatedMemUsage uint64 `json:"estimatedMemUsage"`
@@ -202,6 +206,11 @@ func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
 	}
 
 	return o.DataSize
+}
+
+// Get disk consumption
+func (o *IndexUsage) GetDiskSize() uint64 {
+	return o.ActualDiskSize
 }
 
 // Get disk Usage

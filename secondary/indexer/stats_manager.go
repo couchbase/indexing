@@ -610,6 +610,7 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.residentPercent.AddFilter(stats.PlannerFilter)
 	s.combinedResidentPercent.AddFilter(stats.PlannerFilter)
 	s.dataSize.AddFilter(stats.PlannerFilter)
+	s.diskSize.AddFilter(stats.PlannerFilter)
 	s.memUsed.AddFilter(stats.PlannerFilter)
 	s.avgDiskBps.AddFilter(stats.PlannerFilter)
 	s.avgDrainRate.AddFilter(stats.PlannerFilter)

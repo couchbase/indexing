@@ -635,6 +635,14 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 			index.ActualDiskUsage = uint64(diskUsed.(float64))
 		}
 
+		// disk usage per index
+		if diskUsed, ok := GetIndexStat(index, "disk_size", statsMap, true, clusterVersion); ok {
+			index.ActualDiskSize = uint64(diskUsed.(float64))
+		} else {
+			// Estimate disk usage from data_size assuming 30% fragmentation
+			index.ActualDiskSize = uint64(float64(index.ActualDataSize) * 1.3)
+		}
+
 		if numDocsQueued, ok := GetIndexStat(index, "num_docs_queued", statsMap, true, clusterVersion); ok {
 			index.numDocsQueued = int64(numDocsQueued.(float64))
 		}
