@@ -357,6 +357,10 @@ type Solution struct {
 	// flag for ignoring constraint check during heterogenous swap
 	// rebalance while upgrading
 	swapOnlyRebalance bool
+
+	// When set to 1, planner ignores excludeNode params as well as resource
+	// contraints during DDL operations
+	allowDDLDuringScaleUp bool
 }
 
 type Violations struct {
@@ -1673,24 +1677,25 @@ func (p *SAPlanner) SetParam(param map[string]interface{}) error {
 // Constructor
 //
 func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*IndexerNode, isLive bool, useLive bool,
-	disableRepair bool) *Solution {
+	disableRepair bool, allowDDLDuringScaleUp bool) *Solution {
 
 	r := &Solution{
-		constraint:           constraint,
-		sizing:               sizing,
-		Placement:            make([]*IndexerNode, len(indexers)),
-		isLiveData:           isLive,
-		useLiveData:          useLive,
-		disableRepair:        disableRepair,
-		estimate:             true,
-		enableExclude:        true,
-		indexSGMap:           make(ServerGroupMap),
-		replicaMap:           make(ReplicaMap),
-		usedReplicaIdMap:     make(UsedReplicaIdMap),
-		eligIndexSGMap:       make(ServerGroupMap),
-		eligReplicaMap:       make(ReplicaMap),
-		eligUsedReplicaIdMap: make(UsedReplicaIdMap),
-		swapOnlyRebalance:    false,
+		constraint:            constraint,
+		sizing:                sizing,
+		Placement:             make([]*IndexerNode, len(indexers)),
+		isLiveData:            isLive,
+		useLiveData:           useLive,
+		disableRepair:         disableRepair,
+		estimate:              true,
+		enableExclude:         true,
+		indexSGMap:            make(ServerGroupMap),
+		replicaMap:            make(ReplicaMap),
+		usedReplicaIdMap:      make(UsedReplicaIdMap),
+		eligIndexSGMap:        make(ServerGroupMap),
+		eligReplicaMap:        make(ReplicaMap),
+		eligUsedReplicaIdMap:  make(UsedReplicaIdMap),
+		swapOnlyRebalance:     false,
+		allowDDLDuringScaleUp: allowDDLDuringScaleUp,
 	}
 
 	// initialize list of indexers
@@ -1938,6 +1943,7 @@ func (s *Solution) clone() *Solution {
 	r.eligIndexSGMap = make(ServerGroupMap)
 	r.eligReplicaMap = make(ReplicaMap)
 	r.eligUsedReplicaIdMap = make(UsedReplicaIdMap)
+	r.allowDDLDuringScaleUp = s.allowDDLDuringScaleUp
 
 	for _, node := range s.Placement {
 		if node.isDelete && len(node.Indexes) == 0 {
@@ -2058,6 +2064,14 @@ func (s *Solution) getNewNodes() []*IndexerNode {
 }
 
 //
+// When set to true, this flag ignores excludeNode params, as well as
+// planner resource constraints during DDL operations.
+//
+func (s *Solution) AllowDDLDuringScaleUp() bool {
+	return s.allowDDLDuringScaleUp
+}
+
+//
 // This prints the vital statistics from Solution.
 //
 func (s *Solution) PrintStats() {
@@ -2127,9 +2141,8 @@ func (s *Solution) PrintLayout() {
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes))
-		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v",
-			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer))
-
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v" ,
+			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp())
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
 			logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v",
@@ -4577,14 +4590,14 @@ func (o *IndexerNode) shouldExcludeIndex(s *Solution, n *IndexUsage) bool {
 // This function returns whether to exclude this node for taking in new index
 //
 func (o *IndexerNode) ExcludeIn(s *Solution) bool {
-	return s.enableExclude && (o.IsDeleted() || o.Exclude == "in" || o.Exclude == "inout")
+	return !s.AllowDDLDuringScaleUp() && s.enableExclude && (o.IsDeleted() || o.Exclude == "in" || o.Exclude == "inout")
 }
 
 //
 // This function returns whether to exclude this node for rebalance out index
 //
 func (o *IndexerNode) ExcludeOut(s *Solution) bool {
-	return s.enableExclude && (!o.IsDeleted() && (o.Exclude == "out" || o.Exclude == "inout"))
+	return !s.AllowDDLDuringScaleUp() && s.enableExclude && (!o.IsDeleted() && (o.Exclude == "out" || o.Exclude == "inout"))
 }
 
 //
@@ -6268,7 +6281,8 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 	candidates := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
 		// This function is used for initial placement (create index).
-		// Do not place index on excluded nodes.
+		// Do not place index on excluded nodes unless overridden by
+		// allowDDLDuringScaleUp flag
 		if !indexer.ExcludeAny(s) {
 			candidates = append(candidates, indexer)
 		}
@@ -6306,7 +6320,8 @@ func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) error
 	candidates := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
 		// This function is used for simulation.
-		// Do not place in excluded nodes.
+		// Do not place in excluded nodes unless overridden by
+		// allowDDLDuringScaleUp flag
 		if !indexer.ExcludeAny(s) {
 			candidates = append(candidates, indexer)
 		}

@@ -32,36 +32,37 @@ import (
 /////////////////////////////////////////////////////////////
 
 type RunConfig struct {
-	Detail           bool
-	GenStmt          string
-	MemQuotaFactor   float64
-	CpuQuotaFactor   float64
-	Resize           bool
-	MaxNumNode       int
-	Output           string
-	Shuffle          int
-	AllowMove        bool
-	AllowSwap        bool
-	AllowUnpin       bool
-	AddNode          int
-	DeleteNode       int
-	MaxMemUse        int
-	MaxCpuUse        int
-	MemQuota         int64
-	CpuQuota         int
-	DataCostWeight   float64
-	CpuCostWeight    float64
-	MemCostWeight    float64
-	EjectOnly        bool
-	DisableRepair    bool
-	Timeout          int
-	UseLive          bool
-	Runtime          *time.Time
-	Threshold        float64
-	CpuProfile       bool
-	MinIterPerTemp   int
-	MaxIterPerTemp   int
-	UseGreedyPlanner bool
+	Detail                bool
+	GenStmt               string
+	MemQuotaFactor        float64
+	CpuQuotaFactor        float64
+	Resize                bool
+	MaxNumNode            int
+	Output                string
+	Shuffle               int
+	AllowMove             bool
+	AllowSwap             bool
+	AllowUnpin            bool
+	AddNode               int
+	DeleteNode            int
+	MaxMemUse             int
+	MaxCpuUse             int
+	MemQuota              int64
+	CpuQuota              int
+	DataCostWeight        float64
+	CpuCostWeight         float64
+	MemCostWeight         float64
+	EjectOnly             bool
+	DisableRepair         bool
+	Timeout               int
+	UseLive               bool
+	Runtime               *time.Time
+	Threshold             float64
+	CpuProfile            bool
+	MinIterPerTemp        int
+	MaxIterPerTemp        int
+	UseGreedyPlanner      bool
+	AllowDDLDuringScaleup bool
 }
 
 type RunStats struct {
@@ -489,7 +490,8 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 // Integration with Metadata Provider
 /////////////////////////////////////////////////////////////
 
-func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool, useGreedyPlanner bool, enforceLimits bool) (*Solution, error) {
+func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool,
+	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -544,7 +546,7 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 	}
 
 	detail := logging.IsEnabled(logging.Info)
-	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner)
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp)
 }
 
 func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
@@ -819,7 +821,7 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
-	useGreedyPlanner bool) (*Solution, error) {
+	useGreedyPlanner bool, allowDDLDuringScaleup bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -837,6 +839,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.AllowUnpin = allowUnpin
 	config.UseLive = useLive
 	config.UseGreedyPlanner = useGreedyPlanner
+	config.AllowDDLDuringScaleup = allowDDLDuringScaleup
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
@@ -1774,30 +1777,31 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 func DefaultRunConfig() *RunConfig {
 
 	return &RunConfig{
-		Detail:         false,
-		GenStmt:        "",
-		MemQuotaFactor: 1.0,
-		CpuQuotaFactor: 1.0,
-		Resize:         true,
-		MaxNumNode:     int(math.MaxInt16),
-		Output:         "",
-		Shuffle:        0,
-		AllowMove:      false,
-		AllowSwap:      true,
-		AllowUnpin:     false,
-		AddNode:        0,
-		DeleteNode:     0,
-		MaxMemUse:      -1,
-		MaxCpuUse:      -1,
-		MemQuota:       -1,
-		CpuQuota:       -1,
-		DataCostWeight: 1,
-		CpuCostWeight:  1,
-		MemCostWeight:  1,
-		EjectOnly:      false,
-		DisableRepair:  false,
-		MinIterPerTemp: 100,
-		MaxIterPerTemp: 20000,
+		Detail:                false,
+		GenStmt:               "",
+		MemQuotaFactor:        1.0,
+		CpuQuotaFactor:        1.0,
+		Resize:                true,
+		MaxNumNode:            int(math.MaxInt16),
+		Output:                "",
+		Shuffle:               0,
+		AllowMove:             false,
+		AllowSwap:             true,
+		AllowUnpin:            false,
+		AddNode:               0,
+		DeleteNode:            0,
+		MaxMemUse:             -1,
+		MaxCpuUse:             -1,
+		MemQuota:              -1,
+		CpuQuota:              -1,
+		DataCostWeight:        1,
+		CpuCostWeight:         1,
+		MemCostWeight:         1,
+		EjectOnly:             false,
+		DisableRepair:         false,
+		MinIterPerTemp:        100,
+		MaxIterPerTemp:        20000,
+		AllowDDLDuringScaleup: false,
 	}
 }
 
@@ -1843,6 +1847,8 @@ func initialSolution(config *RunConfig,
 	maxNumNode := config.MaxNumNode
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
+	// initial solution is called only from Plan, hence pass CommandPlan
+	allowDDLDuringScaleup := configureAllowDDLDuringScaleup(CommandPlan, config.AllowDDLDuringScaleup)
 
 	memQuota, cpuQuota := computeQuota(config, sizing, indexes, false)
 
@@ -1850,7 +1856,7 @@ func initialSolution(config *RunConfig,
 
 	indexers := indexerNodes(constraint, indexes, sizing, false)
 
-	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair)
+	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair, allowDDLDuringScaleup)
 
 	placement := newRandomPlacement(indexes, config.AllowSwap, false)
 	if err := placement.InitialPlace(r, indexes); err != nil {
@@ -1868,12 +1874,14 @@ func emptySolution(config *RunConfig,
 	maxNumNode := config.MaxNumNode
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
+	// emptySolution is only called from CommandPlan
+	allowDDLDuringScaleup := configureAllowDDLDuringScaleup(CommandPlan, config.AllowDDLDuringScaleup)
 
 	memQuota, cpuQuota := computeQuota(config, sizing, indexes, false)
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair)
+	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair, allowDDLDuringScaleup)
 
 	return r, constraint
 }
@@ -1889,6 +1897,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
 	useLive := config.UseLive || command == CommandRebalance || command == CommandSwap || command == CommandRepair || command == CommandDrop
+	allowDDLDuringScaleup := configureAllowDDLDuringScaleup(command, config.AllowDDLDuringScaleup)
 
 	movedData := uint64(0)
 	movedIndex := uint64(0)
@@ -1914,7 +1923,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair)
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair, allowDDLDuringScaleup)
 	r.calculateSize() // in case sizing formula changes after the plan is saved
 	r.usedReplicaIdMap = plan.UsedReplicaIdMap
 
