@@ -5657,6 +5657,27 @@ func genResumeDownloadToken(solution *Solution,
 	return result, nil
 }
 
+func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
+	var str string
+	for _, indexerMap := range replicaMap {
+		for indexerNode, indexUsage := range indexerMap {
+			str += fmt.Sprintf("Node: %v, numShards: %v, minShardCapacity: %v, Index name: %v, defnId: %v, replicaId: %v, partnId: %v\n",
+				indexerNode.NodeId, indexerNode.numShards, indexerNode.MinShardCapacity,
+				indexUsage.Name, indexUsage.DefnId,
+				indexUsage.Instance.ReplicaId, indexUsage.PartnId)
+		}
+	}
+	return str
+}
+
+func getLoadDist(nodes map[*IndexerNode]bool) string {
+	var str string
+	for k := range nodes {
+		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.numShards, k.MinShardCapacity)
+	}
+	return str
+}
+
 func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 
 	targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
@@ -5697,6 +5718,10 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 			// If a new shard can be created for this partition across all indexer nodes,
 			// then generate new shardIds and populate the IndexUsage structure
 			if canCreateNewShards(replicaMap) {
+				logging.LazyVerbose(func() string {
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds Generating new shards for index: %v "+
+						"as there is room for new shards", getIndexesFromReplicaMap(replicaMap))
+				})
 
 				// If there is an error in generating alternateID's, do not fail
 				// index creation. Ignore the error so that the index can still be
@@ -5708,8 +5733,41 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 				// Try placing the index on existing shards. If no such placement
 				// if possible across the nodes, then force create new shards
 
-				// TODO: Update the logic to place indexes on existing shards
+				logging.LazyVerbose(func() string {
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds All indexer nodes are full with shards "+
+						"Current shard capacity: %v, re-using existing shards", getIndexesFromReplicaMap(replicaMap))
+				})
 
+				allIndexerNodes := make(map[*IndexerNode]bool) // All indexer nodes in the cluster
+				fullCapNodes := make(map[*IndexerNode]bool)    // All nodes where shard capacity is full
+				for _, indexer := range solution.Placement {
+					allIndexerNodes[indexer] = true
+				}
+
+				for indexer := range targetNodes {
+					if indexer.numShards >= indexer.MinShardCapacity {
+						fullCapNodes[indexer] = true
+					}
+				}
+
+				logging.LazyVerbose(func() string {
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v", getLoadDist(fullCapNodes))
+				})
+
+				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap)
+				if replan {
+					logging.Warnf("Planner::populateAlternateShardIds Re-planning placement as no common shard has been found")
+
+					// TODO: Do actual replanning instead of just assining new shardIds
+					genAlterntateShardIds(replicaMap)
+
+				} else {
+					// Assign alternate Ids based on the least loaded slot
+					slot := shardSlots[0]
+					logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v as "+
+						"it is least loaded", slot[0].slotId, getIndexesFromReplicaMap(replicaMap))
+					assignAlternateIds(replicaMap, slot, targetNodes)
+				}
 			}
 		}
 	}
@@ -5891,4 +5949,169 @@ func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
 	}
 
 	return shardDist
+}
+
+func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
+	targetNodes map[*IndexerNode]map[*IndexUsage]bool, replicaMap map[int]map[*IndexerNode]*IndexUsage) ([][2]*ShardLoad, bool) {
+
+	//allShardDist := getShardDist(allIndexerNodes)
+	shardDistOnFullCapNodes := getShardDist(fullCapNodes)
+
+	// Step-1: Prune all the shards that do not exist on all full capacity nodes
+	// Even if the shard does not exist on one full capacity node, indexer may have
+	// to allocate a shard on the full capacity node - which violates the capacity
+	// constraint. If no common shard exists, then planner will replan the placement
+	//
+	// If a shard exists on all full capacity nodes but the shard usage is beyond the
+	// capacity, then prune the shard
+
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		if len(shardLoad.replicas) != len(fullCapNodes) {
+			logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as it is not present on "+
+				"all full capacity nodes. shardLoad: %v", shardLoad.String())
+			delete(shardDistOnFullCapNodes, slotId)
+			continue
+		}
+
+		for _, replica := range shardLoad.replicas {
+			diskUsageThreshold := uint64(float64(replica.usage.MaxDiskSize) * (replica.usage.DiskSizeThreshold / 100.0))
+			if replica.usage.ActualDiskSize >= diskUsageThreshold || replica.usage.NumInstances >= replica.usage.MaxInstances {
+				logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as the disk usage is beyond threshold or "+
+					"the shard has hit maximum instance capacity. shardLoad: %v", slotId, shardLoad.String())
+				delete(shardDistOnFullCapNodes, slotId)
+				continue
+			}
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true // re-plan
+	}
+
+	// Step-2: Among the shards that exist on all full capacity nodes,
+	// make sure that the replicas of those shards are with in the replicas of interest
+	//
+	// E.g., if nodes n1 & n2 are full at its capacity and has a shard with replicaIds: 2, 3
+	// on each of them respectively but planner wants to create only replicas 0 & 1, then
+	// such shards can not be used
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		for _, replicaDist := range shardLoad.replicas {
+
+			if _, ok := replicaMap[replicaDist.ReplicaId]; !ok {
+				logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shard does not contain replicas of interest. "+
+					"shardLoad: %v, replicaDist: %v", slotId, shardLoad.String(), getIndexesFromReplicaMap(replicaMap))
+				// Shard replica is not of interest for index creation
+				delete(shardDistOnFullCapNodes, slotId)
+			}
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true // re-plan
+	}
+
+	// Step-3: For the remaining shards, it is possible that global distribution of replicas
+	// can exist beyond the target nodes
+	//
+	// E.g., if there are 5 nodes n0, n1, n2, n3, n4 in the cluster and the target nodes are
+	// n0, n1, n2 with n0, n1 being at full capacity, then do not choose a shard that exists
+	// on n0 (replica: 0), n1 (replica: 1), n3 (replica: 2) as planner has to place (replica: 2)
+	// on n2 while replica already exists on n3 i.e. if a replica of interest exists outside
+	// target nodes, ignore the shard
+	globalShardDist := getShardDist(allIndexerNodes)
+
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		if globalDist, ok := globalShardDist[slotId]; ok {
+
+			for _, replica := range globalDist.replicas {
+				_, ok1 := replicaMap[replica.ReplicaId]
+				_, ok2 := targetNodes[replica.node]
+
+				// "ok1 && !ok2" means that replica of interest for this shard exists outside
+				// target nodes. Skip this shard
+				//
+				// Note: Do not check for !ok1 case as the shard can have replica: 3 on a
+				// different node but planner wants to create only replicas 0, 1 and 2. In
+				// that case !ok1 will be true but the shard can still be eligible for placement
+				if ok1 && !ok2 {
+					logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shards of interest are outside target nodes. "+
+						"shardLoad: %v, replicaDist: %v", slotId, shardLoad.String(), getIndexesFromReplicaMap(replicaMap))
+					delete(shardDistOnFullCapNodes, slotId)
+				}
+			}
+		} else {
+			// This case should never happen
+			delete(shardDistOnFullCapNodes, slotId)
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true
+	}
+
+	var shardSlice [][2]*ShardLoad
+	for slotId, v := range shardDistOnFullCapNodes {
+		shardSlice = append(shardSlice, [2]*ShardLoad{v, globalShardDist[slotId]})
+	}
+
+	return sortByLoad(shardSlice), false
+}
+
+func sortByLoad(shardSlice [][2]*ShardLoad) [][2]*ShardLoad {
+
+	// Instead of storing based on totalDiskSize, use bin based sorting
+	// If two shards have usage of 20G and 21G but the shard with 20G is having
+	// more indexes, then it is ideal to place the new indexes on the shard with
+	// 21G of disk usage.
+	//
+	// To facilitate such sorting, the totalDiskSize is divided into bins of 2.5G size
+	// (1% of maximum disk usage threshold)
+	// If two shards fall in the same bin, then the number of instances are compared
+	// If the number of instances match, then the absolute value of disk size is used
+	binSize := uint64(2560 * 1024 * 1024) // 2.5G
+	sort.Slice(shardSlice, func(i, j int) bool {
+		iSlot, jSlot := shardSlice[i][0].totalDiskSize/binSize, shardSlice[j][0].totalDiskSize/binSize
+		a := iSlot < jSlot
+		b := (iSlot == jSlot) && (shardSlice[i][0].maxInstances < shardSlice[j][0].maxInstances)
+		c := (iSlot == jSlot) && (shardSlice[i][0].maxInstances == shardSlice[j][0].maxInstances) &&
+			(shardSlice[i][0].totalDiskSize < shardSlice[j][0].totalDiskSize)
+		return a || b || c
+	})
+
+	return shardSlice
+}
+
+func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2]*ShardLoad, targetNodes map[*IndexerNode]map[*IndexUsage]bool) {
+
+	slotId := slot[0].slotId
+	slotDist := make(map[*IndexerNode]int)
+	for _, replica := range slot[1].replicas {
+		slotDist[replica.node] = replica.ReplicaId
+	}
+
+	assignedReplicas := make(map[int]bool)
+	var remainingIndexes []*IndexUsage
+	for _, indexDist := range replicaMap {
+		for indexerNode, index := range indexDist {
+			if val, ok := slotDist[indexerNode]; ok {
+				index.Instance.ReplicaId = val
+				index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val), fmt.Sprintf("%v-%v-1", slotId, val)}
+				assignedReplicas[val] = true
+			} else {
+				remainingIndexes = append(remainingIndexes, index)
+			}
+		}
+	}
+
+	i := 0
+	for replicaId, _ := range replicaMap {
+		if _, ok := assignedReplicas[replicaId]; !ok {
+			index := remainingIndexes[i]
+			index.Instance.ReplicaId = replicaId
+			msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
+			bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 1}
+			index.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
+			i++
+		}
+	}
 }
