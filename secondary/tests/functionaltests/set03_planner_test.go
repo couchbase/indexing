@@ -111,6 +111,13 @@ type greedyPlannerIdxDistTestCase struct {
 	maxDistVariance float64
 }
 
+type partitionedIdxHeterogenousTestCase struct {
+	comment       string
+	topology      string
+	index         string
+	numPartitions int
+}
+
 var initialPlacementTestCases = []initialPlacementTestCase{
 	{"initial placement - 20-50M, 10 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-10-3.json", "", 0.20, 0.20},
 	{"initial placement - 20-50M, 30 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-30-3.json", "", 0.20, 0.20},
@@ -441,6 +448,53 @@ var ddlHeterogenousPlannerFuncTestCases = []greedyPlannerFuncTestCase{
 	},
 }
 
+var ddlHeterogenousPartitionedIndexTestCases = []partitionedIdxHeterogenousTestCase{
+	// Place single partitioned(8) index instace - 1 Scaled Node
+	{
+		"Place Single Partitioned Index Instance - 3 non-empty heterogenous nodes with 1 Scaled up",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		8,
+	},
+	// Place single partitioned(8) index instace - 2 Scaled Node
+	{
+		"Place Single Partitioned Index Instance - 3 non-empty heterogenous nodes with 2 Scaled up",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-2-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_1.json",
+		8,
+	},
+
+	// Place partitioned(8) index with 1 replica - 1 Scaled Node
+	{
+		"Place Paritioned Index with 1 replica - 3 non-empty heterogenous nodes with 1 Scaled up",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		8,
+	},
+	// Place partitioned(8) index with 1 replica - 2 Scaled Node
+	{
+		"Place Paritioned Index with 1 replica - 3 non-empty heterogenous nodes with 2 Scaled up",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-2-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_with_1_replica.json",
+		8,
+	},
+
+	// Place partitioned(8) index with 2 replica - 1 Scaled Node
+	{
+		"Place Paritioned Index with 2 replica - 3 non-empty heterogenous nodes with 1 Scaled up",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_with_2_replicas.json",
+		8,
+	},
+	// Place partitioned(8) index with 2 replica - 2 Scaled Node
+	{
+		"Place Paritioned Index with 2 replica - 3 non-empty heterogenous nodes with 2 Scaled up",
+		"../testdata/planner/scaleup/heterogenous-6-2_3-nodes-2-scaled_1-sg.json",
+		"../testdata/planner/greedy/new_index_with_2_replicas.json",
+		8,
+	},
+}
+
 func TestPlanner(t *testing.T) {
 	log.Printf("In TestPlanner()")
 
@@ -480,8 +534,12 @@ func TestPlanDuringHeterogenousScaleup(t *testing.T) {
 	logging.SetLogLevel(logging.Info)
 	defer logging.SetLogLevel(logging.Warn)
 
-	heterogenousScaleupGreedyPlannerTests(t)
-	// TO-DO: ScaleupSAPlannerTests
+	t.Run("GreedyPlanner", func(t *testing.T) {
+		scaleupGreedyPlannerTests(t)
+	})
+	t.Run("SAPlanner", func(t *testing.T) {
+		scaleupSAPlannerTests(t)
+	})
 
 }
 
@@ -774,8 +832,7 @@ func heterogenousRebalanceTest(t *testing.T) {
 	}
 }
 
-
-func heterogenousScaleupGreedyPlannerTests(t *testing.T) {
+func scaleupGreedyPlannerTests(t *testing.T) {
 
 	ddlScaleUpGreedyFuncTestCase(t)
 	// TO-DO: Replica Repair and Alter Index
@@ -812,6 +869,100 @@ func ddlScaleUpGreedyFuncTestCase(t *testing.T) {
 		}
 
 		validateGreedyPlacementFunc(t, p, indexSpecs, testcase.targetNodes)
+	}
+}
+
+func scaleupSAPlannerTests(t *testing.T) {
+
+	t.Run("FunctionalDDLTests", func(t *testing.T) {
+		ddlScaleUpSAPlannerFuncTestCase(t)
+	})
+	t.Run("CreatePartitionedIndex", func(t *testing.T) {
+		ddlScaleUpPartitionedIndexSAPlannerTestCase(t)
+	})
+	// TO-DO: Replica Repair and Alter Index(CommandRepair)
+}
+
+// Currently no cost based optimisation check is done for heterogenous
+// cluster, if planner is able to place indexes without any error it is
+// consider as a successful run
+func ddlScaleUpSAPlannerFuncTestCase(t *testing.T) {
+
+	for _, testcase := range ddlHeterogenousPlannerFuncTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.Resize = false
+		config.AddNode = -1
+		config.AllowSwap = false
+		config.AllowMove = false
+		config.UseLive = true
+		config.UseGreedyPlanner = false
+		config.AllowDDLDuringScaleup = true
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.index)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
+		FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+		p.Print()
+
+		if _, ok := p.(*planner.SAPlanner); !ok {
+			t.Fatalf("SAPlanner was not chosen for index placement.")
+			continue
+		}
+	}
+}
+
+func ddlScaleUpPartitionedIndexSAPlannerTestCase(t *testing.T) {
+	for _, testcase := range ddlHeterogenousPartitionedIndexTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.Resize = false
+		config.AddNode = -1
+		config.AllowSwap = false
+		config.AllowMove = false
+		config.UseLive = true
+		config.AllowDDLDuringScaleup = true
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		indexSpecs, err := planner.ReadIndexSpecs(testcase.index)
+		FailTestIfError(err, "Fail to read index spec", t)
+
+		// update the partition config in indexSpecs
+		for _, spec := range indexSpecs {
+			spec.Deferred = false
+			spec.Immutable = false
+			spec.Desc = []bool{false}
+			spec.NumPartition = uint64(testcase.numPartitions)
+			spec.PartitionScheme = string(common.SINGLE)
+			spec.HashScheme = uint64(common.CRC32)
+			spec.PartitionKeys = []string(nil)
+			spec.RetainDeletedXATTR = false
+			spec.ExprType = string(common.N1QL)
+			spec.Using = string(common.PlasmaDB)
+		}
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
+		FailTestIfError(err, "Error in RunSingleTestPlan", t)
+
+		p.Print()
+
+		if _, ok := p.(*planner.SAPlanner); !ok {
+			t.Fatalf("SAPlanner was not chosen for index placement.")
+			continue
+		}
 	}
 }
 
