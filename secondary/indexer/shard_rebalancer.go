@@ -225,9 +225,38 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					continue
 				}
 
+				isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
 				var err error
-				sr.transferTokens, _, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
-					*sr.topologyChange, sr.nodeUUID)
+
+				// If shard affinity is enabled in non-serverless deployments, used normal planner.
+				// Otherwise, use tenant aware planner
+				if isShardAffinityEnabled && !common.IsServerlessDeployment() {
+					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
+					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
+					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
+					timeout := cfg["planner.timeout"].Int()
+					threshold := cfg["planner.variationThreshold"].Float64()
+					cpuProfile := cfg["planner.cpuProfile"].Bool()
+					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
+					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
+
+					//user setting redistribute_indexes overrides the internal setting
+					//onEjectOnly. onEjectOnly is not expected to be used in production
+					//as this is not documented.
+					if optimizePlacement {
+						onEjectOnly = false
+					} else {
+						onEjectOnly = true
+					}
+
+					sr.transferTokens, _, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
+						sr.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
+						minIterPerTemp, maxIterPerTemp, true)
+
+				} else { //
+					sr.transferTokens, _, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
+						*sr.topologyChange, sr.nodeUUID)
+				}
 
 				// TODO: Add logic to remove duplicate indexes
 
@@ -239,7 +268,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
-				} else {
+				} else if !isShardAffinityEnabled {
 					destination, region, err := getDestinationFromConfig(sr.config.Load())
 					if err != nil {
 						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
@@ -1028,6 +1057,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		return true
 
 	case c.ShardTokenDropOnSource:
+		// Process write billing only for serverless deployments
+		if c.IsServerlessDeployment() == false {
+			return false
+		}
+
 		enableWriteBilling := func(token *c.TransferToken) {
 			msg := &MsgMeteringUpdate{
 				mType:   METERING_MGR_START_WRITE_BILLING,

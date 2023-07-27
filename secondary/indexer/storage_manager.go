@@ -165,7 +165,9 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	if common.IsServerlessDeployment() {
+	isShardAffinityEnabled := s.config["planner.enableShardAffinity"].Bool()
+
+	if isShardAffinityEnabled || common.IsServerlessDeployment() {
 		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
 	} else {
 		s.stm = nil
