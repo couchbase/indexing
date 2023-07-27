@@ -2607,7 +2607,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		// Re-group indexes
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
 		}
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
@@ -2759,7 +2759,7 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 
 	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan"
 
-	solution := solutionFromPlan2(plan)
+	solution := SolutionFromPlan2(plan)
 
 	subClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
 	if err != nil {
@@ -2862,10 +2862,10 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 
 }
 
-// solutionFromPlan2 creates a Solution from the input Plan.
+// SolutionFromPlan2 creates a Solution from the input Plan.
 // This function does a shallow copy of the Placement from the Plan
 // to create a Solution.
-func solutionFromPlan2(plan *Plan) *Solution {
+func SolutionFromPlan2(plan *Plan) *Solution {
 
 	s := &Solution{
 		Placement: make([]*IndexerNode, len(plan.Placement)),
@@ -4195,7 +4195,7 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 
 	const _executeTenantAwareRebal = "Planner::executeTenantAwareRebal"
 
-	solution := solutionFromPlan2(plan)
+	solution := SolutionFromPlan2(plan)
 	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
 
 	// update the number of new and deleted nodes in the solution
@@ -5569,7 +5569,7 @@ func executeTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*T
 
 	logging.Infof("%v Resume Nodes %v", _executeTenantAwarePlanForResume, resumeNodes)
 
-	solution := solutionFromPlan2(plan)
+	solution := SolutionFromPlan2(plan)
 	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
 
 	//group indexer nodes into subclusters
@@ -5873,7 +5873,7 @@ func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
 	for _, indexerMap := range replicaMap {
 		for indexerNode, indexUsage := range indexerMap {
 			str += fmt.Sprintf("Node: %v, numShards: %v, minShardCapacity: %v, Index name: %v, defnId: %v, replicaId: %v, partnId: %v\n",
-				indexerNode.NodeId, indexerNode.numShards, indexerNode.MinShardCapacity,
+				indexerNode.NodeId, indexerNode.NumShards, indexerNode.MinShardCapacity,
 				indexUsage.Name, indexUsage.DefnId,
 				indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 		}
@@ -5884,7 +5884,7 @@ func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
 func getLoadDist(nodes map[*IndexerNode]bool) string {
 	var str string
 	for k := range nodes {
-		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.numShards, k.MinShardCapacity)
+		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.NumShards, k.MinShardCapacity)
 	}
 	return str
 }
@@ -5925,7 +5925,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
 			for indexer := range targetNodes {
-				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
 			}
 
 			// If a new shard can be created for this partition across all indexer nodes,
@@ -5959,7 +5959,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 				}
 
 				for indexer := range targetNodes {
-					if indexer.numShards >= indexer.MinShardCapacity {
+					if indexer.NumShards >= indexer.MinShardCapacity {
 						fullCapNodes[indexer] = true
 					}
 				}
@@ -6253,7 +6253,7 @@ func canCreateNewShards(replicaMap ReplicaDistMap) bool {
 			// One of the indexer nodes has reached the minimum number of shards limit
 			// Return false so that planner will try populating existing shards
 			// instead of creating new shards
-			if indexer.numShards >= indexer.MinShardCapacity {
+			if indexer.NumShards >= indexer.MinShardCapacity {
 				return false
 			}
 		}
@@ -6294,7 +6294,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
 				indexUsage.AlternateShardIds = []string{alternateId.String()}
-				indexerNode.numShards += 1 // Increment new shard count as more shards are getting created
+				indexerNode.NumShards += 1 // Increment new shard count as more shards are getting created
 			} else {
 				alternateId.SetInstaceGroup(0)
 				msAltId := alternateId.String() // compute mainstore alternate ID
@@ -6307,7 +6307,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
 				indexUsage.AlternateShardIds = []string{msAltId, bsAltId}
-				indexerNode.numShards += 2
+				indexerNode.NumShards += 2
 			}
 		}
 	}
@@ -6323,7 +6323,7 @@ type ReplicaLoad struct {
 func (r *ReplicaLoad) String() string {
 	var out string
 	out += fmt.Sprintf("[replicaId: %v, node: %v, numShards: %v, minShardCap: %v, diskSize: %v, numInsts: %v], ",
-		r.ReplicaId, r.node.NodeId, r.node.numShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
+		r.ReplicaId, r.node.NodeId, r.node.NumShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
 	return out
 }
 

@@ -71,7 +71,7 @@ type IndexerNode struct {
 
 	// Current number of shards on the node
 	// Derived from index grouping based on alternate shardId
-	numShards int
+	NumShards int
 
 	// Minium number of shards that can be created on the node
 	// before trying to place indexes on existing shards
@@ -204,7 +204,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.totalData = o.totalData
 	r.totalIndex = o.totalIndex
 	r.NodeVersion = o.NodeVersion
-	r.numShards = o.numShards
+	r.NumShards = o.NumShards
 	r.MinShardCapacity = o.MinShardCapacity
 	r.memQuota = o.memQuota
 	r.MaxInstancesPerShard = o.MaxInstancesPerShard

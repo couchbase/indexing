@@ -365,7 +365,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	if p.shardAffinity {
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
 		}
 		solution.place.RegroupIndexes()
 
@@ -1975,7 +1975,7 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 
 	if p.shardAffinity {
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
 		}
 
 		solution.place.RegroupIndexes()
