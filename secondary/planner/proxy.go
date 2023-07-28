@@ -111,7 +111,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 		return nil, err
 	}
 
-	replicaMap := generateReplicaMap(indexers)
+	replicaMap := GenerateReplicaMap(indexers)
 
 	if err := processDeleteToken(indexers); err != nil {
 		return nil, err
@@ -1598,7 +1598,7 @@ func rebalanceRemoveFromPlan(counterMergeErrMap map[common.IndexDefnId]error, pl
 }
 
 // Generate a map for replicaId
-func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]bool {
+func GenerateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]bool {
 
 	result := make(map[common.IndexDefnId]map[int]bool)
 	for _, indexer := range indexers {

@@ -118,6 +118,13 @@ type partitionedIdxHeterogenousTestCase struct {
 	numPartitions int
 }
 
+type scaleupAlterIndexTestCase struct {
+	comment   string
+	topology  string
+	defnId    common.IndexDefnId
+	increment int
+}
+
 var initialPlacementTestCases = []initialPlacementTestCase{
 	{"initial placement - 20-50M, 10 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-10-3.json", "", 0.20, 0.20},
 	{"initial placement - 20-50M, 30 index, 3 replica, 2x", 2.0, 2.0, "../testdata/planner/workload/uniform-small-30-3.json", "", 0.20, 0.20},
@@ -495,6 +502,37 @@ var ddlHeterogenousPartitionedIndexTestCases = []partitionedIdxHeterogenousTestC
 	},
 }
 
+var scaleupAlterIndexTestCases = []scaleupAlterIndexTestCase{
+	// Increment Replica count by 1 - 1 Scaled Node
+	{
+		"Increment Replica count by 1 - 3 non-empty heterogenous nodes with 1 Scaled up",
+		"../testdata/planner/scaleup/heterogenous_3-nodes-1-scaled_replica.json",
+		common.IndexDefnId(4242),
+		1,
+	},
+	// Increment Replica count by 2 - 1 Scaled Node
+	{
+		"Increment Replica count by 2 - 3 non-empty heterogenous nodes with 1 Scaled up",
+		"../testdata/planner/scaleup/heterogenous_3-nodes-1-scaled_replica.json",
+		common.IndexDefnId(1337),
+		2,
+	},
+	// Increment Replica count by 1 - 2 Scaled Node
+	{
+		"Increment Replica count by 1 - 3 non-empty heterogenous nodes with 2 Scaled up",
+		"../testdata/planner/scaleup/heterogenous_3-nodes-2-scaled_replica.json",
+		common.IndexDefnId(4242),
+		1,
+	},
+	// Increment Replica count by 2 - 2 Scaled Node
+	{
+		"Increment Replica count by 2 - 3 non-empty heterogenous nodes with 2 Scaled up",
+		"../testdata/planner/scaleup/heterogenous_3-nodes-2-scaled_replica.json",
+		common.IndexDefnId(1337),
+		2,
+	},
+}
+
 func TestPlanner(t *testing.T) {
 	log.Printf("In TestPlanner()")
 
@@ -539,6 +577,9 @@ func TestPlanDuringHeterogenousScaleup(t *testing.T) {
 	})
 	t.Run("SAPlanner", func(t *testing.T) {
 		scaleupSAPlannerTests(t)
+	})
+	t.Run("CommandRepair", func(t *testing.T) {
+		scaleupCommandRepairTests(t)
 	})
 
 }
@@ -963,6 +1004,40 @@ func ddlScaleUpPartitionedIndexSAPlannerTestCase(t *testing.T) {
 			t.Fatalf("SAPlanner was not chosen for index placement.")
 			continue
 		}
+	}
+}
+
+func scaleupCommandRepairTests(t *testing.T) {
+	scaleupAlterIndexTest(t)
+}
+
+func scaleupAlterIndexTest(t *testing.T) {
+
+	for _, testcase := range scaleupAlterIndexTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.Resize = false
+		config.AddNode = -1
+		config.AllowSwap = false
+		config.AllowMove = false
+		config.UseLive = true
+		config.AllowDDLDuringScaleup = true
+
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		earlierCount, err := checkForExcessiveIncrement(plan, 0, testcase.defnId, testcase.increment)
+		FailTestIfError(err, "checkForExcessiveIncrement failed", t)
+
+		s := planner.NewSimulator()
+		p, err := s.RunSingleTestCommandRepair(config, plan, testcase.defnId, testcase.increment)
+		FailTestIfError(err, "Error in RunSingleTestCommandRepair", t)
+
+		p.Print()
+
+		validateAlterIndexFunc(t, p, earlierCount+testcase.increment, testcase.defnId)
 	}
 }
 
@@ -1636,6 +1711,37 @@ func cleanupEstimation(s *planner.Solution) {
 				index.EstimatedDataSize = 0
 			}
 		}
+	}
+}
+
+// returns the current replica count before alter index and any error if the placement is not able to hold the
+// new value
+func checkForExcessiveIncrement(p *planner.Plan, addNodes int, defnId common.IndexDefnId, increment int) (int, error) {
+
+	if increment <= 0 {
+		return -1, errors.New(fmt.Sprintf("increment value has to be greater than 1"))
+	}
+
+	idxReplicaMap := planner.GenerateReplicaMap(p.Placement)
+	currCount := len(idxReplicaMap[defnId])
+
+	if currCount+increment > len(p.Placement)+addNodes {
+		return currCount, errors.New(fmt.Sprintf("placement can't accomodate the number of replica increase"))
+	}
+
+	return currCount, nil
+}
+
+func validateAlterIndexFunc(t *testing.T, p planner.Planner,
+	expectedNumReplica int, defnId common.IndexDefnId) {
+
+	result := p.GetResult()
+	idxReplicaMap := planner.GenerateReplicaMap(result.Placement)
+
+	if len(idxReplicaMap[defnId]) != expectedNumReplica {
+		p.Print()
+		t.Fatalf("The expected num replica did not match the resultant num replica. Expected: %v Got: %v",
+			expectedNumReplica, idxReplicaMap[defnId])
 	}
 }
 

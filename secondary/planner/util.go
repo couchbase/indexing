@@ -489,7 +489,7 @@ func ValidateSolution(s *Solution) error {
 
 // Returns the value for allowDDLDuringScaleup flag
 func configureAllowDDLDuringScaleup(command CommandType, configVal bool) bool {
-	if command != CommandPlan {
+	if command != CommandPlan && command != CommandRepair {
 		return false
 	}
 	return configVal
