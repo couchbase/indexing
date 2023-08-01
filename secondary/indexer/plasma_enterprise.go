@@ -19,6 +19,7 @@ import (
 )
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
+var errStoragePathNotFound = fmt.Errorf("Storage path not found for recovery")
 
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
