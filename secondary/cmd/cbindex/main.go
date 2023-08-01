@@ -35,6 +35,11 @@ func usage(fset *flag.FlagSet) {
     cbindex -auth user:pass -type create -bucket default -primary=true -index primary
     cbindex -auth user:pass -type drop -bucket default -index first_name 
 
+- N1QL support (Only create index is supported currently)
+	cbindex -auth Administrator:pass -type n1ql -index_ddl "CREATE INDEX idx_source_schedule ON travel-sample.inventory.route(sourceairport,  DISTINCT ARRAY v.flight FOR v IN schedule END );" -server 127.0.0.1:9000
+	cbindex -auth Administrator:pass -type n1ql -index_ddl "CREATE PRIMARY INDEX def_inventory_airport_primary ON travel-sample.inventory.airport WITH { \"defer_build\":true };" -server 127.0.0.1:9000
+    cbindex -auth Administrator:pass -type n1ql -index_ddl "CREATE INDEX ixf_sched ON travel-sample.inventory.route (ALL ARRAY FLATTEN_KEYS(s.day DESC, s.flight) FOR s IN schedule END, sourceairport, destinationairport, stops);" -server 127.0.0.1:9000
+
 - List
     cbindex -auth user:pass -type list
     cbindex -auth user:pass -type nodes
