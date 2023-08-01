@@ -100,6 +100,7 @@ type Planner interface {
 	Print()
 	PrintCost()
 	SetParam(map[string]interface{}) error
+	SetShardAffinity(bool)
 }
 
 type CostMethod interface {
@@ -202,6 +203,9 @@ type SAPlanner struct {
 	minIterPerTemp int
 	maxIterPerTemp int
 
+	// Set to true if indexes are to grouped based on shard affinity
+	shardAffinity bool
+
 	// result
 	Result          *Solution `json:"result,omitempty"`
 	Score           float64   `json:"score,omitempty"`
@@ -245,6 +249,8 @@ type GreedyPlanner struct {
 	Result *Solution
 
 	numNewIndexes int
+
+	shardAffinity bool
 }
 
 type TenantAwarePlanner struct {
@@ -811,6 +817,10 @@ func (p *SAPlanner) SetMinIterPerTemp(minIterPerTemp int) {
 
 func (p *SAPlanner) SetMaxIterPerTemp(maxIterPerTemp int) {
 	p.maxIterPerTemp = maxIterPerTemp
+}
+
+func (p *SAPlanner) SetShardAffinity(shardAffinity bool) {
+	p.shardAffinity = shardAffinity
 }
 
 // Validate the solution
@@ -2077,6 +2087,10 @@ func (p *GreedyPlanner) SetParam(param map[string]interface{}) error {
 	return nil
 }
 
+func (p *GreedyPlanner) SetShardAffinity(shardAffinity bool) {
+	p.shardAffinity = shardAffinity
+}
+
 // During index creation, either of SAPlanner and GreedyPlanner can be used. The
 // decision to use a specific planner depends on the input indexes - to be created
 // and the planner config.
@@ -2126,4 +2140,8 @@ func (p *TenantAwarePlanner) PrintCost() {
 
 func (p *TenantAwarePlanner) SetParam(param map[string]interface{}) error {
 	return nil
+}
+
+func (p *TenantAwarePlanner) SetShardAffinity(shardAffinity bool) {
+	return // no-op for tenant aware planner
 }

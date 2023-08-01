@@ -2565,6 +2565,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
 	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
+	enableShardAffinity := o.settings.IsShardAffinityEnabled()
 
 	var solution *planner.Solution
 
@@ -2577,7 +2578,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
-			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp)
+			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, enableShardAffinity)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -2676,12 +2677,14 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 		}
 	}
 
+	enableShardAffinity := o.settings.IsShardAffinityEnabled()
+
 	// Use the planner to find out where to place the replica.
 	// If planner cannot read from the given list of nodes, it will return error.
 	// In case of input plan has list of nodes to be used, pass the list along
 	// for planner to place the replicas on those specific nodes.
 	var solution *planner.Solution
-	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false, enforceLimits)
+	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false, enforceLimits, enableShardAffinity)
 	if err != nil {
 		return nil, nil, err
 	}

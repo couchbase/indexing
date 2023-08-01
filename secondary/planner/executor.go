@@ -33,37 +33,42 @@ import (
 /////////////////////////////////////////////////////////////
 
 type RunConfig struct {
-	Detail                bool
-	GenStmt               string
-	MemQuotaFactor        float64
-	CpuQuotaFactor        float64
-	Resize                bool
-	MaxNumNode            int
-	Output                string
-	Shuffle               int
-	AllowMove             bool
-	AllowSwap             bool
-	AllowUnpin            bool
-	AddNode               int
-	DeleteNode            int
-	MaxMemUse             int
-	MaxCpuUse             int
-	MemQuota              int64
-	CpuQuota              int
-	DataCostWeight        float64
-	CpuCostWeight         float64
-	MemCostWeight         float64
-	EjectOnly             bool
-	DisableRepair         bool
-	Timeout               int
-	UseLive               bool
-	Runtime               *time.Time
-	Threshold             float64
-	CpuProfile            bool
-	MinIterPerTemp        int
-	MaxIterPerTemp        int
-	UseGreedyPlanner      bool
+	Detail           bool
+	GenStmt          string
+	MemQuotaFactor   float64
+	CpuQuotaFactor   float64
+	Resize           bool
+	MaxNumNode       int
+	Output           string
+	Shuffle          int
+	AllowMove        bool
+	AllowSwap        bool
+	AllowUnpin       bool
+	AddNode          int
+	DeleteNode       int
+	MaxMemUse        int
+	MaxCpuUse        int
+	MemQuota         int64
+	CpuQuota         int
+	DataCostWeight   float64
+	CpuCostWeight    float64
+	MemCostWeight    float64
+	EjectOnly        bool
+	DisableRepair    bool
+	Timeout          int
+	UseLive          bool
+	Runtime          *time.Time
+	Threshold        float64
+	CpuProfile       bool
+	MinIterPerTemp   int
+	MaxIterPerTemp   int
+	UseGreedyPlanner bool
+
 	AllowDDLDuringScaleup bool
+
+	// For file transfer based rebalance, this field is set to
+	// "true" if indexes are to be grouped based on alternate shardIds
+	EnableShardAffinity bool
 }
 
 type RunStats struct {
@@ -169,16 +174,16 @@ type TenantUsage struct {
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
 	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	maxIterPerTemp int, enableShardAffinity bool) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
-		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, &runtime)
+		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, enableShardAffinity, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	enableShardAffinity bool, runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
 	if err != nil {
@@ -222,6 +227,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.CpuProfile = cpuProfile
 	config.MinIterPerTemp = minIterPerTemp
 	config.MaxIterPerTemp = maxIterPerTemp
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, hostToIndexToRemove, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes, true)
 	if p != nil && detail {
@@ -1051,7 +1057,7 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 /////////////////////////////////////////////////////////////
 
 func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool,
-	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp bool) (*Solution, error) {
+	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp, enableShardAffinity bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1106,7 +1112,8 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 	}
 
 	detail := logging.IsEnabled(logging.Info)
-	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp)
+
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp, enableShardAffinity)
 }
 
 func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
@@ -1187,7 +1194,8 @@ func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.Inde
 	return replicaNodes, nil
 }
 
-func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool, enforceLimits bool) (*Solution, error) {
+func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string,
+	override bool, enforceLimits bool, enableShardAffinity bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1243,6 +1251,7 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 	config := DefaultRunConfig()
 	config.Detail = logging.IsEnabled(logging.Info)
 	config.Resize = false
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, err := replicaRepair(config, plan, defnId, increment)
 	if p != nil && config.Detail {
@@ -1381,7 +1390,7 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
-	useGreedyPlanner bool, allowDDLDuringScaleup bool) (*Solution, error) {
+	useGreedyPlanner, allowDDLDuringScaleup, enableShardAffinity bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -1400,6 +1409,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.UseLive = useLive
 	config.UseGreedyPlanner = useGreedyPlanner
 	config.AllowDDLDuringScaleup = allowDDLDuringScaleup
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
@@ -1416,7 +1426,8 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 }
 
 func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) (*Solution, error) {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
+	deletedNodes []string, enableShardAffinity bool) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -1427,6 +1438,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.MemQuota = memQuota
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
@@ -1444,7 +1456,8 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 }
 
 func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) (*Solution, error) {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
+	deletedNodes []string, enableShardAffinity bool) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -1455,6 +1468,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	config.MemQuota = memQuota
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes, false)
 
@@ -1561,6 +1575,8 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 	if err := planner.SetParam(param); err != nil {
 		return nil, nil, err
 	}
+
+	planner.SetShardAffinity(config.EnableShardAffinity)
 
 	// run planner
 	if _, err := planner.Plan(CommandPlan, solution); err != nil {
@@ -2097,6 +2113,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	planner.SetTimeout(config.Timeout)
 	planner.SetRuntime(config.Runtime)
 	planner.SetVariationThreshold(config.Threshold)
+	planner.SetShardAffinity(config.EnableShardAffinity)
 
 	param := make(map[string]interface{})
 	param["MinIterPerTemp"] = config.MinIterPerTemp
@@ -2149,6 +2166,7 @@ func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, inc
 	planner.SetRuntime(config.Runtime)
 	planner.SetVariationThreshold(config.Threshold)
 	planner.SetCpuProfile(config.CpuProfile)
+	planner.SetShardAffinity(config.EnableShardAffinity)
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {

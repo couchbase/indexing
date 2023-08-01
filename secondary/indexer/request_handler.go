@@ -227,6 +227,7 @@ type requestHandlerContext struct {
 	useGreedyPlanner bool
 
 	allowDDLDuringScaleUp bool
+	enableShardAffinity   bool
 }
 
 // requestHandlerContext is the singleton object containing state for the HTTP(S) server.
@@ -2362,7 +2363,7 @@ func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 		return "", fmt.Errorf("%v: Fail to read index spec from request. err: %v", method, err)
 	}
 
-	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp)
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp, m.enableShardAffinity)
 	if err != nil {
 		return "", fmt.Errorf("%v: Fail to plan index. err: %v", method, err)
 	}
