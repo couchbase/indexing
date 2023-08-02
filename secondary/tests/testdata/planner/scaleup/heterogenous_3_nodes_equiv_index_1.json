@@ -24,6 +24,7 @@
                     "actualCpuUsage": 1,
                     "actualMemUsage": 25000000000,
                     "actualMemOverhead": 3000000000,
+                    "actualMemMin": 5000000000,
                     "instance": {
                         "InstId": 1062966916559205800,
                         "State": 4,
@@ -72,6 +73,7 @@
                     "actualCpuUsage": 1,
                     "actualMemUsage": 6000000000,
                     "actualMemOverhead": 2500000000,
+                    "actualMemMin": 6000000000,
                     "cpuUsage": 1,
                     "instance": {
                         "InstId": 4650686066397790000,
@@ -123,6 +125,7 @@
                     "memOverhead": 100,
                     "actualMemUsage": 5000000000,
                     "actualMemOverhead": 2000000000,
+                    "actualMemMin": 5000000000,
                     "instance": {
                         "InstId": 1062966916559205800,
                         "State": 4,

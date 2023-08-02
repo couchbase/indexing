@@ -31,6 +31,7 @@
                     "memOverhead": 100,
                     "actualMemUsage": 27754610480,
                     "actualMemOverhead": 3206917592,
+                    "actualMemMin": 5550922096,
                     "actualKeySize": 0
                 },
                 {
@@ -54,6 +55,7 @@
                     "memOverhead": 100,
                     "actualMemUsage": 73059719100,
                     "actualMemOverhead": 7983829108,
+                    "actualMemMin": 14611943820,
                     "actualKeySize": 0
                 },
                 {
@@ -77,6 +79,7 @@
                     "memOverhead": 100,
                     "actualMemUsage": 72507837150,
                     "actualMemOverhead": 10194327652,
+                    "actualMemMin": 14501567430,
                     "actualKeySize": 0
                 },
                 {
@@ -100,6 +103,7 @@
                     "memOverhead": 100,
                     "actualMemUsage": 63899137575,
                     "actualMemOverhead": 9175310452,
+                    "actualMemMin": 12779827515,
                     "actualKeySize": 0
                 }
             ]
@@ -134,6 +138,7 @@
                     "actualCpuUsage": 3,
                     "memOverhead": 100,
                     "actualMemUsage": 5550922096,
+                    "actualMemMin": 5550922096,
                     "actualMemOverhead": 2788623993,
                     "actualKeySize": 0
                 },
@@ -157,6 +162,7 @@
                     "actualCpuUsage": 4,
                     "memOverhead": 100,
                     "actualMemUsage": 14611943820,
+                    "actualMemMin": 14611943820,
                     "actualMemOverhead": 6942460094,
                     "actualKeySize": 0
                 },
@@ -180,6 +186,7 @@
                     "actualCpuUsage": 3,
                     "memOverhead": 100,
                     "actualMemUsage": 10444486052,
+                    "actualMemMin": 10444486052,
                     "actualMemOverhead": 3177172039,
                     "actualKeySize": 0
                 },
@@ -203,6 +210,7 @@
                     "actualCpuUsage": 3,
                     "memOverhead": 100,
                     "actualMemUsage": 10432434095,
+                    "actualMemMin": 10432434095,
                     "actualMemOverhead": 3422898812,
                     "actualKeySize": 0
                 }
@@ -238,6 +246,7 @@
                     "actualCpuUsage": 5,
                     "memOverhead": 100,
                     "actualMemUsage": 14501567430,
+                    "actualMemMin": 14501567430,
                     "actualMemOverhead": 8864632741,
                     "actualKeySize": 0
                 },
@@ -261,6 +270,7 @@
                     "actualCpuUsage": 5,
                     "memOverhead": 100,
                     "actualMemUsage": 12779827515,
+                    "actualMemMin": 12779827515,
                     "actualMemOverhead": 7978530828,
                     "actualKeySize": 0
                 },
@@ -284,6 +294,7 @@
                     "actualCpuUsage": 3,
                     "memOverhead": 100,
                     "actualMemUsage": 10444486052,
+                    "actualMemMin": 10444486052,
                     "actualMemOverhead": 3177172039,
                     "actualKeySize": 0
                 },
@@ -307,6 +318,7 @@
                     "actualCpuUsage": 3,
                     "memOverhead": 100,
                     "actualMemUsage": 10432434095,
+                    "actualMemMin": 10432434095,
                     "actualMemOverhead": 3422898812,
                     "actualKeySize": 0
                 }

@@ -32,6 +32,7 @@
                     "memOverhead": 0,
                     "actualMemUsage": 237221304305,
                     "actualMemOverhead": 30560384804,
+                    "actualMemMin": 47444260861,
                     "memResidentRatio": 50,
                     "actualResidentPercent": 50,
                     "actualKeySize": 0,
@@ -97,6 +98,7 @@
                     "memOverhead": 157286400,
                     "actualMemUsage": 41039786063,
                     "actualMemOverhead": 16331154938,
+                    "actualMemMin": 41039786063,
                     "memResidentRatio": 10,
                     "actualResidentPercent": 10,
                     "actualKeySize": 0,
@@ -109,7 +111,7 @@
                             "bucket": "default",
                             "bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
                             "secExprs": [
-                                "`country`"
+                                "`city`"
                             ],
                             "exprType": "N1QL",
                             "partitionScheme": "SINGLE",
@@ -163,6 +165,7 @@
                     "memOverhead": 1,
                     "actualMemUsage": 48158315092,
                     "actualMemOverhead": 23443234420,
+                    "actualMemMin": 48158315092,
                     "actualKeySize": 0,
                     "instance": {
                         "InstId": 2,
@@ -173,7 +176,7 @@
                             "bucket": "default",
                             "bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
                             "secExprs": [
-                                "`country`"
+                                "`city`"
                             ],
                             "exprType": "N1QL",
                             "partitionScheme": "SINGLE",
@@ -196,7 +199,7 @@
             ]
         }
     ],
-    "memQuota": 40158315092,
+    "memQuota": 55158315092,
     "cpuQuota": 27,
     "isLive": true
 }
