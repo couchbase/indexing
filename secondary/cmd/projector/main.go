@@ -63,7 +63,7 @@ func argParse() string {
 
 	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
 	fset.StringVar(&options.caFile, "caFile", "", "Multiple Root/Client CAs")
-	fset.StringVar(&options.deploymentModel, "deploymentModel", "default", "Specify the deployment model [serverless|default]")
+	fset.StringVar(&options.deploymentModel, "deploymentModel", "default", "Specify the deployment model [provisioned|serverless|default]")
 
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
@@ -81,9 +81,10 @@ func argParse() string {
 	}
 
 	// Validate DeploymentModel
-	if options.deploymentModel != "serverless" &&
+	if options.deploymentModel != "provisioned" &&
+		options.deploymentModel != "serverless" &&
 		options.deploymentModel != "default" {
-		c.CrashOnError(fmt.Errorf("Deployment model should be [serverless|default] but it is %v", options.deploymentModel))
+		c.CrashOnError(fmt.Errorf("Deployment model should be [provisioned|serverless|default] but it is %v", options.deploymentModel))
 	}
 
 	// Set Deployment Model

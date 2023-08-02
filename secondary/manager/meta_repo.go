@@ -586,9 +586,7 @@ func (c *MetadataRepo) BroadcastIndexStats2(stats *client.IndexStats2) error {
 //  Public Function : Index DDL
 ///////////////////////////////////////////////////////
 
-//
 // TODO: This function is not transactional.
-//
 func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 
 	// check if defn already exist
@@ -738,9 +736,7 @@ func (c *MetadataRepo) loadTopology() error {
 // Public Function : RepoIterator
 /////////////////////////////////////////////////////////////////////////////
 
-//
 // Create a new iterator
-//
 func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
 
 	c.mutex.RLock()
@@ -769,9 +765,7 @@ func (i *MetaIterator) Close() {
 	// no op
 }
 
-//
 // Create a new topology iterator
-//
 func (c *MetadataRepo) NewTopologyIterator() (*TopologyIterator, error) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
@@ -1346,9 +1340,7 @@ func isIndexStats2(key string) bool {
 // package local function : Index Definition and Topology
 ///////////////////////////////////////////////////////////
 
-//
 // Add Index to Topology
-//
 func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int,
 	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
@@ -1378,7 +1370,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 	topology.AddIndexDefinition(defn.Bucket, defn.Scope, defn.Collection, defn.Name, uint64(defn.DefnId),
 		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
 		uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
-		numPartitions, scheduled, string(defn.Using), uint64(realInstId))
+		numPartitions, scheduled, string(defn.Using), uint64(realInstId), defn.AlternateShardIds)
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have
@@ -1395,9 +1387,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 	return nil
 }
 
-//
 // Add Index to Topology
-//
 func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int,
 	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
@@ -1428,7 +1418,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 		topology.AddIndexDefinition(defn.Bucket, defn.Scope, defn.Collection, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
 			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
-			numPartitions, scheduled, string(defn.Using), uint64(realInstId))
+			numPartitions, scheduled, string(defn.Using), uint64(realInstId), defn.AlternateShardIds)
 	} else {
 		partns := make([]uint64, len(partitions))
 		for i, p := range partitions {
@@ -1439,7 +1429,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 		topology.AddIndexInstance(defn.Bucket, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
 			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
-			numPartitions, scheduled, string(defn.Using), uint64(realInstId))
+			numPartitions, scheduled, string(defn.Using), uint64(realInstId), defn.AlternateShardIds)
 	}
 
 	// Add a reference of the bucket-level topology to the global topology.
@@ -1457,9 +1447,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 	return nil
 }
 
-//
 // Delete Index from Topology
-//
 func (m *MetadataRepo) deleteIndexFromTopology(bucket, scope, collection string, id common.IndexDefnId) error {
 
 	// get existing topology
@@ -1486,9 +1474,7 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket, scope, collection string,
 	return nil
 }
 
-//
 // Delete Index from Topology
-//
 func (m *MetadataRepo) deleteInstanceFromTopology(bucket, scope, collection string, id common.IndexDefnId, instId common.IndexInstId) error {
 
 	// get existing topology
@@ -1509,9 +1495,7 @@ func (m *MetadataRepo) deleteInstanceFromTopology(bucket, scope, collection stri
 	return nil
 }
 
-//
 // Merge partitions from Topology
-//
 func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket, scope, collection string, id common.IndexDefnId, srcInstId common.IndexInstId,
 	srcRState common.RebalanceState, tgtInstId common.IndexInstId, tgtInstVersion uint64, tgtPartitions []uint64, tgtVersions []int) error {
 
@@ -1538,9 +1522,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket, scop
 	return nil
 }
 
-//
 // Split partitions from Topology
-//
 func (m *MetadataRepo) splitPartitionFromTopology(bucket, scope, collection string, id common.IndexDefnId, instId common.IndexInstId, tombstoneInstId common.IndexInstId,
 	partitions []common.PartitionId) error {
 
@@ -1562,10 +1544,8 @@ func (m *MetadataRepo) splitPartitionFromTopology(bucket, scope, collection stri
 	return nil
 }
 
-//
 // Add a reference of the bucket-level index topology to global topology.
 // If not exist, create a new one.
-//
 func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket, scope, collection string) error {
 
 	globalTop, err := m.GetGlobalTopology()

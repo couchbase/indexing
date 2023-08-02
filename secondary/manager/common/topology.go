@@ -55,11 +55,12 @@ type IndexInstDistribution struct {
 }
 
 type IndexPartDistribution struct {
-	PartId          uint64                      `json:"partId,omitempty"`
-	Version         uint64                      `json:"version,omitempty"`
-	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
-	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
-	ShardIds        []c.ShardId                 `json:"shardIds,omitempty"`
+	PartId            uint64                      `json:"partId,omitempty"`
+	Version           uint64                      `json:"version,omitempty"`
+	SinglePartition   IndexSinglePartDistribution `json:"singlePartition,omitempty"`
+	KeyPartition      IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
+	ShardIds          []c.ShardId                 `json:"shardIds,omitempty"`
+	AlternateShardIds []string                    `json:"alternateShardIds,omitempty"`
 }
 
 type IndexSinglePartDistribution struct {

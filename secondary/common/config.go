@@ -3489,6 +3489,14 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.allow_ddl_during_scaleup": ConfigValue{
+		false,
+		"When set to true, this flag ignores excludeNode params, as well as " +
+			"planner resource constraints during DDL operations.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.debug.assertOnError": ConfigValue{
 		false,
 		"This flag is intended for use in test/debug setups. Certain " +

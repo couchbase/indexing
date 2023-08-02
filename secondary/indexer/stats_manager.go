@@ -3400,15 +3400,17 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 		out = s.populateMetrics(out)
 	}
 
-	func() {
-		is.bslock.RLock()
-		defer is.bslock.RUnlock()
+	if common.IsServerlessDeployment() {
+		func() {
+			is.bslock.RLock()
+			defer is.bslock.RUnlock()
 
-		for bucket, bstats := range is.buckets {
-			str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
-			out = append(out, []byte(str)...)
-		}
-	}()
+			for bucket, bstats := range is.buckets {
+				str := fmt.Sprintf("%vdisk_used{bucket=\"%v\"} %v\n", METRICS_PREFIX, bucket, bstats.diskUsed.Value())
+				out = append(out, []byte(str)...)
+			}
+		}()
+	}
 
 	out = populatePlasmaTenantMetrics(out)
 

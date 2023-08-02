@@ -73,13 +73,11 @@ type tokenKey struct {
 // Function
 ///////////////////////////////////////////////////////
 
-//
 // This function retrieves the current index layout from a live cluster.
 // This function uses REST API to retrieve index metadata, instead of
 // using metadata provider.  This method should not use metadata provider
 // since this method can be called from metadata provider, so it is to
 // avoid code cyclic dependency.
-//
 func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool) (*Plan, error) {
 
 	config, err := common.GetSettingsConfig(common.SystemConfig)
@@ -175,9 +173,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 	return plan, nil
 }
 
-//
 // This function recalculates the index and indexer sizes based on sizing formula.
-//
 func recalculateIndexerSize(plan *Plan) {
 
 	sizing := newGeneralSizingMethod()
@@ -193,9 +189,7 @@ func recalculateIndexerSize(plan *Plan) {
 	}
 }
 
-//
 // This function retrieves the index layout.
-//
 func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error) {
 	cinfo := cinfoClient.GetClusterInfoCache()
 	cinfo.RLock()
@@ -284,9 +278,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	return list, nil
 }
 
-//
 // This function convert index definitions from a single metadata repository to a list of IndexUsage.
-//
 func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, node *IndexerNode,
 	buildTokens map[common.IndexDefnId]*mc.BuildCommandToken,
 	delTokens map[common.IndexDefnId]*mc.DeleteCommandToken) ([]*IndexUsage, error) {
@@ -315,9 +307,7 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 	return list, nil
 }
 
-//
 // This function convert a single index definition to IndexUsage.
-//
 func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta *LocalIndexMetadata,
 	buildTokens map[common.IndexDefnId]*mc.BuildCommandToken,
 	delTokens map[common.IndexDefnId]*mc.DeleteCommandToken) ([]*IndexUsage, error) {
@@ -357,7 +347,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// create an index usage object
 				index := makeIndexUsageFromDefn(defn, common.IndexInstId(inst.InstId),
-					common.PartitionId(partn.PartId), uint64(inst.NumPartitions), partn.ShardIds)
+					common.PartitionId(partn.PartId), uint64(inst.NumPartitions),
+					partn.ShardIds, partn.AlternateShardIds)
 
 				// Copy the index state from the instance to IndexUsage.
 				index.state = state
@@ -441,9 +432,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 	return result, nil
 }
 
-//
 // This function retrieves the index stats.
-//
 func getIndexStats(plan *Plan, config common.Config) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
@@ -902,9 +891,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 	}
 }
 
-//
 // This function extract the topology metadata for a bucket, scope and collection.
-//
 func findTopologyByCollection(topologies []mc.IndexTopology, bucket, scope, collection string) *mc.IndexTopology {
 
 	for _, topology := range topologies {
@@ -918,9 +905,7 @@ func findTopologyByCollection(topologies []mc.IndexTopology, bucket, scope, coll
 	return nil
 }
 
-//
 // This function creates an indexer node for plan
-//
 func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*IndexerNode, error) {
 
 	host, err := getIndexerHost(cinfo, nid)
@@ -932,9 +917,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 	return newIndexerNode(host, sizing), nil
 }
 
-//
 // This function gets the indexer host name from ClusterInfoCache.
-//
 func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, error) {
 
 	addr, err := cinfo.GetServiceAddress(nid, "mgmt", true)
@@ -957,9 +940,7 @@ func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, 
 	return addr, nil
 }
 
-//
 // This function gets the marshalled metadata for a specific indexer host.
-//
 func getLocalMetadataResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata?useETag=false")
@@ -971,9 +952,7 @@ func getLocalMetadataResp(addr string) (*http.Response, error) {
 	return resp, nil
 }
 
-//
 // This function gets the marshalled index stats from a specific indexer host.
-//
 func getLocalStatsResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
@@ -990,10 +969,8 @@ func getLocalStatsResp(addr string) (*http.Response, error) {
 	return resp, nil
 }
 
-//
 // This function gets the marshalled list of create tokens in metakv
 // on a specific indexer host.
-//
 func getLocalCreateTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listCreateTokens")
@@ -1005,10 +982,8 @@ func getLocalCreateTokensResp(addr string) (*http.Response, error) {
 	return resp, nil
 }
 
-//
 // getLocalDeleteTokensResp gets the marshalled list of delete tokens from metakv
 // on a specific indexer host. Used only in pre-7.0 clusters.
-//
 func getLocalDeleteTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDeleteTokens")
@@ -1020,11 +995,9 @@ func getLocalDeleteTokensResp(addr string) (*http.Response, error) {
 	return resp, nil
 }
 
-//
 // getLocalDeleteTokenPathsResp gets the marshalled list of delete token paths
 // from metakv on a specific indexer host. All the needed info is in the paths,
 // so we do not need to retrieve the tokens, which is much more expensive.
-//
 func getLocalDeleteTokenPathsResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDeleteTokenPaths")
@@ -1038,10 +1011,8 @@ func getLocalDeleteTokenPathsResp(addr string) (*http.Response, error) {
 	return resp, nil
 }
 
-//
 // This function gets the marshalled list of drop instance tokens in metakv
 // on a specific indexer host.
-//
 func getLocalDropInstanceTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
@@ -1053,9 +1024,7 @@ func getLocalDropInstanceTokensResp(addr string) (*http.Response, error) {
 	return resp, nil
 }
 
-//
 // This function gets the marshalled num replica for a specific indexer host.
-//
 func getLocalNumReplicasResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listReplicaCount")
@@ -1071,9 +1040,7 @@ func getWithCbauth(url string) (*http.Response, error) {
 	return security.GetWithAuthAndTimeout(url, GetRestRequestTimeout())
 }
 
-//
 // This function find a matching indexer host given the nodeId.
-//
 func findIndexerByNodeId(indexers []*IndexerNode, nodeId string) *IndexerNode {
 
 	for _, node := range indexers {
@@ -1085,13 +1052,11 @@ func findIndexerByNodeId(indexers []*IndexerNode, nodeId string) *IndexerNode {
 	return nil
 }
 
-//
 // The planner is called every rebalance, but it is not guaranteed that rebalance cleanup is completed before another
 // rebalance start.  Therefore, planner needs to clean up the index based on rebalancer clean up logic.
 // 1) REBAL_PENDING index will not become ACTIVE during clean up.
 // 2) REBAL_MERGED index can be ignored (it can be replaced with another REBAL_ACTIVE partition).
 // 3) Higher version partition/indexUsage wins
-//
 func cleanseIndexLayout(indexers []*IndexerNode) {
 
 	for _, indexer := range indexers {
@@ -1171,9 +1136,7 @@ func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, part
 	return max, multiVer
 }
 
-//
 // There may be create token that has yet to process.  Update the indexer layout based on token information.
-//
 func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
@@ -1226,7 +1189,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 		}
 
 		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId, shardIds []common.ShardId) *IndexUsage {
-			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions), shardIds)
+			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions), shardIds, nil)
 
 			pc := common.NewKeyPartitionContainer(int(defn.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
@@ -1303,9 +1266,7 @@ func getDefnIdFromDeleteTokenPath(path string) (common.IndexDefnId, error) {
 	return common.IndexDefnId(defnId), nil
 }
 
-//
 // There may be delete token that has yet to process.  Update the indexer layout based on token information.
-//
 func processDeleteToken(indexers []*IndexerNode) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
@@ -1432,9 +1393,7 @@ func getDeletedDefnIds(res *RestResponse, clusterVersion uint64, nodeId string) 
 	return tokenMap, nil
 }
 
-//
 // There may be drop instance token that has yet to process.  Update the indexer layout based on token information.
-//
 func processDropInstanceToken(indexers []*IndexerNode,
 	replicaIdMap map[common.IndexDefnId]map[int]bool) error {
 
@@ -1604,8 +1563,8 @@ func getIndexNumReplica(plan *Plan, isRebalance bool) error {
 	return nil
 }
 
-//getUsageThresholds gets the usage thresholds from config and
-//updates it in the plan.UsageThreshold struct.
+// getUsageThresholds gets the usage thresholds from config and
+// updates it in the plan.UsageThreshold struct.
 func getUsageThresholds(plan *Plan, config common.Config) {
 
 	plan.UsageThreshold = &UsageThreshold{}
@@ -1638,9 +1597,7 @@ func rebalanceRemoveFromPlan(counterMergeErrMap map[common.IndexDefnId]error, pl
 	}
 }
 
-//
 // Generate a map for replicaId
-//
 func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]bool {
 
 	result := make(map[common.IndexDefnId]map[int]bool)
@@ -1762,13 +1719,11 @@ func (r *RestResponse) SetResponse(res *http.Response) error {
 	return nil
 }
 
-//
 // Helper function for sending REST requests in parallel to indexer nodes.
 // This function assumes that the cinfoClient is already initialized and
 // the latest information is fetched. All the callers use the same cache.
 //
 // IMP: Note that the callers of this function should hold cinfo lock
-//
 func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 	indexers []*IndexerNode, cinfo *common.ClusterInfoCache,
 	respType string) (map[common.NodeId]*RestResponse, error) {

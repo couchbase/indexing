@@ -15,6 +15,7 @@ type DeploymentModel byte
 const (
 	DEFAULT_DEPLOYMENT DeploymentModel = iota
 	SERVERLESS_DEPLOYMENT
+	PROVISIONED_DEPLOYMENT
 )
 
 func (b DeploymentModel) String() string {
@@ -23,6 +24,8 @@ func (b DeploymentModel) String() string {
 		return "default"
 	case SERVERLESS_DEPLOYMENT:
 		return "serverless"
+	case PROVISIONED_DEPLOYMENT:
+		return "provisioned"
 	default:
 		return "invalid"
 	}
@@ -31,6 +34,8 @@ func (b DeploymentModel) String() string {
 func MakeDeploymentModel(model string) DeploymentModel {
 	if model == "serverless" {
 		return SERVERLESS_DEPLOYMENT
+	} else if model == "provisioned" {
+		return PROVISIONED_DEPLOYMENT
 	}
 	return DEFAULT_DEPLOYMENT
 }

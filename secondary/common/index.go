@@ -276,14 +276,17 @@ type IndexDefn struct {
 	// Otherwise, index would recover as INDEX_STATE_RECOVERED
 	InstStateAtRebal IndexState `json:"instStateAtRebal,omitempty"`
 
-	ShardIdsForDest []ShardId `json:"shardIdsForDest,omitempty"`
+	// As each partition of an index can go to different shard, track the
+	// shardIds for each partition
+	ShardIdsForDest map[PartitionId][]ShardId `json:"shardIdsForDest,omitempty"`
 
 	// The value of this field is decided by planner at the time
 	// of creating the index. The same value will be persisted in
-	// index meta. This will be a slice of size "2" where the 0th
-	// entry corresponds alternateShardId of main index and 1st
-	// entry corresponds to alternateShardId of back index
-	AlternateShardIds []string `json:"alternateShardIds,omitempty"`
+	// index meta.
+	// As each partition can go to different shard, the key to the map
+	// is the partition and the value represents the alternate shardIds
+	// for main and back index shards
+	AlternateShardIds map[PartitionId][]string `json:"alternateShardIds,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)
@@ -339,7 +342,7 @@ func (idx IndexDefn) String() string {
 // This function makes a copy of index definition, excluding any transient
 // field.  It is a shallow copy (e.g. does not clone field 'Nodes').
 func (idx IndexDefn) Clone() *IndexDefn {
-	return &IndexDefn{
+	clone := &IndexDefn{
 		DefnId:                 idx.DefnId,
 		Name:                   idx.Name,
 		Using:                  idx.Using,
@@ -372,8 +375,19 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		HasArrItemsCount:       idx.HasArrItemsCount,
 		IndexMissingLeadingKey: idx.IndexMissingLeadingKey,
 		IsPartnKeyDocId:        idx.IsPartnKeyDocId,
-		AlternateShardIds:      idx.AlternateShardIds,
 	}
+
+	clone.ShardIdsForDest = make(map[PartitionId][]ShardId)
+	for k, v := range idx.ShardIdsForDest {
+		clone.ShardIdsForDest[k] = v
+	}
+
+	clone.AlternateShardIds = make(map[PartitionId][]string)
+	for k, v := range idx.AlternateShardIds {
+		clone.AlternateShardIds[k] = v
+	}
+
+	return clone
 }
 
 func (idx *IndexDefn) HasDescending() bool {

@@ -1214,7 +1214,12 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn, ttid string, tt *c.TransferToken, isDeferred, pendingCreate bool) (bool, error) {
 
 	// TODO: Use ShardIds for desintaion when changing the shardIds
-	defn.ShardIdsForDest = tt.ShardIds
+	if len(defn.ShardIdsForDest) == 0 {
+		defn.ShardIdsForDest = make(map[c.PartitionId][]c.ShardId)
+	}
+	for _, partnId := range defn.Partitions {
+		defn.ShardIdsForDest[partnId] = tt.ShardIds
+	}
 
 	if !pendingCreate {
 
@@ -1357,7 +1362,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		return nonDeferredInsts, buildDefnIdList, currIndex
 	}
 
-	pendingCreateDefnList := make([]c.IndexDefn, 0)
+	pendingCreateDefnList := make(map[common.IndexDefnId]*c.IndexDefn, 0)
 
 	for cid, defns := range groupedDefns {
 		buildDefnIdList := make([]client.IndexIdList, 3)
@@ -1367,17 +1372,43 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// of this collection. Once all indexes are recovered, they can be
 		// built in a batch
 		for _, defn := range defns {
+			var partitions []common.PartitionId
+			var versions []int
+			for i, partnId := range defn.Partitions {
+				if len(defn.ShardIdsForDest[partnId]) == 0 {
+					logging.Infof("ShardRebalancer::StartShardRecovery: Skipping partition for defnId: %v, partnId: %v, all partitions: %v "+
+						"for later processing", defn.DefnId, partnId, defn.Partitions)
 
-			if defn.ShardIdsForDest == nil { // Process pendingCreate indexes at the end
-				pendingCreateDefnList = append(pendingCreateDefnList, defn)
+					if _, ok := pendingCreateDefnList[defn.DefnId]; !ok {
+						clone := defn.Clone()
+						clone.Partitions = nil                                      // reset partitions list
+						clone.Versions = nil                                        // reset versions list
+						clone.ShardIdsForDest = make(map[c.PartitionId][]c.ShardId) // reset shardIds list
+						clone.AlternateShardIds = make(map[c.PartitionId][]string)  // reset alternate shardIds list
+						pendingCreateDefnList[defn.DefnId] = clone
+					}
+
+					pendingCreateDefnList[defn.DefnId].Partitions = append(pendingCreateDefnList[defn.DefnId].Partitions, partnId)
+					pendingCreateDefnList[defn.DefnId].Versions = append(pendingCreateDefnList[defn.DefnId].Versions, defn.Versions[i])
+				} else {
+					partitions = append(partitions, defn.Partitions[i])
+					versions = append(versions, defn.Versions[i])
+				}
+			}
+
+			// All partitions are pendingCreate - They will be processed later
+			if len(partitions) == 0 {
 				continue
+			} else {
+				defn.Partitions = partitions
+				defn.Versions = versions
 			}
 
 			isDeferred := defn.Deferred &&
 				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 					defn.InstStateAtRebal == c.INDEX_STATE_READY)
 
-			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, defn.ShardIdsForDest == nil); err != nil {
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false); err != nil {
 				setErrInTransferToken(err)
 				return
 			} else if skip {
@@ -1450,7 +1481,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	// DDL service manager will take care of building the indexes after
 	// rebalance is done
 	for _, defn := range pendingCreateDefnList {
-		if skip, err := sr.createDeferredIndex(&defn, ttid, tt, false, true); err != nil {
+		if skip, err := sr.createDeferredIndex(defn, ttid, tt, false, true); err != nil {
 			setErrInTransferToken(err)
 			return
 		} else if skip {
@@ -2401,7 +2432,8 @@ loop:
 				defnStats := allStats.indexes[instKey] // stats for current defn
 				if defnStats == nil {
 					l.Infof("ShardRebalancer::dropShardsWhenIdle Missing defnStats for instId %v. Considering the index as dropped", instKey)
-					continue // If index is deleted, then it is validated from localMeta
+					droppedIndexes[instKey] = true
+					continue // If index is deleted, then it is already validated from localMeta
 				}
 
 				var pending, numRequests, numCompletedRequests int64

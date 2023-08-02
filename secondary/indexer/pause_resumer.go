@@ -926,7 +926,13 @@ func (r *Resumer) recoverShard(rdtid string,
 	for _, inst := range rdt.IndexInsts {
 
 		defn := inst.Defn
-		defn.ShardIdsForDest = rdt.ShardIds
+		if len(defn.ShardIdsForDest) == 0 {
+			defn.ShardIdsForDest = make(map[c.PartitionId][]c.ShardId)
+		}
+		for _, partnId := range defn.Partitions {
+			defn.ShardIdsForDest[partnId] = rdt.ShardIds
+		}
+
 		if skip, err := r.postRecoverIndexReq(defn); err != nil {
 			return err
 		} else if skip {

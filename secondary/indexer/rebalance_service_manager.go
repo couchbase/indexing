@@ -1178,7 +1178,28 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		ttList = append(ttList, ttListElement{ttid, tt})
 	}
 
-	ttList = append(ttList, ttListRealInst...)
+	ttPrependRealInst := []ttListElement{}
+	ttAppendRealInst := []ttListElement{}
+	for _, ttElem := range ttListRealInst {
+		//if emptyNodeBatching is enabled and instance is ready, then
+		//the realInst RState needs to change before the proxy. This is
+		//required so that proxy merge can proceed.
+		if ttElem.tt.State == c.TransferTokenInProgress &&
+			ttElem.tt.IsEmptyNodeBatch &&
+			ttElem.tt.IsPendingReady {
+			ttPrependRealInst = append(ttPrependRealInst, ttElem)
+			logging.Infof("RebalanceServiceManager::cleanupTransferTokens Prepend RealInst %v", ttElem.tt.RealInstId)
+
+		} else {
+			logging.Infof("RebalanceServiceManager::cleanupTransferTokens Append RealInst %v", ttElem.tt.RealInstId)
+			ttAppendRealInst = append(ttAppendRealInst, ttElem)
+		}
+	}
+
+	if len(ttPrependRealInst) != 0 {
+		ttList = append(ttPrependRealInst, ttList...)
+	}
+	ttList = append(ttList, ttAppendRealInst...)
 
 	tokenMap := make(map[string]*c.TransferToken)
 	for _, t := range ttList {
@@ -3316,6 +3337,14 @@ func (m *RebalanceServiceManager) handleMoveIndexInternal(w http.ResponseWriter,
 func (m *RebalanceServiceManager) doHandleMoveIndex(req *IndexRequest) (int, string) {
 
 	l.Infof("RebalanceServiceManager::doHandleMoveIndex %v", l.TagUD(req))
+
+	cfg := m.config.Load()
+	if c.ShouldMaintainShardAffinity(cfg) {
+		// move index is disabled since 7.6 if shard affinity is enabled for planner
+		errMsg := "move index is disabled"
+		l.Errorf("RebalanceServiceManager::dohandleMoveIndex %v", errMsg)
+		return http.StatusBadRequest, errMsg
+	}
 
 	nodes, err := validateMoveIndexReq(req)
 	if err != nil {

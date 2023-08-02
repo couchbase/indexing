@@ -2042,7 +2042,7 @@ var watchingClusterVer uint32
 
 func watchClusterVer(cluster string) {
 	if atomic.CompareAndSwapUint32(&watchingClusterVer, 0, 1) {
-		go common.WatchClusterVersionChanges(cluster, int64(common.INDEXER_71_VERSION))
-		go common.MonitorInternalVersion(int64(common.INDEXER_71_VERSION), common.MIN_VER_SRV_AUTH, cluster)
+		go common.WatchClusterVersionChanges(cluster, int64(common.INDEXER_76_VERSION))
+		go common.MonitorInternalVersion(int64(common.INDEXER_76_VERSION), common.MIN_VER_SHARD_AFFINITY, cluster)
 	}
 }
