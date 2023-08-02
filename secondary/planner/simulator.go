@@ -398,6 +398,19 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 	return nil, nil, nil
 }
 
+// NOTE: the increment here needs to be positive only, the drop replica flow is different
+func (t *simulator) RunSingleTestCommandRepair(config *RunConfig, p *Plan, defnId common.IndexDefnId, increment int) (*SAPlanner, error) {
+
+	if p == nil {
+		return nil, errors.New("missing argument: plan must be present")
+	}
+
+	t.setStorageType(p)
+
+	return replicaRepair(config, p, defnId, increment)
+
+}
+
 //////////////////////////////////////////////////////////////
 // Topology Change
 /////////////////////////////////////////////////////////////

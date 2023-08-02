@@ -1,0 +1,157 @@
+{
+    "placement": [
+        {
+            "nodeId": "127.0.0.1:9000",
+            "nodeUUID": "c6fe7e12b609acc9767c7b671c908773",
+            "indexerId": "c6fe7e12b609acc9767c7b671c908773",
+            "cpuUsage": 1,
+            "actualMemUsage": 25000000000,
+            "actualMemOverhead": 3000000000,
+            "serverGroup": "index 1",
+            "indexes": [
+                {
+                    "defnId": 1062966916559205800,
+                    "instId": 1062966916559205800,
+                    "name": "nonEquiv",
+                    "bucket": "default",
+                    "numOfDocs": 168168,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 10,
+                    "memOverhead": 10,
+                    "memResidentRatio": 50,
+                    "actualResidentPercent": 50,
+                    "actualCpuUsage": 1,
+                    "actualMemUsage": 25000000000,
+                    "actualMemOverhead": 3000000000,
+                    "actualMemMin": 5000000000,
+                    "instance": {
+                        "InstId": 1062966916559205800,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 0,
+                        "Defn": {
+                            "defnId": 1062966916559205800,
+                            "name": "nonEquiv",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "nonEquivField"
+                            ],
+                            "partitionScheme": "SINGLE"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9001",
+            "nodeUUID": "f18c1f3d3c1fabf2a63b51d06f536bf9",
+            "indexerId": "f18c1f3d3c1fabf2a63b51d06f536bf9",
+            "cpuUsage": 1,
+            "actualCpuUsage": 1,
+            "actualMemUsage": 6000000000,
+            "actualMemOverhead": 2500000000,
+            "serverGroup": "index 1",
+            "indexes": [
+                {
+                    "defnId": 4650686066397790000,
+                    "instId": 4650686066397790000,
+                    "name": "equiv2",
+                    "bucket": "default",
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 10,
+                    "memOverhead": 100,
+                    "memResidentRatio": 10,
+                    "actualResidentPercent": 10,
+                    "actualCpuUsage": 1,
+                    "actualMemUsage": 6000000000,
+                    "actualMemOverhead": 2500000000,
+                    "actualMemMin": 6000000000,
+                    "cpuUsage": 1,
+                    "instance": {
+                        "InstId": 4650686066397790000,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 0,
+                        "Defn": {
+                            "defnId": 4650686066397790000,
+                            "name": "equiv2",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9002",
+            "nodeUUID": "d70e7e12b609acd0767c7b671c908889",
+            "indexerId": "d70e7e12b609acd0767c7b671c908889",
+            "cpuUsage": 1,
+            "actualCpuUsage": 1,
+            "actualMemUsage": 5000000000,
+            "actualMemOverhead": 2000000000,
+            "serverGroup": "index 1",
+            "indexes": [
+                {
+                    "defnId": 1062966916559205800,
+                    "instId": 1062966916559205800,
+                    "name": "equiv1",
+                    "bucket": "default",
+                    "numOfDocs": 168168,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 10,
+                    "cpuUsage": 1,
+                    "memResidentRatio": 10,
+                    "actualResidentPercent": 10,
+                    "actualCpuUsage": 1,
+                    "memOverhead": 100,
+                    "actualMemUsage": 5000000000,
+                    "actualMemOverhead": 2000000000,
+                    "actualMemMin": 5000000000,
+                    "instance": {
+                        "InstId": 1062966916559205800,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 0,
+                        "Defn": {
+                            "defnId": 1062966916559205800,
+                            "name": "equiv1",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE"
+                        }
+                    }
+                }
+            ]
+        }
+    ],
+    "memQuota": 9000000000,
+    "cpuQuota": 8,
+    "isLive": true
+}

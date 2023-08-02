@@ -1,0 +1,205 @@
+{
+    "placement": [
+        {
+            "nodeId": "127.0.0.1:9001",
+            "nodeUUID": "af33bb1cf058349f6fafffa6a843a979",
+            "serverGroup": "sg0",
+            "memUsage": 0,
+            "cpuUsage": 0,
+            "memOverhead": 0,
+            "actualMemUsage": 237221304305,
+            "actualMemOverhead": 30560384804,
+            "exclude": "inout",
+            "indexes": [
+                {
+                    "defnId": 1337,
+                    "instId": 1,
+                    "name": "replicaIdx1",
+                    "bucket": "default",
+                    "host": [
+                        "af33bb1cf058349f6fafffa6a843a979"
+                    ],
+                    "isMOI": true,
+                    "avgSecKeySize": 0,
+                    "avgDocKeySize": 0,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "numOfDocs": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 0,
+                    "cpuUsage": 0,
+                    "memOverhead": 0,
+                    "actualMemUsage": 237221304305,
+                    "actualMemOverhead": 30560384804,
+                    "actualMemMin": 47444260861,
+                    "memResidentRatio": 50,
+                    "actualResidentPercent": 50,
+                    "actualKeySize": 0,
+                    "instance": {
+                        "InstId": 1,
+                        "Defn": {
+                            "defnId": 1337,
+                            "name": "replicaIdx1",
+                            "using": "plasma",
+                            "bucket": "default",
+                            "bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+                            "secExprs": [
+                                "`country`"
+                            ],
+                            "exprType": "N1QL",
+                            "partitionScheme": "SINGLE",
+                            "nodes": [
+                                "af33bb1cf058349f6fafffa6a843a979"
+                            ],
+                            "numReplica": 0
+                        },
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9002",
+            "nodeUUID": "929bb73f8aaeb55422bdc071cf2dfbfc",
+            "serverGroup": "sg0",
+            "memUsage": 0,
+            "cpuUsage": 0,
+            "memOverhead": 1,
+            "actualMemUsage": 41039786063,
+            "actualMemOverhead": 16331154938,
+            "exclude": "inout",
+            "indexes": [
+                {
+                    "defnId": 4242,
+                    "instId": 1,
+                    "name": "replicaIdx2",
+                    "bucket": "default",
+                    "host": [
+                        "934d23a204d25a4970e0262fa63920ba",
+                        "929bb73f8aaeb55422bdc071cf2dfbfc"
+                    ],
+                    "isMOI": false,
+                    "avgSecKeySize": 0,
+                    "avgDocKeySize": 0,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "numOfDocs": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 0,
+                    "cpuUsage": 0,
+                    "memOverhead": 157286400,
+                    "actualMemUsage": 41039786063,
+                    "actualMemOverhead": 16331154938,
+                    "actualMemMin": 41039786063,
+                    "memResidentRatio": 10,
+                    "actualResidentPercent": 10,
+                    "actualKeySize": 0,
+                    "instance": {
+                        "InstId": 1,
+                        "Defn": {
+                            "defnId": 4242,
+                            "name": "replicaIdx2",
+                            "using": "plasma",
+                            "bucket": "default",
+                            "bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+                            "secExprs": [
+                                "`city`"
+                            ],
+                            "exprType": "N1QL",
+                            "partitionScheme": "SINGLE",
+                            "nodes": [
+                                "934d23a204d25a4970e0262fa63920ba",
+                                "929bb73f8aaeb55422bdc071cf2dfbfc"
+                            ],
+                            "numReplica": 1
+                        },
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 1
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9003",
+            "nodeUUID": "934d23a204d25a4970e0262fa63920ba",
+            "serverGroup": "sg0",
+            "memUsage": 0,
+            "cpuUsage": 0,
+            "memOverhead": 1,
+            "actualMemUsage": 48158315092,
+            "actualMemOverhead": 23443234420,
+            "indexes": [
+                {
+                    "defnId": 4242,
+                    "instId": 2,
+                    "name": "replicaIdx2",
+                    "bucket": "default",
+                    "host": [
+                        "934d23a204d25a4970e0262fa63920ba",
+                        "929bb73f8aaeb55422bdc071cf2dfbfc"
+                    ],
+                    "isMOI": true,
+                    "avgSecKeySize": 0,
+                    "avgDocKeySize": 0,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "numOfDocs": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 0,
+                    "cpuUsage": 0,
+                    "memOverhead": 1,
+                    "actualMemUsage": 48158315092,
+                    "actualMemOverhead": 23443234420,
+                    "actualMemMin": 48158315092,
+                    "actualKeySize": 0,
+                    "instance": {
+                        "InstId": 2,
+                        "Defn": {
+                            "defnId": 4242,
+                            "name": "replicaIdx2",
+                            "using": "plasma",
+                            "bucket": "default",
+                            "bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+                            "secExprs": [
+                                "`city`"
+                            ],
+                            "exprType": "N1QL",
+                            "partitionScheme": "SINGLE",
+                            "nodes": [
+                                "934d23a204d25a4970e0262fa63920ba",
+                                "929bb73f8aaeb55422bdc071cf2dfbfc"
+                            ],
+                            "numReplica": 1
+                        },
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 0
+                    }
+                }
+            ]
+        }
+    ],
+    "memQuota": 55158315092,
+    "cpuQuota": 27,
+    "isLive": true
+}
