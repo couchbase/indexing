@@ -2325,12 +2325,12 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.maxHeapThreshold": ConfigValue{
-		20,
+		0,
 		"Max percentage of memory quota which can be used for heap." +
 			"Based on this threshold and current heap usage, Indexer will " +
 			"adjust the mutation queue allocation. Setting the value to 0 " +
 			"disables the heap control.",
-		20,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -3047,12 +3047,12 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.rebalance.enableEmptyNodeBatching": ConfigValue{
-		true,
+		false,
 		"Enable empty node batching during rebalance." +
 			"true = enables the special handling of empty nodes and rebalance master will publish " +
 			"all transfer tokens for an empty node in a single batch, one node at a time. " +
 			"false = disables special handling for empty nodes.",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
