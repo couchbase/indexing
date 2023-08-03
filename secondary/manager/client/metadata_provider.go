@@ -4088,7 +4088,13 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 		temp.InstId = instId
 		temp.ReplicaId = replicaIds[i]
 		temp.NumReplica2 = numReplica
-		temp.NumReplica2.Decrement(uint32(decrement))
+
+		// Do not decrement the NumReplica2 if the action is dropping a specific replicaId
+		// (Rather drop only if dropReplicaId is -1)
+		// If the counter is decremented, then the replica will not be repaired during rebalance
+		if dropReplicaId == -1 {
+			temp.NumReplica2.Decrement(uint32(decrement))
+		}
 		definitions = append(definitions, temp)
 	}
 
