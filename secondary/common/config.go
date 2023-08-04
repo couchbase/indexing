@@ -2790,10 +2790,10 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.sliceBufSize": ConfigValue{
-		uint64(runtime.GOMAXPROCS(0) * 20),
+		uint64(runtime.GOMAXPROCS(0) * 200),
 		"Buffer for each slice to queue mutations before flush " +
 			"to storage.",
-		uint64(runtime.GOMAXPROCS(0) * 20),
+		uint64(runtime.GOMAXPROCS(0) * 200),
 		false, // mutable
 		false, // case-insensitive
 	},
