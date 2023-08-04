@@ -3147,6 +3147,22 @@ func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
 	sliceBufSize := slice.sysconf["settings.sliceBufSize"].Uint64()
 	slice.confLock.RUnlock()
 
+	memQuota := slice.indexerStats.memoryQuota.Value()
+
+	//use lower config for small memory quota
+	var scaleDownFactor uint64
+	if memQuota <= 4*1024*1024*1024 {
+		scaleDownFactor = 8
+	} else if memQuota <= 8*1024*1024*1024 {
+		scaleDownFactor = 4
+	} else if memQuota <= 16*1024*1024*1024 {
+		scaleDownFactor = 2
+	} else {
+		scaleDownFactor = 1
+	}
+
+	sliceBufSize = sliceBufSize / scaleDownFactor
+
 	numWriters := slice.numWritersPerPartition()
 
 	if sliceBufSize < uint64(numWriters) {
