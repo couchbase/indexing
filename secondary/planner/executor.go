@@ -2420,6 +2420,10 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		}
 	}
 
+	if config.EnableShardAffinity {
+		PopulateSiblingIndexForReplicaRepair(planner.GetResult())
+	}
+
 	return planner, s, indexDefnsToRemove, nil
 }
 
@@ -5781,6 +5785,110 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 				}
 			}
 		}
+	}
+}
+
+func findReplicaProxies(solution *Solution, needsRepairProxy *IndexUsage) []*IndexUsage {
+	alternateId, _ := common.ParseAlternateId(needsRepairProxy.AlternateShardIds[0])
+	slotId := alternateId.SlotId
+	var out []*IndexUsage
+
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy == false || index.initialNode == nil {
+				continue
+			}
+
+			indexAlternateId, _ := common.ParseAlternateId(index.AlternateShardIds[0])
+
+			if indexAlternateId.SlotId != slotId {
+				continue
+			}
+
+			out = append(out, index)
+		}
+	}
+	return out
+}
+
+func getDiskUsageAndMatchingInstances(replicaProxy, needsRepairProxy *IndexUsage) (uint64, int) {
+	var totalDiskUsage uint64
+	replicaInsts := 0
+	for _, index := range needsRepairProxy.GroupedIndexes {
+		for _, replicaIndex := range replicaProxy.GroupedIndexes {
+			if index.IsReplica(replicaIndex) {
+				replicaInsts++
+				totalDiskUsage += replicaIndex.ActualDiskSize
+			}
+		}
+	}
+	return totalDiskUsage, replicaInsts
+}
+
+func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *IndexUsage) []*IndexUsage {
+
+	type proxyDiskUsage struct {
+		diskSize         uint64
+		replicaInstances int
+		replicaIndex     *IndexUsage
+	}
+
+	proxyUsages := []*proxyDiskUsage{}
+
+	for _, replicaProxy := range replicaProxies {
+		diskUsage, replicaInsts := getDiskUsageAndMatchingInstances(replicaProxy, needsRepairProxy)
+		proxyUsages = append(proxyUsages, &proxyDiskUsage{diskUsage, replicaInsts, replicaProxy})
+	}
+
+	binSize := uint64(2560 * 1024 * 1024) // 2.5G
+	sort.Slice(proxyUsages, func(i, j int) bool {
+		iSlot, jSlot := proxyUsages[i].diskSize/binSize, proxyUsages[j].diskSize/binSize
+		a := iSlot < jSlot
+		b := (iSlot == jSlot) && (proxyUsages[i].replicaInstances < proxyUsages[i].replicaInstances)
+		c := (iSlot == jSlot) && (proxyUsages[i].replicaInstances == proxyUsages[i].replicaInstances) &&
+			(proxyUsages[i].diskSize < proxyUsages[j].diskSize)
+		return a || b || c
+	})
+
+	var out []*IndexUsage
+	for i := range proxyUsages {
+		out = append(out, proxyUsages[i].replicaIndex)
+	}
+	return out
+}
+
+// Sibling index is only populated for shard proxies where an entire shard
+// has to be repaired (E.g., the node containing the shard is failed over)
+//
+// The initialNode for a shard that needs repair will be to nil
+func PopulateSiblingIndexForReplicaRepair(solution *Solution) {
+	shardsRequiringRepair := []*IndexUsage{}
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy == false || index.initialNode != nil {
+				continue
+			}
+
+			// Index is a shard proxy and initialNode is nil
+			shardsRequiringRepair = append(shardsRequiringRepair, index)
+		}
+	}
+
+	for _, needsRepairProxy := range shardsRequiringRepair {
+		replicaProxies := findReplicaProxies(solution, needsRepairProxy)
+
+		if len(replicaProxies) == 0 {
+			continue
+		}
+
+		// Atleast one replica shard exits. Since there can be more than
+		// one replica shard, use the shard that has covered higher disk
+		// size for all the instances of interest so that the time taken
+		// to copy the shard is minimized
+		replicaProxies = sortProxiesByDiskUsage(replicaProxies, needsRepairProxy)
+		needsRepairProxy.siblingIndex = replicaProxies[0]
+		logging.Infof("PopulateSiblingIndexForReplicaRepair: Using sibling index: %v from node: %v for replica repair",
+			needsRepairProxy.siblingIndex.Name, needsRepairProxy.siblingIndex.initialNode.NodeId)
 	}
 }
 
