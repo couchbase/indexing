@@ -268,7 +268,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
-				} else if !isShardAffinityEnabled {
+				} else if !isShardAffinityEnabled && common.IsServerlessDeployment() {
 					destination, region, err := getDestinationFromConfig(sr.config.Load())
 					if err != nil {
 						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
@@ -1482,20 +1482,33 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 					"recoverIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
 					"Initiating build", currInsts, buildDefnIdList[i].DefnIds, cid, ttid)
 
-				skipDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
-				if err != nil {
-					setErrInTransferToken(err)
-					return
-				}
+				retry := true
+				lastlog := time.Now()
+				for retry {
+					skipDefns, retryDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
+					if err != nil {
+						setErrInTransferToken(err)
+						return
+					}
 
-				// Do not wait for index state of skipped insts
-				if len(skipDefns) > 0 {
-					logging.Infof("ShardRebalancer::startShardRecovery Skipping state monitoring for insts: %v "+
-						"as scope/collection/index is dropped", skipDefns)
-					for defnId, _ := range skipDefns {
-						if instId, ok := defnIdToInstIdMap[defnId]; ok {
-							delete(nonDeferredInsts[i], instId)
+					// Do not wait for index state of skipped insts
+					if len(skipDefns) > 0 {
+						logging.Infof("ShardRebalancer::startShardRecovery Skipping state monitoring for insts: %v "+
+							"as scope/collection/index is dropped", skipDefns)
+						for defnId, _ := range skipDefns {
+							if instId, ok := defnIdToInstIdMap[defnId]; ok {
+								delete(nonDeferredInsts[i], instId)
+							}
 						}
+					}
+					retry = len(retryDefns) > 0
+					if retry {
+						if time.Since(lastlog) > time.Duration(60*time.Second) {
+							logging.Infof("ShardRebalancer::startShardRecovery Retrying index build for defns: %v", retryDefns)
+							lastlog = time.Now()
+						}
+						// Retry build after 5 seconds
+						time.Sleep(5 * time.Second)
 					}
 				}
 
@@ -1592,15 +1605,15 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 	return false, nil
 }
 
-func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, error) {
+func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
 	select {
 	case <-sr.cancel:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance cancel received")
-		return nil, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
+		return nil, nil, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
 	case <-sr.done:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance done received")
-		return nil, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
+		return nil, nil, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
 	default:
 		url := "/buildRecoveredIndexesRebalance"
@@ -1609,47 +1622,53 @@ func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, tt
 		if err != nil {
 			logging.Errorf("ShardRebalancer::postBuildIndexesReq Error observed when posting build indexes request, "+
 				"defnIdList: %v, err: %v", defnIdList.DefnIds, err)
-			return nil, err
+			return nil, nil, err
 		}
 
 		response := new(IndexResponse)
 		if err := convertResponse(resp, response); err != nil {
 			l.Errorf("ShardRebalancer::postBuildIndexesReq Error unmarshal response for defnIdList: %v, "+
 				"url: %v, err: %v", defnIdList.DefnIds, sr.localaddr+url, err)
-			return nil, err
+			return nil, nil, err
 		}
 
 		if response.Error != "" {
-			skipDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+			skipDefns, retryDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
 			if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
 				l.Errorf("ShardRebalancer::postBuildIndexesReq Error received for defnIdList: %v, err: %v",
 					defnIdList.DefnIds, response.Error)
-				return nil, errors.New(response.Error)
+				return nil, nil, errors.New(response.Error)
 			} else {
-				return skipDefns, nil
+				return skipDefns, retryDefns, nil
 			}
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, error) {
+func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
 	errMap := make(map[common.IndexDefnId]string)
 
 	err := json.Unmarshal([]byte(errStr), &errMap)
 	if err != nil {
 		logging.Errorf("ShardRebalancer::postBuildIndexesReq Unmarshal of errStr failed. "+
 			"defnIdList: %v, err: %v, errStr: %v", defnIdList, err, errStr)
-		return nil, err
+		return nil, nil, err
 	}
 
 	skipDefns := make(map[common.IndexDefnId]bool)
+	retryDefns := make(map[common.IndexDefnId]bool)
+
 	for defnId, buildErr := range errMap {
 		if isIndexDeletedDuringRebal(buildErr) || isIndexNotFoundRebal(buildErr) {
 			skipDefns[defnId] = true
 		}
+
+		if strings.Contains(buildErr, "Build Already In Progress") {
+			retryDefns[defnId] = true
+		}
 	}
-	return skipDefns, nil
+	return skipDefns, retryDefns, nil
 }
 
 func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
@@ -1796,6 +1815,13 @@ loop:
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
 						continue
 					}
+
+					if indexState == c.INDEX_STATE_INITIAL ||
+						indexState == c.INDEX_STATE_CATCHUP ||
+						indexState == c.INDEX_STATE_ACTIVE {
+						continue
+					}
+
 					if indexState != expectedState {
 						allReachedState = false
 						break
@@ -1831,24 +1857,35 @@ loop:
 					}
 
 					defn.SetCollectionDefaults()
-					instKey := realInstId
+
+					// defnKey is used to retrive the stats of real instance
+					// (in case real instance exists)
+					defnKey := realInstId
 					if realInstId == 0 {
-						instKey = instId
+						defnKey = instId
 					}
 
-					indexState := indexStateMap[instKey]
+					var instKey common.IndexInstId
+					var indexState c.IndexState
+					if _, ok := indexStateMap[instId]; ok {
+						indexState = indexStateMap[instId]
+						instKey = instId
+					} else {
+						indexState = indexStateMap[realInstId]
+						instKey = realInstId
+					}
 
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", instId)
+						l.Infof("ShardRebalancer::waitForIndexState Index state is nil or deleted for instId %v. Retrying...", instId)
 						delete(processedInsts, instKey) // consider the index build done
 						continue
 					}
 
 					//  for current defn. If indexState is not NIL or DELETED and defn stats are nil,
 					// wait for defn stats to get populated
-					defnStats := allStats.indexes[instKey]
+					defnStats := allStats.indexes[defnKey]
 					if defnStats == nil {
-						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", instKey)
+						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", defnKey)
 						continue // Try next index definition
 					}
 
@@ -1878,10 +1915,11 @@ loop:
 						lastLogTime = now
 						l.Infof("ShardRebalancer::waitForIndexState Index: %v:%v:%v:%v State: %v"+
 							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v",
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v, instId: %v, realInstId: %v",
 							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
-							tot_remaining, remainingBuildTime, defn.Partitions, sr.localaddr)
+							tot_remaining, remainingBuildTime, defn.Partitions, sr.localaddr,
+							instId, realInstId)
 					}
 					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 						activeIndexes[instKey] = true

@@ -6074,8 +6074,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		partnInst := PartitionInst{Defn: partnDefn,
 			Sc: NewHashedSliceContainer()}
 
-		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v",
-			indexInst.InstId, partnInst)
+		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v, shardIds: %v",
+			indexInst.InstId, partnInst, indexInst.Defn.ShardIdsForDest)
 
 		//add a single slice per partition for now
 		var slice Slice

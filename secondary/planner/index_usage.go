@@ -433,7 +433,7 @@ func (o *IndexUsage) ComputeSizing(useLive bool, sizing SizingMethod) {
 
 func (o *IndexUsage) GetDisplayName() string {
 
-	if o.Instance == nil {
+	if o.Instance == nil || o.IsShardProxy {
 		return o.Name
 	}
 

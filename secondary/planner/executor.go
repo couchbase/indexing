@@ -961,7 +961,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 	tokens := make(map[string]*common.TransferToken)
 
 	// merge tokenB into tokenA for DCP based tokens
-	mergeToken  := func(tokenA, tokenB *common.TransferToken) bool {
+	mergeToken := func(tokenA, tokenB *common.TransferToken) bool {
 		if tokenB.BuildSource != tokenA.BuildSource {
 			return false
 		}
@@ -978,6 +978,15 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			for partnId, asi := range tokenB.IndexInst.Defn.AlternateShardIds {
 				tokenA.IndexInst.Defn.AlternateShardIds[partnId] = asi
 			}
+
+			if tokenA.IndexInst.Defn.ShardIdsForDest == nil {
+				tokenA.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+			}
+
+			for partnId, shardIds := range tokenB.IndexInst.Defn.ShardIdsForDest {
+				tokenA.IndexInst.Defn.ShardIdsForDest[partnId] = shardIds
+			}
+
 		default:
 			return false
 		}
@@ -995,10 +1004,10 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 		keys := make([]string, 1)
 
 		token := common.TransferToken{
-			DestId: index.destNode.NodeUUID,
+			DestId:   index.destNode.NodeUUID,
 			DestHost: index.destNode.NodeId,
 			MasterId: masterId,
-			RebalId: topologyChange.ID,
+			RebalId:  topologyChange.ID,
 		}
 		var tokenKey string
 
@@ -1060,6 +1069,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 				// realIndex alternateShardIds might not be initialised in the plan
 				realIndex.AlternateShardIds = index.AlternateShardIds
+				realIndex.ShardIds = index.ShardIds
 				realIndex.destNode = index.destNode
 
 				childTokens, childKeys, err := createTokenForIndex(realIndex)
@@ -1101,7 +1111,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			tokenKey = fmt.Sprintf("asi_%v_%v-%v-%v", asi.SlotId, asi.ReplicaId, token.SourceId,
 				token.DestId)
 
-
 		} else {
 			// single index only
 			// set token.Inst, token.InstId and token.RealInstId
@@ -1123,6 +1132,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			if index.HasAlternateShardIds() {
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
 			}
+			token.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+			token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = index.ShardIds
+
 			token.IndexInst.Pc = nil
 
 			// reset defn id and instance id as if it is a new index.
@@ -1138,11 +1150,10 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 			// if there is a build token for the definition, set index STATE to active so the
 			// index will be built as part of rebalancing.
-			if index.pendingBuild && !index.PendingDelete && (
-				token.IndexInst.State == common.INDEX_STATE_CREATED ||
+			if index.pendingBuild && !index.PendingDelete && (token.IndexInst.State == common.INDEX_STATE_CREATED ||
 				token.IndexInst.State == common.INDEX_STATE_READY) {
 
-					token.IndexInst.State = common.INDEX_STATE_ACTIVE
+				token.IndexInst.State = common.INDEX_STATE_ACTIVE
 
 			}
 
