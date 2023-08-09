@@ -459,12 +459,10 @@ func (s *Solution) getNewNodes() []*IndexerNode {
 	return result
 }
 
-//
 // When set to true, this flag ignores excludeNode params, as well as
 // planner resource constraints during DDL operations.
-//
 func (s *Solution) AllowDDLDuringScaleUp() bool {
-	return s.allowDDLDuringScaleUp 
+	return s.allowDDLDuringScaleUp
 }
 
 // This prints the vital statistics from Solution.
@@ -533,14 +531,16 @@ func (s *Solution) PrintLayout() {
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
 			len(indexer.Indexes))
-		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v" ,
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v",
 			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp())
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
+				"shardProxy: %v, numInstances: %v, alternateShardIds: %v",
 				index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId)
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
+				index.IsShardProxy, index.NumInstances, index.AlternateShardIds)
 			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
