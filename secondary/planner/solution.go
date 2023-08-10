@@ -2059,6 +2059,28 @@ func (s *Solution) addToSlotMap(slotId uint64, indexer *IndexerNode, replicaId i
 	s.slotMap[slotId][indexer] = replicaId
 }
 
+func (s *Solution) updateSlotMapEntry(slotId uint64, oldNode, newNode *IndexerNode, replicaId int) {
+	delete(s.slotMap[slotId], oldNode)
+	s.addToSlotMap(slotId, newNode, replicaId)
+}
+
+func (s *Solution) getIndexSlot(index *IndexUsage) uint64 {
+	defnId := index.DefnId
+
+	for _, replicaSlots := range s.indexSlots[defnId] {
+		for partnId, slotId := range replicaSlots {
+			if partnId == index.PartnId && slotId != 0 {
+				// There exists atleast one replica with required partnId for the instance.
+				// Use the slotId
+				return slotId
+			}
+		}
+	}
+
+	// This index does not have any replicas which are placed with alternate shardIds
+	return 0
+}
+
 func (s *Solution) updateSlotMap() {
 
 	for _, indexer := range s.Placement {

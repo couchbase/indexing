@@ -1738,7 +1738,7 @@ func ExecuteRetrieve(clusterUrl string, nodes []string, output string) (*Solutio
 func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string]interface{}) (*Solution, error) {
 
 	sizing := newGeneralSizingMethod()
-	solution, constraint, initialIndexes, movedIndex, movedData := solutionFromPlan(CommandRebalance, config, sizing, plan)
+	solution, constraint, initialIndexes, movedIndex, movedData := solutionFromPlan(CommandRebalance, config, sizing, plan, false)
 
 	if params != nil && config.UseGreedyPlanner {
 		var gub, ok, getUsage bool
@@ -1944,7 +1944,7 @@ func executeRebal(config *RunConfig, command CommandType, p *Plan, indexSpecs []
 		return nil, nil, nil, errors.New("missing argument: either workload or plan must be present")
 	}
 
-	return rebalance(command, config, p, indexes, deletedNodes, isInternal)
+	return rebalance(command, config, p, indexes, deletedNodes, isInternal, 0)
 }
 
 func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunStats, error) {
@@ -1968,7 +1968,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 	// create a solution
 	if plan != nil {
 		// create a solution from plan
-		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(CommandPlan, config, sizing, plan)
+		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(CommandPlan, config, sizing, plan, false)
 		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, false)
 
 	} else {
@@ -2461,7 +2461,8 @@ func setExcludeInForNonEmptyNodes(s *Solution) {
 
 }
 
-func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNodes []string, isInternal bool) (
+func rebalance(command CommandType, config *RunConfig, plan *Plan,
+	indexes []*IndexUsage, deletedNodes []string, isInternal bool, retryCount int) (
 	*SAPlanner, *RunStats, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	var constraint ConstraintMethod
@@ -2484,7 +2485,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	if plan != nil {
 		// create an initial solution from plan
 		var movedIndex, movedData uint64
-		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(command, config, sizing, plan)
+		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(command, config, sizing, plan, retryCount > 0)
 		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, true)
 
 	} else {
@@ -2542,6 +2543,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 			}
 		}
 	}
+
 	// run planner
 	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
@@ -2579,7 +2581,36 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	}
 
 	if config.EnableShardAffinity {
-		PopulateSiblingIndexForReplicaRepair(planner.GetResult(), config.binSize)
+		solution := planner.GetResult()
+
+		// The maximum number of times this recursion can happen is proportional to
+		// the number of indexes in the cluster. This can happen if an index replica
+		// moves to a different node than the one at which the shard exists. In such
+		// a case, planner will trigger a re-plan.
+		//
+		// Before re-planning, planner forces the replica movement to the correct shard.
+		// After that, the replica will be moved along with the proxy. Therefore, the
+		// recursion is bounded by the indexes in the cluster.
+		needsReplan, needsNewAlteranteShardIds := NeedsReplan(solution)
+		if needsReplan {
+			logging.Infof("rebalance::Re-planning placement as shard affinity is violated for few indexes. RetryCount: %v", retryCount)
+			newPlan := newPlanFromSolution(plan, solution)
+			// Set deleted-nodes to nil as earlier rebalance must have already moved indexes
+			// considering deletedNodes
+			retryCount++
+			return rebalance(command, config, newPlan, indexes, nil, isInternal, retryCount)
+		}
+
+		if len(needsNewAlteranteShardIds) > 0 {
+			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize)
+		}
+
+		// Re-group indexes
+		for _, indexer := range solution.Placement {
+			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+		}
+
+		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
 	}
 
 	return planner, s, indexDefnsToRemove, nil
@@ -2596,7 +2627,7 @@ func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, inc
 
 	// create an initial solution from plan
 	sizing = newGeneralSizingMethod()
-	solution, constraint, _, _, _ = solutionFromPlan(CommandRepair, config, sizing, plan)
+	solution, constraint, _, _, _ = solutionFromPlan(CommandRepair, config, sizing, plan, false)
 
 	// run planner
 	placement = newRandomPlacement(nil, config.AllowSwap, false)
@@ -2643,7 +2674,7 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 
 	// create an initial solution from plan
 	sizing = newGeneralSizingMethod()
-	solution, constraint, _, _, _ = solutionFromPlan(CommandDrop, config, sizing, plan)
+	solution, constraint, _, _, _ = solutionFromPlan(CommandDrop, config, sizing, plan, false)
 
 	// run planner
 	placement = newRandomPlacement(nil, config.AllowSwap, false)
@@ -3617,7 +3648,7 @@ func emptySolution(config *RunConfig,
 }
 
 func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMethod,
-	plan *Plan) (*Solution, ConstraintMethod, []*IndexUsage, uint64, uint64) {
+	plan *Plan, isRetry bool) (*Solution, ConstraintMethod, []*IndexUsage, uint64, uint64) {
 
 	memQuotaFactor := config.MemQuotaFactor
 	cpuQuotaFactor := config.CpuQuotaFactor
@@ -3634,10 +3665,14 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	indexes := ([]*IndexUsage)(nil)
 
-	for _, indexer := range plan.Placement {
-		for _, index := range indexer.Indexes {
-			index.initialNode = indexer
-			indexes = append(indexes, index)
+	// No need to populate initialNode if the solution is generated
+	// during rebalance re-planning
+	if !isRetry {
+		for _, indexer := range plan.Placement {
+			for _, index := range indexer.Indexes {
+				index.initialNode = indexer
+				indexes = append(indexes, index)
+			}
 		}
 	}
 
@@ -3662,9 +3697,11 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 		movedIndex, movedData = placement.randomMoveNoConstraint(r, shuffle)
 	}
 
-	for _, indexer := range r.Placement {
-		for _, index := range indexer.Indexes {
-			index.initialNode = indexer
+	if !isRetry {
+		for _, indexer := range r.Placement {
+			for _, index := range indexer.Indexes {
+				index.initialNode = indexer
+			}
 		}
 	}
 
@@ -6058,6 +6095,114 @@ func PopulateSiblingIndexForReplicaRepair(solution *Solution, binSize uint64) {
 	}
 }
 
+func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
+
+	// Step-1: Ungroup indexes in solution
+	UngroupIndexes(s)
+
+	// Step-2: Gather all indexes that are moving as a part of rebalance
+	var allIndexMovements []*IndexUsage
+	for _, indexer := range s.Placement {
+		if indexer.NodeVersion < common.INDEXER_76_VERSION {
+			continue
+		}
+
+		for _, index := range indexer.Indexes {
+			index.destNode = indexer // Populate destination node
+
+			if index.initialNode != nil && index.initialNode.NodeId == index.destNode.NodeId {
+				continue
+			}
+
+			// Index is moving - Either as a part of replica repair (or) as a part of upgrade
+			allIndexMovements = append(allIndexMovements, index)
+		}
+	}
+
+	if len(allIndexMovements) == 0 {
+		return false, nil
+	}
+
+	// Step-3: Update slotMapping for the new solution
+	s.updateSlotMap()
+
+	// Step-4: For the indexes that are being moved, check if there is already a slot
+	// in the cluster. If so, check if the slot with required replicaId exists on the
+	// destination node. If slot does not exist, then populate new slot.
+	//
+	// If slot exists and index is moving to the same node on which the slot exists,
+	// then no need to replan the placement. Update the alternateShardIds of the index
+	//
+	// If slot exists and index is moving to different node than the one on which the
+	// slot exists, then move the index to the node on which slot is present and replan
+	// the placement
+	var needsAlternateShardIds []*IndexUsage
+	needsReplan := false
+
+	for _, index := range allIndexMovements {
+		indexSlot := s.getIndexSlot(index)
+		if indexSlot == 0 { // No slot exists for this index. Needs to populate new
+			needsAlternateShardIds = append(needsAlternateShardIds, index)
+			continue
+		}
+
+		updateSlotMap := false
+		// If index does not have alternate shardIds, populate them now
+		if index.HasAlternateShardIds() == false {
+			alternateShardId := &common.AlternateShardId{indexSlot, uint8(index.Instance.ReplicaId), 0}
+			if index.IsPrimary {
+				index.AlternateShardIds = []string{alternateShardId.String()}
+			} else {
+				msAltId := alternateShardId.String()
+				alternateShardId.SetInstaceGroup(1)
+				bsAltId := alternateShardId.String()
+				index.AlternateShardIds = []string{msAltId, bsAltId}
+			}
+			updateSlotMap = true
+
+			logging.Infof("NeedsReplan: Populating alternateShardIds: %v for (%v,%v,%v,%v)",
+				index.AlternateShardIds, index.Name, index.DefnId, index.Instance.ReplicaId, index.PartnId)
+		} else {
+			// No-op. Index already has alternate shardIds.
+			// Skip populating the alternate shardIds
+		}
+
+		// Check if any slot with required replicaId exists on any node
+		for indexer, replicaId := range s.slotMap[indexSlot] {
+
+			if replicaId == index.Instance.ReplicaId {
+
+				if indexer.NodeId != index.destNode.NodeId {
+					needsReplan = true
+					logging.Infof("NeedsReplan:: Index: (%v, %v, %v, %v) is "+
+						"expected to go to node: %v but its shard is going to node: %v. Relocating index",
+						index.Name, index.DefnId, index.Instance.ReplicaId, index.PartnId, indexer.NodeId,
+						index.destNode.NodeId)
+
+					// Remove the index from planned movement and trigger replan
+					offset := s.findIndexOffset(index.destNode, index)
+					s.removeIndex(index.destNode, offset)
+					s.addIndex(indexer, index, false)
+
+					updateSlotMap = false
+					s.updateSlotMapEntry(indexSlot, index.destNode, indexer, replicaId)
+					s.addToIndexSlots(index.DefnId, index.Instance.ReplicaId, index.PartnId, indexSlot)
+				} else {
+					// Index is moving to appropriate destination node
+					// No action needed
+				}
+			}
+		}
+
+		if updateSlotMap {
+			s.addToSlotMap(indexSlot, index.destNode, index.Instance.ReplicaId)
+			s.addToIndexSlots(index.DefnId, index.Instance.ReplicaId, index.PartnId, indexSlot)
+		}
+	}
+
+	return needsReplan, needsAlternateShardIds
+}
+
 func pruneIndexers(nodes map[*IndexerNode]map[*IndexUsage]bool) map[*IndexerNode]map[*IndexUsage]bool {
 	resp := make(map[*IndexerNode]map[*IndexUsage]bool)
 	for indexer, indexUsageMap := range nodes {
@@ -6416,4 +6561,16 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 			i++
 		}
 	}
+}
+
+func newPlanFromSolution(plan *Plan, solution *Solution) *Plan {
+	newPlan := &Plan{
+		Placement: solution.Placement,
+		MemQuota:  plan.MemQuota,
+		CpuQuota:  plan.CpuQuota,
+		IsLive:    plan.IsLive,
+	}
+
+	newPlan.UsedReplicaIdMap = GenerateReplicaMap(solution.Placement)
+	return newPlan
 }
