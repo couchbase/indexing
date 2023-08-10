@@ -129,6 +129,7 @@ type PlacementMethod interface {
 	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
 	RemoveEligibleIndex([]*IndexUsage)
+	RegroupIndexes()
 	Print()
 }
 
@@ -361,6 +362,14 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	solution.command = command
 	solution = p.adjustInitialSolutionIfNecessary(solution)
+
+	if p.shardAffinity {
+		for _, indexer := range solution.Placement {
+			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+		}
+		solution.place.RegroupIndexes()
+	}
+
 	solution.enforceConstraint = true
 
 	for i := 0; i < RunPerPlan; i++ {
@@ -1917,6 +1926,12 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 
 	// Initialize solution
 	p.initializeSolution(command, solution)
+
+	if p.shardAffinity {
+		for _, indexer := range solution.Placement {
+			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+		}
+	}
 
 	// Sort the list of nodes based on usages
 	// (For MOI, may be), do we need to use tie breaker as number of indexes

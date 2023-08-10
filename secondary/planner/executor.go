@@ -1094,7 +1094,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					} else {
 						if !mergeToken(oldChildToken, childTokens[0]) {
 							return nil, nil, fmt.Errorf("failed to merge token %v and %v",
-												oldChildToken, childTokens[0])
+								oldChildToken, childTokens[0])
 						}
 					}
 				}
@@ -5723,7 +5723,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
 			for indexer := range targetNodes {
-				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes)
+				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
 			}
 
 			// If a new shard can be created for this partition across all indexer nodes,

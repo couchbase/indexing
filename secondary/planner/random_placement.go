@@ -1144,3 +1144,42 @@ func (p *RandomPlacement) isEligibleIndex(index *IndexUsage) bool {
 	_, ok := p.indexes[index]
 	return ok
 }
+
+func updateIndexes(indexes []*IndexUsage) []*IndexUsage {
+
+	var result []*IndexUsage
+
+	indexMap := make(map[*IndexUsage]bool)
+
+	for _, index := range indexes {
+		if index.ProxyIndex == nil {
+			result = append(result, index)
+		} else {
+			if _, ok := indexMap[index.ProxyIndex]; !ok {
+				result = append(result, index.ProxyIndex)
+				index.ProxyIndex.eligible = true
+				indexMap[index.ProxyIndex] = true
+			}
+		}
+	}
+	return result
+}
+
+// Note: Always call this method after calling grouping on the
+// solution
+func (p *RandomPlacement) RegroupIndexes() {
+
+	p.eligibles = updateIndexes(p.eligibles)
+	p.optionals = updateIndexes(p.optionals)
+
+	var indexList []*IndexUsage
+	for index := range p.indexes {
+		indexList = append(indexList, index)
+	}
+
+	indexList = updateIndexes(indexList)
+	p.indexes = make(map[*IndexUsage]bool)
+	for _, index := range indexList {
+		p.indexes[index] = true
+	}
+}

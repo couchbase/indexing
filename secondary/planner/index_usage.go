@@ -138,6 +138,10 @@ type IndexUsage struct {
 	// When index is shard proxy, this field captures the list of all indexes
 	// that are grouped to make the proxy index
 	GroupedIndexes []*IndexUsage
+
+	// When this index is grouped under a proxy, the "ProxyIndex" field
+	// holds the reference to the proxy
+	ProxyIndex *IndexUsage
 }
 
 // This function makes a copy of a index usage
@@ -570,6 +574,7 @@ func (o *IndexUsage) HasAlternateShardIds() bool {
 
 func (o *IndexUsage) AddToGroupedIndexes(in *IndexUsage) {
 	o.GroupedIndexes = append(o.GroupedIndexes, in)
+	in.ProxyIndex = o
 }
 
 func (o *IndexUsage) Union(in *IndexUsage) {

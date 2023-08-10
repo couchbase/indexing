@@ -170,17 +170,6 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 	// the usage, it makes sure that planning does not partially skewed data.
 	recalculateIndexerSize(plan)
 
-	storageMode := getStorageMode(plan)
-	enableShardAffinityCfg, ok := config["indexer.planner.enableShardAffinity"]
-	if ok && enableShardAffinityCfg.Bool() && storageMode == common.PlasmaDB {
-		for _, indexer := range plan.Placement {
-			indexer.Indexes, indexer.numShards, err = GroupIndexes(indexer.Indexes)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
 	return plan, nil
 }
 
@@ -1939,7 +1928,7 @@ func validateShardIds(index *IndexUsage) bool {
 	return true
 }
 
-func GroupIndexes(indexes []*IndexUsage) ([]*IndexUsage, int, error) {
+func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode) ([]*IndexUsage, int, error) {
 
 	result := []*IndexUsage{}
 	numShards := 0
@@ -1990,6 +1979,12 @@ func GroupIndexes(indexes []*IndexUsage) ([]*IndexUsage, int, error) {
 			if err != nil {
 				logging.Errorf("GroupIndexes:: Observed error while generating new proxy, err: %v", err)
 				return nil, 0, err
+			}
+
+			if indexer != nil {
+				proxyIndex.MaxInstances = indexer.MaxInstancesPerShard
+				proxyIndex.MaxDiskSize = indexer.MaxDiskUsagePerShard
+				proxyIndex.DiskSizeThreshold = indexer.DiskUsageThreshold
 			}
 		}
 
