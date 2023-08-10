@@ -165,7 +165,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	isShardAffinityEnabled := s.config["planner.enableShardAffinity"].Bool()
+	isShardAffinityEnabled := common.CanMaintanShardAffinity(config)
 
 	if isShardAffinityEnabled || common.IsServerlessDeployment() {
 		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
@@ -1882,10 +1882,10 @@ func (s *storageMgr) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	s.config = cfgUpdate.GetConfig()
 
-	isShardAffinityEnabled := s.config["planner.enableShardAffinity"].Bool()
+	isShardAffinityEnabled := common.CanMaintanShardAffinity(s.config)
 	if isShardAffinityEnabled && s.stm == nil {
 		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
-	} else if !isShardAffinityEnabled && s.stm != nil {
+	} else if !common.IsServerlessDeployment() && !isShardAffinityEnabled && s.stm != nil {
 		s.stm.cmdCh <- &MsgGeneral{mType: STORAGE_MGR_SHUTDOWN}
 		s.stm = nil
 	}

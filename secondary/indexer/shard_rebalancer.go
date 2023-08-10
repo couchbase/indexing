@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
@@ -20,6 +23,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/testcode"
 )
 
@@ -111,12 +115,17 @@ type ShardRebalancer struct {
 	schedulingVersion c.ShardRebalanceSchedulingVersion
 
 	rpcCommandSyncChannel chan struct{}
+
+	cinfo                    *c.ClusterInfoCache
+	transferScheme           string
+	canMaintainShardAffinity bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
-	runPlanner bool, runParams *runParams, statsMgr *statsManager) *ShardRebalancer {
+	runPlanner bool, runParams *runParams, statsMgr *statsManager,
+	cinfo *c.ClusterInfoCache) *ShardRebalancer {
 
 	clusterVersion := common.GetClusterVersion()
 	l.Infof("NewShardRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
@@ -124,6 +133,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 	perNodeBatchSize := config["rebalance.serverless.perNodeTransferBatchSize"].Int()
 	schedulingVersion := config["rebalance.serverless.scheduleVersion"].String()
+	transferScheme := getTransferScheme(config)
+	canMaintainShardAffinity := c.CanMaintanShardAffinity(config)
 
 	sr := &ShardRebalancer{
 		clusterVersion: clusterVersion,
@@ -162,6 +173,10 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		schedulingVersion:   c.ShardRebalanceSchedulingVersion(schedulingVersion),
 
 		rpcCommandSyncChannel: make(chan struct{}),
+
+		cinfo:                    cinfo,
+		transferScheme:           transferScheme,
+		canMaintainShardAffinity: canMaintainShardAffinity,
 	}
 
 	sr.config.Store(config)
@@ -173,9 +188,9 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		go sr.observeRebalance()
 	}
 
-	if isShardAffinityEnabled, ok := config["planner.enableShardAffinity"]; ok && isShardAffinityEnabled.Bool() {
+	if sr.canMaintainShardAffinity {
 		// start shard transfer server
-		go sr.sendPeerServerCommand(START_PEER_SERVER, sr.rpcCommandSyncChannel)
+		go sr.sendPeerServerCommand(START_PEER_SERVER, sr.rpcCommandSyncChannel, sr.done)
 	} else {
 		close(sr.rpcCommandSyncChannel)
 	}
@@ -238,12 +253,11 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					continue
 				}
 
-				isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
 				var err error
 
 				// If shard affinity is enabled in non-serverless deployments, used normal planner.
 				// Otherwise, use tenant aware planner
-				if isShardAffinityEnabled && !common.IsServerlessDeployment() {
+				if sr.canMaintainShardAffinity && !common.IsServerlessDeployment() {
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
 					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
 					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
@@ -281,7 +295,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
-				} else if !isShardAffinityEnabled && common.IsServerlessDeployment() {
+				} else if !sr.canMaintainShardAffinity && common.IsServerlessDeployment() {
 					destination, region, err := getDestinationFromConfig(sr.config.Load())
 					if err != nil {
 						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
@@ -296,6 +310,29 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					sr.destination = destination
 					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v, region: %v in all transfer tokens", destination, region)
 
+				} else if sr.canMaintainShardAffinity {
+					err := sr.cinfo.FetchNodesAndSvsInfoWithLock()
+					if err != nil {
+						l.Warnf("ShardRebalancer::initRebalAsync failed to fetch nodes and services info with error %v. Using stale values",
+							err)
+					}
+
+					for tid, token := range sr.transferTokens {
+						if !token.IsShardTransferToken() {
+							continue
+						}
+
+						token.Destination, err = sr.genPeerDestination(token.DestId)
+						if err != nil {
+							l.Errorf("ShardRebalancer::initRebalAsync failed to create destination for token %v (destination %v) with error %v",
+								tid, token.DestId, err)
+							go sr.finishRebalance(err)
+							return
+						}
+
+						l.Infof("ShardRebalancer::initRebalAsync set destination %v for token with id %v",
+							token.Destination, tid)
+					}
 				}
 
 				break loop
@@ -306,15 +343,34 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	go sr.doRebalance()
 }
 
-func getDestinationFromConfig(cfg c.Config) (string, string, error) {
+func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
+	nid, ok := sr.cinfo.GetNodeIdByUUID(nodeUuid)
+	if !ok {
+		return "", errors.New("couldn't find source node in cluster info cache")
+	}
+
+	addr, err := sr.cinfo.GetServiceAddress(nid, c.INDEX_RPC_SERVICE, true)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%v%v/", sr.transferScheme, addr), nil
+}
+
+func getTransferScheme(cfg c.Config) string {
 	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
+	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageScheme, "://") {
+		blobStorageScheme += "://"
+	}
+	return blobStorageScheme
+}
+
+func getDestinationFromConfig(cfg c.Config) (string, string, error) {
+	blobStorageScheme := getTransferScheme(cfg)
 	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
 	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
 	blobStorageRegion := cfg["settings.rebalance.blob_storage_region"].String()
 
-	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageBucket, "://") {
-		blobStorageScheme += "://"
-	}
 	if blobStorageBucket != "" && !strings.HasSuffix(blobStorageBucket, "/") {
 		blobStorageBucket += "/"
 	}
@@ -822,6 +878,37 @@ loop:
 		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
+	}
+
+	if sr.canMaintainShardAffinity {
+		msg.isPeerTransfer = true
+		msg.authCallback = func(req *http.Request) error {
+			return cbauth.SetRequestAuth(req)
+		}
+		host, _, _ := net.SplitHostPort(tt.DestHost)
+		tlsConfig, err := security.GetTLSConfig()
+		if err != nil {
+			l.Errorf("ShardRebalancer::startShardTransfer failed to get TLS config for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		} else if tlsConfig == nil {
+			l.Errorf("ShardRebalancer::startShardTransfer got nil TLS config for transfer token %v (host %v)",
+				ttid, tt.DestHost)
+			sr.setTransferTokenError(ttid, tt, "got nil TLS config")
+			return
+		}
+
+		err = security.SetupCertificate(host, tlsConfig)
+		if err != nil {
+			l.Errorf("ShardRebalancer::startShardTransfer failed to set certificates for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
+
+		msg.tlsConfig = tlsConfig
+
 	}
 
 	sr.supvMsgch <- msg
@@ -2644,7 +2731,10 @@ func (sr *ShardRebalancer) doFinish() {
 	close(sr.done)
 
 	sr.cancelMetakv()
-	sr.sendPeerServerCommand(STOP_PEER_SERVER, nil)
+	if sr.canMaintainShardAffinity {
+		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
+		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
+	}
 
 	sr.wg.Wait()
 
@@ -2980,7 +3070,7 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	return true
 }
 
-func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct{}) {
+func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct{}, doneCh chan struct{}) {
 	sr.wg.Add(1)
 	defer sr.wg.Done()
 	defer func() {
@@ -2988,6 +3078,11 @@ func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct
 			close(syncCh)
 		}
 	}()
+
+	if doneCh == nil {
+		doneCh = make(chan struct{})
+		defer close(doneCh)
+	}
 
 	respCh := make(chan error)
 
@@ -3013,7 +3108,7 @@ func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct
 
 	sr.supvMsgch <- msg
 	select {
-	case <-sr.done:
+	case <-doneCh:
 		l.Infof("ShardRebalancer::sendPeerServerCommand: got done on rebalancer channel. will monitor %v in go-routine",
 			cmd)
 		go monitor(respCh, sr.rebalToken.RebalId, cmd)

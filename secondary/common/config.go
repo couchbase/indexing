@@ -3631,11 +3631,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.rebalance.blob_storage_scheme": ConfigValue{
-		"",
+		"https",
 		"Scheme to use for data transfser between source and destination. " +
 			"For S3, this is expected to be 's3://'. For local setup like " +
 			"cluster_run, the value is empty",
-		"",
+		"https",
 		false, // mutable
 		false, // case-insensitive
 	},

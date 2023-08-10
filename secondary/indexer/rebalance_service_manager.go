@@ -763,12 +763,13 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	m.updateRebalanceProgressLOCKED(0)
 
 	isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
-	isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
+	canMaintainShardAffintiy := c.CanMaintanShardAffinity(cfg)
 
-	if isShardAffinityEnabled || (c.IsServerlessDeployment() && isShardAwareRebalance) {
+	if canMaintainShardAffintiy || (c.IsServerlessDeployment() && isShardAwareRebalance) {
 		m.rebalancer = NewShardRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
+			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr,
+			m.genericMgr.cinfo)
 	} else {
 		m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
@@ -2971,13 +2972,13 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 
 			cfg := m.config.Load()
 			isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
-			isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
+			canMaintainShardAffinity := c.CanMaintanShardAffinity(cfg)
 
-			if isShardAffinityEnabled || (c.IsServerlessDeployment() && isShardAwareRebalance) {
+			if canMaintainShardAffinity || (c.IsServerlessDeployment() && isShardAwareRebalance) {
 				m.rebalancerF = NewShardRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 					m.localhttp, m.config.Load(), nil, false, &m.p,
-					m.genericMgr.statsMgr)
+					m.genericMgr.statsMgr, m.genericMgr.cinfo)
 			} else {
 				m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,

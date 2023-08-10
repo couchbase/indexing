@@ -481,6 +481,30 @@ func getTLSTransport(host string) (*http.Transport, error) {
 	return transport, nil
 }
 
+func GetTLSConfig() (*tls.Config, error) {
+	settings := GetSecuritySetting()
+	if settings == nil {
+		return nil, fmt.Errorf("security settings not initialised")
+	}
+	return getTLSConfigFromSetting(settings)
+}
+
+func SetupCertificate(host string, tlsConfig *tls.Config) error {
+	settings := GetSecuritySetting()
+	if settings == nil {
+		return fmt.Errorf("security settings not initialised")
+	}
+
+	// TODO: remove insecureSkipVerify and add VerifyPeerConnection callback
+	if IsLocal(host) || !settings.encryptionEnabled {
+		tlsConfig.InsecureSkipVerify = true
+	} else {
+		tlsConfig.ServerName = host
+	}
+
+	return nil
+}
+
 //
 // Secure HTTP Client if necessary
 //

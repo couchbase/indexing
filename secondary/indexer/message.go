@@ -9,7 +9,9 @@
 package indexer
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -2500,6 +2502,11 @@ type MsgStartShardTransfer struct {
 	// to zero while transfer is in progress)
 	storageMgrCancelCh chan bool
 	storageMgrRespCh   chan bool
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgStartShardTransfer) GetMsgType() MsgType {
@@ -2591,6 +2598,18 @@ func (m *MsgStartShardTransfer) GetStorageMgrRespCh() chan bool {
 	return m.storageMgrRespCh
 }
 
+func (m *MsgStartShardTransfer) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
+func (m *MsgStartShardTransfer) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgStartShardTransfer) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
 func (m *MsgStartShardTransfer) String() string {
 	var sb strings.Builder
 	sbp := &sb
@@ -2605,6 +2624,7 @@ func (m *MsgStartShardTransfer) String() string {
 		fmt.Fprintf(sbp, " RebalanceId: %v ", m.taskId)
 		fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferId)
 		fmt.Fprintf(sbp, " Task Type: Rebalance ")
+		fmt.Fprintf(sbp, " IsPeerTransfer: %v", m.isPeerTransfer)
 	}
 	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
 	fmt.Fprintf(sbp, " Region: %v ", m.region)

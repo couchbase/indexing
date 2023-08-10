@@ -4,6 +4,7 @@
 package indexer
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -187,6 +188,10 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 		meta[plasma.GSIRebalanceTransferToken] = ttid
 		if region != "" {
 			meta[plasma.GSIBucketRegion] = region
+		}
+		if msg.IsPeerTransfer() {
+			meta[plasma.RPCClientTLSConfig] = msg.GetTLSConfig()
+			meta[plasma.RPCHTTPSetReqAuthCb] = (plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback())
 		}
 	case common.PauseResumeTask:
 		bucket := msg.GetBucket()
@@ -874,7 +879,7 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 	stm.rpcSrv = rpcSrv
 
 	go func() {
-		if err := rpcSrv.HttpSrv.Serve(lst); err != nil {
+		if err := rpcSrv.HttpSrv.Serve(lst); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logging.Errorf("ShardTransferManager::initPeerRPCServerNoLock server failed with error %v. shuting down RPC server...",
 				err)
 			// rpcSrv shutsdown both http server and listener
@@ -935,7 +940,7 @@ func (stm *ShardTransferManager) handleSecurityChange(cmd Message) {
 			}
 			return stm.destroyPeerRPCServerNoLock("security_change")
 		}
-		rh := c.NewRetryHelper(10, 10 * time.Second, 1, shutdownWithRetries)
+		rh := c.NewRetryHelper(10, 10*time.Second, 1, shutdownWithRetries)
 		err := rh.Run()
 		if err != nil {
 			logging.Fatalf("ShardTransferManager::handleSecurityChange: failed to stop RPC server with retries on error %v",
@@ -950,7 +955,7 @@ func (stm *ShardTransferManager) handleSecurityChange(cmd Message) {
 			}
 			return stm.initPeerRPCServerNoLock("security_change")
 		}
-		rh = c.NewRetryHelper(10, 10 * time.Millisecond, 10, restartWithRetries)
+		rh = c.NewRetryHelper(10, 10*time.Millisecond, 10, restartWithRetries)
 		err = rh.Run()
 		if err != nil {
 			logging.Fatalf("ShardTransferManager::handleSecurityManager: failed to restart RPC server with retries on error %v",
@@ -974,7 +979,7 @@ func (stm *ShardTransferManager) handleStartPeerServer(cmd Message) {
 		return stm.initPeerRPCServer(rebalId)
 	}
 
-	rh := c.NewRetryHelper(10, 10 * time.Millisecond, 10, startServer)
+	rh := c.NewRetryHelper(10, 10*time.Millisecond, 10, startServer)
 	respCh <- rh.Run()
 }
 
@@ -992,7 +997,7 @@ func (stm *ShardTransferManager) handleStopPeerServer(cmd Message) {
 		return stm.destroyPeerRPCServer(rebalId)
 	}
 
-	rh := c.NewRetryHelper(10, 10 * time.Millisecond, 10, stopServer)
+	rh := c.NewRetryHelper(10, 10*time.Millisecond, 10, stopServer)
 	respCh <- rh.Run()
 }
 

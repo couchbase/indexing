@@ -41,6 +41,7 @@ const (
 	INDEX_DATA_INIT     = "indexStreamInit"
 	INDEX_DATA_MAINT    = "indexStreamMaint"
 	INDEX_DATA_CATUP    = "indexStreamCatchup"
+	INDEX_RPC_SERVICE   = "indexStreamCatchup"
 	NODE_IPV6           = "inet6"
 )
 
