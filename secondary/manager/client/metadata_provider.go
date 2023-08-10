@@ -2699,6 +2699,9 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 		return nil, nil, err
 	}
 
+	// Ungroup indexes to idenfify the placement of index with required replicaId
+	planner.UngroupIndexes(solution)
+
 	// build the layout and index definitions
 	definitions := make(map[c.IndexerId][]c.IndexDefn)
 	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
@@ -2716,7 +2719,21 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 					temp.InstId = index.Instance.InstId
 					temp.ReplicaId = index.Instance.ReplicaId
 					temp.NumPartitions = uint32(index.Instance.Pc.GetNumPartitions())
+					temp.AlternateShardIds = make(map[c.PartitionId][]string)
 
+					// Populate new alternate shardIds based on the replicaId of the index
+					for partnId, alternateShardIds := range defn.AlternateShardIds {
+						alternateShardId, _ := c.ParseAlternateId(alternateShardIds[0])
+						alternateShardId.ReplicaId = uint8(index.Instance.ReplicaId)
+						if temp.IsPrimary {
+							temp.AlternateShardIds[partnId] = []string{alternateShardId.String()}
+						} else {
+							msAltId := alternateShardId.String()
+							alternateShardId.GroupId = 1
+							bsAltId := alternateShardId.String()
+							temp.AlternateShardIds[partnId] = []string{msAltId, bsAltId}
+						}
+					}
 					definitions[c.IndexerId(indexer.IndexerId)] = append(definitions[c.IndexerId(indexer.IndexerId)], temp)
 				}
 
