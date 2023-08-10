@@ -984,9 +984,17 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	// DEPRECATED. Reused for shardTransferServerPort
 	"indexer.streamCatchupPort": ConfigValue{
+		"0",
+		"DEPRECATED. port for catchup stream",
+		"0",
+		true,  // immutable
+		false, // case-insensitive
+	},
+	"indexer.shardTransferServerPort": ConfigValue{
 		"9104",
-		"port for catchup stream",
+		"port for shard transfer server",
 		"9104",
 		true,  // immutable
 		false, // case-insensitive

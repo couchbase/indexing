@@ -748,6 +748,9 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		common.ResetBucketSeqnos()
 	}
 
+	idx.storageMgrCmdCh <- msg
+	<-idx.storageMgrCmdCh
+
 	logging.Infof("handleSecurityChange: done")
 }
 
@@ -1602,7 +1605,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		LOCK_SHARDS,
 		UNLOCK_SHARDS,
 		RESTORE_SHARD_DONE,
-		RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+		RESTORE_AND_UNLOCK_LOCKED_SHARDS,
+		START_PEER_SERVER,
+		STOP_PEER_SERVER:
 
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh

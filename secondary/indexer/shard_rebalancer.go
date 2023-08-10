@@ -109,6 +109,8 @@ type ShardRebalancer struct {
 	// or a global transfer batch size. This setting can not be changed during an
 	// ongoing rebalance. It can be changed before a rebalance
 	schedulingVersion c.ShardRebalanceSchedulingVersion
+
+	rpcCommandSyncChannel chan struct{}
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -158,6 +160,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		activeTransferCount: make(map[string]int),
 		waitQ:               make(chan bool, perNodeBatchSize),
 		schedulingVersion:   c.ShardRebalanceSchedulingVersion(schedulingVersion),
+
+		rpcCommandSyncChannel: make(chan struct{}),
 	}
 
 	sr.config.Store(config)
@@ -168,6 +172,14 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		close(sr.waitForTokenPublish)
 		go sr.observeRebalance()
 	}
+
+	if isShardAffinityEnabled, ok := config["planner.enableShardAffinity"]; ok && isShardAffinityEnabled.Bool() {
+		// start shard transfer server
+		go sr.sendPeerServerCommand(START_PEER_SERVER, sr.rpcCommandSyncChannel)
+	} else {
+		close(sr.rpcCommandSyncChannel)
+	}
+
 	go sr.processDropShards()
 	go sr.updateTransferProgress()
 
@@ -178,6 +190,7 @@ func (sr *ShardRebalancer) observeRebalance() {
 	l.Infof("ShardRebalancer::observeRebalance %v master:%v", sr.rebalToken, sr.isMaster)
 
 	<-sr.waitForTokenPublish
+	<-sr.rpcCommandSyncChannel
 
 	err := metakv.RunObserveChildren(RebalanceMetakvDir, sr.processShardTokens, sr.metakvCancel)
 	if err != nil {
@@ -2626,13 +2639,17 @@ func (sr *ShardRebalancer) finishRebalance(err error) {
 }
 
 func (sr *ShardRebalancer) doFinish() {
-	l.Infof("ShardRebalancer::doFinish Cleanup: %v", sr.retErr)
 
 	atomic.StoreInt32(&sr.isDone, 1)
 	close(sr.done)
 
 	sr.cancelMetakv()
+	sr.sendPeerServerCommand(STOP_PEER_SERVER, nil)
+
 	sr.wg.Wait()
+
+	// we want to log the last err we send to callback once all components are done processing
+	l.Infof("ShardRebalancer::doFinish Cleanup: %v", sr.retErr)
 	sr.cb.done(sr.retErr, sr.cancel)
 }
 
@@ -2961,6 +2978,58 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 		}
 	}
 	return true
+}
+
+func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct{}) {
+	sr.wg.Add(1)
+	defer sr.wg.Done()
+	defer func() {
+		if syncCh != nil {
+			close(syncCh)
+		}
+	}()
+
+	respCh := make(chan error)
+
+	msg := &MsgPeerServerCommand{
+		mType:       cmd,
+		respCh:      respCh,
+		rebalanceId: sr.rebalToken.RebalId,
+	}
+
+	monitor := func(respCh chan error, rebalId string, cmd MsgType) {
+		// rebalance could be done by now so we dont have a nice way to hadle this error other than
+		// crash
+		err := <-respCh
+		if err != nil {
+			l.Errorf("ShardRebalancer::sendPeerCommand:monitor failed command %v for rebalance %v with error %v",
+				cmd, rebalId, err)
+			common.CrashOnError(err)
+		} else {
+			l.Infof("ShardRebalancer::sendPeerCommand:monitor: command %v successful for rebalance %v",
+				cmd, rebalId)
+		}
+	}
+
+	sr.supvMsgch <- msg
+	select {
+	case <-sr.done:
+		l.Infof("ShardRebalancer::sendPeerServerCommand: got done on rebalancer channel. will monitor %v in go-routine",
+			cmd)
+		go monitor(respCh, sr.rebalToken.RebalId, cmd)
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::sendPeerServerCommand: got cancel on rebalancer channel. will monitor %v in go-routine",
+			cmd)
+		go monitor(respCh, sr.rebalToken.RebalId, cmd)
+	case err := <-respCh:
+		if err != nil {
+			// only finish rebalance if we have an error
+			logging.Errorf("ShardRebalancer::sendPeerServerCommand: failed command %v with error %v", cmd, err)
+			go sr.finishRebalance(err)
+		} else {
+			logging.Infof("ShardRebalancer::sendPeerServerCommand: command %v successful", cmd)
+		}
+	}
 }
 
 // isIndexDeletedDuringRebal returns true if an index is deleted while

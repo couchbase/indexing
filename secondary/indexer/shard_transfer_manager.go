@@ -4,11 +4,15 @@
 package indexer
 
 import (
+	"net"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/plasma"
 )
 
@@ -32,6 +36,10 @@ type ShardTransferManager struct {
 
 	sliceList          []Slice
 	sliceCloseNotifier map[common.ShardId]MsgChannel
+
+	// rpc server
+	rpcMutex sync.Mutex
+	rpcSrv   plasma.RPCServer
 }
 
 func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *ShardTransferManager {
@@ -132,6 +140,14 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	case RESTORE_AND_UNLOCK_LOCKED_SHARDS:
 		go stm.handleRestoreAndUnlockShards(cmd)
 
+	case INDEXER_SECURITY_CHANGE:
+		stm.handleSecurityChange(cmd)
+
+	case START_PEER_SERVER:
+		stm.handleStartPeerServer(cmd)
+
+	case STOP_PEER_SERVER:
+		stm.handleStopPeerServer(cmd)
 	}
 }
 
@@ -800,4 +816,209 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 	}
 
 	respCh <- true
+}
+
+// caller should hold stm.rpcMutex.Lock
+func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
+	if stm.rpcSrv != nil {
+		logging.Warnf("ShardTransferManager::initPeerRPCServerNoLock received start server msg for rebalance %v while server was already running",
+			rebalId)
+		return nil
+	}
+	port := stm.config["shardTransferServerPort"].String()
+	nodeAddr := net.JoinHostPort("", port)
+
+	dir := stm.config["storage_dir"].String()
+
+	cfg := plasma.DefaultRPCHTTPServerConfig()
+	cfg.DoServe = false
+
+	httpSrv := &http.Server{
+		Addr: nodeAddr,
+	}
+
+	lst, err := security.MakeAndSecureTCPListener(nodeAddr)
+	lstClose := func() {
+		if lst != nil {
+			if errLstClose := lst.Close(); errLstClose != nil {
+				logging.Errorf("ShardTransferManager::initRPCServerNoLock failed to close TCP listener with error %v",
+					errLstClose)
+			}
+		}
+	}
+	if err != nil {
+		lstClose()
+		logging.Errorf("ShardTransferManager::initPeerRPCServerNoLock failed to create a secure listener with error %v",
+			err)
+		return err
+	}
+
+	mux := http.NewServeMux()
+	rpcSrv, err := plasma.NewRPCServerWithHTTP(nodeAddr, httpSrv, lst, mux,
+		dir, plasma.DefaultConfig().Environment, plasma.GetOpRateLimiter(plasma.GSIRebalanceId), cfg)
+	if err != nil {
+		lstClose()
+		logging.Errorf("ShardTransferManager::initPeerRPCServerNoLock failed to create Plasma RPC server with error %v",
+			err)
+		return err
+	}
+
+	mux.HandleFunc(rpcSrv.Url, authMiddlewareForShardTransfer(rpcSrv.RPCHandler))
+
+	if err := rpcSrv.Start(); err != nil {
+		lstClose()
+		logging.Errorf("ShardTransferManager::initPeerRPCServerNoLock failed to start RPC server with error %v",
+			err)
+		return err
+	}
+	stm.rpcSrv = rpcSrv
+
+	go func() {
+		if err := rpcSrv.HttpSrv.Serve(lst); err != nil {
+			logging.Errorf("ShardTransferManager::initPeerRPCServerNoLock server failed with error %v. shuting down RPC server...",
+				err)
+			// rpcSrv shutsdown both http server and listener
+			rpcSrv.Shutdown()
+
+			// TODO: handle restart on server crash
+		}
+	}()
+
+	return nil
+}
+
+func (stm *ShardTransferManager) initPeerRPCServer(rebalId string) error {
+	stm.rpcMutex.Lock()
+	defer stm.rpcMutex.Unlock()
+
+	return stm.initPeerRPCServerNoLock(rebalId)
+}
+
+func (stm *ShardTransferManager) destroyPeerRPCServerNoLock(rebalId string) error {
+	if stm.rpcSrv == nil {
+		logging.Warnf("ShardTransferManager::destroyPeerRPCServerNoLock received stop command for rebalance %v while server was not running",
+			rebalId)
+		return nil
+	}
+
+	err := stm.rpcSrv.Shutdown()
+	if err == nil {
+		stm.rpcSrv = nil
+	} else {
+		logging.Errorf("ShardTransferManager::destroyPeerRPCServerNoLock failed to stop RPC server with error %v",
+			err)
+	}
+	return err
+}
+
+func (stm *ShardTransferManager) destroyPeerRPCServer(rebalId string) error {
+	stm.rpcMutex.Lock()
+	defer stm.rpcMutex.Unlock()
+
+	return stm.destroyPeerRPCServerNoLock(rebalId)
+}
+
+func (stm *ShardTransferManager) handleSecurityChange(cmd Message) {
+	secChange := cmd.(*MsgSecurityChange)
+
+	stm.rpcMutex.Lock()
+	defer stm.rpcMutex.Unlock()
+
+	if secChange.refreshCert && stm.rpcSrv != nil {
+		// restart rpc server for certificate change
+
+		// shutdown should trigger srv.httpSrv.Serve to fail with error ErrServerClosed
+		shutdownWithRetries := func(attempts int, lastErr error) error {
+			if lastErr != nil {
+				logging.Warnf("ShardTransferManager::handleSecurityChange: failed %v attempt to shutdown RPC server with error %v",
+					attempts, lastErr)
+			}
+			return stm.destroyPeerRPCServerNoLock("security_change")
+		}
+		rh := c.NewRetryHelper(10, 10 * time.Second, 1, shutdownWithRetries)
+		err := rh.Run()
+		if err != nil {
+			logging.Fatalf("ShardTransferManager::handleSecurityChange: failed to stop RPC server with retries on error %v",
+				err)
+			c.CrashOnError(err)
+		}
+
+		restartWithRetries := func(attempts int, lastErr error) error {
+			if lastErr != nil {
+				logging.Warnf("ShardTransferManager::handleSecurityChange: failed %v attempt to restart RPC server with error %v",
+					attempts, lastErr)
+			}
+			return stm.initPeerRPCServerNoLock("security_change")
+		}
+		rh = c.NewRetryHelper(10, 10 * time.Millisecond, 10, restartWithRetries)
+		err = rh.Run()
+		if err != nil {
+			logging.Fatalf("ShardTransferManager::handleSecurityManager: failed to restart RPC server with retries on error %v",
+				err)
+			c.CrashOnError(err)
+		}
+	}
+}
+
+func (stm *ShardTransferManager) handleStartPeerServer(cmd Message) {
+	msg := cmd.(*MsgPeerServerCommand)
+
+	rebalId := msg.GetRebalanceId()
+	respCh := msg.GetRespCh()
+
+	startServer := func(attempts int, lastErr error) error {
+		if lastErr != nil {
+			logging.Errorf("ShardTransferManager::handleStartPeerServer: %v attempt to start peer server for rebalance %v failed with err %v",
+				attempts, rebalId, lastErr)
+		}
+		return stm.initPeerRPCServer(rebalId)
+	}
+
+	rh := c.NewRetryHelper(10, 10 * time.Millisecond, 10, startServer)
+	respCh <- rh.Run()
+}
+
+func (stm *ShardTransferManager) handleStopPeerServer(cmd Message) {
+	msg := cmd.(*MsgPeerServerCommand)
+
+	rebalId := msg.GetRebalanceId()
+	respCh := msg.GetRespCh()
+
+	stopServer := func(attempts int, lastErr error) error {
+		if lastErr != nil {
+			logging.Errorf("ShardTransferManager::handleStopPeerServer: %v attempt to stop peer server for rebalance %v failed with err %v",
+				attempts, rebalId, lastErr)
+		}
+		return stm.destroyPeerRPCServer(rebalId)
+	}
+
+	rh := c.NewRetryHelper(10, 10 * time.Millisecond, 10, stopServer)
+	respCh <- rh.Run()
+}
+
+func authMiddlewareForShardTransfer(next http.HandlerFunc) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		creds, valid, err2 := c.IsAuthValid(r)
+		if err2 != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err2.Error() + "\n"))
+			return
+		} else if !valid {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write(c.HTTP_STATUS_UNAUTHORIZED)
+			return
+		} else if creds != nil {
+			allowed, err := creds.IsAllowed("cluster.admin.internal.index!read")
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error()))
+				return
+			} else if !allowed {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write(c.HTTP_STATUS_FORBIDDEN)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

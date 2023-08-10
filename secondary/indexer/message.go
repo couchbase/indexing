@@ -212,6 +212,9 @@ const (
 	METERING_MGR_STOP_WRITE_BILLING
 	METERING_MGR_START_WRITE_BILLING
 	PAUSE_UPDATE_BUCKET_STATE
+
+	START_PEER_SERVER
+	STOP_PEER_SERVER
 )
 
 type Message interface {
@@ -3036,6 +3039,24 @@ func (m *MsgPauseUpdateBucketState) GetBucketPauseState() bucketStateEnum {
 	return m.bucketPauseState
 }
 
+type MsgPeerServerCommand struct {
+	respCh      chan error
+	rebalanceId string
+	mType       MsgType
+}
+
+func (m *MsgPeerServerCommand) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgPeerServerCommand) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgPeerServerCommand) GetRespCh() chan error {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3362,6 +3383,10 @@ func (m MsgType) String() string {
 		return "METERING_MGR_STOP_WRITE_BILLING"
 	case PAUSE_UPDATE_BUCKET_STATE:
 		return "PAUSE_UPDATE_BUCKET_STATE"
+	case START_PEER_SERVER:
+		return "START_PEER_SERVER"
+	case STOP_PEER_SERVER:
+		return "STOP_PEER_SERVER"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"
