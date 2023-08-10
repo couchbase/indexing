@@ -225,6 +225,8 @@ func newProxyIndexUsage(slotId uint64, replicaId int) (*IndexUsage, error) {
 		// E.g. proxy-1 can have i1, i2, i3
 		//      proxy-2 can have i1 (replica 1), i2 (replica 1) - No i3
 		suppressEquivIdxCheck: true,
+		eligible:              true,
+		overrideExclude:       true,
 	}
 
 	return proxy, nil
@@ -574,6 +576,13 @@ func (o *IndexUsage) HasAlternateShardIds() bool {
 
 func (o *IndexUsage) AddToGroupedIndexes(in *IndexUsage) {
 	o.GroupedIndexes = append(o.GroupedIndexes, in)
+
+	// All indexes of a proxy must be eligible for the proxy to move
+	o.eligible = o.eligible && in.eligible
+
+	// Any index of a proxy can go to exclude node. Hence,
+	o.overrideExclude = o.overrideExclude && in.overrideExclude
+
 	in.ProxyIndex = o
 }
 

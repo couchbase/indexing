@@ -1035,6 +1035,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	}
 
 	cloned := s.clone()
+	cloned.updateSlotMap()
 
 	// Make sure we only repair when it is rebalancing
 	if s.command == CommandRebalance || s.command == CommandSwap || s.command == CommandRepair {
@@ -1211,8 +1212,9 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 				for replicaId := 0; replicaId < int(index.Instance.Defn.NumReplica+1); replicaId++ {
 					if instId, ok := missing[replicaId]; ok && len(indexers) != 0 {
 
-						indexer := indexers[0]
-						indexers = indexers[1:]
+						var indexSlot uint64
+						var isEligible bool
+						indexSlot, indexer, indexers, isEligible = s.findIndexerForReplica(index.DefnId, replicaId, index.PartnId, indexers)
 
 						if index.Instance != nil {
 
@@ -1220,6 +1222,16 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							cloned := index.clone()
 							cloned.Instance.ReplicaId = replicaId
 							cloned.initialNode = nil
+
+							if indexSlot != 0 {
+								msAltId := &common.AlternateShardId{SlotId: indexSlot, ReplicaId: uint8(replicaId), GroupId: 0}
+								if !cloned.IsPrimary {
+									bsAltId := &common.AlternateShardId{SlotId: indexSlot, ReplicaId: uint8(replicaId), GroupId: 1}
+									cloned.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
+								} else {
+									cloned.AlternateShardIds = []string{msAltId.String()}
+								}
+							}
 
 							// generate a new instance id for the new replica
 							if instId == 0 {
@@ -1236,11 +1248,39 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							// add the new replica to the solution
 							s.addIndex(indexer, cloned, false)
 
-							clonedCandidates = append(clonedCandidates, cloned)
+							if indexSlot != 0 {
+								// update slotMap and index slots for indexer
+								s.addToIndexSlots(cloned.DefnId, replicaId, cloned.PartnId, indexSlot)
+								s.addToSlotMap(indexSlot, indexer, replicaId)
+							}
+
+							// Add to clonedCandidates only if the index is eligible for movement
+							// The clonedCandidates will later be added to required/optional indexes
+							// The required/optional indexes are the indexes that will be eligible
+							// for movements across different node.
+							//
+							// If the slotId of an indexer is finalised, then the index can not be moved
+							// in isolation. As it has to be moved along with the shard, do not consider
+							// the index to be eligible for movement. In case of rebalance, all indexes
+							// will be eligible by default. Therefore, the index will be moved with the
+							// proxy.
+							//
+							// For replica repair, move only those indexes for which the shard placement
+							// is not finalized
+							if isEligible {
+								clonedCandidates = append(clonedCandidates, cloned)
+							}
 							numReplica++
 
-							logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v)",
-								index.Bucket, index.Scope, index.Collection, index.Name, replicaId)
+							if len(cloned.AlternateShardIds) > 0 {
+								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v) with alternate shardIds: %v "+
+									"with initial placement on node: %v, eligible: %v",
+									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
+									cloned.AlternateShardIds, indexer.NodeId, isEligible)
+							} else {
+								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v) with initial placement on node: %v",
+									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId, indexer.NodeId)
+							}
 						}
 					}
 				}
@@ -1307,6 +1347,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 				cloned.PartnId = partitionId
 				cloned.initialNode = nil
 				cloned.overrideExclude = true
+				cloned.AlternateShardIds = nil
 
 				// repair only if there is no replica, otherwise, replica repair would have handle this.
 				if s.findNumReplica(cloned) == 0 {
