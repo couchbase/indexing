@@ -6137,6 +6137,13 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 				continue
 			}
 
+			if (bootstrapPhase && err == errStoragePathNotFound) && !shardRebalance {
+				errStr := fmt.Sprintf("storage path not found for indexInst %v partnDefn %v", indexInst, partnDefn)
+				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+				continue
+			}
+
 			errStr := fmt.Sprintf("Error creating slice %v", err)
 			logging.Errorf("Indexer::initPartnInstance %v. Abort.", errStr)
 			err1 := errors.New(errStr)
