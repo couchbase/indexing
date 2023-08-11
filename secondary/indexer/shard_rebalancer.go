@@ -1299,7 +1299,7 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn, ttid string, t
 			return false, err
 		}
 
-		sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, partnMergeWaitGroup)
+		sr.destTokenToMergeOrReady(defn.InstId, defn.RealInstId, ttid, tt, &partnMergeWaitGroup)
 
 		// Wait for the deferred partition index merge to happen
 		// This is essentially a no-op for non-partitioned indexes
@@ -1885,7 +1885,7 @@ loop:
 					}
 					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 						activeIndexes[instKey] = true
-						sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, partnMergeWaitGroup)
+						sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
 						delete(processedInsts, instKey)
 					}
 				}
@@ -1911,7 +1911,7 @@ loop:
 }
 
 func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
-	realInstId c.IndexInstId, ttid string, tt *c.TransferToken, partnMergeWaitGroup sync.WaitGroup) {
+	realInstId c.IndexInstId, ttid string, tt *c.TransferToken, partnMergeWaitGroup *sync.WaitGroup) {
 	// There is no proxy (no merge needed)
 	if realInstId == 0 {
 
@@ -1948,17 +1948,24 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 				respCh:     respch}
 
 			var err error
-			select {
-			case <-sr.cancel:
-				l.Infof("ShardRebalancer::destTokenToMergeOrReady rebalance cancel Received")
-				return
-			case <-sr.done:
-				l.Infof("ShardRebalancer::destTokenToMergeOrReady rebalance done Received")
-				return
-			case <-ticker.C:
-				l.Infof("ShardRebalancer::destTokenToMergeOrReady waiting for partition merge "+
-					"to finish for index instance: %v, realInst: %v", instId, realInstId)
-			case err = <-respch:
+			retry := true
+			for retry {
+				select {
+				case <-sr.cancel:
+					l.Infof("ShardRebalancer::destTokenToMergeOrReady rebalance cancel Received")
+					return
+				case <-sr.done:
+					l.Infof("ShardRebalancer::destTokenToMergeOrReady rebalance done Received")
+					return
+				case <-ticker.C:
+					l.Infof("ShardRebalancer::destTokenToMergeOrReady waiting for partition merge "+
+						"to finish for index instance: %v, realInst: %v", instId, realInstId)
+				case err = <-respch:
+					l.Infof("ShardRebalancer::destTokenToMergeOrReady Response reveived for merge of "+
+						"index instance: %v, realInst: %v", instId, realInstId)
+					retry = false
+					break
+				}
 			}
 			if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 				// The indexer could be in an inconsistent state.
