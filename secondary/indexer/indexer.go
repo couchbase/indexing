@@ -1488,6 +1488,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.scanCoordCmdCh <- msg
 		<-idx.scanCoordCmdCh
 
+	case MUTATION_STATS:
+		idx.mutMgrCmdCh <- msg
+		<-idx.mutMgrCmdCh
+
 	case INDEX_PROGRESS_STATS:
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
@@ -11014,6 +11018,7 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 func (idx *indexer) updateStatsFromMemStats() {
 	gMemstatLock.RLock()
 	idx.stats.pauseTotalNs.Set(gMemstatCache.PauseTotalNs)
+	idx.stats.heapInUse.Set(gMemstatCache.HeapInuse)
 	gMemstatLock.RUnlock()
 }
 
