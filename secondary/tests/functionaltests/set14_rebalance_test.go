@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -516,12 +517,15 @@ func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
 	docs := 100000
 	CreateDocs(docs)
 
+	var wg sync.WaitGroup
 	err := secondaryindex.CreateSecondaryIndex3("index_11", bucket, scope, coll, indexManagementAddress,
 		"", []string{"name"}, []bool{false}, false, []byte("{\"nodes\": [\"127.0.0.1:9002\"], \"defer_build\":true}"), c.SINGLE, nil, true,
 		0, nil)
 	FailTestIfError(err, fmt.Sprintf("Failed while creating index_11"), t)
+	wg.Add(1)
 	go func() {
 		err = secondaryindex.BuildIndex("index_11", BUCKET, indexManagementAddress, defaultIndexActiveTimeout)
+		wg.Done()
 	}()
 	time.Sleep(1 * time.Second)
 	// Failover Node-2
@@ -534,8 +538,8 @@ func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
 	if err := cluster.Rebalance(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password); err == nil {
 		t.Fatalf("TestFailureAndRebalanceDuringInitialIndexBuild: Rebalance is expected to fail, but it succeded")
 	}
-
 	printClusterConfig(_TestFailureAndRebalanceDuringInitialIndexBuild, "exit")
+	wg.Wait() // Wait for index build to finish before proceeding to next test
 }
 
 // Adds a Node with specified Service running, with the Address taken from config at nodeNumber; nodeNumber is between 0 to 3
