@@ -84,8 +84,7 @@
     "index_num_docs_indexed": {
         "type": "counter",
         "help": "Number of document updates (of type insert, modify, delete) observed by this index",
-        "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "This is an ever increasing counter, incremented on each insert/delete/modify. Resets to zero on indexer process restart."
+        "labels": ["bucket", "scope", "collection", "index"]
     },
     "index_num_docs_pending": {
         "type": "gauge",
@@ -106,7 +105,7 @@
         "help": "Number of scan requests received by the index service, for this index",
         "uiName": "Index Request Rate",
         "labels": ["bucket", "scope", "collection", "index"],
-        "notes": "One n1ql query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)"
+        "notes": "One query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)"
     },
     "index_num_rows_returned": {
         "type": "counter",
@@ -156,7 +155,7 @@
         "notes": "This metric does not includes the index data which not returned as scan result."
     },
     "index_total_scan_duration": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Total time taken by the scans requests, for this index",
         "unit": "Nanoseconds",
         "labels": ["bucket", "scope", "collection", "index"],
