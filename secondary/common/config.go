@@ -3911,6 +3911,14 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.thisNodeOnly.ignoreAlternateShardIds": ConfigValue{
+		false,
+		"Set to true to make lifecycle manager ignore the alternate shardIds " +
+			"populated by planner. Only for testing - Not for production",
+		false,
+		false,
+		false,
+	},
 }
 
 // NewConfig from another

@@ -9,3 +9,7 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 	// Note: This function is a no-op for non-CI builds. See test_action_ci.go
 	// for the implementation for CI builds
 }
+
+func IgnoreAlternateShardIds(cfg common.Config, defn *common.IndexDefn) {
+	// No-op
+}

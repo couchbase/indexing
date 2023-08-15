@@ -29,6 +29,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/testcode"
 	//"runtime/debug"
 )
 
@@ -1494,6 +1495,10 @@ func (m *LifecycleMgr) CreateIndexOrInstance(defn *common.IndexDefn, scheduled b
 	if err := m.verifyDuplicateInstance(defn, reqCtx); err != nil {
 		return err
 	}
+
+	////////////// Testing code - Not used in production //////////////
+	testcode.IgnoreAlternateShardIds(m.configHolder.Load(), defn)
+	///////////////////////////////////////////////////////////////////
 
 	hasIndex := existDefn != nil && (defn.DefnId == existDefn.DefnId)
 	isPartitioned := common.IsPartitioned(defn.PartitionScheme)
