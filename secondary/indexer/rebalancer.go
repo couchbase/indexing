@@ -1738,7 +1738,8 @@ func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifyc
 		}
 	}()
 
-	missingStatRetry := 0
+	missingDefnStatRetry := 0
+	missingPartnStatRetry := 0
 	defn := &tt.IndexInst.Defn
 	defn.SetCollectionDefaults()
 	defn.InstId = tt.InstId
@@ -1761,6 +1762,14 @@ loop:
 			defnStats := allStats.indexes[defnKey] // stats for current defn
 			if defnStats == nil {
 				l.Infof("%v Missing defnStats for instId %v. Retrying...", method, defnKey)
+				missingDefnStatRetry++
+				if missingDefnStatRetry > (50 / sleepSecs) {
+					if r.needRetryForDrop(ttid, tt) {
+						break labelselect
+					} else {
+						break loop
+					}
+				}
 				break
 			}
 
@@ -1773,8 +1782,8 @@ loop:
 				} else {
 					l.Infof("%v Missing partnStats for instId %d partition %v. Retrying...",
 						method, defnKey, partitionId)
-					missingStatRetry++
-					if missingStatRetry > (50 / sleepSecs) {
+					missingPartnStatRetry++
+					if missingPartnStatRetry > (50 / sleepSecs) {
 						if r.needRetryForDrop(ttid, tt) {
 							break labelselect
 						} else {
