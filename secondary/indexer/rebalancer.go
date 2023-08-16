@@ -384,6 +384,7 @@ func (r *Rebalancer) initRebalAsync() {
 					cpuProfile := cfg["planner.cpuProfile"].Bool()
 					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
 					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
+					binSize := common.GetBinSize(cfg)
 
 					//user setting redistribute_indexes overrides the internal setting
 					//onEjectOnly. onEjectOnly is not expected to be used in production
@@ -404,7 +405,7 @@ func (r *Rebalancer) initRebalAsync() {
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-							minIterPerTemp, maxIterPerTemp, false)
+							minIterPerTemp, maxIterPerTemp, binSize, false)
 					}
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)

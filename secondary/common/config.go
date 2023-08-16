@@ -3417,6 +3417,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.internal.binSize": ConfigValue{
+		uint64(2560 * 1024 * 1024),
+		"Planner uses bin based sorting to sort shards by load. This config specifies the size " +
+			"of the bin to be used when sorting shards by disk size",
+		uint64(2560 * 1024 * 1024),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.useGreedyPlanner": ConfigValue{
 		true,
 		"Attempt to use greedy planner (instead of simulated annealing planner) for index creation, for faster placement.",
