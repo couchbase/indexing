@@ -1491,7 +1491,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 
 	schedIndex := false
 	if o.canSkipPlanner(watcherMap, idxDefn) && !enforceLimits && !c.IsServerlessDeployment() &&
-		o.ShouldMaintainShardAffinity() {
+		o.ShouldMaintainShardAffinity() == false {
 		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
 			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
@@ -1785,6 +1785,10 @@ func (o *MetadataProvider) getAlternateShardIdsFromIndexUsage(solution *planner.
 			for _, index := range indexer.Indexes {
 				for i, defn := range defns {
 					if index.DefnId != defn.DefnId || index.Instance.ReplicaId != defn.ReplicaId {
+						continue
+					}
+
+					if len(index.AlternateShardIds) == 0 {
 						continue
 					}
 
@@ -2564,6 +2568,8 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
+	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
+	enableShardAffinity := o.settings.IsShardAffinityEnabled()
 
 	var solution *planner.Solution
 
@@ -2576,7 +2582,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
-			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits)
+			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, enableShardAffinity)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -2675,12 +2681,14 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 		}
 	}
 
+	enableShardAffinity := o.settings.IsShardAffinityEnabled()
+
 	// Use the planner to find out where to place the replica.
 	// If planner cannot read from the given list of nodes, it will return error.
 	// In case of input plan has list of nodes to be used, pass the list along
 	// for planner to place the replicas on those specific nodes.
 	var solution *planner.Solution
-	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false, enforceLimits)
+	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false, enforceLimits, enableShardAffinity)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -4084,7 +4092,13 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 		temp.InstId = instId
 		temp.ReplicaId = replicaIds[i]
 		temp.NumReplica2 = numReplica
-		temp.NumReplica2.Decrement(uint32(decrement))
+
+		// Do not decrement the NumReplica2 if the action is dropping a specific replicaId
+		// (Rather drop only if dropReplicaId is -1)
+		// If the counter is decremented, then the replica will not be repaired during rebalance
+		if dropReplicaId == -1 {
+			temp.NumReplica2.Decrement(uint32(decrement))
+		}
 		definitions = append(definitions, temp)
 	}
 

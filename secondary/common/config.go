@@ -1319,6 +1319,14 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.flushBufferQuota": ConfigValue{
+		4.0,
+		"Percentage of indexer memory quota that can be used for plasma flush " +
+			"buffer allocations. Default is 4.0% i.e. 0.04 * memory_quota",
+		4.0,
+		false, // mutable
+		false, // case in-sensitive
+	},
 	"indexer.plasma.useMemMgmt": ConfigValue{
 		true,
 		"Use jemalloc based manual memory management",
@@ -2180,6 +2188,15 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.diskUsageThreshold": ConfigValue{
+		50.0,
+		"Disk utilisation as percentage of maximum disk usage upto which the " +
+			"shard can take new indexes. If the shard's disk usage exceeds this " +
+			"value, it will not be considered for new index placement",
+		50.0,
+		false,
+		false,
+	},
 	"indexer.plasma.minNumShard": ConfigValue{
 		Plasma_minNumShard,
 		"Minimum number of shard",
@@ -2790,10 +2807,10 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.sliceBufSize": ConfigValue{
-		uint64(runtime.GOMAXPROCS(0) * 20),
+		uint64(runtime.GOMAXPROCS(0) * 200),
 		"Buffer for each slice to queue mutations before flush " +
 			"to storage.",
-		uint64(runtime.GOMAXPROCS(0) * 20),
+		uint64(runtime.GOMAXPROCS(0) * 200),
 		false, // mutable
 		false, // case-insensitive
 	},

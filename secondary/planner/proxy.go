@@ -111,7 +111,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 		return nil, err
 	}
 
-	replicaMap := generateReplicaMap(indexers)
+	replicaMap := GenerateReplicaMap(indexers)
 
 	if err := processDeleteToken(indexers); err != nil {
 		return nil, err
@@ -169,6 +169,17 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 	// sizing formula, since sizing formula captures max usage capacity. By recalculating
 	// the usage, it makes sure that planning does not partially skewed data.
 	recalculateIndexerSize(plan)
+
+	storageMode := getStorageMode(plan)
+	enableShardAffinityCfg, ok := config["indexer.planner.enableShardAffinity"]
+	if ok && enableShardAffinityCfg.Bool() && storageMode == common.PlasmaDB {
+		for _, indexer := range plan.Placement {
+			indexer.Indexes, indexer.numShards, err = GroupIndexes(indexer.Indexes)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	return plan, nil
 }
@@ -495,6 +506,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 		DiskUsage   uint64 `json:"diskUsage,omitempty"`
 	*/
+	indexer.NodeVersion = indexerVersion
+	indexer.MaxInstancesPerShard = config["indexer.plasma.maxInstancePerShard"].Uint64()
+	indexer.MaxDiskUsagePerShard = config["indexer.plasma.maxDiskUsagePerShard"].Uint64()
+	indexer.DiskUsageThreshold = config["indexer.plasma.diskUsageThreshold"].Float64()
 
 	var actualStorageMem uint64
 	// memory_used_storage contains the total storage consumption,
@@ -551,11 +566,20 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		actualCpuUtil = cpuUtil.(float64) / 100
 	}
 
+	if memQuota, ok := statsMap["memory_quota"]; ok {
+		indexer.memQuota = uint64(memQuota.(float64))
+	} else { // Assume a minimum memory quota of 256MB
+		logging.Warnf("SetStatsInIndexer: memory_quota is not available for indexer node: %v. "+
+			"Defaulting to 256M of memory quota for this node", indexer.String())
+		indexer.memQuota = 256 * 1024 * 1024
+	}
+
+	indexer.ComputeMinShardCapacity(config)
+
 	var totalIndexMemUsed uint64
 	var totalMutation uint64
 	var totalScan uint64
 	for _, index := range indexer.Indexes {
-
 		/*
 			CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`
@@ -623,6 +647,14 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		// disk usage per index
 		if diskUsed, ok := GetIndexStat(index, "avg_disk_bps", statsMap, true, clusterVersion); ok {
 			index.ActualDiskUsage = uint64(diskUsed.(float64))
+		}
+
+		// disk usage per index
+		if diskUsed, ok := GetIndexStat(index, "disk_size", statsMap, true, clusterVersion); ok {
+			index.ActualDiskSize = uint64(diskUsed.(float64))
+		} else {
+			// Estimate disk usage from data_size assuming 30% fragmentation
+			index.ActualDiskSize = uint64(float64(index.ActualDataSize) * 1.3)
 		}
 
 		if numDocsQueued, ok := GetIndexStat(index, "num_docs_queued", statsMap, true, clusterVersion); ok {
@@ -1598,7 +1630,7 @@ func rebalanceRemoveFromPlan(counterMergeErrMap map[common.IndexDefnId]error, pl
 }
 
 // Generate a map for replicaId
-func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]bool {
+func GenerateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]bool {
 
 	result := make(map[common.IndexDefnId]map[int]bool)
 	for _, indexer := range indexers {
@@ -1856,4 +1888,142 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 	}
 
 	return respMap, nil
+}
+
+func getStorageMode(plan *Plan) string {
+	for _, indexer := range plan.Placement {
+		return indexer.StorageMode
+	}
+	return ""
+}
+
+func validateShardIds(index *IndexUsage) bool {
+
+	if index.HasAlternateShardIds() == false {
+		return false
+	}
+
+	var msAltId, bsAltId *common.AlternateShardId
+	var err error
+	msAltId, err = common.ParseAlternateId(index.AlternateShardIds[0])
+	if err != nil || msAltId.IsNil() {
+		logging.Errorf("GroupIndexes:validateShardIds Error in parsing alternateShardId for index defnId: %v, "+
+			"replicaId: %v, partnId: %v, mainstore alternateShardId: %v, err: %v",
+			index.DefnId, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds[0])
+
+		return false
+	}
+
+	if !index.IsPrimary {
+		bsAltId, err = common.ParseAlternateId(index.AlternateShardIds[1])
+
+		if err != nil || bsAltId.IsNil() {
+			logging.Errorf("GroupIndexes: Error in parsing alternateShardId for index defnId: %v, "+
+				"replicaId: %v, partnId: %v, backstore alternateShardId: %v, err: %v",
+				index.DefnId, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds[1])
+
+			return false
+		}
+
+		if msAltId.IsPair(bsAltId) == false { // Log a violation and consider this as individual index
+
+			logging.Fatalf("GroupIndexes: Mainstore and backstore alternate shardID mismatch. "+
+				"mainstore value: %v, backstore value: %v, defnId: %v, instId: %v, partnId: %v, "+
+				"bucket: %v, scope: %v, coll: %v. Considering this as independent index",
+				msAltId.String(), bsAltId.String(), index.DefnId, index.DefnId, index.PartnId,
+				index.Bucket, index.Scope, index.Collection)
+
+			return false
+		}
+	}
+	return true
+}
+
+func GroupIndexes(indexes []*IndexUsage) ([]*IndexUsage, int, error) {
+
+	result := []*IndexUsage{}
+	numShards := 0
+
+	groupedIndexes := make(map[string][]*IndexUsage)
+	allShards := make(map[string]bool)
+
+	for _, index := range indexes {
+
+		// If index has empty shards or invalid shardId combination, then ignore the shardIds in
+		// the index usage and consider this index as a normal index
+		if validateShardIds(index) == false {
+			index.AlternateShardIds = nil
+			result = append(result, index)
+			continue
+		}
+
+		// Group indexes based on main-store alternate shardId
+		// as primary index exists only on main-store
+		msAltId := index.AlternateShardIds[0]
+		groupedIndexes[msAltId] = append(groupedIndexes[msAltId], index)
+		allShards[msAltId] = true
+		if index.IsPrimary == false {
+			bsAltId := index.AlternateShardIds[1]
+			allShards[bsAltId] = true
+		}
+	}
+
+	numShards = len(allShards)
+
+	// Merge the grouped indexes
+	for altId, indexUsages := range groupedIndexes {
+		var proxyIndex *IndexUsage
+		// Check if proxy indexUsage exists
+		for _, index := range indexUsages {
+			if index.IsShardProxy {
+				proxyIndex = index
+				break
+			}
+		}
+
+		if proxyIndex == nil {
+			// It is safe to ignore the error as error validation has happend in
+			// earlier steps
+			var err error
+			alternateId, _ := common.ParseAlternateId(altId)
+			proxyIndex, err = newProxyIndexUsage(alternateId.SlotId, int(alternateId.ReplicaId))
+			if err != nil {
+				logging.Errorf("GroupIndexes:: Observed error while generating new proxy, err: %v", err)
+				return nil, 0, err
+			}
+		}
+
+		for _, index := range indexUsages {
+			if index.IsShardProxy {
+				continue
+			}
+			proxyIndex.AddToGroupedIndexes(index)
+			proxyIndex.Union(index)
+		}
+
+		proxyIndex.NumInstances = uint64(len(proxyIndex.GroupedIndexes))
+		proxyIndex.Normalize()
+		proxyIndex.SetInitialNode()
+		result = append(result, proxyIndex)
+	}
+
+	return result, numShards, nil
+}
+
+func UngroupIndexes(solution *Solution) {
+	for _, indexer := range solution.Placement {
+		allIndexes := indexer.Indexes
+		indexer.Indexes = []*IndexUsage{}
+
+		for _, indexUsage := range allIndexes {
+			if indexUsage.IsShardProxy == false {
+				indexer.Indexes = append(indexer.Indexes, indexUsage)
+				continue
+			}
+
+			for _, groupedIndex := range indexUsage.GroupedIndexes {
+				indexer.Indexes = append(indexer.Indexes, groupedIndex)
+			}
+		}
+	}
 }

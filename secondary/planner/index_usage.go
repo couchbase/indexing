@@ -2,8 +2,10 @@ package planner
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // IndexUsage is a description of one instance of an index used by Planner to keep track of which
@@ -62,6 +64,10 @@ type IndexUsage struct {
 	ActualMemMin          uint64 `json:"actualMemMin"`
 	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
 
+	// Available from 7.6+ version of server
+	// This field captures the actual size of the index on disk (including fragmentation)
+	ActualDiskSize uint64 `json:"actualDiskSize,omitempty"`
+
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
 	EstimatedMemUsage uint64 `json:"estimatedMemUsage"`
@@ -106,6 +112,32 @@ type IndexUsage struct {
 	numDocsPending   int64
 	rollbackTime     int64
 	progressStatTime int64
+
+	// Shard level information
+	// Set to true if this structure is a proxy for shard
+	IsShardProxy bool
+
+	// Number of instances on this proxy shard
+	NumInstances uint64
+
+	// Maximum instances that can be assigned to a shard
+	MaxInstances uint64
+
+	// When index is used as shard proxy, this field represents the
+	// maximum amount of data each shard can hold
+	MaxDiskSize uint64
+
+	// When index is used as shard proxy, this field represents the
+	// percentage of MaxDiskSize that can be used as a cut-off to
+	// decide if the shard can be used for new indexes.
+	// If the 'ActualDiskUsage' of a shard is greater than
+	// 'DiskSizeThreshold'* 'MaxDiskSize', then the shard will not be
+	// used for placing new indexes
+	DiskSizeThreshold float64
+
+	// When index is shard proxy, this field captures the list of all indexes
+	// that are grouped to make the proxy index
+	GroupedIndexes []*IndexUsage
 }
 
 // This function makes a copy of a index usage
@@ -133,13 +165,66 @@ func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, partnId
 	name, bucket, scope, collection string) *IndexUsage {
 
 	return &IndexUsage{DefnId: defnId,
-		InstId:     instId,
-		PartnId:    partnId,
-		Name:       name,
-		Bucket:     bucket,
-		Scope:      scope,
-		Collection: collection,
+		InstId:       instId,
+		PartnId:      partnId,
+		Name:         name,
+		Bucket:       bucket,
+		Scope:        scope,
+		Collection:   collection,
+		NumInstances: 1,
 	}
+}
+
+func newProxyIndexUsage(slotId uint64, replicaId int) (*IndexUsage, error) {
+
+	// Build proxy defnId based on slotId so that planner will not move
+	// this IndexUsage to a node that already has same alternate ID but
+	// different replica number
+	//
+	// As instances get shared between shards with same slotID, during
+	// rebalance, if planner decides to move the proxy to a node that
+	// contains same slotID, a replica violation will be generated and
+	// planner can choose to skip the movement
+	proxyDefnId := common.IndexDefnId(slotId)
+
+	retry := 0
+	var proxyInstId common.IndexInstId
+	var err error
+	for retry < 10 {
+		proxyInstId, err = common.NewIndexInstId()
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+		retry++
+	}
+	if err != nil {
+		logging.Errorf("newProxyIndexUsage: Error observed while generating indexInstId. err: %v", err)
+		return nil, err
+	}
+
+	name := fmt.Sprintf("shard_proxy_%v_%v", slotId, replicaId)
+
+	msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
+	bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 1}
+
+	proxy := &IndexUsage{
+		DefnId:            proxyDefnId,
+		InstId:            proxyInstId,
+		Name:              name,
+		IsShardProxy:      true,
+		AlternateShardIds: []string{msAltId.String(), bsAltId.String()},
+		Instance:          &common.IndexInst{InstId: proxyInstId, ReplicaId: replicaId},
+
+		// Since each proxy can hold variable number of instances,
+		// supress equivalent index check for proxy
+		// E.g. proxy-1 can have i1, i2, i3
+		//      proxy-2 can have i1 (replica 1), i2 (replica 1) - No i3
+		suppressEquivIdxCheck: true,
+	}
+
+	return proxy, nil
+
 }
 
 // Get cpu usage
@@ -202,6 +287,11 @@ func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
 	}
 
 	return o.DataSize
+}
+
+// Get disk consumption
+func (o *IndexUsage) GetDiskSize() uint64 {
+	return o.ActualDiskSize
 }
 
 // Get disk Usage
@@ -472,4 +562,79 @@ func (o *IndexUsage) IndexOnCollection() bool {
 
 func (o *IndexUsage) NeedsEstimation() bool {
 	return o.NoUsageInfo || o.NeedsEstimate
+}
+
+func (o *IndexUsage) HasAlternateShardIds() bool {
+	return len(o.AlternateShardIds) > 0
+}
+
+func (o *IndexUsage) AddToGroupedIndexes(in *IndexUsage) {
+	o.GroupedIndexes = append(o.GroupedIndexes, in)
+}
+
+func (o *IndexUsage) Union(in *IndexUsage) {
+	o.ActualDataSize += in.ActualDataSize
+	o.ActualNumDocs += in.ActualNumDocs
+	o.ActualDiskUsage += in.ActualDiskUsage
+	o.ActualDrainRate += in.ActualDrainRate
+	o.ActualScanRate += in.ActualScanRate
+	o.ActualMemStats += in.ActualMemStats
+	o.ActualMemUsage += in.ActualMemUsage
+	o.ActualMemMin += in.ActualMemMin
+	o.ActualMemOverhead += in.ActualMemOverhead
+	o.ActualCpuUsage += in.ActualCpuUsage
+
+	o.MutationRate += in.MutationRate
+	o.DrainRate += in.DrainRate
+
+	o.ActualResidentPercent += in.ActualResidentPercent
+	o.ActualBuildPercent += in.ActualBuildPercent
+
+	// If the first index in the list is a primay index, then we can end-up
+	// copying only one shardId. Hence, always copy until we see a secondary
+	// index which will have 2 shardIds
+	if len(o.ShardIds) < 2 {
+		o.ShardIds = in.ShardIds
+	}
+}
+
+func (o *IndexUsage) Normalize() {
+
+	// Normalize build percent
+	o.ActualBuildPercent = o.ActualBuildPercent / o.NumInstances
+	o.ActualDrainRate = max(o.MutationRate, o.DrainRate)
+	o.ActualResidentPercent = o.ActualResidentPercent / o.NumInstances
+
+	// Compute the AcutalKeySize
+	if o.ActualNumDocs > 0 {
+		o.ActualKeySize = o.ActualDataSize / o.ActualNumDocs
+	}
+}
+
+func (o *IndexUsage) SetInitialNode() {
+	if o.IsShardProxy == false {
+		return
+	}
+
+	// Even if one index of the grouped instances has a non-nil initialNode,
+	// it means that there exists a node in the cluster containing the
+	// alternateShardId relevant to this proxy usage. Hence, set the initialNode
+	// of that index as the initialNode of proxy usage.
+	//
+	// If all the indexes of proxy usage have "nil" initialNode values, it means
+	// that the entire shard has to be repaired. In such a case, leave the
+	// initialNode value as nil
+	for _, in := range o.GroupedIndexes {
+		if in.initialNode != nil {
+			o.initialNode = in.initialNode
+			break
+		}
+	}
+}
+
+func max(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -52,9 +52,7 @@ type RestoreContext struct {
 // RestoreContext
 //////////////////////////////////////////////////////////////
 
-//
 // Initialize restore context
-//
 func CreateRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket string,
 	filters map[string]bool, filterType string, remap map[string]string) *RestoreContext {
 
@@ -110,12 +108,17 @@ func (m *RestoreContext) postBuildTokens() error {
 	return nil
 }
 
-//
 // Restore and place index in the image onto the current cluster.
-//
 func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, error) {
 
+	config, err := common.GetSettingsConfig(common.SystemConfig)
+	if err != nil {
+		logging.Errorf("RestoreContext: Error from retrieving indexer settings. Error = %v", err)
+		return nil, err
+	}
+
 	serverless := (common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT)
+	enableShardAffinity := config["indexer.planner.enableShardAffinity"].Bool()
 
 	//In serverless mode no need to convert storage mode.
 	if !serverless {
@@ -182,7 +185,7 @@ func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, e
 		return nil, err
 	} else {
 		// invoke placement
-		return m.placeIndex()
+		return m.placeIndex(enableShardAffinity)
 	}
 
 }
@@ -222,9 +225,7 @@ func GetSchedCreateTokens(bucket string, filters map[string]bool, filterType str
 	return schedTokensMap, nil
 }
 
-//
 // Convert storage mode of index to cluster storage mode
-//
 func (m *RestoreContext) convertStorageMode() error {
 
 	for i := range m.image.Metadata {
@@ -242,9 +243,7 @@ func (m *RestoreContext) convertStorageMode() error {
 	return nil
 }
 
-//
 // Convert from LocalIndexMetadata to IndexUsage
-//
 func (m *RestoreContext) convertImage() error {
 
 	config, err := common.GetSettingsConfig(common.SystemConfig)
@@ -309,11 +308,9 @@ func (m *RestoreContext) convertImage() error {
 	return nil
 }
 
-//
 // Remove duplicate index defintion from image.   Dupcliate index defintion include:
 // 1) Index with RState=Pending
 // 2) Index with different instance versions
-//
 func (m *RestoreContext) cleanseBackupMetadata() {
 
 	for indexerId, indexes := range m.idxFromImage {
@@ -351,9 +348,7 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 	}
 }
 
-//
 // Prepare a map of index name to any instance of that index in the current placement
-//
 func (m *RestoreContext) prepareInstNameMap() {
 	for _, indexers := range m.current.Placement {
 		for _, index := range indexers.Indexes {
@@ -365,9 +360,7 @@ func (m *RestoreContext) prepareInstNameMap() {
 	}
 }
 
-//
 // Pick out the indexes that are not yet created in the existing cluster.
-//
 func (m *RestoreContext) findIndexToRestore() error {
 
 	defnId2NameMap := make(map[common.IndexDefnId]string)
@@ -756,9 +749,7 @@ func ApplyFilters(bucket, idxBucket, scope, collection, name string,
 	return true
 }
 
-//
 // For each indexer in the image, try to find a correpsonding indexer.
-//
 func (m *RestoreContext) buildIndexerMapping() {
 
 	// find a match for each indexer node in the image
@@ -777,7 +768,6 @@ func (m *RestoreContext) buildIndexerMapping() {
 	}
 }
 
-//
 // For Serverless Deployment Convert Restore candidates to Schedule Create Tokens.
 // TODO: Wait for Schedule Create Token
 func (m *RestoreContext) convertIndexestoSchedTokens() error {
@@ -827,9 +817,7 @@ func (m *RestoreContext) convertIndexestoSchedTokens() error {
 	return nil
 }
 
-//
 // Post Schedule Create Tokens for the given Restore Candidate onto the selected Indexer.
-//
 func makeScheduleCreateRequest(idxDefn *common.IndexDefn, indexer *planner.IndexerNode) error {
 
 	addr := indexer.RestUrl
@@ -888,9 +876,7 @@ func makeScheduleCreateRequest(idxDefn *common.IndexDefn, indexer *planner.Index
 	return nil
 }
 
-//
 // Update index definition id according to the indexes in current cluster.
-//
 func (m *RestoreContext) updateIndexDefnId() error {
 
 	defnIdMap := make(map[string]common.IndexDefnId)
@@ -946,10 +932,8 @@ func (m *RestoreContext) updateIndexDefnId() error {
 	return nil
 }
 
-//
 // Place index
-//
-func (m *RestoreContext) placeIndex() (map[string][]*common.IndexDefn, error) {
+func (m *RestoreContext) placeIndex(enableShardAffinity bool) (map[string][]*common.IndexDefn, error) {
 
 	newNodes := ([]*planner.IndexerNode)(nil)
 	newNodeIds := ([]string)(nil)
@@ -1044,14 +1028,14 @@ func (m *RestoreContext) placeIndex() (map[string][]*common.IndexDefn, error) {
 	numEmptyIndexer := findNumEmptyIndexer(m.current.Placement, mappedIndexers)
 	if numEmptyIndexer >= len(newNodes) {
 		// place indexes using swap rebalance
-		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds)
+		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds, enableShardAffinity)
 		if err == nil {
 			return m.buildIndexHostMapping(solution), nil
 		}
 	}
 
 	// place indexes using regular rebalance
-	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds)
+	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds, enableShardAffinity)
 	if err == nil {
 		return m.buildIndexHostMapping(solution), nil
 	}
@@ -1063,9 +1047,7 @@ func (m *RestoreContext) placeIndex() (map[string][]*common.IndexDefn, error) {
 	return nil, err
 }
 
-//
 // Find new home for the index
-//
 func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[string][]*common.IndexDefn {
 
 	result := make(map[string][]*common.IndexDefn)
@@ -1269,9 +1251,7 @@ func (m *RestoreContext) remapToken(index *common.IndexDefn) error {
 	return nil
 }
 
-//
 // Get new name for the index
-//
 func (m *RestoreContext) getNewName(defnId2NameMap *map[common.IndexDefnId]string,
 	bucket, scope, collection, name string, defnId common.IndexDefnId) string {
 
@@ -1298,9 +1278,7 @@ func (m *RestoreContext) getNewName(defnId2NameMap *map[common.IndexDefnId]strin
 // Utility
 //////////////////////////////////////////////////////////////
 
-//
 // Find a higest version index instance with the same definition id and instance id
-//
 func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, defnId common.IndexDefnId, partnId common.PartitionId,
 	instId common.IndexInstId) *planner.IndexUsage {
 
@@ -1325,9 +1303,7 @@ func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, def
 	return max
 }
 
-//
 // Find any instance in the metadata, regardless of its partitionId, version or RState
-//
 func findMatchingInst(instNameMap map[string]*planner.IndexUsage, bucket, scope, collection, name string) *planner.IndexUsage {
 
 	key := fmt.Sprintf("%v:%v:%v:%v", bucket, scope, collection, name)
@@ -1338,9 +1314,7 @@ func findMatchingInst(instNameMap map[string]*planner.IndexUsage, bucket, scope,
 	return nil
 }
 
-//
 // Find matching replica in the metadata, regardless of its version or RState
-//
 func findMatchingReplica(current *planner.Plan, bucket, scope, collection, name string, partnId common.PartitionId, replicaId int) *planner.IndexUsage {
 
 	for _, indexers := range current.Placement {
@@ -1362,9 +1336,7 @@ func findMatchingReplica(current *planner.Plan, bucket, scope, collection, name 
 	return nil
 }
 
-//
 // Find any replica in the metadata, regardless of its partitionId, version or RState
-//
 func findAnyReplica(current *planner.Plan, bucket, scope, collection, name string, replicaId int) *planner.IndexUsage {
 
 	for _, indexers := range current.Placement {
@@ -1385,11 +1357,9 @@ func findAnyReplica(current *planner.Plan, bucket, scope, collection, name strin
 	return nil
 }
 
-//
 // Find a node in candidates which is a subset of the given indexes.  This is to honor
 // original layout even if the restore operation has to restart in a cluster that is
 // partially restored.
-//
 func findMatchingIndexer(indexerId common.IndexerId, indexes []*planner.IndexUsage,
 	candidates []*planner.IndexerNode, excludes []*planner.IndexerNode) *planner.IndexerNode {
 
@@ -1419,9 +1389,7 @@ func findMatchingIndexer(indexerId common.IndexerId, indexes []*planner.IndexUsa
 	return nil
 }
 
-//
 // Find the number of empty indexer nodes
-//
 func findNumEmptyIndexer(indexers []*planner.IndexerNode, excludes []*planner.IndexerNode) int {
 
 	count := 0
@@ -1440,9 +1408,7 @@ func findNumEmptyIndexer(indexers []*planner.IndexerNode, excludes []*planner.In
 	return count
 }
 
-//
 // Find if there is a match in the candidate list
-//
 func isMember(candidates []*planner.IndexerNode, indexer *planner.IndexerNode) bool {
 
 	for _, candidate := range candidates {
@@ -1454,9 +1420,7 @@ func isMember(candidates []*planner.IndexerNode, indexer *planner.IndexerNode) b
 	return false
 }
 
-//
 // Is one a subset of another?
-//
 func isSubset(superset []*planner.IndexUsage, subset []*planner.IndexUsage) bool {
 
 	for _, sub := range subset {
@@ -1480,9 +1444,7 @@ func isSubset(superset []*planner.IndexUsage, subset []*planner.IndexUsage) bool
 	return true
 }
 
-//
 // Find the indexer node given the indexerId
-//
 func findIndexer(plan *planner.Plan, indexerId common.IndexerId) *planner.IndexerNode {
 
 	for _, indexer := range plan.Placement {
@@ -1495,9 +1457,7 @@ func findIndexer(plan *planner.Plan, indexerId common.IndexerId) *planner.Indexe
 
 }
 
-//
 // Create a new "ejected" indexer node to hold the indexes to restore
-//
 func createNewEjectedNode(indexes []*planner.IndexUsage, indexerId common.IndexerId) *planner.IndexerNode {
 
 	nodeId := fmt.Sprintf("%v", indexerId)
@@ -1508,9 +1468,7 @@ func createNewEjectedNode(indexes []*planner.IndexUsage, indexerId common.Indexe
 	return node
 }
 
-//
 // Add Indexes to the indexer node
-//
 func addIndexes(indexes []*planner.IndexUsage, indexer *planner.IndexerNode) {
 
 	for _, index := range indexes {
@@ -1518,9 +1476,7 @@ func addIndexes(indexes []*planner.IndexUsage, indexer *planner.IndexerNode) {
 	}
 }
 
-//
 // Find the number of replica across partitions for an index (including itself).
-//
 func findNumReplica(indexers []*planner.IndexerNode, defnId common.IndexDefnId) int {
 
 	replicaMap := make(map[int]bool)
@@ -1535,9 +1491,7 @@ func findNumReplica(indexers []*planner.IndexerNode, defnId common.IndexDefnId) 
 	return len(replicaMap)
 }
 
-//
 // Find valid matching schedule create token
-//
 func findMatchingSchedToken(tokens map[common.IndexDefnId]*mc.ScheduleCreateToken,
 	bucket, scope, collection, name string) *mc.ScheduleCreateToken {
 
@@ -1554,9 +1508,7 @@ func findMatchingSchedToken(tokens map[common.IndexDefnId]*mc.ScheduleCreateToke
 	return nil
 }
 
-//
 // Prepare the index specs
-//
 func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
 
 	var spec planner.IndexSpec
@@ -1599,9 +1551,7 @@ func TransformMetaToPlannerMeta(metadata *LocalIndexMetadata) *planner.LocalInde
 	return transformMeta(metadata)
 }
 
-//
 // Copy metadata from type LocalIndexMetadata to planner.LocalIndexMetadata
-//
 func transformMeta(metadata *LocalIndexMetadata) *planner.LocalIndexMetadata {
 	meta := new(planner.LocalIndexMetadata)
 	meta.IndexerId = metadata.IndexerId

@@ -763,8 +763,9 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	m.updateRebalanceProgressLOCKED(0)
 
 	isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
+	isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
 
-	if c.IsServerlessDeployment() && isShardAwareRebalance {
+	if isShardAffinityEnabled || (c.IsServerlessDeployment() && isShardAwareRebalance) {
 		m.rebalancer = NewShardRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
 			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
@@ -1649,13 +1650,14 @@ func (m *RebalanceServiceManager) doesDropOnSourceExist(ttid string) bool {
 
 // At the time of this function invocation, the following tokens can exist
 // in metaKV:
-//   a. DropOnSource tokens
-//   b. Tokens that have failed cleanup and owner is alive
-//   c. Tokens that have failed cleanup and owner is not alive
+//
+//	a. DropOnSource tokens
+//	b. Tokens that have failed cleanup and owner is alive
+//	c. Tokens that have failed cleanup and owner is not alive
 //
 // For tokens of type (b) and (c), this method will cleanup tranferred data
 // on S3 irrespective of whether the node is alive or not. It will not cleanup
-// any token. The token will be cleaned by either`` by the respective owner (or)
+// any token. The token will be cleaned by either“ by the respective owner (or)
 // during next rebalance by orphan token cleaner
 func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 	rtokens, err := m.getCurrRebalTokens()
@@ -2969,8 +2971,9 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 
 			cfg := m.config.Load()
 			isShardAwareRebalance := cfg["rebalance.shard_aware_rebalance"].Bool()
+			isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
 
-			if c.IsServerlessDeployment() && isShardAwareRebalance {
+			if isShardAffinityEnabled || (c.IsServerlessDeployment() && isShardAwareRebalance) {
 				m.rebalancerF = NewShardRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 					m.localhttp, m.config.Load(), nil, false, &m.p,

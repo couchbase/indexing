@@ -404,7 +404,7 @@ func (r *Rebalancer) initRebalAsync() {
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-							minIterPerTemp, maxIterPerTemp)
+							minIterPerTemp, maxIterPerTemp, false)
 					}
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
@@ -554,9 +554,9 @@ func (r *Rebalancer) doRebalance() {
 	}
 }
 
-//publishFirstTransferBatch publishes the first batch of transfer tokens.
-//Based on the config, it can either choose to publish the first batch for
-//empty node or default to regular processing.
+// publishFirstTransferBatch publishes the first batch of transfer tokens.
+// Based on the config, it can either choose to publish the first batch for
+// empty node or default to regular processing.
 func (r *Rebalancer) publishFirstTransferBatch() {
 
 	cfg := r.config.Load()
@@ -576,9 +576,9 @@ func (r *Rebalancer) publishFirstTransferBatch() {
 
 }
 
-//publishNextTransferBatch publishes the subsequent batch of transfer tokens
-//after the first batch is done. Based on the config, it can choose to publish
-//the tokens for empty nodes separately before regular processing of tokens.
+// publishNextTransferBatch publishes the subsequent batch of transfer tokens
+// after the first batch is done. Based on the config, it can choose to publish
+// the tokens for empty nodes separately before regular processing of tokens.
 func (r *Rebalancer) publishNextTransferBatch() {
 
 	cfg := r.config.Load()
@@ -598,9 +598,9 @@ func (r *Rebalancer) publishNextTransferBatch() {
 
 }
 
-//publishFirstEmptyNodeBatch publishes the first batch for empty
-//node. If there are no empty nodes, it returns without any action.
-//Empty nodes are determined based on the metadata.
+// publishFirstEmptyNodeBatch publishes the first batch for empty
+// node. If there are no empty nodes, it returns without any action.
+// Empty nodes are determined based on the metadata.
 func (r *Rebalancer) publishFirstEmptyNodeBatch() bool {
 
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex",
@@ -658,9 +658,9 @@ func (r *Rebalancer) publishFirstEmptyNodeBatch() bool {
 	return false //nothing published
 }
 
-//publishNextEmptyNodeBatch check if the currently building
-//empty node batch is done and, if so, publishes the next
-//empty node batch. Returns true if any new batch gets published.
+// publishNextEmptyNodeBatch check if the currently building
+// empty node batch is done and, if so, publishes the next
+// empty node batch. Returns true if any new batch gets published.
 func (r *Rebalancer) publishNextEmptyNodeBatch() bool {
 
 	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex",
@@ -1356,8 +1356,8 @@ func (r *Rebalancer) moveTokenToBuildingLOCKED(ttid string, tt *common.TransferT
 	delete(r.toBuildTTsByDestId[destId], ttid)
 }
 
-//checkAnyTTPendingAcceptByDestId check if any TT in current batch for a dest has not yet
-//moved to TransferTokenAccepted state.
+// checkAnyTTPendingAcceptByDestId check if any TT in current batch for a dest has not yet
+// moved to TransferTokenAccepted state.
 func (r *Rebalancer) checkAnyTTPendingAcceptByDestId(destId string) bool {
 
 	const method string = "Rebalancer::checkAnyTTPendingAcceptByDestId:"
@@ -1377,7 +1377,7 @@ func (r *Rebalancer) checkAnyTTPendingAcceptByDestId(destId string) bool {
 	return false
 }
 
-//getAcceptedTTByDestId returns the list of accepted TTs for given dest.
+// getAcceptedTTByDestId returns the list of accepted TTs for given dest.
 func (r *Rebalancer) getAcceptedTTByDestId(destId string) map[string]*c.TransferToken {
 
 	const method string = "Rebalancer::getAcceptedTTByDestId:"
@@ -2195,11 +2195,11 @@ cleanup: // fail the rebalance; mark all accepted transfer tokens with error
 	return
 }
 
-//buildAcceptedIndexesInBatches accepts a map of build tokens and batch size.
-//Input tokens are grouped by keyspace and built in batches with each batch
-//having a max number of tokens as the input batchSize. Only 1 keyspace's
-//batch is built at a time. This is done to limit the backfill pressure on KV
-//during index rebalance.
+// buildAcceptedIndexesInBatches accepts a map of build tokens and batch size.
+// Input tokens are grouped by keyspace and built in batches with each batch
+// having a max number of tokens as the input batchSize. Only 1 keyspace's
+// batch is built at a time. This is done to limit the backfill pressure on KV
+// during index rebalance.
 func (r *Rebalancer) buildAcceptedIndexesInBatches(buildTokens map[string]*common.TransferToken,
 	batchSize int) {
 
@@ -2258,10 +2258,10 @@ func (r *Rebalancer) buildAcceptedIndexesInBatches(buildTokens map[string]*commo
 
 }
 
-//buildAcceptedIndexesBatch submits a request to the Index to build
-//all the indexes for the input buildTokens. The builds occur asynchronously
-//in Indexer handleBuildIndex. This function calls waitForIndexBuildBatch
-//to wait for the builds to finish.
+// buildAcceptedIndexesBatch submits a request to the Index to build
+// all the indexes for the input buildTokens. The builds occur asynchronously
+// in Indexer handleBuildIndex. This function calls waitForIndexBuildBatch
+// to wait for the builds to finish.
 func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.TransferToken) error {
 	const method string = "Rebalancer::buildAcceptedIndexesBatch:" // for logging
 
@@ -2625,7 +2625,7 @@ loop:
 	return cancelled
 }
 
-//once all builds are done, move the token to merge or ready state
+// once all builds are done, move the token to merge or ready state
 func (r *Rebalancer) moveDestTokenToMergeOrReady(buildTokens map[string]*common.TransferToken) {
 	const _moveDestTokenToMergeOrReady string = "Rebalancer::moveDestTokenToMergeOrReady:"
 

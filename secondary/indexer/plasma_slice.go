@@ -282,9 +282,9 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 
 	if err := slice.initStores(isInitialBuild); err != nil {
 		// Index is unusable. Remove the data files and reinit
-		if err == errStorageCorrupted {
-			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
-				"fatal error occured: %v", sliceId, idxInstId, partitionId, err)
+		if err == errStorageCorrupted || err == errStoragePathNotFound {
+			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v isNew %v"+
+				"fatal error occured: %v", sliceId, idxInstId, partitionId, isNew, err)
 		}
 		if isNew {
 			destroyPlasmaSlice(storage_dir, path)
@@ -625,12 +625,20 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 	if mErr != nil && plasma.IsFatalError(mErr) {
 		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
 			"fatal error occured: %v", slice.Id, slice.idxInstId, mErr)
+
+		if !slice.newBorn && plasma.IsErrorRecoveryInstPathNotFound(mErr) {
+			return errStoragePathNotFound
+		}
 		return errStorageCorrupted
 	}
 
 	if bErr != nil && plasma.IsFatalError(bErr) {
 		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
 			"fatal error occured: %v", slice.Id, slice.idxInstId, bErr)
+
+		if !slice.newBorn && plasma.IsErrorRecoveryInstPathNotFound(bErr) {
+			return errStoragePathNotFound
+		}
 		return errStorageCorrupted
 	}
 
@@ -4009,6 +4017,22 @@ func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
 	slice.confLock.RLock()
 	sliceBufSize := slice.sysconf["settings.sliceBufSize"].Uint64()
 	slice.confLock.RUnlock()
+
+	memQuota := slice.indexerStats.memoryQuota.Value()
+
+	//use lower config for small memory quota
+	var scaleDownFactor uint64
+	if memQuota <= 4*1024*1024*1024 {
+		scaleDownFactor = 8
+	} else if memQuota <= 8*1024*1024*1024 {
+		scaleDownFactor = 4
+	} else if memQuota <= 16*1024*1024*1024 {
+		scaleDownFactor = 2
+	} else {
+		scaleDownFactor = 1
+	}
+
+	sliceBufSize = sliceBufSize / scaleDownFactor
 
 	numWriters := slice.numWritersPerPartition()
 

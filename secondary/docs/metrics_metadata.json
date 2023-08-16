@@ -149,8 +149,7 @@
             "scope",
             "collection",
             "index"
-        ],
-        "notes": "This is an ever increasing counter, incremented on each insert/delete/modify. Resets to zero on indexer process restart."
+        ]
     },
     "index_num_docs_pending": {
         "type": "gauge",
@@ -186,7 +185,7 @@
             "collection",
             "index"
         ],
-        "notes": "One n1ql query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)"
+        "notes": "One query can contribute to more than one index scan requests (in case of sub-queries, joins etc.)"
     },
     "index_num_rows_returned": {
         "type": "counter",
@@ -271,7 +270,7 @@
         "notes": "This metric does not includes the index data which not returned as scan result."
     },
     "index_total_scan_duration": {
-        "type": "gauge",
+        "type": "counter",
         "help": "Total time taken by the scans requests, for this index",
         "unit": "Nanoseconds",
         "labels": [

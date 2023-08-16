@@ -28,6 +28,9 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 )
 
+type PartnDistMap map[common.PartitionId]map[int]map[*IndexerNode]*IndexUsage
+type ReplicaDistMap map[int]map[*IndexerNode]*IndexUsage
+
 //////////////////////////////////////////////////////////////
 // Concrete Type/Struct
 /////////////////////////////////////////////////////////////
@@ -63,6 +66,12 @@ type RunConfig struct {
 	MinIterPerTemp   int
 	MaxIterPerTemp   int
 	UseGreedyPlanner bool
+
+	AllowDDLDuringScaleup bool
+
+	// For file transfer based rebalance, this field is set to
+	// "true" if indexes are to be grouped based on alternate shardIds
+	EnableShardAffinity bool
 }
 
 type RunStats struct {
@@ -168,16 +177,16 @@ type TenantUsage struct {
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
 	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	maxIterPerTemp int, enableShardAffinity bool) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
-		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, &runtime)
+		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, enableShardAffinity, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	enableShardAffinity bool, runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
 	if err != nil {
@@ -221,6 +230,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.CpuProfile = cpuProfile
 	config.MinIterPerTemp = minIterPerTemp
 	config.MaxIterPerTemp = maxIterPerTemp
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, hostToIndexToRemove, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes, true)
 	if p != nil && detail {
@@ -235,7 +245,12 @@ func ExecuteRebalanceInternal(clusterUrl string,
 
 	filterSolution(p.Result.Placement)
 
-	transferTokens, err := genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	var transferTokens map[string]*common.TransferToken
+	if enableShardAffinity {
+		transferTokens, err = genShardTransferToken2(p.Result, masterId, topologyChange, false)
+	} else {
+		transferTokens, err = genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -940,6 +955,260 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	return result, nil
 }
 
+func genShardTransferToken2(soln *Solution, masterId string, topologyChange service.TopologyChange,
+	isServerless bool) (map[string]*common.TransferToken, error) {
+
+	tokens := make(map[string]*common.TransferToken)
+
+	// merge tokenB into tokenA for DCP based tokens
+	mergeToken  := func(tokenA, tokenB *common.TransferToken) bool {
+		if tokenB.BuildSource != tokenA.BuildSource {
+			return false
+		}
+
+		switch tokenA.BuildSource {
+		case common.TokenBuildSourceDcp:
+			tokenA.IndexInst.Defn.Partitions = append(tokenA.IndexInst.Defn.Partitions,
+				tokenB.IndexInst.Defn.Partitions...)
+			tokenA.IndexInst.Defn.Versions = append(tokenA.IndexInst.Defn.Versions,
+				tokenB.IndexInst.Defn.Versions...)
+			if tokenA.IndexInst.Defn.AlternateShardIds == nil {
+				tokenA.IndexInst.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
+			}
+			for partnId, asi := range tokenB.IndexInst.Defn.AlternateShardIds {
+				tokenA.IndexInst.Defn.AlternateShardIds[partnId] = asi
+			}
+		default:
+			return false
+		}
+		return true
+	}
+
+	var createTokenForIndex func(*IndexUsage) ([]*common.TransferToken, []string, error)
+
+	// createTokenForIndex - creates TransferTokens for IndexUsage for shard affinity
+	// if an IndexUsage which represents a single partition, this will only generate a single token
+	// if the usage is for a shard proxy, it can generate 1+(len(indexes-in-shard)) tokens
+	// depending on the state of replicas
+	createTokenForIndex = func(index *IndexUsage) ([]*common.TransferToken, []string, error) {
+		allTokens := make([]*common.TransferToken, 1)
+		keys := make([]string, 1)
+
+		token := common.TransferToken{
+			DestId: index.destNode.NodeUUID,
+			DestHost: index.destNode.NodeId,
+			MasterId: masterId,
+			RebalId: topologyChange.ID,
+		}
+		var tokenKey string
+
+		// set transfer details
+		if index.initialNode == nil || index.pendingCreate {
+			// replica repair
+			token.SourceId = ""
+			token.SourceHost = ""
+			token.TransferMode = common.TokenTransferModeCopy
+
+			if index.siblingIndex != nil && index.siblingIndex.initialNode != nil {
+				// replica repair from sibling shard
+				token.SourceId = index.siblingIndex.initialNode.NodeId
+				token.SourceHost = index.siblingIndex.initialNode.NodeUUID
+			}
+
+			// reset instance version for new replicas being created
+			token.IndexInst.Version = 0
+		} else if index.initialNode.NodeId != index.destNode.NodeId {
+			// move
+			token.TransferMode = common.TokenTransferModeMove
+			token.SourceId = index.initialNode.NodeUUID
+			token.SourceHost = index.initialNode.NodeId
+		}
+
+		// set index inst
+		if index.IsShardProxy {
+			// index is a proxy for shard (grouped indexes);
+			// all indexes under the proxy move together.
+			// original indexes should be found from `index.AllIndexes` by alternateShardId
+			// index.DefnId -> proxy of AlternateShardId.SlotNo
+
+			token.BuildSource = common.TokenBuildSourcePeer
+			token.ShardTransferTokenState = common.ShardTokenCreated
+			token.Version = common.MULTI_INST_SHARD_TRANSFER
+
+			var asi *common.AlternateShardId
+			subTokenMap := make(map[string]*common.TransferToken)
+
+			// set token.Insts, token.InstIds and token.RealInstIds by alternateShardId-slot
+			// there should only be 1 <slotNo, destId>/<slotNo, replicaId> pair
+			// all indexes under it move together
+			if index.destNode.NodeVersion < common.INDEXER_76_VERSION {
+				// TODO: if the dest node is on version less than 7.6
+				// need to fallback to DCP based movement here;
+				// this is possible in a mixed mode cluster with server versions 7.6 (or above) and
+				// server version before 7.6 (nodes which can honour and can't honour shardAffintiy
+				// are in the same cluster) as planner should always run on latest version nodes
+			} else {
+				var err error
+				asi, err = common.ParseAlternateId(index.AlternateShardIds[0])
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to parse alternate shard id with err %v", err)
+				}
+			}
+
+			for _, realIndex := range index.GroupedIndexes {
+				// we use recursion here to initialise the IndexInst to correct values
+
+				// realIndex alternateShardIds might not be initialised in the plan
+				realIndex.AlternateShardIds = index.AlternateShardIds
+				realIndex.destNode = index.destNode
+
+				childTokens, childKeys, err := createTokenForIndex(realIndex)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				if len(childTokens) != 1 || len(childKeys) != 1 {
+					// this case should not happen
+					return nil, nil, fmt.Errorf("unexpected child tokens created")
+				}
+
+				if realIndex.initialNode == nil || realIndex.pendingCreate {
+					// case of replica repair for lost replica (replica is not a part of shard)
+					// recreate replica as a part of the shard but with DCP
+					allTokens = append(allTokens, childTokens[0])
+					keys = append(keys, childKeys[0])
+				} else {
+					oldChildToken, ok := subTokenMap[childKeys[0]]
+					if !ok {
+						subTokenMap[childKeys[0]] = childTokens[0]
+					} else {
+						if !mergeToken(oldChildToken, childTokens[0]) {
+							return nil, nil, fmt.Errorf("failed to merge token %v and %v",
+												oldChildToken, childTokens[0])
+						}
+					}
+				}
+			}
+
+			for _, childToken := range subTokenMap {
+				token.IndexInsts = append(token.IndexInsts, childToken.IndexInst)
+				token.InstIds = append(token.InstIds, childToken.InstId)
+				token.RealInstIds = append(token.RealInstIds, childToken.RealInstId)
+			}
+
+			token.ShardIds = index.ShardIds
+
+			tokenKey = fmt.Sprintf("asi_%v_%v-%v-%v", asi.SlotId, asi.ReplicaId, token.SourceId,
+				token.DestId)
+
+
+		} else {
+			// single index only
+			// set token.Inst, token.InstId and token.RealInstId
+
+			token.BuildSource = common.TokenBuildSourceDcp
+			token.State = common.TransferTokenCreated
+			token.Version = common.SINGLE_INST_DCP_BUILD
+
+			token.IndexInst = *index.Instance
+			token.InstId = index.InstId
+
+			token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
+			token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+			token.IndexInst.Defn.Using = common.IndexType(index.StorageMode)
+			token.IndexInst.Defn.Partitions = []common.PartitionId{index.PartnId}
+			token.IndexInst.Defn.Versions = []int{token.IndexInst.Version + 1}
+			token.IndexInst.Defn.NumPartitions = uint32(token.IndexInst.Pc.GetNumPartitions())
+			token.IndexInst.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
+			if index.HasAlternateShardIds() {
+				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
+			}
+			token.IndexInst.Pc = nil
+
+			// reset defn id and instance id as if it is a new index.
+			if common.IsPartitioned(token.IndexInst.Defn.PartitionScheme) {
+				instId, err := common.NewIndexInstId()
+				if err != nil {
+					return nil, nil, fmt.Errorf("Fail to generate transfer token.  Reason: %v", err)
+				}
+
+				token.RealInstId = token.InstId
+				token.InstId = instId
+			}
+
+			// if there is a build token for the definition, set index STATE to active so the
+			// index will be built as part of rebalancing.
+			if index.pendingBuild && !index.PendingDelete && (
+				token.IndexInst.State == common.INDEX_STATE_CREATED ||
+				token.IndexInst.State == common.INDEX_STATE_READY) {
+
+					token.IndexInst.State = common.INDEX_STATE_ACTIVE
+
+			}
+
+			tokenKey = fmt.Sprintf("dcp_%v-%v-%v-%v", index.DefnId, index.Instance.ReplicaId,
+				token.SourceId, token.DestId)
+
+		}
+
+		allTokens[0] = &token
+		keys[0] = tokenKey
+
+		return allTokens, keys, nil
+	}
+
+	for _, indexer := range soln.Placement {
+		for _, index := range indexer.Indexes {
+
+			if index.initialNode != nil && index.initialNode.NodeId == index.destNode.NodeId {
+				// nothing to generate for indexes which are not moving
+				continue
+			}
+
+			groupedTokens, tokenKeys, err := createTokenForIndex(index)
+			if err != nil {
+				return nil, err
+			}
+
+			// merge using token key
+			for i := 0; i < len(groupedTokens); i++ {
+				token := groupedTokens[i]
+				tokenKey := tokenKeys[i]
+
+				if token.BuildSource == common.TokenBuildSourcePeer && len(token.IndexInsts) == 0 {
+					// because of the way we generate groupedTokens, it can be that we end up adding
+					// an empty token for a shard proxy while all of it's indexes are needed to be
+					// rebuilt with DCP; if that is the case skip the token
+					continue
+				}
+
+				oldToken, ok := tokens[tokenKey]
+				if !ok {
+					tokens[tokenKey] = token
+				} else {
+					mergeToken(oldToken, token)
+				}
+			}
+		}
+	}
+
+	if isServerless {
+		// TODO: populate siblingToken for AlternateShardIds
+	}
+
+	result := make(map[string]*common.TransferToken)
+
+	for _, token := range tokens {
+		uuid, _ := common.NewUUID()
+		ttid := fmt.Sprintf("TransferToken%s", uuid.Str())
+		result[ttid] = token
+
+		logging.Infof("ShardTransferToken(v2) generated token - %v | %v", ttid, token)
+	}
+
+	return result, nil
+}
+
 func validateSiblingTokenId(transferTokens map[string]*common.TransferToken) error {
 	for ttid, token := range transferTokens {
 		if token.TransferMode != common.TokenTransferModeMove {
@@ -1049,7 +1318,8 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 // Integration with Metadata Provider
 /////////////////////////////////////////////////////////////
 
-func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool, useGreedyPlanner bool, enforceLimits bool) (*Solution, error) {
+func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool,
+	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp, enableShardAffinity bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1104,7 +1374,8 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 	}
 
 	detail := logging.IsEnabled(logging.Info)
-	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner)
+
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp, enableShardAffinity)
 }
 
 func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
@@ -1185,7 +1456,8 @@ func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.Inde
 	return replicaNodes, nil
 }
 
-func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool, enforceLimits bool) (*Solution, error) {
+func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string,
+	override bool, enforceLimits bool, enableShardAffinity bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1241,6 +1513,7 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 	config := DefaultRunConfig()
 	config.Detail = logging.IsEnabled(logging.Info)
 	config.Resize = false
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, err := replicaRepair(config, plan, defnId, increment)
 	if p != nil && config.Detail {
@@ -1379,7 +1652,7 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
-	useGreedyPlanner bool) (*Solution, error) {
+	useGreedyPlanner, allowDDLDuringScaleup, enableShardAffinity bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -1397,6 +1670,8 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.AllowUnpin = allowUnpin
 	config.UseLive = useLive
 	config.UseGreedyPlanner = useGreedyPlanner
+	config.AllowDDLDuringScaleup = allowDDLDuringScaleup
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
@@ -1413,7 +1688,8 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 }
 
 func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) (*Solution, error) {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
+	deletedNodes []string, enableShardAffinity bool) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -1424,6 +1700,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.MemQuota = memQuota
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
@@ -1441,7 +1718,8 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 }
 
 func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) (*Solution, error) {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
+	deletedNodes []string, enableShardAffinity bool) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -1452,6 +1730,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	config.MemQuota = memQuota
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
+	config.EnableShardAffinity = enableShardAffinity
 
 	p, _, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes, false)
 
@@ -1559,6 +1838,8 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 		return nil, nil, err
 	}
 
+	planner.SetShardAffinity(config.EnableShardAffinity)
+
 	// run planner
 	if _, err := planner.Plan(CommandPlan, solution); err != nil {
 		return nil, nil, err
@@ -1578,6 +1859,11 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 		if err := genCreateIndexDDL(config.GenStmt, planner.GetResult()); err != nil {
 			return nil, nil, err
 		}
+	}
+
+	if config.EnableShardAffinity {
+		PopulateAlternateShardIds(planner.GetResult(), indexes)
+		UngroupIndexes(planner.GetResult())
 	}
 
 	return planner, s, nil
@@ -2094,6 +2380,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	planner.SetTimeout(config.Timeout)
 	planner.SetRuntime(config.Runtime)
 	planner.SetVariationThreshold(config.Threshold)
+	planner.SetShardAffinity(config.EnableShardAffinity)
 
 	param := make(map[string]interface{})
 	param["MinIterPerTemp"] = config.MinIterPerTemp
@@ -2146,6 +2433,7 @@ func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, inc
 	planner.SetRuntime(config.Runtime)
 	planner.SetVariationThreshold(config.Threshold)
 	planner.SetCpuProfile(config.CpuProfile)
+	planner.SetShardAffinity(config.EnableShardAffinity)
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
@@ -3045,30 +3333,31 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 func DefaultRunConfig() *RunConfig {
 
 	return &RunConfig{
-		Detail:         false,
-		GenStmt:        "",
-		MemQuotaFactor: 1.0,
-		CpuQuotaFactor: 1.0,
-		Resize:         true,
-		MaxNumNode:     int(math.MaxInt16),
-		Output:         "",
-		Shuffle:        0,
-		AllowMove:      false,
-		AllowSwap:      true,
-		AllowUnpin:     false,
-		AddNode:        0,
-		DeleteNode:     0,
-		MaxMemUse:      -1,
-		MaxCpuUse:      -1,
-		MemQuota:       -1,
-		CpuQuota:       -1,
-		DataCostWeight: 1,
-		CpuCostWeight:  1,
-		MemCostWeight:  1,
-		EjectOnly:      false,
-		DisableRepair:  false,
-		MinIterPerTemp: 100,
-		MaxIterPerTemp: 20000,
+		Detail:                false,
+		GenStmt:               "",
+		MemQuotaFactor:        1.0,
+		CpuQuotaFactor:        1.0,
+		Resize:                true,
+		MaxNumNode:            int(math.MaxInt16),
+		Output:                "",
+		Shuffle:               0,
+		AllowMove:             false,
+		AllowSwap:             true,
+		AllowUnpin:            false,
+		AddNode:               0,
+		DeleteNode:            0,
+		MaxMemUse:             -1,
+		MaxCpuUse:             -1,
+		MemQuota:              -1,
+		CpuQuota:              -1,
+		DataCostWeight:        1,
+		CpuCostWeight:         1,
+		MemCostWeight:         1,
+		EjectOnly:             false,
+		DisableRepair:         false,
+		MinIterPerTemp:        100,
+		MaxIterPerTemp:        20000,
+		AllowDDLDuringScaleup: false,
 	}
 }
 
@@ -3114,6 +3403,8 @@ func initialSolution(config *RunConfig,
 	maxNumNode := config.MaxNumNode
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
+	// initialSolution is only called from Plan
+	allowDDLDuringScaleup := configureAllowDDLDuringScaleup(CommandPlan, config.AllowDDLDuringScaleup)
 
 	memQuota, cpuQuota := computeQuota(config, sizing, indexes, false)
 
@@ -3121,7 +3412,7 @@ func initialSolution(config *RunConfig,
 
 	indexers := indexerNodes(constraint, indexes, sizing, false)
 
-	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair)
+	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair, allowDDLDuringScaleup)
 
 	placement := newRandomPlacement(indexes, config.AllowSwap, false)
 	if err := placement.InitialPlace(r, indexes); err != nil {
@@ -3139,12 +3430,14 @@ func emptySolution(config *RunConfig,
 	maxNumNode := config.MaxNumNode
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
+	// emptySolution is only called from CommandPlan
+	allowDDLDuringScaleup := configureAllowDDLDuringScaleup(CommandPlan, config.AllowDDLDuringScaleup)
 
 	memQuota, cpuQuota := computeQuota(config, sizing, indexes, false)
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair)
+	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair, allowDDLDuringScaleup)
 
 	return r, constraint
 }
@@ -3160,6 +3453,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
 	useLive := config.UseLive || command == CommandRebalance || command == CommandSwap || command == CommandRepair || command == CommandDrop
+	allowDDLDuringScaleup := configureAllowDDLDuringScaleup(command, config.AllowDDLDuringScaleup)
 
 	movedData := uint64(0)
 	movedIndex := uint64(0)
@@ -3185,7 +3479,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair)
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair, allowDDLDuringScaleup)
 	r.calculateSize() // in case sizing formula changes after the plan is saved
 	r.usedReplicaIdMap = plan.UsedReplicaIdMap
 
@@ -5361,4 +5655,463 @@ func genResumeDownloadToken(solution *Solution,
 	logResumeDownloadTokens()
 
 	return result, nil
+}
+
+func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
+	var str string
+	for _, indexerMap := range replicaMap {
+		for indexerNode, indexUsage := range indexerMap {
+			str += fmt.Sprintf("Node: %v, numShards: %v, minShardCapacity: %v, Index name: %v, defnId: %v, replicaId: %v, partnId: %v\n",
+				indexerNode.NodeId, indexerNode.numShards, indexerNode.MinShardCapacity,
+				indexUsage.Name, indexUsage.DefnId,
+				indexUsage.Instance.ReplicaId, indexUsage.PartnId)
+		}
+	}
+	return str
+}
+
+func getLoadDist(nodes map[*IndexerNode]bool) string {
+	var str string
+	for k := range nodes {
+		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.numShards, k.MinShardCapacity)
+	}
+	return str
+}
+
+func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
+
+	targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
+
+	// Get the list of indexer nodes on to which the "indexes" are going to
+	// be placed on
+	for _, newIndex := range indexes {
+		for _, indexer := range solution.Placement {
+			for _, index := range indexer.Indexes {
+
+				if index.IsShardProxy == false && index.DefnId == newIndex.DefnId &&
+					index.Instance.ReplicaId == newIndex.Instance.ReplicaId {
+					if _, ok := targetNodes[indexer]; !ok {
+						targetNodes[indexer] = make(map[*IndexUsage]bool)
+					}
+					targetNodes[indexer][index] = true
+				}
+
+			}
+		}
+	}
+
+	targetNodes = pruneIndexers(targetNodes) // Prune indexers that are <7.6 version
+
+	// Group indexes for each partition
+	// partnId -> replicaId -> indexerNode to corresponding index usage
+	allPartnDist := getPartnDistribution(targetNodes)
+
+	for _, partnDist := range allPartnDist {
+		for _, replicaMap := range partnDist {
+
+			// Re-group indexes on the target nodes so that the index can use the grouping
+			// done from earlier iteration
+			for indexer := range targetNodes {
+				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes)
+			}
+
+			// If a new shard can be created for this partition across all indexer nodes,
+			// then generate new shardIds and populate the IndexUsage structure
+			if canCreateNewShards(replicaMap) {
+				logging.LazyVerbose(func() string {
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds Generating new shards for index: %v "+
+						"as there is room for new shards", getIndexesFromReplicaMap(replicaMap))
+				})
+
+				// If there is an error in generating alternateID's, do not fail
+				// index creation. Ignore the error so that the index can still be
+				// created without alternateId
+				genAlterntateShardIds(replicaMap)
+
+			} else {
+				// Atleast one indexer node has reached the capacity of shards
+				// Try placing the index on existing shards. If no such placement
+				// if possible across the nodes, then force create new shards
+
+				logging.LazyVerbose(func() string {
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds All indexer nodes are full with shards "+
+						"Current shard capacity: %v, re-using existing shards", getIndexesFromReplicaMap(replicaMap))
+				})
+
+				allIndexerNodes := make(map[*IndexerNode]bool) // All indexer nodes in the cluster
+				fullCapNodes := make(map[*IndexerNode]bool)    // All nodes where shard capacity is full
+				for _, indexer := range solution.Placement {
+					allIndexerNodes[indexer] = true
+				}
+
+				for indexer := range targetNodes {
+					if indexer.numShards >= indexer.MinShardCapacity {
+						fullCapNodes[indexer] = true
+					}
+				}
+
+				logging.LazyVerbose(func() string {
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v", getLoadDist(fullCapNodes))
+				})
+
+				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap)
+				if replan {
+					logging.Warnf("Planner::populateAlternateShardIds Re-planning placement as no common shard has been found")
+
+					// TODO: Do actual replanning instead of just assining new shardIds
+					genAlterntateShardIds(replicaMap)
+
+				} else {
+					// Assign alternate Ids based on the least loaded slot
+					slot := shardSlots[0]
+					logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v as "+
+						"it is least loaded", slot[0].slotId, getIndexesFromReplicaMap(replicaMap))
+					assignAlternateIds(replicaMap, slot, targetNodes)
+				}
+			}
+		}
+	}
+}
+
+func pruneIndexers(nodes map[*IndexerNode]map[*IndexUsage]bool) map[*IndexerNode]map[*IndexUsage]bool {
+	resp := make(map[*IndexerNode]map[*IndexUsage]bool)
+	for indexer, indexUsageMap := range nodes {
+		if indexer.NodeVersion < common.INDEXER_76_VERSION {
+			continue
+		}
+
+		resp[indexer] = indexUsageMap
+	}
+
+	return resp
+}
+
+// Generates a distribution map for each partition across all definitions
+// Mapping contains defnId -> partnId -> replicaId -> indexerNode to corresponding index usage
+func getPartnDistribution(nodes map[*IndexerNode]map[*IndexUsage]bool) map[common.IndexDefnId]PartnDistMap {
+	allPartnDist := make(map[common.IndexDefnId]PartnDistMap)
+
+	for indexer, indexUsageMap := range nodes {
+		for indexUsage, _ := range indexUsageMap {
+			defnId := indexUsage.DefnId
+			partnId := indexUsage.PartnId
+			replicaId := indexUsage.Instance.ReplicaId
+
+			if _, ok := allPartnDist[defnId]; !ok {
+				allPartnDist[defnId] = make(PartnDistMap)
+			}
+
+			if _, ok := allPartnDist[defnId][partnId]; !ok {
+				allPartnDist[defnId][partnId] = make(ReplicaDistMap)
+			}
+
+			if _, ok := allPartnDist[defnId][partnId][replicaId]; !ok {
+				allPartnDist[defnId][partnId][replicaId] = make(map[*IndexerNode]*IndexUsage)
+			}
+
+			allPartnDist[defnId][partnId][replicaId][indexer] = indexUsage
+		}
+	}
+
+	return allPartnDist
+}
+
+func canCreateNewShards(replicaMap ReplicaDistMap) bool {
+	for _, indexerMap := range replicaMap {
+		for indexer := range indexerMap {
+
+			// One of the indexer nodes has reached the minimum number of shards limit
+			// Return false so that planner will try populating existing shards
+			// instead of creating new shards
+			if indexer.numShards >= indexer.MinShardCapacity {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
+
+	// All replicas share same slotId. Hence, generate a single slotId
+	// and re-use the slotId for all replicas
+	var alternateId *common.AlternateShardId
+	var err error
+	retry := 0
+	for retry < 10 {
+		alternateId, err = common.NewAlternateId()
+		if err == nil {
+			break
+		}
+
+		logging.Errorf("genAlternateShardIds: Error observed while generating alternateShardId, err: %v", err)
+		time.Sleep(10 * time.Millisecond)
+		retry++
+	}
+	if alternateId == nil || err != nil {
+		return err
+	}
+
+	for replicaId, indexerMap := range replicaMap {
+		for indexerNode, indexUsage := range indexerMap {
+
+			alternateId.SetReplicaGroup(uint8(replicaId))
+			if indexUsage.IsPrimary {
+				alternateId.SetInstaceGroup(0)
+				logging.Infof("genAlternateShardIds: Generating new alternageShardId: %v for primary index "+
+					"name: %v, defnId: %v, replicaId: %v, partnId: %v",
+					alternateId.String(), indexUsage.Name, indexUsage.DefnId,
+					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
+
+				indexUsage.AlternateShardIds = []string{alternateId.String()}
+				indexerNode.numShards += 1 // Increment new shard count as more shards are getting created
+			} else {
+				alternateId.SetInstaceGroup(0)
+				msAltId := alternateId.String() // compute mainstore alternate ID
+				alternateId.SetInstaceGroup(1)
+				bsAltId := alternateId.String() // compute backstore alternate ID
+
+				logging.Infof("genAlternateShardIds: Generating new alternateShardIds: [%v, %v] for index "+
+					"name: %v, defnId: %v, replicaId: %v, partnId: %v",
+					msAltId, bsAltId, indexUsage.Name, indexUsage.DefnId,
+					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
+
+				indexUsage.AlternateShardIds = []string{msAltId, bsAltId}
+				indexerNode.numShards += 2
+			}
+		}
+	}
+	return nil
+}
+
+type ReplicaLoad struct {
+	ReplicaId int
+	node      *IndexerNode
+	usage     *IndexUsage
+}
+
+func (r *ReplicaLoad) String() string {
+	var out string
+	out += fmt.Sprintf("[replicaId: %v, node: %v, numShards: %v, minShardCap: %v, diskSize: %v, numInsts: %v], ",
+		r.ReplicaId, r.node.NodeId, r.node.numShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
+	return out
+}
+
+// ShardLoad
+// Captures the load of a shard "slot" across all nodes in the cluster
+type ShardLoad struct {
+	slotId uint64
+
+	replicas []*ReplicaLoad
+
+	// Maximum number of instances the shard with "slotId" holds
+	// on any node in the cluster
+	maxInstances uint64
+
+	// Disk size of the shard with "slotId" across all nodes in
+	// the cluster
+	totalDiskSize uint64
+}
+
+func (s *ShardLoad) String() string {
+	var out string
+	out += fmt.Sprintf("Slot: %v, ReplicaDist:\n", s.slotId)
+	for _, v := range s.replicas {
+		out += fmt.Sprintf("\t\t%v,", v.String())
+	}
+	out += fmt.Sprintf("TotalDiskSize: %v, MaxInstances: %v ", s.totalDiskSize, s.maxInstances)
+	return out
+}
+
+// Returns the shard distribution for nodes
+func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
+
+	shardDist := make(map[uint64]*ShardLoad)
+	for indexer := range nodes {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy == false {
+				continue
+			}
+
+			alternateId, _ := common.ParseAlternateId(index.AlternateShardIds[0])
+			slotId, replicaId := alternateId.SlotId, int(alternateId.ReplicaId)
+
+			if _, ok := shardDist[slotId]; !ok {
+				shardDist[slotId] = &ShardLoad{
+					slotId: slotId,
+				}
+			}
+
+			shardDist[slotId].replicas = append(shardDist[slotId].replicas, &ReplicaLoad{replicaId, indexer, index})
+			shardDist[slotId].totalDiskSize += index.ActualDiskSize
+			shardDist[slotId].maxInstances = max(shardDist[slotId].maxInstances, index.NumInstances)
+		}
+	}
+
+	return shardDist
+}
+
+func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
+	targetNodes map[*IndexerNode]map[*IndexUsage]bool, replicaMap map[int]map[*IndexerNode]*IndexUsage) ([][2]*ShardLoad, bool) {
+
+	//allShardDist := getShardDist(allIndexerNodes)
+	shardDistOnFullCapNodes := getShardDist(fullCapNodes)
+
+	// Step-1: Prune all the shards that do not exist on all full capacity nodes
+	// Even if the shard does not exist on one full capacity node, indexer may have
+	// to allocate a shard on the full capacity node - which violates the capacity
+	// constraint. If no common shard exists, then planner will replan the placement
+	//
+	// If a shard exists on all full capacity nodes but the shard usage is beyond the
+	// capacity, then prune the shard
+
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		if len(shardLoad.replicas) != len(fullCapNodes) {
+			logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as it is not present on "+
+				"all full capacity nodes. shardLoad: %v", shardLoad.String())
+			delete(shardDistOnFullCapNodes, slotId)
+			continue
+		}
+
+		for _, replica := range shardLoad.replicas {
+			diskUsageThreshold := uint64(float64(replica.usage.MaxDiskSize) * (replica.usage.DiskSizeThreshold / 100.0))
+			if replica.usage.ActualDiskSize >= diskUsageThreshold || replica.usage.NumInstances >= replica.usage.MaxInstances {
+				logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as the disk usage is beyond threshold or "+
+					"the shard has hit maximum instance capacity. shardLoad: %v", slotId, shardLoad.String())
+				delete(shardDistOnFullCapNodes, slotId)
+				continue
+			}
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true // re-plan
+	}
+
+	// Step-2: Among the shards that exist on all full capacity nodes,
+	// make sure that the replicas of those shards are with in the replicas of interest
+	//
+	// E.g., if nodes n1 & n2 are full at its capacity and has a shard with replicaIds: 2, 3
+	// on each of them respectively but planner wants to create only replicas 0 & 1, then
+	// such shards can not be used
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		for _, replicaDist := range shardLoad.replicas {
+
+			if _, ok := replicaMap[replicaDist.ReplicaId]; !ok {
+				logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shard does not contain replicas of interest. "+
+					"shardLoad: %v, replicaDist: %v", slotId, shardLoad.String(), getIndexesFromReplicaMap(replicaMap))
+				// Shard replica is not of interest for index creation
+				delete(shardDistOnFullCapNodes, slotId)
+			}
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true // re-plan
+	}
+
+	// Step-3: For the remaining shards, it is possible that global distribution of replicas
+	// can exist beyond the target nodes
+	//
+	// E.g., if there are 5 nodes n0, n1, n2, n3, n4 in the cluster and the target nodes are
+	// n0, n1, n2 with n0, n1 being at full capacity, then do not choose a shard that exists
+	// on n0 (replica: 0), n1 (replica: 1), n3 (replica: 2) as planner has to place (replica: 2)
+	// on n2 while replica already exists on n3 i.e. if a replica of interest exists outside
+	// target nodes, ignore the shard
+	globalShardDist := getShardDist(allIndexerNodes)
+
+	for slotId, shardLoad := range shardDistOnFullCapNodes {
+		if globalDist, ok := globalShardDist[slotId]; ok {
+
+			for _, replica := range globalDist.replicas {
+				_, ok1 := replicaMap[replica.ReplicaId]
+				_, ok2 := targetNodes[replica.node]
+
+				// "ok1 && !ok2" means that replica of interest for this shard exists outside
+				// target nodes. Skip this shard
+				//
+				// Note: Do not check for !ok1 case as the shard can have replica: 3 on a
+				// different node but planner wants to create only replicas 0, 1 and 2. In
+				// that case !ok1 will be true but the shard can still be eligible for placement
+				if ok1 && !ok2 {
+					logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shards of interest are outside target nodes. "+
+						"shardLoad: %v, replicaDist: %v", slotId, shardLoad.String(), getIndexesFromReplicaMap(replicaMap))
+					delete(shardDistOnFullCapNodes, slotId)
+				}
+			}
+		} else {
+			// This case should never happen
+			delete(shardDistOnFullCapNodes, slotId)
+		}
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true
+	}
+
+	var shardSlice [][2]*ShardLoad
+	for slotId, v := range shardDistOnFullCapNodes {
+		shardSlice = append(shardSlice, [2]*ShardLoad{v, globalShardDist[slotId]})
+	}
+
+	return sortByLoad(shardSlice), false
+}
+
+func sortByLoad(shardSlice [][2]*ShardLoad) [][2]*ShardLoad {
+
+	// Instead of storing based on totalDiskSize, use bin based sorting
+	// If two shards have usage of 20G and 21G but the shard with 20G is having
+	// more indexes, then it is ideal to place the new indexes on the shard with
+	// 21G of disk usage.
+	//
+	// To facilitate such sorting, the totalDiskSize is divided into bins of 2.5G size
+	// (1% of maximum disk usage threshold)
+	// If two shards fall in the same bin, then the number of instances are compared
+	// If the number of instances match, then the absolute value of disk size is used
+	binSize := uint64(2560 * 1024 * 1024) // 2.5G
+	sort.Slice(shardSlice, func(i, j int) bool {
+		iSlot, jSlot := shardSlice[i][0].totalDiskSize/binSize, shardSlice[j][0].totalDiskSize/binSize
+		a := iSlot < jSlot
+		b := (iSlot == jSlot) && (shardSlice[i][0].maxInstances < shardSlice[j][0].maxInstances)
+		c := (iSlot == jSlot) && (shardSlice[i][0].maxInstances == shardSlice[j][0].maxInstances) &&
+			(shardSlice[i][0].totalDiskSize < shardSlice[j][0].totalDiskSize)
+		return a || b || c
+	})
+
+	return shardSlice
+}
+
+func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2]*ShardLoad, targetNodes map[*IndexerNode]map[*IndexUsage]bool) {
+
+	slotId := slot[0].slotId
+	slotDist := make(map[*IndexerNode]int)
+	for _, replica := range slot[1].replicas {
+		slotDist[replica.node] = replica.ReplicaId
+	}
+
+	assignedReplicas := make(map[int]bool)
+	var remainingIndexes []*IndexUsage
+	for _, indexDist := range replicaMap {
+		for indexerNode, index := range indexDist {
+			if val, ok := slotDist[indexerNode]; ok {
+				index.Instance.ReplicaId = val
+				index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val), fmt.Sprintf("%v-%v-1", slotId, val)}
+				assignedReplicas[val] = true
+			} else {
+				remainingIndexes = append(remainingIndexes, index)
+			}
+		}
+	}
+
+	i := 0
+	for replicaId, _ := range replicaMap {
+		if _, ok := assignedReplicas[replicaId]; !ok {
+			index := remainingIndexes[i]
+			index.Instance.ReplicaId = replicaId
+			msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
+			bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 1}
+			index.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
+			i++
+		}
+	}
 }

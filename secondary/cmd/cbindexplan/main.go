@@ -173,6 +173,7 @@ var gCpuQuota int
 var gEjectedNode string
 var gGetUsage bool
 var gNumNewReplica int
+var gEnableShardAffinity bool
 
 //////////////////////////////////////////////////////////////
 // Initialization
@@ -211,6 +212,9 @@ func init() {
 
 	// number of new replicas to be created (considered for running the size estimation) - Applicable only when command is retrieve.
 	flag.IntVar(&gNumNewReplica, "numNewReplica", 1, "number of new index replicas to be created - considered for running size estimation. Applicable only when command is retrieve. Applicable only with greedy planner.")
+
+	// enable shard affinity when creating/moving/repairing indexes
+	flag.BoolVar(&gEnableShardAffinity, "enableShardAffinity", true, "flag to enable shard affinity during the plan phase of index creation/rebalance/replica repair/ restore")
 }
 
 func main() {
@@ -292,7 +296,7 @@ func main() {
 			return
 		}
 
-		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false, true)
+		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false, true, false, gEnableShardAffinity)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -304,7 +308,7 @@ func main() {
 			logging.Fatalf("Invalid argument: option 'ddl' is not supported for rebalancing.")
 		}
 
-		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil)
+		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil, gEnableShardAffinity)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -351,7 +355,7 @@ func main() {
 		}
 
 		tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
-			gDetail, true, false, 0, 0, false, 100, 20000, nil)
+			gDetail, true, false, 0, 0, false, 100, 20000, gEnableShardAffinity, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
