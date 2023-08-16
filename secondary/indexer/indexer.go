@@ -5379,7 +5379,15 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 // manager would asynchronously update it's book-keeping
 func (idx *indexer) sendMonitorSliceMsg(sliceList []Slice) {
 	// Process this only for serverless deployments
-	if common.GetBuildMode() != common.ENTERPRISE || common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
+	if common.GetBuildMode() != common.ENTERPRISE {
+		return
+	}
+
+	shardAffinityEnabled := idx.config["planner.enableShardAffinity"].Bool() && common.GetStorageMode() == common.PLASMA
+	// ShardAffinity is always enabled for serverless deployments
+	shardAffinityEnabled = shardAffinityEnabled || common.IsServerlessDeployment()
+
+	if !shardAffinityEnabled {
 		return
 	}
 

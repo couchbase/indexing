@@ -1122,6 +1122,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.IndexInst = *index.Instance
 			token.InstId = index.InstId
 
+			token.IndexInst.Defn.InstStateAtRebal = token.IndexInst.State
 			token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
 			token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
 			token.IndexInst.Defn.Using = common.IndexType(index.StorageMode)
