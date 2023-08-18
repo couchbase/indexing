@@ -155,6 +155,8 @@ type watcher struct {
 
 	clientStats IndexStats2Holder // local cached complete version showing all buckets and indexes that exist
 	storeStats  bool
+
+	retrieveClientStats uint32
 }
 
 // With partitioning, index instance is distributed among indexer nodes.
@@ -6192,7 +6194,20 @@ RETRY2:
 	if err == nil && w.storeStats {
 		clusterVersion := w.getClusterVersion()
 		if clusterVersion >= c.INDEXER_70_VERSION {
-			err = w.getClientStats()
+
+			// By retrieving client stats asynchronously, watcher does not have to wait
+			// for stats from indexer. This means that the indexes belonging to this node
+			// may not be picked up for scans if replicas are available as client does
+			// not have the load statistics of indexes on the node
+			//
+			// In case, indexer broadcasts the full list of stats to watcher before
+			// getClientStats succeed, then the compare-and-swap (CAS) in getClientStats
+			// would fail as CAS would succeed only if clientStats are nil. This will
+			// make sure that the full index stats broadcast always takes precedence
+			// over updation via getClientStats
+			if atomic.CompareAndSwapUint32(&w.retrieveClientStats, 0, 1) {
+				go w.getClientStats()
+			}
 		}
 	}
 
