@@ -351,6 +351,10 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	if region != "" {
 		meta[plasma.GSIBucketRegion] = region
 	}
+	if msg.IsPeerTransfer() {
+		meta[plasma.RPCClientTLSConfig] = msg.GetTLSConfig()
+		meta[plasma.RPCHTTPSetReqAuthCb] = (plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback())
+	}
 
 	if !isSyncCleanup { // Invoke asynchronous cleanup
 		err := plasma.DoCleanup(destination, meta, nil)
@@ -409,6 +413,10 @@ func (stm *ShardTransferManager) cleanupStagingDirOnRestore(cmd Message) {
 		transferId = msg.GetTransferTokenId()
 		meta[plasma.GSIRebalanceId] = taskId
 		meta[plasma.GSIRebalanceTransferToken] = transferId
+		if msg.IsPeerTransfer() {
+			meta[plasma.RPCClientTLSConfig] = msg.GetTLSConfig()
+			meta[plasma.RPCHTTPSetReqAuthCb] = (plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback())
+		}
 	} else if taskType == common.PauseResumeTask {
 		taskId = msg.GetPauseResumeId()
 		transferId = msg.GetBucket()
@@ -536,6 +544,10 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 			case common.RebalanceTask:
 				meta[plasma.GSIRebalanceId] = taskId
 				meta[plasma.GSIRebalanceTransferToken] = transferId
+				if msg.IsPeerTransfer() {
+					meta[plasma.RPCClientTLSConfig] = msg.GetTLSConfig()
+					meta[plasma.RPCHTTPSetReqAuthCb] = (plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback())
+				}
 			case common.PauseResumeTask:
 				meta[plasma.GSIPauseResume] = transferId
 			}

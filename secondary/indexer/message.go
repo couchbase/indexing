@@ -2666,6 +2666,11 @@ type MsgShardTransferCleanup struct {
 	transferTokenId string
 	respCh          chan bool
 	syncCleanup     bool
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
@@ -2708,6 +2713,18 @@ func (m *MsgShardTransferCleanup) String() string {
 	return sbp.String()
 }
 
+func (m *MsgShardTransferCleanup) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgShardTransferCleanup) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgShardTransferCleanup) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
 type MsgShardTransferStagingCleanup struct {
 	respCh      chan Message
 	destination string
@@ -2715,6 +2732,11 @@ type MsgShardTransferStagingCleanup struct {
 	taskId      string
 	transferId  string
 	taskType    common.TaskType
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgShardTransferStagingCleanup) GetMsgType() MsgType {
@@ -2773,6 +2795,18 @@ func (m *MsgShardTransferStagingCleanup) GetTaskType() common.TaskType {
 	return m.taskType
 }
 
+func (m *MsgShardTransferStagingCleanup) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgShardTransferStagingCleanup) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgShardTransferStagingCleanup) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
 type MsgStartShardRestore struct {
 	shardPaths  map[common.ShardId]string
 	taskId      string
@@ -2798,6 +2832,11 @@ type MsgStartShardRestore struct {
 
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgStartShardRestore) GetMsgType() MsgType {
@@ -2894,6 +2933,18 @@ func (m *MsgStartShardRestore) ToShardTransferStagingCleanup() *MsgShardTransfer
 		transferId: m.transferId,
 		taskType: m.taskType,
 	}
+}
+
+func (m *MsgStartShardRestore) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgStartShardRestore) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgStartShardRestore) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
 }
 
 type MsgDestroyLocalShardData struct {

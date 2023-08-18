@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -886,28 +887,14 @@ loop:
 			return cbauth.SetRequestAuth(req)
 		}
 		host, _, _ := net.SplitHostPort(tt.DestHost)
-		tlsConfig, err := security.GetTLSConfig()
-		if err != nil {
-			l.Errorf("ShardRebalancer::startShardTransfer failed to get TLS config for transfer token %v (host %v) with error %v",
-				ttid, tt.DestHost, err)
-			sr.setTransferTokenError(ttid, tt, err.Error())
-			return
-		} else if tlsConfig == nil {
-			l.Errorf("ShardRebalancer::startShardTransfer got nil TLS config for transfer token %v (host %v)",
-				ttid, tt.DestHost)
-			sr.setTransferTokenError(ttid, tt, "got nil TLS config")
-			return
-		}
+		msg.tlsConfig, err = getTLSConfigWithCeftificates(host)
 
-		err = security.SetupCertificate(host, tlsConfig)
 		if err != nil {
-			l.Errorf("ShardRebalancer::startShardTransfer failed to set certificates for transfer token %v (host %v) with error %v",
+			l.Errorf("ShardRebalancer::startShardTransfer failed to setup TLS config for transfer token %v (host %v) with error %v",
 				ttid, tt.DestHost, err)
 			sr.setTransferTokenError(ttid, tt, err.Error())
 			return
 		}
-
-		msg.tlsConfig = tlsConfig
 
 	}
 
@@ -1021,6 +1008,21 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		transferTokenId: ttid,
 		respCh:          respCh,
 		syncCleanup:     syncCleanup,
+	}
+
+	if sr.canMaintainShardAffinity {
+		msg.isPeerTransfer = true
+		msg.authCallback = func(req *http.Request) error {
+			return cbauth.SetRequestAuth(req)
+		}
+		host, _, _ := net.SplitHostPort(tt.DestHost)
+		msg.tlsConfig, err = getTLSConfigWithCeftificates(host)
+		if err != nil {
+			l.Errorf("ShardRebalancer::initiateShardTransferCleanup failed to get TLS config for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
 	}
 
 	sr.supvMsgch <- msg
@@ -1236,6 +1238,21 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
+	}
+
+	if sr.canMaintainShardAffinity {
+		msg.isPeerTransfer = true
+		msg.authCallback = cbauth.SetRequestAuth
+		var err error
+
+		host, _, _ := net.SplitHostPort(tt.DestHost)
+		msg.tlsConfig, err = getTLSConfigWithCeftificates(host)
+		if err != nil {
+			l.Errorf("ShardRebalancer::startShardRestore failed to get TLS config for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
 	}
 
 	sr.supvMsgch <- msg
@@ -3190,4 +3207,20 @@ func restoreShardDone(shardIds []common.ShardId, supvMsgch MsgChannel) {
 	supvMsgch <- msg
 
 	<-respCh
+}
+
+func getTLSConfigWithCeftificates(host string) (*tls.Config, error) {
+	tlsConfig, err := security.GetTLSConfig()
+	if err != nil {
+		return nil, err
+	} else if tlsConfig == nil {
+		return nil, err
+	}
+
+	err = security.SetupCertificate(host, tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return tlsConfig, nil
 }
