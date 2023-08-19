@@ -478,11 +478,13 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 	}
 
 	if !tt.IsShardTransferToken() {
-		err := fmt.Errorf("ShardRebalancer::processShardTransferToken Transfer token is not for transferring shard. ttid: %v, tt: %v",
-			ttid, tt)
-		l.Fatalf(err.Error())
-		sr.setTransferTokenError(ttid, tt, err.Error())
-		return
+		errStr := "Transfer token is not for transferring shard"
+		l.Fatalf("ShardRebalancer::processShardTransferToken %v. ttid: %v, tt: %v", errStr, ttid, tt)
+		sr.setTransferTokenError(ttid, tt, errStr)
+		if tt.MasterId != sr.nodeUUID {
+			// allow master to consume this error
+			return
+		}
 	}
 
 	// "processed" var ensures only the incoming token state gets processed by this

@@ -1555,7 +1555,10 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 
 	if ddl, err := r.runParams.checkDDLRunning("Rebalancer"); ddl {
 		r.setTransferTokenError(ttid, tt, err.Error())
-		return
+		if tt.MasterId != r.nodeUUID {
+			// allow master to consume this error
+			return
+		}
 	}
 
 	// "processed" var ensures only the incoming token state gets processed by this
