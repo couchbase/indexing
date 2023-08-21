@@ -1209,6 +1209,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	}
 
 	updateTokenMap := true
+	dropIssued := false
 	// cleanup transfer token
 	for _, t := range ttList {
 
@@ -1229,15 +1230,23 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 				m.cleanupTransferTokensForMaster(t.ttid, t.tt)
 			}
 			if t.tt.SourceId == string(m.nodeInfo.NodeID) {
-				m.cleanupTransferTokensForSource(t.ttid, t.tt)
+				_, dropIssued = m.cleanupTransferTokensForSource(t.ttid, t.tt)
 			}
 			if t.tt.DestId == string(m.nodeInfo.NodeID) {
-				m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
+				_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
 			}
 		}
 	}
 
 	m.cleanupAllDropOnSourceTokens()
+
+	//emptyNodeBatching uses large batch size for transfer and need more time for
+	//async cleanup of index to finish in case of failure
+	enableEmptyNodeBatching := m.config.Load()["rebalance.enableEmptyNodeBatching"].Bool()
+	if dropIssued && enableEmptyNodeBatching {
+		logging.Infof("RebalanceServiceManager::cleanupTransferTokens Wait for async cleanup to finish")
+		time.Sleep(30 * time.Second)
+	}
 
 	return cleanupFailedShards, nil
 }
@@ -1278,7 +1287,9 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForMaster(ttid string, tt
 
 }
 
-func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt *c.TransferToken) error {
+func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt *c.TransferToken) (error, bool) {
+
+	dropIssued := false
 
 	switch tt.State {
 
@@ -1288,24 +1299,25 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt
 		defn := tt.IndexInst.Defn
 		defn.InstId = tt.InstId
 		defn.RealInstId = tt.RealInstId
+		dropIssued = true
 		err = m.cleanupIndex(defn)
 		if err == nil {
 			err = c.MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForSource Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
-				return err
+				return err, dropIssued
 			}
 		}
 	}
 
-	return nil
+	return nil, dropIssued
 
 }
 
-func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) error {
+func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) (error, bool) {
 
-	cleanup := func() error {
+	cleanup := func() (error, bool) {
 		var err error
 		l.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt.LessVerboseString())
 		defn := tt.IndexInst.Defn
@@ -1317,11 +1329,11 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 			if err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
-				return err
+				return err, true /* dropIssued */
 			}
 		}
 
-		return nil
+		return nil, true /* dropIssued */
 	}
 
 	switch tt.State {
@@ -1360,7 +1372,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 			if err := c.MetakvDel(RebalanceMetakvDir + ttid); err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
-				return err
+				return err, false
 			}
 
 			// proxy instance: REBAL_PENDING -> REBAL_MERGED
@@ -1374,7 +1386,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 		}
 	}
 
-	return nil
+	return nil, false
 }
 
 func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.TransferToken) error {
