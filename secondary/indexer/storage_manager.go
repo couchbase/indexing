@@ -165,7 +165,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	isShardAffinityEnabled := s.config["planner.enableShardAffinity"].Bool()
+	isShardAffinityEnabled := common.CanMaintanShardAffinity(config)
 
 	if isShardAffinityEnabled || common.IsServerlessDeployment() {
 		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
@@ -279,7 +279,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		START_SHARD_RESTORE,
 		DESTROY_LOCAL_SHARD,
 		MONITOR_SLICE_STATUS,
-		RESTORE_SHARD_DONE:
+		RESTORE_SHARD_DONE,
+		START_PEER_SERVER,
+		STOP_PEER_SERVER:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		}
@@ -300,6 +302,12 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		// of shard movement is complete. Clear rebalance running flag for
 		// corresponding slices
 		s.ClearRebalanceRunning(cmd)
+		if s.stm != nil {
+			s.stm.ProcessCommand(cmd)
+		}
+		s.supvCmdch <- &MsgSuccess{}
+
+	case INDEXER_SECURITY_CHANGE:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
 		}
@@ -1873,6 +1881,14 @@ func (s *storageMgr) handleRecoveryDone() {
 func (s *storageMgr) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	s.config = cfgUpdate.GetConfig()
+
+	isShardAffinityEnabled := common.CanMaintanShardAffinity(s.config)
+	if isShardAffinityEnabled && s.stm == nil {
+		s.stm = NewShardTransferManager(s.config, s.wrkrCh)
+	} else if !common.IsServerlessDeployment() && !isShardAffinityEnabled && s.stm != nil {
+		s.stm.cmdCh <- &MsgGeneral{mType: STORAGE_MGR_SHUTDOWN}
+		s.stm = nil
+	}
 
 	if s.stm != nil { // Pass on the config change to shard tranfser manager
 		s.stm.ProcessCommand(cmd)

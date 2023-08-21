@@ -9,7 +9,9 @@
 package indexer
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -212,6 +214,9 @@ const (
 	METERING_MGR_STOP_WRITE_BILLING
 	METERING_MGR_START_WRITE_BILLING
 	PAUSE_UPDATE_BUCKET_STATE
+
+	START_PEER_SERVER
+	STOP_PEER_SERVER
 )
 
 type Message interface {
@@ -2497,6 +2502,11 @@ type MsgStartShardTransfer struct {
 	// to zero while transfer is in progress)
 	storageMgrCancelCh chan bool
 	storageMgrRespCh   chan bool
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgStartShardTransfer) GetMsgType() MsgType {
@@ -2588,6 +2598,18 @@ func (m *MsgStartShardTransfer) GetStorageMgrRespCh() chan bool {
 	return m.storageMgrRespCh
 }
 
+func (m *MsgStartShardTransfer) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
+func (m *MsgStartShardTransfer) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgStartShardTransfer) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
 func (m *MsgStartShardTransfer) String() string {
 	var sb strings.Builder
 	sbp := &sb
@@ -2602,6 +2624,7 @@ func (m *MsgStartShardTransfer) String() string {
 		fmt.Fprintf(sbp, " RebalanceId: %v ", m.taskId)
 		fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferId)
 		fmt.Fprintf(sbp, " Task Type: Rebalance ")
+		fmt.Fprintf(sbp, " IsPeerTransfer: %v", m.isPeerTransfer)
 	}
 	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
 	fmt.Fprintf(sbp, " Region: %v ", m.region)
@@ -2643,6 +2666,11 @@ type MsgShardTransferCleanup struct {
 	transferTokenId string
 	respCh          chan bool
 	syncCleanup     bool
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
@@ -2685,6 +2713,18 @@ func (m *MsgShardTransferCleanup) String() string {
 	return sbp.String()
 }
 
+func (m *MsgShardTransferCleanup) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgShardTransferCleanup) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgShardTransferCleanup) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
 type MsgShardTransferStagingCleanup struct {
 	respCh      chan Message
 	destination string
@@ -2692,6 +2732,11 @@ type MsgShardTransferStagingCleanup struct {
 	taskId      string
 	transferId  string
 	taskType    common.TaskType
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgShardTransferStagingCleanup) GetMsgType() MsgType {
@@ -2750,6 +2795,18 @@ func (m *MsgShardTransferStagingCleanup) GetTaskType() common.TaskType {
 	return m.taskType
 }
 
+func (m *MsgShardTransferStagingCleanup) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgShardTransferStagingCleanup) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgShardTransferStagingCleanup) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
+}
+
 type MsgStartShardRestore struct {
 	shardPaths  map[common.ShardId]string
 	taskId      string
@@ -2775,6 +2832,11 @@ type MsgStartShardRestore struct {
 
 	progressCh chan *ShardTransferStatistics
 	respCh     chan Message
+
+	// config to be passed by the follower if shardAffinity is enabled
+	authCallback   func(*http.Request) error
+	tlsConfig      *tls.Config
+	isPeerTransfer bool
 }
 
 func (m *MsgStartShardRestore) GetMsgType() MsgType {
@@ -2871,6 +2933,18 @@ func (m *MsgStartShardRestore) ToShardTransferStagingCleanup() *MsgShardTransfer
 		transferId: m.transferId,
 		taskType: m.taskType,
 	}
+}
+
+func (m *MsgStartShardRestore) IsPeerTransfer() bool {
+	return m.isPeerTransfer
+}
+
+func (m *MsgStartShardRestore) GetTLSConfig() *tls.Config {
+	return m.tlsConfig
+}
+
+func (m *MsgStartShardRestore) GetAuthCallback() func(*http.Request) error {
+	return m.authCallback
 }
 
 type MsgDestroyLocalShardData struct {
@@ -3034,6 +3108,24 @@ func (m *MsgPauseUpdateBucketState) GetBucket() string {
 
 func (m *MsgPauseUpdateBucketState) GetBucketPauseState() bucketStateEnum {
 	return m.bucketPauseState
+}
+
+type MsgPeerServerCommand struct {
+	respCh      chan error
+	rebalanceId string
+	mType       MsgType
+}
+
+func (m *MsgPeerServerCommand) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgPeerServerCommand) GetRebalanceId() string {
+	return m.rebalanceId
+}
+
+func (m *MsgPeerServerCommand) GetRespCh() chan error {
+	return m.respCh
 }
 
 // MsgType.String is a helper function to return string for message type.
@@ -3362,6 +3454,10 @@ func (m MsgType) String() string {
 		return "METERING_MGR_STOP_WRITE_BILLING"
 	case PAUSE_UPDATE_BUCKET_STATE:
 		return "PAUSE_UPDATE_BUCKET_STATE"
+	case START_PEER_SERVER:
+		return "START_PEER_SERVER"
+	case STOP_PEER_SERVER:
+		return "STOP_PEER_SERVER"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

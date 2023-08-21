@@ -157,6 +157,8 @@ type IndexStatus struct {
 	ReplicaId    int    `json:"replicaId"` // 0-based
 	Stale        bool   `json:"stale"`
 	LastScanTime string `json:"lastScanTime,omitempty"`
+
+	AlternateShardIds map[common.PartitionId][]string `json:"alternateShardIds"`
 }
 
 // NodeUUIDsResponse is used to return a list of Index Service NodeUUIDs from the
@@ -1067,32 +1069,33 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						secExprs, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc)
 
 						status := IndexStatus{
-							DefnId:       defn.DefnId,
-							InstId:       common.IndexInstId(instance.InstId),
-							Name:         name, // display name only
-							Bucket:       defn.Bucket,
-							Scope:        defn.Scope,
-							Collection:   defn.Collection,
-							IndexName:    defn.Name, // real index name
-							IsPrimary:    defn.IsPrimary,
-							SecExprs:     secExprs,
-							WhereExpr:    defn.WhereExpr,
-							IndexType:    string(defn.Using),
-							Status:       stateStr,
-							Error:        errStr,
-							Hosts:        []string{mgmtAddr},
-							Definition:   common.IndexStatement(defn, int(instance.NumPartitions), -1, true),
-							Completion:   completion,
-							Progress:     progress,
-							Scheduled:    instance.Scheduled,
-							Partitioned:  common.IsPartitioned(defn.PartitionScheme),
-							NumPartition: len(instance.Partitions),
-							PartitionMap: partitionMap,
-							NodeUUID:     localMeta.NodeUUID,
-							NumReplica:   int(defn.GetNumReplica()),
-							ReplicaId:    int(instance.ReplicaId),
-							Stale:        stale,
-							LastScanTime: lastScanTime,
+							DefnId:            defn.DefnId,
+							InstId:            common.IndexInstId(instance.InstId),
+							Name:              name, // display name only
+							Bucket:            defn.Bucket,
+							Scope:             defn.Scope,
+							Collection:        defn.Collection,
+							IndexName:         defn.Name, // real index name
+							IsPrimary:         defn.IsPrimary,
+							SecExprs:          secExprs,
+							WhereExpr:         defn.WhereExpr,
+							IndexType:         string(defn.Using),
+							Status:            stateStr,
+							Error:             errStr,
+							Hosts:             []string{mgmtAddr},
+							Definition:        common.IndexStatement(defn, int(instance.NumPartitions), -1, true),
+							Completion:        completion,
+							Progress:          progress,
+							Scheduled:         instance.Scheduled,
+							Partitioned:       common.IsPartitioned(defn.PartitionScheme),
+							NumPartition:      len(instance.Partitions),
+							PartitionMap:      partitionMap,
+							NodeUUID:          localMeta.NodeUUID,
+							NumReplica:        int(defn.GetNumReplica()),
+							ReplicaId:         int(instance.ReplicaId),
+							Stale:             stale,
+							LastScanTime:      lastScanTime,
+							AlternateShardIds: defn.AlternateShardIds,
 						}
 
 						indexStatuses = append(indexStatuses, status)

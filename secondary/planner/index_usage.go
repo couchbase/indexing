@@ -138,6 +138,10 @@ type IndexUsage struct {
 	// When index is shard proxy, this field captures the list of all indexes
 	// that are grouped to make the proxy index
 	GroupedIndexes []*IndexUsage
+
+	// When this index is grouped under a proxy, the "ProxyIndex" field
+	// holds the reference to the proxy
+	ProxyIndex *IndexUsage
 }
 
 // This function makes a copy of a index usage
@@ -221,6 +225,8 @@ func newProxyIndexUsage(slotId uint64, replicaId int) (*IndexUsage, error) {
 		// E.g. proxy-1 can have i1, i2, i3
 		//      proxy-2 can have i1 (replica 1), i2 (replica 1) - No i3
 		suppressEquivIdxCheck: true,
+		eligible:              true,
+		overrideExclude:       true,
 	}
 
 	return proxy, nil
@@ -433,7 +439,7 @@ func (o *IndexUsage) ComputeSizing(useLive bool, sizing SizingMethod) {
 
 func (o *IndexUsage) GetDisplayName() string {
 
-	if o.Instance == nil {
+	if o.Instance == nil || o.IsShardProxy {
 		return o.Name
 	}
 
@@ -570,6 +576,14 @@ func (o *IndexUsage) HasAlternateShardIds() bool {
 
 func (o *IndexUsage) AddToGroupedIndexes(in *IndexUsage) {
 	o.GroupedIndexes = append(o.GroupedIndexes, in)
+
+	// All indexes of a proxy must be eligible for the proxy to move
+	o.eligible = o.eligible && in.eligible
+
+	// Any index of a proxy can go to exclude node. Hence,
+	o.overrideExclude = o.overrideExclude && in.overrideExclude
+
+	in.ProxyIndex = o
 }
 
 func (o *IndexUsage) Union(in *IndexUsage) {

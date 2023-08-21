@@ -124,6 +124,7 @@ func main() {
 	config.SetValue("indexer.streamInitPort", *streamInitPort)
 	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
+	config.SetValue("indexer.shardTransferServerPort", *streamCatchupPort)
 	config.SetValue("indexer.storage_dir", *storageDir)
 	config.SetValue("indexer.diagnostics_dir", *diagDir)
 	config.SetValue("indexer.log_dir", *logDir)

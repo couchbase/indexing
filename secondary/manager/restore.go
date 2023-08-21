@@ -118,7 +118,8 @@ func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, e
 	}
 
 	serverless := (common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT)
-	enableShardAffinity := config["indexer.planner.enableShardAffinity"].Bool()
+	// if we are not passing the config updates to RestoreContext, will this flag change be picked up?
+	enableShardAffinity := common.CanMaintanShardAffinity(config)
 
 	//In serverless mode no need to convert storage mode.
 	if !serverless {

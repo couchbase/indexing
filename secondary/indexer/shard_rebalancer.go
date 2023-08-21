@@ -1,16 +1,20 @@
 package indexer
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"math"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
@@ -20,6 +24,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/testcode"
 )
 
@@ -109,12 +114,19 @@ type ShardRebalancer struct {
 	// or a global transfer batch size. This setting can not be changed during an
 	// ongoing rebalance. It can be changed before a rebalance
 	schedulingVersion c.ShardRebalanceSchedulingVersion
+
+	rpcCommandSyncChannel chan struct{}
+
+	cinfo                    *c.ClusterInfoCache
+	transferScheme           string
+	canMaintainShardAffinity bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
-	runPlanner bool, runParams *runParams, statsMgr *statsManager) *ShardRebalancer {
+	runPlanner bool, runParams *runParams, statsMgr *statsManager,
+	cinfo *c.ClusterInfoCache) *ShardRebalancer {
 
 	clusterVersion := common.GetClusterVersion()
 	l.Infof("NewShardRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
@@ -122,6 +134,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 	perNodeBatchSize := config["rebalance.serverless.perNodeTransferBatchSize"].Int()
 	schedulingVersion := config["rebalance.serverless.scheduleVersion"].String()
+	transferScheme := getTransferScheme(config)
+	canMaintainShardAffinity := c.CanMaintanShardAffinity(config)
 
 	sr := &ShardRebalancer{
 		clusterVersion: clusterVersion,
@@ -158,6 +172,12 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		activeTransferCount: make(map[string]int),
 		waitQ:               make(chan bool, perNodeBatchSize),
 		schedulingVersion:   c.ShardRebalanceSchedulingVersion(schedulingVersion),
+
+		rpcCommandSyncChannel: make(chan struct{}),
+
+		cinfo:                    cinfo,
+		transferScheme:           transferScheme,
+		canMaintainShardAffinity: canMaintainShardAffinity,
 	}
 
 	sr.config.Store(config)
@@ -168,6 +188,14 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		close(sr.waitForTokenPublish)
 		go sr.observeRebalance()
 	}
+
+	if sr.canMaintainShardAffinity {
+		// start shard transfer server
+		go sr.sendPeerServerCommand(START_PEER_SERVER, sr.rpcCommandSyncChannel, sr.done)
+	} else {
+		close(sr.rpcCommandSyncChannel)
+	}
+
 	go sr.processDropShards()
 	go sr.updateTransferProgress()
 
@@ -178,6 +206,7 @@ func (sr *ShardRebalancer) observeRebalance() {
 	l.Infof("ShardRebalancer::observeRebalance %v master:%v", sr.rebalToken, sr.isMaster)
 
 	<-sr.waitForTokenPublish
+	<-sr.rpcCommandSyncChannel
 
 	err := metakv.RunObserveChildren(RebalanceMetakvDir, sr.processShardTokens, sr.metakvCancel)
 	if err != nil {
@@ -225,12 +254,11 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					continue
 				}
 
-				isShardAffinityEnabled := cfg["planner.enableShardAffinity"].Bool()
 				var err error
 
 				// If shard affinity is enabled in non-serverless deployments, used normal planner.
 				// Otherwise, use tenant aware planner
-				if isShardAffinityEnabled && !common.IsServerlessDeployment() {
+				if sr.canMaintainShardAffinity && !common.IsServerlessDeployment() {
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
 					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
 					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
@@ -268,7 +296,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 				if len(sr.transferTokens) == 0 {
 					sr.transferTokens = nil
-				} else if !isShardAffinityEnabled {
+				} else if !sr.canMaintainShardAffinity && common.IsServerlessDeployment() {
 					destination, region, err := getDestinationFromConfig(sr.config.Load())
 					if err != nil {
 						l.Errorf("ShardRebalancer::initRebalAsync err: %v", err)
@@ -283,6 +311,29 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					sr.destination = destination
 					l.Infof("ShardRebalancer::initRebalAsync Populated destination: %v, region: %v in all transfer tokens", destination, region)
 
+				} else if sr.canMaintainShardAffinity {
+					err := sr.cinfo.FetchNodesAndSvsInfoWithLock()
+					if err != nil {
+						l.Warnf("ShardRebalancer::initRebalAsync failed to fetch nodes and services info with error %v. Using stale values",
+							err)
+					}
+
+					for tid, token := range sr.transferTokens {
+						if !token.IsShardTransferToken() {
+							continue
+						}
+
+						token.Destination, err = sr.genPeerDestination(token.DestId)
+						if err != nil {
+							l.Errorf("ShardRebalancer::initRebalAsync failed to create destination for token %v (destination %v) with error %v",
+								tid, token.DestId, err)
+							go sr.finishRebalance(err)
+							return
+						}
+
+						l.Infof("ShardRebalancer::initRebalAsync set destination %v for token with id %v",
+							token.Destination, tid)
+					}
 				}
 
 				break loop
@@ -293,15 +344,34 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	go sr.doRebalance()
 }
 
-func getDestinationFromConfig(cfg c.Config) (string, string, error) {
+func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
+	nid, ok := sr.cinfo.GetNodeIdByUUID(nodeUuid)
+	if !ok {
+		return "", errors.New("couldn't find source node in cluster info cache")
+	}
+
+	addr, err := sr.cinfo.GetServiceAddress(nid, c.INDEX_RPC_SERVICE, true)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%v%v/", sr.transferScheme, addr), nil
+}
+
+func getTransferScheme(cfg c.Config) string {
 	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
+	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageScheme, "://") {
+		blobStorageScheme += "://"
+	}
+	return blobStorageScheme
+}
+
+func getDestinationFromConfig(cfg c.Config) (string, string, error) {
+	blobStorageScheme := getTransferScheme(cfg)
 	blobStorageBucket := cfg["settings.rebalance.blob_storage_bucket"].String()
 	blobStoragePrefix := cfg["settings.rebalance.blob_storage_prefix"].String()
 	blobStorageRegion := cfg["settings.rebalance.blob_storage_region"].String()
 
-	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageBucket, "://") {
-		blobStorageScheme += "://"
-	}
 	if blobStorageBucket != "" && !strings.HasSuffix(blobStorageBucket, "/") {
 		blobStorageBucket += "/"
 	}
@@ -811,6 +881,23 @@ loop:
 		progressCh: progressCh,
 	}
 
+	if sr.canMaintainShardAffinity {
+		msg.isPeerTransfer = true
+		msg.authCallback = func(req *http.Request) error {
+			return cbauth.SetRequestAuth(req)
+		}
+		host, _, _ := net.SplitHostPort(tt.DestHost)
+		msg.tlsConfig, err = getTLSConfigWithCeftificates(host)
+
+		if err != nil {
+			l.Errorf("ShardRebalancer::startShardTransfer failed to setup TLS config for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
+
+	}
+
 	sr.supvMsgch <- msg
 
 	for {
@@ -921,6 +1008,21 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		transferTokenId: ttid,
 		respCh:          respCh,
 		syncCleanup:     syncCleanup,
+	}
+
+	if sr.canMaintainShardAffinity {
+		msg.isPeerTransfer = true
+		msg.authCallback = func(req *http.Request) error {
+			return cbauth.SetRequestAuth(req)
+		}
+		host, _, _ := net.SplitHostPort(tt.DestHost)
+		msg.tlsConfig, err = getTLSConfigWithCeftificates(host)
+		if err != nil {
+			l.Errorf("ShardRebalancer::initiateShardTransferCleanup failed to get TLS config for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
 	}
 
 	sr.supvMsgch <- msg
@@ -1136,6 +1238,21 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
+	}
+
+	if sr.canMaintainShardAffinity {
+		msg.isPeerTransfer = true
+		msg.authCallback = cbauth.SetRequestAuth
+		var err error
+
+		host, _, _ := net.SplitHostPort(tt.DestHost)
+		msg.tlsConfig, err = getTLSConfigWithCeftificates(host)
+		if err != nil {
+			l.Errorf("ShardRebalancer::startShardRestore failed to get TLS config for transfer token %v (host %v) with error %v",
+				ttid, tt.DestHost, err)
+			sr.setTransferTokenError(ttid, tt, err.Error())
+			return
+		}
 	}
 
 	sr.supvMsgch <- msg
@@ -1482,20 +1599,33 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 					"recoverIndexRebalance requests for %v defnIds: %v belonging to collectionId: %v, ttid: %v. "+
 					"Initiating build", currInsts, buildDefnIdList[i].DefnIds, cid, ttid)
 
-				skipDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
-				if err != nil {
-					setErrInTransferToken(err)
-					return
-				}
+				retry := true
+				lastlog := time.Now()
+				for retry {
+					skipDefns, retryDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
+					if err != nil {
+						setErrInTransferToken(err)
+						return
+					}
 
-				// Do not wait for index state of skipped insts
-				if len(skipDefns) > 0 {
-					logging.Infof("ShardRebalancer::startShardRecovery Skipping state monitoring for insts: %v "+
-						"as scope/collection/index is dropped", skipDefns)
-					for defnId, _ := range skipDefns {
-						if instId, ok := defnIdToInstIdMap[defnId]; ok {
-							delete(nonDeferredInsts[i], instId)
+					// Do not wait for index state of skipped insts
+					if len(skipDefns) > 0 {
+						logging.Infof("ShardRebalancer::startShardRecovery Skipping state monitoring for insts: %v "+
+							"as scope/collection/index is dropped", skipDefns)
+						for defnId, _ := range skipDefns {
+							if instId, ok := defnIdToInstIdMap[defnId]; ok {
+								delete(nonDeferredInsts[i], instId)
+							}
 						}
+					}
+					retry = len(retryDefns) > 0
+					if retry {
+						if time.Since(lastlog) > time.Duration(60*time.Second) {
+							logging.Infof("ShardRebalancer::startShardRecovery Retrying index build for defns: %v", retryDefns)
+							lastlog = time.Now()
+						}
+						// Retry build after 5 seconds
+						time.Sleep(5 * time.Second)
 					}
 				}
 
@@ -1592,15 +1722,15 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 	return false, nil
 }
 
-func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, error) {
+func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
 	select {
 	case <-sr.cancel:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance cancel received")
-		return nil, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
+		return nil, nil, ErrRebalanceCancel // return for now. Cleanup will take care of dropping the index instances
 
 	case <-sr.done:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance done received")
-		return nil, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
+		return nil, nil, ErrRebalanceDone // return for now. Cleanup will take care of dropping the index instances
 
 	default:
 		url := "/buildRecoveredIndexesRebalance"
@@ -1609,47 +1739,53 @@ func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, tt
 		if err != nil {
 			logging.Errorf("ShardRebalancer::postBuildIndexesReq Error observed when posting build indexes request, "+
 				"defnIdList: %v, err: %v", defnIdList.DefnIds, err)
-			return nil, err
+			return nil, nil, err
 		}
 
 		response := new(IndexResponse)
 		if err := convertResponse(resp, response); err != nil {
 			l.Errorf("ShardRebalancer::postBuildIndexesReq Error unmarshal response for defnIdList: %v, "+
 				"url: %v, err: %v", defnIdList.DefnIds, sr.localaddr+url, err)
-			return nil, err
+			return nil, nil, err
 		}
 
 		if response.Error != "" {
-			skipDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+			skipDefns, retryDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
 			if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
 				l.Errorf("ShardRebalancer::postBuildIndexesReq Error received for defnIdList: %v, err: %v",
 					defnIdList.DefnIds, response.Error)
-				return nil, errors.New(response.Error)
+				return nil, nil, errors.New(response.Error)
 			} else {
-				return skipDefns, nil
+				return skipDefns, retryDefns, nil
 			}
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, error) {
+func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
 	errMap := make(map[common.IndexDefnId]string)
 
 	err := json.Unmarshal([]byte(errStr), &errMap)
 	if err != nil {
 		logging.Errorf("ShardRebalancer::postBuildIndexesReq Unmarshal of errStr failed. "+
 			"defnIdList: %v, err: %v, errStr: %v", defnIdList, err, errStr)
-		return nil, err
+		return nil, nil, err
 	}
 
 	skipDefns := make(map[common.IndexDefnId]bool)
+	retryDefns := make(map[common.IndexDefnId]bool)
+
 	for defnId, buildErr := range errMap {
 		if isIndexDeletedDuringRebal(buildErr) || isIndexNotFoundRebal(buildErr) {
 			skipDefns[defnId] = true
 		}
+
+		if strings.Contains(buildErr, "Build Already In Progress") {
+			retryDefns[defnId] = true
+		}
 	}
-	return skipDefns, nil
+	return skipDefns, retryDefns, nil
 }
 
 func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
@@ -1796,6 +1932,13 @@ loop:
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
 						continue
 					}
+
+					if indexState == c.INDEX_STATE_INITIAL ||
+						indexState == c.INDEX_STATE_CATCHUP ||
+						indexState == c.INDEX_STATE_ACTIVE {
+						continue
+					}
+
 					if indexState != expectedState {
 						allReachedState = false
 						break
@@ -1831,24 +1974,35 @@ loop:
 					}
 
 					defn.SetCollectionDefaults()
-					instKey := realInstId
+
+					// defnKey is used to retrive the stats of real instance
+					// (in case real instance exists)
+					defnKey := realInstId
 					if realInstId == 0 {
-						instKey = instId
+						defnKey = instId
 					}
 
-					indexState := indexStateMap[instKey]
+					var instKey common.IndexInstId
+					var indexState c.IndexState
+					if _, ok := indexStateMap[instId]; ok {
+						indexState = indexStateMap[instId]
+						instKey = instId
+					} else {
+						indexState = indexStateMap[realInstId]
+						instKey = realInstId
+					}
 
 					if indexState == c.INDEX_STATE_NIL || indexState == c.INDEX_STATE_DELETED {
-						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", instId)
+						l.Infof("ShardRebalancer::waitForIndexState Index state is nil or deleted for instId %v. Retrying...", instId)
 						delete(processedInsts, instKey) // consider the index build done
 						continue
 					}
 
 					//  for current defn. If indexState is not NIL or DELETED and defn stats are nil,
 					// wait for defn stats to get populated
-					defnStats := allStats.indexes[instKey]
+					defnStats := allStats.indexes[defnKey]
 					if defnStats == nil {
-						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", instKey)
+						l.Infof("ShardRebalancer::waitForIndexState Missing defnStats for instId %v. Retrying...", defnKey)
 						continue // Try next index definition
 					}
 
@@ -1878,10 +2032,11 @@ loop:
 						lastLogTime = now
 						l.Infof("ShardRebalancer::waitForIndexState Index: %v:%v:%v:%v State: %v"+
 							" DocsPending: %v DocsQueued: %v DocsProcessed: %v, Rate: %v"+
-							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v",
+							" Remaining: %v EstTime: %v Partns: %v DestAddr: %v, instId: %v, realInstId: %v",
 							defn.Bucket, defn.Scope, defn.Collection, defn.Name, indexState,
 							numDocsPending, numDocsQueued, numDocsProcessed, processing_rate,
-							tot_remaining, remainingBuildTime, defn.Partitions, sr.localaddr)
+							tot_remaining, remainingBuildTime, defn.Partitions, sr.localaddr,
+							instId, realInstId)
 					}
 					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 						activeIndexes[instKey] = true
@@ -2588,13 +2743,20 @@ func (sr *ShardRebalancer) finishRebalance(err error) {
 }
 
 func (sr *ShardRebalancer) doFinish() {
-	l.Infof("ShardRebalancer::doFinish Cleanup: %v", sr.retErr)
 
 	atomic.StoreInt32(&sr.isDone, 1)
 	close(sr.done)
 
 	sr.cancelMetakv()
+	if sr.canMaintainShardAffinity {
+		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
+		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
+	}
+
 	sr.wg.Wait()
+
+	// we want to log the last err we send to callback once all components are done processing
+	l.Infof("ShardRebalancer::doFinish Cleanup: %v", sr.retErr)
 	sr.cb.done(sr.retErr, sr.cancel)
 }
 
@@ -2925,6 +3087,63 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	return true
 }
 
+func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct{}, doneCh chan struct{}) {
+	sr.wg.Add(1)
+	defer sr.wg.Done()
+	defer func() {
+		if syncCh != nil {
+			close(syncCh)
+		}
+	}()
+
+	if doneCh == nil {
+		doneCh = make(chan struct{})
+		defer close(doneCh)
+	}
+
+	respCh := make(chan error)
+
+	msg := &MsgPeerServerCommand{
+		mType:       cmd,
+		respCh:      respCh,
+		rebalanceId: sr.rebalToken.RebalId,
+	}
+
+	monitor := func(respCh chan error, rebalId string, cmd MsgType) {
+		// rebalance could be done by now so we dont have a nice way to hadle this error other than
+		// crash
+		err := <-respCh
+		if err != nil {
+			l.Errorf("ShardRebalancer::sendPeerCommand:monitor failed command %v for rebalance %v with error %v",
+				cmd, rebalId, err)
+			common.CrashOnError(err)
+		} else {
+			l.Infof("ShardRebalancer::sendPeerCommand:monitor: command %v successful for rebalance %v",
+				cmd, rebalId)
+		}
+	}
+
+	sr.supvMsgch <- msg
+	select {
+	case <-doneCh:
+		l.Infof("ShardRebalancer::sendPeerServerCommand: got done on rebalancer channel. will monitor %v in go-routine",
+			cmd)
+		go monitor(respCh, sr.rebalToken.RebalId, cmd)
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::sendPeerServerCommand: got cancel on rebalancer channel. will monitor %v in go-routine",
+			cmd)
+		go monitor(respCh, sr.rebalToken.RebalId, cmd)
+	case err := <-respCh:
+		if err != nil {
+			// only finish rebalance if we have an error
+			logging.Errorf("ShardRebalancer::sendPeerServerCommand: failed command %v with error %v", cmd, err)
+			go sr.finishRebalance(err)
+		} else {
+			logging.Infof("ShardRebalancer::sendPeerServerCommand: command %v successful", cmd)
+		}
+	}
+}
+
 // isIndexDeletedDuringRebal returns true if an index is deleted while
 // bucket rebalance is in progress
 func isIndexDeletedDuringRebal(errMsg string) bool {
@@ -2988,4 +3207,20 @@ func restoreShardDone(shardIds []common.ShardId, supvMsgch MsgChannel) {
 	supvMsgch <- msg
 
 	<-respCh
+}
+
+func getTLSConfigWithCeftificates(host string) (*tls.Config, error) {
+	tlsConfig, err := security.GetTLSConfig()
+	if err != nil {
+		return nil, err
+	} else if tlsConfig == nil {
+		return nil, err
+	}
+
+	err = security.SetupCertificate(host, tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return tlsConfig, nil
 }

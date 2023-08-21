@@ -748,6 +748,9 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		common.ResetBucketSeqnos()
 	}
 
+	idx.storageMgrCmdCh <- msg
+	<-idx.storageMgrCmdCh
+
 	logging.Infof("handleSecurityChange: done")
 }
 
@@ -1602,7 +1605,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		LOCK_SHARDS,
 		UNLOCK_SHARDS,
 		RESTORE_SHARD_DONE,
-		RESTORE_AND_UNLOCK_LOCKED_SHARDS:
+		RESTORE_AND_UNLOCK_LOCKED_SHARDS,
+		START_PEER_SERVER,
+		STOP_PEER_SERVER:
 
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
@@ -5379,7 +5384,15 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 // manager would asynchronously update it's book-keeping
 func (idx *indexer) sendMonitorSliceMsg(sliceList []Slice) {
 	// Process this only for serverless deployments
-	if common.GetBuildMode() != common.ENTERPRISE || common.GetDeploymentModel() != common.SERVERLESS_DEPLOYMENT {
+	if common.GetBuildMode() != common.ENTERPRISE {
+		return
+	}
+
+	shardAffinityEnabled := idx.config["planner.enableShardAffinity"].Bool() && common.GetStorageMode() == common.PLASMA
+	// ShardAffinity is always enabled for serverless deployments
+	shardAffinityEnabled = shardAffinityEnabled || common.IsServerlessDeployment()
+
+	if !shardAffinityEnabled {
 		return
 	}
 
@@ -5647,7 +5660,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	}
 
 	//override projector config for rebalance stream
-	if isRebalBuild {
+	enableEmptyNodeBatching := idx.config["rebalance.enableEmptyNodeBatching"].Bool()
+	if isRebalBuild && enableEmptyNodeBatching {
 		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
 		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
 	}
@@ -6074,8 +6088,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		partnInst := PartitionInst{Defn: partnDefn,
 			Sc: NewHashedSliceContainer()}
 
-		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v",
-			indexInst.InstId, partnInst)
+		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v, shardIds: %v",
+			indexInst.InstId, partnInst, indexInst.Defn.ShardIdsForDest)
 
 		//add a single slice per partition for now
 		var slice Slice
@@ -7719,7 +7733,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 	//override projector config for rebalance stream
 	isRebalBuild := idx.streamKeyspaceIdIsRebalance[streamId][keyspaceId]
-	if isRebalBuild {
+	enableEmptyNodeBatching := idx.config["rebalance.enableEmptyNodeBatching"].Bool()
+	if isRebalBuild && enableEmptyNodeBatching {
 		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
 		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
 	}

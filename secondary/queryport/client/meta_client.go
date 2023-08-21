@@ -1004,7 +1004,6 @@ func (b *metadataClient) pickEquivalent(defnID uint64, skips map[common.IndexDef
 // for scanning.   This function will filter out any replica partition falls behind from other replicas.  It returns:
 // 1) a map of partition Id and index instance
 // 2) a map of partition Id and rollback timestamp
-//
 func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 	excludes map[common.PartitionId]map[uint64]bool) (map[common.PartitionId]*mclient.InstanceDefn, map[common.PartitionId]int64, bool) {
 
@@ -1214,7 +1213,6 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 	return
 }
 
-//
 // This method prune stale partitions from the given replica.  For each replica, it returns
 // the rollback time of up-to-date partition.  Staleness is based on the limit of how far
 // the partition is fallen behind the most current partition.
@@ -1227,7 +1225,6 @@ func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint
 //
 // If there is no stats available for a particular partition (across all replicas), then
 // no pruning for that partition.
-//
 func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[common.PartitionId]map[uint64]bool) (
 	[]map[common.PartitionId]int64, map[common.IndexInstId]map[common.PartitionId]string) {
 
@@ -1331,7 +1328,6 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 	return result, prunedInsts
 }
 
-//
 // This method returns item pending and rollback time for each partition for every given replica.
 // If replica does not exist, it returns a empty map for item pending and rollback time.
 // If the partition/replica is excluded, then item pending and rollback time will be missing in the map.
@@ -1341,7 +1337,6 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 // This method also return the minPending for each partition across all replicas.
 // If no replica has valid stat for that partition, minPending is MaxInt64.
 // If all replica are excluded for that partition, minPending is also MaxInt64.
-//
 func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopology, excludes map[common.PartitionId]map[uint64]bool,
 	useCurrent bool) ([]map[common.PartitionId]int64, []map[common.PartitionId]int64,
 	map[common.PartitionId]int64) {
@@ -1937,12 +1932,12 @@ func (b *metadataClient) hasIndexesChanged(
 	return false
 }
 
-//
 // Update statistics index instance
-//
 func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.PartitionId]common.Statistics) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	changedRollbackTimes := map[common.IndexInstId]map[common.PartitionId]int64{}
 
 	for instId, statsByPartitions := range stats {
 
@@ -1983,8 +1978,12 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 				if rollback, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
 
 					oldRollbackTime := load.getStats().getRollbackTime(partitionId)
+
 					if rollback != oldRollbackTime {
-						logging.Infof("Rollback time has changed for index inst %v. New rollback time %v", instId, rollback)
+						if changedRollbackTimes[instId] == nil {
+							changedRollbackTimes[instId] = map[common.PartitionId]int64{}
+						}
+						changedRollbackTimes[instId][partitionId] = rollback
 					}
 
 					newStats.updateRollbackTime(partitionId, rollback)
@@ -2000,6 +1999,18 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 					logging.Errorf("Error in converting progress_stat_time %v, type %v", err)
 				}
 			}
+		}
+
+		if len(changedRollbackTimes) != 0 {
+			var stringBuilder strings.Builder
+			stringBuilder.WriteString("Rollback time has changed for the following indexes \n")
+			fmt.Fprintf(&stringBuilder, "%-30s|%-30s|%-30s\n", "Index inst", "Partition Id", "New rollback time")
+			for indexInst, partitionMap := range changedRollbackTimes {
+				for partitionId, rollbackTime := range partitionMap {
+					fmt.Fprintf(&stringBuilder, "%-30v|%-30v|%-30v\n", indexInst, partitionId, rollbackTime)
+				}
+			}
+			logging.Infof(stringBuilder.String())
 		}
 
 		load.updateStats(newStats)

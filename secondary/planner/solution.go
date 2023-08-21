@@ -69,6 +69,14 @@ type Solution struct {
 	// When set to 1, planner ignores excludeNode params as well as resource
 	// contraints during DDL operations
 	allowDDLDuringScaleUp bool
+
+	// Contains the slot mapping for each index that is present in the
+	// cluster. DefnId -> replicaId -> PartnId -> SlotId on which the partition exists
+	indexSlots map[common.IndexDefnId]map[int]map[common.PartitionId]uint64
+
+	// Contains the list of all nodes on which the slot exists
+	// slotId -> indexerNode -> replica number of the slot on the corresponding node
+	slotMap map[uint64]map[*IndexerNode]int
 }
 
 // Constructor
@@ -92,6 +100,9 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		eligUsedReplicaIdMap:  make(UsedReplicaIdMap),
 		swapOnlyRebalance:     false,
 		allowDDLDuringScaleUp: allowDDLDuringScaleUp,
+
+		indexSlots: make(map[common.IndexDefnId]map[int]map[common.PartitionId]uint64),
+		slotMap:    make(map[uint64]map[*IndexerNode]int),
 	}
 
 	// initialize list of indexers
@@ -382,6 +393,9 @@ func (s *Solution) clone() *Solution {
 			r.eligUsedReplicaIdMap[defnId][replicaId] = true
 		}
 	}
+
+	r.indexSlots = s.indexSlots
+	r.slotMap = s.slotMap
 
 	return r
 }
@@ -1993,4 +2007,116 @@ func (s *Solution) markSwapOnlyRebalance() {
 			}
 		}
 	}
+}
+
+func (s *Solution) addToIndexSlots(defnId common.IndexDefnId, replicaId int, partnId common.PartitionId, slotId uint64) {
+	// Update indexSlots
+	if _, ok := s.indexSlots[defnId]; !ok {
+		s.indexSlots[defnId] = make(map[int]map[common.PartitionId]uint64)
+	}
+
+	if _, ok := s.indexSlots[defnId][replicaId]; !ok {
+		s.indexSlots[defnId][replicaId] = make(map[common.PartitionId]uint64)
+	}
+
+	s.indexSlots[defnId][replicaId][partnId] = slotId
+}
+
+func (s *Solution) addToSlotMap(slotId uint64, indexer *IndexerNode, replicaId int) {
+	// Add to slotMap
+	if _, ok := s.slotMap[slotId]; !ok {
+		s.slotMap[slotId] = make(map[*IndexerNode]int)
+	}
+	s.slotMap[slotId][indexer] = replicaId
+}
+
+func (s *Solution) updateSlotMap() {
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			// Only consider indexes with valid alternate shardIds
+			if len(index.AlternateShardIds) > 0 {
+				alternateShardId, err := common.ParseAlternateId(index.AlternateShardIds[0])
+				if err != nil || alternateShardId == nil {
+					logging.Fatalf("Solution::updateSlotMap Invalid alternateShardId seen. Index: %v, defnId: %v, "+
+						" partnId: %v, alternateShardId: %v, err: %v", index.Name, index.DefnId, index.PartnId, index.AlternateShardIds[0], err)
+					continue // Ignore the index
+				}
+
+				slotId, replicaId := alternateShardId.SlotId, int(alternateShardId.ReplicaId)
+				s.addToIndexSlots(index.DefnId, replicaId, index.PartnId, slotId)
+				s.addToSlotMap(slotId, indexer, replicaId)
+			}
+		}
+	}
+}
+
+// All replicas of an index share the same slotId and they only differ by
+// replica number of the slot. Get the slot ID for the missing replica from slotMap
+func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
+	indexReplicaId int, indexPartnId common.PartitionId, indexers []*IndexerNode) (uint64, *IndexerNode, []*IndexerNode, bool) {
+
+	// If no slots exists for this index in the cluster,
+	// return the first node from the list of eligible indexer nodes
+	if _, ok := s.indexSlots[indexDefnId]; !ok {
+		return 0, indexers[0], indexers[1:], true
+	}
+
+	// Atleast one replica of the index exists.
+	// Instances with same partition Id of replica instances share the same slotId.
+	// E.g, partnId: 0 for replica: 0 and replica:1 share same slotId
+	//      partnId: 1 for replica: 0 and replica:1 share same slotId
+	//      partnId: 0 and partnId: 1 can have different slotIds
+	//
+	// Find the slotId for the partition of interest
+	var indexSlotId uint64
+	found := false
+	for _, partnMap := range s.indexSlots[indexDefnId] {
+		for partnId, slotId := range partnMap {
+			if partnId == indexPartnId {
+				indexSlotId = slotId
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	// No partition that is a replica of the current partition is found in the cluster
+	// Return the first node from the list of eligible indexer nodes
+	if !found {
+		return 0, indexers[0], indexers[1:], true
+	}
+
+	// If there is any indexer node that hosts this slot with same replicaId,
+	// use that indexer node for placing the index being repaired and prune
+	// that indexer from list of eligible indexer nodes
+	for target, replicaId := range s.slotMap[indexSlotId] {
+		if replicaId == indexReplicaId {
+			for i, indexer := range indexers {
+				if target == indexer {
+					return indexSlotId, indexer, append(indexers[:i], indexers[i+1:]...), false
+				}
+			}
+
+			// At this point, the target indexer is not in the list of eligible indexer nodes
+			// (Either because the indexer is getting deleted or it was excluded from taking
+			// any new indexes). In such a case, map the index to the indexer node on which
+			// the slot with required replica exists as rebalance will move the slot to a
+			// different node
+			return indexSlotId, target, indexers, false
+		}
+	}
+
+	// At this point, either any replica of the index being repaired does not exist
+	// or the indexer is beyond the list of eligible indexer nodes
+	// Return the first eligible node from the list
+	//
+	// E.g., if replica:2 is being repaired but only replica:0 and replica:1 is a part
+	// of the cluster, then we still create index on slot "indexSlotId" on a different
+	// node in the cluster
+	return indexSlotId, indexers[0], indexers[1:], true
 }

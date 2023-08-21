@@ -1765,7 +1765,8 @@ func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifyc
 		}
 	}()
 
-	missingStatRetry := 0
+	missingDefnStatRetry := 0
+	missingPartnStatRetry := 0
 	defn := &tt.IndexInst.Defn
 	defn.SetCollectionDefaults()
 	defn.InstId = tt.InstId
@@ -1788,6 +1789,14 @@ loop:
 			defnStats := allStats.indexes[defnKey] // stats for current defn
 			if defnStats == nil {
 				l.Infof("%v Missing defnStats for instId %v. Retrying...", method, defnKey)
+				missingDefnStatRetry++
+				if missingDefnStatRetry > (50 / sleepSecs) {
+					if r.needRetryForDrop(ttid, tt) {
+						break labelselect
+					} else {
+						break loop
+					}
+				}
 				break
 			}
 
@@ -1800,8 +1809,8 @@ loop:
 				} else {
 					l.Infof("%v Missing partnStats for instId %d partition %v. Retrying...",
 						method, defnKey, partitionId)
-					missingStatRetry++
-					if missingStatRetry > (50 / sleepSecs) {
+					missingPartnStatRetry++
+					if missingPartnStatRetry > (50 / sleepSecs) {
 						if r.needRetryForDrop(ttid, tt) {
 							break labelselect
 						} else {
@@ -2806,6 +2815,9 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 	case c.TransferTokenRefused:
 		//TODO replan
 
+	case c.TransferTokenInProgress:
+		r.updateMasterTokenState(ttid, c.TransferTokenInProgress)
+
 	case c.TransferTokenCommit:
 		tt.State = c.TransferTokenDeleted
 		setTransferTokenInMetakv(ttid, tt)
@@ -3115,7 +3127,7 @@ func (r *Rebalancer) getBuildProgress(status *IndexStatusResponse, tt *c.Transfe
 				}
 
 				destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
-				l.Infof("Rebalancer::getBuildProgress Index: %v:%v:%v:%v"+
+				l.Debugf("Rebalancer::getBuildProgress Index: %v:%v:%v:%v"+
 					" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name,
 					progress, idx.InstId, tt.RealInstId, defn.Partitions, destNode)

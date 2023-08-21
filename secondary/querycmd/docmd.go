@@ -7,6 +7,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/couchbase/query/algebra"
+	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/value"
 	"io"
 	"io/ioutil"
 	"net"
@@ -32,10 +35,19 @@ import (
 
 var batchProcess bool
 
+type IndexOperation byte
+
+const (
+	CREATE IndexOperation = iota
+	ALTER
+	DROP
+)
+
 // Command object containing parsed result from command-line
 // or program constructued list of args.
 type Command struct {
-	OpType string
+	OpType             string
+	IndexOperationType IndexOperation
 	// basic options.
 	Server    string
 	IndexName string
@@ -44,16 +56,19 @@ type Command struct {
 	QueryPort string
 	Auth      string
 	// options for create-index.
-	Using         string
-	ExprType      string
-	PartnStr      string
-	WhereStr      string
-	SecStrs       []string
-	IsPrimary     bool
-	With          string
-	WithPlan      map[string]interface{}
-	Scheme        c.PartitionScheme
-	PartitionKeys []string
+	Using                  string
+	ExprType               string
+	PartnStr               string
+	WhereStr               string
+	SecStrs                []string
+	Desc                   []bool
+	IndexMissingLeadingKey bool
+	IsPrimary              bool
+	With                   string
+	WithPlan               map[string]interface{}
+	Scheme                 c.PartitionScheme
+	PartitionKeys          []string
+	WithJson               []byte
 	// options for build index
 	Bindexes []string
 	// options for Range, Statistics, Count
@@ -89,10 +104,63 @@ type Command struct {
 	UseLogLevel string
 }
 
+type IndexCreate interface {
+	Name() string
+	Using() datastore.IndexType
+	With() value.Value
+	Partition() *algebra.IndexPartitionTerm
+	Keyspace() *algebra.KeyspaceRef
+}
+
+func PopulateCreateIndexOptions(estmt IndexCreate, cmdOptions *Command) error {
+
+	var err error
+
+	cmdOptions.IndexOperationType = CREATE
+
+	// name
+	cmdOptions.IndexName = estmt.Name()
+
+	// bucket
+	cmdOptions.Bucket = estmt.Keyspace().Path().Bucket()
+
+	// scope
+	cmdOptions.Scope = estmt.Keyspace().Path().Scope()
+
+	// collection
+	cmdOptions.Collection = estmt.Keyspace().Path().Keyspace()
+
+	// using
+	if estmt.Using() == datastore.DEFAULT {
+		cmdOptions.Using = "GSI"
+	}
+
+	// with
+	if estmt.With() != nil {
+		if cmdOptions.WithJson, err = estmt.With().MarshalJSON(); err != nil {
+			msgf := "Error occured: Invalid With Clause (%v) %v\n"
+			return fmt.Errorf(msgf, cmdOptions.WithJson, err)
+		}
+	}
+
+	// partition
+	cmdOptions.Scheme = c.SINGLE
+	if estmt.Partition() != nil {
+		if estmt.Partition().Strategy() == datastore.HASH_PARTITION {
+			cmdOptions.Scheme = c.KEY
+		}
+		for _, expr := range estmt.Partition().Exprs() {
+			cmdOptions.PartitionKeys = append(cmdOptions.PartitionKeys, expression.NewStringer().Visit(expr))
+		}
+	}
+
+	return nil
+}
+
 // ParseArgs into Command object, return the list of arguments,
 // flagset used for parseing and error if any.
 func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
-	var fields, bindexes, partitionKeys string
+	var fields, bindexes, partitionKeys, indexDDL string
 	var inclusion uint
 	var equal, low, high, scheme string
 	var useSessionCons bool
@@ -104,13 +172,15 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:8091", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
-	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|alter|list|config|batch_process|batch_build")
+	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|n1ql|build|move|drop|alter|list|config|batch_process|batch_build")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	// options for create-index
 	fset.StringVar(&cmdOptions.WhereStr, "where", "", "where clause for create index")
 	fset.StringVar(&fields, "fields", "", "Comma separated on-index fields") // secStrs
 	fset.BoolVar(&cmdOptions.IsPrimary, "primary", false, "Is primary index")
 	fset.StringVar(&cmdOptions.With, "with", "", "index specific properties")
+	// options of create-with-n1ql
+	fset.StringVar(&indexDDL, "index_ddl", "", "Index DDL following the n1ql syntax")
 	// options for build-indexes, move-indexes, drop-indexes
 	fset.StringVar(&bindexes, "indexes", "", "csv list of bucket:index to build")
 	// options for Range, Statistics, Count
@@ -184,6 +254,75 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 			cmdOptions.SecStrs = append(cmdOptions.SecStrs, secStr)
 		}
 	}
+
+	if indexDDL != "" {
+		stmt, err := n1ql.ParseStatement(indexDDL)
+
+		if err != nil {
+			msgf := "Error occured: Invalid create statement (%v) %v\n"
+			return nil, nil, fset, fmt.Errorf(msgf, indexDDL, err)
+		}
+
+		switch estmt := stmt.(type) {
+
+		case *algebra.CreateIndex:
+			cmdOptions.IsPrimary = false
+
+			err = PopulateCreateIndexOptions(estmt, cmdOptions)
+
+			if err != nil {
+				return nil, nil, fset, err
+			}
+
+			// where
+			if estmt.Where() != nil {
+				cmdOptions.WhereStr = expression.NewStringer().Visit(estmt.Where())
+			}
+
+			// secStrs
+			for keyPos, key := range estmt.Keys() {
+				s := expression.NewStringer().Visit(key.Expression())
+				isArray, _, isFlatten := key.Expression().IsArrayIndexKey()
+
+				if isArray && isFlatten {
+					if all, ok := key.Expression().(*expression.All); ok && all.Flatten() {
+						fk := all.FlattenKeys()
+						for pos, _ := range fk.Operands() {
+							cmdOptions.SecStrs = append(cmdOptions.SecStrs, s)
+							cmdOptions.Desc = append(cmdOptions.Desc, fk.HasDesc(pos))
+							if keyPos == 0 && pos == 0 {
+								cmdOptions.IndexMissingLeadingKey = fk.HasMissing(pos)
+							}
+						}
+					}
+				} else {
+					cmdOptions.SecStrs = append(cmdOptions.SecStrs, s)
+					cmdOptions.Desc = append(cmdOptions.Desc, key.HasAttribute(datastore.IK_DESC))
+					if keyPos == 0 {
+						cmdOptions.IndexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
+					}
+				}
+			}
+
+		case *algebra.CreatePrimaryIndex:
+			cmdOptions.IsPrimary = true
+			err = PopulateCreateIndexOptions(estmt, cmdOptions)
+
+			if err != nil {
+				return nil, nil, fset, err
+			}
+
+			cmdOptions.IndexMissingLeadingKey = false
+
+		//TODO: Support Alter and Drop.
+
+		default:
+			msgf := "Unsupported Index DDL. Only Index creation is supported currently. (%v)\n"
+			return nil, nil, fset, fmt.Errorf(msgf, indexDDL)
+		}
+
+	}
+
 	if equal != "" {
 		cmdOptions.Equal = c.SecondaryKey(Arg2Key([]byte(equal)))
 	}
@@ -397,6 +536,20 @@ func HandleCommand(
 			fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
 				iname, defnID, cmd.With)
 		}
+
+	case "n1ql":
+		if cmd.IndexOperationType == CREATE {
+			var defnID uint64
+			defnID, err = client.CreateIndex4(
+				iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
+				cmd.WhereStr, cmd.SecStrs, cmd.Desc, cmd.IndexMissingLeadingKey, cmd.IsPrimary, cmd.Scheme,
+				cmd.PartitionKeys, cmd.WithJson)
+			if err == nil {
+				fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
+					iname, defnID, cmd.With)
+			}
+		}
+		//TODO: Handle Drop and Alter
 
 	case "build":
 		defnIDs := make([]uint64, 0, len(cmd.Bindexes))
@@ -915,63 +1068,68 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 	switch cmd.OpType {
 	case "":
 		have = []string{}
-		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval", "refresh_settings"}
+		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval", "refresh_settings"}
 
 	case "nodes":
 		have = []string{"type", "server", "auth"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "list":
 		have = []string{"type", "server", "auth"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "create":
 		have = []string{"type", "server", "auth", "index", "bucket", "primary"}
-		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval", "index_ddl"}
+
+	case "n1ql":
+		have = []string{"type", "server", "auth", "index_ddl"}
+		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval", "fields",
+			"bucket", "primary", "where", "with", "scheme", "partitionKeys", "collection", "scope", "using", "index"}
 
 	case "build":
 		have = []string{"type", "server", "auth", "indexes"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "index_ddl", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "move":
 		have = []string{"type", "server", "auth", "index", "bucket", "with"}
-		dont = []string{"h", "indexes", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "indexes", "where", "fields", "primary", "index_ddl", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "drop":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "alter":
 		have = []string{"type", "server", "auth", "index", "bucket", "with"}
-		dont = []string{"h", "indexes", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "indexes", "where", "fields", "primary", "index_ddl", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "scan":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "index_ddl", "indexes", "ckey", "cval"}
 
 	case "scanAll":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "ckey", "cval"}
 
 	case "stats":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "index_ddl", "indexes", "limit", "distinct", "ckey", "cval"}
 
 	case "count":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "index_ddl", "indexes", "ckey", "cval"}
 
 	case "config":
 		have = []string{"type", "server", "auth"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct"}
 
 	case "batch_process":
 		have = []string{"type", "auth", "input"}
-		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "batch_build":
 		have = []string{"type", "auth", "input"}
-		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "index_ddl", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	default:
 		return fmt.Errorf("Specified operation type '%s' has no validation rule. Please add one to use.", cmd.OpType)

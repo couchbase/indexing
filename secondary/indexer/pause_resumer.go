@@ -1061,7 +1061,7 @@ func (r *Resumer) postResumeIndexesReq(defnIdList client.IndexIdList) (map[c.Ind
 	}
 
 	if response.Error != "" {
-		skipDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+		skipDefns, _, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
 		if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
 			l.Errorf("Resumer::postResumeIndexesReq Error received for defnIdList: %v, err: %v",
 				defnIdList.DefnIds, response.Error)

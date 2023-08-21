@@ -961,7 +961,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 	tokens := make(map[string]*common.TransferToken)
 
 	// merge tokenB into tokenA for DCP based tokens
-	mergeToken  := func(tokenA, tokenB *common.TransferToken) bool {
+	mergeToken := func(tokenA, tokenB *common.TransferToken) bool {
 		if tokenB.BuildSource != tokenA.BuildSource {
 			return false
 		}
@@ -978,6 +978,15 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			for partnId, asi := range tokenB.IndexInst.Defn.AlternateShardIds {
 				tokenA.IndexInst.Defn.AlternateShardIds[partnId] = asi
 			}
+
+			if tokenA.IndexInst.Defn.ShardIdsForDest == nil {
+				tokenA.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+			}
+
+			for partnId, shardIds := range tokenB.IndexInst.Defn.ShardIdsForDest {
+				tokenA.IndexInst.Defn.ShardIdsForDest[partnId] = shardIds
+			}
+
 		default:
 			return false
 		}
@@ -995,10 +1004,10 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 		keys := make([]string, 1)
 
 		token := common.TransferToken{
-			DestId: index.destNode.NodeUUID,
+			DestId:   index.destNode.NodeUUID,
 			DestHost: index.destNode.NodeId,
 			MasterId: masterId,
-			RebalId: topologyChange.ID,
+			RebalId:  topologyChange.ID,
 		}
 		var tokenKey string
 
@@ -1060,6 +1069,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 				// realIndex alternateShardIds might not be initialised in the plan
 				realIndex.AlternateShardIds = index.AlternateShardIds
+				realIndex.ShardIds = index.ShardIds
 				realIndex.destNode = index.destNode
 
 				childTokens, childKeys, err := createTokenForIndex(realIndex)
@@ -1084,7 +1094,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					} else {
 						if !mergeToken(oldChildToken, childTokens[0]) {
 							return nil, nil, fmt.Errorf("failed to merge token %v and %v",
-												oldChildToken, childTokens[0])
+								oldChildToken, childTokens[0])
 						}
 					}
 				}
@@ -1101,7 +1111,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			tokenKey = fmt.Sprintf("asi_%v_%v-%v-%v", asi.SlotId, asi.ReplicaId, token.SourceId,
 				token.DestId)
 
-
 		} else {
 			// single index only
 			// set token.Inst, token.InstId and token.RealInstId
@@ -1113,6 +1122,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.IndexInst = *index.Instance
 			token.InstId = index.InstId
 
+			token.IndexInst.Defn.InstStateAtRebal = token.IndexInst.State
 			token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
 			token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
 			token.IndexInst.Defn.Using = common.IndexType(index.StorageMode)
@@ -1123,6 +1133,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			if index.HasAlternateShardIds() {
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
 			}
+			token.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+			token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = index.ShardIds
+
 			token.IndexInst.Pc = nil
 
 			// reset defn id and instance id as if it is a new index.
@@ -1138,11 +1151,10 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 			// if there is a build token for the definition, set index STATE to active so the
 			// index will be built as part of rebalancing.
-			if index.pendingBuild && !index.PendingDelete && (
-				token.IndexInst.State == common.INDEX_STATE_CREATED ||
+			if index.pendingBuild && !index.PendingDelete && (token.IndexInst.State == common.INDEX_STATE_CREATED ||
 				token.IndexInst.State == common.INDEX_STATE_READY) {
 
-					token.IndexInst.State = common.INDEX_STATE_ACTIVE
+				token.IndexInst.State = common.INDEX_STATE_ACTIVE
 
 			}
 
@@ -2407,6 +2419,10 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		if err := savePlan(config.Output, planner.Result, constraint); err != nil {
 			return nil, nil, nil, err
 		}
+	}
+
+	if config.EnableShardAffinity {
+		PopulateSiblingIndexForReplicaRepair(planner.GetResult())
 	}
 
 	return planner, s, indexDefnsToRemove, nil
@@ -5712,7 +5728,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
 			for indexer := range targetNodes {
-				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes)
+				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
 			}
 
 			// If a new shard can be created for this partition across all indexer nodes,
@@ -5770,6 +5786,110 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 				}
 			}
 		}
+	}
+}
+
+func findReplicaProxies(solution *Solution, needsRepairProxy *IndexUsage) []*IndexUsage {
+	alternateId, _ := common.ParseAlternateId(needsRepairProxy.AlternateShardIds[0])
+	slotId := alternateId.SlotId
+	var out []*IndexUsage
+
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy == false || index.initialNode == nil {
+				continue
+			}
+
+			indexAlternateId, _ := common.ParseAlternateId(index.AlternateShardIds[0])
+
+			if indexAlternateId.SlotId != slotId {
+				continue
+			}
+
+			out = append(out, index)
+		}
+	}
+	return out
+}
+
+func getDiskUsageAndMatchingInstances(replicaProxy, needsRepairProxy *IndexUsage) (uint64, int) {
+	var totalDiskUsage uint64
+	replicaInsts := 0
+	for _, index := range needsRepairProxy.GroupedIndexes {
+		for _, replicaIndex := range replicaProxy.GroupedIndexes {
+			if index.IsReplica(replicaIndex) {
+				replicaInsts++
+				totalDiskUsage += replicaIndex.ActualDiskSize
+			}
+		}
+	}
+	return totalDiskUsage, replicaInsts
+}
+
+func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *IndexUsage) []*IndexUsage {
+
+	type proxyDiskUsage struct {
+		diskSize         uint64
+		replicaInstances int
+		replicaIndex     *IndexUsage
+	}
+
+	proxyUsages := []*proxyDiskUsage{}
+
+	for _, replicaProxy := range replicaProxies {
+		diskUsage, replicaInsts := getDiskUsageAndMatchingInstances(replicaProxy, needsRepairProxy)
+		proxyUsages = append(proxyUsages, &proxyDiskUsage{diskUsage, replicaInsts, replicaProxy})
+	}
+
+	binSize := uint64(2560 * 1024 * 1024) // 2.5G
+	sort.Slice(proxyUsages, func(i, j int) bool {
+		iSlot, jSlot := proxyUsages[i].diskSize/binSize, proxyUsages[j].diskSize/binSize
+		a := iSlot < jSlot
+		b := (iSlot == jSlot) && (proxyUsages[i].replicaInstances < proxyUsages[i].replicaInstances)
+		c := (iSlot == jSlot) && (proxyUsages[i].replicaInstances == proxyUsages[i].replicaInstances) &&
+			(proxyUsages[i].diskSize < proxyUsages[j].diskSize)
+		return a || b || c
+	})
+
+	var out []*IndexUsage
+	for i := range proxyUsages {
+		out = append(out, proxyUsages[i].replicaIndex)
+	}
+	return out
+}
+
+// Sibling index is only populated for shard proxies where an entire shard
+// has to be repaired (E.g., the node containing the shard is failed over)
+//
+// The initialNode for a shard that needs repair will be to nil
+func PopulateSiblingIndexForReplicaRepair(solution *Solution) {
+	shardsRequiringRepair := []*IndexUsage{}
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy == false || index.initialNode != nil {
+				continue
+			}
+
+			// Index is a shard proxy and initialNode is nil
+			shardsRequiringRepair = append(shardsRequiringRepair, index)
+		}
+	}
+
+	for _, needsRepairProxy := range shardsRequiringRepair {
+		replicaProxies := findReplicaProxies(solution, needsRepairProxy)
+
+		if len(replicaProxies) == 0 {
+			continue
+		}
+
+		// Atleast one replica shard exits. Since there can be more than
+		// one replica shard, use the shard that has covered higher disk
+		// size for all the instances of interest so that the time taken
+		// to copy the shard is minimized
+		replicaProxies = sortProxiesByDiskUsage(replicaProxies, needsRepairProxy)
+		needsRepairProxy.siblingIndex = replicaProxies[0]
+		logging.Infof("PopulateSiblingIndexForReplicaRepair: Using sibling index: %v from node: %v for replica repair",
+			needsRepairProxy.siblingIndex.Name, needsRepairProxy.siblingIndex.initialNode.NodeId)
 	}
 }
 

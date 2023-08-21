@@ -1777,3 +1777,11 @@ func ShouldMaintainShardAffinity(config Config) bool {
 	isStoragePlasma := GetClusterStorageMode() == PLASMA
 	return !intVer.LessThan(MIN_VER_SHARD_AFFINITY) && isShardAffinityEnabled && isStoragePlasma
 }
+
+// CanMaintainShardAffinity - if shard affinity is enabled and storage mode is Plasma
+// Should only be called from *indexer* and not from client/metadata_provider
+func CanMaintanShardAffinity(config Config) bool {
+	isShardAffinityEnabled := config.getIndexerConfig("planner.enableShardAffinity").Bool()
+	isStoragePlasma := GetClusterStorageMode() == PLASMA
+	return isShardAffinityEnabled && isStoragePlasma
+}

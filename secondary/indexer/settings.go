@@ -123,11 +123,13 @@ func NewSettingsManager(supvCmdch MsgChannel,
 
 // sigarGetMemoryMaxAndNumCpuPrc returns memory_max and num_cpu_prc from sigar when cgroups are
 // supported.
-//   memory_max is the memory quota in bytes, not accounting for GSI's exposed user override
-//     indexer.settings.memory_quota.
-//   num_cpu_prc is the number of CPUs to use * 100 either from the cgroup or from ns_server's
-//     COUCHBASE_CPU_COUNT environment variable which overrides it. This value does not account for
-//     GSI's exposed user override indexer.settings.max_cpu_percent.
+//
+//	memory_max is the memory quota in bytes, not accounting for GSI's exposed user override
+//	  indexer.settings.memory_quota.
+//	num_cpu_prc is the number of CPUs to use * 100 either from the cgroup or from ns_server's
+//	  COUCHBASE_CPU_COUNT environment variable which overrides it. This value does not account for
+//	  GSI's exposed user override indexer.settings.max_cpu_percent.
+//
 // Returns 0, 0 if cgroups are not supported or sigar fails.
 func sigarGetMemoryMaxAndNumCpuPrc() (uint64, int) {
 	const _sigarGetMemoryMaxAndNumCpuPrc = "settings::sigarGetMemoryMaxAndNumCpuPrc:"
