@@ -341,7 +341,9 @@ func (r *Rebalancer) initRebalAsync() {
 	var hostToIndexToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 	//short circuit
 	if len(r.transferTokens) == 0 && !r.runPlanner {
-		r.cb.progress(1.0, r.cancel)
+		if r.cb.progress != nil {
+			r.cb.progress(1.0, r.cancel)
+		}
 		r.finishRebalance(nil)
 		return
 	}
@@ -477,12 +479,15 @@ func (r *Rebalancer) finishRebalance(err error) {
 }
 
 func (r *Rebalancer) doFinish() {
-	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
+	l.Infof("Rebalancer::doFinish cleanup started")
+
 	atomic.StoreInt32(&r.isDone, 1)
 	close(r.done)
 	r.cancelMetakv()
 
 	r.wg.Wait()
+
+	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
 	r.cb.done(r.retErr, r.cancel)
 }
 
@@ -530,7 +535,7 @@ func (r *Rebalancer) doRebalance() {
 	if r.master && r.runPlanner && r.removeDupIndex {
 		<-r.dropIndexDone // wait for duplicate index removal to finish
 	}
-	if r.transferTokens != nil {
+	if len(r.transferTokens) != 0 {
 		if ddl, err := r.runParams.checkDDLRunning("Rebalancer"); ddl {
 			r.finishRebalance(err)
 			return

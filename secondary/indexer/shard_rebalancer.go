@@ -120,6 +120,11 @@ type ShardRebalancer struct {
 	cinfo                    *c.ClusterInfoCache
 	transferScheme           string
 	canMaintainShardAffinity bool
+
+	dcpRebr        RebalanceProvider // controlled rebalancer (DCP rebalancer)
+	dcpRebrCloseCh chan struct{}     // channel to sync on controlled rebalancer close
+	dcpTokens      map[string]*common.TransferToken
+	dcpRebrOnce    sync.Once
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -178,6 +183,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		cinfo:                    cinfo,
 		transferScheme:           transferScheme,
 		canMaintainShardAffinity: canMaintainShardAffinity,
+
+		dcpRebrCloseCh: make(chan struct{}),
 	}
 
 	sr.config.Store(config)
@@ -220,7 +227,9 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 	//short circuit
 	if len(sr.transferTokens) == 0 && !sr.runPlanner {
-		sr.cb.progress(1.0, sr.cancel)
+		if sr.cb.progress != nil {
+			sr.cb.progress(1.0, sr.cancel)
+		}
 		sr.finishRebalance(nil)
 		return
 	}
@@ -319,6 +328,27 @@ func (sr *ShardRebalancer) initRebalAsync() {
 							err)
 					}
 
+					// seperate out list of tokens for shard and DCP transfer
+					sr.transferTokens, sr.dcpTokens = func(tokens map[string]*c.TransferToken) (
+						shardTokens, dcpTokens map[string]*c.TransferToken) {
+
+						shardTokens = make(map[string]*c.TransferToken)
+						dcpTokens = make(map[string]*c.TransferToken)
+
+						for ttid, tt := range tokens {
+							if tt.IsShardTransferToken() {
+								shardTokens[ttid] = tt
+							} else if tt.IsDcpTransferToken() {
+								dcpTokens[ttid] = tt
+							} else {
+								l.Warnf("ShardRebalancer::initRebalAsync got invalid transfer token %v. skipping it...",
+									ttid)
+							}
+						}
+
+						return shardTokens, dcpTokens
+					}(sr.transferTokens)
+
 					for tid, token := range sr.transferTokens {
 						if !token.IsShardTransferToken() {
 							continue
@@ -414,6 +444,15 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 				if rToken.Version >= c.AllowDDLDuringRebalance_v1 {
 					sr.updateGlobalRebalancePhase(rToken)
 				}
+
+				if rToken.ActiveRebalancer < c.SHARD_REBALANCER &&
+					rToken.ActiveRebalancer != sr.rebalToken.ActiveRebalancer {
+
+					l.Infof("ShardRebalancer::processShardTokens change in ActiveRebalancer from %v to %v",
+						sr.rebalToken.ActiveRebalancer, rToken.ActiveRebalancer)
+					// switch to DcpRebr
+					sr.processRebalancerChange(rToken)
+				}
 			}
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
@@ -478,6 +517,14 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 	}
 
 	if !tt.IsShardTransferToken() {
+		if !common.IsServerlessDeployment() && sr.canMaintainShardAffinity {
+			// because of eventual consistecy, it can happen that we receive DCP based TT first
+			// and later get update of RebalToken which starts the DCP rebr and stop shard metakv
+			// watches; ignore non-shard transfer tokens in such cases
+			l.Warnf("ShardRebalancer::processShardTransferToken got non-(Shard Transfer Token) %v. skipping processing in Shard Rebalancer...",
+				tt)
+			return
+		}
 		errStr := "Transfer token is not for transferring shard"
 		l.Fatalf("ShardRebalancer::processShardTransferToken %v. ttid: %v, tt: %v", errStr, ttid, tt)
 		sr.setTransferTokenError(ttid, tt, errStr)
@@ -695,8 +742,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				sr.cb.progress(1.0, sr.cancel)
 			}
 			l.Infof("ShardRebalancer::processShardTransferTokenAsMaster No Tokens Found. Mark Done.")
-			sr.cancelMetakv()
-			go sr.finishRebalance(nil)
+
+			sr.transitionToDcpOrEndShardRebalance()
 		}
 		return true
 
@@ -2204,10 +2251,15 @@ func (sr *ShardRebalancer) getIndexStatusFromMeta(tt *c.TransferToken,
 
 func (sr *ShardRebalancer) doRebalance() {
 
-	if sr.transferTokens == nil {
-		sr.cb.progress(1.0, sr.cancel)
-		sr.finishRebalance(nil)
-		return
+	if len(sr.transferTokens) == 0 {
+		if sr.cb.progress != nil {
+			sr.cb.progress(1.0, sr.cancel)
+		}
+		sr.transitionToDcpOrEndShardRebalance()
+		if c.IsServerlessDeployment() {
+			// need to run observer to detect ActiveRebalancer change
+			return
+		}
 	}
 
 	// If DDL is allowed during rebalance, skip the ongoing DDL check.
@@ -2757,6 +2809,7 @@ func (sr *ShardRebalancer) finishRebalance(err error) {
 
 func (sr *ShardRebalancer) doFinish() {
 
+	l.Infof("ShardRebalancer::doFinish cleanup started")
 	atomic.StoreInt32(&sr.isDone, 1)
 	close(sr.done)
 
@@ -2764,6 +2817,8 @@ func (sr *ShardRebalancer) doFinish() {
 	if sr.canMaintainShardAffinity {
 		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
 		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
+
+		<-sr.dcpRebrCloseCh
 	}
 
 	sr.wg.Wait()
@@ -2811,6 +2866,12 @@ func (sr *ShardRebalancer) Cancel() {
 	if sr.cancelMetakv() {
 		close(sr.cancel)
 		sr.wg.Wait()
+	}
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if sr.dcpRebr != nil {
+		sr.dcpRebr.Cancel()
 	}
 }
 
@@ -2979,6 +3040,7 @@ func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (s
 		RebalId:                 rebalId,
 		SourceTokenId:           sourceTokenId,
 		SiblingTokenId:          siblingTokenId,
+		BuildSource:             c.TokenBuildSourceS3,
 	}
 
 	return dropOnSourceTokenId, dropOnSourceToken
@@ -3081,6 +3143,39 @@ func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhas
 	sr.supvMsgch <- msg
 }
 
+func (sr *ShardRebalancer) moveToDcpRebr() {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if sr.rebalToken.ActiveRebalancer != c.DCP_REBALANCER {
+
+		temp := *sr.rebalToken
+		clonedToken := temp
+
+		clonedToken.ActiveRebalancer = c.DCP_REBALANCER
+
+		setToken := func(attempts int, lastErr error) error {
+			if lastErr != nil {
+				l.Errorf("ShardRebalancer::moveToContRebr failed %v times. Last error %v.",
+					attempts, lastErr)
+			}
+
+			return c.MetakvSet(RebalanceTokenPath, &clonedToken)
+		}
+
+		rh := c.NewRetryHelper(10, 10*time.Millisecond, 10, setToken)
+		err := rh.Run()
+
+		if err != nil {
+			l.Errorf("ShardRebalancer::moveToContRebr failed to update metakv Token to transition to DCP rebalancer with err %v",
+				err)
+			if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+				go sr.finishRebalance(err)
+			}
+		}
+	}
+}
+
 func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	// Allow or reject DDL based on "allowDDLDuringRebalance" config
 	config := sr.config.Load()
@@ -3154,6 +3249,89 @@ func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct
 		} else {
 			logging.Infof("ShardRebalancer::sendPeerServerCommand: command %v successful", cmd)
 		}
+	}
+}
+
+// transitionToDcpOrEndShardRebalance - is the final step in a succesful shard rebalance
+// the step is to either start Dcp Rebalance for on-prem or call finishRebalance
+func (sr *ShardRebalancer) transitionToDcpOrEndShardRebalance() {
+	if !c.IsServerlessDeployment() && sr.canMaintainShardAffinity {
+		sr.moveToDcpRebr()
+	} else {
+		sr.dcpRebrOnce.Do(func() {
+			close(sr.dcpRebrCloseCh)
+		})
+		sr.cancelMetakv()
+		go sr.finishRebalance(nil)
+	}
+}
+
+// processRebalancerChange to start controlled rebalancer acc to transition on
+// rToken.ActiveRebalancer; only to be called on change in ActiveRebalancer
+func (sr *ShardRebalancer) processRebalancerChange(rToken *RebalanceToken) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	select {
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::processRebalancerChange saw cancel will skip processing rebalancer change")
+		return
+	default:
+	}
+
+	switch rToken.ActiveRebalancer {
+	case c.DCP_REBALANCER:
+		// start DCP rebalance and finish shard rebalance
+		sr.startDcpRebalance()
+
+		sr.cancelMetakv()
+		// shard rebalancer finish will wait internally wait for DCP rebalance to finish
+		go sr.finishRebalance(nil)
+	default:
+		// can we end up in a hang here if we don't finish rebalance?
+		l.Warnf("ShardRebalancer::processRebalancerChange invalid change in active rebalancer from %v to %v. skip processing...",
+			sr.rebalToken.ActiveRebalancer, rToken.ActiveRebalancer)
+		return
+	}
+
+	sr.rebalToken.ActiveRebalancer = rToken.ActiveRebalancer
+}
+
+// startDcpRebalancer starts the DCP rebalancer in controlled mode (runPlanner: false,
+// master: sr.IsMaster); or closes the dcpRebrCloseCh
+func (sr *ShardRebalancer) startDcpRebalance() {
+	sr.wg.Add(1)
+	defer sr.wg.Done()
+
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		tokens := (map[string]*c.TransferToken)(nil)
+		if sr.isMaster {
+			// only master has DCP tokens, followers get nil
+			tokens = sr.dcpTokens
+		}
+		sr.dcpRebrOnce.Do(func() {
+			sr.dcpRebr = NewRebalancer(tokens, sr.rebalToken, sr.nodeUUID, sr.isMaster, nil,
+				sr.dcpRebrDoneCallback, sr.supvMsgch, sr.localaddr, sr.config.Load(),
+				sr.topologyChange, false, sr.runParams, sr.statsMgr)
+
+			l.Infof("ShardRebalancer::startDcpRebalance started controlled rebalancer")
+		})
+	} else {
+		sr.dcpRebrOnce.Do(func() {
+			close(sr.dcpRebrCloseCh)
+		})
+	}
+}
+
+func (sr *ShardRebalancer) dcpRebrDoneCallback(err error, cancel <-chan struct{}) {
+	sr.wg.Add(1)
+	defer sr.wg.Done()
+
+	defer close(sr.dcpRebrCloseCh)
+	l.Infof("ShardRebalancer::dcpRebrDoneCallback controlled rebalancer exited with error %v",
+		err)
+	if err != nil {
+		sr.retErr = err
 	}
 }
 

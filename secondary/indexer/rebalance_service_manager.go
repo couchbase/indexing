@@ -2026,7 +2026,11 @@ func (m *RebalanceServiceManager) initStartPhase(
 	if err != nil {
 		return err, true
 	}
-	m.rebalanceToken = m.genRebalanceToken(masterIP)
+	rebalancer := c.SHARD_REBALANCER
+	if !c.IsServerlessDeployment() && !c.CanMaintanShardAffinity(m.config.Load()) {
+		rebalancer = c.DCP_REBALANCER
+	}
+	m.rebalanceToken = m.genRebalanceToken(masterIP, rebalancer)
 
 	if err = m.registerLocalRebalanceToken(m.rebalanceToken); err != nil {
 		return err, true
@@ -2045,13 +2049,16 @@ func (m *RebalanceServiceManager) initStartPhase(
 
 // genRebalanceToken creates and returns a new rebalance token. masterIP must be the true IP of this
 // node, not 127.0.0.1 from m.localhttp, so other nodes can find the Rebalance master.
-func (m *RebalanceServiceManager) genRebalanceToken(masterIP string) *RebalanceToken {
+func (m *RebalanceServiceManager) genRebalanceToken(masterIP string,
+	initRebalancer c.RebalancerType) *RebalanceToken {
 	cfg := m.config.Load()
 	return &RebalanceToken{
 		MasterId: cfg["nodeuuid"].String(),
 		RebalId:  m.getStateRebalanceID(),
 		Source:   RebalSourceClusterOp,
 		MasterIP: masterIP,
+
+		ActiveRebalancer: initRebalancer,
 	}
 }
 

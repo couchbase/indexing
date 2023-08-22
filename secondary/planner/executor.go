@@ -1022,7 +1022,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.TransferMode = common.TokenTransferModeCopy
 
 			if index.siblingIndex != nil && index.siblingIndex.initialNode != nil {
-				// replica repair from sibling shard
+				// shard repair
 				token.SourceId = index.siblingIndex.initialNode.NodeId
 				token.SourceHost = index.siblingIndex.initialNode.NodeUUID
 			}
@@ -1072,7 +1072,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 				// realIndex alternateShardIds might not be initialised in the plan
 				realIndex.AlternateShardIds = index.AlternateShardIds
-				realIndex.ShardIds = index.ShardIds
 				realIndex.destNode = index.destNode
 
 				childTokens, childKeys, err := createTokenForIndex(realIndex)
@@ -1091,6 +1090,11 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					allTokens = append(allTokens, childTokens[0])
 					keys = append(keys, childKeys[0])
 				} else {
+					if len(index.ShardIds) > 0 {
+						childTokens[0].IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+						childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = index.ShardIds
+					}
+
 					oldChildToken, ok := subTokenMap[childKeys[0]]
 					if !ok {
 						subTokenMap[childKeys[0]] = childTokens[0]
@@ -1136,8 +1140,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			if index.HasAlternateShardIds() {
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
 			}
-			token.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
-			token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = index.ShardIds
 
 			token.IndexInst.Pc = nil
 
