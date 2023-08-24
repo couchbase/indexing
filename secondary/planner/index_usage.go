@@ -65,6 +65,13 @@ type IndexUsage struct {
 	ActualUnitsUsage      uint64 `json:"actualUnitsUsage"`
 
 	// Available from 7.6+ version of server
+
+	// When grouping indexes based on alternate shard Id, the
+	// ActualRecsInMem and TotalRecords for each index are
+	// added to compute the resident ratio of the proxy index
+	ActualRecsInMem uint64 `json:"actualRecsInMem"`
+	TotalRecords    uint64 `json:"totalRecords"`
+
 	// This field captures the actual size of the index on disk (including fragmentation)
 	ActualDiskSize uint64 `json:"actualDiskSize,omitempty"`
 
@@ -604,6 +611,9 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 	o.ActualResidentPercent += in.ActualResidentPercent
 	o.ActualBuildPercent += in.ActualBuildPercent
 
+	o.ActualRecsInMem += in.ActualRecsInMem
+	o.TotalRecords += in.TotalRecords
+
 	// If the first index in the list is a primay index, then we can end-up
 	// copying only one shardId. Hence, always copy until we see a secondary
 	// index which will have 2 shardIds
@@ -617,7 +627,12 @@ func (o *IndexUsage) Normalize() {
 	// Normalize build percent
 	o.ActualBuildPercent = o.ActualBuildPercent / o.NumInstances
 	o.ActualDrainRate = max(o.MutationRate, o.DrainRate)
-	o.ActualResidentPercent = o.ActualResidentPercent / o.NumInstances
+
+	if o.TotalRecords > 0 {
+		o.ActualResidentPercent = uint64(float64(o.ActualRecsInMem) / float64(o.TotalRecords))
+	} else {
+		o.ActualResidentPercent = o.ActualResidentPercent / o.NumInstances
+	}
 
 	// Compute the AcutalKeySize
 	if o.ActualNumDocs > 0 {

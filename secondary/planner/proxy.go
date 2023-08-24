@@ -757,6 +757,39 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 				}
 			}
 		}
+
+		// recs_in_mem and recs_on_disk are used to compute the ActualResidentRatio
+		// of the proxy index usage. These stats are available only from 7.6+ version
+		// of indexer node.
+		// For pre-7.6 nodes, estimate the records in memory based on the items_count of
+		// the index and the resident ratio.
+		if msRecsOnDisk, ok := GetIndexStat(index, "recs_on_disk", statsMap, true, clusterVersion); ok {
+			index.TotalRecords = uint64(msRecsOnDisk.(float64))
+		} else {
+			index.TotalRecords = index.ActualNumDocs
+		}
+		if !index.IsPrimary {
+			if bsRecsOnDisk, ok := GetIndexStat(index, "backstore_recs_on_disk", statsMap, true, clusterVersion); ok {
+				index.TotalRecords += uint64(bsRecsOnDisk.(float64))
+			} else {
+				index.TotalRecords += index.ActualNumDocs
+			}
+		}
+
+		if msRecsInMem, ok := GetIndexStat(index, "recs_in_mem", statsMap, true, clusterVersion); ok {
+			index.ActualRecsInMem = uint64(msRecsInMem.(float64))
+		} else {
+			index.ActualRecsInMem = uint64(float64(index.ActualResidentPercent/100.0) * float64(index.ActualNumDocs))
+		}
+
+		if !index.IsPrimary {
+			if bsRecsInMem, ok := GetIndexStat(index, "backstore_recs_in_mem", statsMap, true, clusterVersion); ok {
+				index.ActualRecsInMem += uint64(bsRecsInMem.(float64))
+			} else {
+				index.ActualRecsInMem += uint64(float64(index.ActualResidentPercent/100.0) * float64(index.ActualNumDocs))
+			}
+		}
+
 	}
 
 	// Compute the estimated memory usage for each index.  This also computes the aggregated indexer mem usage.

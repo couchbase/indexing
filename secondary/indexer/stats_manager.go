@@ -624,6 +624,10 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.progressStatTime.AddFilter(stats.PlannerFilter)
 	s.indexState.AddFilter(stats.PlannerFilter)
 	s.avgUnitsUsage.AddFilter(stats.PlannerFilter)
+	s.numRecsInMem.AddFilter(stats.PlannerFilter)
+	s.numRecsOnDisk.AddFilter(stats.PlannerFilter)
+	s.bsNumRecsInMem.AddFilter(stats.PlannerFilter)
+	s.bsNumRecsOnDisk.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexStats) SetIndexStatusFilters() {
