@@ -693,6 +693,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"queryport.client.settings.closeActiveConnections": ConfigValue{
+		true,
+		"Closes active connections when connection pool is closed",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"queryport.client.settings.poolOverflow": ConfigValue{
 		30,
 		"maximum number of connections in a pool",

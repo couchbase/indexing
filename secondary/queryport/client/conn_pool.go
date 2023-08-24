@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,18 @@ const (
 	CONN_COUNT_LOG_INTERVAL    = 60 // Seconds.
 )
 
+type Operation int32
+
+const (
+	Add Operation = iota
+	Delete
+)
+
+type ActiveConnOperation struct {
+	Operation Operation
+	conn      *connection
+}
+
 // ErrorClosedPool
 var ErrorClosedPool = errors.New("queryport.closedPool")
 
@@ -35,10 +48,15 @@ var ErrorNoPool = errors.New("queryport.errorNoPool")
 var ErrorPoolTimeout = errors.New("queryport.connPoolTimeout")
 
 type connectionPool struct {
-	host        string
-	mkConn      func(host string) (*connection, error)
-	connections chan *connection
-	createsem   chan bool
+	host                           string
+	mkConn                         func(host string) (*connection, error)
+	connections                    chan *connection
+	activeConnections              map[*connection]struct{}
+	activeConnectionsUpdateChannel chan *ActiveConnOperation
+	activeConnWaitGroup            sync.WaitGroup
+	closeActiveConnections         bool
+	overflowLimit                  int
+	createsem                      chan bool
 	// config params
 	maxPayload       int
 	timeout          time.Duration
@@ -72,22 +90,26 @@ func newConnectionPool(
 	poolSize, poolOverflow, maxPayload int,
 	timeout, availTimeout time.Duration,
 	minPoolSizeWM int32, relConnBatchSize int32, kaInterval int,
-	cluster string, needsAuth *uint32) *connectionPool {
+	cluster string, needsAuth *uint32, closeActiveConnections bool) *connectionPool {
 
 	cp := &connectionPool{
-		host:             host,
-		connections:      make(chan *connection, poolSize),
-		createsem:        make(chan bool, poolSize+poolOverflow),
-		maxPayload:       maxPayload,
-		timeout:          timeout,
-		availTimeout:     availTimeout,
-		logPrefix:        fmt.Sprintf("[Queryport-connpool:%v]", host),
-		minPoolSizeWM:    minPoolSizeWM,
-		relConnBatchSize: relConnBatchSize,
-		stopCh:           make(chan bool, 1),
-		kaInterval:       time.Duration(kaInterval) * time.Second,
-		cluster:          cluster,
-		needsAuth:        needsAuth,
+		host:                           host,
+		connections:                    make(chan *connection, poolSize),
+		createsem:                      make(chan bool, poolSize+poolOverflow),
+		maxPayload:                     maxPayload,
+		timeout:                        timeout,
+		availTimeout:                   availTimeout,
+		logPrefix:                      fmt.Sprintf("[Queryport-connpool:%v]", host),
+		minPoolSizeWM:                  minPoolSizeWM,
+		relConnBatchSize:               relConnBatchSize,
+		stopCh:                         make(chan bool, 1),
+		kaInterval:                     time.Duration(kaInterval) * time.Second,
+		cluster:                        cluster,
+		needsAuth:                      needsAuth,
+		activeConnections:              make(map[*connection]struct{}, poolSize+poolOverflow),
+		activeConnectionsUpdateChannel: make(chan *ActiveConnOperation, 2*(poolSize+poolOverflow)), // double the buffer for addition and deletion events
+		overflowLimit:                  poolSize + poolOverflow,
+		closeActiveConnections:         closeActiveConnections,
 	}
 
 	// Ignore the error in initHostportForAuth, if any.
@@ -99,6 +121,11 @@ func newConnectionPool(
 	logging.Infof("%v started poolsize %v overflow %v low WM %v relConn batch size %v ...\n",
 		cp.logPrefix, poolSize, poolOverflow, minPoolSizeWM, relConnBatchSize)
 	go cp.releaseConnsRoutine()
+
+	logging.Infof("%v Started active connections updates consumer ... \n", cp.logPrefix)
+	cp.activeConnWaitGroup.Add(1)
+	go cp.pollActiveConnectionUpdates()
+
 	return cp
 }
 
@@ -258,6 +285,35 @@ func (cp *connectionPool) initHostportForAuth() error {
 	return nil
 }
 
+func (cp *connectionPool) CloseActiveConnections() {
+
+	defer func() {
+		// channel is already closed
+		if r := recover(); r != nil {
+			logging.Verbosef("%v Active connections channel Close() crashed: %v\n", cp.logPrefix, r)
+			logging.Verbosef("%s", logging.StackTrace())
+		}
+	}()
+
+	close(cp.activeConnectionsUpdateChannel)
+
+	// wait for the consumer to finish updating the active connections
+	cp.activeConnWaitGroup.Wait()
+
+	for activeConn := range cp.activeConnections {
+
+		if cp.closeActiveConnections {
+			logging.Infof("Closing active connection from %v to %v", activeConn.conn.LocalAddr(), activeConn.conn.RemoteAddr())
+			e := activeConn.conn.Close()
+
+			if e != nil {
+				logging.Errorf("Error closing the active connection from the connection pool: %v", e)
+			}
+		}
+		delete(cp.activeConnections, activeConn)
+	}
+}
+
 func (cp *connectionPool) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -270,6 +326,8 @@ func (cp *connectionPool) Close() (err error) {
 	for connectn := range cp.connections {
 		connectn.conn.Close()
 	}
+
+	cp.CloseActiveConnections()
 	logging.Infof("%v ... stopped\n", cp.logPrefix)
 	return
 }
@@ -278,6 +336,17 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 	if cp == nil {
 		return nil, ErrorNoPool
 	}
+
+	defer func() {
+		if err == nil {
+			// Add to active connections
+			// In case the pool is closed after creating a connection, close the connection and return the error
+			err = cp.pushActiveConnectionUpdates(&ActiveConnOperation{Operation: Add, conn: connectn})
+			if err != nil {
+				connectn.conn.Close()
+			}
+		}
+	}()
 
 	path, ok := "", false
 
@@ -353,7 +422,9 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 	}
 }
 
-func (cp *connectionPool) Renew(conn *connection) (*connection, error) {
+func (cp *connectionPool) Renew(conn *connection) (*connection, error, bool) {
+
+	cp.pushActiveConnectionUpdates(&ActiveConnOperation{Operation: Delete, conn: conn})
 
 	newConn, err := cp.mkConn(cp.host)
 	if err == nil {
@@ -362,7 +433,16 @@ func (cp *connectionPool) Renew(conn *connection) (*connection, error) {
 		conn = newConn
 	}
 
-	return conn, err
+	err1 := cp.pushActiveConnectionUpdates(&ActiveConnOperation{Operation: Add, conn: conn})
+
+	// pool closed
+	if err1 != nil {
+		logging.Infof("%v closing connection %q -> %q as the pool is closed\n", cp.logPrefix, conn.conn.LocalAddr(), conn.conn.RemoteAddr())
+		conn.conn.Close()
+		return conn, err, true
+	}
+
+	return conn, err, false
 }
 
 func (cp *connectionPool) Get() (*connection, error) {
@@ -371,6 +451,11 @@ func (cp *connectionPool) Get() (*connection, error) {
 
 func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 	defer atomic.AddInt32(&cp.curActConns, -1)
+
+	// update the active connections state. As the connection is returned, it should not be active
+	// delete before returning to pool
+	cp.pushActiveConnectionUpdates(&ActiveConnOperation{Operation: Delete, conn: connectn})
+
 	if connectn == nil || connectn.conn == nil {
 		return
 	}
@@ -452,6 +537,40 @@ func (cp *connectionPool) releaseConns(numRetConns int32) {
 			break
 		}
 	}
+}
+
+func (cp *connectionPool) pushActiveConnectionUpdates(update *ActiveConnOperation) (err error) {
+
+	defer func() {
+		if recover() != nil {
+			// channel is already closed in response to pool closure
+			err = ErrorClosedPool
+		}
+	}()
+
+	cp.activeConnectionsUpdateChannel <- update
+
+	return nil
+}
+
+func (cp *connectionPool) pollActiveConnectionUpdates() {
+
+	defer cp.activeConnWaitGroup.Done()
+
+	for key := range cp.activeConnectionsUpdateChannel {
+		if key.Operation == Add {
+			cp.activeConnections[key.conn] = struct{}{}
+			// Add a warning to show possible memory leaks
+			if len(cp.activeConnections) > cp.overflowLimit {
+				logging.Warnf("Number of active connections : %v exceeded the pool overflow limit: %v. Possible memory "+
+					"leak", len(cp.activeConnections), cp.overflowLimit)
+			}
+		} else {
+			delete(cp.activeConnections, key.conn)
+		}
+	}
+
+	logging.Infof("activeConnectionsUpdateChannel channel closed")
 }
 
 func (cp *connectionPool) releaseConnsRoutine() {
