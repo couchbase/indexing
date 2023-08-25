@@ -2317,6 +2317,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.shardLimitPerNode": ConfigValue{
+		200,
+		"Maximum number of shards that can be created per node",
+		200,
+		false,
+		false,
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),
