@@ -3219,6 +3219,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.perNodeTransferBatchSize": ConfigValue{
+		2,
+		"Number of transfer tokens that can be transferred per node.",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.serverless.transferBatchSize": ConfigValue{
 		4,
 		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching." +

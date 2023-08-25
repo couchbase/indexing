@@ -2877,6 +2877,20 @@ func (sr *ShardRebalancer) Cancel() {
 	}
 }
 
+// batchTransferTokens is the delegator func which creates batches of transfer token on the
+// basis of serverless mode or shard affinity
+func (sr *ShardRebalancer) batchTransferTokens() {
+	if c.IsServerlessDeployment() {
+		sr.batchShardTransferTokensForServerless()
+	} else if sr.canMaintainShardAffinity {
+		if sr.schedulingVersion >= c.PER_NODE_TRANSFER_LIMIT {
+			sr.orderTransferTokensPerNode()
+		} else {
+			sr.orderCopyAndMoveTransferTokens()
+		}
+	}
+}
+
 // This function batches a group of transfer tokens
 // according to the following rules:
 //
@@ -2892,7 +2906,7 @@ func (sr *ShardRebalancer) Cancel() {
 // batches can lead to a deadlock where after finishing the first
 // batch, tokens would wait for sibling to come to Ready but sibling
 // would wait for initial token to move to Deleted state.
-func (sr *ShardRebalancer) batchTransferTokens() {
+func (sr *ShardRebalancer) batchShardTransferTokensForServerless() {
 	tokenBatched := make(map[string]bool)
 
 	for ttid, token := range sr.transferTokens {
@@ -2913,9 +2927,73 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 	}
 }
 
+func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
+	cfg := sr.config.Load()
+	windowSz := cfg["rebalance.transferBatchSize"].Int()
+	if windowSz == 0 {
+		sr.batchedTokens = []map[string]*c.TransferToken{sr.transferTokens}
+		return
+	}
+
+	cTokens, mTokens := func() (cTokens, mTokens map[string]*c.TransferToken) {
+		cTokens = make(map[string]*c.TransferToken)
+		mTokens = make(map[string]*c.TransferToken)
+
+		for ttid, token := range sr.transferTokens {
+			switch token.TransferMode {
+			case c.TokenTransferModeCopy:
+				cTokens[ttid] = token
+			case c.TokenTransferModeMove:
+				mTokens[ttid] = token
+			}
+		}
+
+		return
+	}()
+
+	groupTokens := func(tokens map[string]*c.TransferToken, windowSz int) []map[string]*c.TransferToken {
+		batch := make([]map[string]*c.TransferToken, 0, len(tokens)/windowSz)
+
+		group := make(map[string]*c.TransferToken)
+		for ttid, token := range tokens {
+			group[ttid] = token
+			if len(group) >= windowSz {
+				batch = append(batch, group)
+
+				group = make(map[string]*c.TransferToken)
+			}
+		}
+		if len(group) > 0 {
+			batch = append(batch, group)
+		}
+
+		return batch
+	}
+
+	// Perform copy of all shards first
+	sr.batchedTokens = append(sr.batchedTokens, groupTokens(cTokens, windowSz)...)
+
+	// To keep things simple, we don't keep copy and move tokens in the same group
+	sr.batchedTokens = append(sr.batchedTokens, groupTokens(mTokens, windowSz)...)
+
+	l.Infof("ShardRebalancer::orderCopyAndMoveTransferTokens greated a batch of %v tokens with window of %v",
+		len(sr.batchedTokens), windowSz)
+}
+
+func (sr *ShardRebalancer) orderTransferTokensPerNode() {
+	// TODO: add batching by source node
+	sr.orderCopyAndMoveTransferTokens()
+}
+
 func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	config := sr.config.Load()
-	batchSize := config["rebalance.serverless.perNodeTransferBatchSize"].Int()
+	var batchSize int
+
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		batchSize = config["rebalance.perNodeTransferBatchSize"].Int()
+	} else if c.IsServerlessDeployment() {
+		batchSize = config["rebalance.serverless.perNodeTransferBatchSize"].Int()
+	}
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
@@ -2969,7 +3047,14 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 
 	config := sr.config.Load()
-	batchSize := config["rebalance.serverless.transferBatchSize"].Int()
+
+	var batchSize int
+
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		batchSize = config["rebalance.transferBatchSize"].Int()
+	} else if c.IsServerlessDeployment() {
+		batchSize = config["rebalance.serverless.transferBatchSize"].Int()
+	}
 
 	publishAllTokens := false
 	if batchSize == 0 { // Disable batching and publish all tokens
