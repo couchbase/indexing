@@ -1385,9 +1385,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.memFragThreshold": ConfigValue{
-		float64(0.15),
+		float64(0.30),
 		"Percentage of memory fragmentation",
-		float64(0.15),
+		float64(0.30),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1998,10 +1998,38 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.memtuner.runInterval": ConfigValue{
+		float64(0.5),
+		"Memtuner run interval (second).  Can be fraction of second",
+		float64(0.5),
+		false,
+		false,
+	},
 	"indexer.plasma.memtuner.incrCeilPercent": ConfigValue{
 		float64(3),
 		"Memtuner increment ceiling percent",
 		float64(3),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.freeMemHighWatermark": ConfigValue{
+		float64(0.3),
+		"Memtuner high watermark for free memory",
+		float64(0.3),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.freeMemLowWatermark": ConfigValue{
+		float64(0.2),
+		"Memtuner low watermark for free memory",
+		float64(0.2),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.decrCeilAdjust": ConfigValue{
+		float64(0.03),
+		"Memtuner decrement ceiling adjustment",
+		float64(0.03),
 		false,
 		false,
 	},
@@ -2116,6 +2144,13 @@ var SystemConfig = Config{
 		uint64(10),
 		false, // mutable
 		false, // case-insensitive
+	},
+	"indexer.plasma.reader.quotaAdjRatio": ConfigValue{
+		float64(0.9),
+		"quota adjustment for reader",
+		float64(0.9),
+		false,
+		false,
 	},
 	"indexer.plasma.holecleaner.enabled": ConfigValue{
 		true,
