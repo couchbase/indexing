@@ -349,6 +349,7 @@ func (slice *plasmaSlice) initStores() error {
 		cfg.EnableReaderPurge = slice.sysconf["plasma.reader.purge.enabled"].Bool()
 		cfg.ReaderPurgeThreshold = slice.sysconf["plasma.reader.purge.threshold"].Float64()
 		cfg.ReaderPurgePageRatio = slice.sysconf["plasma.reader.purge.pageRatio"].Float64()
+		cfg.ReaderQuotaAdjRatio = slice.sysconf["plasma.reader.quotaAdjRatio"].Float64()
 
 		cfg.ReaderMinHoleSize = slice.sysconf["plasma.reader.hole.minPages"].Uint64()
 		cfg.AutoHoleCleaner = slice.sysconf["plasma.holecleaner.enabled"].Bool()
@@ -2496,9 +2497,18 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MTunerMinQuotaRatio = cfg["plasma.memtuner.minQuotaRatio"].Float64()
 	plasma.MTunerOvershootRatio = cfg["plasma.memtuner.overshootRatio"].Float64()
 	plasma.MTunerIncrCeilPercent = cfg["plasma.memtuner.incrCeilPercent"].Float64()
+	plasma.MTunerDecrCeilAdjust = cfg["plasma.memtuner.decrCeilAdjust"].Float64()
 	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
+	plasma.MTunerRunInterval = time.Duration(cfg["plasma.memtuner.runInterval"].Float64() * float64(time.Second))
 	plasma.MFragThreshold = cfg["plasma.memFragThreshold"].Float64()
 	plasma.EnableContainerSupport = cfg["plasma.EnableContainerSupport"].Bool()
+
+	highWatermark := cfg["plasma.memtuner.freeMemHighWatermark"].Float64()
+	lowWatermark := cfg["plasma.memtuner.freeMemLowWatermark"].Float64()
+	if highWatermark > lowWatermark {
+		plasma.MTunerFreeMemHigh = highWatermark
+		plasma.MTunerFreeMemLow = lowWatermark
+	}
 
 	// hole cleaner global config
 	numHoleCleanerThreads := int(math.Ceil(float64(runtime.GOMAXPROCS(0)) *
@@ -2551,6 +2561,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EnableReaderPurge = mdb.sysconf["plasma.reader.purge.enabled"].Bool()
 	mdb.mainstore.ReaderPurgeThreshold = mdb.sysconf["plasma.reader.purge.threshold"].Float64()
 	mdb.mainstore.ReaderPurgePageRatio = mdb.sysconf["plasma.reader.purge.pageRatio"].Float64()
+	mdb.mainstore.ReaderQuotaAdjRatio = mdb.sysconf["plasma.reader.quotaAdjRatio"].Float64()
 
 	mdb.mainstore.ReaderMinHoleSize = mdb.sysconf["plasma.reader.hole.minPages"].Uint64()
 	mdb.mainstore.HoleCleanerMaxPages = mdb.sysconf["plasma.holecleaner.maxPages"].Uint64()
@@ -2625,6 +2636,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EnableReaderPurge = mdb.sysconf["plasma.reader.purge.enabled"].Bool()
 		mdb.backstore.ReaderPurgeThreshold = mdb.sysconf["plasma.reader.purge.threshold"].Float64()
 		mdb.backstore.ReaderPurgePageRatio = mdb.sysconf["plasma.reader.purge.pageRatio"].Float64()
+		mdb.backstore.ReaderQuotaAdjRatio = mdb.sysconf["plasma.reader.quotaAdjRatio"].Float64()
 
 		mdb.backstore.ReaderMinHoleSize = mdb.sysconf["plasma.reader.hole.minPages"].Uint64()
 		mdb.backstore.HoleCleanerMaxPages = mdb.sysconf["plasma.holecleaner.maxPages"].Uint64()
