@@ -125,6 +125,8 @@ type ShardRebalancer struct {
 	dcpRebrCloseCh chan struct{}     // channel to sync on controlled rebalancer close
 	dcpTokens      map[string]*common.TransferToken
 	dcpRebrOnce    sync.Once
+
+	shardProgressRatio, dcpProgressRatio float64
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -228,7 +230,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	//short circuit
 	if len(sr.transferTokens) == 0 && !sr.runPlanner {
 		if sr.cb.progress != nil {
-			sr.cb.progress(1.0, sr.cancel)
+			sr.cb.progress(sr.shardProgressRatio, sr.cancel)
 		}
 		sr.finishRebalance(nil)
 		return
@@ -366,6 +368,14 @@ func (sr *ShardRebalancer) initRebalAsync() {
 							token.Destination, tid)
 					}
 				}
+
+				sum := len(sr.transferTokens) + len(sr.dcpTokens)
+				if sum == 0 {
+					sum = 1
+				}
+
+				sr.shardProgressRatio = float64(len(sr.transferTokens)) / float64(sum)
+				sr.dcpProgressRatio = float64(len(sr.dcpTokens)) / float64(sum)
 
 				break loop
 			}
@@ -741,7 +751,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			///////////////////////////////////////////////////////////////////
 
 			if sr.cb.progress != nil {
-				sr.cb.progress(1.0, sr.cancel)
+				sr.cb.progress(sr.shardProgressRatio, sr.cancel)
 			}
 			l.Infof("ShardRebalancer::processShardTransferTokenAsMaster No Tokens Found. Mark Done.")
 
@@ -2255,7 +2265,7 @@ func (sr *ShardRebalancer) doRebalance() {
 
 	if len(sr.transferTokens) == 0 {
 		if sr.cb.progress != nil {
-			sr.cb.progress(1.0, sr.cancel)
+			sr.cb.progress(sr.shardProgressRatio, sr.cancel)
 		}
 		sr.transitionToDcpOrEndShardRebalance()
 		if c.IsServerlessDeployment() {
@@ -2379,16 +2389,23 @@ func (sr *ShardRebalancer) updateProgress() {
 	defer sr.wg.Done()
 
 	l.Infof("ShardRebalancer::updateProgress goroutine started")
+
+	progHolder := float64Holder{}
+	// set progress
+	go asyncCollectProgress(&progHolder, sr.computeProgress, 5*time.Second,
+		"ShardRebalancer::updateProgress", sr.cancel, sr.done)
+
+	// report progress
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			progress := sr.computeProgress()
+			progress := progHolder.GetFloat64()
 			sr.cb.progress(progress, sr.cancel)
 		case <-sr.cancel:
-			l.Infof("ShardRebalancer::updateProgress Cancel Received")
+			l.Infof("ShardRebalancer::updateProgress Cancel Received. progress reporter stapped")
 			return
 		case <-sr.done:
 			l.Infof("ShardRebalancer::updateProgress Done Received")
@@ -2422,23 +2439,13 @@ func getProgressForToken(statusResp *IndexStatusResponse, ttid string, token *c.
 	}
 }
 
-// Shard rebalancer's version of compute progress method
+// computeProgress calculate progress considering Dcp Rebal tokens
 func (sr *ShardRebalancer) computeProgress() float64 {
+	return sr.shardProgressRatio * sr.computeShardProgress()
+}
 
-	url := "/getIndexStatus?getAll=true"
-	resp, err := getWithAuth(sr.localaddr + url)
-	if err != nil {
-		l.Errorf("ShardRebalancer::computeProgress Error getting local metadata %v %v", sr.localaddr+url, err)
-		return 0
-	}
-
-	defer resp.Body.Close()
-	statusResp := new(IndexStatusResponse)
-	bytes, _ := ioutil.ReadAll(resp.Body)
-	if err := json.Unmarshal(bytes, &statusResp); err != nil {
-		l.Errorf("ShardRebalancer::computeProgress Error unmarshal response %v %v", sr.localaddr+url, err)
-		return 0
-	}
+// computeShardProgress only computes the progress of the shard tokens
+func (sr *ShardRebalancer) computeShardProgress() float64 {
 
 	// Make a shallow copy of the transfer token map
 	getTransferTokenMap := func() map[string]*c.TransferToken {
@@ -2455,6 +2462,25 @@ func (sr *ShardRebalancer) computeProgress() float64 {
 
 	tokens := getTransferTokenMap()
 	totTokens := len(tokens)
+
+	if totTokens == 0 {
+		return 1.0
+	}
+
+	url := "/getIndexStatus?getAll=true"
+	resp, err := getWithAuth(sr.localaddr + url)
+	if err != nil {
+		l.Errorf("ShardRebalancer::computeProgress Error getting local metadata %v %v", sr.localaddr+url, err)
+		return 0
+	}
+
+	defer resp.Body.Close()
+	statusResp := new(IndexStatusResponse)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	if err := json.Unmarshal(bytes, &statusResp); err != nil {
+		l.Errorf("ShardRebalancer::computeProgress Error unmarshal response %v %v", sr.localaddr+url, err)
+		return 0
+	}
 
 	transferWt := 0.35
 	restoreWt := 0.35
@@ -3397,9 +3423,9 @@ func (sr *ShardRebalancer) startDcpRebalance() {
 			tokens = sr.dcpTokens
 		}
 		sr.dcpRebrOnce.Do(func() {
-			sr.dcpRebr = NewRebalancer(tokens, sr.rebalToken, sr.nodeUUID, sr.isMaster, nil,
-				sr.dcpRebrDoneCallback, sr.supvMsgch, sr.localaddr, sr.config.Load(),
-				sr.topologyChange, false, sr.runParams, sr.statsMgr)
+			sr.dcpRebr = NewRebalancer(tokens, sr.rebalToken, sr.nodeUUID, sr.isMaster,
+				sr.dcpRebrProgressCallback, sr.dcpRebrDoneCallback, sr.supvMsgch, sr.localaddr,
+				sr.config.Load(), sr.topologyChange, false, sr.runParams, sr.statsMgr)
 
 			l.Infof("ShardRebalancer::startDcpRebalance started controlled rebalancer")
 		})
@@ -3420,6 +3446,14 @@ func (sr *ShardRebalancer) dcpRebrDoneCallback(err error, cancel <-chan struct{}
 	if err != nil {
 		sr.retErr = err
 	}
+}
+
+func (sr *ShardRebalancer) dcpRebrProgressCallback(progress float64, cancel <-chan struct{}) {
+	if sr.cb.progress == nil {
+		return
+	}
+
+	sr.cb.progress(sr.shardProgressRatio+progress*sr.dcpProgressRatio, cancel)
 }
 
 // isIndexDeletedDuringRebal returns true if an index is deleted while
@@ -3501,4 +3535,23 @@ func getTLSConfigWithCeftificates(host string) (*tls.Config, error) {
 	}
 
 	return tlsConfig, nil
+}
+
+func asyncCollectProgress(progHolder *float64Holder, collector func() float64, dur time.Duration,
+	caller string, cancel, done <-chan struct{}) {
+	collectorTicker := time.NewTicker(dur - 500*time.Millisecond)
+	defer collectorTicker.Stop()
+
+	for {
+		select {
+		case <-collectorTicker.C:
+			progHolder.SetFloat64(collector())
+		case <-cancel:
+			l.Infof("%v:asyncCollectProgress cancel received. progress collector stopped", caller)
+			return
+		case <-done:
+			l.Infof("%v:asyncCollectProgress done received. progress collector stopped", caller)
+			return
+		}
+	}
 }
