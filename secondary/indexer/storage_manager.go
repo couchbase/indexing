@@ -253,6 +253,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case STORAGE_STATS:
 		s.handleStats(cmd)
 
+	case SHARD_STORAGE_STATS:
+		s.handleShardStorageStats(cmd)
+
 	case STORAGE_INDEX_MERGE_SNAPSHOT:
 		s.handleIndexMergeSnapshot(cmd)
 
@@ -1679,6 +1682,20 @@ func (s *storageMgr) handleStats(cmd Message) {
 	}()
 }
 
+func (s *storageMgr) handleShardStorageStats(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	go func() { // Process shard storage stats asyncronously
+		s.statsLock.Lock()
+		defer s.statsLock.Unlock()
+
+		req := cmd.(*MsgShardStatsRequest)
+		replych := req.GetReplyChannel()
+		stats := s.getShardStats()
+		replych <- stats
+	}()
+}
+
 func (s *storageMgr) setBucketStats() {
 	// TODO: Fix this for non-serveless if required.
 	if !common.IsServerlessDeployment() {
@@ -1868,6 +1885,76 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 	gStats.numIndexes.Set(numIndexes)
 
 	return stats
+}
+
+func (s *storageMgr) getShardStats() map[string]*common.ShardStats {
+
+	doPrepare := true
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+
+	out := make(map[string]*common.ShardStats)
+
+	populateShardStats := func(skipPrimaryIndex bool) {
+		for idxInstId, partnMap := range indexPartnMap {
+			inst, ok := indexInstMap[idxInstId]
+
+			//skip deleted indexes
+			if !ok || inst.State == common.INDEX_STATE_DELETED {
+				continue
+			}
+
+			if inst.Defn.IsPrimary && skipPrimaryIndex {
+				continue
+			}
+
+			// TODO: Index may skip deleted instances but shard may still
+			// be maintaining the stats for the index. Need to filter the stats
+			// of the deleted instances in the shard
+			for _, partnInst := range partnMap {
+				slices := partnInst.Sc.GetAllSlices()
+
+				for _, slice := range slices {
+
+					// Make sure that the slice is not deleted while stats are being gathered
+					if !slice.CheckAndIncrRef() {
+						continue
+					}
+
+					if doPrepare {
+						slice.PrepareStats()
+						doPrepare = false
+					}
+
+					partnId := partnInst.Defn.GetPartitionId()
+					alternateShardId := slice.GetAlternateShardId(partnId)
+					if len(alternateShardId) == 0 {
+						slice.DecrRef()
+						continue
+					}
+
+					if _, ok := out[alternateShardId]; ok {
+						slice.DecrRef()
+						continue
+					}
+
+					shardStats := slice.ShardStatistics(partnId)
+					out[shardStats.AlternateShardId] = shardStats
+					slice.DecrRef()
+
+				}
+			}
+		}
+	}
+
+	// Shard stats are accumulated for both mainstore and backstore. As primary
+	// indexes are not aware of backstore, skip processing primary indexes in
+	// first iteration. As there can exist a shard with only primary indexes,
+	// iterate the instance list again to accommodate such shards
+	populateShardStats(true)
+	populateShardStats(false)
+
+	return out
 }
 
 func (s *storageMgr) handleRecoveryDone() {

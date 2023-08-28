@@ -910,9 +910,9 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	return len(oldEntriesBytes)
 }
 
-//checkFatalDbError checks if the error returned from DB
-//is fatal and stores it. This error will be returned
-//to caller on next DB operation
+// checkFatalDbError checks if the error returned from DB
+// is fatal and stores it. This error will be returned
+// to caller on next DB operation
 func (mdb *memdbSlice) checkFatalDbError(err error) {
 
 	//panic on all DB errors and recover rather than risk
@@ -1295,8 +1295,8 @@ func (mdb *memdbSlice) resetStats() {
 	mdb.idxStats.lastMutateGatherTime.Set(0)
 }
 
-//Rollback slice to given snapshot. Return error if
-//not possible
+// Rollback slice to given snapshot. Return error if
+// not possible
 func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 
 	//before rollback make sure there are no mutations
@@ -1486,8 +1486,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	return
 }
 
-//RollbackToZero rollbacks the slice to initial state. Return error if
-//not possible
+// RollbackToZero rollbacks the slice to initial state. Return error if
+// not possible
 func (mdb *memdbSlice) RollbackToZero(initialBuild bool) error {
 
 	//before rollback make sure there are no mutations
@@ -1511,11 +1511,11 @@ func (mdb *memdbSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
 	mdb.lastRollbackTs = ts
 }
 
-//slice insert/delete methods are async. There
-//can be outstanding mutations in internal queue to flush even
-//after insert/delete have return success to caller.
-//This method provides a mechanism to wait till internal
-//queue is empty.
+// slice insert/delete methods are async. There
+// can be outstanding mutations in internal queue to flush even
+// after insert/delete have return success to caller.
+// This method provides a mechanism to wait till internal
+// queue is empty.
 func (mdb *memdbSlice) waitPersist() {
 
 	if !mdb.checkAllWorkersDone() {
@@ -1536,9 +1536,9 @@ func (mdb *memdbSlice) waitPersist() {
 
 }
 
-//Commit persists the outstanding writes in underlying
-//forestdb database. If Commit returns error, slice
-//should be rolled back to previous snapshot.
+// Commit persists the outstanding writes in underlying
+// forestdb database. If Commit returns error, slice
+// should be rolled back to previous snapshot.
 func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
 	mdb.waitPersist()
@@ -1573,8 +1573,8 @@ func (mdb *memdbSlice) FlushDone() {
 	// no-op
 }
 
-//checkAllWorkersDone return true if all workers have
-//finished processing
+// checkAllWorkersDone return true if all workers have
+// finished processing
 func (mdb *memdbSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
@@ -1609,8 +1609,8 @@ func (mdb *memdbSlice) Close() {
 	}
 }
 
-//Destroy removes the database file from disk.
-//Slice is not recoverable after this.
+// Destroy removes the database file from disk.
+// Slice is not recoverable after this.
 func (mdb *memdbSlice) Destroy() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
@@ -1627,7 +1627,7 @@ func (mdb *memdbSlice) Destroy() {
 	}
 }
 
-//Id returns the Id for this Slice
+// Id returns the Id for this Slice
 func (mdb *memdbSlice) Id() SliceId {
 	return mdb.id
 }
@@ -1637,12 +1637,12 @@ func (mdb *memdbSlice) Path() string {
 	return mdb.path
 }
 
-//IsActive returns if the slice is active
+// IsActive returns if the slice is active
 func (mdb *memdbSlice) IsActive() bool {
 	return mdb.isActive
 }
 
-//SetActive sets the active state of this slice
+// SetActive sets the active state of this slice
 func (mdb *memdbSlice) SetActive(isActive bool) {
 	mdb.isActive = isActive
 }
@@ -1656,18 +1656,18 @@ func (mdb *memdbSlice) IsCleanupDone() bool {
 	return mdb.isClosed && mdb.isDeleted
 }
 
-//Status returns the status for this slice
+// Status returns the status for this slice
 func (mdb *memdbSlice) Status() SliceStatus {
 	return mdb.status
 }
 
-//SetStatus set new status for this slice
+// SetStatus set new status for this slice
 func (mdb *memdbSlice) SetStatus(status SliceStatus) {
 	mdb.status = status
 }
 
-//IndexInstId returns the Index InstanceId this
-//slice is associated with
+// IndexInstId returns the Index InstanceId this
+// slice is associated with
 func (mdb *memdbSlice) IndexInstId() common.IndexInstId {
 	return mdb.idxInstId
 }
@@ -1676,8 +1676,8 @@ func (mdb *memdbSlice) IndexPartnId() common.PartitionId {
 	return mdb.idxPartnId
 }
 
-//IndexDefnId returns the Index DefnId this slice
-//is associated with
+// IndexDefnId returns the Index DefnId this slice
+// is associated with
 func (mdb *memdbSlice) IndexDefnId() common.IndexDefnId {
 	return mdb.idxDefnId
 }
@@ -1761,6 +1761,14 @@ func (mdb *memdbSlice) Statistics(consumerFilter uint64) (StorageStatistics, err
 	mdb.idxStats.numRecsInMem.Set(itemsCount)
 
 	return sts, nil
+}
+
+func (mdb *memdbSlice) ShardStatistics(partnId common.PartitionId) *common.ShardStats {
+	return nil
+}
+
+func (mdb *memdbSlice) GetAlternateShardId(partnId common.PartitionId) string {
+	return ""
 }
 
 func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
@@ -1943,7 +1951,7 @@ func (s *memdbSnapshot) Timestamp() *common.TsVbuuid {
 	return s.ts
 }
 
-//Close the snapshot
+// Close the snapshot
 func (s *memdbSnapshot) Close() error {
 
 	count := atomic.AddInt32(&s.refCount, int32(-1))

@@ -2974,6 +2974,7 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/stats/mem", s.handleMemStatsReq)
 	mux.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
 	mux.HandleFunc("/stats/storage", s.handleStorageStatsReq)
+	mux.HandleFunc("/stats/storage/shard", s.handleShardStorageStatsReq)
 	mux.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	mux.HandleFunc("/storage/jemalloc/profile", s.jemallocMemoryProfileHandler)
 	mux.HandleFunc("/storage/jemalloc/profileActivate", s.jemallocMemoryProfileActivateHandler)
@@ -3373,6 +3374,14 @@ func (s *statsManager) getStorageStatsMap(spec *statsSpec) map[string]interface{
 	return result
 }
 
+func (s *statsManager) getShardStorageStats() ([]byte, error) {
+	replych := make(chan map[string]*common.ShardStats)
+	statReq := &MsgShardStatsRequest{mType: SHARD_STORAGE_STATS, respch: replych}
+	s.supvMsgch <- statReq
+	res := <-replych
+	return json.Marshal(res)
+}
+
 func (s *statsManager) getStorageStats(spec *statsSpec, creds cbauth.Creds) string {
 	var result strings.Builder
 	replych := make(chan []IndexStorageStats)
@@ -3476,6 +3485,34 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 		} else {
 			w.WriteHeader(200)
 			w.Write([]byte("Indexer In Warmup. Please try again later."))
+		}
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) handleShardStorageStatsReq(w http.ResponseWriter, r *http.Request) {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
+		audit.Audit(common.AUDIT_UNAUTHORIZED, r, "StatsManager::handleStorageStatsReq", "")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(common.HTTP_STATUS_UNAUTHORIZED)
+		return
+	}
+
+	if r.Method == "GET" {
+		resp, err := s.getShardStorageStats()
+		if err != nil { // return nil repsonse and error
+			w.WriteHeader(200)
+			w.Write([]byte(fmt.Sprintf("Error observed, err: %v", err)))
+		} else { // return error
+			w.WriteHeader(200)
+			w.Write(resp)
 		}
 	} else {
 		w.WriteHeader(400)
