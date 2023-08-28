@@ -639,7 +639,8 @@ func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := couch.GetPool(pooln)
+
+	pool, err := couch.GetPoolWithBucket(pooln, bucketn)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +673,7 @@ func ConnectBucket2(cluster, pooln, bucketn string) (*couchbase.Bucket,
 	if err != nil {
 		return nil, 0, err
 	}
-	pool, err := couch.GetPool(pooln)
+	pool, err := couch.GetPoolWithBucket(pooln, bucketn)
 	if err != nil {
 		return nil, 0, err
 	}
