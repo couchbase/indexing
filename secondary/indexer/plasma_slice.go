@@ -2903,7 +2903,9 @@ func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.Shar
 	// For computing resident ratio
 	ss.CachedRecords = val.Stats.CachedRecords
 	ss.TotalRecords = val.Stats.TotalRecords
-	ss.Instances = val.InstList
+	for _, instPath := range val.InstList {
+		ss.Instances[instPath] = true
+	}
 
 	if len(mdb.idxDefn.AlternateShardIds[partnId]) > 1 {
 		bsAlternateShardId := mdb.idxDefn.AlternateShardIds[partnId][1]

@@ -98,6 +98,8 @@ type IndexerNode struct {
 	// The maximum value across all indexer nodes will be considered for cluster wide limit
 	ShardLimitPerTenant   int `json:"shardLimitPerTenant,omitempty"`
 	ShardTenantMultiplier int `json:"shardTenantMultiplier,omitempty"`
+
+	ShardStats map[string]*common.ShardStats
 }
 
 // This function creates a new indexer node
@@ -206,6 +208,8 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.DiskUsageThreshold = o.DiskUsageThreshold
 	r.ShardLimitPerTenant = o.ShardLimitPerTenant
 	r.ShardTenantMultiplier = o.ShardTenantMultiplier
+
+	r.ShardStats = o.ShardStats
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]

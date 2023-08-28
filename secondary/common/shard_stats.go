@@ -22,11 +22,12 @@ type ShardStats struct {
 	// For computing resident percent of the shard
 	CachedRecords int64
 	TotalRecords  int64
-	Instances     []string
+	Instances     map[string]bool
 }
 
 func NewShardStats(alternateShardId string) *ShardStats {
 	return &ShardStats{
 		AlternateShardId: alternateShardId,
+		Instances:        make(map[string]bool),
 	}
 }

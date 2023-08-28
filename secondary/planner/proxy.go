@@ -136,6 +136,11 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string, isRebalance bool
 		return nil, err
 	}
 
+	err = getShardStats(plan, config)
+	if err != nil {
+		return nil, err
+	}
+
 	// GOMAXPROCS is now set to the logical minimum of
 	//   1. runtime.NumCPU
 	//   2. SigarControlGroupInfo.NumCpuPrc / 100 (only included if cgroups are supported)
@@ -483,6 +488,45 @@ func getIndexStats(plan *Plan, config common.Config) error {
 			return err
 		}
 		SetStatsInIndexer(indexer, statsMap, clusterVersion, indexerVersion, config)
+	}
+
+	return nil
+}
+
+func getShardStats(plan *Plan, config common.Config) error {
+
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	// find all nodes that has a index http service
+	nids := cinfo.GetNodeIdsByServiceType(common.INDEX_HTTP_SERVICE)
+
+	if len(nids) == 0 {
+		return errors.New("No indexing service available.")
+	}
+
+	resp, err := restHelperNoLock(getShardStatsResp, nil, plan.Placement, cinfo, "ShardStatsResp")
+	if err != nil {
+		return err
+	}
+
+	for nid, res := range resp {
+
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::getShardStats: Error from initializing indexer nodeId: %v, err: %v", nid, err)
+			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(plan.Placement, nodeId)
+		if indexer == nil {
+			logging.Errorf("Planner::getShardStats: skipping stats collection for indexer nodeId %v, restURL %v", nodeId, indexer.RestUrl)
+			continue
+		}
+
+		indexer.ShardStats = res.shardStats
 	}
 
 	return nil
@@ -1020,6 +1064,22 @@ func getLocalStatsResp(addr string) (*http.Response, error) {
 			logging.Errorf("Planner::getLocalStatsResp: Failed to get stats from node: %v, err: %v", addr, err)
 			return nil, err
 		}
+	}
+
+	return resp, nil
+}
+
+// This function gets the marshalled index stats from a specific indexer host.
+func getShardStatsResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/stats/storage/shard")
+	if err != nil {
+		if strings.Contains(err.Error(), "404 page not found") || (resp != nil && resp.StatusCode == 404) {
+			logging.Warnf("Planner::getShardStatsResp: Ignoring shard stats from node as page is not found, node: %v, err: %v", addr, err)
+			return nil, nil
+		}
+		logging.Warnf("Planner::getShardStatsResp: Failed to get the stats from node: %v, err: %v", addr, err)
+		return nil, err
 	}
 
 	return resp, nil
@@ -1679,6 +1739,7 @@ type RestResponse struct {
 	delTokenPaths  *mc.TokenPathList
 	dropInstTokens *mc.DropInstanceCommandTokenList
 	numReplicas    map[common.IndexDefnId]common.Counter
+	shardStats     map[string]*common.ShardStats
 
 	respType string
 }
@@ -1716,6 +1777,9 @@ func NewRestResponse(respType string) (*RestResponse, error) {
 	case "LocalNumReplicasResp":
 		m := make(map[common.IndexDefnId]common.Counter)
 		r.numReplicas = m
+
+	case "ShardStatsResp":
+		r.shardStats = make(map[string]*common.ShardStats)
 
 	default:
 		return nil, fmt.Errorf("NewRestResponse: Unexpected HTTP Response Type")
@@ -1765,6 +1829,16 @@ func (r *RestResponse) SetResponse(res *http.Response) error {
 
 	case "LocalNumReplicasResp":
 		if err := security.ConvertHttpResponse(res, &r.numReplicas); err != nil {
+			return err
+		}
+
+	case "ShardStatsResp":
+		// 'res' can be nil for indexer versions that do not support
+		// the shard stats endpoint
+		if res == nil {
+			return nil
+		}
+		if err := security.ConvertHttpResponse(res, &r.shardStats); err != nil {
 			return err
 		}
 
@@ -2035,6 +2109,17 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode) ([]*IndexUsage, i
 		proxyIndex.Normalize()
 		proxyIndex.SetInitialNode()
 		result = append(result, proxyIndex)
+	}
+
+	// Replace the stats in proxy with stats retrieved from the shard
+	for _, index := range result {
+		if index.IsShardProxy == false {
+			continue
+		}
+
+		if shardStats, ok := indexer.ShardStats[index.AlternateShardIds[0]]; ok {
+			index.updateProxyStats(shardStats)
+		}
 	}
 
 	return result, numShards, nil
