@@ -3432,6 +3432,15 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.planner.honourNodesInDefn": ConfigValue{
+		false,
+		"With index grouping (shard-index affinity) enabled, we may violate resource contraints " +
+			"to honour user provided nodes in index definition. To force enable this resource violation and " +
+			"honour nodes provided in index definition, set this flag to true. This may impact performance",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",
@@ -3662,6 +3671,13 @@ var SystemConfig = Config{
 		201,
 		"Limit on the number of indexes that can be created per bucket in Serverless Mode.",
 		201,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.shardTransferProtocol": ConfigValue{
+		"https",
+		"Transfer protocol for node to node shard movement",
+		"https",
 		false, // mutable
 		false, // case-insensitive
 	},

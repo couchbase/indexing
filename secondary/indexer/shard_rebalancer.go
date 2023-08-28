@@ -359,11 +359,21 @@ func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
 }
 
 func getTransferScheme(cfg c.Config) string {
-	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
-	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageScheme, "://") {
-		blobStorageScheme += "://"
+	if c.IsServerlessDeployment() {
+		blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
+		if blobStorageScheme != "" && !strings.HasSuffix(blobStorageScheme, "://") {
+			blobStorageScheme += "://"
+		}
+		return blobStorageScheme
+	} else if c.CanMaintanShardAffinity(cfg) {
+		shardTransferProtocol := cfg["rebalance.shardTransferProtocol"].String()
+		if shardTransferProtocol != "" && !strings.HasSuffix(shardTransferProtocol, "://") {
+			shardTransferProtocol += "://"
+		}
+		return shardTransferProtocol
 	}
-	return blobStorageScheme
+
+	return ""
 }
 
 func getDestinationFromConfig(cfg c.Config) (string, string, error) {
