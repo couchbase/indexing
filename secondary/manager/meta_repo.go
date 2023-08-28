@@ -1508,12 +1508,16 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket, scop
 		return nil
 	}
 
+	alternateShardIds, shardIds := topology.GetShardInfoForInst(id, srcInstId)
+
 	// Delete the proxy during merge.
 	topology.RemoveIndexInstanceById(id, srcInstId)
 	topology.RemovePartitionsFromTombstone(id, tgtInstId, tgtPartitions)
 
 	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions, tgtVersions)
 	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtInstVersion)
+	topology.UpdateShardIdsForIndexPartn(id, tgtInstId, shardIds)
+	topology.UpdateAlternateShardIdsForIndexPartn(id, tgtInstId, alternateShardIds)
 
 	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
 		return err
