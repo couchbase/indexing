@@ -1535,7 +1535,10 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 
 	retryCleanupAtReady:
 
-		dropOnDest := true
+		// If the token does not exist in tokenMap, then source must have deleted it
+		// In such a case, skip dropping the token on destination
+		_, dropOnDest := tokenMap[ttid]
+
 		for _, tt := range tokenMap {
 			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
 				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
