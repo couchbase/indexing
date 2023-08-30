@@ -925,7 +925,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	result := make(map[string]*common.TransferToken)
 	for _, token := range tokens {
 		ustr, _ := common.NewUUID()
-		ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
+		ttid := fmt.Sprintf("ShardToken%s", ustr.Str())
 		result[ttid] = token
 	}
 
@@ -1217,7 +1217,12 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 	for _, token := range tokens {
 		uuid, _ := common.NewUUID()
-		ttid := fmt.Sprintf("TransferToken%s", uuid.Str())
+		var ttid string
+		if token.IsShardTransferToken() {
+			ttid = fmt.Sprintf("ShardToken%s", uuid.Str())
+		} else {
+			ttid = fmt.Sprintf("TransferToken%s", uuid.Str())
+		}
 		result[ttid] = token
 
 		logging.Infof("ShardTransferToken(v2) generated token - %v | %v", ttid, token)

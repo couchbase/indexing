@@ -2938,6 +2938,13 @@ func (m *RebalanceServiceManager) getCurrRebalTokens() (*RebalTokens, error) {
 			var tt c.TransferToken
 			json.Unmarshal(kv.Value, &tt)
 			rinfo.TT[ttid] = &tt
+		} else if strings.Contains(kv.Path, ShardTokenTag) {
+			ttidpos := strings.Index(kv.Path, ShardTokenTag)
+			ttid := kv.Path[ttidpos:]
+
+			var tt c.TransferToken
+			json.Unmarshal(kv.Value, &tt)
+			rinfo.TT[ttid] = &tt
 		} else {
 			l.Errorf("RebalanceServiceManager::getCurrRebalTokens Unknown Token %v. Ignored.", kv)
 		}

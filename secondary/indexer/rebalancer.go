@@ -1516,7 +1516,7 @@ func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer")
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer", TransferTokenTag)
 			if err != nil {
 				l.Errorf("%v Unable to decode transfer token. Ignored.", _processTokens)
 				return nil
@@ -2905,16 +2905,17 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 }
 
 // decodeTransferToken unmarshals a transfer token received in a callback from metakv.
-func decodeTransferToken(path string, value []byte, prefix string) (string, *c.TransferToken, error) {
+func decodeTransferToken(path string, value []byte, prefix, tokenTag string) (
+	string, *c.TransferToken, error) {
 
-	ttidpos := strings.Index(path, TransferTokenTag)
+	ttidpos := strings.Index(path, tokenTag)
 	ttid := path[ttidpos:]
 
 	tt := &c.TransferToken{}
 	err := json.Unmarshal(value, tt)
 	if err != nil {
-		l.Fatalf("%v::decodeTransferToken Failed unmarshalling value for %s: %s\n%s",
-			prefix, path, err.Error(), string(value))
+		l.Fatalf("%v::decodeTransferToken Failed unmarshalling value for tag %s %s: %s\n%s",
+			prefix, tokenTag, path, err.Error(), string(value))
 		return "", nil, err
 	}
 

@@ -455,9 +455,11 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 				}
 			}
 		}
-	} else if strings.Contains(kve.Path, TransferTokenTag) {
+	} else if strings.Contains(kve.Path, ShardTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "ShardRebalancer")
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "ShardRebalancer",
+				ShardTokenTag)
+
 			if err != nil {
 				l.Errorf("ShardRebalancer::processShardTokens Unable to decode transfer token. Ignored.")
 				return nil
@@ -3032,7 +3034,7 @@ func (sr *ShardRebalancer) checkAllTokensDone() bool {
 
 func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (string, *c.TransferToken) {
 	ustr, _ := common.NewUUID()
-	dropOnSourceTokenId := fmt.Sprintf("TransferToken%s", ustr.Str())
+	dropOnSourceTokenId := fmt.Sprintf("ShardToken%s", ustr.Str())
 
 	dropOnSourceToken := &c.TransferToken{
 		ShardTransferTokenState: c.ShardTokenDropOnSource,

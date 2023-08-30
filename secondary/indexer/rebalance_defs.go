@@ -16,14 +16,17 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
-const RebalanceRunning = "RebalanceRunning"
-const RebalanceTokenTag = "RebalanceToken"
-const MoveIndexTokenTag = "MoveIndexToken"
-const TransferTokenTag = "TransferToken"
+const (
+	RebalanceRunning  = "RebalanceRunning"
+	RebalanceTokenTag = "RebalanceToken"
+	MoveIndexTokenTag = "MoveIndexToken"
+	TransferTokenTag  = "TransferToken"
+	ShardTokenTag     = "ShardToken"
 
-const RebalanceMetakvDir = c.IndexingMetaDir + "rebalance/"
-const RebalanceTokenPath = RebalanceMetakvDir + RebalanceTokenTag
-const MoveIndexTokenPath = RebalanceMetakvDir + MoveIndexTokenTag
+	RebalanceMetakvDir = c.IndexingMetaDir + "rebalance/"
+	RebalanceTokenPath = RebalanceMetakvDir + RebalanceTokenTag
+	MoveIndexTokenPath = RebalanceMetakvDir + MoveIndexTokenTag
+)
 
 type RebalSource byte
 
