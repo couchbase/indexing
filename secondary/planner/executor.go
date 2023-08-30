@@ -561,18 +561,17 @@ func groupIndexInstances(index *IndexUsage, defnIdToInstIdMap map[common.IndexDe
 	}
 }
 
-func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, sliceIndex int) {
-	if index.initialNode != nil {
+func getRenamePath(index *IndexUsage, newInstId common.IndexInstId) (string, string) {
+	return fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId),
+		fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, newInstId, index.PartnId)
+}
+
+func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInstId common.IndexInstId) {
+	if index.initialNode != nil || index.siblingIndex == nil {
 		return
 	}
 
-	currPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, index.siblingIndex.InstId, index.PartnId)
-
-	newInstId := token.InstIds[sliceIndex]
-	if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
-		newInstId = token.RealInstIds[sliceIndex]
-	}
-	newPathInMeta := fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, newInstId, index.PartnId)
+	currPathInMeta, newPathInMeta := getRenamePath(index, newInstId)
 
 	if token.InstRenameMap == nil {
 		token.InstRenameMap = make(map[common.ShardId]map[string]string)
@@ -705,7 +704,11 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 			}
 
 			if index.initialNode == nil {
-				addToInstRenamePath(token, index, sliceIndex)
+				newInstId := token.InstIds[sliceIndex]
+				if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+					newInstId = token.RealInstIds[sliceIndex]
+				}
+				addToInstRenamePath(token, index, newInstId)
 			}
 
 			// If there is a build token for the definition, set index STATE to INITIAL so the
@@ -958,9 +961,83 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	return result, nil
 }
 
+func getLiveAlternateShardIdsFromSolution(soln *Solution) map[common.IndexDefnId]map[int]map[common.PartitionId]uint64 {
+	liveAsiMap := make(map[common.IndexDefnId]map[int]map[common.PartitionId]uint64)
+
+	addToLiveAsi := func(index *IndexUsage) {
+		if index.IsShardProxy {
+			return
+		}
+
+		if len(index.AlternateShardIds) > 0 {
+			liveDefnId := index.DefnId
+			liveReplicaId := index.Instance.ReplicaId
+			livePartnId := index.PartnId
+
+			liveAsi, err := common.ParseAlternateId(index.AlternateShardIds[0])
+			if err != nil {
+				logging.Warnf("getLiveAlternateShardIdsFromSolution: failed to parse Alternate Shard Id %v with err %v",
+					index.AlternateShardIds[0], err)
+				return
+			}
+
+			var ok bool
+			if _, ok = liveAsiMap[liveDefnId]; !ok {
+				liveAsiMap[liveDefnId] = make(map[int]map[common.PartitionId]uint64)
+			}
+
+			if _, ok = liveAsiMap[liveDefnId][liveReplicaId]; !ok {
+				liveAsiMap[liveDefnId][liveReplicaId] = make(map[common.PartitionId]uint64)
+			}
+
+			liveAsiMap[liveDefnId][liveReplicaId][livePartnId] = liveAsi.SlotId
+		}
+	}
+
+	for _, indexer := range soln.Placement {
+
+		for _, index := range indexer.Indexes {
+			if index.initialNode != nil && !index.IsShardProxy {
+				addToLiveAsi(index)
+			} else if index.IsShardProxy {
+				for _, realIndex := range index.GroupedIndexes {
+					if realIndex.initialNode != nil {
+						addToLiveAsi(realIndex)
+					}
+				}
+			}
+		}
+
+	}
+
+	return liveAsiMap
+}
+
+func setSiblingIndexForRealIndex(realIndex, proxySiblingIndex *IndexUsage) {
+	if realIndex == nil || realIndex.IsShardProxy ||
+		proxySiblingIndex == nil || !proxySiblingIndex.IsShardProxy {
+		return
+	}
+
+	targetDefnId := realIndex.DefnId
+	targetPartnId := realIndex.PartnId
+
+	for _, index := range proxySiblingIndex.GroupedIndexes {
+		if index.DefnId == targetDefnId && index.PartnId == targetPartnId &&
+			index.initialNode != nil {
+			if len(index.AlternateShardIds) == 0 && len(proxySiblingIndex.AlternateShardIds) != 0 {
+				index.AlternateShardIds = proxySiblingIndex.AlternateShardIds
+			}
+			realIndex.siblingIndex = index
+			return
+		}
+	}
+}
+
 func genShardTransferToken2(soln *Solution, masterId string, topologyChange service.TopologyChange,
 	isServerless bool) (map[string]*common.TransferToken, error) {
 
+	liveAsiMap := getLiveAlternateShardIdsFromSolution(soln)
 	tokens := make(map[string]*common.TransferToken)
 
 	// merge tokenB into tokenA for DCP based tokens
@@ -982,7 +1059,8 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 				tokenA.IndexInst.Defn.AlternateShardIds[partnId] = asi
 			}
 
-			if tokenA.IndexInst.Defn.ShardIdsForDest == nil {
+			if tokenA.IndexInst.Defn.ShardIdsForDest == nil &&
+				tokenB.IndexInst.Defn.ShardIdsForDest != nil {
 				tokenA.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
 			}
 
@@ -996,6 +1074,46 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 		return true
 	}
 
+	// indexExistInAlternateShard - checks if index (aka defn-partn) exists in a shard prior
+	// new solution or not; this helps us understand if we can truly perform shard rebalance or not
+	alternateShardExistsInCluster := func(index *IndexUsage) bool {
+
+		if len(index.AlternateShardIds) < 1 {
+			return false
+		}
+
+		asi, err := common.ParseAlternateId(index.AlternateShardIds[0])
+		if err != nil {
+			logging.Warnf("genShardTransferToken2:indexExistsInAlternateShard failed to parse Alternate Id %v for index %v with err %v. falling back to DCP",
+				index.AlternateShardIds[0], index, err)
+			return false
+		}
+
+		targetDefnId := index.DefnId
+		targetPartnId := index.PartnId
+		targetReplicaId := -1
+		targetSlotId := asi.SlotId
+		if index.Instance != nil {
+			targetReplicaId = index.Instance.ReplicaId
+		}
+
+		if index.initialNode == nil &&
+			index.siblingIndex != nil && index.siblingIndex.Instance != nil {
+			// incase of shard repair, we need to search with replicaId of source
+			targetReplicaId = index.siblingIndex.Instance.ReplicaId
+		}
+
+		if replicaGpMap, ok := liveAsiMap[targetDefnId]; ok {
+			if partnMap, ok := replicaGpMap[targetReplicaId]; ok {
+				if slotNo, ok := partnMap[targetPartnId]; ok {
+					return slotNo == targetSlotId
+				}
+			}
+		}
+
+		return false
+	}
+
 	var createTokenForIndex func(*IndexUsage) ([]*common.TransferToken, []string, error)
 
 	// createTokenForIndex - creates TransferTokens for IndexUsage for shard affinity
@@ -1003,6 +1121,12 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 	// if the usage is for a shard proxy, it can generate 1+(len(indexes-in-shard)) tokens
 	// depending on the state of replicas
 	createTokenForIndex = func(index *IndexUsage) ([]*common.TransferToken, []string, error) {
+		if !index.IsShardProxy &&
+			index.initialNode != nil && index.initialNode.NodeId == index.destNode.NodeId {
+			// nothing to generate for indexes which are not moving
+			return nil, nil, nil
+		}
+
 		allTokens := make([]*common.TransferToken, 1)
 		keys := make([]string, 1)
 
@@ -1013,6 +1137,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			RebalId:  topologyChange.ID,
 		}
 		var tokenKey string
+		var targetShardIds []common.ShardId
 
 		// set transfer details
 		if index.initialNode == nil || index.pendingCreate {
@@ -1023,8 +1148,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 			if index.siblingIndex != nil && index.siblingIndex.initialNode != nil {
 				// shard repair
-				token.SourceId = index.siblingIndex.initialNode.NodeId
-				token.SourceHost = index.siblingIndex.initialNode.NodeUUID
+				token.SourceId = index.siblingIndex.initialNode.NodeUUID
+				token.SourceHost = index.siblingIndex.initialNode.NodeId
+				targetShardIds = index.siblingIndex.ShardIds
 			}
 
 			// reset instance version for new replicas being created
@@ -1034,6 +1160,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.TransferMode = common.TokenTransferModeMove
 			token.SourceId = index.initialNode.NodeUUID
 			token.SourceHost = index.initialNode.NodeId
+			targetShardIds = index.ShardIds
 		}
 
 		// set index inst
@@ -1050,49 +1177,63 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			var asi *common.AlternateShardId
 			subTokenMap := make(map[string]*common.TransferToken)
 
-			// set token.Insts, token.InstIds and token.RealInstIds by alternateShardId-slot
-			// there should only be 1 <slotNo, destId>/<slotNo, replicaId> pair
-			// all indexes under it move together
-			if index.destNode.NodeVersion < common.INDEXER_76_VERSION {
-				// TODO: if the dest node is on version less than 7.6
-				// need to fallback to DCP based movement here;
-				// this is possible in a mixed mode cluster with server versions 7.6 (or above) and
-				// server version before 7.6 (nodes which can honour and can't honour shardAffintiy
-				// are in the same cluster) as planner should always run on latest version nodes
-			} else {
+			if len(index.AlternateShardIds) > 0 {
 				var err error
 				asi, err = common.ParseAlternateId(index.AlternateShardIds[0])
 				if err != nil {
-					return nil, nil, fmt.Errorf("failed to parse alternate shard id with err %v", err)
+					return nil, nil, fmt.Errorf("failed to parse alternate shard id %v with err %v",
+						index.AlternateShardIds[0], err)
 				}
+
 			}
 
 			for _, realIndex := range index.GroupedIndexes {
-				// we use recursion here to initialise the IndexInst to correct values
+				// set siblingIndex for realIndex
+				setSiblingIndexForRealIndex(realIndex, index.siblingIndex)
 
 				// realIndex alternateShardIds might not be initialised in the plan
 				realIndex.AlternateShardIds = index.AlternateShardIds
 				realIndex.destNode = index.destNode
 
+				// we use recursion here to initialise the IndexInst to correct values
 				childTokens, childKeys, err := createTokenForIndex(realIndex)
 				if err != nil {
 					return nil, nil, err
 				}
 
-				if len(childTokens) != 1 || len(childKeys) != 1 {
+				if len(childTokens) > 1 || len(childKeys) > 1 {
 					// this case should not happen
-					return nil, nil, fmt.Errorf("unexpected child tokens created")
+					return nil, nil, fmt.Errorf("unexpected child tokens (len - %v) created", len(childTokens))
+				} else if len(childTokens) == 0 {
+					continue
 				}
 
-				if realIndex.initialNode == nil || realIndex.pendingCreate {
-					// case of replica repair for lost replica (replica is not a part of shard)
-					// recreate replica as a part of the shard but with DCP
-					allTokens = append(allTokens, childTokens[0])
-					keys = append(keys, childKeys[0])
-				} else {
-					if len(index.ShardIds) > 0 {
+				// only if we have both source and dest on or above 7.6 and all partn exists in
+				// original shards then can we use Shard based movements; this ensures that
+				// shard movement only happens on 7.6 or above nodes which are part of shard
+				if realIndex.destNode.NodeVersion >= common.INDEXER_76_VERSION &&
+					((index.initialNode != nil && index.initialNode.NodeVersion >= common.INDEXER_76_VERSION) ||
+						(index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
+							index.siblingIndex.initialNode.NodeVersion >= common.INDEXER_76_VERSION)) &&
+					alternateShardExistsInCluster(realIndex) {
+
+					if realIndex.siblingIndex != nil &&
+						token.TransferMode == common.TokenTransferModeCopy {
+						// set InstRenameMap in the root token itself
+						addToInstRenamePath(&token, realIndex, realIndex.InstId)
+					}
+
+					if !realIndex.pendingCreate {
 						childTokens[0].IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
-						childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = index.ShardIds
+						childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds
+					}
+
+					if realIndex.pendingBuild && !realIndex.PendingDelete &&
+						(childTokens[0].IndexInst.State == common.INDEX_STATE_CREATED ||
+							childTokens[0].IndexInst.State == common.INDEX_STATE_READY) {
+
+						childTokens[0].IndexInst.State = common.INDEX_STATE_INITIAL
+
 					}
 
 					oldChildToken, ok := subTokenMap[childKeys[0]]
@@ -1104,17 +1245,23 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 								oldChildToken, childTokens[0])
 						}
 					}
+				} else {
+					// in all other cases, use DCP to rebalance indices
+					allTokens = append(allTokens, childTokens[0])
+					keys = append(keys, childKeys[0])
 				}
 			}
 
+			// set token.Insts, token.InstIds and token.RealInstIds by alternateShardId-slot
+			// there should only be 1 <slotNo, destId>/<slotNo, replicaId> pair
+			// all indexes under it move together
 			for _, childToken := range subTokenMap {
 				token.IndexInsts = append(token.IndexInsts, childToken.IndexInst)
 				token.InstIds = append(token.InstIds, childToken.InstId)
 				token.RealInstIds = append(token.RealInstIds, childToken.RealInstId)
 			}
 
-			token.ShardIds = index.ShardIds
-
+			token.ShardIds = targetShardIds
 			tokenKey = fmt.Sprintf("asi_%v_%v-%v-%v", asi.SlotId, asi.ReplicaId, token.SourceId,
 				token.DestId)
 
@@ -1176,11 +1323,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 	for _, indexer := range soln.Placement {
 		for _, index := range indexer.Indexes {
-
-			if index.initialNode != nil && index.initialNode.NodeId == index.destNode.NodeId {
-				// nothing to generate for indexes which are not moving
-				continue
-			}
 
 			groupedTokens, tokenKeys, err := createTokenForIndex(index)
 			if err != nil {
