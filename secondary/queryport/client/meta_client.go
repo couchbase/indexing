@@ -1932,12 +1932,17 @@ func (b *metadataClient) hasIndexesChanged(
 	return false
 }
 
+type RollbackTimeChange struct {
+	oldRollbackTime int64
+	newRollbackTime int64
+}
+
 // Update statistics index instance
 func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.PartitionId]common.Statistics) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	changedRollbackTimes := map[common.IndexInstId]map[common.PartitionId]int64{}
+	changedRollbackTimes := map[RollbackTimeChange]map[common.IndexInstId][]common.PartitionId{}
 
 	for instId, statsByPartitions := range stats {
 
@@ -1980,10 +1985,14 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 					oldRollbackTime := load.getStats().getRollbackTime(partitionId)
 
 					if rollback != oldRollbackTime {
-						if changedRollbackTimes[instId] == nil {
-							changedRollbackTimes[instId] = map[common.PartitionId]int64{}
+						rollbackTimeChange := RollbackTimeChange{oldRollbackTime: oldRollbackTime, newRollbackTime: rollback}
+						if changedRollbackTimes[rollbackTimeChange] == nil {
+							changedRollbackTimes[rollbackTimeChange] = map[common.IndexInstId][]common.PartitionId{}
 						}
-						changedRollbackTimes[instId][partitionId] = rollback
+						if changedRollbackTimes[rollbackTimeChange][instId] == nil {
+							changedRollbackTimes[rollbackTimeChange][instId] = []common.PartitionId{}
+						}
+						changedRollbackTimes[rollbackTimeChange][instId] = append(changedRollbackTimes[rollbackTimeChange][instId], partitionId)
 					}
 
 					newStats.updateRollbackTime(partitionId, rollback)
@@ -2004,11 +2013,10 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 		if len(changedRollbackTimes) != 0 {
 			var stringBuilder strings.Builder
 			stringBuilder.WriteString("Rollback time has changed for the following indexes \n")
-			fmt.Fprintf(&stringBuilder, "%-30s|%-30s|%-30s\n", "Index inst", "Partition Id", "New rollback time")
-			for indexInst, partitionMap := range changedRollbackTimes {
-				for partitionId, rollbackTime := range partitionMap {
-					fmt.Fprintf(&stringBuilder, "%-30v|%-30v|%-30v\n", indexInst, partitionId, rollbackTime)
-				}
+			for rollbackTimeChange, instances := range changedRollbackTimes {
+				fmt.Fprintf(&stringBuilder, "{Index inst : [partitions]}: %v. \t New rollbacktime: %v, "+
+					"Old rollbacktime: %v\n", instances, rollbackTimeChange.newRollbackTime,
+					rollbackTimeChange.oldRollbackTime)
 			}
 			logging.Infof(stringBuilder.String())
 		}
