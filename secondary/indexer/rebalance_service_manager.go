@@ -1574,7 +1574,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards)
-		} else {
+		} else if common.IsServerlessDeployment() {
 			// On Destination if we see a token in ShardTokenDropOnSource state
 			// it implies that source instance will be cleaned up and hence there
 			// wont be any metering there. Destination may or may not have started

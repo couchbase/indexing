@@ -2391,6 +2391,7 @@ func (sr *ShardRebalancer) updateProgress() {
 	l.Infof("ShardRebalancer::updateProgress goroutine started")
 
 	progHolder := float64Holder{}
+	progHolder.SetFloat64(0)
 	// set progress
 	go asyncCollectProgress(&progHolder, sr.computeProgress, 5*time.Second,
 		"ShardRebalancer::updateProgress", sr.cancel, sr.done)
