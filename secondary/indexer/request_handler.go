@@ -158,7 +158,7 @@ type IndexStatus struct {
 	Stale        bool   `json:"stale"`
 	LastScanTime string `json:"lastScanTime,omitempty"`
 
-	AlternateShardIds map[common.PartitionId][]string `json:"alternateShardIds"`
+	AlternateShardIds map[string]map[int][]string `json:"alternateShardIds"`
 }
 
 // NodeUUIDsResponse is used to return a list of Index Service NodeUUIDs from the
@@ -1058,8 +1058,18 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						}
 
 						partitionMap := make(map[string][]int)
+						asiMap := make(map[string]map[int][]string)
 						for _, partnDef := range instance.Partitions {
 							partitionMap[mgmtAddr] = append(partitionMap[mgmtAddr], int(partnDef.PartId))
+							if len(partnDef.AlternateShardIds) > 0 {
+								if nodeAsiMap, ok := asiMap[mgmtAddr]; !ok {
+									asiMap[mgmtAddr] = map[int][]string{
+										int(partnDef.PartId): partnDef.AlternateShardIds,
+									}
+								} else {
+									nodeAsiMap[int(partnDef.PartId)] = partnDef.AlternateShardIds
+								}
+							}
 						}
 
 						addHost(defn.DefnId, mgmtAddr, defnToHostMap)
@@ -1095,7 +1105,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 							ReplicaId:         int(instance.ReplicaId),
 							Stale:             stale,
 							LastScanTime:      lastScanTime,
-							AlternateShardIds: defn.AlternateShardIds,
+							AlternateShardIds: asiMap,
 						}
 
 						indexStatuses = append(indexStatuses, status)
@@ -1431,6 +1441,9 @@ func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) [
 
 			for host, partitions := range status.PartitionMap {
 				s2.PartitionMap[host] = partitions
+			}
+			for partnId, shardIds := range status.AlternateShardIds {
+				s2.AlternateShardIds[partnId] = shardIds
 			}
 			s2.Stale = s2.Stale || status.Stale
 
@@ -2355,6 +2368,7 @@ func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r 
 
 func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 	const method string = "RequestHandler::getIndexPlan" // for logging
+	const binSize uint64 = common.DEFAULT_BIN_SIZE
 
 	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil, false)
 	if err != nil {
@@ -2366,7 +2380,7 @@ func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 		return "", fmt.Errorf("%v: Fail to read index spec from request. err: %v", method, err)
 	}
 
-	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp, m.enableShardAffinity)
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true, m.useGreedyPlanner, m.allowDDLDuringScaleUp, binSize, m.enableShardAffinity)
 	if err != nil {
 		return "", fmt.Errorf("%v: Fail to plan index. err: %v", method, err)
 	}

@@ -120,6 +120,7 @@ func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, e
 	serverless := (common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT)
 	// if we are not passing the config updates to RestoreContext, will this flag change be picked up?
 	enableShardAffinity := common.CanMaintanShardAffinity(config)
+	binSize := common.GetBinSize(config)
 
 	//In serverless mode no need to convert storage mode.
 	if !serverless {
@@ -186,7 +187,7 @@ func (m *RestoreContext) ComputeIndexLayout() (map[string][]*common.IndexDefn, e
 		return nil, err
 	} else {
 		// invoke placement
-		return m.placeIndex(enableShardAffinity)
+		return m.placeIndex(enableShardAffinity, binSize)
 	}
 
 }
@@ -934,7 +935,7 @@ func (m *RestoreContext) updateIndexDefnId() error {
 }
 
 // Place index
-func (m *RestoreContext) placeIndex(enableShardAffinity bool) (map[string][]*common.IndexDefn, error) {
+func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (map[string][]*common.IndexDefn, error) {
 
 	newNodes := ([]*planner.IndexerNode)(nil)
 	newNodeIds := ([]string)(nil)
@@ -1029,14 +1030,14 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool) (map[string][]*com
 	numEmptyIndexer := findNumEmptyIndexer(m.current.Placement, mappedIndexers)
 	if numEmptyIndexer >= len(newNodes) {
 		// place indexes using swap rebalance
-		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds, enableShardAffinity)
+		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity)
 		if err == nil {
 			return m.buildIndexHostMapping(solution), nil
 		}
 	}
 
 	// place indexes using regular rebalance
-	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds, enableShardAffinity)
+	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity)
 	if err == nil {
 		return m.buildIndexHostMapping(solution), nil
 	}

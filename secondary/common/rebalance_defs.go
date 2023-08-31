@@ -392,9 +392,8 @@ func (tt *TransferToken) String() string {
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
-	} else {
-		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}
+	fmt.Fprintf(sbp, "State: %v ", tt.State)
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
@@ -452,9 +451,8 @@ func (tt *TransferToken) LessVerboseString() string {
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
-	} else {
-		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}
+	fmt.Fprintf(sbp, "State: %v ", tt.State)
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
@@ -500,6 +498,10 @@ func (tt *TransferToken) LessVerboseString() string {
 
 func (tt *TransferToken) IsShardTransferToken() bool {
 	return (tt.Version == MULTI_INST_SHARD_TRANSFER)
+}
+
+func (tt *TransferToken) IsDcpTransferToken() bool {
+	return tt.Version == SINGLE_INST_DCP_BUILD || tt.BuildSource == TokenBuildSourceDcp
 }
 
 func (tt *TransferToken) SiblingExists() bool {
@@ -563,3 +565,23 @@ const (
 	GLOBAL_TRANSFER_LIMIT   ShardRebalanceSchedulingVersion = "v1"
 	PER_NODE_TRANSFER_LIMIT                                 = "v2"
 )
+
+type RebalancerType byte
+
+const (
+	INVALID_REBALANCER RebalancerType = iota
+	DCP_REBALANCER
+	SHARD_REBALANCER
+)
+
+func (rt RebalancerType) String() string {
+	switch rt {
+	case INVALID_REBALANCER:
+		return "INVALID"
+	case DCP_REBALANCER:
+		return "DCP"
+	case SHARD_REBALANCER:
+		return "SHARD"
+	}
+	return "UNKNOWN"
+}

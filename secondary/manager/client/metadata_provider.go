@@ -67,6 +67,7 @@ type Settings interface {
 	MemLowThreshold() int32
 	ServerlessIndexLimit() uint32
 	AllowDDLDuringScaleUp() bool
+	GetBinSize() uint64
 }
 
 ///////////////////////////////////////////////////////
@@ -155,6 +156,8 @@ type watcher struct {
 
 	clientStats IndexStats2Holder // local cached complete version showing all buckets and indexes that exist
 	storeStats  bool
+
+	retrieveClientStats uint32
 }
 
 // With partitioning, index instance is distributed among indexer nodes.
@@ -2570,6 +2573,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
 	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
 	enableShardAffinity := o.settings.IsShardAffinityEnabled()
+	binSize := o.settings.GetBinSize()
 
 	var solution *planner.Solution
 
@@ -2582,7 +2586,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		}
 	} else {
 		solution, err = planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes,
-			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, enableShardAffinity)
+			len(defn.Nodes) != 0, useGreedyPlanner, enforceLimits, allowDDLDuringScaleUp, binSize, enableShardAffinity)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -2682,13 +2686,15 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	}
 
 	enableShardAffinity := o.settings.IsShardAffinityEnabled()
+	binSize := o.settings.GetBinSize()
 
 	// Use the planner to find out where to place the replica.
 	// If planner cannot read from the given list of nodes, it will return error.
 	// In case of input plan has list of nodes to be used, pass the list along
 	// for planner to place the replicas on those specific nodes.
 	var solution *planner.Solution
-	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false, enforceLimits, enableShardAffinity)
+	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false,
+		enforceLimits, binSize, enableShardAffinity)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -6192,7 +6198,20 @@ RETRY2:
 	if err == nil && w.storeStats {
 		clusterVersion := w.getClusterVersion()
 		if clusterVersion >= c.INDEXER_70_VERSION {
-			err = w.getClientStats()
+
+			// By retrieving client stats asynchronously, watcher does not have to wait
+			// for stats from indexer. This means that the indexes belonging to this node
+			// may not be picked up for scans if replicas are available as client does
+			// not have the load statistics of indexes on the node
+			//
+			// In case, indexer broadcasts the full list of stats to watcher before
+			// getClientStats succeed, then the compare-and-swap (CAS) in getClientStats
+			// would fail as CAS would succeed only if clientStats are nil. This will
+			// make sure that the full index stats broadcast always takes precedence
+			// over updation via getClientStats
+			if atomic.CompareAndSwapUint32(&w.retrieveClientStats, 0, 1) {
+				go w.getClientStats()
+			}
 		}
 	}
 

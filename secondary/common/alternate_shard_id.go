@@ -13,6 +13,7 @@ type AlternateShardId struct {
 	ReplicaId uint8
 	GroupId   uint8
 }
+type PartnAlternateShardIdMap map[PartitionId][]string
 
 func NewAlternateId() (*AlternateShardId, error) {
 	uuid := make([]byte, 8)

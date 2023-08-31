@@ -72,6 +72,8 @@ type RunConfig struct {
 	// For file transfer based rebalance, this field is set to
 	// "true" if indexes are to be grouped based on alternate shardIds
 	EnableShardAffinity bool
+
+	binSize uint64
 }
 
 type RunStats struct {
@@ -177,16 +179,16 @@ type TenantUsage struct {
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
 	disableReplicaRepair bool, threshold float64, timeout int, cpuProfile bool, minIterPerTemp int,
-	maxIterPerTemp int, enableShardAffinity bool) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	maxIterPerTemp int, binSize uint64, enableShardAffinity bool) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 	runtime := time.Now()
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair,
-		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, enableShardAffinity, &runtime)
+		timeout, threshold, cpuProfile, minIterPerTemp, maxIterPerTemp, binSize, enableShardAffinity, &runtime)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int, threshold float64, cpuProfile bool, minIterPerTemp, maxIterPerTemp int,
-	enableShardAffinity bool, runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
+	binSize uint64, enableShardAffinity bool, runtime *time.Time) (map[string]*common.TransferToken, map[string]map[common.IndexDefnId]*common.IndexDefn, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil, true)
 	if err != nil {
@@ -231,6 +233,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.MinIterPerTemp = minIterPerTemp
 	config.MaxIterPerTemp = maxIterPerTemp
 	config.EnableShardAffinity = enableShardAffinity
+	config.binSize = binSize
 
 	p, _, hostToIndexToRemove, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes, true)
 	if p != nil && detail {
@@ -922,7 +925,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	result := make(map[string]*common.TransferToken)
 	for _, token := range tokens {
 		ustr, _ := common.NewUUID()
-		ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
+		ttid := fmt.Sprintf("ShardToken%s", ustr.Str())
 		result[ttid] = token
 	}
 
@@ -1019,7 +1022,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.TransferMode = common.TokenTransferModeCopy
 
 			if index.siblingIndex != nil && index.siblingIndex.initialNode != nil {
-				// replica repair from sibling shard
+				// shard repair
 				token.SourceId = index.siblingIndex.initialNode.NodeId
 				token.SourceHost = index.siblingIndex.initialNode.NodeUUID
 			}
@@ -1069,7 +1072,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 				// realIndex alternateShardIds might not be initialised in the plan
 				realIndex.AlternateShardIds = index.AlternateShardIds
-				realIndex.ShardIds = index.ShardIds
 				realIndex.destNode = index.destNode
 
 				childTokens, childKeys, err := createTokenForIndex(realIndex)
@@ -1088,6 +1090,11 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					allTokens = append(allTokens, childTokens[0])
 					keys = append(keys, childKeys[0])
 				} else {
+					if len(index.ShardIds) > 0 {
+						childTokens[0].IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+						childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = index.ShardIds
+					}
+
 					oldChildToken, ok := subTokenMap[childKeys[0]]
 					if !ok {
 						subTokenMap[childKeys[0]] = childTokens[0]
@@ -1133,8 +1140,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			if index.HasAlternateShardIds() {
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
 			}
-			token.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
-			token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = index.ShardIds
 
 			token.IndexInst.Pc = nil
 
@@ -1212,7 +1217,12 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 	for _, token := range tokens {
 		uuid, _ := common.NewUUID()
-		ttid := fmt.Sprintf("TransferToken%s", uuid.Str())
+		var ttid string
+		if token.IsShardTransferToken() {
+			ttid = fmt.Sprintf("ShardToken%s", uuid.Str())
+		} else {
+			ttid = fmt.Sprintf("TransferToken%s", uuid.Str())
+		}
 		result[ttid] = token
 
 		logging.Infof("ShardTransferToken(v2) generated token - %v | %v", ttid, token)
@@ -1331,7 +1341,8 @@ func populateSiblingTokenId(solution *Solution, transferTokens map[string]*commo
 /////////////////////////////////////////////////////////////
 
 func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool,
-	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp, enableShardAffinity bool) (*Solution, error) {
+	useGreedyPlanner bool, enforceLimits bool, allowDDLDuringScaleUp bool,
+	binSize uint64, enableShardAffinity bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1387,7 +1398,7 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 
 	detail := logging.IsEnabled(logging.Info)
 
-	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp, enableShardAffinity)
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp, binSize, enableShardAffinity)
 }
 
 func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
@@ -1469,7 +1480,7 @@ func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.Inde
 }
 
 func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string,
-	override bool, enforceLimits bool, enableShardAffinity bool) (*Solution, error) {
+	override bool, enforceLimits bool, binSize uint64, enableShardAffinity bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes, false)
 	if err != nil {
@@ -1526,6 +1537,7 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 	config.Detail = logging.IsEnabled(logging.Info)
 	config.Resize = false
 	config.EnableShardAffinity = enableShardAffinity
+	config.binSize = binSize
 
 	p, err := replicaRepair(config, plan, defnId, increment)
 	if p != nil && config.Detail {
@@ -1664,7 +1676,7 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
-	useGreedyPlanner, allowDDLDuringScaleup, enableShardAffinity bool) (*Solution, error) {
+	useGreedyPlanner, allowDDLDuringScaleup bool, binSize uint64, enableShardAffinity bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -1684,6 +1696,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.UseGreedyPlanner = useGreedyPlanner
 	config.AllowDDLDuringScaleup = allowDDLDuringScaleup
 	config.EnableShardAffinity = enableShardAffinity
+	config.binSize = binSize
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
@@ -1701,7 +1714,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 
 func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
-	deletedNodes []string, enableShardAffinity bool) (*Solution, error) {
+	deletedNodes []string, binSize uint64, enableShardAffinity bool) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -1713,6 +1726,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 	config.EnableShardAffinity = enableShardAffinity
+	config.binSize = binSize
 
 	p, _, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes, false)
 
@@ -1731,7 +1745,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 
 func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool,
-	deletedNodes []string, enableShardAffinity bool) (*Solution, error) {
+	deletedNodes []string, binSize uint64, enableShardAffinity bool) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -1743,6 +1757,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 	config.EnableShardAffinity = enableShardAffinity
+	config.binSize = binSize
 
 	p, _, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes, false)
 
@@ -1874,7 +1889,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 	}
 
 	if config.EnableShardAffinity {
-		PopulateAlternateShardIds(planner.GetResult(), indexes)
+		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize)
 		UngroupIndexes(planner.GetResult())
 	}
 
@@ -2422,7 +2437,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	}
 
 	if config.EnableShardAffinity {
-		PopulateSiblingIndexForReplicaRepair(planner.GetResult())
+		PopulateSiblingIndexForReplicaRepair(planner.GetResult(), config.binSize)
 	}
 
 	return planner, s, indexDefnsToRemove, nil
@@ -3374,6 +3389,7 @@ func DefaultRunConfig() *RunConfig {
 		MinIterPerTemp:        100,
 		MaxIterPerTemp:        20000,
 		AllowDDLDuringScaleup: false,
+		binSize:               common.DEFAULT_BIN_SIZE, // 2.5G
 	}
 }
 
@@ -5694,7 +5710,7 @@ func getLoadDist(nodes map[*IndexerNode]bool) string {
 	return str
 }
 
-func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
+func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64) {
 
 	targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
 
@@ -5770,7 +5786,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage) {
 					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v", getLoadDist(fullCapNodes))
 				})
 
-				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap)
+				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap, binSize)
 				if replan {
 					logging.Warnf("Planner::populateAlternateShardIds Re-planning placement as no common shard has been found")
 
@@ -5826,7 +5842,11 @@ func getDiskUsageAndMatchingInstances(replicaProxy, needsRepairProxy *IndexUsage
 	return totalDiskUsage, replicaInsts
 }
 
-func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *IndexUsage) []*IndexUsage {
+func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *IndexUsage, binSize uint64) []*IndexUsage {
+
+	if binSize == 0 {
+		binSize = 1 // '1' means that each index will be compared based on their actual disk size
+	}
 
 	type proxyDiskUsage struct {
 		diskSize         uint64
@@ -5841,7 +5861,6 @@ func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *Inde
 		proxyUsages = append(proxyUsages, &proxyDiskUsage{diskUsage, replicaInsts, replicaProxy})
 	}
 
-	binSize := uint64(2560 * 1024 * 1024) // 2.5G
 	sort.Slice(proxyUsages, func(i, j int) bool {
 		iSlot, jSlot := proxyUsages[i].diskSize/binSize, proxyUsages[j].diskSize/binSize
 		a := iSlot < jSlot
@@ -5862,7 +5881,7 @@ func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *Inde
 // has to be repaired (E.g., the node containing the shard is failed over)
 //
 // The initialNode for a shard that needs repair will be to nil
-func PopulateSiblingIndexForReplicaRepair(solution *Solution) {
+func PopulateSiblingIndexForReplicaRepair(solution *Solution, binSize uint64) {
 	shardsRequiringRepair := []*IndexUsage{}
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
@@ -5886,7 +5905,7 @@ func PopulateSiblingIndexForReplicaRepair(solution *Solution) {
 		// one replica shard, use the shard that has covered higher disk
 		// size for all the instances of interest so that the time taken
 		// to copy the shard is minimized
-		replicaProxies = sortProxiesByDiskUsage(replicaProxies, needsRepairProxy)
+		replicaProxies = sortProxiesByDiskUsage(replicaProxies, needsRepairProxy, binSize)
 		needsRepairProxy.siblingIndex = replicaProxies[0]
 		logging.Infof("PopulateSiblingIndexForReplicaRepair: Using sibling index: %v from node: %v for replica repair",
 			needsRepairProxy.siblingIndex.Name, needsRepairProxy.siblingIndex.initialNode.NodeId)
@@ -6072,7 +6091,8 @@ func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
 }
 
 func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
-	targetNodes map[*IndexerNode]map[*IndexUsage]bool, replicaMap map[int]map[*IndexerNode]*IndexUsage) ([][2]*ShardLoad, bool) {
+	targetNodes map[*IndexerNode]map[*IndexUsage]bool,
+	replicaMap map[int]map[*IndexerNode]*IndexUsage, binSize uint64) ([][2]*ShardLoad, bool) {
 
 	//allShardDist := getShardDist(allIndexerNodes)
 	shardDistOnFullCapNodes := getShardDist(fullCapNodes)
@@ -6174,10 +6194,14 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 		shardSlice = append(shardSlice, [2]*ShardLoad{v, globalShardDist[slotId]})
 	}
 
-	return sortByLoad(shardSlice), false
+	return sortByLoad(shardSlice, binSize), false
 }
 
-func sortByLoad(shardSlice [][2]*ShardLoad) [][2]*ShardLoad {
+func sortByLoad(shardSlice [][2]*ShardLoad, binSize uint64) [][2]*ShardLoad {
+
+	if binSize == 0 {
+		binSize = 1 // '1' means that each index will be compared based on their actual disk size
+	}
 
 	// Instead of storing based on totalDiskSize, use bin based sorting
 	// If two shards have usage of 20G and 21G but the shard with 20G is having
@@ -6188,7 +6212,6 @@ func sortByLoad(shardSlice [][2]*ShardLoad) [][2]*ShardLoad {
 	// (1% of maximum disk usage threshold)
 	// If two shards fall in the same bin, then the number of instances are compared
 	// If the number of instances match, then the absolute value of disk size is used
-	binSize := uint64(2560 * 1024 * 1024) // 2.5G
 	sort.Slice(shardSlice, func(i, j int) bool {
 		iSlot, jSlot := shardSlice[i][0].totalDiskSize/binSize, shardSlice[j][0].totalDiskSize/binSize
 		a := iSlot < jSlot

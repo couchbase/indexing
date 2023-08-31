@@ -13,18 +13,20 @@ import (
 	"encoding/binary"
 
 	"github.com/couchbase/cbauth/service"
-	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
-const RebalanceRunning = "RebalanceRunning"
-const RebalanceTokenTag = "RebalanceToken"
-const MoveIndexTokenTag = "MoveIndexToken"
-const TransferTokenTag = "TransferToken"
+const (
+	RebalanceRunning  = "RebalanceRunning"
+	RebalanceTokenTag = "RebalanceToken"
+	MoveIndexTokenTag = "MoveIndexToken"
+	TransferTokenTag  = "TransferToken"
+	ShardTokenTag     = "ShardToken"
 
-const RebalanceMetakvDir = c.IndexingMetaDir + "rebalance/"
-const RebalanceTokenPath = RebalanceMetakvDir + RebalanceTokenTag
-const MoveIndexTokenPath = RebalanceMetakvDir + MoveIndexTokenTag
+	RebalanceMetakvDir = c.IndexingMetaDir + "rebalance/"
+	RebalanceTokenPath = RebalanceMetakvDir + RebalanceTokenTag
+	MoveIndexTokenPath = RebalanceMetakvDir + MoveIndexTokenTag
+)
 
 type RebalSource byte
 
@@ -52,8 +54,11 @@ type RebalanceToken struct {
 	MasterIP string // real IP address of master node, not 127.0.0.1, so followers can reach it
 
 	// Only used for DDL during rebalance
-	Version    common.DDLDuringRebalanceVersion
-	RebalPhase common.RebalancePhase
+	Version    c.DDLDuringRebalanceVersion
+	RebalPhase c.RebalancePhase
+
+	// Tracking active rebalancers
+	ActiveRebalancer c.RebalancerType
 }
 
 type RebalTokens struct {

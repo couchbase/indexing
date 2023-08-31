@@ -49,6 +49,7 @@ type ClientSettings struct {
 	useGreedyPlanner uint32
 
 	isShardAffinityEnabled uint32
+	binSize                uint64
 
 	//serverless configs
 	memHighThreshold int32
@@ -315,6 +316,15 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
 	}
 
+	binSize, ok := config["indexer.planner.internal.binSize"]
+	if ok && binSize.Uint64() > 0 {
+		atomic.StoreUint64(&s.binSize, binSize.Uint64())
+	} else {
+		// Use default config on error
+		logging.Errorf("ClientSettings: missing indexer.planner.internal.binSize")
+		atomic.StoreUint64(&s.binSize, common.DEFAULT_BIN_SIZE) // 2.5G (default)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -462,6 +472,10 @@ func (s *ClientSettings) ServerlessIndexLimit() uint32 {
 
 func (s *ClientSettings) IsShardAffinityEnabled() bool {
 	return atomic.LoadUint32(&s.isShardAffinityEnabled) == 1
+}
+
+func (s *ClientSettings) GetBinSize() uint64 {
+	return atomic.LoadUint64(&s.binSize)
 }
 
 func (s *ClientSettings) AllowDDLDuringScaleUp() bool {

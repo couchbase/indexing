@@ -341,7 +341,9 @@ func (r *Rebalancer) initRebalAsync() {
 	var hostToIndexToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 	//short circuit
 	if len(r.transferTokens) == 0 && !r.runPlanner {
-		r.cb.progress(1.0, r.cancel)
+		if r.cb.progress != nil {
+			r.cb.progress(1.0, r.cancel)
+		}
 		r.finishRebalance(nil)
 		return
 	}
@@ -384,6 +386,7 @@ func (r *Rebalancer) initRebalAsync() {
 					cpuProfile := cfg["planner.cpuProfile"].Bool()
 					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
 					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
+					binSize := common.GetBinSize(cfg)
 
 					//user setting redistribute_indexes overrides the internal setting
 					//onEjectOnly. onEjectOnly is not expected to be used in production
@@ -404,7 +407,7 @@ func (r *Rebalancer) initRebalAsync() {
 					} else {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-							minIterPerTemp, maxIterPerTemp, false)
+							minIterPerTemp, maxIterPerTemp, binSize, false)
 					}
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
@@ -476,12 +479,15 @@ func (r *Rebalancer) finishRebalance(err error) {
 }
 
 func (r *Rebalancer) doFinish() {
-	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
+	l.Infof("Rebalancer::doFinish cleanup started")
+
 	atomic.StoreInt32(&r.isDone, 1)
 	close(r.done)
 	r.cancelMetakv()
 
 	r.wg.Wait()
+
+	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
 	r.cb.done(r.retErr, r.cancel)
 }
 
@@ -529,7 +535,7 @@ func (r *Rebalancer) doRebalance() {
 	if r.master && r.runPlanner && r.removeDupIndex {
 		<-r.dropIndexDone // wait for duplicate index removal to finish
 	}
-	if r.transferTokens != nil {
+	if len(r.transferTokens) != 0 {
 		if ddl, err := r.runParams.checkDDLRunning("Rebalancer"); ddl {
 			r.finishRebalance(err)
 			return
@@ -1510,7 +1516,7 @@ func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer")
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer", TransferTokenTag)
 			if err != nil {
 				l.Errorf("%v Unable to decode transfer token. Ignored.", _processTokens)
 				return nil
@@ -1554,7 +1560,10 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 
 	if ddl, err := r.runParams.checkDDLRunning("Rebalancer"); ddl {
 		r.setTransferTokenError(ttid, tt, err.Error())
-		return
+		if tt.MasterId != r.nodeUUID {
+			// allow master to consume this error
+			return
+		}
 	}
 
 	// "processed" var ensures only the incoming token state gets processed by this
@@ -2896,16 +2905,17 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 }
 
 // decodeTransferToken unmarshals a transfer token received in a callback from metakv.
-func decodeTransferToken(path string, value []byte, prefix string) (string, *c.TransferToken, error) {
+func decodeTransferToken(path string, value []byte, prefix, tokenTag string) (
+	string, *c.TransferToken, error) {
 
-	ttidpos := strings.Index(path, TransferTokenTag)
+	ttidpos := strings.Index(path, tokenTag)
 	ttid := path[ttidpos:]
 
 	tt := &c.TransferToken{}
 	err := json.Unmarshal(value, tt)
 	if err != nil {
-		l.Fatalf("%v::decodeTransferToken Failed unmarshalling value for %s: %s\n%s",
-			prefix, path, err.Error(), string(value))
+		l.Fatalf("%v::decodeTransferToken Failed unmarshalling value for tag %s %s: %s\n%s",
+			prefix, tokenTag, path, err.Error(), string(value))
 		return "", nil, err
 	}
 

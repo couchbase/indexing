@@ -40,7 +40,8 @@ import (
 )
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
-const FLAG_COMPRESSED = byte(1) // compressed flag
+const FLAG_COMPRESSED = byte(1)             // compressed flag
+const DEFAULT_BIN_SIZE = 2560 * 1024 * 1024 // 2.5G
 
 const (
 	MAX_AUTH_RETRIES = 10
@@ -638,7 +639,8 @@ func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := couch.GetPool(pooln)
+
+	pool, err := couch.GetPoolWithBucket(pooln, bucketn)
 	if err != nil {
 		return nil, err
 	}
@@ -671,7 +673,7 @@ func ConnectBucket2(cluster, pooln, bucketn string) (*couchbase.Bucket,
 	if err != nil {
 		return nil, 0, err
 	}
-	pool, err := couch.GetPool(pooln)
+	pool, err := couch.GetPoolWithBucket(pooln, bucketn)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1784,4 +1786,11 @@ func CanMaintanShardAffinity(config Config) bool {
 	isShardAffinityEnabled := config.getIndexerConfig("planner.enableShardAffinity").Bool()
 	isStoragePlasma := GetClusterStorageMode() == PLASMA
 	return isShardAffinityEnabled && isStoragePlasma
+}
+
+func GetBinSize(config Config) uint64 {
+	if binSize, ok := config["planner.internal.binSize"]; ok && binSize.Uint64() > 0 {
+		return binSize.Uint64()
+	}
+	return DEFAULT_BIN_SIZE
 }

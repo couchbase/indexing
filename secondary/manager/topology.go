@@ -304,6 +304,32 @@ func (t *IndexTopology) UpdateShardIdsForIndexPartn(defnId common.IndexDefnId, i
 	return changed
 }
 
+// Update shardIds on instance
+func (t *IndexTopology) UpdateAlternateShardIdsForIndexPartn(defnId common.IndexDefnId,
+	instId common.IndexInstId, partnAlternateShardIdMap common.PartnAlternateShardIdMap) bool {
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					partitions := t.Definitions[i].Instances[j].Partitions
+					for k, partn := range partitions {
+						partnId := partn.PartId
+						if alternateShardIds, ok := partnAlternateShardIdMap[common.PartitionId(partnId)]; ok {
+							t.Definitions[i].Instances[j].Partitions[k].AlternateShardIds = alternateShardIds
+							logging.Debugf("IndexTopology.UpdateShardIdsForIndexPartn(): Update index '%v' inst '%v' partnId '%v' with alternateShardIds '%v'",
+								defnId, t.Definitions[i].Instances[j].InstId, partnId,
+								alternateShardIds)
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+	return changed
+}
+
 // Set scheduled flag
 func (t *IndexTopology) UpdateScheduledFlagForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, scheduled bool) bool {
 
@@ -718,6 +744,30 @@ func (t *IndexTopology) SetCollectionDefaults() {
 	if t.Collection == "" {
 		t.Collection = common.DEFAULT_COLLECTION
 	}
+}
+
+func (t *IndexTopology) GetShardInfoForInst(defn common.IndexDefnId,
+	instId common.IndexInstId) (common.PartnAlternateShardIdMap, common.PartnShardIdMap) {
+
+	inst := t.GetIndexInstByDefn(defn, instId)
+	if inst != nil {
+		alternateShardIds := make(map[common.PartitionId][]string)
+		shardIds := make(map[common.PartitionId][]common.ShardId)
+
+		for _, partn := range inst.Partitions {
+			if len(partn.AlternateShardIds) > 0 {
+				alternateShardIds[common.PartitionId(partn.PartId)] = partn.AlternateShardIds
+			}
+
+			if len(partn.ShardIds) > 0 {
+				shardIds[common.PartitionId(partn.PartId)] = partn.ShardIds
+			}
+		}
+
+		return alternateShardIds, shardIds
+	}
+
+	return nil, nil
 }
 
 /*

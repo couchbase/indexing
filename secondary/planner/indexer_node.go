@@ -1,8 +1,6 @@
 package planner
 
 import (
-	"math"
-
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -623,12 +621,14 @@ func (o *IndexerNode) ComputeSizing(sizing SizingMethod) {
 func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 	flushBufferSz := config["indexer.plasma.sharedFlushBufferSize"].Int()
 	flushBufferQuota := config["indexer.plasma.flushBufferQuota"].Float64()
+	shardLimitPerNode := config["indexer.plasma.shardLimitPerNode"].Int()
 
 	if flushBufferQuota == 0 || flushBufferSz == 0 {
-		// Do not limit the number of shards. Each index will be created on a new shards
-		logging.Warnf("IndexerNode::ComputeMinShardCapacity Disabling the maxShards. "+
-			"FlushBufferQuota: %v, FlushBufferSize: %v", flushBufferQuota, flushBufferSz)
-		o.MinShardCapacity = math.MaxInt
+		// Limit the number of shards at "shardLimitPerNode"
+		logging.Warnf("IndexerNode::ComputeMinShardCapacity Limiting the number of shards at: %v. "+
+			"FlushBufferQuota: %v, FlushBufferSize: %v, indexer: %v",
+			shardLimitPerNode, flushBufferQuota, flushBufferSz, o.NodeId)
+		o.MinShardCapacity = shardLimitPerNode
 		return
 	}
 
@@ -638,5 +638,11 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 	// make the maxShards value even
 	if o.MinShardCapacity%2 != 0 {
 		o.MinShardCapacity++
+	}
+
+	if o.MinShardCapacity > shardLimitPerNode {
+		logging.Warnf("IndexerNode::ComputeMinShardCapacity Limiting the number of shards at: %v. "+
+			"Num shards per quota: %v, indexer node: %v", shardLimitPerNode, o.MinShardCapacity, o.NodeId)
+		o.MinShardCapacity = shardLimitPerNode
 	}
 }

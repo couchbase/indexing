@@ -226,6 +226,8 @@ func main() {
 		return
 	}
 
+	const binSize uint64 = common.DEFAULT_BIN_SIZE
+
 	if os.Getenv("CBAUTH_REVRPC_URL") == "" && gClusterUrl != "" {
 		// unfortunately, above is read at init, so we have to respawn
 		revrpc := fmt.Sprintf("http://%v:%v@%v", gUsername, gPassword, gClusterUrl)
@@ -296,7 +298,7 @@ func main() {
 			return
 		}
 
-		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false, true, false, gEnableShardAffinity)
+		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false, true, false, binSize, gEnableShardAffinity)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -308,7 +310,7 @@ func main() {
 			logging.Fatalf("Invalid argument: option 'ddl' is not supported for rebalancing.")
 		}
 
-		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil, gEnableShardAffinity)
+		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil, binSize, gEnableShardAffinity)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -355,7 +357,7 @@ func main() {
 		}
 
 		tokens, _, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true,
-			gDetail, true, false, 0, 0, false, 100, 20000, gEnableShardAffinity, nil)
+			gDetail, true, false, 0, 0, false, 100, 20000, binSize, gEnableShardAffinity, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

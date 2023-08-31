@@ -120,6 +120,13 @@ type ShardRebalancer struct {
 	cinfo                    *c.ClusterInfoCache
 	transferScheme           string
 	canMaintainShardAffinity bool
+
+	dcpRebr        RebalanceProvider // controlled rebalancer (DCP rebalancer)
+	dcpRebrCloseCh chan struct{}     // channel to sync on controlled rebalancer close
+	dcpTokens      map[string]*common.TransferToken
+	dcpRebrOnce    sync.Once
+
+	shardProgressRatio, dcpProgressRatio float64
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -178,6 +185,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		cinfo:                    cinfo,
 		transferScheme:           transferScheme,
 		canMaintainShardAffinity: canMaintainShardAffinity,
+
+		dcpRebrCloseCh: make(chan struct{}),
 	}
 
 	sr.config.Store(config)
@@ -220,7 +229,9 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 	//short circuit
 	if len(sr.transferTokens) == 0 && !sr.runPlanner {
-		sr.cb.progress(1.0, sr.cancel)
+		if sr.cb.progress != nil {
+			sr.cb.progress(sr.shardProgressRatio, sr.cancel)
+		}
 		sr.finishRebalance(nil)
 		return
 	}
@@ -267,6 +278,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					cpuProfile := cfg["planner.cpuProfile"].Bool()
 					minIterPerTemp := cfg["planner.internal.minIterPerTemp"].Int()
 					maxIterPerTemp := cfg["planner.internal.maxIterPerTemp"].Int()
+					binSize := common.GetBinSize(cfg)
 
 					//user setting redistribute_indexes overrides the internal setting
 					//onEjectOnly. onEjectOnly is not expected to be used in production
@@ -279,7 +291,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 
 					sr.transferTokens, _, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
 						sr.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
-						minIterPerTemp, maxIterPerTemp, true)
+						minIterPerTemp, maxIterPerTemp, binSize, true)
 
 				} else { //
 					sr.transferTokens, _, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
@@ -318,6 +330,27 @@ func (sr *ShardRebalancer) initRebalAsync() {
 							err)
 					}
 
+					// seperate out list of tokens for shard and DCP transfer
+					sr.transferTokens, sr.dcpTokens = func(tokens map[string]*c.TransferToken) (
+						shardTokens, dcpTokens map[string]*c.TransferToken) {
+
+						shardTokens = make(map[string]*c.TransferToken)
+						dcpTokens = make(map[string]*c.TransferToken)
+
+						for ttid, tt := range tokens {
+							if tt.IsShardTransferToken() {
+								shardTokens[ttid] = tt
+							} else if tt.IsDcpTransferToken() {
+								dcpTokens[ttid] = tt
+							} else {
+								l.Warnf("ShardRebalancer::initRebalAsync got invalid transfer token %v. skipping it...",
+									ttid)
+							}
+						}
+
+						return shardTokens, dcpTokens
+					}(sr.transferTokens)
+
 					for tid, token := range sr.transferTokens {
 						if !token.IsShardTransferToken() {
 							continue
@@ -335,6 +368,14 @@ func (sr *ShardRebalancer) initRebalAsync() {
 							token.Destination, tid)
 					}
 				}
+
+				sum := len(sr.transferTokens) + len(sr.dcpTokens)
+				if sum == 0 {
+					sum = 1
+				}
+
+				sr.shardProgressRatio = float64(len(sr.transferTokens)) / float64(sum)
+				sr.dcpProgressRatio = float64(len(sr.dcpTokens)) / float64(sum)
 
 				break loop
 			}
@@ -359,11 +400,21 @@ func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
 }
 
 func getTransferScheme(cfg c.Config) string {
-	blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
-	if blobStorageScheme != "" && !strings.HasSuffix(blobStorageScheme, "://") {
-		blobStorageScheme += "://"
+	if c.IsServerlessDeployment() {
+		blobStorageScheme := cfg["settings.rebalance.blob_storage_scheme"].String()
+		if blobStorageScheme != "" && !strings.HasSuffix(blobStorageScheme, "://") {
+			blobStorageScheme += "://"
+		}
+		return blobStorageScheme
+	} else if c.CanMaintanShardAffinity(cfg) {
+		shardTransferProtocol := cfg["rebalance.shardTransferProtocol"].String()
+		if shardTransferProtocol != "" && !strings.HasSuffix(shardTransferProtocol, "://") {
+			shardTransferProtocol += "://"
+		}
+		return shardTransferProtocol
 	}
-	return blobStorageScheme
+
+	return ""
 }
 
 func getDestinationFromConfig(cfg c.Config) (string, string, error) {
@@ -403,11 +454,22 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 				if rToken.Version >= c.AllowDDLDuringRebalance_v1 {
 					sr.updateGlobalRebalancePhase(rToken)
 				}
+
+				if rToken.ActiveRebalancer < c.SHARD_REBALANCER &&
+					rToken.ActiveRebalancer != sr.rebalToken.ActiveRebalancer {
+
+					l.Infof("ShardRebalancer::processShardTokens change in ActiveRebalancer from %v to %v",
+						sr.rebalToken.ActiveRebalancer, rToken.ActiveRebalancer)
+					// switch to DcpRebr
+					sr.processRebalancerChange(rToken)
+				}
 			}
 		}
-	} else if strings.Contains(kve.Path, TransferTokenTag) {
+	} else if strings.Contains(kve.Path, ShardTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "ShardRebalancer")
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "ShardRebalancer",
+				ShardTokenTag)
+
 			if err != nil {
 				l.Errorf("ShardRebalancer::processShardTokens Unable to decode transfer token. Ignored.")
 				return nil
@@ -467,11 +529,21 @@ func (sr *ShardRebalancer) processShardTransferToken(ttid string, tt *c.Transfer
 	}
 
 	if !tt.IsShardTransferToken() {
-		err := fmt.Errorf("ShardRebalancer::processShardTransferToken Transfer token is not for transferring shard. ttid: %v, tt: %v",
-			ttid, tt)
-		l.Fatalf(err.Error())
-		sr.setTransferTokenError(ttid, tt, err.Error())
-		return
+		if !common.IsServerlessDeployment() && sr.canMaintainShardAffinity {
+			// because of eventual consistecy, it can happen that we receive DCP based TT first
+			// and later get update of RebalToken which starts the DCP rebr and stop shard metakv
+			// watches; ignore non-shard transfer tokens in such cases
+			l.Warnf("ShardRebalancer::processShardTransferToken got non-(Shard Transfer Token) %v. skipping processing in Shard Rebalancer...",
+				tt)
+			return
+		}
+		errStr := "Transfer token is not for transferring shard"
+		l.Fatalf("ShardRebalancer::processShardTransferToken %v. ttid: %v, tt: %v", errStr, ttid, tt)
+		sr.setTransferTokenError(ttid, tt, errStr)
+		if tt.MasterId != sr.nodeUUID {
+			// allow master to consume this error
+			return
+		}
 	}
 
 	// "processed" var ensures only the incoming token state gets processed by this
@@ -679,11 +751,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			///////////////////////////////////////////////////////////////////
 
 			if sr.cb.progress != nil {
-				sr.cb.progress(1.0, sr.cancel)
+				sr.cb.progress(sr.shardProgressRatio, sr.cancel)
 			}
 			l.Infof("ShardRebalancer::processShardTransferTokenAsMaster No Tokens Found. Mark Done.")
-			sr.cancelMetakv()
-			go sr.finishRebalance(nil)
+
+			sr.transitionToDcpOrEndShardRebalance()
 		}
 		return true
 
@@ -2191,10 +2263,15 @@ func (sr *ShardRebalancer) getIndexStatusFromMeta(tt *c.TransferToken,
 
 func (sr *ShardRebalancer) doRebalance() {
 
-	if sr.transferTokens == nil {
-		sr.cb.progress(1.0, sr.cancel)
-		sr.finishRebalance(nil)
-		return
+	if len(sr.transferTokens) == 0 {
+		if sr.cb.progress != nil {
+			sr.cb.progress(sr.shardProgressRatio, sr.cancel)
+		}
+		sr.transitionToDcpOrEndShardRebalance()
+		if c.IsServerlessDeployment() {
+			// need to run observer to detect ActiveRebalancer change
+			return
+		}
 	}
 
 	// If DDL is allowed during rebalance, skip the ongoing DDL check.
@@ -2312,16 +2389,23 @@ func (sr *ShardRebalancer) updateProgress() {
 	defer sr.wg.Done()
 
 	l.Infof("ShardRebalancer::updateProgress goroutine started")
+
+	progHolder := float64Holder{}
+	// set progress
+	go asyncCollectProgress(&progHolder, sr.computeProgress, 5*time.Second,
+		"ShardRebalancer::updateProgress", sr.cancel, sr.done)
+
+	// report progress
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			progress := sr.computeProgress()
+			progress := progHolder.GetFloat64()
 			sr.cb.progress(progress, sr.cancel)
 		case <-sr.cancel:
-			l.Infof("ShardRebalancer::updateProgress Cancel Received")
+			l.Infof("ShardRebalancer::updateProgress Cancel Received. progress reporter stapped")
 			return
 		case <-sr.done:
 			l.Infof("ShardRebalancer::updateProgress Done Received")
@@ -2355,23 +2439,13 @@ func getProgressForToken(statusResp *IndexStatusResponse, ttid string, token *c.
 	}
 }
 
-// Shard rebalancer's version of compute progress method
+// computeProgress calculate progress considering Dcp Rebal tokens
 func (sr *ShardRebalancer) computeProgress() float64 {
+	return sr.shardProgressRatio * sr.computeShardProgress()
+}
 
-	url := "/getIndexStatus?getAll=true"
-	resp, err := getWithAuth(sr.localaddr + url)
-	if err != nil {
-		l.Errorf("ShardRebalancer::computeProgress Error getting local metadata %v %v", sr.localaddr+url, err)
-		return 0
-	}
-
-	defer resp.Body.Close()
-	statusResp := new(IndexStatusResponse)
-	bytes, _ := ioutil.ReadAll(resp.Body)
-	if err := json.Unmarshal(bytes, &statusResp); err != nil {
-		l.Errorf("ShardRebalancer::computeProgress Error unmarshal response %v %v", sr.localaddr+url, err)
-		return 0
-	}
+// computeShardProgress only computes the progress of the shard tokens
+func (sr *ShardRebalancer) computeShardProgress() float64 {
 
 	// Make a shallow copy of the transfer token map
 	getTransferTokenMap := func() map[string]*c.TransferToken {
@@ -2388,6 +2462,25 @@ func (sr *ShardRebalancer) computeProgress() float64 {
 
 	tokens := getTransferTokenMap()
 	totTokens := len(tokens)
+
+	if totTokens == 0 {
+		return 1.0
+	}
+
+	url := "/getIndexStatus?getAll=true"
+	resp, err := getWithAuth(sr.localaddr + url)
+	if err != nil {
+		l.Errorf("ShardRebalancer::computeProgress Error getting local metadata %v %v", sr.localaddr+url, err)
+		return 0
+	}
+
+	defer resp.Body.Close()
+	statusResp := new(IndexStatusResponse)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	if err := json.Unmarshal(bytes, &statusResp); err != nil {
+		l.Errorf("ShardRebalancer::computeProgress Error unmarshal response %v %v", sr.localaddr+url, err)
+		return 0
+	}
 
 	transferWt := 0.35
 	restoreWt := 0.35
@@ -2744,6 +2837,7 @@ func (sr *ShardRebalancer) finishRebalance(err error) {
 
 func (sr *ShardRebalancer) doFinish() {
 
+	l.Infof("ShardRebalancer::doFinish cleanup started")
 	atomic.StoreInt32(&sr.isDone, 1)
 	close(sr.done)
 
@@ -2751,6 +2845,8 @@ func (sr *ShardRebalancer) doFinish() {
 	if sr.canMaintainShardAffinity {
 		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
 		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
+
+		<-sr.dcpRebrCloseCh
 	}
 
 	sr.wg.Wait()
@@ -2799,6 +2895,26 @@ func (sr *ShardRebalancer) Cancel() {
 		close(sr.cancel)
 		sr.wg.Wait()
 	}
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if sr.dcpRebr != nil {
+		sr.dcpRebr.Cancel()
+	}
+}
+
+// batchTransferTokens is the delegator func which creates batches of transfer token on the
+// basis of serverless mode or shard affinity
+func (sr *ShardRebalancer) batchTransferTokens() {
+	if c.IsServerlessDeployment() {
+		sr.batchShardTransferTokensForServerless()
+	} else if sr.canMaintainShardAffinity {
+		if sr.schedulingVersion >= c.PER_NODE_TRANSFER_LIMIT {
+			sr.orderTransferTokensPerNode()
+		} else {
+			sr.orderCopyAndMoveTransferTokens()
+		}
+	}
 }
 
 // This function batches a group of transfer tokens
@@ -2816,7 +2932,7 @@ func (sr *ShardRebalancer) Cancel() {
 // batches can lead to a deadlock where after finishing the first
 // batch, tokens would wait for sibling to come to Ready but sibling
 // would wait for initial token to move to Deleted state.
-func (sr *ShardRebalancer) batchTransferTokens() {
+func (sr *ShardRebalancer) batchShardTransferTokensForServerless() {
 	tokenBatched := make(map[string]bool)
 
 	for ttid, token := range sr.transferTokens {
@@ -2837,9 +2953,73 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 	}
 }
 
+func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
+	cfg := sr.config.Load()
+	windowSz := cfg["rebalance.transferBatchSize"].Int()
+	if windowSz == 0 {
+		sr.batchedTokens = []map[string]*c.TransferToken{sr.transferTokens}
+		return
+	}
+
+	cTokens, mTokens := func() (cTokens, mTokens map[string]*c.TransferToken) {
+		cTokens = make(map[string]*c.TransferToken)
+		mTokens = make(map[string]*c.TransferToken)
+
+		for ttid, token := range sr.transferTokens {
+			switch token.TransferMode {
+			case c.TokenTransferModeCopy:
+				cTokens[ttid] = token
+			case c.TokenTransferModeMove:
+				mTokens[ttid] = token
+			}
+		}
+
+		return
+	}()
+
+	groupTokens := func(tokens map[string]*c.TransferToken, windowSz int) []map[string]*c.TransferToken {
+		batch := make([]map[string]*c.TransferToken, 0, len(tokens)/windowSz)
+
+		group := make(map[string]*c.TransferToken)
+		for ttid, token := range tokens {
+			group[ttid] = token
+			if len(group) >= windowSz {
+				batch = append(batch, group)
+
+				group = make(map[string]*c.TransferToken)
+			}
+		}
+		if len(group) > 0 {
+			batch = append(batch, group)
+		}
+
+		return batch
+	}
+
+	// Perform copy of all shards first
+	sr.batchedTokens = append(sr.batchedTokens, groupTokens(cTokens, windowSz)...)
+
+	// To keep things simple, we don't keep copy and move tokens in the same group
+	sr.batchedTokens = append(sr.batchedTokens, groupTokens(mTokens, windowSz)...)
+
+	l.Infof("ShardRebalancer::orderCopyAndMoveTransferTokens greated a batch of %v tokens with window of %v",
+		len(sr.batchedTokens), windowSz)
+}
+
+func (sr *ShardRebalancer) orderTransferTokensPerNode() {
+	// TODO: add batching by source node
+	sr.orderCopyAndMoveTransferTokens()
+}
+
 func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	config := sr.config.Load()
-	batchSize := config["rebalance.serverless.perNodeTransferBatchSize"].Int()
+	var batchSize int
+
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		batchSize = config["rebalance.perNodeTransferBatchSize"].Int()
+	} else if c.IsServerlessDeployment() {
+		batchSize = config["rebalance.serverless.perNodeTransferBatchSize"].Int()
+	}
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
@@ -2893,7 +3073,14 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 
 	config := sr.config.Load()
-	batchSize := config["rebalance.serverless.transferBatchSize"].Int()
+
+	var batchSize int
+
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		batchSize = config["rebalance.transferBatchSize"].Int()
+	} else if c.IsServerlessDeployment() {
+		batchSize = config["rebalance.serverless.transferBatchSize"].Int()
+	}
 
 	publishAllTokens := false
 	if batchSize == 0 { // Disable batching and publish all tokens
@@ -2958,7 +3145,7 @@ func (sr *ShardRebalancer) checkAllTokensDone() bool {
 
 func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (string, *c.TransferToken) {
 	ustr, _ := common.NewUUID()
-	dropOnSourceTokenId := fmt.Sprintf("TransferToken%s", ustr.Str())
+	dropOnSourceTokenId := fmt.Sprintf("ShardToken%s", ustr.Str())
 
 	dropOnSourceToken := &c.TransferToken{
 		ShardTransferTokenState: c.ShardTokenDropOnSource,
@@ -2966,6 +3153,7 @@ func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (s
 		RebalId:                 rebalId,
 		SourceTokenId:           sourceTokenId,
 		SiblingTokenId:          siblingTokenId,
+		BuildSource:             c.TokenBuildSourceS3,
 	}
 
 	return dropOnSourceTokenId, dropOnSourceToken
@@ -3068,6 +3256,39 @@ func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhas
 	sr.supvMsgch <- msg
 }
 
+func (sr *ShardRebalancer) moveToDcpRebr() {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if sr.rebalToken.ActiveRebalancer != c.DCP_REBALANCER {
+
+		temp := *sr.rebalToken
+		clonedToken := temp
+
+		clonedToken.ActiveRebalancer = c.DCP_REBALANCER
+
+		setToken := func(attempts int, lastErr error) error {
+			if lastErr != nil {
+				l.Errorf("ShardRebalancer::moveToContRebr failed %v times. Last error %v.",
+					attempts, lastErr)
+			}
+
+			return c.MetakvSet(RebalanceTokenPath, &clonedToken)
+		}
+
+		rh := c.NewRetryHelper(10, 10*time.Millisecond, 10, setToken)
+		err := rh.Run()
+
+		if err != nil {
+			l.Errorf("ShardRebalancer::moveToContRebr failed to update metakv Token to transition to DCP rebalancer with err %v",
+				err)
+			if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+				go sr.finishRebalance(err)
+			}
+		}
+	}
+}
+
 func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	// Allow or reject DDL based on "allowDDLDuringRebalance" config
 	config := sr.config.Load()
@@ -3142,6 +3363,97 @@ func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct
 			logging.Infof("ShardRebalancer::sendPeerServerCommand: command %v successful", cmd)
 		}
 	}
+}
+
+// transitionToDcpOrEndShardRebalance - is the final step in a succesful shard rebalance
+// the step is to either start Dcp Rebalance for on-prem or call finishRebalance
+func (sr *ShardRebalancer) transitionToDcpOrEndShardRebalance() {
+	if !c.IsServerlessDeployment() && sr.canMaintainShardAffinity {
+		sr.moveToDcpRebr()
+	} else {
+		sr.dcpRebrOnce.Do(func() {
+			close(sr.dcpRebrCloseCh)
+		})
+		sr.cancelMetakv()
+		go sr.finishRebalance(nil)
+	}
+}
+
+// processRebalancerChange to start controlled rebalancer acc to transition on
+// rToken.ActiveRebalancer; only to be called on change in ActiveRebalancer
+func (sr *ShardRebalancer) processRebalancerChange(rToken *RebalanceToken) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	select {
+	case <-sr.cancel:
+		l.Infof("ShardRebalancer::processRebalancerChange saw cancel will skip processing rebalancer change")
+		return
+	default:
+	}
+
+	switch rToken.ActiveRebalancer {
+	case c.DCP_REBALANCER:
+		// start DCP rebalance and finish shard rebalance
+		sr.startDcpRebalance()
+
+		sr.cancelMetakv()
+		// shard rebalancer finish will wait internally wait for DCP rebalance to finish
+		go sr.finishRebalance(nil)
+	default:
+		// can we end up in a hang here if we don't finish rebalance?
+		l.Warnf("ShardRebalancer::processRebalancerChange invalid change in active rebalancer from %v to %v. skip processing...",
+			sr.rebalToken.ActiveRebalancer, rToken.ActiveRebalancer)
+		return
+	}
+
+	sr.rebalToken.ActiveRebalancer = rToken.ActiveRebalancer
+}
+
+// startDcpRebalancer starts the DCP rebalancer in controlled mode (runPlanner: false,
+// master: sr.IsMaster); or closes the dcpRebrCloseCh
+func (sr *ShardRebalancer) startDcpRebalance() {
+	sr.wg.Add(1)
+	defer sr.wg.Done()
+
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		tokens := (map[string]*c.TransferToken)(nil)
+		if sr.isMaster {
+			// only master has DCP tokens, followers get nil
+			tokens = sr.dcpTokens
+		}
+		sr.dcpRebrOnce.Do(func() {
+			sr.dcpRebr = NewRebalancer(tokens, sr.rebalToken, sr.nodeUUID, sr.isMaster,
+				sr.dcpRebrProgressCallback, sr.dcpRebrDoneCallback, sr.supvMsgch, sr.localaddr,
+				sr.config.Load(), sr.topologyChange, false, sr.runParams, sr.statsMgr)
+
+			l.Infof("ShardRebalancer::startDcpRebalance started controlled rebalancer")
+		})
+	} else {
+		sr.dcpRebrOnce.Do(func() {
+			close(sr.dcpRebrCloseCh)
+		})
+	}
+}
+
+func (sr *ShardRebalancer) dcpRebrDoneCallback(err error, cancel <-chan struct{}) {
+	sr.wg.Add(1)
+	defer sr.wg.Done()
+
+	defer close(sr.dcpRebrCloseCh)
+	l.Infof("ShardRebalancer::dcpRebrDoneCallback controlled rebalancer exited with error %v",
+		err)
+	if err != nil {
+		sr.retErr = err
+	}
+}
+
+func (sr *ShardRebalancer) dcpRebrProgressCallback(progress float64, cancel <-chan struct{}) {
+	if sr.cb.progress == nil {
+		return
+	}
+
+	sr.cb.progress(sr.shardProgressRatio+progress*sr.dcpProgressRatio, cancel)
 }
 
 // isIndexDeletedDuringRebal returns true if an index is deleted while
@@ -3223,4 +3535,23 @@ func getTLSConfigWithCeftificates(host string) (*tls.Config, error) {
 	}
 
 	return tlsConfig, nil
+}
+
+func asyncCollectProgress(progHolder *float64Holder, collector func() float64, dur time.Duration,
+	caller string, cancel, done <-chan struct{}) {
+	collectorTicker := time.NewTicker(dur - 500*time.Millisecond)
+	defer collectorTicker.Stop()
+
+	for {
+		select {
+		case <-collectorTicker.C:
+			progHolder.SetFloat64(collector())
+		case <-cancel:
+			l.Infof("%v:asyncCollectProgress cancel received. progress collector stopped", caller)
+			return
+		case <-done:
+			l.Infof("%v:asyncCollectProgress done received. progress collector stopped", caller)
+			return
+		}
+	}
 }

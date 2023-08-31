@@ -38,9 +38,7 @@ import (
 // Concrete Type/Struct
 //////////////////////////////////////////////////////////////
 
-//
 // DDLServiceMgr Definition
-//
 type DDLServiceMgr struct {
 	indexerId                    common.IndexerId
 	config                       common.ConfigHolder
@@ -67,9 +65,7 @@ type DDLServiceMgr struct {
 
 const DELETE_TOKEN_DELAYED_CLEANUP_INTERVAL = 24 * time.Hour
 
-//
 // DDL related settings
-//
 type ddlSettings struct {
 	numReplica   int32
 	numPartition int32
@@ -81,6 +77,7 @@ type ddlSettings struct {
 	useGreedyPlanner   uint32
 
 	isShardAffinityEnabled uint32
+	binSize                uint64
 
 	//serverless configs
 	memHighThreshold int32
@@ -101,9 +98,7 @@ var gDDLServiceMgrLck sync.RWMutex // protects gDDLServiceMgr, which is assigned
 // DDLServiceMgr
 //////////////////////////////////////////////////////////////
 
-//
 // Constructor
-//
 func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgch MsgChannel, config common.Config) (*DDLServiceMgr, Message) {
 
 	addr := config["clusterAddr"].String()
@@ -155,9 +150,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	return mgr, &MsgSuccess{}
 }
 
-//
 // Get DDLServiceMgr singleton
-//
 func getDDLServiceMgr() *DDLServiceMgr {
 	gDDLServiceMgrLck.RLock()
 	defer gDDLServiceMgrLck.RUnlock()
@@ -165,9 +158,7 @@ func getDDLServiceMgr() *DDLServiceMgr {
 	return gDDLServiceMgr
 }
 
-//
 // Set DDLServiceMgr singleton
-//
 func setDDLServiceMgr(mgr *DDLServiceMgr) {
 	gDDLServiceMgrLck.Lock()
 	gDDLServiceMgr = mgr
@@ -301,10 +292,8 @@ func resumeDDLProcessing() {
 	}
 }
 
-//
 // This is run as a go-routine.  Rebalancing could have finished while
 // this gorountine is still running.
-//
 func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 
 	mgr := getDDLServiceMgr()
@@ -318,9 +307,7 @@ func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 	}
 }
 
-//
 // Recover DDL command
-//
 func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel bool) {
 	const method = "DDLServiceMgr::rebalanceDone:" // for logging
 
@@ -376,9 +363,7 @@ func (m *DDLServiceMgr) startProcessDDL() {
 // Drop Token
 //////////////////////////////////////////////////////////////
 
-//
 // Recover drop index command
-//
 func (m *DDLServiceMgr) cleanupDelCommand(provider *client.MetadataProvider) {
 	if !m.canProcessDDL() {
 		return
@@ -486,9 +471,7 @@ func (m *DDLServiceMgr) cleanupDelCommand(provider *client.MetadataProvider) {
 // Build Token
 //////////////////////////////////////////////////////////////
 
-//
 // Recover build index command
-//
 func (m *DDLServiceMgr) cleanupBuildCommand(provider *client.MetadataProvider) {
 	if !m.canProcessDDL() {
 		return
@@ -900,7 +883,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 						if defn.Deferred && (!found || (found &&
 							status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId)) &&
 							index != nil && (index.State == common.INDEX_STATE_INITIAL ||
-							index.State == common.INDEX_STATE_CATCHUP || 
+							index.State == common.INDEX_STATE_CATCHUP ||
 							index.State == common.INDEX_STATE_ACTIVE) {
 							buildMap[defn.DefnId] = true
 						}
@@ -1067,9 +1050,7 @@ func (m *DDLServiceMgr) processCreateCommand() {
 // Drop Instance Token
 //////////////////////////////////////////////////////////////
 
-//
 // Recover drop instance command
-//
 func (m *DDLServiceMgr) cleanupDropInstanceCommand(provider *client.MetadataProvider) {
 	if !m.canProcessDDL() {
 		return
@@ -2064,6 +2045,10 @@ func (s *ddlSettings) IsShardAffinityEnabled() bool {
 	return atomic.LoadUint32(&s.isShardAffinityEnabled) == 1
 }
 
+func (s *ddlSettings) GetBinSize() uint64 {
+	return atomic.LoadUint64(&s.binSize)
+}
+
 func (s *ddlSettings) AllowDDLDuringScaleUp() bool {
 	return atomic.LoadUint32(&s.allowDDLDuringScaleUp) == 1
 }
@@ -2108,6 +2093,9 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
 	}
 
+	binSize := common.GetBinSize(config)
+	atomic.StoreUint64(&s.binSize, binSize)
+
 	memHighThreshold := int32(config["settings.thresholds.mem_high"].Int())
 	if memHighThreshold >= 0 {
 		atomic.StoreInt32(&s.memHighThreshold, memHighThreshold)
@@ -2135,9 +2123,7 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	}
 }
 
-//
 // Utilityfunctions used for trasferring scheduled create tokens.
-//
 func transferScheduleTokens(keepNodes map[string]bool, clusterAddr string) error {
 
 	//

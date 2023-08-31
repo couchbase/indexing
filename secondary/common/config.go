@@ -1385,9 +1385,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.memFragThreshold": ConfigValue{
-		float64(0.15),
+		float64(0.30),
 		"Percentage of memory fragmentation",
-		float64(0.15),
+		float64(0.30),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1998,10 +1998,38 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.memtuner.runInterval": ConfigValue{
+		float64(0.5),
+		"Memtuner run interval (second).  Can be fraction of second",
+		float64(0.5),
+		false,
+		false,
+	},
 	"indexer.plasma.memtuner.incrCeilPercent": ConfigValue{
 		float64(3),
 		"Memtuner increment ceiling percent",
 		float64(3),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.freeMemHighWatermark": ConfigValue{
+		float64(0.3),
+		"Memtuner high watermark for free memory",
+		float64(0.3),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.freeMemLowWatermark": ConfigValue{
+		float64(0.2),
+		"Memtuner low watermark for free memory",
+		float64(0.2),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.decrCeilAdjust": ConfigValue{
+		float64(0.03),
+		"Memtuner decrement ceiling adjustment",
+		float64(0.03),
 		false,
 		false,
 	},
@@ -2116,6 +2144,13 @@ var SystemConfig = Config{
 		uint64(10),
 		false, // mutable
 		false, // case-insensitive
+	},
+	"indexer.plasma.reader.quotaAdjRatio": ConfigValue{
+		float64(0.9),
+		"quota adjustment for reader",
+		float64(0.9),
+		false,
+		false,
 	},
 	"indexer.plasma.holecleaner.enabled": ConfigValue{
 		true,
@@ -2279,6 +2314,13 @@ var SystemConfig = Config{
 		true,
 		"enable full data replay upon error",
 		true,
+		false,
+		false,
+	},
+	"indexer.plasma.shardLimitPerNode": ConfigValue{
+		200,
+		"Maximum number of shards that can be created per node",
+		200,
 		false,
 		false,
 	},
@@ -3177,6 +3219,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.perNodeTransferBatchSize": ConfigValue{
+		2,
+		"Number of transfer tokens that can be transferred per node.",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.serverless.transferBatchSize": ConfigValue{
 		4,
 		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching." +
@@ -3382,6 +3431,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.internal.binSize": ConfigValue{
+		uint64(2560 * 1024 * 1024),
+		"Planner uses bin based sorting to sort shards by load. This config specifies the size " +
+			"of the bin to be used when sorting shards by disk size",
+		uint64(2560 * 1024 * 1024),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.useGreedyPlanner": ConfigValue{
 		true,
 		"Attempt to use greedy planner (instead of simulated annealing planner) for index creation, for faster placement.",
@@ -3395,6 +3452,15 @@ var SystemConfig = Config{
 			"solution to maintain shard-index affinity in the cluster",
 		false,
 		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.planner.honourNodesInDefn": ConfigValue{
+		false,
+		"With index grouping (shard-index affinity) enabled, we may violate resource contraints " +
+			"to honour user provided nodes in index definition. To force enable this resource violation and " +
+			"honour nodes provided in index definition, set this flag to true. This may impact performance",
+		false,
+		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
@@ -3627,6 +3693,13 @@ var SystemConfig = Config{
 		201,
 		"Limit on the number of indexes that can be created per bucket in Serverless Mode.",
 		201,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.shardTransferProtocol": ConfigValue{
+		"https",
+		"Transfer protocol for node to node shard movement",
+		"https",
 		false, // mutable
 		false, // case-insensitive
 	},
