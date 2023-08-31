@@ -100,6 +100,10 @@ type IndexerNode struct {
 	ShardTenantMultiplier int `json:"shardTenantMultiplier,omitempty"`
 
 	ShardStats map[string]*common.ShardStats
+
+	// Set to true so that planner will use the shard stats for planning
+	// (instead of accummulating per index stats)
+	UseShardStats bool
 }
 
 // This function creates a new indexer node
@@ -208,6 +212,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.DiskUsageThreshold = o.DiskUsageThreshold
 	r.ShardLimitPerTenant = o.ShardLimitPerTenant
 	r.ShardTenantMultiplier = o.ShardTenantMultiplier
+	r.UseShardStats = o.UseShardStats
 
 	r.ShardStats = o.ShardStats
 

@@ -545,6 +545,7 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 	indexer.DiskUsageThreshold = config["indexer.plasma.diskUsageThreshold"].Float64()
 	indexer.ShardLimitPerTenant = config["indexer.plasma.shardLimitPerTenant"].Int()
 	indexer.ShardTenantMultiplier = config["indexer.plasma.shardTenantMultiplier"].Int()
+	indexer.UseShardStats = config["indexer.planner.useShardStats"].Bool()
 
 	var actualStorageMem uint64
 	// memory_used_storage contains the total storage consumption,
@@ -2111,14 +2112,16 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode) ([]*IndexUsage, i
 		result = append(result, proxyIndex)
 	}
 
-	// Replace the stats in proxy with stats retrieved from the shard
-	for _, index := range result {
-		if index.IsShardProxy == false {
-			continue
-		}
+	if indexer.UseShardStats {
+		// Replace the stats in proxy with stats retrieved from the shard
+		for _, index := range result {
+			if index.IsShardProxy == false {
+				continue
+			}
 
-		if shardStats, ok := indexer.ShardStats[index.AlternateShardIds[0]]; ok {
-			index.updateProxyStats(shardStats)
+			if shardStats, ok := indexer.ShardStats[index.AlternateShardIds[0]]; ok {
+				index.updateProxyStats(shardStats)
+			}
 		}
 	}
 
