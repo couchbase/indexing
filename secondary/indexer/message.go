@@ -1143,6 +1143,7 @@ type MsgRecoverIndexResp struct {
 	partnInstMap    PartitionInstMap
 	partnShardIdMap common.PartnShardIdMap
 	err             error
+	recoveryDoneCh  chan bool
 }
 
 func (m *MsgRecoverIndexResp) GetMsgType() MsgType {
@@ -1163,6 +1164,10 @@ func (m *MsgRecoverIndexResp) GetPartnShardIdMap() common.PartnShardIdMap {
 
 func (m *MsgRecoverIndexResp) GetError() error {
 	return m.err
+}
+
+func (m *MsgRecoverIndexResp) GetRecoveryDoneCh() chan bool {
+	return m.recoveryDoneCh
 }
 
 func (m *MsgRecoverIndexResp) GetString() string {
