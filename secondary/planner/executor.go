@@ -5855,21 +5855,22 @@ func sortProxiesByDiskUsage(replicaProxies []*IndexUsage, needsRepairProxy *Inde
 		diskSize         uint64
 		replicaInstances int
 		replicaIndex     *IndexUsage
+		totalDiskSize    uint64
 	}
 
 	proxyUsages := []*proxyDiskUsage{}
 
 	for _, replicaProxy := range replicaProxies {
 		diskUsage, replicaInsts := getDiskUsageAndMatchingInstances(replicaProxy, needsRepairProxy)
-		proxyUsages = append(proxyUsages, &proxyDiskUsage{diskUsage, replicaInsts, replicaProxy})
+		proxyUsages = append(proxyUsages, &proxyDiskUsage{diskUsage, replicaInsts, replicaProxy, replicaProxy.ActualDiskSize})
 	}
 
 	sort.Slice(proxyUsages, func(i, j int) bool {
 		iSlot, jSlot := proxyUsages[i].diskSize/binSize, proxyUsages[j].diskSize/binSize
-		a := iSlot < jSlot
-		b := (iSlot == jSlot) && (proxyUsages[i].replicaInstances < proxyUsages[i].replicaInstances)
-		c := (iSlot == jSlot) && (proxyUsages[i].replicaInstances == proxyUsages[i].replicaInstances) &&
-			(proxyUsages[i].diskSize < proxyUsages[j].diskSize)
+		a := iSlot > jSlot
+		b := (iSlot == jSlot) && (proxyUsages[i].replicaInstances > proxyUsages[j].replicaInstances)
+		c := (iSlot == jSlot) && (proxyUsages[i].replicaInstances == proxyUsages[j].replicaInstances) &&
+			(proxyUsages[i].totalDiskSize < proxyUsages[j].totalDiskSize)
 		return a || b || c
 	})
 
