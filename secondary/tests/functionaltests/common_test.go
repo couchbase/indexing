@@ -575,8 +575,9 @@ func makeurl(path string) (string, error) {
 }
 
 // makeUrlForIndexNode makes a URL to call a REST API on a specific Index node.
-//   nodeAddr - ipAddr:port of the target Index node
-//   path - REST API path portion of the URL, including leading /
+//
+//	nodeAddr - ipAddr:port of the target Index node
+//	path - REST API path portion of the URL, including leading /
 func makeUrlForIndexNode(nodeAddr string, path string) string {
 	return fmt.Sprintf("http://%s:%s@%v%v",
 		clusterconfig.Username, clusterconfig.Password, nodeAddr, path)
