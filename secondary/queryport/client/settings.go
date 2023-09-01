@@ -303,17 +303,11 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
 	}
 
-	isShardAffinityEnabled, ok := config["indexer.planner.enableShardAffinity"]
-	if ok {
-		if isShardAffinityEnabled.Bool() {
-			atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
-		} else {
-			atomic.StoreUint32(&s.isShardAffinityEnabled, 0)
-		}
-	} else {
-		// Use default config on error
-		logging.Errorf("ClientSettings: missing indexer.planner.enableShardAffinity")
+	isShardAffinityEnabled := config.GetDeploymentModelAwareCfgBool("indexer.settings.enableShardAffinity")
+	if isShardAffinityEnabled {
 		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
+	} else {
+		atomic.StoreUint32(&s.isShardAffinityEnabled, 0)
 	}
 
 	binSize, ok := config["indexer.planner.internal.binSize"]

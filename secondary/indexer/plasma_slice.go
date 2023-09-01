@@ -550,7 +550,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			bCfg.EvictMinThreshold = slice.sysconf["plasma.serverless.backIndex.evictMinThreshold"].Float64()
 		}
 
-		enableShardAffinity := slice.sysconf["planner.enableShardAffinity"].Bool() || common.IsServerlessDeployment()
+		enableShardAffinity := slice.sysconf.GetIndexerShardAffinity() || common.IsServerlessDeployment()
 
 		if enableShardAffinity && len(slice.shardIds) > 0 && slice.IsRebalRunning() {
 			mCfg.UseShardId = plasma.ShardId(slice.shardIds[0])

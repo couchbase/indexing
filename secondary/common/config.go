@@ -3461,11 +3461,17 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.planner.enableShardAffinity": ConfigValue{
+	"indexer.settings.enableShardAffinity": ConfigValue{
 		false,
-		"This is a boolean flag to control if planner creates a" +
-			"solution to maintain shard-index affinity in the cluster",
+		"This is a boolean flag to enable index grouping (aka shard-index affinity) in the cluster",
 		false,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.settings.provisioned.enableShardAffinity": ConfigValue{
+		true,
+		"This is a boolean flag to enable index grouping (aka shard-index affinity) in a provisioned cluster",
+		true,
 		false, // mutable,
 		false, // case-insensitive
 	},
@@ -4299,12 +4305,35 @@ var indexerServerLessConfigMap = map[string]string{
 	"max_parallel_per_bucket_builds": "serverless.max_parallel_per_bucket_builds",
 }
 
+var indexerProvisionedConfigMap = map[string]string{
+	"settings.enableShardAffinity":         "settings.provisioned.enableShardAffinity",
+	"indexer.settings.enableShardAffinity": "indexer.settings.provisioned.enableShardAffinity",
+}
+
 func (config Config) GetDeploymentModelAwareCfgInt(k string) int {
 	key := k
 	if IsServerlessDeployment() {
 		key = indexerServerLessConfigMap[k]
+	} else if IsProvisionedDeployment() {
+		key = indexerProvisionedConfigMap[k]
 	}
 	return config.getIndexerConfigInt(key)
+}
+
+func (config Config) GetDeploymentModelAwareCfgBool(k string) bool {
+	key := k
+	if IsServerlessDeployment() {
+		key = indexerServerLessConfigMap[k]
+	} else if IsProvisionedDeployment() {
+		key = indexerProvisionedConfigMap[k]
+	}
+	return config.getIndexerConfig(key).Bool()
+}
+
+// GetIndexerShardAffinity - get the value of `enableShardAffinity` from config being aware of the
+// deployment model
+func (config Config) GetIndexerShardAffinity() bool {
+	return config.GetDeploymentModelAwareCfgBool("settings.enableShardAffinity")
 }
 
 // Int assumes config value is an integer and returns the same.
@@ -4358,5 +4387,8 @@ func (cv ConfigValue) Strings() []string {
 
 // Bool assumes config value is a Bool and returns the same.
 func (cv ConfigValue) Bool() bool {
-	return cv.Value.(bool)
+	if val, ok := cv.Value.(bool); ok {
+		return val
+	}
+	return false
 }
