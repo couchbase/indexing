@@ -149,8 +149,8 @@ func rebalanceFromRest(serverAddr, username, password string, nodesToRemove []st
 }
 
 func getServerGroup(serverAddr, username, password, serverGroup string) ([]byte, error) {
-	log.Printf("getting server groups: %v via server %v\n",serverGroup, serverAddr)
-	payload := strings.NewReader(fmt.Sprintf("name=%s",serverGroup))
+	log.Printf("getting server groups: %v via server %v\n", serverGroup, serverAddr)
+	payload := strings.NewReader(fmt.Sprintf("name=%s", serverGroup))
 
 	return makeRequest(username, password, "GET", payload, getServerGroupUrl(serverAddr))
 }
@@ -381,7 +381,26 @@ func AddNodeAndRebalance(serverAddr, username, password, hostname string, role s
 	}
 
 	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		return fmt.Errorf("AddNodeAndRebalance: Error during rebalance, err: %v", err)
+		log.Printf("AddNodeAndRebalance: Error during rebalance, err: %v, Sleeping for 30 seconds", err)
+		time.Sleep(30 * time.Second)
+		log.Printf("Woke-up from sleep")
+
+		if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
+			return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, err: %v", err)
+		} else if err == nil && res == nil {
+			return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, rebalanceFromRest empty response: %s", res)
+		} else if res != nil {
+			// unmarshall response
+			resp := make(map[string]interface{})
+			json.Unmarshal(res, &resp)
+			if _, ok := resp["rebalance_id"]; !ok {
+				return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, rebalanceFromRest response: %s", res)
+			}
+		}
+
+		if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -389,7 +408,7 @@ func AddNodeAndRebalance(serverAddr, username, password, hostname string, role s
 func ServerGroupExists(serverAddr, username, password, serverGroup string) (exists bool, err error) {
 	method := "ServerGroupExists"
 	var res []byte
-	var response string        // string form of res
+	var response string // string form of res
 	for retries := 0; ; retries++ {
 		res, err = getServerGroup(serverAddr, username, password, serverGroup)
 		if err == nil {
