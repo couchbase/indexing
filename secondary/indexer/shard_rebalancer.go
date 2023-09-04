@@ -2831,6 +2831,16 @@ func (sr *ShardRebalancer) finishRebalance(err error) {
 		cfg := sr.config.Load()
 		_ = transferScheduleTokens(keepNodes, cfg["clusterAddr"].String())
 	}
+	if err != nil {
+		// we cannot encounter an error on finishRebalance once we have moved to DcpRebalance
+		// so if we have seen an error, we can close the DcpRebo channel as we will not be entering
+		// DcpRebalance
+		sr.dcpRebrOnce.Do(func() {
+			if sr.dcpRebrCloseCh != nil {
+				close(sr.dcpRebrCloseCh)
+			}
+		})
+	}
 
 	sr.retErr = err
 	sr.cleanupOnce.Do(sr.doFinish)
@@ -2895,6 +2905,12 @@ func (sr *ShardRebalancer) Cancel() {
 	if sr.cancelMetakv() {
 		close(sr.cancel)
 		sr.wg.Wait()
+	}
+
+	// we are not making any checks here if the RPC server was running or not; if the server is not
+	// running then STOP_PEER_SERVER should be a no-op
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
+		go sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
 	}
 
 	sr.mu.Lock()
@@ -3402,10 +3418,14 @@ func (sr *ShardRebalancer) processRebalancerChange(rToken *RebalanceToken) {
 		// shard rebalancer finish will wait internally wait for DCP rebalance to finish
 		go sr.finishRebalance(nil)
 	default:
+		// if tomorrow we add a new rebalancer, we should record that change too although we may not
+		// start that rebalancer; ideally this will be the scenario only on follower as master
+		// always has latest code aware of new rebalancer too; follower does not stop shard
+		// rebalancer here but rather will end when the token gets deleted;
+
 		// can we end up in a hang here if we don't finish rebalance?
-		l.Warnf("ShardRebalancer::processRebalancerChange invalid change in active rebalancer from %v to %v. skip processing...",
+		l.Warnf("ShardRebalancer::processRebalancerChange invalid change in active rebalancer from %v to %v",
 			sr.rebalToken.ActiveRebalancer, rToken.ActiveRebalancer)
-		return
 	}
 
 	sr.rebalToken.ActiveRebalancer = rToken.ActiveRebalancer
