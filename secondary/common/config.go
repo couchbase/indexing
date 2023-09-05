@@ -2324,6 +2324,21 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.shardLimitPerTenant": ConfigValue{
+		2000,
+		"Maximum number of shards per tenant that can be created in entire cluster",
+		2000,
+		false,
+		false,
+	},
+	"indexer.plasma.shardTenantMultiplier": ConfigValue{
+		5,
+		"Maximum number of shards per tenant will be computed based on " +
+			"min(shardLimitPerTenant, shardTenantMultiplier * minShardCapacity of each node) ",
+		5,
+		false,
+		false,
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(500),
@@ -3893,6 +3908,14 @@ var SystemConfig = Config{
 		2,
 		"pause interval when queued mutation exceeds threshold",
 		2,
+		false,
+		false,
+	},
+	"indexer.thisNodeOnly.ignoreAlternateShardIds": ConfigValue{
+		false,
+		"Set to true to make lifecycle manager ignore the alternate shardIds " +
+			"populated by planner. Only for testing - Not for production",
+		false,
 		false,
 		false,
 	},

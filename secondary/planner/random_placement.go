@@ -319,12 +319,11 @@ func (p *RandomPlacement) RemoveEligibleIndex(indexes []*IndexUsage) {
 		index.eligible = false
 	}
 
-	newEligibles := make([]*IndexUsage, len(p.indexes))
-	count := 0
+	var newEligibles []*IndexUsage
+
 	for _, eligible := range p.eligibles {
 		if _, ok := p.indexes[eligible]; ok {
-			newEligibles[count] = eligible
-			count++
+			newEligibles = append(newEligibles, eligible)
 			eligible.eligible = true
 		}
 	}
@@ -1168,7 +1167,6 @@ func updateIndexes(indexes []*IndexUsage) []*IndexUsage {
 // Note: Always call this method after calling grouping on the
 // solution
 func (p *RandomPlacement) RegroupIndexes() {
-
 	p.eligibles = updateIndexes(p.eligibles)
 	p.optionals = updateIndexes(p.optionals)
 

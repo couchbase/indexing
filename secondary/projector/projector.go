@@ -239,7 +239,7 @@ func (p *Projector) setupHTTP() {
 		apConfig.SetValue("name", "PRAM")
 
 		p.reqch = make(chan apcommon.Request)
-		p.admind, err = apserver.NewHTTPServer(apConfig, p.reqch)
+		p.admind, err = apserver.NewHTTPServer(apConfig, p.reqch, p.cinfoProvider, &p.cinfoProviderLock)
 		return err
 	}
 	helper := c.NewRetryHelper(10, time.Second, 1, fn)

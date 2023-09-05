@@ -11,12 +11,18 @@
 
 package client
 
-import "bytes"
-import "io/ioutil"
-import "net/http"
-import "strings"
-import "github.com/couchbase/indexing/secondary/security"
-import apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+import (
+	"bytes"
+	"errors"
+	"io/ioutil"
+	"net/http"
+	"strings"
+
+	"github.com/couchbase/cbauth"
+	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+)
 
 // httpClient is a concrete type implementing Client interface.
 type httpClient struct {
@@ -65,6 +71,13 @@ func (c *httpClient) Request(msg, resp apcommon.MessageMarshaller) (err error) {
 			return nil, err
 		}
 		req.Header.Add("Content-Type", msg.ContentType())
+
+		err = cbauth.SetRequestAuthVia(req, nil)
+		if err != nil {
+			logging.Warnf("httpClient: unable to set auth to request. Err: %v", err)
+			return nil, err
+		}
+
 		// POST request and return back the response
 		return c.httpc.Do(req)
 
@@ -82,5 +95,11 @@ func doResponse(postRequest func() (*http.Response, error), resp apcommon.Messag
 	if err != nil {
 		return err
 	}
+
+	status := htresp.StatusCode
+	if status == http.StatusNotFound || status == http.StatusBadRequest || status == http.StatusInternalServerError || status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return errors.New(string(body))
+	}
+
 	return resp.Decode(body) // unmarshal and return
 }

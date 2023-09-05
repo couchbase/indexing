@@ -85,6 +85,19 @@ type IndexerNode struct {
 	MaxInstancesPerShard uint64  `json:"maxInstancesPerShard,omitempty"`
 	MaxDiskUsagePerShard uint64  `json:"maxDiskUsagePerShard,omitempty"`
 	DiskUsageThreshold   float64 `json:"diskUsageThreshold,omitempty"`
+
+	// ShardLimitPerTenant is a cluster wide property which gets decided on
+	// three factors:
+	// a. MinShardCapacity of the node
+	// b. ShardTenantMultiplier
+	// c. Value of "ShardLimitPerTenant" in config
+	//
+	// The final value will be min(MinShardCapacity * ShardTenantMultiplier, ShardLimitPerTenant)
+	// As each indexer node can have different shard capacity (due to the support
+	// of percentage memory quota), the ShardLimitPerTenant is tracked per indexer node
+	// The maximum value across all indexer nodes will be considered for cluster wide limit
+	ShardLimitPerTenant   int `json:"shardLimitPerTenant,omitempty"`
+	ShardTenantMultiplier int `json:"shardTenantMultiplier,omitempty"`
 }
 
 // This function creates a new indexer node
@@ -191,6 +204,8 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.MaxInstancesPerShard = o.MaxInstancesPerShard
 	r.MaxDiskUsagePerShard = o.MaxDiskUsagePerShard
 	r.DiskUsageThreshold = o.DiskUsageThreshold
+	r.ShardLimitPerTenant = o.ShardLimitPerTenant
+	r.ShardTenantMultiplier = o.ShardTenantMultiplier
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
@@ -644,5 +659,11 @@ func (o *IndexerNode) ComputeMinShardCapacity(config common.Config) {
 		logging.Warnf("IndexerNode::ComputeMinShardCapacity Limiting the number of shards at: %v. "+
 			"Num shards per quota: %v, indexer node: %v", shardLimitPerNode, o.MinShardCapacity, o.NodeId)
 		o.MinShardCapacity = shardLimitPerNode
+	}
+
+	if o.ShardTenantMultiplier*o.MinShardCapacity != 0 {
+		if o.ShardTenantMultiplier*o.MinShardCapacity < o.ShardLimitPerTenant {
+			o.ShardLimitPerTenant = o.ShardTenantMultiplier * o.MinShardCapacity
+		}
 	}
 }

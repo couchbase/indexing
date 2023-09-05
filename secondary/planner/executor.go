@@ -5741,6 +5741,8 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 	for _, partnDist := range allPartnDist {
 		for _, replicaMap := range partnDist {
 
+			shardLimitPerTenant, currShardCount := solution.getShardLimits()
+
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
 			for indexer := range targetNodes {
@@ -5748,8 +5750,9 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			}
 
 			// If a new shard can be created for this partition across all indexer nodes,
-			// then generate new shardIds and populate the IndexUsage structure
-			if canCreateNewShards(replicaMap) {
+			// then generate new shardIds and populate the IndexUsage structure. A new shard
+			// can be created if the current shard count is less than the shard limit per tenant
+			if currShardCount <= shardLimitPerTenant && canCreateNewShards(replicaMap) {
 				logging.LazyVerbose(func() string {
 					return fmt.Sprintf("Planner::PopulateAlternateShardIds Generating new shards for index: %v "+
 						"as there is room for new shards", getIndexesFromReplicaMap(replicaMap))

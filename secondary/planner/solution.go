@@ -2120,3 +2120,23 @@ func (s *Solution) findIndexerForReplica(indexDefnId common.IndexDefnId,
 	// node in the cluster
 	return indexSlotId, indexers[0], indexers[1:], true
 }
+
+func (s *Solution) getShardLimits() (int, int) {
+	shardLimitPerTenant := 0
+
+	shardMap := make(map[string]bool)
+	for _, indexer := range s.Placement {
+
+		if shardLimitPerTenant < indexer.ShardLimitPerTenant {
+			shardLimitPerTenant = indexer.ShardLimitPerTenant
+		}
+
+		for _, index := range indexer.Indexes {
+			for _, alternateShardId := range index.AlternateShardIds {
+				shardMap[alternateShardId] = true
+			}
+		}
+	}
+
+	return shardLimitPerTenant, len(shardMap)
+}

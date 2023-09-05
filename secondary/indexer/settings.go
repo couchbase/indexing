@@ -162,6 +162,7 @@ func (s *settingsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	mux.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
 	mux.HandleFunc("/plasmaDiag", s.handlePlasmaDiag)
+	mux.HandleFunc("/settings/thisNodeOnly", s.handlePerNodeSettingsReq)
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
@@ -268,6 +269,60 @@ func (s *settingsManager) handleSettings(w http.ResponseWriter, r *http.Request,
 		}
 		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
 
+	} else {
+		s.writeError(w, errors.New("Unsupported method"))
+		return
+	}
+}
+
+// Apply the settings only for this request - Do not propagate the settings to other nodes
+// in the cluster
+func (s *settingsManager) handlePerNodeSettingsReq(w http.ResponseWriter, r *http.Request) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleSettings") {
+		return
+	}
+
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		newConfig, err := common.NewConfig(bytes)
+		if err != nil {
+			logging.Errorf("Error observed while making newconfig from bytes: %s, err: %v", bytes, err)
+			s.writeError(w, err)
+			return
+		}
+		config := s.config.Clone()
+		config.Update(bytes)
+
+		if len(newConfig) != 1 {
+			err = fmt.Errorf("Expected only one argument for this endpoint. Found different. newConfig: %v", newConfig)
+			s.writeError(w, err)
+			return
+		}
+
+		if _, ok := newConfig["indexer.thisNodeOnly.ignoreAlternateShardIds"]; !ok {
+			err = fmt.Errorf("Found unsupported config for this endpoint. newConfig: %v", newConfig)
+			s.writeError(w, err)
+			return
+		}
+
+		if bytes, _, err = common.MapSettings(bytes); err != nil {
+			logging.Errorf("Fail to map settings.  Error: %v", err)
+			s.writeError(w, err)
+			return
+		}
+
+		indexerConfig := config.SectionConfig("indexer.", true)
+		s.supvMsgch <- &MsgConfigUpdate{
+			cfg: indexerConfig,
+		}
+
+		s.writeOk(w)
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return

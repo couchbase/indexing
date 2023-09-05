@@ -696,19 +696,24 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 
 	defer func() {
 		if err == nil {
-			dcp_buckets_seqnos.buckets[bucketn] = bucket
 			reader, e := newVbSeqnosReader(cluster, pooln, bucketn, kvfeeds)
 			if e == nil {
+				dcp_buckets_seqnos.buckets[bucketn] = bucket
 				cloneReaderMap := dcp_buckets_seqnos.readerMap.Clone()
 				cloneReaderMap[bucketn] = reader
 				dcp_buckets_seqnos.readerMap.Set(cloneReaderMap)
 			} else {
 				err = e
+				for _, kvfeed := range kvfeeds {
+					kvfeed.mc.Close()
+				}
+				bucket.Close()
 			}
 		} else {
 			for _, kvfeed := range kvfeeds {
 				kvfeed.mc.Close()
 			}
+			bucket.Close()
 		}
 	}()
 

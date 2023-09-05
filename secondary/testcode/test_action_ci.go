@@ -3,12 +3,15 @@
 
 package testcode
 
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging"
-import "fmt"
-import "time"
-import "strings"
-import "github.com/couchbase/indexing/secondary/security"
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+)
 
 func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 	execTestAction := cfg["shardRebalance.execTestAction"].Bool()
@@ -61,4 +64,14 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 
 	// No-op for other states
 	return
+}
+
+func IgnoreAlternateShardIds(cfg common.Config, defn *common.IndexDefn) {
+	logging.Infof("testcode::IgnoreAlternateShardIds (Before), defn.Name: %v, defnId: %v, replicaId: %v, alternateShardIds: %v",
+		defn.Name, defn.DefnId, defn.ReplicaId, defn.AlternateShardIds)
+	if val, ok := cfg["thisNodeOnly.ignoreAlternateShardIds"]; ok && val.Bool() {
+		defn.AlternateShardIds = nil
+	}
+	logging.Infof("testcode::IgnoreAlternateShardIds (After), defn.Name: %v, defnId: %v, replicaId: %v, alternateShardIds: %v",
+		defn.Name, defn.DefnId, defn.ReplicaId, defn.AlternateShardIds)
 }

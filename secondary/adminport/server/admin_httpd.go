@@ -48,14 +48,16 @@ import (
 // httpServer is a concrete type implementing adminport Server
 // interface.
 type httpServer struct {
-	mu         sync.Mutex   // handle concurrent updates to this object
-	lis        net.Listener // TCP listener
-	mux        *http.ServeMux
-	srv        *http.Server // http server
-	messages   map[string]apcommon.MessageMarshaller
-	conns      map[string]net.Conn
-	reqch      chan<- apcommon.Request // request channel back to application
-	reqChState ChannelState
+	mu                sync.Mutex   // handle concurrent updates to this object
+	lis               net.Listener // TCP listener
+	mux               *http.ServeMux
+	srv               *http.Server // http server
+	messages          map[string]apcommon.MessageMarshaller
+	conns             map[string]net.Conn
+	reqch             chan<- apcommon.Request // request channel back to application
+	reqChState        ChannelState
+	cinfoProvider     c.ClusterInfoProvider
+	cinfoProviderLock *sync.RWMutex
 
 	// config params
 	name      string // human readable name for this server
@@ -75,15 +77,17 @@ type httpServer struct {
 
 // NewHTTPServer creates an instance of admin-server.
 // Start() will actually start the server.
-func NewHTTPServer(config c.Config, reqch chan<- apcommon.Request) (apcommon.Server, error) {
+func NewHTTPServer(config c.Config, reqch chan<- apcommon.Request, cip c.ClusterInfoProvider, cipLock *sync.RWMutex) (apcommon.Server, error) {
 	s := &httpServer{
-		messages:      make(map[string]apcommon.MessageMarshaller),
-		conns:         make(map[string]net.Conn),
-		reqch:         reqch,
-		reqChState:    REQCH_OPEN,
-		statsInBytes:  0.0,
-		statsOutBytes: 0.0,
-		statsMessages: make(map[string][3]uint64),
+		messages:          make(map[string]apcommon.MessageMarshaller),
+		conns:             make(map[string]net.Conn),
+		reqch:             reqch,
+		reqChState:        REQCH_OPEN,
+		cinfoProvider:     cip,
+		cinfoProviderLock: cipLock,
+		statsInBytes:      0.0,
+		statsOutBytes:     0.0,
+		statsMessages:     make(map[string][3]uint64),
 
 		name:      config["name"].String(),
 		laddr:     config["listenAddr"].String(),
@@ -245,6 +249,7 @@ func (s *httpServer) Start() (err error) {
 		defer s.shutdown()
 
 		logging.Infof("%s starting ...\n", s.logPrefix)
+		logging.Infof("%s ClusterVersion: %v", s.logPrefix, s.getCipClusterVersion())
 		err := s.srv.Serve(s.lis) // serve until listener is closed.
 		// TODO: look into error message and skip logging if Stop().
 		if err != nil {
@@ -284,6 +289,13 @@ func (s *httpServer) CloseReqch() {
 	}
 }
 
+func (s *httpServer) getCipClusterVersion() uint64 {
+	s.cinfoProviderLock.RLock()
+	defer s.cinfoProviderLock.RUnlock()
+
+	return s.cinfoProvider.ClusterVersion()
+}
+
 // handle incoming request.
 func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 
@@ -321,6 +333,16 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	stats[0]++ // request count
 	s.mu.Unlock()
+
+	if s.getCipClusterVersion() >= (uint64)(c.INDEXER_75_VERSION) {
+		// Enforce authentication
+		if !validateAuth(w, r) {
+			logging.Errorf("%s systemHandler():validateAuth failed. ClusterVersion: %v", s.logPrefix, s.getCipClusterVersion())
+			return
+		}
+	} else {
+		logging.Infof("%s systemHandler() skipping auth for ClusterVersion: %v ",s.logPrefix, s.getCipClusterVersion())
+	}
 
 	// get request message type.
 	msg, ok := s.messages[r.URL.Path]
