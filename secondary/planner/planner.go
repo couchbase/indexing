@@ -368,6 +368,11 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
 		}
 		solution.place.RegroupIndexes()
+
+		// Re-generate replica map based on the index grouping
+		solution.resetReplicaMap()
+		solution.generateReplicaMap()
+		solution.initializeServerGroupMap()
 	}
 
 	solution.enforceConstraint = true
@@ -1972,6 +1977,13 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		for _, indexer := range solution.Placement {
 			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
 		}
+
+		solution.place.RegroupIndexes()
+
+		// Re-generate replica map based on the index grouping
+		solution.resetReplicaMap()
+		solution.generateReplicaMap()
+		solution.initializeServerGroupMap()
 	}
 
 	// Sort the list of nodes based on usages
