@@ -534,11 +534,40 @@ func (o *IndexUsage) IsEquivalentIndex(other *IndexUsage, checkSuppress bool) bo
 		return false
 	}
 
+	// Either both indexes have to be shard proxy (or) both
+	// should not be shard proxy
+	if o.IsShardProxy != other.IsShardProxy {
+		return false
+	}
+
 	// suppressEquivCheck is only enabled for eligible index.  So as long as one index
 	// has suppressEquivCheck, we should not check.
 	if !checkSuppress || !o.suppressEquivIdxCheck && !other.suppressEquivIdxCheck {
-		if o.Instance != nil && other.Instance != nil {
-			return common.IsEquivalentIndex(&o.Instance.Defn, &other.Instance.Defn)
+		if o.IsShardProxy == false && other.IsShardProxy == false {
+			if o.Instance != nil && other.Instance != nil {
+				return common.IsEquivalentIndex(&o.Instance.Defn, &other.Instance.Defn)
+			}
+		} else {
+
+			findEquivalent := func(src, tgt *IndexUsage) bool {
+				for _, index_src := range src.GroupedIndexes {
+					foundEquivalent := false
+					for _, index_tgt := range tgt.GroupedIndexes {
+						if index_src.IsEquivalentIndex(index_tgt, checkSuppress) {
+							foundEquivalent = true
+							break
+						}
+					}
+
+					if !foundEquivalent {
+						return false
+					}
+				}
+				return true
+			}
+
+			// Return true only if all indexes in both proxies are equivalent.
+			return findEquivalent(o, other) && findEquivalent(other, o)
 		}
 	}
 
