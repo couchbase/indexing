@@ -6242,7 +6242,11 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 		for indexerNode, index := range indexDist {
 			if val, ok := slotDist[indexerNode]; ok {
 				index.Instance.ReplicaId = val
-				index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val), fmt.Sprintf("%v-%v-1", slotId, val)}
+				if index.IsPrimary {
+					index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val)}
+				} else {
+					index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val), fmt.Sprintf("%v-%v-1", slotId, val)}
+				}
 				assignedReplicas[val] = true
 			} else {
 				remainingIndexes = append(remainingIndexes, index)
@@ -6255,9 +6259,14 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 		if _, ok := assignedReplicas[replicaId]; !ok {
 			index := remainingIndexes[i]
 			index.Instance.ReplicaId = replicaId
-			msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
-			bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 1}
-			index.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
+			if index.IsPrimary {
+				msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
+				index.AlternateShardIds = []string{msAltId.String()}
+			} else {
+				msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
+				bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 1}
+				index.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
+			}
 			i++
 		}
 	}
