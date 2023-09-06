@@ -6254,6 +6254,10 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 		}
 	}
 
+	if len(remainingIndexes) == 0 {
+		return
+	}
+
 	i := 0
 	for replicaId, _ := range replicaMap {
 		if _, ok := assignedReplicas[replicaId]; !ok {
