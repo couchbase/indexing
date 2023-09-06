@@ -62,6 +62,7 @@ type ShardRebalancer struct {
 
 	cancel              chan struct{} // Close to signal rebalance cancellation
 	done                chan struct{} // Close to signal completion of rebalance
+	dropIndexDone       chan struct{} // closed to signal rebalance is done with dropping duplicate indexes
 	waitForTokenPublish chan struct{}
 
 	isDone int32 // Atomically updated if rebalance is done
@@ -127,6 +128,8 @@ type ShardRebalancer struct {
 	dcpRebrOnce    sync.Once
 
 	shardProgressRatio, dcpProgressRatio float64
+
+	removeDupIndex bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -167,6 +170,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 		cancel:              make(chan struct{}),
 		done:                make(chan struct{}),
+		dropIndexDone:       make(chan struct{}),
 		metakvCancel:        make(chan struct{}),
 		waitForTokenPublish: make(chan struct{}),
 
@@ -266,6 +270,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 				}
 
 				var err error
+				var hostToIndexToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 
 				// If shard affinity is enabled in non-serverless deployments, used normal planner.
 				// Otherwise, use tenant aware planner
@@ -289,7 +294,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 						onEjectOnly = true
 					}
 
-					sr.transferTokens, _, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
+					sr.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *sr.topologyChange,
 						sr.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
 						minIterPerTemp, maxIterPerTemp, binSize, true)
 
@@ -298,12 +303,16 @@ func (sr *ShardRebalancer) initRebalAsync() {
 						*sr.topologyChange, sr.nodeUUID)
 				}
 
-				// TODO: Add logic to remove duplicate indexes
-
 				if err != nil {
 					l.Errorf("ShardRebalancer::initRebalAsync Planner Error %v", err)
 					go sr.finishRebalance(err)
 					return
+				}
+
+				if len(hostToIndexToRemove) > 0 {
+					sr.removeDupIndex = true
+					go RemoveDuplicateIndexes(hostToIndexToRemove, sr.cancel, sr.done,
+						sr.dropIndexDone, "ShardRebalancer")
 				}
 
 				if len(sr.transferTokens) == 0 {
@@ -2262,6 +2271,10 @@ func (sr *ShardRebalancer) getIndexStatusFromMeta(tt *c.TransferToken,
 }
 
 func (sr *ShardRebalancer) doRebalance() {
+
+	if sr.isMaster && sr.runPlanner && sr.removeDupIndex {
+		<-sr.dropIndexDone // wait for duplicate index removal to finish
+	}
 
 	if len(sr.transferTokens) == 0 {
 		if sr.cb.progress != nil {
