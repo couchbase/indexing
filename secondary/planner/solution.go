@@ -1514,6 +1514,13 @@ func (s *Solution) initializeServerGroupMap() {
 	}
 }
 
+func (s *Solution) resetReplicaMap() {
+	s.eligReplicaMap = make(ReplicaMap)
+	s.replicaMap = make(ReplicaMap)
+	s.indexSGMap = make(ServerGroupMap)
+	s.eligIndexSGMap = make(ServerGroupMap)
+}
+
 // Generate a map for replicaId
 func (s *Solution) generateReplicaMap() {
 

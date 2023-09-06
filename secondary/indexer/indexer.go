@@ -242,6 +242,9 @@ type indexer struct {
 
 	//maintains bucket->bucketStateEnum mapping for pause state
 	bucketPauseState map[string]bucketStateEnum
+
+	// This map contains the list of instances that are in async recovery
+	recoveryChMap map[common.IndexInstId]chan bool
 }
 
 type kvRequest struct {
@@ -353,6 +356,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bsRunParams:      &runParams{},
 		instsPerColl:     make(map[string]map[string]map[common.IndexInstId]bool),
 		bucketPauseState: make(map[string]bucketStateEnum),
+		recoveryChMap:    make(map[common.IndexInstId]chan bool),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -2341,6 +2345,14 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		idx.stats.AddPartitionStats(indexInst, partnDefn.GetPartitionId())
 	}
 
+	recoveryDoneCh := make(chan bool)
+	idx.recoveryChMap[indexInst.InstId] = recoveryDoneCh
+
+	var realInstRecoveryCh chan bool
+	if indexInst.RealInstId != 0 {
+		realInstRecoveryCh = idx.recoveryChMap[indexInst.RealInstId]
+	}
+
 	go func() {
 		//allocate partition/slice
 		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true)
@@ -2350,12 +2362,21 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 		logging.Infof("Indexer::handleRecoverIndex Sending message to indexer "+
 			"on recovery of inst: %v, shardIdMap: %verr: %v", indexInst.InstId, partnShardIdMap, err)
+
+		if realInstRecoveryCh != nil {
+			logging.Infof("Indexer::handleRecoverIndex Waiting for real instance recovery to be done. "+
+				"inst: %v, realInstId: %v", indexInst.InstId, indexInst.RealInstId)
+
+			<-realInstRecoveryCh
+		}
+
 		idx.internalRecvCh <- &MsgRecoverIndexResp{
 			mType:           INDEXER_INST_RECOVERY_RESPONSE,
 			indexInst:       indexInst,
 			partnInstMap:    partnInstMap,
 			partnShardIdMap: partnShardIdMap,
 			err:             err,
+			recoveryDoneCh:  recoveryDoneCh,
 		}
 
 		return
@@ -2372,6 +2393,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	partnInstMap := msg.(*MsgRecoverIndexResp).GetPartnInstMap()
 	partnShardIdMap := msg.(*MsgRecoverIndexResp).GetPartnShardIdMap()
 	err := msg.(*MsgRecoverIndexResp).GetError()
+	recoveryDoneCh := msg.(*MsgRecoverIndexResp).GetRecoveryDoneCh()
 
 	// Notify lifecycle manager that the async recovery is done.
 	// If any index were dropped while async recovery was in progress
@@ -2383,6 +2405,10 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 			logging.Errorf("Indexer::handleInstRecoveryResponse Error observed while notifying "+
 				"async recovery done for inst: %v, err: %v", indexInst.InstId, err)
 		}
+
+		// Close recoveryDoneCh to unblock any proxy instances that are in async recovery
+		close(recoveryDoneCh)
+		delete(idx.recoveryChMap, indexInst.InstId)
 	}()
 
 	if err != nil {
@@ -2418,6 +2444,18 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	idx.indexInstMap[indexInst.InstId] = indexInst
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
+	// Send a message to cluster manager to update index instance state to topology
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	//for indexer, Ready state doesn't matter. Till build index is received,
+	//the index stays in Created state.
+	if indexInst.State == common.INDEX_STATE_READY {
+		indexInst.State = common.INDEX_STATE_CREATED
+		idx.indexInstMap[indexInst.InstId] = indexInst
+	}
+
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
 
@@ -2437,10 +2475,6 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		keyspaceId: "",
 	}
 
-	// Send a message to cluster manager to update index instance state to topology
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, nil); err != nil {
-		common.CrashOnError(err)
-	}
 	return
 
 }
