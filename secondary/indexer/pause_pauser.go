@@ -22,7 +22,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
-	"github.com/couchbase/plasma"
 )
 
 func newPauseUploadToken(masterUuid, followerUuid, pauseId, bucketName string) (string, *common.PauseUploadToken, error) {
@@ -732,8 +731,7 @@ func (p *Pauser) masterUploadPauseMetadata() error {
 	data = common.ChecksumAndCompress(data, compression)
 
 	ctx := p.task.ctx
-	plasmaCfg := generatePlasmaCopierConfig(p.task, cfg)
-	copier, cerr := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, nil, plasmaCfg.CopyConfig)
+	copier, cerr := MakeFileCopierForPauseResume(p.task, cfg)
 	if cerr != nil {
 		err = fmt.Errorf("couldn't create copier object. archive path %v is unsupported (err=%v)", p.task.archivePath, cerr)
 		logging.Errorf("Pauser::masterUploadPauseMetadata: %v", err)
@@ -782,8 +780,7 @@ func (p *Pauser) followerUploadBucketData() (map[common.ShardId]string, error) {
 		logging.Infof("Pauser::followerUploadBucketData: compression is disabled. will upload raw data")
 	}
 
-	plasmaCfg := generatePlasmaCopierConfig(p.task, cfg)
-	copier, cerr := plasma.MakeFileCopier(p.task.archivePath, "", plasmaCfg.Environment, nil, plasmaCfg.CopyConfig)
+	copier, cerr := MakeFileCopierForPauseResume(p.task, p.pauseMgr.config.Load())
 	if cerr != nil {
 		err := fmt.Errorf("couldn't create a copier object. archive path %v is unsupported (err=%v)", p.task.archivePath, cerr)
 		logging.Errorf("Pauser::followerUploadBucketData: %v", err)
