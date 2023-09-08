@@ -331,7 +331,7 @@ func TestRebalanceCancelAfterDropOnSource(t *testing.T) {
 	// exists for validation
 	index := indexes[0]
 	for _, bucket := range buckets {
-		hosts := getHostsForBucket(bucket)
+		hosts, status := getHostsForBucket(bucket)
 
 		err := secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
 		FailTestIfError(err, "Error while dropping index", t)
@@ -351,9 +351,11 @@ func TestRebalanceCancelAfterDropOnSource(t *testing.T) {
 		// Scan only the newly created index
 		scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
 
-		newHosts := getHostsForBucket(bucket)
+		newHosts, newStatus := getHostsForBucket(bucket)
 		if len(newHosts) != len(hosts) {
+			log.Printf("Bucket: %v, Prev Status: %v, currStats: %v", bucket, status, newStatus)
 			t.Fatalf("Bucket: %v is expected to be placed on hosts: %v, bucket it exists on hosts: %v", bucket, hosts, newHosts)
+
 		}
 		for _, newHost := range newHosts {
 			found := false

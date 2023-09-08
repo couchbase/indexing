@@ -71,9 +71,10 @@ func TestRebalancePanicTestsSetup(t *testing.T) {
 // inNodes -> Nodes coming into the cluster
 // outNodes -> Nodes going out of the cluster
 // areInNodesFinal -> 'true' if "inNodes" become the final nodes in
-//                    the cluster (i.e. rebalance succeeds)
-//                    Otherwise, "outNodes" will be the final nodes in
-//                    the cluster after rebalance
+//
+//	the cluster (i.e. rebalance succeeds)
+//	Otherwise, "outNodes" will be the final nodes in
+//	the cluster after rebalance
 func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFinal, skipAdding, isRebalCancel bool, t *testing.T) {
 
 	performSwapRebalance(inNodes, outNodes, true, skipAdding, isRebalCancel, t)
@@ -389,7 +390,7 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 	// exists for validation
 	index := indexes[0]
 	for _, bucket := range buckets {
-		hosts := getHostsForBucket(bucket)
+		hosts, status := getHostsForBucket(bucket)
 
 		err := secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
 		FailTestIfError(err, "Error while dropping index", t)
@@ -409,9 +410,11 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 		// Scan only the newly created index
 		scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
 
-		newHosts := getHostsForBucket(bucket)
+		newHosts, newStatus := getHostsForBucket(bucket)
 		if len(newHosts) != len(hosts) {
+			log.Printf("Bucket: %v, Prev Status: %v, currStats: %v", bucket, status, newStatus)
 			t.Fatalf("Bucket: %v is expected to be placed on hosts: %v, bucket it exists on hosts: %v", bucket, hosts, newHosts)
+
 		}
 		for _, newHost := range newHosts {
 			found := false
