@@ -399,7 +399,7 @@ func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, s
 			t.setStorageType(p)
 		}
 
-		plnr, stat, _, e := rebalance(command, config, p, indexes, deletedNodes, false)
+		plnr, stat, _, e := rebalance(command, config, p, indexes, deletedNodes, false, 0)
 		return plnr, stat, e
 
 	} else {

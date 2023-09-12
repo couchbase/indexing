@@ -570,6 +570,28 @@ func (s *Solution) PrintLayout() {
 				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
 				!index.suppressEquivIdxCheck,
 				index.pendingCreate, index.PendingDelete)
+			for _, subIndex := range index.GroupedIndexes {
+				logging.Infof("\t\t\t* Sub-Index name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v",
+					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
+					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
+					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds)
+				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
+					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),
+					subIndex.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemOverhead(s.UseLiveData()))),
+					subIndex.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemMin(s.UseLiveData()))),
+					subIndex.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDataSize(s.UseLiveData()))),
+					subIndex.GetCpuUsage(s.UseLiveData()),
+					subIndex.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetDiskUsage(s.UseLiveData()))),
+					subIndex.GetScanRate(s.UseLiveData()), subIndex.GetDrainRate(s.UseLiveData()))
+				logging.Infof("\t\t\t Sub-Index resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
+					uint64(subIndex.GetResidentRatio(s.UseLiveData())),
+					subIndex.GetBuildPercent(s.UseLiveData()),
+					subIndex.NeedsEstimation() && subIndex.HasSizing(s.UseLiveData()),
+					!subIndex.suppressEquivIdxCheck,
+					subIndex.pendingCreate, subIndex.PendingDelete)
+			}
 		}
 	}
 }
@@ -2035,6 +2057,28 @@ func (s *Solution) addToSlotMap(slotId uint64, indexer *IndexerNode, replicaId i
 		s.slotMap[slotId] = make(map[*IndexerNode]int)
 	}
 	s.slotMap[slotId][indexer] = replicaId
+}
+
+func (s *Solution) updateSlotMapEntry(slotId uint64, oldNode, newNode *IndexerNode, replicaId int) {
+	delete(s.slotMap[slotId], oldNode)
+	s.addToSlotMap(slotId, newNode, replicaId)
+}
+
+func (s *Solution) getIndexSlot(index *IndexUsage) uint64 {
+	defnId := index.DefnId
+
+	for _, replicaSlots := range s.indexSlots[defnId] {
+		for partnId, slotId := range replicaSlots {
+			if partnId == index.PartnId && slotId != 0 {
+				// There exists atleast one replica with required partnId for the instance.
+				// Use the slotId
+				return slotId
+			}
+		}
+	}
+
+	// This index does not have any replicas which are placed with alternate shardIds
+	return 0
 }
 
 func (s *Solution) updateSlotMap() {

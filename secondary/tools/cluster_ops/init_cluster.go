@@ -120,7 +120,7 @@ func setStorageModeAndShardAwareRebalance(storageMode, username, password string
 	jbody["indexer.settings.storage_mode"] = storageMode
 	jbody["indexer.rebalance.shard_aware_rebalance"] = true
 	jbody["indexer.settings.rebalance.blob_storage_bucket"] = "/tmp/"
-	jbody["indexer.planner.enableShardAffinity"] = true
+	jbody["indexer.settings.enableShardAffinity"] = true
 	pbody, err := json.Marshal(jbody)
 	if err != nil {
 		return err

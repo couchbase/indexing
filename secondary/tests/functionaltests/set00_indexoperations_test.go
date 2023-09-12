@@ -506,12 +506,12 @@ func TestIndexingOnXATTRs(t *testing.T) {
 	numDocs := 100
 	xattrs := map[string]string{"_sync.rev": randSpecialString(10),
 		"_sync.channels": randSpecialString(10000),
-		"_sync.sequence": randSpecialString(1000),
+		"_sync.test":     randSpecialString(1000),
 		"_sync.history":  randSpecialString(100000)}
 
 	index_sync_rev := "index_sync_rev"
 	index_sync_channels := "index_sync_channels"
-	index_sync_sequence := "index_sync_sequence"
+	index_sync_test := "index_sync_test"
 
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
@@ -525,8 +525,8 @@ func TestIndexingOnXATTRs(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndex(index_sync_channels, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync.channels"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error creating"+index_sync_channels+" on xattr docs", t)
 
-	err = secondaryindex.CreateSecondaryIndex(index_sync_sequence, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync.sequence"}, false, nil, true, defaultIndexActiveTimeout, nil)
-	FailTestIfError(err, "Error creating"+index_sync_sequence+" on xattr docs", t)
+	err = secondaryindex.CreateSecondaryIndex(index_sync_test, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync.test"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+index_sync_test+" on xattr docs", t)
 
 	time.Sleep(5 * time.Second)
 
@@ -544,7 +544,7 @@ func TestIndexingOnXATTRs(t *testing.T) {
 
 	validateItemsCount(index_sync_rev)
 	validateItemsCount(index_sync_channels)
-	validateItemsCount(index_sync_sequence)
+	validateItemsCount(index_sync_test)
 
 	validateScanResultsAndDropIndex := func(indexName string) {
 		results, err := secondaryindex.ScanAll(indexName, bucket2, indexManagementAddress, defaultlimit, c.SessionConsistency, nil)
@@ -564,8 +564,8 @@ func TestIndexingOnXATTRs(t *testing.T) {
 					xattrVal = xattrs["_sync.rev"]
 				case index_sync_channels:
 					xattrVal = xattrs["_sync.channels"]
-				case index_sync_sequence:
-					xattrVal = xattrs["_sync.sequence"]
+				case index_sync_test:
+					xattrVal = xattrs["_sync.test"]
 				}
 
 				if len(val) > 1 {
@@ -582,7 +582,7 @@ func TestIndexingOnXATTRs(t *testing.T) {
 
 	validateScanResultsAndDropIndex(index_sync_rev)
 	validateScanResultsAndDropIndex(index_sync_channels)
-	validateScanResultsAndDropIndex(index_sync_sequence)
+	validateScanResultsAndDropIndex(index_sync_test)
 
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)

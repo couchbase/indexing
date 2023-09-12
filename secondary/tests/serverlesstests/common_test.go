@@ -548,8 +548,9 @@ func makeurl(path string) (string, error) {
 }
 
 // makeUrlForIndexNode makes a URL to call a REST API on a specific Index node.
-//   nodeAddr - ipAddr:port of the target Index node
-//   path - REST API path portion of the URL, including leading /
+//
+//	nodeAddr - ipAddr:port of the target Index node
+//	path - REST API path portion of the URL, including leading /
 func makeUrlForIndexNode(nodeAddr string, path string) string {
 	return fmt.Sprintf("http://%s:%s@%v%v",
 		clusterconfig.Username, clusterconfig.Password, nodeAddr, path)
@@ -1281,7 +1282,7 @@ func testDDLAfterRebalance(indexNodes []string, t *testing.T) {
 	}
 }
 
-func getHostsForBucket(bucket string) []string {
+func getHostsForBucket(bucket string) ([]string, map[string]interface{}) {
 	hosts := make(map[string]bool)
 
 	status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -1304,7 +1305,7 @@ func getHostsForBucket(bucket string) []string {
 	for host, _ := range hosts {
 		hostSlice = append(hostSlice, host)
 	}
-	return hostSlice
+	return hostSlice, status
 }
 
 func getInstAndDefnId(bucket, scope, collection, name string) (c.IndexInstId, c.IndexDefnId, error) {

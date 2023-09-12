@@ -2047,12 +2047,14 @@ func UngroupIndexes(solution *Solution) {
 
 		for _, indexUsage := range allIndexes {
 			if indexUsage.IsShardProxy == false {
+				indexUsage.ProxyIndex = nil
 				indexer.Indexes = append(indexer.Indexes, indexUsage)
 				continue
 			}
 
 			for _, groupedIndex := range indexUsage.GroupedIndexes {
 				indexer.Indexes = append(indexer.Indexes, groupedIndex)
+				groupedIndex.ProxyIndex = nil
 			}
 		}
 	}

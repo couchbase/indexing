@@ -40,7 +40,7 @@ func MakeDeploymentModel(model string) DeploymentModel {
 	return DEFAULT_DEPLOYMENT
 }
 
-//Global Deployment Model
+// Global Deployment Model
 var gDeploymentModel DeploymentModel
 var gDeploymentModelOnce sync.Once
 
@@ -60,4 +60,8 @@ func IsServerlessDeployment() bool {
 		return true
 	}
 	return false
+}
+
+func IsProvisionedDeployment() bool {
+	return gDeploymentModel == PROVISIONED_DEPLOYMENT
 }

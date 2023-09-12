@@ -33,16 +33,17 @@ type GsiScanClient struct {
 	queryport string
 	pool      *connectionPool
 	// config params
-	maxPayload         int // TODO: what if it exceeds ?
-	readDeadline       time.Duration
-	writeDeadline      time.Duration
-	poolSize           int
-	poolOverflow       int
-	cpTimeout          time.Duration
-	cpAvailWaitTimeout time.Duration
-	logPrefix          string
-	minPoolSizeWM      int32
-	relConnBatchSize   int32
+	maxPayload             int // TODO: what if it exceeds ?
+	readDeadline           time.Duration
+	writeDeadline          time.Duration
+	poolSize               int
+	poolOverflow           int
+	cpTimeout              time.Duration
+	cpAvailWaitTimeout     time.Duration
+	logPrefix              string
+	minPoolSizeWM          int32
+	relConnBatchSize       int32
+	closeActiveConnections bool
 
 	serverVersion uint32
 	closed        uint32
@@ -51,24 +52,32 @@ type GsiScanClient struct {
 
 func NewGsiScanClient(queryport, cluster string, config common.Config, needsAuth *uint32) (*GsiScanClient, error) {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
+
+	closeActiveConnections := false
+
+	if val, ok := config["settings.closeActiveConnections"]; ok {
+		closeActiveConnections = val.Bool()
+	}
+
 	c := &GsiScanClient{
-		queryport:          queryport,
-		maxPayload:         config["maxPayload"].Int(),
-		readDeadline:       time.Duration(config["readDeadline"].Int()),
-		writeDeadline:      time.Duration(config["writeDeadline"].Int()),
-		poolSize:           config["settings.poolSize"].Int(),
-		poolOverflow:       config["settings.poolOverflow"].Int(),
-		cpTimeout:          time.Duration(config["connPoolTimeout"].Int()),
-		cpAvailWaitTimeout: t,
-		logPrefix:          fmt.Sprintf("[GsiScanClient:%q]", queryport),
-		minPoolSizeWM:      int32(config["settings.minPoolSizeWM"].Int()),
-		relConnBatchSize:   int32(config["settings.relConnBatchSize"].Int()),
-		needsAuth:          needsAuth,
+		queryport:              queryport,
+		maxPayload:             config["maxPayload"].Int(),
+		readDeadline:           time.Duration(config["readDeadline"].Int()),
+		writeDeadline:          time.Duration(config["writeDeadline"].Int()),
+		poolSize:               config["settings.poolSize"].Int(),
+		poolOverflow:           config["settings.poolOverflow"].Int(),
+		cpTimeout:              time.Duration(config["connPoolTimeout"].Int()),
+		cpAvailWaitTimeout:     t,
+		logPrefix:              fmt.Sprintf("[GsiScanClient:%q]", queryport),
+		minPoolSizeWM:          int32(config["settings.minPoolSizeWM"].Int()),
+		relConnBatchSize:       int32(config["settings.relConnBatchSize"].Int()),
+		needsAuth:              needsAuth,
+		closeActiveConnections: closeActiveConnections,
 	}
 	c.pool = newConnectionPool(
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
 		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize, config["keepAliveInterval"].Int(),
-		cluster, needsAuth)
+		cluster, needsAuth, closeActiveConnections)
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {
@@ -221,6 +230,8 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 
 	partial, healthy, closeStream := false, true, false
 
+	poolClosed := false
+
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return err, false
@@ -238,7 +249,7 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 
 	renew := func() bool {
 		var err1 error
-		connectn, err1 = c.pool.Renew(connectn)
+		connectn, err1, poolClosed = c.pool.Renew(connectn)
 
 		if connectn != nil && err1 == nil {
 			logging.Verbosef("%v renew connection from %v to %v", requestId, connectn.conn.LocalAddr(), connectn.conn.RemoteAddr())
@@ -250,6 +261,10 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 	var authRetryOnce bool
 
 STREAM_RETRY:
+
+	if poolClosed {
+		return err, partial
+	}
 
 	conn, pkt := connectn.conn, connectn.pkt
 
@@ -1282,24 +1297,32 @@ func (c *GsiScanClient) IsClosed() bool {
 func (c *GsiScanClient) doRequestResponse(req interface{}, requestId string,
 	retry bool) (interface{}, uint64, error) {
 
+	poolClosed := false
+
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return nil, 0, err
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
+	defer func() {
+		c.pool.Return(connectn, healthy)
+	}()
 
 	renew := func() bool {
 		logging.Verbosef("%v renew connection %v", requestId, c.pool.host)
 
 		var err1 error
-		connectn, err1 = c.pool.Renew(connectn)
+		connectn, err1, poolClosed = c.pool.Renew(connectn)
 		return err1 == nil
 	}
 
 	var authRetry bool
 
 REQUEST_RESPONSE_RETRY:
+
+	if poolClosed {
+		return nil, 0, err
+	}
 
 	conn, pkt := connectn.conn, connectn.pkt
 

@@ -5422,7 +5422,7 @@ func (idx *indexer) sendMonitorSliceMsg(sliceList []Slice) {
 		return
 	}
 
-	shardAffinityEnabled := idx.config["planner.enableShardAffinity"].Bool() && common.GetStorageMode() == common.PLASMA
+	shardAffinityEnabled := common.CanMaintanShardAffinity(idx.config)
 	// ShardAffinity is always enabled for serverless deployments
 	shardAffinityEnabled = shardAffinityEnabled || common.IsServerlessDeployment()
 

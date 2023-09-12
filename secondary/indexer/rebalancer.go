@@ -188,11 +188,13 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 // that it recieves but the name has been given as removeDuplicateIndexes to identify its purpose
 // which is different than other dropIndex cleanup that rebalance process does.
 // Also if there is an error while dropping one or more indexes it simply logs the error but does not fail the rebalance.
-func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.IndexDefnId]*common.IndexDefn) {
-	defer close(r.dropIndexDone)
+func RemoveDuplicateIndexes(
+	hostIndexMap map[string]map[common.IndexDefnId]*common.IndexDefn,
+	cancel, done, removeDone chan struct{}, caller string) {
+	defer close(removeDone)
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	const method string = "Rebalancer::RemoveDuplicateIndexes:"
 	errMap := make(map[string]map[common.IndexDefnId]error)
 
 	uniqueDefns := make(map[common.IndexDefnId]*common.IndexDefn)
@@ -209,28 +211,31 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 	// If we fail to place drop token even after 3 retries we will not drop that index to avoid any errors in dropIndex
 	// causing metadata consistency and cleanup problems
 	for defnId, defn := range uniqueDefns {
-	loop:
-		for i := 0; i < 3; i++ { // 3 retries in case of error on PostDeleteCommandToken
+		postDeleteToken := func(attempts int, lastErr error) error {
 			select {
-			case <-r.cancel:
-				l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
-				return
-			case <-r.done:
-				l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
-				return
+			case <-cancel:
+				l.Warnf("%v::RemoveDuplicateIndexes Cancel Received. Skip processing drop duplicate indexes",
+					caller)
+				return nil
+			case <-done:
+				l.Warnf("%v::RemoveDuplicateIndexes Cannot drop duplicate index when rebalance is done",
+					caller)
+				return nil
 			default:
-				l.Infof("%v posting dropToken for defnid %v", method, defnId)
-				if err := mc.PostDeleteCommandToken(defnId, true, defn.Bucket); err != nil {
-					if i == 2 { // all retries have failed to post drop token
-						uniqueDefns[defnId] = nil
-						l.Errorf("%v failed to post delete command token after 3 retries, for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
-					} else {
-						l.Warnf("%v failed to post delete command token for index defnId %v due to internal errors.  Error=%v.", method, defnId, err)
-					}
-					break // break select and retry PostDeleteCommandToken
+				if lastErr != nil {
+					logging.Warnf("%v::RemoveDuplicateIndexes failed to post Delete command token for DefnId %v, %v times with error %v",
+						caller, defnId, attempts, lastErr)
 				}
-				break loop // break retry loop and move to next defn
+				return mc.PostDeleteCommandToken(defnId, true, defn.Bucket)
 			}
+		}
+
+		rh := common.NewRetryHelper(3, 10*time.Millisecond, 10, postDeleteToken)
+		err := rh.Run()
+
+		if err != nil {
+			logging.Errorf("%v::RemoveDuplicateIndexes couldn't set Metakv Delete token for DefnId %v after 3 retries. Last known error %v. Will skip droping index",
+				caller, defnId, err)
 		}
 	}
 
@@ -239,19 +244,22 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 
 		for _, index := range indexes {
 			select {
-			case <-r.cancel:
-				l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
+			case <-cancel:
+				l.Warnf("%v::RemoveDuplicateIndexes Cancel Received. Skip processing drop duplicate indexes",
+					caller)
 				return
-			case <-r.done:
-				l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
+			case <-done:
+				l.Warnf("%v::RemoveDuplicateIndexes Cannot drop duplicate index when rebalance is done",
+					caller)
 				return
 			default:
-				if uniqueDefns[index.DefnId] == nil { // we were not able to post dropToken for this index.
+				// we were not able to post dropToken for this index.
+				if uniqueDefns[index.DefnId] == nil {
 					break // break select move to next index
 				}
-				if err := r.makeDropIndexRequest(index, host); err != nil {
-					// we will only record the error and proceeded, not failing rebalance just because we could not delete
-					// a index.
+				if err := makeDropIndexRequest(index, host, cancel, done, caller); err != nil {
+					// we will only record the error and proceeded, not failing rebalance just
+					// because we could not delete a index.
 					mu.Lock()
 					if _, ok := errMap[host]; !ok {
 						errMap[host] = make(map[common.IndexDefnId]error)
@@ -264,11 +272,13 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 	}
 
 	select {
-	case <-r.cancel:
-		l.Warnf("%v Cancel Received. Skip processing drop duplicate indexes.", method)
+	case <-cancel:
+		l.Warnf("%v::RemoveDuplicateIndexes Cancel Received. Skip processing drop duplicate indexes",
+			caller)
 		return
-	case <-r.done:
-		l.Warnf("%v Cannot drop duplicate index when rebalance is done.", method)
+	case <-done:
+		l.Warnf("%v::RemoveDuplicateIndexes Cannot drop duplicate index when rebalance is done",
+			caller)
 		return
 	default:
 		for host, indexes := range hostIndexMap {
@@ -280,56 +290,45 @@ func (r *Rebalancer) RemoveDuplicateIndexes(hostIndexMap map[string]map[common.I
 
 		for host, indexes := range errMap {
 			for defnId, err := range indexes { // not really an error as we already posted drop tokens
-				l.Warnf("%v encountered error while removing index on host %v, defnId %v, err %v", method, host, defnId, err)
+				l.Warnf("%v::RemoveDuplicateIndexes encountered error while removing index on host %v, defnId %v, err %v",
+					caller, host, defnId, err)
 			}
 		}
 	}
 }
 
-func (r *Rebalancer) makeDropIndexRequest(defn *common.IndexDefn, host string) error {
-	const method string = "Rebalancer::makeDropIndexRequest:" // for logging
-	url := "/dropIndex"
-	bodybuf, _, err := getReqBody(defn, url, method)
+func makeDropIndexRequest(defn *common.IndexDefn, host string, cancel, done chan struct{},
+	caller string) error {
 
-	resp, err := postWithAuth(host+url, "application/json", bodybuf)
+	url := "/dropIndex"
+
+	resp, err := postWithHandleEOF(defn, host, url, caller)
 	if err != nil {
-		l.Errorf("%v error in drop index on host %v, defnId %v, err %v", method, host, defn.DefnId, err)
-		if strings.HasSuffix(err.Error(), ": EOF") {
-			// should not rety in case of rebalance done or cancel
-			select {
-			case <-r.cancel:
-				return err // return original error
-			case <-r.done:
-				return err
-			default:
-				bodybuf, _, err := getReqBody(defn, url, method)
-				resp, err = postWithAuth(host+url, "application/json", bodybuf)
-				if err != nil {
-					l.Errorf("%v error in drop index on host %v, defnId %v, err %v", method, host, defn.DefnId, err)
-					return err
-				}
-			}
-		} else {
-			return err
-		}
+		l.Errorf("%v::makeDropIndexRequest error in drop index on host %v, defnId %v, err %v",
+			caller, host, defn.DefnId, err)
+		return err
 	}
 
 	response := new(IndexResponse)
 	err = convertResponse(resp, response)
 	if err != nil {
-		l.Errorf("%v encountered error parsing response, host %v, defnId %v, err %v", method, host, defn.DefnId, err)
+		l.Errorf("%v::makeDropIndexRequest encountered error parsing response, host %v, defnId %v, err %v",
+			caller, host, defn.DefnId, err)
 		return err
 	}
 
 	if response.Code == RESP_ERROR {
 		if strings.Contains(response.Error, forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
-			l.Errorf("%v error dropping index, host %v defnId %v err %v. Ignored.", method, host, defn.DefnId, response.Error)
+			l.Errorf("%v::makeDropIndexRequest error dropping index, host %v defnId %v err %v. Ignored.",
+				caller, host, defn.DefnId, response.Error)
 			return nil
 		}
-		l.Errorf("%v error dropping index, host %v, defnId %v, err %v", method, host, defn.DefnId, response.Error)
+		l.Errorf("%v::makeDropIndexRequest error dropping index, host %v, defnId %v, err %v",
+			caller, host, defn.DefnId, response.Error)
 		return err
 	}
-	l.Infof("%v removed index defnId %v, defn %v, from host %v", method, defn.DefnId, defn, host)
+	l.Infof("%v::makeDropIndexRequest removed index defnId %v, defn %v, from host %v",
+		caller, defn.DefnId, defn, host)
 	return nil
 }
 
@@ -416,7 +415,8 @@ func (r *Rebalancer) initRebalAsync() {
 					}
 					if len(hostToIndexToRemove) > 0 {
 						r.removeDupIndex = true
-						go r.RemoveDuplicateIndexes(hostToIndexToRemove)
+						go RemoveDuplicateIndexes(hostToIndexToRemove, r.cancel, r.done,
+							r.dropIndexDone, "Rebalancer")
 					}
 					if len(r.transferTokens) == 0 {
 						r.transferTokens = nil
