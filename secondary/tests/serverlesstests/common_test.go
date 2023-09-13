@@ -1282,30 +1282,28 @@ func testDDLAfterRebalance(indexNodes []string, t *testing.T) {
 	}
 }
 
-func getHostsForBucket(bucket string) ([]string, map[string]interface{}) {
-	hosts := make(map[string]bool)
+func getHostsForBucket(bucket string) ([]string, []tc.IndexStatus, error) {
 
-	status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
-	if status != nil && err == nil {
-		indexes := status["indexes"].([]interface{})
-		for _, indexEntry := range indexes {
-			entry := indexEntry.(map[string]interface{})
+	status, err := getIndexStatusFromIndexer()
+	if err != nil {
+		return nil, nil, err
+	}
 
-			if bucket != entry["bucket"].(string) {
-				continue
-			}
-
-			allHosts := entry["hosts"].([]interface{})
-			for _, host := range allHosts {
-				hosts[host.(string)] = true
+	allHosts := make(map[string]bool)
+	for _, indexStatus := range status.Status {
+		if indexStatus.Bucket == bucket {
+			for _, host := range indexStatus.Hosts {
+				allHosts[host] = true
 			}
 		}
 	}
-	var hostSlice []string
-	for host, _ := range hosts {
-		hostSlice = append(hostSlice, host)
+
+	var hosts []string
+	for k := range allHosts {
+		hosts = append(hosts, k)
 	}
-	return hostSlice, status
+
+	return hosts, status.Status, nil
 }
 
 func getInstAndDefnId(bucket, scope, collection, name string) (c.IndexInstId, c.IndexDefnId, error) {
