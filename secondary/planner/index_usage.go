@@ -642,6 +642,7 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 
 	o.ActualRecsInMem += in.ActualRecsInMem
 	o.TotalRecords += in.TotalRecords
+	o.ActualDiskSize += in.ActualDiskSize
 
 	// If the first index in the list is a primay index, then we can end-up
 	// copying only one shardId. Hence, always copy until we see a secondary
