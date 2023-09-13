@@ -2082,6 +2082,8 @@ func (s *Solution) getIndexSlot(index *IndexUsage) uint64 {
 }
 
 func (s *Solution) updateSlotMap() {
+	s.indexSlots = make(map[common.IndexDefnId]map[int]map[common.PartitionId]uint64)
+	s.slotMap = map[uint64]map[*IndexerNode]int{}
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
