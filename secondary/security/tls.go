@@ -65,9 +65,7 @@ func getCertPool(setting *SecuritySetting) (*x509.CertPool, error) {
 	return caCertPool, nil
 }
 
-//
 // Setup client TLSConfig
-//
 func setupClientTLSConfig(host string) (*tls.Config, error) {
 
 	if IsToolsConfigUsed() {
@@ -115,9 +113,7 @@ func setupClientTLSConfig(host string) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-//
 // Set up a TLS client connection.  This function does not close conn upon error.
-//
 func makeTLSConn(conn net.Conn, hostname, port string) (net.Conn, error) {
 
 	// Setup TLS Config
@@ -160,9 +156,7 @@ func makeTLSConn(conn net.Conn, hostname, port string) (net.Conn, error) {
 	return conn, nil
 }
 
-//
 // Setup a TCP client connection
-//
 func makeTCPConn(addr string) (net.Conn, error) {
 
 	conn, err := net.Dial("tcp", addr)
@@ -184,11 +178,9 @@ func SecureConn(conn net.Conn, hostname, port string) (net.Conn, error) {
 	return conn, nil
 }
 
-//
 // Setup a TCP or TLS client connection depending whether encryption is used.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func MakeConn(addr string) (net.Conn, error) {
 
 	addr, hostname, port, err := EncryptPortFromAddr(addr)
@@ -210,11 +202,9 @@ func MakeConn(addr string) (net.Conn, error) {
 	return conn2, nil
 }
 
-//
 // Setup a TCP client connection depending whether encryption is used.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func MakeTCPConn(addr string) (*net.TCPConn, error) {
 
 	addr, _, _, err := EncryptPortFromAddr(addr)
@@ -234,9 +224,7 @@ func MakeTCPConn(addr string) (*net.TCPConn, error) {
 // TLS Listener
 /////////////////////////////////////////////
 
-//
 // Setup server TLSConfig
-//
 func setupServerTLSConfig() (*tls.Config, error) {
 
 	setting := GetSecuritySetting()
@@ -248,10 +236,10 @@ func setupServerTLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
-	return getTLSConfigFromSetting(setting)
+	return getTLSConfigFromSettingForServer(setting)
 }
 
-func getTLSConfigFromSetting(setting *SecuritySetting) (*tls.Config, error) {
+func getTLSConfigFromSettingForServer(setting *SecuritySetting) (*tls.Config, error) {
 
 	// Get certifiicate and cbauth config
 	cert := setting.certificate
@@ -292,9 +280,7 @@ func getTLSConfigFromSetting(setting *SecuritySetting) (*tls.Config, error) {
 	return config, nil
 }
 
-//
 // Set up a TLS listener
-//
 func MakeTLSListener(tcpListener net.Listener) (net.Listener, error) {
 
 	config, err := setupServerTLSConfig()
@@ -311,10 +297,8 @@ func MakeTLSListener(tcpListener net.Listener) (net.Listener, error) {
 	return tcpListener, nil
 }
 
-//
 // Make a new tcp listener for given address.
 // Always make it secure, even if the security is not enabled.
-//
 func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
 
 	addr, _, _, err := EncryptPortFromAddr(addr)
@@ -332,7 +316,7 @@ func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
 		return nil, fmt.Errorf("Security setting required for TLS listener")
 	}
 
-	config, err := getTLSConfigFromSetting(setting)
+	config, err := getTLSConfigFromSettingForServer(setting)
 	if err != nil {
 		return nil, err
 	}
@@ -341,9 +325,7 @@ func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
 	return tlsListener, nil
 }
 
-//
 // Set up a TCP listener
-//
 func makeTCPListener(addr string) (net.Listener, error) {
 
 	tcpListener, err := net.Listen("tcp", addr)
@@ -354,12 +336,10 @@ func makeTCPListener(addr string) (net.Listener, error) {
 	return tcpListener, nil
 }
 
-//
 // Set up a TCP listener.
 // If the cluster setting dictates ipv6, then listener will bind only on
 // ipv6 addresses. Similarly if the cluster setting dictates ipv4, then
 // the listener will bind only on ipv4 addresses.
-//
 func MakeProtocolAwareTCPListener(addr string) (net.Listener, error) {
 
 	protocol := "tcp4"
@@ -375,10 +355,8 @@ func MakeProtocolAwareTCPListener(addr string) (net.Listener, error) {
 	return tcpListener, nil
 }
 
-//
 // Secure a TCP listener.  If encryption is requird, listener must already
 // setup with SSL port.
-//
 func SecureListener(listener net.Listener) (net.Listener, error) {
 	if EncryptionEnabled() {
 		return MakeTLSListener(listener)
@@ -387,11 +365,9 @@ func SecureListener(listener net.Listener) (net.Listener, error) {
 	return listener, nil
 }
 
-//
 // Set up a TLS or TCP listener, depending on whether encryption is used.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func MakeListener(addr string) (net.Listener, error) {
 
 	addr, _, _, err := EncryptPortFromAddr(addr)
@@ -417,9 +393,7 @@ func MakeListener(addr string) (net.Listener, error) {
 // HTTP / HTTPS Client
 /////////////////////////////////////////////
 
-//
 // Get URL.  This function will convert non-SSL port to SSL port when necessary.
-//
 func GetURL(u string) (*url.URL, error) {
 
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
@@ -450,9 +424,7 @@ func GetURL(u string) (*url.URL, error) {
 	return parsedUrl, nil
 }
 
-//
 // Setup TLSTransport
-//
 func getTLSTransport(host string) (*http.Transport, error) {
 
 	tlsConfig, err := setupClientTLSConfig(host)
@@ -481,33 +453,45 @@ func getTLSTransport(host string) (*http.Transport, error) {
 	return transport, nil
 }
 
-func GetTLSConfig() (*tls.Config, error) {
-	settings := GetSecuritySetting()
-	if settings == nil {
-		return nil, fmt.Errorf("security settings not initialised")
-	}
-	return getTLSConfigFromSetting(settings)
+func GetTLSConfigForClient(host string) (*tls.Config, error) {
+	return setupClientTLSConfig(host)
 }
 
-func SetupCertificate(host string, tlsConfig *tls.Config) error {
+// Force setup TLS config for client
+func SetupCertificateForClient(host string, tlsConfig *tls.Config) error {
 	settings := GetSecuritySetting()
 	if settings == nil {
 		return fmt.Errorf("security settings not initialised")
 	}
 
-	// TODO: remove insecureSkipVerify and add VerifyPeerConnection callback
-	if IsLocal(host) || !settings.encryptionEnabled {
+	if (!encryptLocalHost() && IsLocal(host)) || !settings.encryptionEnabled {
 		tlsConfig.InsecureSkipVerify = true
 	} else {
 		tlsConfig.ServerName = host
+
+		// Get certificate and cbauth TLS setting
+		pref := settings.tlsPreference
+
+		//  Set up cert pool for rootCAs
+		caCertPool, err := getCertPool(settings)
+		if err != nil {
+			return fmt.Errorf("%v Can't establish ssl connection to %v", err, host)
+		}
+
+		tlsConfig.RootCAs = caCertPool
+
+		// setup prefer ciphers
+		if pref != nil {
+			tlsConfig.MinVersion = pref.MinVersion
+			tlsConfig.CipherSuites = pref.CipherSuites
+			tlsConfig.PreferServerCipherSuites = pref.PreferServerCipherSuites
+		}
 	}
 
 	return nil
 }
 
-//
 // Secure HTTP Client if necessary
-//
 func SecureClient(client *http.Client, u string) error {
 
 	parsedUrl, err := GetURL(u)
@@ -532,11 +516,9 @@ func SecureClient(client *http.Client, u string) error {
 	return nil
 }
 
-//
 // Get HTTP client.  If encryption is enabled, client will be setup with TLS Transport.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func MakeClient(u string) (*http.Client, error) {
 
 	// create a new Client.  Do not use http.DefaultClient.
@@ -604,30 +586,24 @@ func ConvertHttpResponse(r *http.Response, resp interface{}) error {
 	return nil
 }
 
-//
 // GetWithAuth performs an HTTP(S) GET request with optional URL parameters
 // and Basic Authentication. If encryption is enabled, the request is made over HTTPS.
 // This function will make use of encrypt port mapping to translate non-SSL port to SSL port.
 // params may be nil. eTag may be the empty string, in which case it is not transmitted.
-//
 func GetWithAuth(u string, params *RequestParams) (*http.Response, error) {
 	return getWithAuthInternal(u, params, "", true)
 }
 
-//
 // GetWithAuthAndETag performs an HTTP(S) GET with Basic Auth and optional ETag header field.
 // If encryption is enabled, the request is made over HTTPS. This function will make use of
 // encrypt port mapping to translate non-SSL port to SSL port. params may be nil. eTag may
 // be the empty string, in which case it is not transmitted.
-//
 func GetWithAuthAndETag(u string, params *RequestParams, eTag string) (*http.Response, error) {
 	return getWithAuthInternal(u, params, eTag, true)
 }
 
-//
 // GetWithAuthNonTLS performs an HTTP GET with Basic Auth. This function will not convert HTTP URL
 // to HTTPS using Encrypted Port Mapping.
-//
 func GetWithAuthNonTLS(u string, params *RequestParams) (*http.Response, error) {
 	return getWithAuthInternal(u, params, "", false)
 }
@@ -708,7 +684,9 @@ func getWithAuthInternal(u string, params *RequestParams, eTag string, allowTls 
 //
 // ##### IMPORTANT #####
 // Do not pass nil for the body or Go's NewRequestWithContext will panic.
-//   ====> INSTEAD pass: bytes.NewBuffer([]byte("{}"))
+//
+//	====> INSTEAD pass: bytes.NewBuffer([]byte("{}"))
+//
 // Passing nil to body does not produce a nil io.Reader, as that is an interface. It will produce a
 // non-nil io.Reader interface object that contains a nil pointer to the body that will lead to the
 // panic ("if body == nil" here will return false, but the interface object will contain a nil
@@ -752,11 +730,9 @@ func PostWithAuth(u string, bodyType string, body io.Reader, params *RequestPara
 	return client.Do(req)
 }
 
-//
 // HTTP Get.  If encryption is enabled, the request is made over HTTPS.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func Get(u string, params *RequestParams) (*http.Response, error) {
 
 	url, err := GetURL(u)
@@ -786,11 +762,9 @@ func Get(u string, params *RequestParams) (*http.Response, error) {
 	return client.Do(req)
 }
 
-//
 // HTTP Post.  If encryption is enabled, the request is made over HTTPS.
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func Post(u string, bodyType string, body io.Reader, params *RequestParams) (*http.Response, error) {
 
 	url, err := GetURL(u)
@@ -825,9 +799,7 @@ func Post(u string, bodyType string, body io.Reader, params *RequestParams) (*ht
 // HTTP / HTTPS Server
 /////////////////////////////////////////////
 
-//
 // Make HTTPS Server
-//
 func MakeHTTPSServer(server *http.Server) error {
 
 	// get server TLSConfig
@@ -846,10 +818,8 @@ func MakeHTTPSServer(server *http.Server) error {
 	return nil
 }
 
-//
 // Secure the HTTP Server by setting TLS config
 // Always secure the given HTTP server (even if the security is not enabled).
-//
 func SecureHTTPServer(server *http.Server) error {
 
 	setting := GetSecuritySetting()
@@ -857,7 +827,7 @@ func SecureHTTPServer(server *http.Server) error {
 		return fmt.Errorf("Security setting required for https server")
 	}
 
-	config, err := getTLSConfigFromSetting(setting)
+	config, err := getTLSConfigFromSettingForServer(setting)
 	if err != nil {
 		return err
 	}
@@ -872,9 +842,7 @@ func SecureHTTPServer(server *http.Server) error {
 	return nil
 }
 
-//
 // Make HTTP Server
-//
 func makeHTTPServer(addr string) (*http.Server, error) {
 
 	srv := &http.Server{
@@ -884,10 +852,8 @@ func makeHTTPServer(addr string) (*http.Server, error) {
 	return srv, nil
 }
 
-//
 // Secure HTTP server.
 // It expects that server must already be setup with HTTPS port.
-//
 func SecureServer(server *http.Server) error {
 
 	if EncryptionEnabled() {
@@ -897,11 +863,9 @@ func SecureServer(server *http.Server) error {
 	return nil
 }
 
-//
 // Make HTTP/HTTPS server
 // This function will make use of encrypt port mapping to translate non-SSL
 // port to SSL port.
-//
 func MakeHTTPServer(addr string) (*http.Server, error) {
 
 	addr, _, _, err := EncryptPortFromAddr(addr)

@@ -34,7 +34,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"github.com/couchbase/plasma"
 )
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3389,15 +3388,6 @@ func generateShardPath(nodeDir string, trimmedShardPath string) string {
 	return strings.Join([]string{nodeDir, trimmedShardPath, ""}, separator)
 }
 
-func generatePlasmaCopierConfig(task *taskObj, config common.Config) *plasma.Config {
-	cfg := plasma.DefaultConfig()
-	cfg.CopyConfig.KeyEncoding = true
-	cfg.CopyConfig.KeyPrefix = task.archivePath
-	cfg.CopyConfig.Region = task.region
-	cfg.CopyConfig.EndPoint = config["pause_resume.blob_storage_endpoint"].String()
-	return &cfg
-}
-
 func (m *PauseServiceManager) checkDDLRunningForBucket(bucketName string) (bool, []string) {
 
 	respCh := make(MsgChannel)
@@ -3625,19 +3615,16 @@ func (prrm *PauseResumeRunningMap) ForEveryKey(callb func(*pauseResumeRunningMet
 }
 
 func (psm *PauseServiceManager) setTestConfigIfEnabled() {
-	if endpoint, ok := psm.config.Load()["pause_resume.blob_storage_endpoint"]; ok {
-		logging.Infof("PauseServiceManager::setTestConfigIfEnabled: setting blob storage endpoint(%v)", endpoint)
-		cfg := plasma.DefaultConfig()
-		cfg.EndPoint = endpoint.String()
-		plasma.UpdateShardCopyConfig(&cfg)
+	if endpoint, set := setCopierTestConfigIfEnabled(psm.config.Load()); set {
+		logging.Infof("PauseServiceManager::setTestConfigIfEnabled: setting blob storage endpoint(%v)",
+			endpoint)
 	}
 }
 
 func (psm *PauseServiceManager) unsetTestConfigIfEnabled() {
-	if endpoint, ok := psm.config.Load()["pause_resume.blob_storage_endpoint"]; ok {
-		logging.Infof("PauseServiceManager::unsetTestConfigIfEnabled: unsetting blob storage endpoint(%v)", endpoint)
-		cfg := plasma.DefaultConfig()
-		plasma.UpdateShardCopyConfig(&cfg)
+	if endpoint, unset := unsetCopierTestConfigIfEnabled(psm.config.Load()); unset {
+		logging.Infof("PauseServiceManager::unsetTestConfigIfEnabled: unsetting blob storage endpoint(%v)",
+			endpoint)
 	}
 }
 
@@ -3677,7 +3664,7 @@ func (psm *PauseServiceManager) tryTestSleepHook(stage string) {
 
 	logging.Infof("PauseServiceManager::tryTestSleepHook: sleeping for %vs", sleepInt)
 
-	sleepUntil := time.Now().Add(time.Duration(sleepInt)*time.Second)
+	sleepUntil := time.Now().Add(time.Duration(sleepInt) * time.Second)
 	psm.actionStatus.setStageAndSleepUntilLocked(stage, uint64(sleepUntil.UnixNano()))
 
 	time.Sleep(time.Second * time.Duration(sleepInt))

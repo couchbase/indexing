@@ -2361,7 +2361,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		// must have been passed via clientCh to the caller
 
 		logging.Infof("Indexer::handleRecoverIndex Sending message to indexer "+
-			"on recovery of inst: %v, shardIdMap: %verr: %v", indexInst.InstId, partnShardIdMap, err)
+			"on recovery of inst: %v, shardIdMap: %v err: %v", indexInst.InstId, partnShardIdMap, err)
 
 		if realInstRecoveryCh != nil {
 			logging.Infof("Indexer::handleRecoverIndex Waiting for real instance recovery to be done. "+
@@ -2392,14 +2392,15 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	indexInst := msg.(*MsgRecoverIndexResp).GetIndexInst()
 	partnInstMap := msg.(*MsgRecoverIndexResp).GetPartnInstMap()
 	partnShardIdMap := msg.(*MsgRecoverIndexResp).GetPartnShardIdMap()
-	err := msg.(*MsgRecoverIndexResp).GetError()
 	recoveryDoneCh := msg.(*MsgRecoverIndexResp).GetRecoveryDoneCh()
+	recoveryErr := msg.(*MsgRecoverIndexResp).GetError()
 
 	// Notify lifecycle manager that the async recovery is done.
 	// If any index were dropped while async recovery was in progress
 	// they it will be deleted after async recovery is done as simultaneous
 	// index recovery and drop can lead to unwanted race conditions in plasma
 	defer func() {
+
 		err := idx.notifyAsyncRecoveryDone(indexInst)
 		if err != nil {
 			logging.Errorf("Indexer::handleInstRecoveryResponse Error observed while notifying "+
@@ -2411,21 +2412,27 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		delete(idx.recoveryChMap, indexInst.InstId)
 	}()
 
-	if err != nil {
-		// Index recovery did not succeed. Remove index from topology
-		// Send a message to cluster manager to remove index instance from topology
-		logging.Errorf("Indexer::handleInstRecoveryResponse Error response received during recovery for instId: %v, err: %v", indexInst.InstId, err)
+	if recoveryErr != nil {
+		logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received with error for "+
+			"instId: %v, partnShardIdMap: %v, err: %v", indexInst.InstId, partnShardIdMap, recoveryErr)
 
-		// If cleanup is not successful, then crash indexer as rebalancer would be waiting for
-		// change of index state. If state has not changed, then rebalance would be stuck
-		if err := idx.cleanupIndexMetadata(indexInst); err != nil {
+		// As error is observed during recovery, update the index meta with the error
+		// Shard rebalancer would observe this error and fail rebalance. The index metadata
+		// will be cleaned up as a part of token cleanup by shard rebalancer
+		indexInst.Error = recoveryErr.Error()
+		idx.indexInstMap[indexInst.InstId] = indexInst
+		if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, true, false, false, false, false, false, nil, nil); err != nil {
+			// Crash indexer so that rebalancer will not wait for ever
 			common.CrashOnError(err)
 		}
+
+		// Cleanup the book-keeping
+		delete(idx.indexInstMap, indexInst.InstId)
 		return
 	}
 
 	logging.Infof("Indexer::handleInstRecoveryResponse Recovery response received for "+
-		"instId: %v, partnShardIdMap: %v, err: %v", indexInst.InstId, partnShardIdMap, err)
+		"instId: %v, partnShardIdMap: %v, err: %v", indexInst.InstId, partnShardIdMap, recoveryErr)
 
 	// update rollback time for the bucket
 	if _, ok := idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket]; !ok {
@@ -9868,6 +9875,11 @@ func (idx *indexer) notifyAsyncRecoveryDone(indexInst common.IndexInst) error {
 
 	temp := indexInst
 	temp.Pc = nil
+
+	temp.Defn = *indexInst.Defn.Clone()
+	temp.Defn.InstId = indexInst.InstId
+	temp.Defn.RealInstId = indexInst.RealInstId
+
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INST_ASYNC_RECOVERY_DONE, indexList: []common.IndexInst{temp}}
 	return idx.sendMsgToClustMgrAndProcessResponse(msg)
 }

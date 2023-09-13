@@ -43,7 +43,10 @@ import (
 	"github.com/couchbase/indexing/secondary/transport"
 )
 
-var ErrClientTermination = errors.New("Terminate Request due to client termination")
+var (
+	ErrClientTermination     = errors.New("Terminate Request due to client termination")
+	ErrNodesInDefnNotAllowed = errors.New("defining `nodes` in with clause is not allowed to maintain index grouping (index-shard affinity)")
+)
 
 // TODO:
 // 1) cleanup on create/build index fails for replica
@@ -63,6 +66,7 @@ type Settings interface {
 	WaitForScheduledIndex() bool
 	UseGreedyPlanner() bool
 	IsShardAffinityEnabled() bool
+	ShouldHonourNodesClause() bool
 	MemHighThreshold() int32
 	MemLowThreshold() int32
 	ServerlessIndexLimit() uint32
@@ -1355,9 +1359,15 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	//       This can be disabled with the help of AllowPartialQuorum setting.
 
 	//
-	// Validate idxDefn.Nodes before starting with the index creation
+	// `Nodes` clause is disabled since 7.6 to maintain shard-affinity
 	//
 	if len(idxDefn.Nodes) != 0 {
+
+		if o.ShouldMaintainShardAffinity() && !o.settings.ShouldHonourNodesClause() {
+			return ErrNodesInDefnNotAllowed
+		}
+
+		// Validate idxDefn.Nodes before starting with the index creation
 		// If specified, validate if all the input nodes are available.
 		valid, err := o.validateNodes(idxDefn.Nodes)
 		if !valid {

@@ -3556,16 +3556,16 @@ func restoreShardDone(shardIds []common.ShardId, supvMsgch MsgChannel) {
 }
 
 func getTLSConfigWithCeftificates(host string) (*tls.Config, error) {
-	tlsConfig, err := security.GetTLSConfig()
+	tlsConfig, err := security.GetTLSConfigForClient(host)
 	if err != nil {
 		return nil, err
 	} else if tlsConfig == nil {
-		return nil, err
-	}
+		tlsConfig = &tls.Config{}
 
-	err = security.SetupCertificate(host, tlsConfig)
-	if err != nil {
-		return nil, err
+		err = security.SetupCertificateForClient(host, tlsConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return tlsConfig, nil

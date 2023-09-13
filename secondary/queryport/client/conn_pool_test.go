@@ -256,7 +256,7 @@ func TestMaintainActiveConnections(t *testing.T) {
 	addToActiveConnections(5, cp, t)
 
 	// wait for consumer to finish
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	if len(cp.activeConnections) != 5 {
 		t.Errorf("Incorrect number of active connections. Expected %v, actual %v", 5, len(cp.activeConnections))
@@ -283,7 +283,7 @@ func TestMaintainActiveConnections(t *testing.T) {
 	}
 
 	// wait for consumer to finish
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	if len(cp.activeConnections) != 2 {
 		t.Errorf("Incorrect number of active connections. Expected %v, actual %v", 2, len(cp.activeConnections))
@@ -300,7 +300,7 @@ func TestMaintainActiveConnections(t *testing.T) {
 	addToActiveConnections(3, cp, t)
 
 	// wait for consumer to finish
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	if len(cp.activeConnections) != 5 {
 		t.Errorf("Incorrect number of active connections. Expected %v, actual %v", 5, len(cp.activeConnections))
@@ -324,7 +324,7 @@ func TestMaintainActiveConnections(t *testing.T) {
 	}
 
 	// wait for consumer to finish
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	if len(cp.activeConnections) != 2 {
 		t.Errorf("Incorrect number of active connections. Expected %v, actual %v", 2, len(cp.activeConnections))
@@ -353,7 +353,7 @@ func TestConnectionPoolRenew(t *testing.T) {
 	addToActiveConnections(5, cp, t)
 
 	// wait for consumer to finish
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	if len(cp.activeConnections) != 5 {
 		t.Errorf("Incorrect number of active connections. Expected %v, actual %v", 5, len(cp.activeConnections))
@@ -386,7 +386,7 @@ func TestConnectionPoolRenew(t *testing.T) {
 	}
 
 	// wait for consumer to finish
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	if len(cp.activeConnections) != 5 {
 		t.Errorf("Incorrect number of active connections. Expected %v, actual %v", 5, len(cp.activeConnections))
@@ -762,6 +762,7 @@ func TestTotalConns(t *testing.T) {
 	for k := range seenClients {
 		cp.Return(k, true)
 		i++
+		delete(seenClients, k)
 		if i >= 20 {
 			break
 		}

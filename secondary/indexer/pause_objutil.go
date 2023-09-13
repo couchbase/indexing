@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -93,9 +94,11 @@ type ReadAtSeeker interface {
 
 // Upload wraps the tools-common/objstore/objutil/upload.go Upload method. It writes a single file
 // to archive storage.
-//   remotePath -- path to target "directory" (with xx:// prefix; no prefix = local FS)
-//   fileName -- target file name to write in archiveDir
-//   body -- reader for the source data
+//
+//	remotePath -- path to target "directory" (with xx:// prefix; no prefix = local FS)
+//	fileName -- target file name to write in archiveDir
+//	body -- reader for the source data
+//
 // kjc Eventually this will delegate to objutil.Upload but for now it is local impl of local FS only
 func Upload(remotePath, fileName string, body ReadAtSeeker) error {
 	const _Upload = "PauseObjutil::Upload:"
@@ -167,12 +170,15 @@ func Upload(remotePath, fileName string, body ReadAtSeeker) error {
 // ArchiveInfoFromRemotePath returns the archive type and directory from the remotePath from
 // either ns_server or test code, or logs and returns an error if the type is missing or
 // unrecognized. The type is determined by the remotePath prefix:
-//   file:// - local filesystem path; used in tests
-//   s3://   - AWS S3 bucket and path; used in production
+//
+//	file:// - local filesystem path; used in tests
+//	s3://   - AWS S3 bucket and path; used in production
+//
 // In all cases this will append a trailing "/" if one is not present. For local filesystem, the
 // "file://" prefix will be removed from the returned archiveDir, so it works as a regular path:
-//   "file://foo/bar" becomes relative path "foo/bar/"
-//   "file:///foo/bar" becomes absolute path "/foo/bar/"
+//
+//	"file://foo/bar" becomes relative path "foo/bar/"
+//	"file:///foo/bar" becomes absolute path "/foo/bar/"
 func ArchiveInfoFromRemotePath(remotePath string) (
 	archiveType ArchiveEnum, archiveDir string, err error) {
 	const _ArchiveInfoFromRemotePath = "PauseServiceManager::ArchiveInfoFromRemotePath:"
@@ -223,4 +229,31 @@ func ArchiveInfoFromRemotePath(remotePath string) (
 	}
 
 	return archiveType, archiveDir, nil
+}
+
+// ********* CLONE of COPIER obj in Plasma***************
+type Copier interface {
+	// upload
+	GetCopyRoot() string // destination directory or plasma prefix for s3
+	CopyFile(ctx context.Context, src, dst string, off, sz int64) (int64, error)
+	CopyBytes(ctx context.Context, bs []byte, src, dst string) (int64, error)
+	UploadBytes(ctx context.Context, bs []byte, dst string) (int64, error)
+
+	// download
+	GetRestoreRoot() string // staging
+	InitRestore(src string) error
+	RestoreFile(ctx context.Context, dst, src string) (int64, error)
+	RestoreFiles(ctx context.Context, dst, src string) (int64, error)
+	DownloadBytes(ctx context.Context, src string) ([]byte, error)
+
+	// delete
+	CleanupFiles(string) error
+
+	// encoding
+	GetPathEncoding(string) (string, error)
+
+	// control
+	CancelCopy()
+	IsCancelled() bool
+	Debug() bool
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
-	"github.com/couchbase/plasma"
 )
 
 func newResumeDownloadToken(masterUuid, followerUuid, resumeId, bucketName, uploaderId string) (
@@ -602,9 +601,8 @@ func (r *Resumer) masterGenerateResumePlan() (map[string]*c.ResumeDownloadToken,
 	ctx := r.task.ctx
 
 	cfg := r.pauseMgr.config.Load()
-	plasmaCfg := generatePlasmaCopierConfig(r.task, cfg)
 
-	copier, cerr := plasma.MakeFileCopier(r.task.archivePath, "", plasmaCfg.Environment, nil, plasmaCfg.CopyConfig)
+	copier, cerr := MakeFileCopierForPauseResume(r.task, cfg)
 	if cerr != nil {
 		err := fmt.Errorf("object store not supported (err=%v)", cerr)
 		logging.Errorf("Resumer::masterGenerateResumePlan: %v", err)
@@ -770,9 +768,8 @@ func (r *Resumer) downloadNodeMetadataAndStats(nodeDir string) (metadata *planne
 	ctx := r.task.ctx
 
 	cfg := r.pauseMgr.config.Load()
-	plasmaCfg := generatePlasmaCopierConfig(r.task, cfg)
 
-	copier, cerr := plasma.MakeFileCopier(nodeDir, "", plasmaCfg.Environment, nil, plasmaCfg.CopyConfig)
+	copier, cerr := MakeFileCopierForPauseResume(r.task, cfg)
 	if cerr != nil {
 		err = fmt.Errorf("object store not supported (err=%v)", cerr)
 		logging.Errorf("Resumer::downloadNodeMetadataAndStats: %v", err)
