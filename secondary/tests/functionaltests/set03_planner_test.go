@@ -2848,6 +2848,14 @@ var shardAssignmentTestCases = []shardAssignmentTestCase{
 			"\t\t\t the planned nodes",
 		"../testdata/planner/shard_assignment/5_nodes_1_new_index_more_shard_replicas.json",
 	},
+	{"5_nodes_1_new_partn_index_slot_grouping",
+		"\t A slot (1234) exists on nodes n1, n2, n3, n4 with replica Ids: 0, 1, 2, 3 respectively. \n" +
+			"\t\t\t A new partitioned index with 2 replicas and 3 partitions is being placed on these nodes\n" +
+			"\t\t\t The partn distribution is: partnId: 1 -> n2, n3. partnId 2 -> n3, n4. partnId 3 -> n1, n4 \n" +
+			"\t\t\t During slot assignment, the 1234 slot should not be used for the new partitioned index \n" +
+			"\t\t\t as there is no placement on nodes n1, n2 for any partition",
+		"../testdata/planner/shard_assignment/5_nodes_1_new_partn_index_slot_grouping.json",
+	},
 }
 
 func validateShardIds(solution *planner.Solution, expectedShards int, t *testing.T) {
@@ -3024,6 +3032,31 @@ func TestShardAssignmentFuncTestCases(t *testing.T) {
 				}
 			}
 
+			break
+
+		case "5_nodes_1_new_partn_index_slot_grouping":
+			for _, indexer := range solution.Placement {
+				for _, indexUsage := range indexer.Indexes {
+					if indexUsage.Name == "index2" {
+
+						msAltId, err := common.ParseAlternateId(indexUsage.AlternateShardIds[0])
+						FailTestIfError(err, "Error observed when parsing mainstore alternate shardId", t)
+
+						if msAltId.SlotId == 1234 {
+							t.Fatalf("Mismatch in mainstore alternateID assignment for node: %v. Actual: %v can not have 1234 slot",
+								indexer.NodeId, indexUsage.AlternateShardIds)
+						}
+
+						bsAltId, err := common.ParseAlternateId(indexUsage.AlternateShardIds[0])
+						FailTestIfError(err, "Error observed when parsing backstore alternate shardId", t)
+
+						if bsAltId.SlotId == 1234 {
+							t.Fatalf("Mismatch in backstore alternateID assignment for node: %v. Actual: %v can not have 1234 slot",
+								indexer.NodeId, indexUsage.AlternateShardIds)
+						}
+					}
+				}
+			}
 			break
 		}
 	}
