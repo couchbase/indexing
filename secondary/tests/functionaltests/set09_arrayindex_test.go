@@ -229,15 +229,16 @@ func TestArrayIndexCornerCases(t *testing.T) {
 
 	log.Printf("\n\n--------ScanAll for SCALARVALUE array--------")
 	createSpecialArrayDoc(SCALARVALUE, key, field_name, field_tags, bucketName)
-	scanAllAndValidate(indexName1, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_tags]}, t)
-	scanAllAndValidate(indexName2, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_tags], docs[key].(map[string]interface{})[field_name]}, t)
-	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], docs[key].(map[string]interface{})[field_tags]}, t)
+	scanAllAndValidate(indexName1, bucketName, key, []interface{}{nil}, t)
+	scanAllAndValidate(indexName2, bucketName, key, []interface{}{nil, docs[key].(map[string]interface{})[field_name]}, t)
+	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], nil}, t)
 
 	log.Printf("\n\n--------ScanAll for SCALAROBJECT array--------\n")
 	createSpecialArrayDoc(SCALAROBJECT, key, field_name, field_tags, bucketName)
-	scanAllAndValidate(indexName1, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_tags]}, t)
-	scanAllAndValidate(indexName2, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_tags], docs[key].(map[string]interface{})[field_name]}, t)
-	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], docs[key].(map[string]interface{})[field_tags]}, t)
+	scanAllAndValidate(indexName1, bucketName, key, []interface{}{nil}, t)
+	scanAllAndValidate(indexName2, bucketName, key, []interface{}{nil, docs[key].(map[string]interface{})[field_name]}, t)
+	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], nil}, t)
+
 	secondaryindex.UseClient = tmp
 }
 
@@ -321,10 +322,10 @@ func TestArraySizeIncreaseDecrease1(t *testing.T) {
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults2 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
-	scanResults2, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	docScanResults2 := datautility.ExpectedArrayScanResponse_string(kvdocs, "name", "a", "g", 1, false)
+	scanResults, err = secondaryindex.ArrayIndex_Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults2, scanResults2)
+	err = tv.ValidateArrayResult(docScanResults2, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults3 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
@@ -419,10 +420,10 @@ func TestArraySizeIncreaseDecrease2(t *testing.T) {
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults2 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
-	scanResults2, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	docScanResults2 := datautility.ExpectedArrayScanResponse_string(kvdocs, "name", "a", "g", 1, false)
+	scanResults2, err := secondaryindex.ArrayIndex_Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults2, scanResults2)
+	err = tv.ValidateArrayResult(docScanResults2, scanResults2)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults3 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
@@ -442,10 +443,10 @@ func TestArraySizeIncreaseDecrease2(t *testing.T) {
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults2 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
-	scanResults2, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	docScanResults2 = datautility.ExpectedArrayScanResponse_string(kvdocs, "name", "a", "g", 1, false)
+	scanResults2, err = secondaryindex.ArrayIndex_Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults2, scanResults2)
+	err = tv.ValidateArrayResult(docScanResults2, scanResults2)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults3 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
@@ -466,10 +467,10 @@ func TestArraySizeIncreaseDecrease2(t *testing.T) {
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults2 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
-	scanResults2, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	docScanResults2 = datautility.ExpectedArrayScanResponse_string(kvdocs, "name", "a", "g", 1, false)
+	scanResults2, err = secondaryindex.ArrayIndex_Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults2, scanResults2)
+	err = tv.ValidateArrayResult(docScanResults2, scanResults2)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults3 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
@@ -490,7 +491,7 @@ func updateDocsArrayField(kvdocs tc.KeyValues, bucketName string) tc.KeyValues {
 		arr := json["friends"].([]string)
 		arr[0] = fmt.Sprintf("%s_%v", arr[0], randomNum(0, 10000))
 		json["friends"] = arr
-		json["name"] = fmt.Sprintf("%s_%v", json["name"].(string), randomNum(0, 10000))
+		json["name"] = []string{fmt.Sprintf("%v_%v", json["name"].([]string)[0], randomNum(0, 10000))}
 		keysToBeUpdated[k] = json
 	}
 	kvdocs = keysToBeUpdated
@@ -513,7 +514,7 @@ func createArrayDocs(numDocs, numArrayItems, indvKeySize int) tc.KeyValues {
 			arr = append(arr, randString(randomNum(5, 7)))
 		}
 		value["friends"] = arr
-		value["name"] = randString(randomNum(float64(indvKeySize*5), float64(indvKeySize*6)))
+		value["name"] = []string{randString(randomNum(float64(indvKeySize*5), float64(indvKeySize*6)))}
 		arrDocs[key] = value
 	}
 	log.Printf("End of createArrayDocs()")
@@ -561,8 +562,10 @@ func createSpecialArrayDoc(at ArrayType, key, nonArrayFieldName, arrayFieldName,
 	case NULL:
 		value[arrayFieldName] = nil //JSON null
 	case SCALARVALUE:
+		// Scalar values are no longer supported. these will not be indexed and scan results will be nil
 		value[arrayFieldName] = "IamScalar" //Scalar value
 	case SCALAROBJECT:
+		// Scalar objects are no longer supported. these will not be indexed and scan results will be nil
 		tags := make(map[string]interface{})
 		tags["1"] = "abc"
 		tags["2"] = "def"
