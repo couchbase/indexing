@@ -399,3 +399,107 @@ func GetIndexerSetting(indexerAddr, setting, username, password string) (interfa
 
 	return val, nil
 }
+
+type InvalidClusterState uint64
+
+const (
+	DEFAULT_INVALID_CLUSTER_STATE InvalidClusterState = iota
+	MISSING_PARTITION_INVALID_CLUSTER_STATE
+	MISSING_REPLICA_INVALID_CLUSTER_STATE
+	REPLICA_GROUP_VIOLATIONS_INVALID_CLUSTER_STATE
+	ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE
+)
+
+func (ics InvalidClusterState) String() string {
+	switch ics {
+	case DEFAULT_INVALID_CLUSTER_STATE:
+		return "default"
+	case MISSING_PARTITION_INVALID_CLUSTER_STATE:
+		return "Missing-Partition"
+	case MISSING_REPLICA_INVALID_CLUSTER_STATE:
+		return "Missing-Replica"
+	case REPLICA_GROUP_VIOLATIONS_INVALID_CLUSTER_STATE:
+		return "Replica-Violation"
+	case ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE:
+		return "Alternate-shard-affinity-violations"
+	default:
+		return "invalid"
+	}
+}
+
+type AlternateShardMap map[c.IndexDefnId]*struct {
+	Name         string
+	NumReplica   int
+	NumPartition int
+	IsPrimary    bool
+	ReplicaMap   map[int]map[c.PartitionId][]string
+}
+
+func (asm AlternateShardMap) String() string {
+	out := strings.Builder{}
+	for defnId, defnStruct := range asm {
+		out.WriteString(fmt.Sprintf("Defn - id %v, name %v, numReplica %v, numPartition %v, isPrimary %v | Replicas - \n", defnId, defnStruct.Name, defnStruct.NumReplica, defnStruct.NumPartition, defnStruct.IsPrimary))
+		for replicaId, partnMap := range defnStruct.ReplicaMap {
+			out.WriteString(fmt.Sprintf("\treplica id %v | Partitions - \n", replicaId))
+			for partnId, asis := range partnMap {
+				out.WriteString(fmt.Sprintf("\t\tpartnId %v, alternate shards %v\n", partnId, asis))
+			}
+		}
+	}
+	return out.String()
+}
+
+func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClusterState][]string {
+	logger := func(format string, args ...interface{}) {
+		if logFails {
+			log.Printf(format, args...)
+		}
+	}
+
+	res := make(map[InvalidClusterState][]string)
+	for defnId, defnStruct := range asm {
+		idx := fmt.Sprintf("(defnId %v - name %v)", defnId, defnStruct.Name)
+		if len(defnStruct.ReplicaMap) != defnStruct.NumReplica+1 {
+			err := fmt.Errorf("'less replicas %v than definition %v for index: %v'", len(defnStruct.ReplicaMap), defnStruct.NumReplica+1, idx)
+			logger("ValidateClusterState: %v", err)
+			res[MISSING_REPLICA_INVALID_CLUSTER_STATE] = append(res[MISSING_REPLICA_INVALID_CLUSTER_STATE], err.Error())
+		}
+
+		for replicaId, partnMap := range defnStruct.ReplicaMap {
+			// could be a case of lost parititions
+			if len(partnMap) != defnStruct.NumPartition {
+				err := fmt.Errorf("'less partitions %v than definition %v for index: %v'", len(partnMap), defnStruct.NumPartition, idx)
+				logger("ValidateClusterState: %v", err)
+				res[MISSING_PARTITION_INVALID_CLUSTER_STATE] = append(res[MISSING_PARTITION_INVALID_CLUSTER_STATE], err.Error())
+			}
+
+			for _, asis := range partnMap {
+				if defnStruct.IsPrimary && len(asis) != 1 {
+					err := fmt.Errorf("'alternate shard id count mismatch for primary index. Expected 1 actual %v for index: %v'", asis, idx)
+					logger("ValidateClusterState: %v", err)
+					res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE] = append(res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE], err.Error())
+				} else if !defnStruct.IsPrimary && len(asis) != 2 {
+					err := fmt.Errorf("'alternate shard id count mismatch for index. Expected 2 actual %v for index: %v'", asis, idx)
+					logger("ValidateClusterState: %v", err)
+					res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE] = append(res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE], err.Error())
+				}
+
+				for _, asiStr := range asis {
+					asi, err := c.ParseAlternateId(asiStr)
+					if err != nil || asi == nil {
+						err = fmt.Errorf("'parse error for asi %v: %v for index: %v'", asiStr, err, idx)
+						logger("ValidateClusterState: %v", err)
+						res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE] = append(res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE], err.Error())
+					}
+
+					if asi.ReplicaId != uint8(replicaId) {
+						err := fmt.Errorf("'replica ID mismatch for alternate shard id. Expected %v Actual %v for index: %v'", replicaId, asi.ReplicaId, idx)
+						logger("ValidateClusterState: %v", err)
+						res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE] = append(res[ALTERNATE_SHARD_AFFINITY_INVALID_CLUSTER_STATE], err.Error())
+					}
+				}
+			}
+		}
+	}
+	return res
+}

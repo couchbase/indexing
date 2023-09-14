@@ -41,32 +41,33 @@ type ClusterConfiguration struct {
 
 // IndexStatus type is same type returned by /getIndexStatus REST call.
 type IndexStatus struct {
-	DefnId       common.IndexDefnId `json:"defnId,omitempty"`
-	InstId       common.IndexInstId `json:"instId,omitempty"`
-	Name         string             `json:"name,omitempty"`
-	Bucket       string             `json:"bucket,omitempty"`
-	Scope        string             `json:"scope,omitempty"`
-	Collection   string             `json:"collection,omitempty"`
-	IsPrimary    bool               `json:"isPrimary,omitempty"`
-	SecExprs     []string           `json:"secExprs,omitempty"`
-	WhereExpr    string             `json:"where,omitempty"`
-	IndexType    string             `json:"indexType,omitempty"`
-	Status       string             `json:"status,omitempty"`
-	Definition   string             `json:"definition"`
-	Hosts        []string           `json:"hosts,omitempty"`
-	Error        string             `json:"error,omitempty"`
-	Completion   int                `json:"completion"`
-	Progress     float64            `json:"progress"`
-	Scheduled    bool               `json:"scheduled"`
-	Partitioned  bool               `json:"partitioned"`
-	NumPartition int                `json:"numPartition"`
-	PartitionMap map[string][]int   `json:"partitionMap"`
-	NodeUUID     string             `json:"nodeUUID,omitempty"`
-	NumReplica   int                `json:"numReplica"`
-	IndexName    string             `json:"indexName"`
-	ReplicaId    int                `json:"replicaId"`
-	Stale        bool               `json:"stale"`
-	LastScanTime string             `json:"lastScanTime,omitempty"`
+	DefnId            common.IndexDefnId          `json:"defnId,omitempty"`
+	InstId            common.IndexInstId          `json:"instId,omitempty"`
+	Name              string                      `json:"name,omitempty"`
+	Bucket            string                      `json:"bucket,omitempty"`
+	Scope             string                      `json:"scope,omitempty"`
+	Collection        string                      `json:"collection,omitempty"`
+	IsPrimary         bool                        `json:"isPrimary,omitempty"`
+	SecExprs          []string                    `json:"secExprs,omitempty"`
+	WhereExpr         string                      `json:"where,omitempty"`
+	IndexType         string                      `json:"indexType,omitempty"`
+	Status            string                      `json:"status,omitempty"`
+	Definition        string                      `json:"definition"`
+	Hosts             []string                    `json:"hosts,omitempty"`
+	Error             string                      `json:"error,omitempty"`
+	Completion        int                         `json:"completion"`
+	Progress          float64                     `json:"progress"`
+	Scheduled         bool                        `json:"scheduled"`
+	Partitioned       bool                        `json:"partitioned"`
+	NumPartition      int                         `json:"numPartition"`
+	PartitionMap      map[string][]int            `json:"partitionMap"`
+	NodeUUID          string                      `json:"nodeUUID,omitempty"`
+	NumReplica        int                         `json:"numReplica"`
+	IndexName         string                      `json:"indexName"`
+	ReplicaId         int                         `json:"replicaId"`
+	Stale             bool                        `json:"stale"`
+	LastScanTime      string                      `json:"lastScanTime,omitempty"`
+	AlternateShardIds map[string]map[int][]string `json:"alternateShardIds"`
 }
 
 // IndexStatusResponse is a copy of the same type from generic_service_manager.go, as the tests
