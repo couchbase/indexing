@@ -129,7 +129,7 @@ type PlacementMethod interface {
 	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
 	RemoveEligibleIndex([]*IndexUsage)
-	RegroupIndexes()
+	RegroupIndexes(bool)
 	Print()
 }
 
@@ -365,9 +365,9 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	if p.shardAffinity {
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
 		}
-		solution.place.RegroupIndexes()
+		solution.place.RegroupIndexes(command == CommandPlan)
 
 		// Re-generate replica map based on the index grouping
 		solution.resetReplicaMap()
@@ -1975,10 +1975,10 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 
 	if p.shardAffinity {
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
 		}
 
-		solution.place.RegroupIndexes()
+		solution.place.RegroupIndexes(command == CommandPlan)
 
 		// Re-generate replica map based on the index grouping
 		solution.resetReplicaMap()

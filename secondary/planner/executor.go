@@ -2607,7 +2607,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		// Re-group indexes
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
 		}
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
@@ -5933,7 +5933,9 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
 			for indexer := range targetNodes {
-				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer)
+				// Always group deferred indexes as this is only for populating alternate shardIds
+				// and no size estimations will be run
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
 			}
 
 			// If a new shard can be created for this partition across all indexer nodes,

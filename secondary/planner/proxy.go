@@ -2038,7 +2038,7 @@ func validateShardIds(index *IndexUsage) bool {
 	return true
 }
 
-func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode) ([]*IndexUsage, int, error) {
+func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndexGrouping bool) ([]*IndexUsage, int, error) {
 
 	result := []*IndexUsage{}
 	numShards := 0
@@ -2056,15 +2056,30 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode) ([]*IndexUsage, i
 			continue
 		}
 
-		// Group indexes based on main-store alternate shardId
-		// as primary index exists only on main-store
 		msAltId := index.AlternateShardIds[0]
-		groupedIndexes[msAltId] = append(groupedIndexes[msAltId], index)
 		allShards[msAltId] = true
 		if index.IsPrimary == false {
 			bsAltId := index.AlternateShardIds[1]
 			allShards[bsAltId] = true
 		}
+
+		// Group indexes based on main-store alternate shardId
+		// as primary index exists only on main-store. For deferred
+		// indexes, if 'skipDeferredIndexGrouping' is set to true,
+		// then skip grouping the deferred indexes.
+		//
+		// For create index flow, planner runs some size estimation for
+		// deferred indexes. The size estimation is skipped for other flows
+		// like rebalance or repair. If a deferred index is grouped with a
+		// proxy, then the size estimation will be incorrect and planner may
+		// not generate an optimal placement. Hence, skip grouping of deferred
+		// indexes for create index workflow.
+		if index.NeedsEstimation() && skipDeferredIndexGrouping {
+			result = append(result, index)
+		} else {
+			groupedIndexes[msAltId] = append(groupedIndexes[msAltId], index)
+		}
+
 	}
 
 	numShards = len(allShards)
