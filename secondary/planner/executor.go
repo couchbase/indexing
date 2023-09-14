@@ -5891,7 +5891,8 @@ func getLoadDist(nodes map[*IndexerNode]bool) string {
 
 func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64) {
 
-	targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
+	// partnId -> indexerNode -> indexUsage
+	allTargets := make(map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool)
 
 	// Get the list of indexer nodes on to which the "indexes" are going to
 	// be placed on
@@ -5900,27 +5901,34 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			for _, index := range indexer.Indexes {
 
 				if index.IsShardProxy == false && index.DefnId == newIndex.DefnId &&
-					index.Instance.ReplicaId == newIndex.Instance.ReplicaId {
-					if _, ok := targetNodes[indexer]; !ok {
-						targetNodes[indexer] = make(map[*IndexUsage]bool)
+					index.Instance.ReplicaId == newIndex.Instance.ReplicaId &&
+					index.PartnId == newIndex.PartnId {
+
+					if _, ok := allTargets[index.PartnId]; !ok {
+						allTargets[index.PartnId] = make(map[*IndexerNode]map[*IndexUsage]bool)
 					}
-					targetNodes[indexer][index] = true
+					if _, ok := allTargets[index.PartnId][indexer]; !ok {
+						allTargets[index.PartnId][indexer] = make(map[*IndexUsage]bool)
+					}
+					allTargets[index.PartnId][indexer][index] = true
 				}
 
 			}
 		}
 	}
 
-	targetNodes = pruneIndexers(targetNodes) // Prune indexers that are <7.6 version
+	allTargets = pruneIndexers(allTargets) // Prune indexers that are <7.6 version
 
 	// Group indexes for each partition
 	// partnId -> replicaId -> indexerNode to corresponding index usage
-	allPartnDist := getPartnDistribution(targetNodes)
+	allPartnDist := getPartnDistribution(allTargets)
 
 	for _, partnDist := range allPartnDist {
-		for _, replicaMap := range partnDist {
+		for partnId, replicaMap := range partnDist {
 
 			shardLimitPerTenant, currShardCount := solution.getShardLimits()
+			// TODO: Add a fatal error if partnId is not a part of target
+			targetNodes := allTargets[partnId]
 
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
@@ -6203,46 +6211,51 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 	return needsReplan, needsAlternateShardIds
 }
 
-func pruneIndexers(nodes map[*IndexerNode]map[*IndexUsage]bool) map[*IndexerNode]map[*IndexUsage]bool {
-	resp := make(map[*IndexerNode]map[*IndexUsage]bool)
-	for indexer, indexUsageMap := range nodes {
-		if indexer.NodeVersion < common.INDEXER_76_VERSION {
-			continue
+func pruneIndexers(nodes map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool) map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool {
+	resp := make(map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool)
+
+	for partnId, indexDistMap := range nodes {
+		for indexer, indexUsageMap := range indexDistMap {
+			if indexer.NodeVersion < common.INDEXER_76_VERSION {
+				continue
+			}
+			if _, ok := resp[partnId]; !ok {
+				resp[partnId] = make(map[*IndexerNode]map[*IndexUsage]bool)
+			}
+			resp[partnId][indexer] = indexUsageMap
 		}
-
-		resp[indexer] = indexUsageMap
 	}
-
 	return resp
 }
 
 // Generates a distribution map for each partition across all definitions
 // Mapping contains defnId -> partnId -> replicaId -> indexerNode to corresponding index usage
-func getPartnDistribution(nodes map[*IndexerNode]map[*IndexUsage]bool) map[common.IndexDefnId]PartnDistMap {
+func getPartnDistribution(nodes map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool) map[common.IndexDefnId]PartnDistMap {
 	allPartnDist := make(map[common.IndexDefnId]PartnDistMap)
 
-	for indexer, indexUsageMap := range nodes {
-		for indexUsage, _ := range indexUsageMap {
-			defnId := indexUsage.DefnId
-			partnId := indexUsage.PartnId
-			replicaId := indexUsage.Instance.ReplicaId
+	for _, indexDistMap := range nodes {
+		for indexer, indexUsageMap := range indexDistMap {
+			for indexUsage, _ := range indexUsageMap {
+				defnId := indexUsage.DefnId
+				partnId := indexUsage.PartnId
+				replicaId := indexUsage.Instance.ReplicaId
 
-			if _, ok := allPartnDist[defnId]; !ok {
-				allPartnDist[defnId] = make(PartnDistMap)
+				if _, ok := allPartnDist[defnId]; !ok {
+					allPartnDist[defnId] = make(PartnDistMap)
+				}
+
+				if _, ok := allPartnDist[defnId][partnId]; !ok {
+					allPartnDist[defnId][partnId] = make(ReplicaDistMap)
+				}
+
+				if _, ok := allPartnDist[defnId][partnId][replicaId]; !ok {
+					allPartnDist[defnId][partnId][replicaId] = make(map[*IndexerNode]*IndexUsage)
+				}
+
+				allPartnDist[defnId][partnId][replicaId][indexer] = indexUsage
 			}
-
-			if _, ok := allPartnDist[defnId][partnId]; !ok {
-				allPartnDist[defnId][partnId] = make(ReplicaDistMap)
-			}
-
-			if _, ok := allPartnDist[defnId][partnId][replicaId]; !ok {
-				allPartnDist[defnId][partnId][replicaId] = make(map[*IndexerNode]*IndexUsage)
-			}
-
-			allPartnDist[defnId][partnId][replicaId][indexer] = indexUsage
 		}
 	}
-
 	return allPartnDist
 }
 
