@@ -1386,6 +1386,12 @@ func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 	for _, n := range c.nodes {
 		hostList1 = append(hostList1, n.Hostname)
 		addressFamily = append(addressFamily, n.AddressFamily)
+
+		_, err := getServerVersionFromVersionString(n.Version)
+		if err != nil {
+			logging.Warnf("ClusterInfoCache:validateCache - Failed as node version is not parsable err: %v node: %v", err, n)
+			return false
+		}
 	}
 
 	for i, svc := range c.nodesvs {
