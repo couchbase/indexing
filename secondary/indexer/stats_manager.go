@@ -846,6 +846,9 @@ type IndexerStats struct {
 	totalRawDataSize       stats.Int64Val
 	totalMutationQueueSize stats.Int64Val
 
+	// Plasma shard version
+	ShardCompatVersion stats.Int64Val
+
 	RebalanceTransferProgress *MapHolder
 }
 
@@ -897,6 +900,7 @@ func (s *IndexerStats) Init() {
 
 	s.numGoroutine.Init()
 	s.numCgoCall.Init()
+	s.ShardCompatVersion.Init()
 
 	s.lastScanGatherTime.Init()
 	s.netAvgScanRate.Init()
@@ -920,6 +924,7 @@ func (s *IndexerStats) Init() {
 	s.RebalanceTransferProgress = &MapHolder{}
 	s.RebalanceTransferProgress.Init()
 	s.RebalanceTransferProgress.AddFilter(stats.IndexStatusFilter) // Retrieved via getIndexStatus using rebalance
+
 }
 
 // SetSmartBatchingFilters marks the IndexerStats needed by Smart Batching for Rebalance.
@@ -946,6 +951,7 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.unitsQuota.AddFilter(stats.PlannerFilter)
 	s.unitsUsedActual.AddFilter(stats.PlannerFilter)
 	s.numTenants.AddFilter(stats.PlannerFilter)
+	s.ShardCompatVersion.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexerStats) SetSummaryFilters() {
@@ -1297,6 +1303,9 @@ func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	if statMap.spec.consumerFilter == stats.IndexStatusFilter {
 		statMap.AddStat("rebalance_transfer_progress", is.RebalanceTransferProgress.Get())
 	}
+
+	is.ShardCompatVersion.Set(int64(GetShardCompactVersion()))
+	statMap.AddStatValueFiltered("shard_compat_version", &is.ShardCompatVersion)
 }
 
 func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {

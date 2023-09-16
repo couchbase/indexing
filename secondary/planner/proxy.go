@@ -610,6 +610,10 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		indexer.memQuota = 256 * 1024 * 1024
 	}
 
+	if shardCompatVersion, ok := statsMap["shard_compat_version"]; ok {
+		indexer.ShardCompatVersion = int(shardCompatVersion.(float64))
+	}
+
 	indexer.ComputeMinShardCapacity(config)
 
 	var totalIndexMemUsed uint64

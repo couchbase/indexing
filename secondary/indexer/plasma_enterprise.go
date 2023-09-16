@@ -48,3 +48,10 @@ func BackupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(st
 func RecoveryDone() {
 	plasma.RecoveryDone()
 }
+
+func GetShardCompactVersion() int {
+	if common.IsServerlessDeployment() {
+		return plasma.ShardCompatVersionServerless
+	}
+	return plasma.ShardCompatVersion
+}

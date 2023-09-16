@@ -2889,7 +2889,7 @@ func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.Shar
 
 	val, err := plasma.GetShardInfo(msAlternateShardId)
 	if err != nil {
-		logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v", msAlternateShardId)
+		logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v, err: %v", msAlternateShardId, err)
 		return nil
 	}
 	ss.MemSz = val.Stats.MemSz

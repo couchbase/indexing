@@ -1208,14 +1208,33 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					continue
 				}
 
+				// Shard rebalance is only possible if both source and destination are >= 7.6 version
+				canDestDoShardRebalance := realIndex.destNode.NodeVersion >= common.INDEXER_76_VERSION
+				canSrcDoShardRebalance := (index.initialNode != nil && index.initialNode.NodeVersion >= common.INDEXER_76_VERSION)
+
+				// Incase of replica repair, source node is derived from sibling index
+				canSrcDoShardRebalance = canSrcDoShardRebalance || (index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
+					index.siblingIndex.initialNode.NodeVersion >= common.INDEXER_76_VERSION)
+
+				// Check if destination can support the shard version of the source. If it can, then
+				// shard rebalance is possible. Otherwise, shard rebalance is not possible and DCP
+				// rebalance is used instead
+				isShardTransferCompatible := false
+				if index.initialNode != nil &&
+					realIndex.destNode.ShardCompatVersion >= index.initialNode.ShardCompatVersion &&
+					index.initialNode.ShardCompatVersion > 0 {
+					isShardTransferCompatible = true
+				} else if index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
+					realIndex.destNode.ShardCompatVersion >= index.siblingIndex.initialNode.ShardCompatVersion &&
+					index.siblingIndex.initialNode.ShardCompatVersion > 0 {
+					isShardTransferCompatible = true
+				}
+
 				// only if we have both source and dest on or above 7.6 and all partn exists in
 				// original shards then can we use Shard based movements; this ensures that
 				// shard movement only happens on 7.6 or above nodes which are part of shard
-				if realIndex.destNode.NodeVersion >= common.INDEXER_76_VERSION &&
-					((index.initialNode != nil && index.initialNode.NodeVersion >= common.INDEXER_76_VERSION) ||
-						(index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
-							index.siblingIndex.initialNode.NodeVersion >= common.INDEXER_76_VERSION)) &&
-					alternateShardExistsInCluster(realIndex) {
+				if canSrcDoShardRebalance && canDestDoShardRebalance &&
+					isShardTransferCompatible && alternateShardExistsInCluster(realIndex) {
 
 					if realIndex.siblingIndex != nil &&
 						token.TransferMode == common.TokenTransferModeCopy {

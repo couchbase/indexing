@@ -48,3 +48,7 @@ func BackupCorruptedPlasmaSlice(string, string, func(string) (string, error), fu
 
 func RecoveryDone() {
 }
+
+func GetShardCompactVersion() int {
+	return 0
+}

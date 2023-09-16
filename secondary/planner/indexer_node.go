@@ -104,6 +104,11 @@ type IndexerNode struct {
 	// Set to true so that planner will use the shard stats for planning
 	// (instead of accummulating per index stats)
 	UseShardStats bool
+
+	// Shard compatibility versions as decided by plasma. If destination node
+	// is at a lower version than source, then indexer is expected to do a DCP
+	// based rebalance instead of a shard transfer
+	ShardCompatVersion int
 }
 
 // This function creates a new indexer node
@@ -215,6 +220,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.UseShardStats = o.UseShardStats
 
 	r.ShardStats = o.ShardStats
+	r.ShardCompatVersion = o.ShardCompatVersion
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
