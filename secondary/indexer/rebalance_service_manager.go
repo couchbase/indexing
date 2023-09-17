@@ -1449,17 +1449,43 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 
 	case c.ShardTokenReady:
 
+		// Replica repair
+		if tt.TransferMode == c.TokenTransferModeCopy {
+			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
+				"as token is for replica repair", ttid)
+
+			// Delete the token from metaKV
+			err := c.MetakvDel(RebalanceMetakvDir + ttid)
+			if err != nil {
+				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+					"Meta Storage. %v. Err %v", tt, err)
+				return err
+			}
+			return nil
+		}
+
 	retryCleanupAtReady:
-		// If this token is in Ready state, check for the presence of
-		// a tranfser token with ShardTokenDropOnSource state. If it
-		// exists then the index instances on source node can be dropped.
-		// Otherwise index instances on destination node will be dropped
+
 		dropOnSource := false
-		for _, tt := range tokenMap {
-			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
-				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
-					dropOnSource = true
-					break
+
+		// If there is no sibling token for this token, then this rebalance
+		// does not have to maintain sub-cluster affinity. As token moved to
+		// ShardTokenReady state means that destination caught up with all
+		// indexes. Hence, drop the indexes on source.
+		if len(tt.SiblingTokenId) == 0 {
+			dropOnSource = true
+		} else {
+			// Sibling token exists. So, indexer should honour sub-cluter affinity
+			// If this token is in Ready state, check for the presence of
+			// a tranfser token with ShardTokenDropOnSource state. If it
+			// exists then the index instances on source node can be dropped.
+			// Otherwise index instances on destination node will be dropped
+			for _, tt := range tokenMap {
+				if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
+					if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
+						dropOnSource = true
+						break
+					}
 				}
 			}
 		}
@@ -1539,14 +1565,22 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		// In such a case, skip dropping the token on destination
 		_, dropOnDest := tokenMap[ttid]
 
-		for _, tt := range tokenMap {
-			if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
-				if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
-					// There exists a dropOnSource token implies that destination
-					// nodes have reached the Ready state. So, the instances will be
-					// dropped on source.
-					dropOnDest = false
-					break
+		// If transferMode is copy (replica repair case) or there is no sibling token ID,
+		// then indexer need not honour sub-cluster affinity. Therefore, skip dropping
+		// indexes on destination as reaching to Ready state means all indexes have
+		// successfully moved to desitnation node
+		if tt.TransferMode == c.TokenTransferModeCopy || len(tt.SiblingTokenId) == 0 {
+			dropOnDest = false
+		} else {
+			for _, tt := range tokenMap {
+				if tt.ShardTransferTokenState == c.ShardTokenDropOnSource {
+					if tt.SourceTokenId == ttid || tt.SiblingTokenId == ttid {
+						// There exists a dropOnSource token implies that destination
+						// nodes have reached the Ready state. So, the instances will be
+						// dropped on source.
+						dropOnDest = false
+						break
+					}
 				}
 			}
 		}
@@ -2738,7 +2772,9 @@ func (m *RebalanceServiceManager) getTransferTokenOwner(ttid string, tt *c.Trans
 			c.ShardTokenRecoverShard, c.ShardTokenCommit:
 			return tt.DestId
 		case c.ShardTokenReady:
-			if m.doesDropOnSourceExist(ttid) {
+			if m.doesDropOnSourceExist(ttid) ||
+				tt.TransferMode == c.TokenTransferModeCopy || // replica-repair case
+				len(tt.SiblingTokenId) == 0 { // Single node swap rebalance
 				return tt.SourceId
 			} else {
 				return tt.DestId
