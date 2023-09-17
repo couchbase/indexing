@@ -2877,6 +2877,66 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	return sts, nil
 }
 
+func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.ShardStats {
+	var ss *common.ShardStats
+
+	if len(mdb.idxDefn.AlternateShardIds) == 0 || len(mdb.idxDefn.AlternateShardIds[partnId]) == 0 {
+		return nil
+	}
+	msAlternateShardId := mdb.idxDefn.AlternateShardIds[partnId][0]
+
+	ss = common.NewShardStats(msAlternateShardId)
+
+	val, err := plasma.GetShardInfo(msAlternateShardId)
+	if err != nil {
+		logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v", msAlternateShardId)
+		return nil
+	}
+	ss.MemSz = val.Stats.MemSz
+	ss.MemSzIndex = val.Stats.MemSzIndex
+	ss.BufMemUsed = val.Stats.BufMemUsed
+	ss.LSSBufMemUsed = val.Stats.LSSFlushBufferUsed
+
+	ss.LSSDataSize = val.Stats.LSSDataSize
+	ss.ItemsCount = val.Stats.ItemsCount
+
+	// For computing resident ratio
+	ss.CachedRecords = val.Stats.CachedRecords
+	ss.TotalRecords = val.Stats.TotalRecords
+	for _, instPath := range val.InstList {
+		ss.Instances[instPath] = true
+	}
+
+	if len(mdb.idxDefn.AlternateShardIds[partnId]) > 1 {
+		bsAlternateShardId := mdb.idxDefn.AlternateShardIds[partnId][1]
+		val, err := plasma.GetShardInfo(bsAlternateShardId)
+		if err != nil {
+			logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v", msAlternateShardId)
+			return nil
+		}
+		ss.MemSz += val.Stats.MemSz
+		ss.MemSzIndex += val.Stats.MemSzIndex
+		ss.BufMemUsed += val.Stats.BufMemUsed
+		ss.LSSBufMemUsed += val.Stats.LSSFlushBufferUsed
+
+		ss.LSSDataSize += val.Stats.LSSDataSize
+		ss.ItemsCount += val.Stats.ItemsCount
+
+		// For computing resident ratio
+		ss.CachedRecords += val.Stats.CachedRecords
+		ss.TotalRecords += val.Stats.TotalRecords
+	}
+
+	return ss
+}
+
+func (mdb *plasmaSlice) GetAlternateShardId(partnId common.PartitionId) string {
+	if len(mdb.idxDefn.AlternateShardIds) == 0 || len(mdb.idxDefn.AlternateShardIds[partnId]) == 0 {
+		return ""
+	}
+	return mdb.idxDefn.AlternateShardIds[partnId][0]
+}
+
 func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 

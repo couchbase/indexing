@@ -18,10 +18,13 @@ import (
 // a. DataSize is uncompressed lss_data_size i.e. it is lss_data_size * compression_ratio
 // b. DataSizeOnDisk is lss_data_size
 // b. LogSpace is the size of the fraction of the log that will be
-//    considered during next iteration of cleaning
+//
+//	considered during next iteration of cleaning
+//
 // c. DiskSize is lss_used_space + size of Checkpoint info. lss_used_space
-//    is the size of the log on disk (It can include garbaged data marked
-//    by log cleaner)
+//
+//	is the size of the log on disk (It can include garbaged data marked
+//	by log cleaner)
 //
 // In case of forestDB, DataSizeOnDisk is same as DataSize, LogSpace is same as DiskSize
 type StorageStatistics struct {
@@ -97,4 +100,7 @@ type IndexWriter interface {
 
 	//Destroy/Wipe the index completely
 	Destroy()
+
+	GetAlternateShardId(common.PartitionId) string
+	ShardStatistics(common.PartitionId) *common.ShardStats
 }

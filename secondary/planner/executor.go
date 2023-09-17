@@ -2607,7 +2607,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		// Re-group indexes
 		for _, indexer := range solution.Placement {
-			indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
 		}
 
 		PopulateSiblingIndexForReplicaRepair(solution, config.binSize)
@@ -2759,7 +2759,7 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 
 	const _executeTenantAwarePlan = "Planner::executeTenantAwarePlan"
 
-	solution := solutionFromPlan2(plan)
+	solution := SolutionFromPlan2(plan)
 
 	subClusters, err := groupIndexNodesIntoSubClusters(solution.Placement)
 	if err != nil {
@@ -2862,10 +2862,10 @@ func executeTenantAwarePlan(plan *Plan, indexSpec *IndexSpec) (Planner, bool, er
 
 }
 
-// solutionFromPlan2 creates a Solution from the input Plan.
+// SolutionFromPlan2 creates a Solution from the input Plan.
 // This function does a shallow copy of the Placement from the Plan
 // to create a Solution.
-func solutionFromPlan2(plan *Plan) *Solution {
+func SolutionFromPlan2(plan *Plan) *Solution {
 
 	s := &Solution{
 		Placement: make([]*IndexerNode, len(plan.Placement)),
@@ -4195,7 +4195,7 @@ func executeTenantAwareRebal(command CommandType, plan *Plan, deletedNodes []str
 
 	const _executeTenantAwareRebal = "Planner::executeTenantAwareRebal"
 
-	solution := solutionFromPlan2(plan)
+	solution := SolutionFromPlan2(plan)
 	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
 
 	// update the number of new and deleted nodes in the solution
@@ -5569,7 +5569,7 @@ func executeTenantAwarePlanForResume(plan *Plan, resumeNodes []*IndexerNode) (*T
 
 	logging.Infof("%v Resume Nodes %v", _executeTenantAwarePlanForResume, resumeNodes)
 
-	solution := solutionFromPlan2(plan)
+	solution := SolutionFromPlan2(plan)
 	tenantAwarePlanner := &TenantAwarePlanner{Result: solution}
 
 	//group indexer nodes into subclusters
@@ -5873,7 +5873,7 @@ func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
 	for _, indexerMap := range replicaMap {
 		for indexerNode, indexUsage := range indexerMap {
 			str += fmt.Sprintf("Node: %v, numShards: %v, minShardCapacity: %v, Index name: %v, defnId: %v, replicaId: %v, partnId: %v\n",
-				indexerNode.NodeId, indexerNode.numShards, indexerNode.MinShardCapacity,
+				indexerNode.NodeId, indexerNode.NumShards, indexerNode.MinShardCapacity,
 				indexUsage.Name, indexUsage.DefnId,
 				indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 		}
@@ -5884,14 +5884,15 @@ func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
 func getLoadDist(nodes map[*IndexerNode]bool) string {
 	var str string
 	for k := range nodes {
-		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.numShards, k.MinShardCapacity)
+		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.NumShards, k.MinShardCapacity)
 	}
 	return str
 }
 
 func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64) {
 
-	targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
+	// partnId -> indexerNode -> indexUsage
+	allTargets := make(map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool)
 
 	// Get the list of indexer nodes on to which the "indexes" are going to
 	// be placed on
@@ -5900,32 +5901,41 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			for _, index := range indexer.Indexes {
 
 				if index.IsShardProxy == false && index.DefnId == newIndex.DefnId &&
-					index.Instance.ReplicaId == newIndex.Instance.ReplicaId {
-					if _, ok := targetNodes[indexer]; !ok {
-						targetNodes[indexer] = make(map[*IndexUsage]bool)
+					index.Instance.ReplicaId == newIndex.Instance.ReplicaId &&
+					index.PartnId == newIndex.PartnId {
+
+					if _, ok := allTargets[index.PartnId]; !ok {
+						allTargets[index.PartnId] = make(map[*IndexerNode]map[*IndexUsage]bool)
 					}
-					targetNodes[indexer][index] = true
+					if _, ok := allTargets[index.PartnId][indexer]; !ok {
+						allTargets[index.PartnId][indexer] = make(map[*IndexUsage]bool)
+					}
+					allTargets[index.PartnId][indexer][index] = true
 				}
 
 			}
 		}
 	}
 
-	targetNodes = pruneIndexers(targetNodes) // Prune indexers that are <7.6 version
+	allTargets = pruneIndexers(allTargets) // Prune indexers that are <7.6 version
 
 	// Group indexes for each partition
 	// partnId -> replicaId -> indexerNode to corresponding index usage
-	allPartnDist := getPartnDistribution(targetNodes)
+	allPartnDist := getPartnDistribution(allTargets)
 
 	for _, partnDist := range allPartnDist {
-		for _, replicaMap := range partnDist {
+		for partnId, replicaMap := range partnDist {
 
 			shardLimitPerTenant, currShardCount := solution.getShardLimits()
+			// TODO: Add a fatal error if partnId is not a part of target
+			targetNodes := allTargets[partnId]
 
 			// Re-group indexes on the target nodes so that the index can use the grouping
 			// done from earlier iteration
 			for indexer := range targetNodes {
-				indexer.Indexes, indexer.numShards, _ = GroupIndexes(indexer.Indexes, indexer)
+				// Always group deferred indexes as this is only for populating alternate shardIds
+				// and no size estimations will be run
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
 			}
 
 			// If a new shard can be created for this partition across all indexer nodes,
@@ -5959,7 +5969,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 				}
 
 				for indexer := range targetNodes {
-					if indexer.numShards >= indexer.MinShardCapacity {
+					if indexer.NumShards >= indexer.MinShardCapacity {
 						fullCapNodes[indexer] = true
 					}
 				}
@@ -6203,46 +6213,51 @@ func NeedsReplan(s *Solution) (bool, []*IndexUsage) {
 	return needsReplan, needsAlternateShardIds
 }
 
-func pruneIndexers(nodes map[*IndexerNode]map[*IndexUsage]bool) map[*IndexerNode]map[*IndexUsage]bool {
-	resp := make(map[*IndexerNode]map[*IndexUsage]bool)
-	for indexer, indexUsageMap := range nodes {
-		if indexer.NodeVersion < common.INDEXER_76_VERSION {
-			continue
+func pruneIndexers(nodes map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool) map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool {
+	resp := make(map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool)
+
+	for partnId, indexDistMap := range nodes {
+		for indexer, indexUsageMap := range indexDistMap {
+			if indexer.NodeVersion < common.INDEXER_76_VERSION {
+				continue
+			}
+			if _, ok := resp[partnId]; !ok {
+				resp[partnId] = make(map[*IndexerNode]map[*IndexUsage]bool)
+			}
+			resp[partnId][indexer] = indexUsageMap
 		}
-
-		resp[indexer] = indexUsageMap
 	}
-
 	return resp
 }
 
 // Generates a distribution map for each partition across all definitions
 // Mapping contains defnId -> partnId -> replicaId -> indexerNode to corresponding index usage
-func getPartnDistribution(nodes map[*IndexerNode]map[*IndexUsage]bool) map[common.IndexDefnId]PartnDistMap {
+func getPartnDistribution(nodes map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool) map[common.IndexDefnId]PartnDistMap {
 	allPartnDist := make(map[common.IndexDefnId]PartnDistMap)
 
-	for indexer, indexUsageMap := range nodes {
-		for indexUsage, _ := range indexUsageMap {
-			defnId := indexUsage.DefnId
-			partnId := indexUsage.PartnId
-			replicaId := indexUsage.Instance.ReplicaId
+	for _, indexDistMap := range nodes {
+		for indexer, indexUsageMap := range indexDistMap {
+			for indexUsage, _ := range indexUsageMap {
+				defnId := indexUsage.DefnId
+				partnId := indexUsage.PartnId
+				replicaId := indexUsage.Instance.ReplicaId
 
-			if _, ok := allPartnDist[defnId]; !ok {
-				allPartnDist[defnId] = make(PartnDistMap)
+				if _, ok := allPartnDist[defnId]; !ok {
+					allPartnDist[defnId] = make(PartnDistMap)
+				}
+
+				if _, ok := allPartnDist[defnId][partnId]; !ok {
+					allPartnDist[defnId][partnId] = make(ReplicaDistMap)
+				}
+
+				if _, ok := allPartnDist[defnId][partnId][replicaId]; !ok {
+					allPartnDist[defnId][partnId][replicaId] = make(map[*IndexerNode]*IndexUsage)
+				}
+
+				allPartnDist[defnId][partnId][replicaId][indexer] = indexUsage
 			}
-
-			if _, ok := allPartnDist[defnId][partnId]; !ok {
-				allPartnDist[defnId][partnId] = make(ReplicaDistMap)
-			}
-
-			if _, ok := allPartnDist[defnId][partnId][replicaId]; !ok {
-				allPartnDist[defnId][partnId][replicaId] = make(map[*IndexerNode]*IndexUsage)
-			}
-
-			allPartnDist[defnId][partnId][replicaId][indexer] = indexUsage
 		}
 	}
-
 	return allPartnDist
 }
 
@@ -6253,7 +6268,7 @@ func canCreateNewShards(replicaMap ReplicaDistMap) bool {
 			// One of the indexer nodes has reached the minimum number of shards limit
 			// Return false so that planner will try populating existing shards
 			// instead of creating new shards
-			if indexer.numShards >= indexer.MinShardCapacity {
+			if indexer.NumShards >= indexer.MinShardCapacity {
 				return false
 			}
 		}
@@ -6294,7 +6309,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
 				indexUsage.AlternateShardIds = []string{alternateId.String()}
-				indexerNode.numShards += 1 // Increment new shard count as more shards are getting created
+				indexerNode.NumShards += 1 // Increment new shard count as more shards are getting created
 			} else {
 				alternateId.SetInstaceGroup(0)
 				msAltId := alternateId.String() // compute mainstore alternate ID
@@ -6307,7 +6322,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
 				indexUsage.AlternateShardIds = []string{msAltId, bsAltId}
-				indexerNode.numShards += 2
+				indexerNode.NumShards += 2
 			}
 		}
 	}
@@ -6323,7 +6338,7 @@ type ReplicaLoad struct {
 func (r *ReplicaLoad) String() string {
 	var out string
 	out += fmt.Sprintf("[replicaId: %v, node: %v, numShards: %v, minShardCap: %v, diskSize: %v, numInsts: %v], ",
-		r.ReplicaId, r.node.NodeId, r.node.numShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
+		r.ReplicaId, r.node.NodeId, r.node.NumShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
 	return out
 }
 

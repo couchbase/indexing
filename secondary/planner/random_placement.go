@@ -1144,14 +1144,14 @@ func (p *RandomPlacement) isEligibleIndex(index *IndexUsage) bool {
 	return ok
 }
 
-func updateIndexes(indexes []*IndexUsage) []*IndexUsage {
+func updateIndexes(indexes []*IndexUsage, skipDeferredIndexGrouping bool) []*IndexUsage {
 
 	var result []*IndexUsage
 
 	indexMap := make(map[*IndexUsage]bool)
 
 	for _, index := range indexes {
-		if index.ProxyIndex == nil {
+		if index.ProxyIndex == nil || (index.NeedsEstimation() && skipDeferredIndexGrouping) {
 			result = append(result, index)
 		} else {
 			if _, ok := indexMap[index.ProxyIndex]; !ok {
@@ -1166,16 +1166,16 @@ func updateIndexes(indexes []*IndexUsage) []*IndexUsage {
 
 // Note: Always call this method after calling grouping on the
 // solution
-func (p *RandomPlacement) RegroupIndexes() {
-	p.eligibles = updateIndexes(p.eligibles)
-	p.optionals = updateIndexes(p.optionals)
+func (p *RandomPlacement) RegroupIndexes(skipDeferredIndexGrouping bool) {
+	p.eligibles = updateIndexes(p.eligibles, skipDeferredIndexGrouping)
+	p.optionals = updateIndexes(p.optionals, skipDeferredIndexGrouping)
 
 	var indexList []*IndexUsage
 	for index := range p.indexes {
 		indexList = append(indexList, index)
 	}
 
-	indexList = updateIndexes(indexList)
+	indexList = updateIndexes(indexList, skipDeferredIndexGrouping)
 	p.indexes = make(map[*IndexUsage]bool)
 	for _, index := range indexList {
 		p.indexes[index] = true

@@ -32,12 +32,12 @@ var (
 	snapshotMetaListKey = []byte("snapshots-list")
 )
 
-//NewForestDBSlice initiailizes a new slice with forestdb backend.
-//Both main and back index gets initialized with default config.
-//Slice methods are not thread-safe and application needs to
-//handle the synchronization. The only exception being Insert and
-//Delete can be called concurrently.
-//Returns error in case slice cannot be initialized.
+// NewForestDBSlice initiailizes a new slice with forestdb backend.
+// Both main and back index gets initialized with default config.
+// Slice methods are not thread-safe and application needs to
+// handle the synchronization. The only exception being Insert and
+// Delete can be called concurrently.
+// Returns error in case slice cannot be initialized.
 func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
@@ -179,14 +179,14 @@ retry:
 	return fdb, nil
 }
 
-//kv represents a key/value pair in storage format
+// kv represents a key/value pair in storage format
 type indexItem struct {
 	key    []byte
 	rawKey []byte
 	docid  []byte
 }
 
-//fdbSlice represents a forestdb slice
+// fdbSlice represents a forestdb slice
 type fdbSlice struct {
 	get_bytes, insert_bytes, delete_bytes int64
 	//flushed count
@@ -303,10 +303,10 @@ func (fdb *fdbSlice) DecrRef() {
 	}
 }
 
-//Insert will insert the given key/value pair from slice.
-//Internally the request is buffered and executed async.
-//If forestdb has encountered any fatal error condition,
-//it will be returned as error.
+// Insert will insert the given key/value pair from slice.
+// Internally the request is buffered and executed async.
+// If forestdb has encountered any fatal error condition,
+// it will be returned as error.
 func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
 	szConf := fdb.updateSliceBuffers()
 	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex,
@@ -322,10 +322,10 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 	return fdb.fatalDbErr
 }
 
-//Delete will delete the given document from slice.
-//Internally the request is buffered and executed async.
-//If forestdb has encountered any fatal error condition,
-//it will be returned as error.
+// Delete will delete the given document from slice.
+// Internally the request is buffered and executed async.
+// If forestdb has encountered any fatal error condition,
+// it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	fdb.updateSliceBuffers()
 	fdb.idxStats.numDocsFlushQueued.Add(1)
@@ -335,10 +335,10 @@ func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	return fdb.fatalDbErr
 }
 
-//handleCommands keep listening to any buffered
-//write requests for the slice and processes
-//those. This will shut itself down internal
-//shutdown channel is closed.
+// handleCommands keep listening to any buffered
+// write requests for the slice and processes
+// those. This will shut itself down internal
+// shutdown channel is closed.
 func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
 	var start time.Time
@@ -398,7 +398,7 @@ func (fdb *fdbSlice) updateSliceBuffers() keySizeConfig {
 	return fdb.keySzConf
 }
 
-//insert does the actual insert in forestdb
+// insert does the actual insert in forestdb
 func (fdb *fdbSlice) insert(key []byte, rawKey []byte, docid []byte, workerId int) int {
 
 	defer func() {
@@ -728,7 +728,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	return nmut
 }
 
-//delete does the actual delete in forestdb
+// delete does the actual delete in forestdb
 func (fdb *fdbSlice) delete(docid []byte, workerId int) int {
 
 	defer func() {
@@ -922,8 +922,8 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	return len(indexEntriesToBeDeleted)
 }
 
-//getBackIndexEntry returns an existing back index entry
-//given the docid
+// getBackIndexEntry returns an existing back index entry
+// given the docid
 func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, error) {
 
 	//	logging.Tracef("ForestDBSlice::getBackIndexEntry \n\tSliceId %v IndexInstId %v Get BackIndex Key - %s",
@@ -946,9 +946,9 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, erro
 	return kbytes, nil
 }
 
-//checkFatalDbError checks if the error returned from DB
-//is fatal and stores it. This error will be returned
-//to caller on next DB operation
+// checkFatalDbError checks if the error returned from DB
+// is fatal and stores it. This error will be returned
+// to caller on next DB operation
 func (fdb *fdbSlice) checkFatalDbError(err error) {
 
 	//panic on all DB errors and recover rather than risk
@@ -1025,8 +1025,8 @@ func (fdb *fdbSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&fdb.committedCount)
 }
 
-//Rollback slice to given snapshot. Return error if
-//not possible
+// Rollback slice to given snapshot. Return error if
+// not possible
 func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 
 	//before rollback make sure there are no mutations
@@ -1090,8 +1090,8 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	return err
 }
 
-//RollbackToZero rollbacks the slice to initial state. Return error if
-//not possible
+// RollbackToZero rollbacks the slice to initial state. Return error if
+// not possible
 func (fdb *fdbSlice) RollbackToZero(initialBuild bool) error {
 
 	//before rollback make sure there are no mutations
@@ -1144,11 +1144,11 @@ func (fdb *fdbSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
 	fdb.lastRollbackTs = ts
 }
 
-//slice insert/delete methods are async. There
-//can be outstanding mutations in internal queue to flush even
-//after insert/delete have return success to caller.
-//This method provides a mechanism to wait till internal
-//queue is empty.
+// slice insert/delete methods are async. There
+// can be outstanding mutations in internal queue to flush even
+// after insert/delete have return success to caller.
+// This method provides a mechanism to wait till internal
+// queue is empty.
 func (fdb *fdbSlice) waitPersist() {
 
 	if !fdb.checkAllWorkersDone() {
@@ -1170,9 +1170,9 @@ func (fdb *fdbSlice) waitPersist() {
 
 }
 
-//Commit persists the outstanding writes in underlying
-//forestdb database. If Commit returns error, slice
-//should be rolled back to previous snapshot.
+// Commit persists the outstanding writes in underlying
+// forestdb database. If Commit returns error, slice
+// should be rolled back to previous snapshot.
 func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
 	flushStart := time.Now()
@@ -1271,8 +1271,8 @@ func (fdb *fdbSlice) FlushDone() {
 	// no-op
 }
 
-//checkAllWorkersDone return true if all workers have
-//finished processing
+// checkAllWorkersDone return true if all workers have
+// finished processing
 func (fdb *fdbSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
@@ -1309,8 +1309,8 @@ func (fdb *fdbSlice) Close() {
 	}
 }
 
-//Destroy removes the database file from disk.
-//Slice is not recoverable after this.
+// Destroy removes the database file from disk.
+// Slice is not recoverable after this.
 func (fdb *fdbSlice) Destroy() {
 	fdb.lock.Lock()
 	defer fdb.lock.Unlock()
@@ -1325,7 +1325,7 @@ func (fdb *fdbSlice) Destroy() {
 	}
 }
 
-//Id returns the Id for this Slice
+// Id returns the Id for this Slice
 func (fdb *fdbSlice) Id() SliceId {
 	return fdb.id
 }
@@ -1344,28 +1344,28 @@ func (fdb *fdbSlice) IsCleanupDone() bool {
 	return fdb.isClosed && fdb.isDeleted
 }
 
-//IsActive returns if the slice is active
+// IsActive returns if the slice is active
 func (fdb *fdbSlice) IsActive() bool {
 	return fdb.isActive
 }
 
-//SetActive sets the active state of this slice
+// SetActive sets the active state of this slice
 func (fdb *fdbSlice) SetActive(isActive bool) {
 	fdb.isActive = isActive
 }
 
-//Status returns the status for this slice
+// Status returns the status for this slice
 func (fdb *fdbSlice) Status() SliceStatus {
 	return fdb.status
 }
 
-//SetStatus set new status for this slice
+// SetStatus set new status for this slice
 func (fdb *fdbSlice) SetStatus(status SliceStatus) {
 	fdb.status = status
 }
 
-//IndexInstId returns the Index InstanceId this
-//slice is associated with
+// IndexInstId returns the Index InstanceId this
+// slice is associated with
 func (fdb *fdbSlice) IndexInstId() common.IndexInstId {
 	return fdb.idxInstId
 }
@@ -1374,8 +1374,8 @@ func (fdb *fdbSlice) IndexPartnId() common.PartitionId {
 	return 0 // Partition indexes are not supported in FDB
 }
 
-//IndexDefnId returns the Index DefnId this slice
-//is associated with
+// IndexDefnId returns the Index DefnId this slice
+// is associated with
 func (fdb *fdbSlice) IndexDefnId() common.IndexDefnId {
 	return fdb.idxDefnId
 }
@@ -1562,6 +1562,14 @@ func (fdb *fdbSlice) Statistics(consumerFilter uint64) (StorageStatistics, error
 	// Incase of fdb, set rawDataSize to DataSize
 	fdb.idxStats.rawDataSize.Set(sts.DataSize)
 	return sts, nil
+}
+
+func (fdb *fdbSlice) ShardStatistics(partnId common.PartitionId) *common.ShardStats {
+	return nil
+}
+
+func (fdb *fdbSlice) GetAlternateShardId(partnId common.PartitionId) string {
+	return ""
 }
 
 func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {

@@ -177,6 +177,7 @@ const (
 	CONFIG_SETTINGS_UPDATE
 
 	STORAGE_STATS
+	SHARD_STORAGE_STATS
 	SCAN_STATS
 	INDEX_PROGRESS_STATS
 	INDEXER_STATS
@@ -2035,6 +2036,19 @@ func (m *MsgStatsRequest) GetStats() common.Statistics {
 	return m.stats
 }
 
+type MsgShardStatsRequest struct {
+	mType  MsgType
+	respch chan map[string]*common.ShardStats
+}
+
+func (m *MsgShardStatsRequest) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgShardStatsRequest) GetReplyChannel() chan map[string]*common.ShardStats {
+	return m.respch
+}
+
 type MsgIndexCompact struct {
 	instId    common.IndexInstId
 	partnId   common.PartitionId
@@ -2932,11 +2946,11 @@ func (m *MsgStartShardRestore) GetRespCh() chan Message {
 func (m *MsgStartShardRestore) ToShardTransferStagingCleanup() *MsgShardTransferStagingCleanup {
 	return &MsgShardTransferStagingCleanup{
 		destination: m.destination,
-		region: m.region,
-		respCh: m.respCh,
-		taskId: m.taskId,
-		transferId: m.transferId,
-		taskType: m.taskType,
+		region:      m.region,
+		respCh:      m.respCh,
+		taskId:      m.taskId,
+		transferId:  m.transferId,
+		taskType:    m.taskType,
 	}
 }
 
@@ -3400,6 +3414,8 @@ func (m MsgType) String() string {
 
 	case STORAGE_STATS:
 		return "STORAGE_STATS"
+	case SHARD_STORAGE_STATS:
+		return "SHARD_STORAGE_STATS"
 	case SCAN_STATS:
 		return "SCAN_STATS"
 	case INDEX_PROGRESS_STATS:

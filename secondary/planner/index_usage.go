@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -642,6 +643,7 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 
 	o.ActualRecsInMem += in.ActualRecsInMem
 	o.TotalRecords += in.TotalRecords
+	o.ActualDiskSize += in.ActualDiskSize
 
 	// If the first index in the list is a primay index, then we can end-up
 	// copying only one shardId. Hence, always copy until we see a secondary
@@ -658,7 +660,7 @@ func (o *IndexUsage) Normalize() {
 	o.ActualDrainRate = max(o.MutationRate, o.DrainRate)
 
 	if o.TotalRecords > 0 {
-		o.ActualResidentPercent = uint64(float64(o.ActualRecsInMem) / float64(o.TotalRecords))
+		o.ActualResidentPercent = uint64(float64(o.ActualRecsInMem) * 100.0 / float64(o.TotalRecords))
 	} else {
 		o.ActualResidentPercent = o.ActualResidentPercent / o.NumInstances
 	}
@@ -687,6 +689,41 @@ func (o *IndexUsage) SetInitialNode() {
 			o.initialNode = in.initialNode
 			break
 		}
+	}
+}
+
+func (in *IndexUsage) updateProxyStats(shardStats *common.ShardStats) {
+	in.ActualDataSize = uint64(shardStats.LSSDataSize)
+	in.ActualNumDocs = uint64(shardStats.ItemsCount)
+	in.ActualMemUsage = uint64(shardStats.MemSz) + uint64(shardStats.MemSzIndex)
+	in.ActualRecsInMem = uint64(shardStats.CachedRecords)
+	in.TotalRecords = uint64(shardStats.TotalRecords)
+
+	// For indexes getting added to the proxy as a part of replica repair (or)
+	// due to upgrade, shard stats may not have the index information. Update
+	// the stats with the indexes getting newly added
+	for _, index := range in.GroupedIndexes {
+		found := false
+		for instPath, _ := range shardStats.Instances {
+			if strings.Contains(instPath, fmt.Sprintf("%v_%v", index.Instance.InstId, index.PartnId)) {
+				found = true
+				break
+			}
+		}
+
+		// Instance is not present in shard statistics. Add stats of the index to the shard
+		// related statistics
+		if !found {
+			in.ActualDataSize += index.ActualDataSize
+			in.ActualNumDocs += index.ActualNumDocs
+			in.ActualMemUsage += index.MemUsage
+			in.ActualRecsInMem += index.ActualRecsInMem
+			in.TotalRecords += index.TotalRecords
+		}
+	}
+
+	if in.TotalRecords > 0 {
+		in.ActualResidentPercent = in.ActualRecsInMem * 100.0 / in.TotalRecords
 	}
 }
 

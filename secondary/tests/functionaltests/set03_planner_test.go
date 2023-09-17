@@ -584,12 +584,10 @@ func TestPlanDuringHeterogenousScaleup(t *testing.T) {
 
 }
 
-//
 // This test randomly generated a set of index and place them on a single indexer node.
 // The placement algorithm will expand the cluster (by adding node) until every node
 // is under cpu and memory quota.   This test will check if the indexer cpu and
 // memory deviation is less than 10%.
-//
 func initialPlacementTest(t *testing.T) {
 
 	for _, testcase := range initialPlacementTestCases {
@@ -627,12 +625,10 @@ func initialPlacementTest(t *testing.T) {
 	}
 }
 
-//
 // This test starts with an initial index layout with a fixed number of nodes (plan).
 // It then places a set of same size index onto these indexer nodes where number
 // of new index is equal to the number of indexer nodes.  There should be one index
 // on each indexer node.
-//
 func incrPlacementTest(t *testing.T) {
 
 	for _, testcase := range incrPlacementTestCases {
@@ -671,11 +667,9 @@ func incrPlacementTest(t *testing.T) {
 	}
 }
 
-//
 // This test planner to rebalance indexer nodes:
 // 1) rebalance after randomly shuffle a certain percentage of indexes
 // 2) rebalance after swap in/out of indexer nodes
-//
 func rebalanceTest(t *testing.T) {
 
 	for _, testcase := range rebalanceTestCases {
@@ -714,11 +708,9 @@ func rebalanceTest(t *testing.T) {
 	}
 }
 
-//
 // This test planner to rebalance indexer nodes with excludeIn nodes:
 // 1) rebalance after randomly shuffle a certain percentage of indexes
 // 2) rebalance after swap in/out of indexer nodes
-//
 func excludeInTest(t *testing.T) {
 
 	for _, testcase := range excludeInTestCases {
@@ -791,8 +783,6 @@ func excludeInTest(t *testing.T) {
 	}
 }
 
-
-//
 // This test planner to rebalance indexer nodes in a heterogenous configuration:
 // 1) Some nodes are vertically scaled up and its actual memory consumption will be much higher
 // 2) swap-only rebalance is performed by removing 1 old node and adding 1 new. Memory violations are ommitted
@@ -800,7 +790,6 @@ func excludeInTest(t *testing.T) {
 // NOTE: Omitting the memScore and cpuScore in these tests, as reaching a valid solution is important,
 // where no movement except for index movement from outNode to addNode happens.
 // The scores migh not be optimal due to the vertically scaled nodes.
-//
 func heterogenousRebalanceTest(t *testing.T) {
 
 	for _, testcase := range heterogenousRebalTestCases {
@@ -1362,7 +1351,6 @@ func minMemoryTest(t *testing.T) {
 	}()
 }
 
-//
 // The SA Planner runs a certain number of iterations per temperature in an
 // attempt to move the indexes. Ideally the number of iterations should be
 // enuogh to evaulate a large number of index movements to find an optimal
@@ -1384,7 +1372,6 @@ func minMemoryTest(t *testing.T) {
 // 1. Replica/partition repair with HA
 // 2. Node removal
 // 3. Node swap
-//
 func iterationTest(t *testing.T) {
 	for _, testcase := range iterationTestCases {
 		var p planner.Planner
@@ -1471,9 +1458,7 @@ func iterationTest(t *testing.T) {
 	}
 }
 
-//
 // Greedy planner tests
-//
 func greedyPlannerTests(t *testing.T) {
 
 	greedyPlannerFuncTests(t)
@@ -1482,7 +1467,6 @@ func greedyPlannerTests(t *testing.T) {
 
 }
 
-//
 // Greedy planner functional tests.
 // Each test case takes following inputs:
 // 1. Initial topology
@@ -1491,7 +1475,6 @@ func greedyPlannerTests(t *testing.T) {
 //
 // During verification, the index placement decided by greedy planner is
 // validated against the set of target nodes.
-//
 func greedyPlannerFuncTests(t *testing.T) {
 
 	for _, testcase := range greedyPlannerFuncTestCases {
@@ -1527,7 +1510,6 @@ func greedyPlannerFuncTests(t *testing.T) {
 	}
 }
 
-//
 // Greedy planner index distibution tests
 //
 // The purpose of these test cases is to verify the overall good index
@@ -1537,14 +1519,14 @@ func greedyPlannerFuncTests(t *testing.T) {
 // distribution in the cluster has controlled variance.
 //
 // Note: these tests primarily focus on the distribution of the deferred
-//       indexes, given the initial topology.
+//
+//	indexes, given the initial topology.
 //
 // Each test takes following inputs
 // 1. Initial topology
 // 2. A sample index to be placed
 // 3. Total number of indexes to be placed
 // 4. Allowed variance in the number of new indexes placed across the nodes
-//
 func greedyPlannerIdxDistTests(t *testing.T) {
 
 	for _, testcase := range greedyPlannerIdxDistTestCases {
@@ -1983,9 +1965,7 @@ var tenantAwarePlannerFuncTestCasesNegative = []tenantAwarePlannerFuncTestCase{
 	},
 }
 
-//
 // Tenant Aware planner tests
-//
 func tenantAwarePlannerTests(t *testing.T) {
 
 	tenantAwarePlannerFuncTests(t)
@@ -1998,7 +1978,6 @@ func tenantAwarePlannerTests(t *testing.T) {
 
 }
 
-//
 // Tenant Aware planner functional tests.
 // Each test case takes following inputs:
 // 1. Initial topology
@@ -2006,7 +1985,6 @@ func tenantAwarePlannerTests(t *testing.T) {
 //
 // During verification, the index placement decided by tenant aware planner is
 // validated against the a pre-defined set of constraints.
-//
 func tenantAwarePlannerFuncTests(t *testing.T) {
 
 	for _, testcase := range tenantAwarePlannerFuncTestCases {
@@ -2775,4 +2753,311 @@ func tenantAwarePlannerResumeTests(t *testing.T) {
 		}
 	}
 
+}
+
+type shardAssignmentTestCase struct {
+	testId   string
+	comment  string
+	topology string
+}
+
+var shardAssignmentTestCases = []shardAssignmentTestCase{
+	// Place single index instace
+	{
+		"2_nodes_1_new_index",
+		"\t Place single new instance on a node.\n " +
+			"\t\t\t New alternate shard Ids are to be generated for the index",
+		"../testdata/planner/shard_assignment/2_nodes_1_new_index.json",
+	},
+	{
+		"2_nodes_2_new_index",
+		"\t Place two new instance on a node.\n " +
+			"\t\t\t New alternate shard Ids has to be generated for 2 indexes ",
+		"../testdata/planner/shard_assignment/2_nodes_2_new_index.json",
+	},
+	{
+		"2_nodes_3_new_index",
+		"\t Place three new instance on a node.\n" +
+			"\t\t\t New alternate shard Ids has to be generated for 2 indexes\n" +
+			"\t\t\t as the minShardCapacity of the node is 4. For third index,\n" +
+			"\t\t\t the alternate shardIds of existing indexes are to be re-used ",
+		"../testdata/planner/shard_assignment/2_nodes_3_new_index.json",
+	},
+	{
+		"2_nodes_1_new_index_node_full",
+		"\t Place an index on a node which has reached it's minimum shard capacity\n" +
+			"\t\t\t New index has to re-use the shardIds of 'index1' as its disk size is less",
+		"../testdata/planner/shard_assignment/2_nodes_1_new_index_node_full.json",
+	},
+	{
+		"2_nodes_1_new_index_2_replicas",
+		"\t Place one index with two replica instance on two nodes.\n " +
+			"\t\t\t New alternate shard Ids are to be generated for both instances.\n" +
+			"\t\t\t The slotIds should be the same for replica instances but\n" +
+			"\t\t\t slot replica numbers should be different ",
+		"../testdata/planner/shard_assignment/2_nodes_1_new_index_2_replicas.json",
+	},
+	{
+		"2_nodes_2_new_index_2_replicas",
+		"\t Place two indexes with 2 replica instances on two nodes.\n" +
+			"\t\t\t New alternate shard Ids are to be generated for both instances\n." +
+			"\t\t\t The slotIds should be the same for replica instances but\n" +
+			"\t\t\t slot replica numbers should be different. Different indexes will have \n" +
+			"\t\t\t different slot Ids",
+		"../testdata/planner/shard_assignment/2_nodes_2_new_index_2_replicas.json",
+	},
+	{
+		"2_nodes_3_new_index_2_replicas",
+		"\t Place three indexes with 2 replica instances on two nodes.\n" +
+			"\t\t\t New alternate shard Ids are to be generated for two indexes.\n" +
+			"\t\t\t For third index, slotIds should be reused from existing index\n" +
+			"\t\t\t The replicaIds of the new index should match the shard replica Ids.",
+		"../testdata/planner/shard_assignment/2_nodes_3_new_index_2_replicas.json",
+	},
+	{
+		"5_nodes_1_new_index_3_replicas_2_full_nodes",
+		"\t Place one index with 3 replica instances on three nodes.\n" +
+			"\t\t\t Of these 3 nodes, 2 nodes have reached their shard capacity.\n" +
+			"\t\t\t Planner should use the shardId present on both nodes and create\n" +
+			"\t\t\t the same slotId on third node with a different replicaId",
+		"../testdata/planner/shard_assignment/5_nodes_1_new_index_3_replicas_2_full_nodes.json",
+	},
+	{
+		"5_nodes_1_new_index_3_replicas_prune_replica_shard",
+		"\t Place one index with 3 replica instances on three nodes.\n" +
+			"\t\t\t Of these 3 nodes, 2 nodes have 2 shard pairs each\n" +
+			"\t\t\t Of these, planner can not use one as it has a replica 2 on a \n" +
+			"\t\t\t that is beyond the initially decided placement\n " +
+			"\t\t\t (even though it has less disk usage)",
+		"../testdata/planner/shard_assignment/5_nodes_1_new_index_3_replicas_prune_replica_shard.json",
+	},
+	{
+		"5_nodes_1_new_index_3_replicas_different_replica_order",
+		"\tPlace one index with 3 replica instances on three nodes.\n" +
+			"\t\t\t Node-1 has a shard with replica:2, node-1 has same shard with\n" +
+			"\t\t\t replicaId:0, node-3 with replicaId: 1. Planner has decided to \n" +
+			"\t\t\t place a new index with replicaId: 0 on node-1 and replicaId: 1\n" +
+			"\t\t\t on node-2. The replica ordering of planner should not matter and the\n" +
+			"\t\t\t final placement for new index should match the shard replica placement",
+		"../testdata/planner/shard_assignment/5_nodes_1_new_index_3_replicas_different_replica_order.json",
+	},
+	{"5_nodes_1_new_index_more_shard_replicas",
+		"\t A shard exists on 3 nodes and a new index is being placed on a node which has\n" +
+			"\t\t\t 2 of the replicas of the shard. The other 2 indexers have maxed out on capacity\n" +
+			"\t\t\t In such case, planner will re-use the shard even though it has more replicas outside\n" +
+			"\t\t\t the planned nodes",
+		"../testdata/planner/shard_assignment/5_nodes_1_new_index_more_shard_replicas.json",
+	},
+	{"5_nodes_1_new_partn_index_slot_grouping",
+		"\t A slot (1234) exists on nodes n1, n2, n3, n4 with replica Ids: 0, 1, 2, 3 respectively. \n" +
+			"\t\t\t A new partitioned index with 2 replicas and 3 partitions is being placed on these nodes\n" +
+			"\t\t\t The partn distribution is: partnId: 1 -> n2, n3. partnId 2 -> n3, n4. partnId 3 -> n1, n4 \n" +
+			"\t\t\t During slot assignment, the 1234 slot should not be used for the new partitioned index \n" +
+			"\t\t\t as there is no placement on nodes n1, n2 for any partition",
+		"../testdata/planner/shard_assignment/5_nodes_1_new_partn_index_slot_grouping.json",
+	},
+}
+
+func validateShardIds(solution *planner.Solution, expectedShards int, t *testing.T) {
+	shardMap := make(map[string]bool)
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if len(index.AlternateShardIds) == 0 {
+				t.Fatalf("Alternate shardIds are empty for index: %v, node: %v", index.Name, indexer.NodeId)
+			}
+			var msAltId, bsAltId *common.AlternateShardId
+			var err error
+			msAltId, err = common.ParseAlternateId(index.AlternateShardIds[0])
+			FailTestIfError(err, fmt.Sprintf("Error parsing mainstore alternateId: %v", index.AlternateShardIds[0]), t)
+			if !index.IsPrimary {
+				bsAltId, err = common.ParseAlternateId(index.AlternateShardIds[1])
+				FailTestIfError(err, fmt.Sprintf("Error parsing backstore alternateId: %v", index.AlternateShardIds[1]), t)
+				if msAltId.SlotId != bsAltId.SlotId || msAltId.ReplicaId != bsAltId.ReplicaId {
+					t.Fatalf("Mismatch in slot or replicaId between mainstore and backstore. "+
+						"Mainstore altId: %v, backstore altId: %v", msAltId.String(), bsAltId.String())
+				}
+			}
+			for _, altId := range index.AlternateShardIds {
+				shardMap[altId] = true
+			}
+		}
+	}
+	if len(shardMap) != expectedShards {
+		t.Fatalf("Expected %v alternateShardIds, seeing only: %v. Actual: %v",
+			expectedShards, len(shardMap), shardMap)
+	}
+}
+func validateSlotMapping(newIndexes []*planner.IndexUsage, expectedSlots, expectedReplicas int, expectedGroups map[int]bool, t *testing.T) {
+	slotMap := make(map[uint64]map[int]int) // slot to replica mapping
+	for _, indexUsage := range newIndexes {
+		if len(indexUsage.AlternateShardIds) == 0 {
+			t.Fatalf("Alternate shardIds are empty for index: %v, replicaId: %v",
+				indexUsage.Name, indexUsage.Instance.ReplicaId)
+		}
+		var msAltId, bsAltId *common.AlternateShardId
+		var err error
+		msAltId, err = common.ParseAlternateId(indexUsage.AlternateShardIds[0])
+		FailTestIfError(err, fmt.Sprintf("Error parsing mainstore alternateId: %v", indexUsage.AlternateShardIds[0]), t)
+		if _, ok := slotMap[msAltId.SlotId]; !ok {
+			slotMap[msAltId.SlotId] = make(map[int]int)
+		}
+		slotMap[msAltId.SlotId][int(msAltId.ReplicaId)]++
+		bsAltId, err = common.ParseAlternateId(indexUsage.AlternateShardIds[1])
+		FailTestIfError(err, fmt.Sprintf("Error parsing backstore alternateId: %v", indexUsage.AlternateShardIds[1]), t)
+		slotMap[bsAltId.SlotId][int(msAltId.ReplicaId)]++
+	}
+	if len(slotMap) != expectedSlots {
+		t.Fatalf("Expected %v slots but found a mismatch. SlotMap: %v", expectedSlots, slotMap)
+	}
+	for slotId, replicaCount := range slotMap {
+		if len(replicaCount) != expectedReplicas {
+			t.Fatalf("Expected %v replicas found a mismatch. SlotId: %v, ReplicaCount: %v",
+				expectedReplicas, slotId, expectedReplicas)
+		}
+		for replicaId, groupCount := range replicaCount {
+			if _, ok := expectedGroups[groupCount]; !ok {
+				t.Fatalf("Expected %v groups but found a mismatch. SlotMap: %v, slotId: %v, replicaId: %v",
+					expectedGroups, slotMap, slotId, replicaId)
+			}
+		}
+	}
+}
+func TestShardAssignmentFuncTestCases(t *testing.T) {
+
+	for _, testcase := range shardAssignmentTestCases {
+		log.Printf("---------------------------------------------------")
+		log.Printf("===========%v===========", testcase.testId)
+		log.Printf(testcase.comment)
+		plan, err := planner.ReadPlan(testcase.topology)
+		FailTestIfError(err, "Fail to read plan", t)
+		var newIndexes []*planner.IndexUsage
+		for _, indexer := range plan.Placement {
+			if indexer.NodeVersion < common.INDEXER_76_VERSION {
+				continue
+			}
+			for _, index := range indexer.Indexes {
+				if len(index.AlternateShardIds) == 0 { // For a newly created index, alternate shardIds will be empty
+					newIndexes = append(newIndexes, index)
+				}
+			}
+		}
+		if len(newIndexes) == 0 {
+			t.Fatalf("New indexes are empty - Expected non-zero indexes")
+		}
+		for _, indexer := range plan.Placement {
+			indexer.Indexes, indexer.NumShards, _ = planner.GroupIndexes(indexer.Indexes, indexer, true)
+		}
+		// Test the index-shard assigment function
+		solution := planner.SolutionFromPlan2(plan)
+		planner.PopulateAlternateShardIds(solution, newIndexes, 2560*1024*1024)
+		// Test validation
+		switch testcase.testId {
+		// For this test, the new index that got created should have non-empty shardIds
+		case "2_nodes_1_new_index":
+			validateShardIds(solution, 2, t)
+			break
+		// For these tests, there should be 4 different alterante shardIds in total
+		// as minShardCapacity is defined as 4
+		case "2_nodes_2_new_index", "2_nodes_3_new_index":
+			// For this test, both the new index that got created should have non-empty shardIds
+			// Also, there should be 4 alternate shardIds
+			validateShardIds(solution, 4, t)
+			break
+		// For this test, the newly created index should re-use the shardIds of index1
+		// as it has less disk size
+		case "2_nodes_1_new_index_node_full":
+			validateShardIds(solution, 4, t)
+			var index3AltIds []string
+			expectedShardIds := []string{"1234-0-0", "1234-0-1"}
+			for _, indexUsage := range newIndexes {
+				if indexUsage.Name == "index3" {
+					index3AltIds = indexUsage.AlternateShardIds
+					break
+				}
+			}
+			if len(index3AltIds) == 0 || expectedShardIds[0] != index3AltIds[0] || expectedShardIds[1] != index3AltIds[1] {
+				t.Fatalf("Mismatch in alternateID assignment. Expected: %v, Actual: %v", expectedShardIds, index3AltIds)
+			}
+			break
+		case "2_nodes_1_new_index_2_replicas":
+			// 1 slot with 2 replica numbers and 2 group count
+			validateSlotMapping(newIndexes, 1, 2, map[int]bool{2: true}, t)
+			break
+		case "2_nodes_2_new_index_2_replicas":
+			// 2 slot with 2 replica numbers and 4 group count
+			validateSlotMapping(newIndexes, 2, 2, map[int]bool{2: true}, t)
+			break
+		case "2_nodes_3_new_index_2_replicas":
+			// 2 slot with 2 replica numbers and 6 group count
+			validateSlotMapping(newIndexes, 2, 2, map[int]bool{2: true, 4: true}, t)
+			break
+
+		case "5_nodes_1_new_index_3_replicas_2_full_nodes",
+			"5_nodes_1_new_index_3_replicas_prune_replica_shard",
+			"5_nodes_1_new_index_3_replicas_different_replica_order",
+			"5_nodes_1_new_index_more_shard_replicas":
+			expectedPlacement := make(map[string][]string)
+			if testcase.testId == "5_nodes_1_new_index_3_replicas_2_full_nodes" {
+				validateShardIds(solution, 6, t)
+				expectedPlacement["127.0.0.1:9001"] = []string{"1234-0-0", "1234-0-1"}
+				expectedPlacement["127.0.0.1:9002"] = []string{"1234-1-0", "1234-1-1"}
+				expectedPlacement["127.0.0.1:9003"] = []string{"1234-2-0", "1234-2-1"}
+			} else if testcase.testId == "5_nodes_1_new_index_3_replicas_prune_replica_shard" {
+				validateShardIds(solution, 12, t)
+				expectedPlacement["127.0.0.1:9001"] = []string{"1234-0-0", "1234-0-1"}
+				expectedPlacement["127.0.0.1:9002"] = []string{"1234-1-0", "1234-1-1"}
+				expectedPlacement["127.0.0.1:9003"] = []string{"1234-2-0", "1234-2-1"}
+			} else if testcase.testId == "5_nodes_1_new_index_3_replicas_different_replica_order" {
+				validateShardIds(solution, 6, t)
+				expectedPlacement["127.0.0.1:9001"] = []string{"1234-2-0", "1234-2-1"}
+				expectedPlacement["127.0.0.1:9002"] = []string{"1234-0-0", "1234-0-1"}
+				expectedPlacement["127.0.0.1:9003"] = []string{"1234-1-0", "1234-1-1"}
+			} else if testcase.testId == "5_nodes_1_new_index_more_shard_replicas" {
+				expectedPlacement["127.0.0.1:9002"] = []string{"1234-0-0", "1234-0-1"}
+				expectedPlacement["127.0.0.1:9003"] = []string{"1234-1-0", "1234-1-1"}
+			}
+
+			for _, indexer := range solution.Placement {
+				for _, indexUsage := range indexer.Indexes {
+					if indexUsage.Name == "index2" {
+						nodeId := indexer.NodeId
+						if nodeId != "127.0.0.1:9001" && nodeId != "127.0.0.1:9002" && nodeId != "127.0.0.1:9003" {
+							continue
+						}
+						if indexUsage.AlternateShardIds[0] != expectedPlacement[nodeId][0] || indexUsage.AlternateShardIds[1] != expectedPlacement[nodeId][1] {
+							t.Fatalf("Mismatch in alternateID assignment for node: %v. Expected: %v, Actual: %v",
+								indexer.NodeId, expectedPlacement[nodeId], indexUsage.AlternateShardIds)
+						}
+					}
+				}
+			}
+
+			break
+
+		case "5_nodes_1_new_partn_index_slot_grouping":
+			for _, indexer := range solution.Placement {
+				for _, indexUsage := range indexer.Indexes {
+					if indexUsage.Name == "index2" {
+
+						msAltId, err := common.ParseAlternateId(indexUsage.AlternateShardIds[0])
+						FailTestIfError(err, "Error observed when parsing mainstore alternate shardId", t)
+
+						if msAltId.SlotId == 1234 {
+							t.Fatalf("Mismatch in mainstore alternateID assignment for node: %v. Actual: %v can not have 1234 slot",
+								indexer.NodeId, indexUsage.AlternateShardIds)
+						}
+
+						bsAltId, err := common.ParseAlternateId(indexUsage.AlternateShardIds[0])
+						FailTestIfError(err, "Error observed when parsing backstore alternate shardId", t)
+
+						if bsAltId.SlotId == 1234 {
+							t.Fatalf("Mismatch in backstore alternateID assignment for node: %v. Actual: %v can not have 1234 slot",
+								indexer.NodeId, indexUsage.AlternateShardIds)
+						}
+					}
+				}
+			}
+			break
+		}
+	}
 }

@@ -3491,6 +3491,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.useShardStats": ConfigValue{
+		true,
+		"Planner can either use shard stats retrieved from plasma (or) group per index stats. Set this " +
+			"field to true to let planner use shard stats retrived from plasma",
+		true,
+		false,
+		false,
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",

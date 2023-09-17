@@ -71,7 +71,7 @@ type IndexerNode struct {
 
 	// Current number of shards on the node
 	// Derived from index grouping based on alternate shardId
-	numShards int
+	NumShards int
 
 	// Minium number of shards that can be created on the node
 	// before trying to place indexes on existing shards
@@ -98,6 +98,12 @@ type IndexerNode struct {
 	// The maximum value across all indexer nodes will be considered for cluster wide limit
 	ShardLimitPerTenant   int `json:"shardLimitPerTenant,omitempty"`
 	ShardTenantMultiplier int `json:"shardTenantMultiplier,omitempty"`
+
+	ShardStats map[string]*common.ShardStats
+
+	// Set to true so that planner will use the shard stats for planning
+	// (instead of accummulating per index stats)
+	UseShardStats bool
 }
 
 // This function creates a new indexer node
@@ -198,7 +204,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.totalData = o.totalData
 	r.totalIndex = o.totalIndex
 	r.NodeVersion = o.NodeVersion
-	r.numShards = o.numShards
+	r.NumShards = o.NumShards
 	r.MinShardCapacity = o.MinShardCapacity
 	r.memQuota = o.memQuota
 	r.MaxInstancesPerShard = o.MaxInstancesPerShard
@@ -206,6 +212,9 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.DiskUsageThreshold = o.DiskUsageThreshold
 	r.ShardLimitPerTenant = o.ShardLimitPerTenant
 	r.ShardTenantMultiplier = o.ShardTenantMultiplier
+	r.UseShardStats = o.UseShardStats
+
+	r.ShardStats = o.ShardStats
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
