@@ -3,10 +3,12 @@ package serverlesstests
 import (
 	"fmt"
 	"log"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/testcode"
+	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -88,7 +90,7 @@ func testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes []string, areInNodeFi
 		waitForTokenCleanup(node, t)
 	}
 
-	waitForStatsUpdate()
+	waitForStatsUpdate2()
 
 	if !areInNodeFinal { // Since rebalance fails, outNodes will be the final nodes
 		validateIndexPlacement(outNodes, t)
@@ -356,7 +358,7 @@ func TestRebalancePanicAfterDropOnSource(t *testing.T) {
 		waitForTokenCleanup(node, t)
 	}
 
-	waitForStatsUpdate()
+	waitForStatsUpdate2()
 
 	finalPlacement, err := getIndexPlacement()
 	if err != nil {
@@ -462,4 +464,194 @@ func TestRebalancePanicAfterAllTokensAreProcessed(t *testing.T) {
 	// Since rebalance is expected to fail, outNodes will be the final nodes in
 	// the cluster. Hence populate "areInNodesFinal" to true
 	testTwoNodeSwapRebalanceAndValidate(inNodes, outNodes, true, true, false, t)
+}
+
+// Indexes exist on nodes[3] and Nodes[4].
+// Single node swap rebalance is performed by adding Nodes[1] and removing Nodes[3]
+// Master crashes after the tranfser tokens move to ShardTokenReady state
+// Since this is a single node swap rebalance, indexes would exist on Nodes[1] and Nodes[4]
+// for one bucket and Nodes[3] and Nodes[4] for another bucket
+func TestSingleNodeSwapRebalancePanicBeforeDropOnSource(t *testing.T) {
+	log.Printf("In TestSingleNodeSwapRebalancePanicBeforeDropOnSource")
+
+	// All indexes exist on Nodes[3] and Nodes[4]. Due to rebalance failure in earlier test, Nodes[1] or Nodes[2]
+	// can remain in the cluster. Remove them first
+	if err := cluster.RemoveNodes(kvaddress, clusterconfig.Username, clusterconfig.Password, []string{clusterconfig.Nodes[1], clusterconfig.Nodes[2]}); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while removing nodes: %v from cluster", clusterconfig.Nodes[1]), t)
+	}
+
+	err := secondaryindex.ChangeIndexerSettings("indexer.rebalance.serverless.perNodeTransferBatchSize", float64(1), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	tag := testcode.MASTER_SHARDTOKEN_BEFORE_DROP_ON_SOURCE
+	err = testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[2], clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.INDEXER_PANIC, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	inNodes := []string{clusterconfig.Nodes[1]}
+	outNodes := []string{clusterconfig.Nodes[3]}
+
+	performSwapRebalance(inNodes, outNodes, true, false, true, t)
+
+	for _, node := range inNodes {
+		waitForRebalanceCleanup(node, t)
+		waitForTokenCleanup(node, t)
+	}
+	for _, node := range outNodes {
+		waitForRebalanceCleanup(node, t)
+		waitForTokenCleanup(node, t)
+	}
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Timed out waiting for indexer active", t)
+	waitForStatsUpdate2()
+	allIndexNodes := []string{clusterconfig.Nodes[1], clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+
+	// At this point, few indexes should exist on nodes[1] and nodes[4] for one bucket
+	// Few indexes should exist on nodes[3], nodes[4]
+	finalPlacement, err := getIndexPlacement()
+	if err != nil {
+		t.Fatalf("Error while querying getIndexStatus endpoint, err: %v", err)
+	}
+
+	if len(finalPlacement) != 3 {
+		t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+			allIndexNodes, finalPlacement)
+	}
+	for _, node := range allIndexNodes {
+		if _, ok := finalPlacement[node]; !ok {
+			t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+				allIndexNodes, finalPlacement)
+		}
+	}
+
+	collection := "c1"
+	// Scan indexes
+	for _, bucket := range buckets {
+		scanIndexReplicas(indexes[0], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[0]), t)
+		scanIndexReplicas(indexes[4], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[4]), t)
+	}
+
+	verifyStorageDirContents(t)
+}
+
+// Indexes exist on nodes[1] and Nodes[4] for one bucket and Nodes[3] and Nodes[4]
+// for another bucket.
+// Failover Nodes[1] and trigger rebalance. Indexes on Nodes[1] should be repaired on
+// Nodes[3]. During repair, panic indexer on master before drop on source token
+// is posted. Inspite of panic, indexes should exist on Nodes[3] and Nodes[4] after
+// rebalance
+func TestReplicaRepairPanicBeforeDropOnSource(t *testing.T) {
+	log.Printf("In TestReplicaRepairPanicBeforeDropOnSource")
+
+	tag := testcode.MASTER_SHARDTOKEN_BEFORE_DROP_ON_SOURCE
+	err := testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[2], clusterconfig.Username, clusterconfig.Password,
+		tag, testcode.INDEXER_PANIC, "", 0)
+	FailTestIfError(err, "Error while posting request to metaKV", t)
+
+	defer func() {
+		err = testcode.ResetMetaKV()
+		FailTestIfError(err, "Error while resetting metakv", t)
+	}()
+
+	// Failover Nodes[1] and rebalance
+	if err := cluster.FailoverNode(kvaddress, clusterconfig.Username, clusterconfig.Password, clusterconfig.Nodes[1]); err != nil {
+		FailTestIfError(err, fmt.Sprintf("Error while failing over nodes: %v from cluster", clusterconfig.Nodes[1]), t)
+	}
+
+	err = cluster.Rebalance(kvaddress, clusterconfig.Username, clusterconfig.Password)
+	if err != nil && strings.Contains(err.Error(), "Rebalance failed") == false {
+		FailTestIfError(err, fmt.Sprintf("Observed error: %v during rebalabce", err), t)
+	}
+
+	finalNodes := []string{clusterconfig.Nodes[3], clusterconfig.Nodes[4]}
+
+	for _, node := range finalNodes {
+		waitForRebalanceCleanup(node, t)
+		waitForTokenCleanup(node, t)
+	}
+
+	err = secondaryindex.WaitForIndexerActive(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Timed out waiting for indexer active", t)
+	waitForStatsUpdate2()
+
+	// At this point, indexes should exist only on nodes[3] and nodes[4]
+	finalPlacement, err := getIndexPlacement()
+	if err != nil {
+		t.Fatalf("Error while querying getIndexStatus endpoint, err: %v", err)
+	}
+
+	if len(finalPlacement) != 2 {
+		t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+			finalNodes, finalPlacement)
+	}
+	for _, node := range finalNodes {
+		if _, ok := finalPlacement[node]; !ok {
+			t.Fatalf("Expected indexes to be placed only on nodes: %v. Actual placement: %v",
+				finalNodes, finalPlacement)
+		}
+	}
+
+	collection := "c1"
+	// Scan indexes
+	for _, bucket := range buckets {
+		scanIndexReplicas(indexes[0], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[0]), t)
+		scanIndexReplicas(indexes[4], bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(indexPartnIds[4]), t)
+	}
+
+	verifyStorageDirContents(t)
+
+	// DDL after rebalance. As one bucket would have been moved to inNodes
+	// and other bucket is on outNodes, find the nodes on which the bucket
+	// exists for validation
+	index := indexes[0]
+	for _, bucket := range buckets {
+		hosts, status, err := getHostsForBucket(bucket)
+		FailTestIfError(err, fmt.Sprintf("Error while retrieving hosts for bucket: %v", bucket), t)
+
+		err = secondaryindex.DropSecondaryIndex2(index, bucket, scope, collection, indexManagementAddress)
+		FailTestIfError(err, "Error while dropping index", t)
+
+		waitForReplicaDrop(index, bucket, scope, collection, 0, t) // wait for replica drop-0
+		waitForReplicaDrop(index, bucket, scope, collection, 1, t) // wait for replica drop-1
+
+		// Recreate the index again
+		n1qlStatement := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(age)", index, bucket, scope, collection)
+		execN1qlAndWaitForStatus(n1qlStatement, bucket, scope, collection, index, "Ready", t)
+
+		waitForStatsUpdate()
+
+		partns := indexPartnIds[0]
+
+		// Scan only the newly created index
+		scanIndexReplicas(index, bucket, scope, collection, []int{0, 1}, numScans, numDocs, len(partns), t)
+
+		newHosts, newStatus, err := getHostsForBucket(bucket)
+		FailTestIfError(err, fmt.Sprintf("Error while retrieving hosts for bucket: %v", bucket), t)
+		if len(newHosts) != len(hosts) {
+			log.Printf("Bucket: %v, Prev Status: %v, currStats: %v", bucket, status, newStatus)
+			t.Fatalf("Bucket: %v is expected to be placed on hosts: %v, bucket it exists on hosts: %v", bucket, hosts, newHosts)
+
+		}
+		for _, newHost := range newHosts {
+			found := false
+			for _, oldHost := range hosts {
+				if newHost == oldHost {
+					found = true
+				}
+			}
+
+			if !found {
+				t.Fatalf("Mismatch in hosts. Bucket: %v is expected to be placed on hosts: %v, bucket it exists on hosts: %v", bucket, hosts, newHosts)
+			}
+		}
+		for _, indexNode := range hosts {
+			validateShardIdMapping(indexNode, t)
+		}
+	}
 }
