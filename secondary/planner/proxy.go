@@ -2117,8 +2117,19 @@ func GroupIndexes(indexes []*IndexUsage, indexer *IndexerNode, skipDeferredIndex
 			if index.IsShardProxy {
 				continue
 			}
+
 			proxyIndex.AddToGroupedIndexes(index)
 			proxyIndex.Union(index)
+		}
+
+		allPrimaryIndexes := true
+		for _, index := range proxyIndex.GroupedIndexes {
+			allPrimaryIndexes = allPrimaryIndexes && index.IsPrimary
+		}
+		// If all the indexes of a proxy are primary indexes, use only one alternate shardId
+		if allPrimaryIndexes {
+			proxyIndex.AlternateShardIds = proxyIndex.AlternateShardIds[:1]
+			proxyIndex.IsPrimary = true
 		}
 
 		proxyIndex.NumInstances = uint64(len(proxyIndex.GroupedIndexes))

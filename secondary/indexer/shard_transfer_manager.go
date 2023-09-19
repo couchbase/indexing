@@ -157,6 +157,14 @@ func (stm *ShardTransferManager) handleStorageMgrCommands(cmd Message) {
 	}
 }
 
+func copyMeta(meta map[string]interface{}) map[string]interface{} {
+	metaCpy := make(map[string]interface{})
+	for k, v := range meta {
+		metaCpy[k] = v
+	}
+	return metaCpy
+}
+
 func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 
 	msg := cmd.(*MsgStartShardTransfer)
@@ -174,6 +182,7 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	progressCh := msg.GetProgressCh()
 	storageMgrCancelCh := msg.GetStorageMgrCancelCh()
 	storageMgrRespCh := msg.GetStorageMgrRespCh()
+	newAlternateShardIds := msg.GetNewAlternateShardIds()
 
 	// If storage manager is the once cancelling transfer, then this flag
 	// is set to true. In such a case, the errMap returned to caller will
@@ -261,11 +270,16 @@ func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 	go func() {
 		for i := range shardIds {
 
+			metaCpy := copyMeta(meta)
+			if len(newAlternateShardIds) > 0 {
+				metaCpy[plasma.GSINewAlternateID] = newAlternateShardIds[i]
+			}
+
 			// TODO: Add a configurable setting to enable or disbale disk snapshotting
 			// before transferring the shard
 			wg.Add(1)
 
-			if err := plasma.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, meta); err != nil {
+			if err := plasma.TransferShard(plasma.ShardId(shardIds[i]), destination, doneCb, progressCb, cancelCh, metaCpy); err != nil {
 
 				func() { // update errMap for this shard
 					mu.Lock()

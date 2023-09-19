@@ -348,6 +348,13 @@ type TransferToken struct {
 	// the paths which plasma has to repair in shard.json file
 	// during replica repair
 	InstRenameMap map[ShardId]map[string]string
+
+	// During shard repair, a shard from source node will be copied
+	// to destination node. The alternate shardId in the shard meta
+	// has to be updated to refer to the alternate shardIds of the
+	// instances being repaired - Not the alternate id of the source
+	// node
+	NewAlternateShardIds []string
 }
 
 // TransferToken.Clone returns a copy of the transfer token it is called on. Since the type is
