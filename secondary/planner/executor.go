@@ -5891,6 +5891,13 @@ func getLoadDist(nodes map[*IndexerNode]bool) string {
 
 func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64) {
 
+	// As deferred indexes will be skipped from grouping at the time of create index placement,
+	// re-group the indexes again across all nodes so that all indexes of an alternate shardId
+	// are grouped together
+	for _, indexer := range solution.Placement {
+		indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
+	}
+
 	// partnId -> indexerNode -> indexUsage
 	allTargets := make(map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool)
 
