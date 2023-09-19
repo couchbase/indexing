@@ -2038,6 +2038,10 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 	}
 
 	if config.EnableShardAffinity {
+		logging.Infof("************ Index Layout After Planning *************")
+		solution.PrintLayout()
+		logging.Infof("****************************************")
+
 		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize)
 		UngroupIndexes(planner.GetResult())
 	}
@@ -2589,6 +2593,10 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 	if config.EnableShardAffinity {
 		solution := planner.GetResult()
+
+		logging.Infof("************ Index Layout After Rebalance Planning *************")
+		solution.PrintLayout()
+		logging.Infof("****************************************************************")
 
 		// The maximum number of times this recursion can happen is proportional to
 		// the number of indexes in the cluster. This can happen if an index replica
@@ -5879,7 +5887,7 @@ func getIndexesFromReplicaMap(replicaMap ReplicaDistMap) string {
 	var str string
 	for _, indexerMap := range replicaMap {
 		for indexerNode, indexUsage := range indexerMap {
-			str += fmt.Sprintf("Node: %v, numShards: %v, minShardCapacity: %v, Index name: %v, defnId: %v, replicaId: %v, partnId: %v\n",
+			str += fmt.Sprintf("\n\tNode: %v, numShards: %v, minShardCapacity: %v, Index: (%v, %v, %v, %v)",
 				indexerNode.NodeId, indexerNode.NumShards, indexerNode.MinShardCapacity,
 				indexUsage.Name, indexUsage.DefnId,
 				indexUsage.Instance.ReplicaId, indexUsage.PartnId)
@@ -5892,6 +5900,25 @@ func getLoadDist(nodes map[*IndexerNode]bool) string {
 	var str string
 	for k := range nodes {
 		str += fmt.Sprintf("Node: %v, numShards: %v, minShardCap: %v\n", k.NodeId, k.NumShards, k.MinShardCapacity)
+	}
+	return str
+}
+
+func getTargetDist(targetNodes map[*IndexerNode]map[*IndexUsage]bool) string {
+	var str string
+	for indexer, indexMap := range targetNodes {
+		for index, _ := range indexMap {
+			str += fmt.Sprintf("Node: %v, index: (%v, %v, %v, %v), ",
+				indexer.NodeId, index.Name, index.DefnId, index.PartnId, index.Instance.ReplicaId)
+		}
+	}
+	return str
+}
+
+func getAllTargetDist(allTargets map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool) string {
+	var str string
+	for partnId, targetNodes := range allTargets {
+		str += fmt.Sprintf("[%v %v], ", partnId, getTargetDist(targetNodes))
 	}
 	return str
 }
@@ -5925,6 +5952,9 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 	}
 
 	allTargets = pruneIndexers(allTargets) // Prune indexers that are <7.6 version
+	logging.LazyVerbose(func() string {
+		return fmt.Sprintf("Planner::PopulateAlternateShardIds All target distribution: %v", getAllTargetDist(allTargets))
+	})
 
 	// Group indexes for each partition
 	// partnId -> replicaId -> indexerNode to corresponding index usage
@@ -5936,6 +5966,9 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			shardLimitPerTenant, currShardCount := solution.getShardLimits()
 			// TODO: Add a fatal error if partnId is not a part of target
 			targetNodes := allTargets[partnId]
+			logging.LazyVerbose(func() string {
+				return fmt.Sprintf("Planner::PopulateAlternateShardIds Target nodes for partnId: %v is: %v", partnId, getTargetDist(targetNodes))
+			})
 
 			// As deferred indexes will be skipped from grouping at the time of create index placement,
 			// re-group the indexes again across all nodes so that all indexes of an alternate shardId
@@ -5982,7 +6015,8 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 				}
 
 				logging.LazyVerbose(func() string {
-					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v", getLoadDist(fullCapNodes))
+					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v, targetNodes: %v, partnId: %v",
+						getLoadDist(fullCapNodes), getTargetDist(targetNodes), partnId)
 				})
 
 				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap, binSize)
@@ -5995,8 +6029,8 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 				} else {
 					// Assign alternate Ids based on the least loaded slot
 					slot := shardSlots[0]
-					logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v as "+
-						"it is least loaded", slot[0].slotId, getIndexesFromReplicaMap(replicaMap))
+					logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v,\nGlobal dist: %v",
+						slot[0].slotId, getIndexesFromReplicaMap(replicaMap), slot[1])
 					assignAlternateIds(replicaMap, slot, targetNodes)
 				}
 			}
@@ -6107,8 +6141,8 @@ func PopulateSiblingIndexForReplicaRepair(solution *Solution, binSize uint64) {
 		// to copy the shard is minimized
 		replicaProxies = sortProxiesByDiskUsage(replicaProxies, needsRepairProxy, binSize)
 		needsRepairProxy.siblingIndex = replicaProxies[0]
-		logging.Infof("PopulateSiblingIndexForReplicaRepair: Using sibling index: %v from node: %v for replica repair",
-			needsRepairProxy.siblingIndex.Name, needsRepairProxy.siblingIndex.initialNode.NodeId)
+		logging.Infof("PopulateSiblingIndexForReplicaRepair: Using sibling index: %v from node: %v for replica repair of proxy: %v",
+			needsRepairProxy.siblingIndex.Name, needsRepairProxy.siblingIndex.initialNode.NodeId, needsRepairProxy.Name)
 	}
 }
 
@@ -6310,8 +6344,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 			alternateId.SetReplicaGroup(uint8(replicaId))
 			if indexUsage.IsPrimary {
 				alternateId.SetInstaceGroup(0)
-				logging.Infof("genAlternateShardIds: Generating new alternageShardId: %v for primary index "+
-					"name: %v, defnId: %v, replicaId: %v, partnId: %v",
+				logging.Infof("genAlternateShardIds: Generating new alternageShardId: %v for primary index: (%v, %v, %v, %v)",
 					alternateId.String(), indexUsage.Name, indexUsage.DefnId,
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
@@ -6323,8 +6356,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 				alternateId.SetInstaceGroup(1)
 				bsAltId := alternateId.String() // compute backstore alternate ID
 
-				logging.Infof("genAlternateShardIds: Generating new alternateShardIds: [%v, %v] for index "+
-					"name: %v, defnId: %v, replicaId: %v, partnId: %v",
+				logging.Infof("genAlternateShardIds: Generating new alternateShardIds: [%v, %v] for index: (%v, %v, %v, %v) ",
 					msAltId, bsAltId, indexUsage.Name, indexUsage.DefnId,
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
@@ -6343,10 +6375,8 @@ type ReplicaLoad struct {
 }
 
 func (r *ReplicaLoad) String() string {
-	var out string
-	out += fmt.Sprintf("[replicaId: %v, node: %v, numShards: %v, minShardCap: %v, diskSize: %v, numInsts: %v], ",
+	return fmt.Sprintf("ReplicaId: %v, node: %v, numShards: %v, minShardCap: %v, diskSize: %v, numInsts: %v",
 		r.ReplicaId, r.node.NodeId, r.node.NumShards, r.node.MinShardCapacity, r.usage.ActualDiskSize, r.usage.NumInstances)
-	return out
 }
 
 // ShardLoad
@@ -6367,11 +6397,10 @@ type ShardLoad struct {
 
 func (s *ShardLoad) String() string {
 	var out string
-	out += fmt.Sprintf("Slot: %v, ReplicaDist:\n", s.slotId)
+	out += fmt.Sprintf("Slot: %v, TotalDiskSize: %v, MaxInstances: %v ReplicaDist:", s.slotId, s.totalDiskSize, s.maxInstances)
 	for _, v := range s.replicas {
-		out += fmt.Sprintf("\t\t%v,", v.String())
+		out += fmt.Sprintf("\n\t%v", v.String())
 	}
-	out += fmt.Sprintf("TotalDiskSize: %v, MaxInstances: %v ", s.totalDiskSize, s.maxInstances)
 	return out
 }
 
@@ -6421,7 +6450,7 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 	for slotId, shardLoad := range shardDistOnFullCapNodes {
 		if len(shardLoad.replicas) != len(fullCapNodes) {
 			logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as it is not present on "+
-				"all full capacity nodes. shardLoad: %v", shardLoad.String())
+				"all full capacity nodes. shardLoad: %v", slotId, shardLoad.String())
 			delete(shardDistOnFullCapNodes, slotId)
 			continue
 		}
@@ -6472,6 +6501,9 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 	// on n2 while replica already exists on n3 i.e. if a replica of interest exists outside
 	// target nodes, ignore the shard
 	globalShardDist := getShardDist(allIndexerNodes)
+	for slotId, globalDist := range globalShardDist {
+		logging.Verbosef("SlotId: %v, GlobalShardDist: %v", slotId, globalDist)
+	}
 
 	for slotId, shardLoad := range shardDistOnFullCapNodes {
 		if globalDist, ok := globalShardDist[slotId]; ok {
@@ -6504,6 +6536,8 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 
 	var shardSlice [][2]*ShardLoad
 	for slotId, v := range shardDistOnFullCapNodes {
+		globalDist := globalShardDist[slotId]
+		logging.Verbosef("Planner::pruneAndSortByLoad Probable slot: %v for final placement: %v", slotId, globalDist.String())
 		shardSlice = append(shardSlice, [2]*ShardLoad{v, globalShardDist[slotId]})
 	}
 
@@ -6539,14 +6573,27 @@ func sortByLoad(shardSlice [][2]*ShardLoad, binSize uint64) [][2]*ShardLoad {
 
 func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2]*ShardLoad, targetNodes map[*IndexerNode]map[*IndexUsage]bool) {
 
-	slotId := slot[0].slotId
 	slotDist := make(map[*IndexerNode]int)
+	assignedReplicas := make(map[int]bool)
+	var remainingIndexes []*IndexUsage
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("assignAlternateIds slotLoad: %v, targetNodes: %v, slotDist: %v, assignedReplicas: %v",
+				slot, getTargetDist(targetNodes), slotDist, assignedReplicas)
+			for i := range remainingIndexes {
+				logging.Fatalf("assignAlternateIds remainingIndexes[%v]: %v", i, remainingIndexes[i].Instance.ReplicaId)
+			}
+			panic(r)
+		}
+	}()
+
+	slotId := slot[0].slotId
+
 	for _, replica := range slot[1].replicas {
 		slotDist[replica.node] = replica.ReplicaId
 	}
 
-	assignedReplicas := make(map[int]bool)
-	var remainingIndexes []*IndexUsage
 	for _, indexDist := range replicaMap {
 		for indexerNode, index := range indexDist {
 			if val, ok := slotDist[indexerNode]; ok {

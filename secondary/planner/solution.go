@@ -550,11 +550,19 @@ func (s *Solution) PrintLayout() {
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
-				"shardProxy: %v, numInstances: %v, alternateShardIds: %v",
-				index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
-				index.IsShardProxy, index.NumInstances, index.AlternateShardIds)
+			if index.Instance != nil {
+				logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, shardIds: %v, shardIdsInDefn: %v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
+					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
+					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds, index.Instance.Defn.ShardIdsForDest)
+			} else {
+				logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, shardIds: %v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
+					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
+					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds)
+			}
 			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
@@ -572,11 +580,11 @@ func (s *Solution) PrintLayout() {
 				index.pendingCreate, index.PendingDelete)
 			for _, subIndex := range index.GroupedIndexes {
 				logging.Infof("\t\t\t* Sub-Index name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
-					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, initialASIs: %v",
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, initialASIs: %v, shardIds: %v, defnShardIds: %v",
 					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
 					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
 					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds,
-					subIndex.initialAlternateShardIds)
+					subIndex.initialAlternateShardIds, subIndex.ShardIds, subIndex.Instance.Defn.ShardIdsForDest)
 				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
 					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),
