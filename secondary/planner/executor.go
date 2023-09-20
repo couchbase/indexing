@@ -5891,13 +5891,6 @@ func getLoadDist(nodes map[*IndexerNode]bool) string {
 
 func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64) {
 
-	// As deferred indexes will be skipped from grouping at the time of create index placement,
-	// re-group the indexes again across all nodes so that all indexes of an alternate shardId
-	// are grouped together
-	for _, indexer := range solution.Placement {
-		indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
-	}
-
 	// partnId -> indexerNode -> indexUsage
 	allTargets := make(map[common.PartitionId]map[*IndexerNode]map[*IndexUsage]bool)
 
@@ -5937,11 +5930,11 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 			// TODO: Add a fatal error if partnId is not a part of target
 			targetNodes := allTargets[partnId]
 
-			// Re-group indexes on the target nodes so that the index can use the grouping
-			// done from earlier iteration
-			for indexer := range targetNodes {
-				// Always group deferred indexes as this is only for populating alternate shardIds
-				// and no size estimations will be run
+			// As deferred indexes will be skipped from grouping at the time of create index placement,
+			// re-group the indexes again across all nodes so that all indexes of an alternate shardId
+			// are grouped together. Also, if a new alternate shardId has been generated in earlier
+			// iteration, regrouping will help to consider/prune the shard for current iteration
+			for _, indexer := range solution.Placement {
 				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, false)
 			}
 
