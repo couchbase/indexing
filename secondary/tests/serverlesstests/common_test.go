@@ -1091,6 +1091,12 @@ func waitForStatsUpdate() {
 	time.Sleep(2500 * time.Millisecond)
 }
 
+// For panic testcases, scans can be served only after indexer warms up
+// the index. As it can take time, wait for 10 seconds for panic testcases
+func waitForStatsUpdate2() {
+	time.Sleep(10 * time.Second)
+}
+
 func getIndexStatusFromIndexer() (*tc.IndexStatusResponse, error) {
 	url, err := makeurl("/getIndexStatus?getAll=true")
 	if err != nil {

@@ -4323,6 +4323,8 @@ var indexerServerLessConfigMap = map[string]string{
 var indexerProvisionedConfigMap = map[string]string{
 	"settings.enableShardAffinity":         "settings.provisioned.enableShardAffinity",
 	"indexer.settings.enableShardAffinity": "indexer.settings.provisioned.enableShardAffinity",
+	"max_parallel_collection_builds":       "max_parallel_collection_builds",
+	"max_parallel_per_bucket_builds":       "max_parallel_per_bucket_builds",
 }
 
 func (config Config) GetDeploymentModelAwareCfgInt(k string) int {

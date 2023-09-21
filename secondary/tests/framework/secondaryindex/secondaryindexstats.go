@@ -231,6 +231,37 @@ func accumulate(indexStats, stats map[string]interface{}, statKey string) {
 	indexStats[statKey] = stats[statKey]
 }
 
+func WaitForIndexerActive(username, password, hostaddress string) error {
+
+	indexerNodes, err := GetIndexerNodesHttpAddresses(hostaddress)
+	if err != nil {
+		log.Printf("Error observed while retrieving indexer nodes http addr, err: %v", err)
+		return err
+	}
+
+	for _, indexerNode := range indexerNodes {
+		timer := time.NewTimer(time.Duration(2 * time.Minute))
+	loop:
+		for {
+			select {
+			case <-timer.C:
+				return fmt.Errorf("Indexer: %v is not active after 2 min", indexerNode)
+			default:
+				stats := GetStatsForIndexerHttpAddress(indexerNode, username, password)
+				if val, ok := stats["indexer_state"]; !ok || (val != nil && val.(string) != "Active") {
+					log.Printf("Waiting for indexer: %v to go active", indexerNode)
+					time.Sleep(5 * time.Second)
+				} else {
+					log.Printf("Indexer: %v is active", indexerNode)
+					break loop
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func ChangeIndexerSettings(configKey string, configValue interface{}, serverUserName, serverPassword, hostaddress string) error {
 
 	// Wait for some time to prevent the possibility of golang

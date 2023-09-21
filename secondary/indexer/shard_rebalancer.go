@@ -3409,7 +3409,7 @@ func (sr *ShardRebalancer) transitionToDcpOrEndShardRebalance() {
 	}
 }
 
-// processRebalancerChange to start controlled rebalancer acc to transition on
+// processRebalancerChange to start controlled rebalancer according to transition on
 // rToken.ActiveRebalancer; only to be called on change in ActiveRebalancer
 func (sr *ShardRebalancer) processRebalancerChange(rToken *RebalanceToken) {
 	sr.mu.Lock()
