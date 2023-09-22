@@ -1941,6 +1941,12 @@ func (s *storageMgr) getShardStats() map[string]*common.ShardStats {
 					}
 
 					shardStats := slice.ShardStatistics(partnId)
+					if shardStats == nil {
+						logging.Fatalf("storageMgr::getShardStats Expected non-nil shard stats for alternateId: %v, slice: %v, partnId: %v",
+							alternateShardId, slice.IndexInstId(), partnId)
+						slice.DecrRef()
+						continue
+					}
 					out[shardStats.AlternateShardId] = shardStats
 					slice.DecrRef()
 
