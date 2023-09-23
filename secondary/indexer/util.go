@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	MAX_GETSEQS_RETRIES = 10
+	MAX_GETSEQS_RETRIES      = 10
+	MAX_GETITEMCOUNT_RETRIES = 10
 )
 
 func IsIPLocal(ip string) bool {
@@ -120,6 +121,41 @@ func GetRealIndexInstId(inst *common.IndexInst) common.IndexInstId {
 		instId = inst.RealInstId
 	}
 	return instId
+}
+
+func GetCollectionItemCount(cluster, pooln, keyspaceId, cid string) (uint64, error) {
+	var itemCount uint64
+	bucketn := GetBucketFromKeyspaceId(keyspaceId)
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("Indexer::GetCollectionItemCount error=%v Retrying (%d)", err, r)
+		}
+
+		itemCount, err = common.CollectionItemCount(cluster, pooln, bucketn, cid)
+
+		return err
+	}
+
+	verbose := logging.IsEnabled(logging.Verbose)
+	var start time.Time
+	if verbose {
+		start = time.Now()
+	}
+	rh := common.NewRetryHelper(MAX_GETITEMCOUNT_RETRIES, time.Millisecond, 1, fn)
+	err := rh.Run()
+
+	if err != nil {
+		// then log an error and give-up
+		fmsg := "Indexer::GetCollectionItemCount Error Connecting to KV Cluster %v"
+		logging.Errorf(fmsg, err)
+		return 0, err
+	}
+
+	if verbose {
+		logging.Verbosef("Indexer::GetCollectionItemCount Time Taken %v", time.Since(start))
+	}
+	return itemCount, err
 }
 
 // GetCurrentKVTs gets the current KV timestamp vector for the specified number of vBuckets.
@@ -233,7 +269,7 @@ func IsEphemeral(cluster, bucket string) (bool, error) {
 	return cinfo.IsEphemeral(bucket)
 }
 
-//flip bits in-place for a given byte slice
+// flip bits in-place for a given byte slice
 func FlipBits(code []byte) {
 
 	for i, b := range code {

@@ -4291,6 +4291,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		defer tk.statsLock.Unlock()
 		// Populate current KV timestamps for all keyspaces
 		keyspaceIdTsMap := make(map[common.StreamId]map[string]Timestamp)
+		keyspaceIdCollectionItemCountMap := make(map[common.StreamId]map[string]uint64)
 		for _, inst := range indexInstMap {
 			//skip deleted indexes
 			if inst.State == common.INDEX_STATE_DELETED {
@@ -4299,6 +4300,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 			var kvTs Timestamp
 			var err error
+			var itemCount uint64
 
 			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
 			stream := inst.Stream
@@ -4306,12 +4308,14 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				keyspaceIdTsMap[stream] = make(map[string]Timestamp)
 			}
 			if _, ok := keyspaceIdTsMap[stream][keyspaceId]; !ok {
+
+				cluster := tk.config["clusterAddr"].String()
+				cid := ""
+				if inst.Stream == common.INIT_STREAM && inst.Defn.KeyspaceId(inst.Stream) != inst.Defn.Bucket {
+					cid = keyspaceIdCollectionId[keyspaceId]
+				}
+
 				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
-					cluster := tk.config["clusterAddr"].String()
-					cid := ""
-					if inst.Stream == common.INIT_STREAM && inst.Defn.KeyspaceId(inst.Stream) != inst.Defn.Bucket {
-						cid = keyspaceIdCollectionId[keyspaceId]
-					}
 					numVBuckets := streamKeyspaceIdNumVBucketsMap[inst.Stream][keyspaceId]
 					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, numVBuckets)
 					return err
@@ -4323,12 +4327,39 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 
 				keyspaceIdTsMap[stream][keyspaceId] = kvTs
+
+				rhItemCount := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
+					enableOSO := tk.ss.streamKeyspaceIdEnableOSO[stream][keyspaceId]
+
+					if enableOSO && cid != "" {
+						itemCount, err = GetCollectionItemCount(cluster, "default", keyspaceId, cid)
+						if err != nil {
+							logging.Errorf("Error in fetching the item count fast: %v", err)
+							return err
+						}
+
+						if _, ok := keyspaceIdCollectionItemCountMap[stream]; !ok {
+							keyspaceIdCollectionItemCountMap[stream] = make(map[string]uint64)
+						}
+						keyspaceIdCollectionItemCountMap[stream][keyspaceId] = itemCount
+					}
+					return err
+				})
+
+				if err = rhItemCount.Run(); err != nil {
+					logging.Errorf("Timekeeper::handleStats Error occurred while obtaining Collection item counts - %v", err)
+					replych <- true
+					return
+				}
 			}
 		}
 
 		progressStatTime := time.Now().UnixNano()
 		var rollbackTimeMap map[string]int64
 		flushedCountMap := make(map[common.StreamId]map[string]uint64)
+		// checks if any vbuckets in a keyspace are steamed without OSO. Depending on the size of the vbucket,
+		// kv might decide to disable OSO streaming.
+		seqNosUsedInFlushedCountMap := make(map[common.StreamId]map[string]bool)
 		queuedMap := make(map[common.StreamId]map[string]uint64)
 		pendingMap := make(map[common.StreamId]map[string]uint64)
 		totalTobeFlushedMap := make(map[common.StreamId]map[string]uint64)
@@ -4348,8 +4379,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					flushedCountMap[stream] = make(map[string]uint64)
 				}
 
+				if _, ok := seqNosUsedInFlushedCountMap[stream]; !ok {
+					seqNosUsedInFlushedCountMap[stream] = make(map[string]bool)
+				}
+
 				for keyspaceId, flushedTs := range keyspaceIdMap {
 					flushedCount := uint64(0)
+					usesSeqNo := false
 					if flushedTs != nil {
 						for i, seqno := range flushedTs.Seqnos {
 							if flushedTs.OSOCount != nil &&
@@ -4357,10 +4393,14 @@ func (tk *timekeeper) handleStats(cmd Message) {
 								flushedCount += flushedTs.OSOCount[i]
 							} else {
 								flushedCount += seqno
+								if seqno != 0 {
+									usesSeqNo = true
+								}
 							}
 						}
 					}
 					flushedCountMap[stream][keyspaceId] = flushedCount
+					seqNosUsedInFlushedCountMap[stream][keyspaceId] = usesSeqNo
 				}
 			}
 
@@ -4398,6 +4438,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 				for keyspaceId, kvTs := range keyspaceIdMap {
 					pending := uint64(0)
+					receivedItemCount := uint64(0)
+					isOSOExclusiveStream := true
 					sum := uint64(0)
 					if kvTs != nil {
 
@@ -4414,7 +4456,12 @@ func (tk *timekeeper) handleStats(cmd Message) {
 									if recvTsOSO != nil &&
 										recvTsOSO.Snapshots[i][0] == 1 {
 										receivedSeqno = recvTsOSO.Vbuuids[i] //vbuuids store the count
+										receivedItemCount += receivedSeqno
+									} else {
+										isOSOExclusiveStream = false
 									}
+								} else {
+									isOSOExclusiveStream = false
 								}
 							}
 							// By the time we compute index stats, kv timestamp would have
@@ -4424,11 +4471,52 @@ func (tk *timekeeper) handleStats(cmd Message) {
 							}
 						}
 					}
-					pendingMap[stream][keyspaceId] = pending
+					if itemCount, ok := keyspaceIdCollectionItemCountMap[stream][keyspaceId]; ok && isOSOExclusiveStream {
+						if itemCount > receivedItemCount {
+							pendingMap[stream][keyspaceId] = itemCount - receivedItemCount
+						} else {
+							pendingMap[stream][keyspaceId] = uint64(0)
+						}
+					} else {
+						pendingMap[stream][keyspaceId] = pending
+					}
+
 					totalTobeFlushedMap[stream][keyspaceId] = sum
 				}
 			}
 		}()
+
+		getCollectionIndexProgress := func(stream common.StreamId, keyspaceId string) (float64, bool) {
+			progress := 0.00
+			isItemCountUsedForProgress := false
+
+			// if the item count is present for the given stream and keyspace, then the OSO must have been enabled and cid is present.
+			// assign to collectionIndexProgress in that case.
+			if itemCount, ok := keyspaceIdCollectionItemCountMap[stream][keyspaceId]; ok {
+
+				// If seqNos are used, don't compute progress based on item count.
+				if seqNosUsedInFlushedCountMap[stream][keyspaceId] {
+					logging.Infof("Timekeeper::handleStats Some vbuckets are streamed without OSO in "+
+						"the stream: %v, keyspaceId: %v . "+
+						"Disabling item count based index build progress", stream, keyspaceId)
+					return progress, false
+				}
+
+				isItemCountUsedForProgress = true
+				normalizationFactor := 99.00
+
+				var flushedCount uint64
+				if flushedCount, ok = flushedCountMap[stream][keyspaceId]; ok {
+					if itemCount > flushedCount {
+						progress = float64(flushedCount) * normalizationFactor / float64(itemCount)
+					} else {
+						progress = normalizationFactor
+					}
+				}
+			}
+
+			return progress, isItemCountUsedForProgress
+		}
 
 		stats := tk.stats.Get()
 		for instId, inst := range indexInstMap {
@@ -4436,6 +4524,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			if inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
+
+			isItemCountUsedForProgress := false
 
 			stream := inst.Stream
 			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
@@ -4447,13 +4537,17 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			case common.INDEX_STATE_ACTIVE:
 				v = 100.00
 			case common.INDEX_STATE_INITIAL, common.INDEX_STATE_CATCHUP:
-				totalToBeflushed := totalTobeFlushedMap[stream][keyspaceId]
-				flushedCount := flushedCountMap[stream][keyspaceId]
-				if totalToBeflushed > flushedCount {
-					v = float64(flushedCount) * 100.00 / float64(totalToBeflushed)
-				} else {
-					v = 100.00
+				v, isItemCountUsedForProgress = getCollectionIndexProgress(stream, keyspaceId)
+				if !isItemCountUsedForProgress {
+					totalToBeflushed := totalTobeFlushedMap[stream][keyspaceId]
+					flushedCount := flushedCountMap[stream][keyspaceId]
+					if totalToBeflushed > flushedCount {
+						v = float64(flushedCount) * 100.00 / float64(totalToBeflushed)
+					} else {
+						v = 100.00
+					}
 				}
+
 			case common.INDEX_STATE_RECOVERED:
 				totalToBeflushed := totalTobeFlushedMap[stream][keyspaceId]
 				snapTs := getSnapshotTimestampForInst(instId, indexPartnMap)
@@ -5088,7 +5182,7 @@ func (tk *timekeeper) getBucketPauseStateNoLock(keyspaceId string) bucketStateEn
 	}
 }
 
-//Caller must hold timekeeper lock when calling this function
+// Caller must hold timekeeper lock when calling this function
 func (tk *timekeeper) setBucketPauseStateNoLock(keyspaceId string, bucketState bucketStateEnum) {
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
@@ -5096,8 +5190,8 @@ func (tk *timekeeper) setBucketPauseStateNoLock(keyspaceId string, bucketState b
 
 }
 
-//resetTsQueueStats recomputes the ts queue len stats for all the
-//keyspaces in the given streamId. Caller must hold timekeeper lock.
+// resetTsQueueStats recomputes the ts queue len stats for all the
+// keyspaces in the given streamId. Caller must hold timekeeper lock.
 func (tk *timekeeper) resetTsQueueStats(streamId common.StreamId) {
 
 	newTsQueueLen := 0
@@ -5118,8 +5212,8 @@ func (tk *timekeeper) resetTsQueueStats(streamId common.StreamId) {
 	}
 }
 
-//Incr ts queue len stats when new TS is generated.
-//Caller must hold timekeeper lock.
+// Incr ts queue len stats when new TS is generated.
+// Caller must hold timekeeper lock.
 func (tk *timekeeper) incrTsQueueStats(streamId common.StreamId) {
 
 	if streamId == common.INIT_STREAM {
@@ -5131,8 +5225,8 @@ func (tk *timekeeper) incrTsQueueStats(streamId common.StreamId) {
 	tk.mergeTsQueue(streamId)
 }
 
-//Decr ts queue len stats when TS is removed from queue.
-//Caller must hold timekeeper lock.
+// Decr ts queue len stats when TS is removed from queue.
+// Caller must hold timekeeper lock.
 func (tk *timekeeper) decrTsQueueStats(streamId common.StreamId) {
 
 	if streamId == common.INIT_STREAM {
@@ -5158,11 +5252,11 @@ func (tk *timekeeper) mergeTsQueue(streamId common.StreamId) {
 	}
 }
 
-//mergeMaintTsQueue merges the pending ts in the queue
-//by dropping alternate TS in the queue. Logically this
-//has the same affect if the TK clock was running at
-//half the speed when generating TS for continuous
-//stream of mutations.
+// mergeMaintTsQueue merges the pending ts in the queue
+// by dropping alternate TS in the queue. Logically this
+// has the same affect if the TK clock was running at
+// half the speed when generating TS for continuous
+// stream of mutations.
 func (tk *timekeeper) mergeMaintTsQueue() {
 
 	if tk.currMaintTsQueueLen <= tk.maxTsQueueLen {
@@ -5215,11 +5309,11 @@ func (tk *timekeeper) mergeMaintTsQueue() {
 	tk.resetTsQueueStats(common.MAINT_STREAM)
 }
 
-//mergeMaintTsQueue merges the pending ts in the queue
-//by dropping alternate TS in the queue. Logically this
-//has the same affect if the TK clock was running at
-//half the speed when generating TS for continuous
-//stream of mutations.
+// mergeMaintTsQueue merges the pending ts in the queue
+// by dropping alternate TS in the queue. Logically this
+// has the same affect if the TK clock was running at
+// half the speed when generating TS for continuous
+// stream of mutations.
 func (tk *timekeeper) mergeInitTsQueue() {
 
 	if tk.currInitTsQueueLen <= tk.maxTsQueueLen {

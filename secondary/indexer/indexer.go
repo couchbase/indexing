@@ -755,7 +755,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	if refreshEncrypt {
 		// reset memcached connection
 		logging.Infof("handleSecurityChange: restarting keyspace sequence cache")
-		common.ResetBucketSeqnos()
+		common.ResetBucketStats()
 	}
 
 	idx.storageMgrCmdCh <- msg
@@ -1789,7 +1789,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		if newConfig["vbseqnos.workers_per_reader"].Int() !=
 			oldConfig["vbseqnos.workers_per_reader"].Int() {
 			common.UpdateVbSeqnosWorkersPerReader(int32(workersPerReader.Int()))
-			common.ResetBucketSeqnos()
+			common.ResetBucketStats()
 		}
 	}
 

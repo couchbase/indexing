@@ -3059,7 +3059,6 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
 	"indexer.settings.num_replica": ConfigValue{
 		0,
 		"Number of additional replica for each index.",
