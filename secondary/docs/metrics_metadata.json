@@ -374,7 +374,7 @@
     },
     "index_total_mutation_queue_size": {
         "type": "gauge",
-        "help": "Total number of index updates queued in the mutation queues, on this node",
+        "help": "Total number of index updates queued in the mutation queues, on this node"
     },
     "index_total_pending_scans": {
         "type": "gauge",
@@ -383,8 +383,8 @@
     "index_heap_in_use": {
         "type": "gauge",
         "help": "Total heap memory in use by indexer process in the node",
-        "unit": "bytes"
-      	"notes": "This does not include the actual index pages, but it includes the Golang memory overheads required for index maintenance"
+        "unit": "bytes",
+        "notes": "This does not include the actual index pages, but it includes the Golang memory overheads required for index maintenance"
     },
     "index_total_raw_data_size": {
         "type": "gauge",
