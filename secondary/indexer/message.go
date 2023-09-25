@@ -179,6 +179,7 @@ const (
 	STORAGE_STATS
 	SHARD_STORAGE_STATS
 	SCAN_STATS
+	MUTATION_STATS
 	INDEX_PROGRESS_STATS
 	INDEXER_STATS
 	INDEX_STATS_DONE
@@ -2526,6 +2527,8 @@ type MsgStartShardTransfer struct {
 	authCallback   func(*http.Request) error
 	tlsConfig      *tls.Config
 	isPeerTransfer bool
+
+	newAlternateShardIds []string
 }
 
 func (m *MsgStartShardTransfer) GetMsgType() MsgType {
@@ -2629,6 +2632,10 @@ func (m *MsgStartShardTransfer) IsPeerTransfer() bool {
 	return m.isPeerTransfer
 }
 
+func (m *MsgStartShardTransfer) GetNewAlternateShardIds() []string {
+	return m.newAlternateShardIds
+}
+
 func (m *MsgStartShardTransfer) String() string {
 	var sb strings.Builder
 	sbp := &sb
@@ -2644,6 +2651,7 @@ func (m *MsgStartShardTransfer) String() string {
 		fmt.Fprintf(sbp, " TransferTokenId: %v ", m.transferId)
 		fmt.Fprintf(sbp, " Task Type: Rebalance ")
 		fmt.Fprintf(sbp, " IsPeerTransfer: %v", m.isPeerTransfer)
+		fmt.Fprintf(sbp, " NewAlternateShardIds: %v", m.newAlternateShardIds)
 	}
 	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
 	fmt.Fprintf(sbp, " Region: %v ", m.region)

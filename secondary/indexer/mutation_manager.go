@@ -69,8 +69,9 @@ type mutationMgr struct {
 
 	indexerState common.IndexerState
 
-	lock  sync.Mutex //lock to protect this structure (including map reads/writes)
-	flock sync.Mutex //fine-grain lock for streamFlusherStopChMap
+	lock      sync.Mutex //lock to protect this structure (including map reads/writes)
+	flock     sync.Mutex //fine-grain lock for streamFlusherStopChMap
+	statsLock sync.Mutex
 
 	config common.Config
 	stats  IndexerStatsHolder
@@ -349,6 +350,9 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 
 	case INDEXER_SECURITY_CHANGE:
 		m.handleSecurityChange(cmd)
+
+	case MUTATION_STATS:
+		m.handleStats(cmd)
 
 	default:
 		logging.Fatalf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
@@ -1495,6 +1499,31 @@ func (m *mutationMgr) setEnableAuth() {
 	} else {
 		logging.Warnf("mutationMgr::setEnableAuth: missing indexer.dataport.enableAuth in config")
 	}
+}
+
+func (m *mutationMgr) handleStats(cmd Message) {
+	m.supvCmdch <- &MsgSuccess{}
+
+	go func() {
+		m.statsLock.Lock()
+		defer m.statsLock.Unlock()
+
+		req := cmd.(*MsgStatsRequest)
+		replych := req.GetReplyChannel()
+		stats := m.stats.Get()
+
+		var totalMutationQueueSize int64
+
+		for _, ksStats := range stats.keyspaceStatsMap.Get() {
+			for _, ks := range ksStats {
+				totalMutationQueueSize += ks.mutationQueueSize.Value()
+			}
+		}
+
+		stats.totalMutationQueueSize.Set(totalMutationQueueSize)
+
+		replych <- true
+	}()
 }
 
 func CopyKeyspaceIdQueueMap(inMap KeyspaceIdQueueMap) KeyspaceIdQueueMap {

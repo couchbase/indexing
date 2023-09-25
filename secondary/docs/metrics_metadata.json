@@ -372,6 +372,29 @@
         "unit": "bytes",
         "added": "7.2.0"
     },
+    "index_total_mutation_queue_size": {
+        "type": "gauge",
+        "help": "Total number of index updates queued in the mutation queues, on this node",
+    },
+    "index_total_pending_scans": {
+        "type": "gauge",
+        "help": "Sum of number of pending scans across all indexes, located on this node"
+    },
+    "index_heap_in_use": {
+        "type": "gauge",
+        "help": "Total heap memory in use by indexer process in the node",
+        "unit": "bytes"
+      	"notes": "This does not include the actual index pages, but it includes the Golang memory overheads required for index maintenance"
+    },
+    "index_total_raw_data_size": {
+        "type": "gauge",
+        "help": "Sum of encoded, uncompressed size of the index data across all indexes, located on this node",
+        "unit": "bytes"
+    },
+    "index_net_avg_scan_rate": {
+        "type": "gauge",
+        "help": "Average index scan rate across all indexes, for this node"
+    },
     "index_storage_current_quota": {
         "type": "gauge",
         "help": "Plasma's internally active memory quota for this node. It is tuned by memtuner.",

@@ -1488,6 +1488,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.scanCoordCmdCh <- msg
 		<-idx.scanCoordCmdCh
 
+	case MUTATION_STATS:
+		idx.mutMgrCmdCh <- msg
+		<-idx.mutMgrCmdCh
+
 	case INDEX_PROGRESS_STATS:
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
@@ -8943,9 +8947,16 @@ func (idx *indexer) updateBootstrapStats(stats *IndexerStats,
 	id common.IndexInstId) {
 
 	idxStats := stats.indexes[id]
+	indexName := common.GetStatsPrefix(idxStats.bucket, idxStats.scope,
+		idxStats.collection, idxStats.name, idxStats.replicaId, 0, false)
+
 	statsForIndex := make(common.Statistics)
-	statsForIndex[fmt.Sprintf("%v", id)] = idxStats
-	// Marshall stats to byte slice
+	statsForIndex[fmt.Sprintf("%snum_docs_pending", indexName)] = idxStats.numDocsPending.Value()
+	statsForIndex[fmt.Sprintf("%snum_docs_queued", indexName)] = idxStats.numDocsQueued.Value()
+	statsForIndex[fmt.Sprintf("%slast_rollback_time", indexName)] = idxStats.lastRollbackTime.Value()
+	statsForIndex[fmt.Sprintf("%sprogress_stat_time", indexName)] = idxStats.progressStatTime.Value()
+	statsForIndex[fmt.Sprintf("%sindex_state", indexName)] = idxStats.indexState.Value()
+	statsForIndex[fmt.Sprintf("%slast_known_scan_time", indexName)] = idxStats.lastScanTime.Value()
 
 	idx.internalRecvCh <- &MsgStatsRequest{
 		mType: INDEX_BOOTSTRAP_STATS_UPDATE,
@@ -11007,6 +11018,7 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 func (idx *indexer) updateStatsFromMemStats() {
 	gMemstatLock.RLock()
 	idx.stats.pauseTotalNs.Set(gMemstatCache.PauseTotalNs)
+	idx.stats.heapInUse.Set(gMemstatCache.HeapInuse)
 	gMemstatLock.RUnlock()
 }
 

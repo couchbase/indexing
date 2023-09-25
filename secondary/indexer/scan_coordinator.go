@@ -1130,6 +1130,8 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 
 	// Compute counts asynchronously and reply to stats request
 	go func() {
+		var netScanned int64
+		var totalCompletedReqs int64
 		for id, idxStats := range stats.indexes {
 
 			err := s.updateItemsCount(id, idxStats)
@@ -1147,7 +1149,9 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 					partnStats := idxStats.getPartitionStats(pid)
 					numRowsScanned := partnStats.numRowsScanned.Value()
 					if idxStats.lastScanGatherTime.Value() != int64(0) {
-						scanRate := float64(numRowsScanned-partnStats.lastNumRowsScanned.Value()) / elapsed
+						scanned := numRowsScanned - partnStats.lastNumRowsScanned.Value()
+						netScanned += scanned
+						scanRate := float64(scanned) / elapsed
 						partnStats.avgScanRate.Set(int64((scanRate + float64(partnStats.avgScanRate.Value())) / 2))
 						logging.Debugf("scanCoordinator.handleStats: index %v partition %v numRowsScanned %v scan rate %v avg scan rate %v",
 							id, pid, numRowsScanned, scanRate, partnStats.avgScanRate.Value())
@@ -1156,8 +1160,21 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 					idxStats.lastScanGatherTime.Set(now)
 				}
 			}
+			totalCompletedReqs += idxStats.numCompletedRequests.Value()
 		}
 
+		pendingScans := stats.TotalRequests.Value() - totalCompletedReqs
+		stats.totalPendingScans.Set(pendingScans)
+
+		now := time.Now().UnixNano()
+		netElapsed := float64(now-stats.lastScanGatherTime.Value()) / float64(time.Second)
+		if netElapsed > 60 {
+			if stats.lastScanGatherTime.Value() != int64(0) {
+				netScanRate := float64(netScanned) / netElapsed
+				stats.netAvgScanRate.Set(int64((netScanRate + float64(stats.netAvgScanRate.Value())) / 2))
+			}
+			stats.lastScanGatherTime.Set(now)
+		}
 		replych <- true
 	}()
 }

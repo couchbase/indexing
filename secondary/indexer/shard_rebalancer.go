@@ -309,6 +309,12 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					return
 				}
 
+				if err := sr.updateAlternateShardIds(); err != nil {
+					l.Errorf("ShardRebalancer::initRebalAsync Error while updating alterante shardIds. err: %v", err)
+					go sr.finishRebalance(err)
+					return
+				}
+
 				if len(hostToIndexToRemove) > 0 {
 					sr.removeDupIndex = true
 					go RemoveDuplicateIndexes(hostToIndexToRemove, sr.cancel, sr.done,
@@ -392,6 +398,60 @@ func (sr *ShardRebalancer) initRebalAsync() {
 	}
 
 	go sr.doRebalance()
+}
+
+func getAlternateShardIds(ttid string, tt *c.TransferToken) ([]string, error) {
+
+	// Step-1: Make sure that there exists <= 2 alternate shardIds
+	// for all the indexes in the token
+	altShardIdMap := make(map[string]bool)
+	for _, inst := range tt.IndexInsts {
+		for _, altShardIds := range inst.Defn.AlternateShardIds {
+			for _, altShardId := range altShardIds {
+				altShardIdMap[altShardId] = true
+			}
+		}
+	}
+
+	if len(altShardIdMap) > 2 {
+		err := fmt.Errorf("ShardRebalancer::getAlternateShardIds Found more than 2 alternate shardIds for token: %v, "+
+			"alternate shardIds: %v", ttid, altShardIdMap)
+		return nil, err
+	}
+
+	// Step-2: Populate the slice of alternate shardIds
+	result := make([]string, len(altShardIdMap))
+	for _, inst := range tt.IndexInsts {
+		for _, altShardIds := range inst.Defn.AlternateShardIds {
+			if len(altShardIds) == len(altShardIdMap) {
+				copy(result, altShardIds)
+				return result, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("ShardRebalancer::getAlternateShardIds Expected %v alternateShardIds. Found none. "+
+		"Token: %v, alternateShardIdMap: %v", len(altShardIdMap), ttid, altShardIdMap)
+}
+
+func (sr *ShardRebalancer) updateAlternateShardIds() error {
+	// Alternate shardIds are not a part of serverless yet
+	if common.IsServerlessDeployment() {
+		return nil
+	}
+
+	for ttid, tt := range sr.transferTokens {
+		if tt.TransferMode == c.TokenTransferModeCopy && tt.BuildSource == c.TokenBuildSourcePeer {
+			alternateShardIdsInToken, err := getAlternateShardIds(ttid, tt)
+			if err != nil {
+				logging.Errorf("%v", err)
+				return err
+			}
+			tt.NewAlternateShardIds = alternateShardIdsInToken
+			logging.Infof("ShardRebalancer::updateAlternateShardIds Updating alternate shardIds to %v for token: %v",
+				tt.NewAlternateShardIds, ttid)
+		}
+	}
+	return nil
 }
 
 func (sr *ShardRebalancer) genPeerDestination(nodeUuid string) (string, error) {
@@ -960,6 +1020,8 @@ loop:
 		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
+
+		newAlternateShardIds: tt.NewAlternateShardIds,
 	}
 
 	if sr.canMaintainShardAffinity {

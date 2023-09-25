@@ -836,9 +836,15 @@ type IndexerStats struct {
 	// indexerStateHolder holds atomic ptr to a string giving indexer state (e.g. Active, Paused)
 	indexerStateHolder stats.StringVal
 
-	TotalRequests     stats.Int64Val
-	TotalRowsReturned stats.Int64Val
-	TotalRowsScanned  stats.Int64Val
+	TotalRequests          stats.Int64Val
+	TotalRowsReturned      stats.Int64Val
+	TotalRowsScanned       stats.Int64Val
+	lastScanGatherTime     stats.Int64Val
+	netAvgScanRate         stats.Int64Val
+	totalPendingScans      stats.Int64Val
+	heapInUse              stats.Uint64Val
+	totalRawDataSize       stats.Int64Val
+	totalMutationQueueSize stats.Int64Val
 
 	RebalanceTransferProgress *MapHolder
 }
@@ -891,6 +897,13 @@ func (s *IndexerStats) Init() {
 
 	s.numGoroutine.Init()
 	s.numCgoCall.Init()
+
+	s.lastScanGatherTime.Init()
+	s.netAvgScanRate.Init()
+	s.heapInUse.Init()
+	s.totalPendingScans.Init()
+	s.totalRawDataSize.Init()
+	s.totalMutationQueueSize.Init()
 
 	s.SetPlannerFilters()
 	s.SetSmartBatchingFilters()
@@ -3011,7 +3024,7 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 
 			var stats_list []MsgType
 			if allStatsCacheRefreshRequired || sync {
-				stats_list = []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
+				stats_list = []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS, MUTATION_STATS}
 			} else { // Refresh progress stats cache every 3 seconds for effective load balancing at client
 				stats_list = []MsgType{INDEX_PROGRESS_STATS}
 			}
@@ -3220,6 +3233,21 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	is.memoryRss.Set(getRSS())
 	out = append(out, []byte(fmt.Sprintf("# TYPE %vmemory_rss gauge\n", METRICS_PREFIX))...)
 	out = append(out, []byte(fmt.Sprintf("%vmemory_rss %v\n", METRICS_PREFIX, is.memoryRss.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_mutation_queue_size gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_mutation_queue_size %v\n", METRICS_PREFIX, is.totalMutationQueueSize.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_pending_scans counter\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_pending_scans %v\n", METRICS_PREFIX, is.totalPendingScans.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vheap_in_use gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vheap_in_use %v\n", METRICS_PREFIX, is.heapInUse.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vtotal_raw_data_size gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vtotal_raw_data_size %v\n", METRICS_PREFIX, is.totalRawDataSize.Value()))...)
+
+	out = append(out, []byte(fmt.Sprintf("# TYPE %vnet_avg_scan_rate gauge\n", METRICS_PREFIX))...)
+	out = append(out, []byte(fmt.Sprintf("%vnet_avg_scan_rate %v\n", METRICS_PREFIX, is.netAvgScanRate.Value()))...)
 
 	// aggregated plasma stats
 	out = populateAggregatedStorageMetrics(out)
