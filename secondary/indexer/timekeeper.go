@@ -3822,6 +3822,92 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 }
 
+func (tk *timekeeper) checkStreamBeginRecvd(vbCh, stopCh chan bool, repairVbs []Vbucket, streamId common.StreamId, keyspaceId string, sessionId uint64) {
+
+	//used to track if streamBegin msg was received for repairVbs.
+	isStreamBeginRcvd := make(map[int]bool)
+	for _, vbno := range repairVbs {
+		isStreamBeginRcvd[int(vbno)] = false
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+loop:
+	for len(isStreamBeginRcvd) != 0 {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			abort := func() bool {
+				tk.lock.RLock()
+				defer tk.lock.RUnlock()
+
+				if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "checkStreamBeginRecvd") {
+					return true
+				}
+				for vbno, _ := range isStreamBeginRcvd {
+					vbState := tk.ss.getVbStatus(streamId, keyspaceId, Vbucket(vbno))
+					if vbState == VBS_STREAM_BEGIN {
+						delete(isStreamBeginRcvd, vbno)
+					}
+				}
+				return false
+			}()
+			if abort {
+				break loop
+			}
+		}
+	}
+
+	close(vbCh)
+}
+
+func (tk *timekeeper) streamRepairWait(repairVbs []Vbucket, streamId common.StreamId, keyspaceId string, sessionId uint64) {
+
+	waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
+	ticker := time.NewTicker(time.Duration(waitTime) * time.Second)
+	defer ticker.Stop()
+
+	vbCh := make(chan bool)
+	stopCh := make(chan bool)
+
+	go tk.checkStreamBeginRecvd(vbCh, stopCh, repairVbs, streamId, keyspaceId, sessionId)
+	for {
+		select {
+		case <-ticker.C:
+			logging.Verbosef("Timekeeper::streamRepairWait reached streamRepairWaitTime %v %v", streamId, keyspaceId)
+			close(stopCh)
+			return
+		case <-vbCh:
+			logging.Verbosef("Timekeeper::streamRepairWait streamBegin done %v %v", streamId, keyspaceId)
+			return
+		}
+	}
+}
+
+func (tk *timekeeper) validateStreamStatusAndSessionId(streamId common.StreamId, keyspaceId string, sessionId uint64, logMsg string) bool {
+
+	status := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
+
+	//response can be skipped for inactive stream or under recovery stream(stream
+	//will be restarted as part of recovery)
+	if status != STREAM_ACTIVE {
+		logging.Infof("Timekeeper::sendRestartMsg Found Stream %v KeyspaceId %v In "+
+			"State %v. Skipping %v.", streamId, keyspaceId, status, logMsg)
+		return false
+	}
+
+	currSessionId := tk.ss.getSessionId(streamId, keyspaceId)
+	if sessionId != currSessionId {
+		logging.Infof("Timekeeper::sendRestartMsg Stream %v KeyspaceId %v Curr Session "+
+			"%v. Skipping %v Session %v.", streamId, keyspaceId,
+			currSessionId, logMsg, sessionId)
+		return false
+	}
+	return true
+}
+
 func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
@@ -3871,29 +3957,6 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		return
 	}
 
-	validateStreamStatusAndSessionId := func(streamId common.StreamId,
-		keyspaceId string, sessionId uint64, logMsg string) bool {
-
-		status := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
-
-		//response can be skipped for inactive stream or under recovery stream(stream
-		//will be restarted as part of recovery)
-		if status != STREAM_ACTIVE {
-			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v KeyspaceId %v In "+
-				"State %v. Skipping %v.", streamId, keyspaceId, status, logMsg)
-			return false
-		}
-
-		currSessionId := tk.ss.getSessionId(streamId, keyspaceId)
-		if sessionId != currSessionId {
-			logging.Infof("Timekeeper::sendRestartMsg Stream %v KeyspaceId %v Curr Session "+
-				"%v. Skipping %v Session %v.", streamId, keyspaceId,
-				currSessionId, logMsg, sessionId)
-			return false
-		}
-		return true
-	}
-
 	switch kvresp.GetMsgType() {
 
 	case REPAIR_ABORT:
@@ -3913,7 +3976,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			tk.lock.RLock()
 			defer tk.lock.RUnlock()
 
-			if !validateStreamStatusAndSessionId(streamId, keyspaceId,
+			if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId,
 				sessionId, "Restart Vbuckets Response") {
 				return true
 			} else {
@@ -3931,8 +3994,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		} else {
 			//allow sufficient time for control messages to come in
 			//after projector has confirmed success
-			waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
-			time.Sleep(time.Duration(waitTime) * time.Second)
+			tk.streamRepairWait(repairVbs, streamId, keyspaceId, sessionId)
 		}
 
 		abort = func() bool {
@@ -3940,7 +4002,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
 
-			if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Rollback") {
+			if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Rollback") {
 				return true
 			}
 
@@ -3968,7 +4030,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 			sessionId := kvresp.(*MsgRollback).GetSessionId()
 
-			if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Rollback") {
+			if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Rollback") {
 				return
 			}
 
@@ -4045,7 +4107,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		sessionId := kvresp.(*MsgKVStreamRepair).GetSessionId()
 
-		if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Stream Repair") {
+		if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Stream Repair") {
 			return
 		}
 
@@ -4087,7 +4149,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			tk.lock.RLock()
 			defer tk.lock.RUnlock()
 
-			if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Error") {
+			if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Error") {
 				return true
 			}
 			return false
@@ -4114,7 +4176,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
 
-			if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Keyspace Not Found") {
+			if !tk.validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Keyspace Not Found") {
 				return
 			}
 
