@@ -1244,7 +1244,11 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 					if !realIndex.pendingCreate {
 						childTokens[0].IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
-						childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds
+						if realIndex.IsPrimary {
+							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds[:1]
+						} else {
+							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds
+						}
 					}
 
 					if realIndex.pendingBuild && !realIndex.PendingDelete &&
@@ -1304,6 +1308,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.IndexInst.Defn.NumPartitions = uint32(token.IndexInst.Pc.GetNumPartitions())
 			token.IndexInst.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
 			if index.HasAlternateShardIds() {
+				if index.IsPrimary && len(index.AlternateShardIds) > 1 {
+					index.AlternateShardIds = index.AlternateShardIds[:1]
+				}
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
 			}
 
