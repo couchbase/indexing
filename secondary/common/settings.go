@@ -25,10 +25,11 @@ const SIGAR_CGROUP_SUPPORTED = 1 // SigarControlGroupInfo.Supported value if cgr
 var maxMetaKVRetries = int32(MAX_METAKV_RETRIES)
 
 const (
-	IndexingMetaDir                  = "/indexing/"
-	IndexingSettingsMetaDir          = IndexingMetaDir + "settings/"
-	IndexingSettingsMetaPath         = IndexingSettingsMetaDir + "config"
-	IndexingSettingsFeaturesMetaPath = IndexingSettingsMetaPath + "/features/"
+	IndexingMetaDir                       = "/indexing/"
+	IndexingSettingsMetaDir               = IndexingMetaDir + "settings/"
+	IndexingSettingsMetaPath              = IndexingSettingsMetaDir + "config"
+	IndexingSettingsFeaturesMetaPath      = IndexingSettingsMetaPath + "/features/"
+	IndexingSettingsShardAffinityMetaPath = IndexingSettingsFeaturesMetaPath + "ShardAffinity"
 )
 
 func GetSettingsConfig(cfg Config) (Config, error) {
@@ -45,6 +46,16 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 			}
 		} else {
 			logging.Errorf("GetSettingsConfig() failed: %v", err)
+			return err
+		}
+
+		current, _, err = metakv.Get(IndexingSettingsShardAffinityMetaPath)
+		if err == nil {
+			if len(current) > 0 {
+				newConfig.Update(current)
+			}
+		} else {
+			logging.Errorf("GetSettingsConfig() failed to retrive shard affinity meta path: %v", err)
 		}
 		return err
 	}
@@ -56,9 +67,12 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 
 func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 	metaKvCb := func(kve metakv.KVEntry) error {
-		if kve.Path == IndexingSettingsMetaPath {
-			logging.Infof("New settings received: \n%s", string(kve.Value))
+		if kve.Path == IndexingSettingsMetaPath || kve.Path == IndexingSettingsShardAffinityMetaPath {
+			logging.Infof("New settings received on path: %v, value: \n%s", string(kve.Value))
 			config := SystemConfig.FilterConfig(".settings.")
+			if kve.Path == IndexingSettingsShardAffinityMetaPath {
+				config = SystemConfig.Get("indexer.default.enable_shard_affinity")
+			}
 			config.Update(kve.Value)
 			callb(config)
 		}

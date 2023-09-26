@@ -3482,6 +3482,15 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.default.enable_shard_affinity": ConfigValue{
+		true,
+		"Used in provisioned clusters. When provisioned clusters are in mixed mode (<7.6 & 7.6 nodes) " +
+			"indexer uses the value of this setting to control shard affinity. In a 7.6+ upgraded cluster, " +
+			"the ns_server setting indexer.settings.enable_shard_affinity is used",
+		true,
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.settings.provisioned.enableShardAffinity": ConfigValue{
 		true,
 		"This is a boolean flag to enable index grouping (aka shard-index affinity) in a provisioned cluster",
@@ -4164,6 +4173,17 @@ func (config Config) FilterConfig(subs string) Config {
 	for key, value := range config {
 		if strings.Contains(key, subs) {
 			newConfig[key] = value
+		}
+	}
+	return newConfig
+}
+
+func (config Config) Get(key string) Config {
+	newConfig := make(Config)
+	for k, v := range config {
+		if key == k {
+			newConfig[key] = v
+			return newConfig
 		}
 	}
 	return newConfig

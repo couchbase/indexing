@@ -112,8 +112,8 @@ func (s *ClientSettings) Close() {
 
 func (s *ClientSettings) metaKVCallback(kve metakv.KVEntry) error {
 
-	if kve.Path == common.IndexingSettingsMetaPath {
-		logging.Infof("New settings received: \n%s", string(kve.Value))
+	if kve.Path == common.IndexingSettingsMetaPath || kve.Path == common.IndexingSettingsShardAffinityMetaPath {
+		logging.Infof("New settings received on path: %v, value: \n%s", kve.Path, string(kve.Value))
 
 		oldConfig := s.config.Clone()
 

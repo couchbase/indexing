@@ -163,6 +163,7 @@ func (s *settingsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
 	mux.HandleFunc("/plasmaDiag", s.handlePlasmaDiag)
 	mux.HandleFunc("/settings/thisNodeOnly", s.handlePerNodeSettingsReq)
+	mux.HandleFunc("/settings/shardAffinity", s.handleShardAffinitySettingsReq)
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
@@ -268,7 +269,6 @@ func (s *settingsManager) handleSettings(w http.ResponseWriter, r *http.Request,
 			}
 		}
 		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
-
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
@@ -323,6 +323,75 @@ func (s *settingsManager) handlePerNodeSettingsReq(w http.ResponseWriter, r *htt
 		}
 
 		s.writeOk(w)
+	} else {
+		s.writeError(w, errors.New("Unsupported method"))
+		return
+	}
+}
+
+func (s *settingsManager) handleShardAffinitySettingsReq(w http.ResponseWriter, r *http.Request) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, r, w,
+		"SettingsManager::handleSettings") {
+		return
+	}
+
+	if r.Method == "POST" {
+
+		globalClustVer := common.GetClusterVersion()
+		if globalClustVer >= common.INDEXER_76_VERSION {
+			err := fmt.Errorf("This end point is expected to be used only in mixed mode clusters (<7.6 & 7.6 clusters). " +
+				"Use the ns_server endpoint to configure the shard affinity value")
+			logging.Errorf("settingsMgr::handleShardAffinitySettingsReq err: %v", err)
+			s.writeError(w, err)
+			return
+		}
+
+		bytes, _ := ioutil.ReadAll(r.Body)
+
+		config := s.config.Get("indexer.default.enable_shard_affinity")
+		current, rev, err := metakv.Get(common.IndexingSettingsShardAffinityMetaPath)
+		if err == nil {
+			if len(current) > 0 {
+				config.Update(current)
+			}
+
+			if bytes, _, err = common.MapSettings(bytes); err != nil {
+				logging.Errorf("Fail to map settings.  Error: %v", err)
+				s.writeError(w, err)
+				return
+			}
+
+			err = config.Update(bytes)
+		}
+
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+
+		//settingsConfig := config.FilterConfig(".settings.")
+		newSettingsBytes := config.Json()
+		if err = metakv.Set(common.IndexingSettingsShardAffinityMetaPath, newSettingsBytes, rev); err != nil {
+			s.writeError(w, err)
+			return
+		}
+		s.writeOk(w)
+
+	} else if r.Method == "GET" {
+		settingsConfig, err := common.GetSettingsConfig(s.config)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+
+		settingsConfig = settingsConfig.Get("indexer.default.enable_shard_affinity")
+		s.writeJson(w, settingsConfig.Json())
+
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
@@ -409,7 +478,7 @@ func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
 		return nil
 	}
 
-	if kve.Path == common.IndexingSettingsMetaPath {
+	if kve.Path == common.IndexingSettingsMetaPath || kve.Path == common.IndexingSettingsShardAffinityMetaPath {
 		err := s.applySettings(kve.Path, kve.Value, kve.Rev)
 		if err != nil {
 			return err
@@ -451,7 +520,7 @@ func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
 
 func (s *settingsManager) applySettings(path string, value []byte, rev interface{}) error {
 
-	logging.Infof("New settings received: \n%s", string(value))
+	logging.Infof("New settings received on path: %v, value: \n%s", path, string(value))
 
 	var err error
 	upgradedConfig, upgraded, minNumShardChanged := tryUpgradeConfig(value)
@@ -547,8 +616,20 @@ func (s *settingsManager) handleIndexerReady() {
 			logging.Errorf("SettingsMgr::handleIndexerReady Err Metakv Get for Settings %v", err)
 			return
 		}
+
 		if err = s.applySettings(common.IndexingSettingsMetaPath, config, rev); err != nil {
 			logging.Errorf("SettingsMgr::handleIndexerReady Err Applying Settings %v", err)
+			return
+		}
+
+		config, rev, err = metakv.Get(common.IndexingSettingsShardAffinityMetaPath)
+		if err != nil {
+			logging.Errorf("SettingsMgr::handleIndexerReady Err Metakv Get for IndexingSettingsShardAffinityMetaPath %v", err)
+			return
+		}
+
+		if err = s.applySettings(common.IndexingSettingsShardAffinityMetaPath, config, rev); err != nil {
+			logging.Errorf("SettingsMgr::handleIndexerReady Err Applying IndexingSettingsShardAffinityMetaPath %v", err)
 			return
 		}
 	}
@@ -745,6 +826,10 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 		}
 	}
 
+	if _, ok := newConfig["indexer.default.enable_shard_affinity"]; ok {
+		return errors.New("Setting change for indexer.default.enable_shard_affinity is not allowed via /settings endpoint")
+	}
+
 	if val, ok := newConfig["indexer.settings.max_seckey_size"]; ok {
 		if val.Int() <= 0 {
 			return errors.New("Setting should be an integer greater than 0")
@@ -837,6 +922,10 @@ func tryUpgradeConfig(value []byte) ([]byte, bool, bool) {
 	conf, err := common.NewConfig(value)
 	if err != nil {
 		logging.Errorf("tryUpgradeConfig: Failed to parse config err [%v]", err)
+		return value, false, false
+	}
+
+	if _, ok := conf["indexer.default.enable_shard_affinity"]; ok {
 		return value, false, false
 	}
 
