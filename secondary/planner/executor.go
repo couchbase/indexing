@@ -961,6 +961,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 	return result, nil
 }
 
+// deprecated - instead directly use index.InitialAlternateShardId
 func getLiveAlternateShardIdsFromSolution(soln *Solution) map[common.IndexDefnId]map[int]map[common.PartitionId]uint64 {
 	liveAsiMap := make(map[common.IndexDefnId]map[int]map[common.PartitionId]uint64)
 
@@ -969,15 +970,15 @@ func getLiveAlternateShardIdsFromSolution(soln *Solution) map[common.IndexDefnId
 			return
 		}
 
-		if len(index.AlternateShardIds) > 0 {
+		if len(index.initialAlternateShardIds) > 0 {
 			liveDefnId := index.DefnId
 			liveReplicaId := index.Instance.ReplicaId
 			livePartnId := index.PartnId
 
-			liveAsi, err := common.ParseAlternateId(index.AlternateShardIds[0])
+			liveAsi, err := common.ParseAlternateId(index.initialAlternateShardIds[0])
 			if err != nil {
 				logging.Warnf("getLiveAlternateShardIdsFromSolution: failed to parse Alternate Shard Id %v with err %v",
-					index.AlternateShardIds[0], err)
+					index.initialAlternateShardIds[0], err)
 				return
 			}
 
@@ -1037,7 +1038,6 @@ func setSiblingIndexForRealIndex(realIndex, proxySiblingIndex *IndexUsage) {
 func genShardTransferToken2(soln *Solution, masterId string, topologyChange service.TopologyChange,
 	isServerless bool) (map[string]*common.TransferToken, error) {
 
-	liveAsiMap := getLiveAlternateShardIdsFromSolution(soln)
 	tokens := make(map[string]*common.TransferToken)
 
 	// merge tokenB into tokenA for DCP based tokens
@@ -1082,33 +1082,14 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			return false
 		}
 
-		asi, err := common.ParseAlternateId(index.AlternateShardIds[0])
-		if err != nil {
-			logging.Warnf("genShardTransferToken2:indexExistsInAlternateShard failed to parse Alternate Id %v for index %v with err %v. falling back to DCP",
-				index.AlternateShardIds[0], index, err)
-			return false
+		// for move index
+		if index.initialNode != nil {
+			return len(index.initialAlternateShardIds) > 0
 		}
 
-		targetDefnId := index.DefnId
-		targetPartnId := index.PartnId
-		targetReplicaId := -1
-		targetSlotId := asi.SlotId
-		if index.Instance != nil {
-			targetReplicaId = index.Instance.ReplicaId
-		}
-
-		if index.initialNode == nil &&
-			index.siblingIndex != nil && index.siblingIndex.Instance != nil {
-			// incase of shard repair, we need to search with replicaId of source
-			targetReplicaId = index.siblingIndex.Instance.ReplicaId
-		}
-
-		if replicaGpMap, ok := liveAsiMap[targetDefnId]; ok {
-			if partnMap, ok := replicaGpMap[targetReplicaId]; ok {
-				if slotNo, ok := partnMap[targetPartnId]; ok {
-					return slotNo == targetSlotId
-				}
-			}
+		// for shard/replica repair
+		if index.siblingIndex != nil {
+			return len(index.siblingIndex.initialAlternateShardIds) > 0
 		}
 
 		return false

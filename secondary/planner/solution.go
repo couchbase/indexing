@@ -572,10 +572,11 @@ func (s *Solution) PrintLayout() {
 				index.pendingCreate, index.PendingDelete)
 			for _, subIndex := range index.GroupedIndexes {
 				logging.Infof("\t\t\t* Sub-Index name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
-					"shardProxy: %v, numInstances: %v, alternateShardIds: %v",
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, initialASIs: %v",
 					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
 					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
-					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds)
+					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds,
+					subIndex.initialAlternateShardIds)
 				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
 					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),
