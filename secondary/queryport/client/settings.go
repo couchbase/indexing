@@ -305,7 +305,7 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
 	}
 
-	isShardAffinityEnabled := config.GetDeploymentModelAwareCfgBool("indexer.settings.enableShardAffinity")
+	isShardAffinityEnabled := config.GetDeploymentAwareShardAffinity()
 	if isShardAffinityEnabled {
 		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
 	} else {
