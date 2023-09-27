@@ -193,9 +193,7 @@ func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
 	return gsi, nil
 }
 
-//
 // change security setting
-//
 func (gsi *gsiKeyspace) SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
 
 	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile, conf.CAFile)
@@ -207,16 +205,13 @@ func SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
 }
 
 // Query calls this function on the startup
-func SetDeploymentModel(serverLess bool) {
+func SetDeploymentModel(deploymentModel string) {
 
-	dm := common.SERVERLESS_DEPLOYMENT
-	if !serverLess {
-		dm = common.DEFAULT_DEPLOYMENT
-	}
+	queryDm := common.MakeDeploymentModel(deploymentModel)
 
-	common.SetDeploymentModel(dm)
+	common.SetDeploymentModel(queryDm)
 
-	l.Infof("GSIClient DeploymentModel is set to: %v", common.GetDeploymentModel())
+	l.Infof("GSIClient DeploymentModel is set to: %v, input: %v", common.GetDeploymentModel(), deploymentModel)
 }
 
 // KeyspaceId implements datastore.Indexer{} interface.
@@ -906,12 +901,16 @@ func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 // New scan request on closed gsiKeyspace can lead to scans reading
 // stale value of backfillSize, which can lead to:
 // (1) exceeding backfill limit (can lead to disk getting full)
-//     OR
+//
+//	OR
+//
 // (2) false scan failures (due to backfillLimit) which require backfill.
 //
 // So, to be safe, caller should NEVER call Close() when
 // (1) There are any ongoing queries using this gsiKeyspace object.
-//     OR
+//
+//	OR
+//
 // (2) New incoming queries are expected to use this gsiKeyspace object.
 func (gsi *gsiKeyspace) Close() {
 	l.Infof("gsiKeyspace::Close Closing %v", getKeyForIndexer(gsi))
@@ -2133,7 +2132,9 @@ func (stats *statistics) Bins() ([]datastore.Statistics, errors.Error) {
 //------------------
 
 // shape of key passed to scan-coordinator (indexer node) is,
-//      [key1, key2, ... keyN]
+//
+//	[key1, key2, ... keyN]
+//
 // where N expressions supplied in CREATE INDEX
 // to evaluate secondary-key.
 func values2SKey(vals value.Values) c.SecondaryKey {
@@ -2145,7 +2146,9 @@ func values2SKey(vals value.Values) c.SecondaryKey {
 }
 
 // shape of return key from scan-coordinator is,
-//      [key1, key2, ... keyN]
+//
+//	[key1, key2, ... keyN]
+//
 // where N keys where evaluated using N expressions supplied in
 // CREATE INDEX.
 func skey2Values(skey c.SecondaryKey) []value.Value {
@@ -2527,7 +2530,7 @@ func (c *indexConfig) SetConfig(conf map[string]interface{}) errors.Error {
 	return nil
 }
 
-//SetParam should not be called concurrently with SetConfig
+// SetParam should not be called concurrently with SetConfig
 func (c *indexConfig) SetParam(name string, val interface{}) errors.Error {
 
 	conf := c.config.Load().(map[string]interface{})
@@ -2606,7 +2609,7 @@ func (c *indexConfig) processConfig(conf map[string]interface{}) {
 
 }
 
-//best effort cleanup as tmpdir may change during restart
+// best effort cleanup as tmpdir may change during restart
 func cleanupTmpFiles(olddir string) {
 
 	files, err := iowrap.Ioutil_ReadDir(olddir)
