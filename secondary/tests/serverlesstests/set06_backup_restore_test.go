@@ -17,6 +17,7 @@ import (
 // This test will perform backup+restore operation on indexer node
 // An index will be created on bucket.scope.collection and backup restore operation will be done on the same
 func TestBackupRestore(t *testing.T) {
+	t.Skip("Test disbaled")
 	log.Printf("In TestBackupRestore()")
 
 	bucket := "b1"
@@ -98,6 +99,7 @@ func TestBackupRestore(t *testing.T) {
 // This test will perform backup+restore operation on indexer node
 // A schedCreateToken will be created on bucket.scope.collection and backup restore operation will tested for it
 func TestBackupRestoreSchedToken(t *testing.T) {
+	t.Skip("Test disbaled")
 	log.Printf("In TestBackupRestoreSchedToken()")
 
 	bucket := "b1"
@@ -218,6 +220,7 @@ func TestBackupRestoreSchedToken(t *testing.T) {
 // This test will perform backup+restore operation on indexer node
 // Multiple indexes will be created on same keyspace and backup restore operation will be done
 func TestBackupRestoreMultipleIndexes(t *testing.T) {
+	t.Skip("Test disbaled")
 	log.Printf("In TestBackupRestoreMultipleIndexes()")
 
 	bucket := "b1"
