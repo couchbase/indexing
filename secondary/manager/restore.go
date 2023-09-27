@@ -947,6 +947,26 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (m
 		// Found a matching indexer in the target cluster
 		if targetIndexerId, ok := m.indexerMap[indexerId]; ok {
 			if indexer := findIndexer(m.current, targetIndexerId); indexer != nil {
+
+				if len(indexer.Indexes) > 0 {
+					// The indexer node already has some indexes. Using the shard affinity from the
+					// time of back-up may not give optimal shard mapping as the shard loads might have
+					// changed from the time of backup. Hence, reset the alternate shardIds
+					for _, index := range indexes {
+						index.AlternateShardIds = nil
+						if index.Instance != nil {
+							logging.Infof("RestoreContext: Restting alternate shardIds for index (%v, %v, %v, %v, %v, %v)",
+								index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, index.PartnId)
+						} else {
+							logging.Infof("RestoreContext: Restting alternate shardIds for index (%v, %v, %v, %v, %v)",
+								index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId)
+						}
+					}
+				} else {
+					// no-op
+					// Restore is happening on empty node. Try to stick onto shard affinity
+				}
+
 				addIndexes(indexes, indexer)
 				mappedIndexers = append(mappedIndexers, indexer)
 				continue
@@ -1017,28 +1037,53 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (m
 		logging.Infof("\tRestoreContext:  Indexer NodeId %v IndexerId %v", indexer.NodeId, indexer.IndexerId)
 		for _, index := range indexer.Indexes {
 			if index.Instance != nil {
-				logging.Infof("\t\tRestoreContext:  Index (%v, %v, %v, %v, %v)", index.Bucket, index.Scope,
-					index.Collection, index.Name, index.Instance.ReplicaId)
+				logging.Infof("\t\tRestoreContext:  Index (%v, %v, %v, %v, %v, %v), alternateShardIds: %v", index.Bucket, index.Scope,
+					index.Collection, index.Name, index.Instance.ReplicaId, index.PartnId, index.AlternateShardIds)
 			} else {
-				logging.Infof("\t\tRestoreContext:  Index (%v, %v, %v, %v)", index.Bucket, index.Scope,
-					index.Collection, index.Name)
+				logging.Infof("\t\tRestoreContext:  Index (%v, %v, %v, %v, %v), alternateShardIds: %v", index.Bucket, index.Scope,
+					index.Collection, index.Name, index.PartnId, index.AlternateShardIds)
 			}
 		}
 	}
 
-	// If there is enough empty nodes in the current clsuter to do a simple swap rebalance.
+	// If there is enough empty nodes in the current cluster to do a simple swap rebalance.
 	numEmptyIndexer := findNumEmptyIndexer(m.current.Placement, mappedIndexers)
 	if numEmptyIndexer >= len(newNodes) {
 		// place indexes using swap rebalance
 		solution, err := planner.ExecuteSwapWithOptions(m.current, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity)
 		if err == nil {
+			planner.UngroupIndexes(solution) // Un-group indexes as planner would group them based on shard affinity
 			return m.buildIndexHostMapping(solution), nil
+		}
+	}
+
+	// Reset alternate shardIds in index metadata as there is a change in topology i.e.
+	// number of empty nodes required are less than the nodes from which indexes have to
+	// be restored. This means, unless all indexer nodes are empty without any indexes,
+	// the indexes being restored should go to nodes on which indexes already exist
+	// Reset alternate shardIds in such a case so that shard affinity can be set according
+	// to new cluster topology
+	if numEmptyIndexer != len(m.current.Placement) {
+		for _, indexer := range newNodes {
+			for _, index := range indexer.Indexes {
+				index.AlternateShardIds = nil
+
+				if index.Instance != nil {
+					logging.Infof("RestoreContext: Restting alternate shardIds for index (%v, %v, %v, %v, %v, %v)",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, index.PartnId)
+				} else {
+					logging.Infof("RestoreContext: Restting alternate shardIds for index (%v, %v, %v, %v, %v)",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId)
+				}
+
+			}
 		}
 	}
 
 	// place indexes using regular rebalance
 	solution, err := planner.ExecuteRebalanceWithOptions(m.current, nil, true, "", "", 0, -1, -1, false, newNodeIds, binSize, enableShardAffinity)
 	if err == nil {
+		planner.UngroupIndexes(solution) // Un-group indexes as planner would group them based on shard affinity
 		return m.buildIndexHostMapping(solution), nil
 	}
 

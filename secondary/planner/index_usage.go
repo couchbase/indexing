@@ -25,7 +25,8 @@ type IndexUsage struct {
 
 	// For all indexes created from 7.6+ version of planner and on
 	// 7.6+ version of indexer, alternateShardIds will be non-nil
-	AlternateShardIds []string `json:"alternateShardIds,omitempty"`
+	AlternateShardIds        []string `json:"alternateShardIds,omitempty"`
+	initialAlternateShardIds []string
 
 	// input: index sizing
 	IsPrimary     bool    `json:"isPrimary,omitempty"`
@@ -158,6 +159,7 @@ func (o *IndexUsage) clone() *IndexUsage {
 	r := *o
 	r.Hosts = nil
 	r.initialNode = nil // should set to nil
+	r.initialAlternateShardIds = nil
 
 	if o.Instance != nil {
 		inst := *o.Instance

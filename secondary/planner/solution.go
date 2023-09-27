@@ -535,7 +535,7 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v shardCompatVersion: %v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
@@ -544,7 +544,7 @@ func (s *Solution) PrintLayout() {
 			indexer.GetCpuUsage(s.UseLiveData()),
 			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
 			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
-			len(indexer.Indexes))
+			len(indexer.Indexes), indexer.ShardCompatVersion)
 		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v",
 			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp())
 
@@ -572,10 +572,11 @@ func (s *Solution) PrintLayout() {
 				index.pendingCreate, index.PendingDelete)
 			for _, subIndex := range index.GroupedIndexes {
 				logging.Infof("\t\t\t* Sub-Index name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
-					"shardProxy: %v, numInstances: %v, alternateShardIds: %v",
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, initialASIs: %v",
 					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
 					subIndex.initialNode == nil || subIndex.initialNode.NodeId != indexer.NodeId,
-					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds)
+					subIndex.IsShardProxy, subIndex.NumInstances, subIndex.AlternateShardIds,
+					subIndex.initialAlternateShardIds)
 				logging.Infof("\t\t\t Sub-Index total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 					subIndex.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemTotal(s.UseLiveData()))),
 					subIndex.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(subIndex.GetMemUsage(s.UseLiveData()))),

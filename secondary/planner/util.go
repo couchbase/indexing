@@ -540,24 +540,25 @@ func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId,
 	shardIds []common.ShardId, alternateShardIds []string) *IndexUsage {
 
 	index := &IndexUsage{
-		DefnId:            defn.DefnId,
-		InstId:            instId,
-		PartnId:           partnId,
-		Name:              defn.Name,
-		Bucket:            defn.Bucket,
-		Scope:             defn.Scope,
-		Collection:        defn.Collection,
-		ShardIds:          shardIds,
-		AlternateShardIds: alternateShardIds,
-		IsPrimary:         defn.IsPrimary,
-		StorageMode:       common.IndexTypeToStorageMode(defn.Using).String(),
-		NumOfDocs:         defn.NumDoc / numPartition,
-		AvgSecKeySize:     defn.SecKeySize,
-		AvgDocKeySize:     defn.DocKeySize,
-		AvgArrSize:        defn.ArrSize,
-		AvgArrKeySize:     defn.SecKeySize,
-		ResidentRatio:     defn.ResidentRatio,
-		NoUsageInfo:       defn.Deferred, // This value will be reset in IndexUsage.ComputeSizing()
+		DefnId:                   defn.DefnId,
+		InstId:                   instId,
+		PartnId:                  partnId,
+		Name:                     defn.Name,
+		Bucket:                   defn.Bucket,
+		Scope:                    defn.Scope,
+		Collection:               defn.Collection,
+		ShardIds:                 shardIds,
+		AlternateShardIds:        alternateShardIds,
+		initialAlternateShardIds: alternateShardIds,
+		IsPrimary:                defn.IsPrimary,
+		StorageMode:              common.IndexTypeToStorageMode(defn.Using).String(),
+		NumOfDocs:                defn.NumDoc / numPartition,
+		AvgSecKeySize:            defn.SecKeySize,
+		AvgDocKeySize:            defn.DocKeySize,
+		AvgArrSize:               defn.ArrSize,
+		AvgArrKeySize:            defn.SecKeySize,
+		ResidentRatio:            defn.ResidentRatio,
+		NoUsageInfo:              defn.Deferred, // This value will be reset in IndexUsage.ComputeSizing()
 	}
 
 	if defn.ResidentRatio == 0 {
