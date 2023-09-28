@@ -399,8 +399,9 @@ func (tt *TransferToken) String() string {
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}
-	fmt.Fprintf(sbp, "State: %v ", tt.State)
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
@@ -430,12 +431,16 @@ func (tt *TransferToken) String() string {
 			fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInsts[i].Defn.Versions)
 			fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInsts[i])
 		}
+		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
 		fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
 		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
 		fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
+		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
 	}
 
 	return sb.String()
@@ -458,8 +463,9 @@ func (tt *TransferToken) LessVerboseString() string {
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}
-	fmt.Fprintf(sbp, "State: %v ", tt.State)
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
@@ -489,7 +495,9 @@ func (tt *TransferToken) LessVerboseString() string {
 				tt.IndexInsts[i].Defn.Scope, tt.IndexInsts[i].Defn.ScopeId,
 				tt.IndexInsts[i].Defn.Collection, tt.IndexInsts[i].Defn.CollectionId)
 			fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInsts[i].Defn.Partitions)
-			fmt.Fprintf(sbp, "Versions: %v\n", tt.IndexInsts[i].Defn.Versions)
+			fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInsts[i].Defn.Versions)
+			fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+			fmt.Fprintf(sbp, "IsPendingReady: %v", tt.IsPendingReady)
 		}
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)

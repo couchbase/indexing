@@ -131,6 +131,9 @@ type ShardRebalancer struct {
 	shardProgressRatio, dcpProgressRatio float64
 
 	removeDupIndex bool
+
+	// globalTopology is cluster topology from getGlobalTopology in Rebalance case only, else nil
+	globalTopology *manager.ClusterIndexMetadata
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -270,6 +273,15 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					continue
 				}
 
+				if globalTopology, err := GetGlobalTopology(sr.localaddr); err != nil {
+					l.Errorf("ShardRebalancer::initRebalAsync Error Fetching Topology %v", err)
+					go sr.finishRebalance(err)
+					return
+				} else {
+					sr.globalTopology = globalTopology
+					l.Infof("ShardRebalancer::initRebalAsync Global Topology %v", globalTopology)
+				}
+
 				var err error
 				var hostToIndexToRemove map[string]map[common.IndexDefnId]*common.IndexDefn
 
@@ -384,6 +396,8 @@ func (sr *ShardRebalancer) initRebalAsync() {
 							token.Destination, tid)
 					}
 				}
+
+				sr.enableEmptyNodeBatching()
 
 				sum := len(sr.transferTokens) + len(sr.dcpTokens)
 				if sum == 0 {
@@ -502,6 +516,96 @@ func getDestinationFromConfig(cfg c.Config) (string, string, error) {
 		return "", blobStorageRegion, errors.New("Empty destination for shard rebalancer")
 	}
 	return destination, blobStorageRegion, nil
+}
+
+// Empty node batching is enabled in the following cases:
+// a. Cluster is fully upgraded to post 7.6+
+// b. The config "indexer.rebalance.enableEmptyNodeBatching" is set to true
+// c. The destination node on which indexes are being built is empty
+// d. There is atleast one DCP token for the destination node
+//
+// The main aim of empty node batching is to skip the destination node from serving
+// scans while DCP builds are happening as DCP builds can saturate node resources
+// and scan latencies can get impacted. For shard rebalance alone, this is not a
+// problem as shard rebalance relies on shard copy which does not consume much
+// resources (2-4 cores based on the perf experiments).
+//
+// However, if there are DCP tokens involved (either due to replica repair (or) upgrade
+// cases), then if a shard is moved to a destination node, indexes on the shard start
+// scans while there are DCP tokens yet to be processed, then the DCP builds can saturate
+// node resources and impact scan latencies. Hence, shard rebalance will enable empty node
+// batching for the shard tokens only if empty node batching is enabled and DCP transfer
+// tokens are involved in the movement to destination node
+func (sr *ShardRebalancer) enableEmptyNodeBatching() {
+
+	if common.IsServerlessDeployment() {
+		logging.Infof("ShardRebalancer::enableEmptyNodeBatching Empty node batching is not " +
+			"applicable for serverless deployment")
+		return
+	}
+
+	globalClusterVer := common.GetClusterVersion()
+	if globalClusterVer < common.INDEXER_76_VERSION {
+		logging.Infof("ShardRebalancer::enableEmptyNodeBatching Skip empty node batching "+
+			"as cluster version is: %v", globalClusterVer)
+		return
+	}
+
+	emptyNodeBatchingCfg := sr.config.Load()["rebalance.enableEmptyNodeBatching"].Bool()
+	if !emptyNodeBatchingCfg {
+		logging.Infof("ShardRebalancer::enableEmptyNodeBatching Skip empty node batching "+
+			"as it is not enabled in config. Val: %v", emptyNodeBatchingCfg)
+		return
+	}
+
+	emptyNodes := func() map[string]bool {
+		if sr.globalTopology == nil {
+			return nil
+		}
+
+		emptyNodes := make(map[string]bool)
+		for _, metadata := range sr.globalTopology.Metadata {
+			if len(metadata.IndexDefinitions) == 0 {
+				emptyNodes[metadata.NodeUUID] = true
+			}
+		}
+		return emptyNodes
+	}()
+
+	if len(emptyNodes) == 0 {
+		logging.Infof("ShardRebalancer::enableEmptyNodeBatching Skip empty node batching " +
+			"there are no empty nodes in the cluster")
+		return
+	}
+
+	if len(sr.transferTokens) == 0 {
+		logging.Infof("ShardRebalancer::enableEmptyNodeBatching No shard tokens generated for rebalance")
+		return
+	}
+
+	if len(sr.dcpTokens) == 0 {
+		logging.Infof("ShardRebalancer::enableEmptyNodeBatching Skip empty node batching " +
+			"there are no DCP tokens in rebalance")
+		return
+	}
+
+	dcpTokenMap := make(map[string]bool) //destId -> true
+	for _, dcpToken := range sr.dcpTokens {
+		dcpTokenMap[dcpToken.DestId] = true
+	}
+
+	for ttid, token := range sr.transferTokens {
+		_, ok1 := dcpTokenMap[token.DestId] // Check if there are DCP tokens to destination
+		_, ok2 := emptyNodes[token.DestId]  // Check if destination node is empty
+
+		if ok1 && ok2 {
+			// Destination node is empty and there are DCP tokens to destination node
+			// Enable empty node batching
+			token.IsEmptyNodeBatch = true
+			logging.Infof("ShardRebalancer::enableEmptyNodeBatching Enabled empty node batching "+
+				"for token: %v, destId: %v", ttid, token.DestId)
+		}
+	}
 }
 
 // processTokens is invoked by observeRebalance() method
@@ -2425,7 +2529,7 @@ func (sr *ShardRebalancer) updateInMemToken(ttid string, tt *c.TransferToken, ca
 func (sr *ShardRebalancer) checkValidNotifyState(ttid string, tt *c.TransferToken, caller string) bool {
 
 	// As the default state is "ShardTokenCreated"
-	// do not check for valid state changes for this state
+	// do not check for valid state changes for this state.
 	if tt.ShardTransferTokenState == c.ShardTokenCreated {
 		return true
 	}
