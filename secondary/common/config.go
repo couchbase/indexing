@@ -2048,30 +2048,37 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.fbtuner.enable": ConfigValue{
-		false,
+		true,
 		"Enable Auto LSS FlushBuffer Tuning",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.fbtuner.maxQuotaRatio": ConfigValue{
+		float64(0.04),
+		"Maximum ratio between flush buffer memory and plasma assigned quota",
+		float64(0.04),
+		false,
+		false,
+	},
 	"indexer.plasma.fbtuner.minQuotaRatio": ConfigValue{
-		float64(0.10),
-		"Minimum ratio between flush buffer memory to plasma current memory quota tuner tries to keep",
-		float64(0.10),
+		float64(0.02),
+		"Minimum ratio between flush buffer memory and plasma assigned quota",
+		float64(0.02),
 		false,
 		false,
 	},
 	"indexer.plasma.fbtuner.adjustRate": ConfigValue{
-		float64(0.10),
+		float64(0.5),
 		"used by tuner to compute increment/decrement sizes in a readjustment cycle",
-		float64(0.10),
+		float64(0.5),
 		false,
 		false,
 	},
 	"indexer.plasma.fbtuner.adjustInterval": ConfigValue{
-		270, // swapper eviction timeout is 300 secs
+		120,
 		"interval (in seconds) at which tuner performs readjustments",
-		270,
+		120,
 		false,
 		false,
 	},
@@ -2083,9 +2090,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.fbtuner.debug": ConfigValue{
-		false,
+		true,
 		"enable tuner debug logging",
-		false,
+		true,
 		false,
 		false,
 	},

@@ -407,6 +407,8 @@ func (r *Rebalancer) initRebalAsync() {
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.topologyChange,
 							r.nodeUUID, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile,
 							minIterPerTemp, maxIterPerTemp, binSize, false)
+
+						r.resetAlternateShardIds()
 					}
 					if err != nil {
 						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
@@ -557,6 +559,18 @@ func (r *Rebalancer) doRebalance() {
 		r.cb.progress(1.0, r.cancel)
 		r.finishRebalance(nil)
 		return
+	}
+}
+
+func (r *Rebalancer) resetAlternateShardIds() {
+	for ttid, token := range r.transferTokens {
+		if len(token.IndexInst.Defn.AlternateShardIds) > 0 {
+			token.IndexInst.Defn.AlternateShardIds = nil
+			logging.Infof("Rebalancer::resetAlternateShardIds Resetting alternate shardIds for ttid: %v, "+
+				"index: (%v, %v, %v, %v), defnId: %v, instId: %v, realInstId: %v", ttid,
+				token.IndexInst.Defn.Name, token.IndexInst.Defn.Bucket, token.IndexInst.Defn.Scope,
+				token.IndexInst.Defn.Collection, token.IndexInst.Defn.DefnId, token.IndexInst.InstId, token.IndexInst.RealInstId)
+		}
 	}
 }
 

@@ -432,6 +432,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
 		cfg.AutoTuneLSSFlushBuffer = slice.sysconf["plasma.fbtuner.enable"].Bool()
+		cfg.AutoTuneFlushBufferMaxQuota = slice.sysconf["plasma.fbtuner.maxQuotaRatio"].Float64()
 		cfg.AutoTuneFlushBufferMinQuota = slice.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
 		cfg.AutoTuneFlushBufferAdjustRate = slice.sysconf["plasma.fbtuner.adjustRate"].Float64()
 		cfg.AutoTuneFlushBufferAdjustInterval =
