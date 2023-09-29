@@ -3812,7 +3812,7 @@ func (sr *ShardRebalancer) startDcpRebalance(rToken *RebalanceToken) {
 		sr.dcpRebrOnce.Do(func() {
 			sr.dcpRebr = NewRebalancer(tokens, sr.rebalToken, sr.nodeUUID, sr.isMaster,
 				sr.dcpRebrProgressCallback, sr.dcpRebrDoneCallback, sr.supvMsgch, sr.localaddr,
-				sr.config.Load(), sr.topologyChange, false, sr.runParams, sr.statsMgr)
+				sr.config.Load(), sr.topologyChange, false, sr.runParams, sr.statsMgr, sr.globalTopology)
 
 			l.Infof("ShardRebalancer::startDcpRebalance started controlled rebalancer")
 		})
@@ -3850,6 +3850,10 @@ func (sr *ShardRebalancer) dcpRebrProgressCallback(progress float64, cancel <-ch
 	}
 
 	sr.cb.progress(sr.shardProgressRatio+progress*sr.dcpProgressRatio, cancel)
+}
+
+func (sr *ShardRebalancer) InitGlobalTopology(globalTopology *manager.ClusterIndexMetadata) {
+	// no-op for shard rebalancer
 }
 
 // isIndexDeletedDuringRebal returns true if an index is deleted while

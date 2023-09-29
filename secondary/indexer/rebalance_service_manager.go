@@ -684,7 +684,8 @@ func (m *RebalanceServiceManager) startFailover(change service.TopologyChange) e
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(), &change, false, nil, m.genericMgr.statsMgr)
+		m.rebalanceProgressCallback, m.failoverDoneCallback, m.supvMsgch, "", m.config.Load(),
+		&change, false, nil, m.genericMgr.statsMgr, nil)
 
 	return nil
 }
@@ -773,7 +774,7 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	} else {
 		m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr)
+			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr, nil)
 	}
 
 	return nil
@@ -3048,7 +3049,7 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 				m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 					m.localhttp, m.config.Load(), nil, false, &m.p,
-					m.genericMgr.statsMgr)
+					m.genericMgr.statsMgr, nil)
 			}
 
 			m.writeOk(w)
@@ -3243,7 +3244,7 @@ func (m *RebalanceServiceManager) processMoveIndex(kve metakv.KVEntry) error {
 			}
 			m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false, nil, m.genericMgr.statsMgr)
+				m.localhttp, m.config.Load(), nil, false, nil, m.genericMgr.statsMgr, nil)
 		}
 	}
 
@@ -3529,7 +3530,8 @@ func (m *RebalanceServiceManager) initMoveIndex(req *IndexRequest, nodes []strin
 	time.Sleep(2 * time.Second)
 
 	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false, nil, m.genericMgr.statsMgr)
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(),
+		nil, false, nil, m.genericMgr.statsMgr, nil)
 
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true

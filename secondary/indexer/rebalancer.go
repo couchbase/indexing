@@ -129,7 +129,8 @@ type Rebalancer struct {
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
-	runPlanner bool, runParams *runParams, statsMgr *statsManager) *Rebalancer {
+	runPlanner bool, runParams *runParams, statsMgr *statsManager,
+	globalTopo *manager.ClusterIndexMetadata) *Rebalancer {
 
 	clusterVersion := common.GetClusterVersion()
 	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
@@ -167,6 +168,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		runPlanner:     runPlanner,
 		runParams:      runParams,
 		statsMgr:       statsMgr,
+		globalTopology: globalTopo,
 	}
 
 	r.config.Store(config)
@@ -368,14 +370,16 @@ func (r *Rebalancer) initRebalAsync() {
 			default:
 				allWarmedup, _ := checkAllIndexersWarmedup(cfg["clusterAddr"].String())
 				if allWarmedup {
-					globalTopology, err := GetGlobalTopology(r.localaddr)
-					if err != nil {
-						l.Errorf("Rebalancer::initRebalAsync Error Fetching Topology %v", err)
-						go r.finishRebalance(err)
-						return
+					if r.globalTopology == nil {
+						globalTopology, err := GetGlobalTopology(r.localaddr)
+						if err != nil {
+							l.Errorf("Rebalancer::initRebalAsync Error Fetching Topology %v", err)
+							go r.finishRebalance(err)
+							return
+						}
+						r.globalTopology = globalTopology
 					}
-					r.globalTopology = globalTopology
-					l.Infof("Rebalancer::initRebalAsync Global Topology %v", globalTopology)
+					l.Infof("Rebalancer::initRebalAsync Global Topology %v", r.globalTopology)
 
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
 					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
@@ -3162,6 +3166,14 @@ func (r *Rebalancer) getBuildProgress(status *IndexStatusResponse, tt *c.Transfe
 		}
 	}
 	return realInstProgress, count
+}
+
+func (r *Rebalancer) InitGlobalTopology(globalTopology *manager.ClusterIndexMetadata) {
+	if r.globalTopology == nil {
+		r.globalTopology = globalTopology
+	} else {
+		logging.Warnf("Rebalancer::initGlobalTopology Topology is non-nil with rebalancer")
+	}
 }
 
 func getLocalMeta(addr string) (*manager.LocalIndexMetadata, error) {
