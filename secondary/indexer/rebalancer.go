@@ -120,6 +120,11 @@ type Rebalancer struct {
 
 	runParams *runParams
 	statsMgr  *statsManager // indexer's singleton, so Rebalance can get local stats directly
+
+	// When shard rebalance starts DCP rebalance, then this information is used by master to
+	// decide on whether RState of the indexes have to be changed by DCP rebalancer or wait
+	// for shard rebalancer to change the RState of the indexes
+	RebalanceOwner c.RebalancerType
 }
 
 // NewRebalancer creates the Rebalancer object that will run the rebalance on this node and starts
@@ -130,7 +135,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 	nodeUUID string, master bool, progress ProgressCallback, done DoneCallback,
 	supvMsgch MsgChannel, localaddr string, config c.Config, topologyChange *service.TopologyChange,
 	runPlanner bool, runParams *runParams, statsMgr *statsManager,
-	globalTopo *manager.ClusterIndexMetadata) *Rebalancer {
+	globalTopo *manager.ClusterIndexMetadata, owner c.RebalancerType) *Rebalancer {
 
 	clusterVersion := common.GetClusterVersion()
 	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
@@ -169,6 +174,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		runParams:      runParams,
 		statsMgr:       statsMgr,
 		globalTopology: globalTopo,
+		RebalanceOwner: owner,
 	}
 
 	r.config.Store(config)
@@ -401,7 +407,7 @@ func (r *Rebalancer) initRebalAsync() {
 					}
 
 					start := time.Now()
-
+					var err error
 					if c.IsServerlessDeployment() {
 
 						r.transferTokens, hostToIndexToRemove, err = planner.ExecuteTenantAwareRebalance(cfg["clusterAddr"].String(),
@@ -2289,8 +2295,15 @@ func (r *Rebalancer) buildAcceptedIndexesInBatches(buildTokens map[string]*commo
 		}
 	}
 
-	//switch all tokens to ready together
-	r.moveDestTokenToMergeOrReady(buildTokens)
+	// If Shard rebalancer is starting DCP rebalance, then it will take care of changing RState
+	// as changing RState has to be coordinated with changes for indexes on shards inorder
+	// to maintain shard affinity. Hence, skip changing RState in such a case
+	if r.RebalanceOwner != c.SHARD_REBALANCER {
+		//switch all tokens to ready together
+		r.moveDestTokenToMergeOrReady(buildTokens)
+	} else {
+		logging.Infof("Rebalancer::buildAcceptedIndexesInBatches Skip updating RState of the indexes")
+	}
 
 }
 
@@ -2845,6 +2858,18 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 	case c.TransferTokenInProgress:
 		r.updateMasterTokenState(ttid, c.TransferTokenInProgress)
 
+		if r.RebalanceOwner == c.SHARD_REBALANCER && r.allTokensPendingReadyOrDeleted() {
+			logging.Infof("Rebalance::processTokenAsMaster Finishing rebalance as all tokens are either in pendingReady state or Deleted")
+
+			if r.cb.progress != nil {
+				r.cb.progress(1.0, r.cancel)
+			}
+
+			// Finish rebalance
+			r.cancelMetakv()
+			go r.finishRebalance(nil)
+		}
+
 	case c.TransferTokenCommit:
 		tt.State = c.TransferTokenDeleted
 		setTransferTokenInMetakv(ttid, tt)
@@ -2865,6 +2890,16 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 				r.cb.progress(1.0, r.cancel)
 			}
 			l.Infof("Rebalancer::processTokenAsMaster No Tokens Found. Mark Done.")
+			r.cancelMetakv()
+			go r.finishRebalance(nil)
+		} else if r.RebalanceOwner == c.SHARD_REBALANCER && r.allTokensPendingReadyOrDeleted() {
+
+			if r.cb.progress != nil {
+				r.cb.progress(1.0, r.cancel)
+			}
+
+			logging.Infof("Rebalance::processTokenAsMaster Finishing rebalance as all tokens are either in pendingReady state or Deleted")
+			// Finish rebalance
 			r.cancelMetakv()
 			go r.finishRebalance(nil)
 		} else {
@@ -2897,6 +2932,30 @@ func (r *Rebalancer) updateMasterTokenState(ttid string, state c.TokenState) boo
 		return false
 	}
 	return true
+}
+
+func (r *Rebalancer) allTokensPendingReadyOrDeleted() bool {
+	const method = "Rebalancer::allTokensPendingReadyOrDeleted:" // for logging
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+
+	for _, token := range r.transferTokens {
+		if token.State != c.TransferTokenInProgress && token.State != c.TransferTokenDeleted {
+			return false
+		}
+
+		if token.State == c.TransferTokenInProgress {
+			if token.IsEmptyNodeBatch == false {
+				return false
+			}
+
+			if token.IsPendingReady == false {
+				return false
+			}
+		}
+	}
+	return true // all tokens are either Deleted or in pending Ready state
 }
 
 // setTransferTokenInMetakv stores a transfer token in metakv with several retries before

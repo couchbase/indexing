@@ -3812,7 +3812,12 @@ func (sr *ShardRebalancer) startDcpRebalance(rToken *RebalanceToken) {
 		sr.dcpRebrOnce.Do(func() {
 			sr.dcpRebr = NewRebalancer(tokens, sr.rebalToken, sr.nodeUUID, sr.isMaster,
 				sr.dcpRebrProgressCallback, sr.dcpRebrDoneCallback, sr.supvMsgch, sr.localaddr,
-				sr.config.Load(), sr.topologyChange, false, sr.runParams, sr.statsMgr, sr.globalTopology)
+				sr.config.Load(), sr.topologyChange, false, sr.runParams, sr.statsMgr, sr.globalTopology,
+				c.SHARD_REBALANCER)
+
+			if sr.isMaster {
+				sr.dcpRebr.InitGlobalTopology(sr.globalTopology)
+			}
 
 			l.Infof("ShardRebalancer::startDcpRebalance started controlled rebalancer")
 		})
