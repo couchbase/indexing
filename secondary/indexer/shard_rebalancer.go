@@ -1439,13 +1439,22 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 	case c.ShardTokenRecoverShard:
 		sr.updateInMemToken(ttid, tt, "dest")
 
-		go sr.startShardRecovery(ttid, tt)
+		// If pendingReady is set to true, then recovery is already finished.
+		// Skip recovering again
+		if tt.IsEmptyNodeBatch == false || tt.IsPendingReady == false {
+			go sr.startShardRecovery(ttid, tt)
+		}
 
 		return true
 
 	case c.ShardTokenMerge:
 		sr.updateInMemToken(ttid, tt, "dest")
 		sr.updateRStateToActive(ttid, tt)
+
+		if sr.allDestTokensReady() {
+			sr.updateRStateOfDCPTokens()
+		}
+
 		return true
 
 	case c.ShardTokenDropOnSource:
@@ -2471,7 +2480,104 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 
 	// Update state of the transfer token
 	tt.ShardTransferTokenState = c.ShardTokenReady
+	sr.acceptedTokens[ttid] = tt // Update accpeted tokens
 	setTransferTokenInMetakv(ttid, tt)
+}
+
+func (sr *ShardRebalancer) allDestTokensReady() bool {
+	logging.Infof("ShardRebalancer::allDestTokensReady Updating RState of indexes in transfer token")
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	for ttid, token := range sr.acceptedTokens {
+		switch token.ShardTransferTokenState {
+		case c.ShardTokenCreated,
+			c.ShardTokenScheduledOnSource,
+			c.ShardTokenScheduleAck,
+			c.ShardTokenTransferShard,
+			c.ShardTokenRestoreShard,
+			c.ShardTokenRecoverShard,
+			c.ShardTokenMerge,
+			c.ShardTokenError:
+			logging.Infof("ShardRebalancer::allDestTokensReady Token: %v is still not ready", ttid)
+			return false
+		}
+	}
+	return true
+}
+
+func getDcpTokens() (map[string]*c.TransferToken, error) {
+
+	metainfo, err := metakv.ListAllChildren(RebalanceMetakvDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(metainfo) == 0 {
+		return nil, nil
+	}
+
+	var rinfo RebalTokens
+	rinfo.TT = make(map[string]*c.TransferToken)
+
+	for _, kv := range metainfo {
+
+		if strings.Contains(kv.Path, TransferTokenTag) {
+			ttidpos := strings.Index(kv.Path, TransferTokenTag)
+			ttid := kv.Path[ttidpos:]
+
+			var tt c.TransferToken
+			json.Unmarshal(kv.Value, &tt)
+			rinfo.TT[ttid] = &tt
+		} else {
+			l.Errorf("RebalanceServiceManager::getCurrRebalTokens Unknown Token %v. Ignored.", kv)
+		}
+
+	}
+
+	return rinfo.TT, nil
+}
+
+func (sr *ShardRebalancer) updateRStateOfDCPTokens() {
+	// Step-1: Get all DCP tokens from metaKV
+	dcpTokens, err := getDcpTokens()
+	if err != nil {
+		logging.Errorf("ShardRebalancer::updateRStateOfDCPTokens Failure to get DCP tokens from metaKV, err: %v", err)
+		return // Return but do not fail rebalance
+	}
+
+	if len(dcpTokens) == 0 {
+		logging.Errorf("ShardRebalancer::updateRStateOfDCPTokens No DCP tokens found")
+		return
+	}
+
+	// Step-2: Change Rstate of each of the DCP tokens
+	for dcpTokenId, dcpToken := range dcpTokens {
+
+		if dcpToken.IsEmptyNodeBatch == false || dcpToken.IsPendingReady == false {
+			continue
+		}
+
+		if dcpToken.DestId != sr.nodeUUID {
+			continue
+		}
+
+		var partnMergeWaitGroup sync.WaitGroup
+		sr.destTokenToMergeOrReady(dcpToken.InstId, dcpToken.RealInstId, dcpTokenId, dcpToken, &partnMergeWaitGroup)
+		partnMergeWaitGroup.Wait()
+
+		// At this point, index is merged & RState of the index is changed.
+		// Otherwise, indexer would have crashed
+		// Update transfer token state
+		if dcpToken.TransferMode == c.TokenTransferModeMove {
+			dcpToken.State = c.TransferTokenReady
+		} else {
+			dcpToken.State = c.TransferTokenCommit // no source to delete in non-move case
+		}
+		logging.Infof("ShardRebalancer::updateRStateOfDCPTokens Changing RState of dcpToken: %v to %v", dcpTokenId, dcpToken.State)
+		setTransferTokenInMetakv(dcpTokenId, dcpToken)
+	}
 }
 
 func isInstProcessed(instId, realInstId c.IndexInstId, processedInsts map[c.IndexInstId]bool) bool {
@@ -2617,13 +2723,16 @@ func (sr *ShardRebalancer) allTokensPendingReadyOrDone() bool {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	for _, tt := range sr.transferTokens {
+	for ttid, tt := range sr.transferTokens {
 		if (tt.ShardTransferTokenState == c.ShardTokenRecoverShard && tt.IsPendingReady) || tt.ShardTransferTokenState == c.ShardTokenDeleted {
 			continue
 		} else {
+			logging.Infof("ShardRebalancer::allTokensPendingReadyOrDone Returning false as token: %v "+
+				"is in state: %v, pendingReady: %v", ttid, tt.ShardTransferTokenState, tt.IsPendingReady)
 			return false
 		}
 	}
+	logging.Infof("ShardRebalancer::allTokensPendingReadyOrDone All tokens are either pendingReady or Deleted")
 	return true
 }
 

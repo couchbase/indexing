@@ -2858,6 +2858,14 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 	case c.TransferTokenInProgress:
 		r.updateMasterTokenState(ttid, c.TransferTokenInProgress)
 
+		func() {
+			r.bigMutex.Lock()
+			defer r.bigMutex.Unlock()
+
+			r.transferTokens[ttid] = tt
+		}()
+
+		// Finish rebalance at master so that shard rebalance master will start token merging
 		if r.RebalanceOwner == c.SHARD_REBALANCER && r.allTokensPendingReadyOrDeleted() {
 			logging.Infof("Rebalance::processTokenAsMaster Finishing rebalance as all tokens are either in pendingReady state or Deleted")
 
@@ -2865,7 +2873,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 				r.cb.progress(1.0, r.cancel)
 			}
 
-			// Finish rebalance
+			// Finish rebalance at rebalance master
 			r.cancelMetakv()
 			go r.finishRebalance(nil)
 		}
