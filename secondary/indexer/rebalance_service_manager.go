@@ -1184,6 +1184,12 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	ttPrependRealInst := []ttListElement{}
 	ttAppendRealInst := []ttListElement{}
 	for _, ttElem := range ttListRealInst {
+
+		if ttElem.tt.IsShardTransferToken() {
+			ttPrependRealInst = append(ttPrependRealInst, ttElem)
+			continue
+		}
+
 		//if emptyNodeBatching is enabled and instance is ready, then
 		//the realInst RState needs to change before the proxy. This is
 		//required so that proxy merge can proceed.
@@ -1234,7 +1240,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 				_, dropIssued = m.cleanupTransferTokensForSource(t.ttid, t.tt)
 			}
 			if t.tt.DestId == string(m.nodeInfo.NodeID) {
-				_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap)
+				_, dropIssued = m.cleanupTransferTokensForDest(t.ttid, t.tt, indexStateMap, tokenMap)
 			}
 		}
 	}
@@ -1316,7 +1322,44 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt
 
 }
 
-func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) (error, bool) {
+func canMergeOnDest(tt *c.TransferToken, tokenMap map[string]*c.TransferToken) bool {
+
+	// Index does not have alternate shardIds. Proceed with merge on destination
+	defn := tt.IndexInst.Defn
+
+	for _, defnAlternateShardIds := range defn.AlternateShardIds {
+		if len(defnAlternateShardIds) == 0 {
+			continue
+		}
+
+		for tokenId, token := range tokenMap {
+			if token.IsShardTransferToken() {
+				if token.DestId != tt.DestId {
+					continue
+				}
+
+				alternateShardIds, err := getAlternateShardIds(tokenId, token)
+				if err != nil { // Ignore the error
+					continue
+				}
+
+				// For the same destination, there exists a shard movement and a DCP index movement.
+				// By the time the DCP token is cleaned up, all shard tokens are already processed.
+				// In that case, the shard token state should either move to ShardTokenReady
+				// (or) the token should be in error state. If the token is in error state, then
+				// DCP index can not be activated on destination node as the shard affinity constraint
+				// is violated. In such cases, cleanup the index on destination
+				if defnAlternateShardIds[0] == alternateShardIds[0] && (token.ShardTransferTokenState < c.ShardTokenReady && token.Error != "") {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken,
+	indexStateMap map[c.IndexInstId]c.RebalanceState, tokenMap map[string]*c.TransferToken) (error, bool) {
 
 	cleanup := func() (error, bool) {
 		var err error
@@ -1350,6 +1393,14 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 		//On success, move the token to TransferTokenReady/TransferTokenCommit.
 		//In case of any failure, cleanup the index.
 		if tt.IsEmptyNodeBatch && tt.IsPendingReady {
+
+			// If there is a shard token whose alternate shardIds match with the alternate shardIds of this index
+			// definition, then either the shard token should exist in Ready state or in erroneous state
+			// If the shard token moved to ready state, then proceed with merging the DCP token. Otherwise, cleanup
+			// the index on destination
+			if canMergeOnDest(tt, tokenMap) == false {
+				return cleanup()
+			}
 
 			logging.Infof("RebalanceServiceManager::cleanupTransferTokensForDest Found empty node batch token" +
 				" with IsPendingReady as true. Attempt to move to TransferTokenReady/TransferTokenCommit.")
@@ -1514,7 +1565,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		if dropOnSource {
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
-			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, false)
 		} else {
 			// Else, cleanup on destination will be triggered as rebalance is not complete for this tenant
 			// Shards will be unlocked for source (by rebalance_service_manager) after cleanup
@@ -1547,16 +1598,23 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		m.cleanupTranferredData(ttid, tt)
 
 		// Clean up local index instances
-		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, false, cleanupFailedShards)
+		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, false, cleanupFailedShards, false)
 
-	case c.ShardTokenRecoverShard:
-		// In this state, shard is successfully restored
-		// Cleanup data on S3
+	case c.ShardTokenRecoverShard, c.ShardTokenMerge:
+		var cleanup = func(skipTokenDelete bool) error {
+			m.cleanupTranferredData(ttid, tt)
 
-		m.cleanupTranferredData(ttid, tt)
+			// Drop all indexes on destination and cleanup the data locally
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, skipTokenDelete)
+		}
 
-		// Drop all indexes on destination and cleanup the data locally
-		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards)
+		if tt.IsPendingReady {
+			if err := m.updateRStateForShardToken(ttid, tt); err != nil {
+				return cleanup(true)
+			}
+		} else {
+			return cleanup(false)
+		}
 
 	case c.ShardTokenReady:
 
@@ -1608,7 +1666,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		if dropOnDest {
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
-			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, false)
 		} else if common.IsServerlessDeployment() {
 			// On Destination if we see a token in ShardTokenDropOnSource state
 			// it implies that source instance will be cleaned up and hence there
@@ -1648,6 +1706,58 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			return err
 		}
 	}
+	return nil
+}
+
+func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realInstId common.IndexInstId, ttid string) error {
+
+	// There is no proxy (no merge needed)
+	if realInstId == 0 {
+
+		respch := make(chan error)
+		m.supvMsgch <- &MsgUpdateIndexRState{
+			instId: instId,
+			rstate: c.REBAL_ACTIVE,
+			respch: respch}
+		err := <-respch
+		if err != nil {
+			//cleanup the index
+			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
+			return err
+		}
+	} else {
+
+		respch := make(chan error)
+		m.supvMsgch <- &MsgMergePartition{
+			srcInstId:  instId,
+			tgtInstId:  realInstId,
+			rebalState: c.REBAL_ACTIVE,
+			respCh:     respch}
+
+		err := <-respch
+		if err != nil {
+			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.TransferToken) error {
+	for _, indexInst := range tt.IndexInsts {
+		if err := m.destTokenToMergeOrReadyForInst(indexInst.InstId, indexInst.RealInstId, ttid); err != nil {
+			// No error is observed. Update the transfer token state to Ready
+			tt.Error = err.Error()
+			tt.IsPendingReady = false // Reset pending ready so that token will be deleted in next iteration
+			setTransferTokenInMetakv(ttid, tt)
+			return err
+		}
+	}
+
+	// No error is observed. Update the transfer token state to Ready
+	tt.ShardTransferTokenState = c.ShardTokenReady
+	setTransferTokenInMetakv(ttid, tt)
 	return nil
 }
 
@@ -1748,7 +1858,8 @@ func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 	return nil
 }
 
-func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid string, tt *c.TransferToken, dropIndexes bool, cleanupFailedShards map[c.ShardId]bool) error {
+func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid string, tt *c.TransferToken,
+	dropIndexes bool, cleanupFailedShards map[c.ShardId]bool, skipTokenDelete bool) error {
 
 	logging.Infof("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Cleaning up for "+
 		"ttid: %v, dropIndexes: %v", ttid, dropIndexes)
@@ -1774,6 +1885,10 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 		}
 		logging.Errorf("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Error observed while dropping indexes. Skipping shard destruction. err: %v", err)
 		return err
+	}
+
+	if skipTokenDelete {
+		return nil
 	}
 
 	// Destroy the local index data
