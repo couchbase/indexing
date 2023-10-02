@@ -354,6 +354,31 @@ var greedyPlannerFuncTestCases = []greedyPlannerFuncTestCase{
 		"../testdata/planner/greedy/new_equiv_index_1_replica.json",
 		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9002": true},
 	},
+	// Place equivalent index across SG - MB-55628
+	{
+		"Place Equivalent Index With 2 replica - 3 SG - Forced placement on equivalent due to SG constraint",
+		"../testdata/planner/greedy/topologies/5_nodes_3_sg_equiv_map_0001.json",
+		"../testdata/planner/greedy/new_equiv_index_2_replica.json",
+		map[string]bool{"127.0.0.1:9000": true, "127.0.0.1:9002": true, "127.0.0.1:9004": true},
+	},
+	{
+		"Place Equivalent Index With 2 replica - 3 SG - Avoid placement on nodes with equiv Idx when another node in SG is present",
+		"../testdata/planner/greedy/topologies/5_nodes_3_sg_equiv_map_10101.json",
+		"../testdata/planner/greedy/new_equiv_index_2_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9003": true, "127.0.0.1:9004": true},
+	},
+	{
+		"Place Equivalent Index With 2 replica - 4 SG - Avoid lower used nodes with Equiv Idx when other SGs can fully accommodate",
+		"../testdata/planner/greedy/topologies/8_nodes_4_sg_equiv_map_11000000.json",
+		"../testdata/planner/greedy/new_equiv_index_2_replica.json",
+		map[string]bool{"127.0.0.1:9002": true, "127.0.0.1:9004": true, "127.0.0.1:9006": true},
+	},
+	{
+		"Place Equivalent Index With 2 replica - 3 SG - Skip placement on Equiv Index nodes",
+		"../testdata/planner/greedy/topologies/6_nodes_3_sg_equiv_map_101010.json",
+		"../testdata/planner/greedy/new_equiv_index_2_replica.json",
+		map[string]bool{"127.0.0.1:9001": true, "127.0.0.1:9003": true, "127.0.0.1:9005": true},
+	},
 }
 
 var greedyPlannerIdxDistTestCases = []greedyPlannerIdxDistTestCase{
