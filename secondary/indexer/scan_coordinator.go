@@ -337,8 +337,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	}
 
 	if req.hasRollback != nil && req.hasRollback.Load() == true {
-		s.handleError(req.LogPrefix, w.Error(ErrIndexRollback))
-		return
+		err = w.Error(ErrIndexRollback)
 	}
 
 	if s.tryRespondWithError(w, req, err) {
