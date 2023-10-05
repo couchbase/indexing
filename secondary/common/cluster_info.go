@@ -1322,16 +1322,19 @@ func getServerVersionFromVersionString(v string) (int, error) {
 	// E.g. 6.5.0-0000-enterprise, 6.0.3-2855-enterprise etc.
 	versionStr := strings.Split(v, ".")
 	if len(versionStr) < 3 {
-		return 0, ErrInvalidVersion
+		err := fmt.Errorf("%v splitting %v to %v", ErrInvalidVersion, v, versionStr)
+		return 0, err
 	}
 
 	var version, minorVersion int
 	var err error
 	if version, err = strconv.Atoi(versionStr[0]); err != nil {
-		return 0, ErrInvalidVersion
+		err = fmt.Errorf("%v. err: %v parsing version from %v", ErrInvalidVersion, err, v)
+		return 0, err
 	}
 	if minorVersion, err = strconv.Atoi(versionStr[1]); err != nil {
-		return 0, ErrInvalidVersion
+		err = fmt.Errorf("%v. err: %v parsing minorVersion from %v", ErrInvalidVersion, err, v)
+		return 0, err
 	}
 
 	if version < 5 {
@@ -1383,6 +1386,12 @@ func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 	for _, n := range c.nodes {
 		hostList1 = append(hostList1, n.Hostname)
 		addressFamily = append(addressFamily, n.AddressFamily)
+
+		_, err := getServerVersionFromVersionString(n.Version)
+		if err != nil {
+			logging.Warnf("ClusterInfoCache:validateCache - Failed as node version is not parsable err: %v node: %v", err, n)
+			return false
+		}
 	}
 
 	for i, svc := range c.nodesvs {

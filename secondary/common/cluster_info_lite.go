@@ -350,6 +350,13 @@ func (ni *NodesInfo) validateNodesAndSvs(connHost string) {
 
 	for _, n := range ni.nodes {
 		hostsFromNodes = append(hostsFromNodes, n.Hostname)
+		_, err := getServerVersionFromVersionString(n.Version)
+		if err != nil {
+			logging.Warnf("validateNodesAndSvs: Failed as node version is not parsable err: %v, node: %v", err, n)
+			ni.valid = false
+			ni.errList = append(ni.errList, ErrValidationFailed)
+			return
+		}
 	}
 
 	for _, svc := range ni.nodesExt {

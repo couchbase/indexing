@@ -122,10 +122,11 @@ type ShardRebalancer struct {
 	transferScheme           string
 	canMaintainShardAffinity bool
 
-	dcpRebr        RebalanceProvider // controlled rebalancer (DCP rebalancer)
-	dcpRebrCloseCh chan struct{}     // channel to sync on controlled rebalancer close
-	dcpTokens      map[string]*common.TransferToken
-	dcpRebrOnce    sync.Once
+	dcpRebr          RebalanceProvider // controlled rebalancer (DCP rebalancer)
+	dcpTokens        map[string]*common.TransferToken
+	dcpRebrOnce      sync.Once
+	dcpRebrCloseCh   chan struct{} // channel to sync on controlled rebalancer close
+	dcpRebrCloseOnce sync.Once     // sync construct to handle the closure of 'dcpRebrCloseCh'
 
 	shardProgressRatio, dcpProgressRatio float64
 
@@ -2908,9 +2909,9 @@ func (sr *ShardRebalancer) finishRebalance(err error) {
 	}
 	if err != nil {
 		// we cannot encounter an error on finishRebalance once we have moved to DcpRebalance
-		// so if we have seen an error, we can close the DcpRebo channel as we will not be entering
+		// so if we have seen an error, we can close the DcpRebr channel as we will not be entering
 		// DcpRebalance
-		sr.dcpRebrOnce.Do(func() {
+		sr.dcpRebrCloseOnce.Do(func() {
 			if sr.dcpRebrCloseCh != nil {
 				close(sr.dcpRebrCloseCh)
 			}
@@ -3463,8 +3464,10 @@ func (sr *ShardRebalancer) transitionToDcpOrEndShardRebalance() {
 	if !c.IsServerlessDeployment() && sr.canMaintainShardAffinity {
 		sr.moveToDcpRebr()
 	} else {
-		sr.dcpRebrOnce.Do(func() {
-			close(sr.dcpRebrCloseCh)
+		sr.dcpRebrCloseOnce.Do(func() {
+			if sr.dcpRebrCloseCh != nil {
+				close(sr.dcpRebrCloseCh)
+			}
 		})
 		sr.cancelMetakv()
 		go sr.finishRebalance(nil)
@@ -3526,8 +3529,10 @@ func (sr *ShardRebalancer) startDcpRebalance() {
 			l.Infof("ShardRebalancer::startDcpRebalance started controlled rebalancer")
 		})
 	} else {
-		sr.dcpRebrOnce.Do(func() {
-			close(sr.dcpRebrCloseCh)
+		sr.dcpRebrCloseOnce.Do(func() {
+			if sr.dcpRebrCloseCh != nil {
+				close(sr.dcpRebrCloseCh)
+			}
 		})
 	}
 }
@@ -3536,7 +3541,12 @@ func (sr *ShardRebalancer) dcpRebrDoneCallback(err error, cancel <-chan struct{}
 	sr.wg.Add(1)
 	defer sr.wg.Done()
 
-	defer close(sr.dcpRebrCloseCh)
+	defer sr.dcpRebrCloseOnce.Do(func() {
+		if sr.dcpRebrCloseCh != nil {
+			close(sr.dcpRebrCloseCh)
+		}
+	})
+
 	l.Infof("ShardRebalancer::dcpRebrDoneCallback controlled rebalancer exited with error %v",
 		err)
 	if err != nil {

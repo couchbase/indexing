@@ -1595,12 +1595,21 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// Create Index Metadata
 	/////////////////////////////////////////////////////
 
+	// Shard rebalance may populate ShardIdsForDest but they should not be populated in the meta
+	// under index definition as they are not a part of index definition. They can be added under
+	// topology though (as tenant aware planner uses the information from topology to group indexes
+	// for serverless deployments). Hence reset shardIds when persisting definition in index metadata
+	shardIdsForDest := defn.ShardIdsForDest
+	defn.ShardIdsForDest = nil
+
 	// Create index definiton.   It will fail if there is another index defintion of the same
 	// index defnition id.
 	if err := m.repo.CreateIndex(defn); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 		return err
 	}
+
+	defn.ShardIdsForDest = shardIdsForDest
 
 	// Create index instance
 	// If there is any dangling index instance of the same index name and bucket, this will first

@@ -65,3 +65,7 @@ func IsServerlessDeployment() bool {
 func IsProvisionedDeployment() bool {
 	return gDeploymentModel == PROVISIONED_DEPLOYMENT
 }
+
+func IsDefaultDeployment() bool {
+	return gDeploymentModel == DEFAULT_DEPLOYMENT
+}

@@ -2582,7 +2582,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 	useGreedyPlanner := o.settings.UseGreedyPlanner()
 	serverlessIndexLimit := o.settings.ServerlessIndexLimit()
 	allowDDLDuringScaleUp := o.settings.AllowDDLDuringScaleUp()
-	enableShardAffinity := o.settings.IsShardAffinityEnabled()
+	enableShardAffinity := o.ShouldMaintainShardAffinity()
 	binSize := o.settings.GetBinSize()
 
 	var solution *planner.Solution
@@ -2621,7 +2621,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}, 
 		return nil, nil, false, err
 	}
 
-	if o.settings.IsShardAffinityEnabled() {
+	if o.ShouldMaintainShardAffinity() {
 		definitions = o.getAlternateShardIdsFromIndexUsage(solution, definitions)
 	}
 
@@ -2695,7 +2695,7 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 		}
 	}
 
-	enableShardAffinity := o.settings.IsShardAffinityEnabled()
+	enableShardAffinity := o.ShouldMaintainShardAffinity()
 	binSize := o.settings.GetBinSize()
 
 	// Use the planner to find out where to place the replica.

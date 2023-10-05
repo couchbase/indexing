@@ -3475,16 +3475,19 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.settings.enableShardAffinity": ConfigValue{
+	"indexer.settings.enable_shard_affinity": ConfigValue{
 		false,
-		"This is a boolean flag to enable index grouping (aka shard-index affinity) in the cluster",
+		"This is a boolean flag to enable index grouping (aka shard-index affinity) in the cluster. " +
+			"Keep this in sync with ns_server config",
 		false,
 		false, // mutable,
 		false, // case-insensitive
 	},
-	"indexer.settings.provisioned.enableShardAffinity": ConfigValue{
+	"indexer.default.enable_shard_affinity": ConfigValue{
 		true,
-		"This is a boolean flag to enable index grouping (aka shard-index affinity) in a provisioned cluster",
+		"Used in provisioned clusters. When provisioned clusters are in mixed mode (<7.6 & 7.6 nodes) " +
+			"indexer uses the value of this setting to control shard affinity. In a 7.6+ upgraded cluster, " +
+			"the ns_server setting indexer.settings.enable_shard_affinity is used",
 		true,
 		false, // mutable,
 		false, // case-insensitive
@@ -4169,6 +4172,17 @@ func (config Config) FilterConfig(subs string) Config {
 	return newConfig
 }
 
+func (config Config) Get(key string) Config {
+	newConfig := make(Config)
+	for k, v := range config {
+		if key == k {
+			newConfig[key] = v
+			return newConfig
+		}
+	}
+	return newConfig
+}
+
 // Set ConfigValue for parameter. Mutates the config object.
 func (config Config) Set(key string, cv ConfigValue) Config {
 	config[key] = cv
@@ -4354,10 +4368,31 @@ func (config Config) GetDeploymentModelAwareCfgBool(k string) bool {
 	return config.getIndexerConfig(key).Bool()
 }
 
-// GetIndexerShardAffinity - get the value of `enableShardAffinity` from config being aware of the
-// deployment model
-func (config Config) GetIndexerShardAffinity() bool {
-	return config.GetDeploymentModelAwareCfgBool("settings.enableShardAffinity")
+// GetDeploymentAwareShardAffinity - get the value of `enable_shard_affinity` from config being
+// aware of the deployment model
+func (config Config) GetDeploymentAwareShardAffinity() bool {
+
+	if IsServerlessDeployment() {
+		return false // TODO: This should return true eventually
+	}
+
+	if IsDefaultDeployment() {
+		return config.getIndexerConfig("settings.enable_shard_affinity").Bool()
+	}
+
+	// Provisioned deployments
+	// For provisioned deployments, in mixed mode, the shard_affinity value is decided
+	// by "indexer.default.enable_shard_affinity". Once the cluster compact changes to
+	// 7.6+, ns_server will read the value of "indexer.default.enable_shard_affinity" from
+	// metaKV and populate the value of "indexer.settings.enable_shard_affinity"
+	//
+	// For a fully upgraded cluster (>=7.6), the setting change happens only via ns_server
+	globalClustVer := GetClusterVersion()
+	if globalClustVer >= INDEXER_76_VERSION {
+		return config.getIndexerConfig("settings.enable_shard_affinity").Bool()
+	} else {
+		return config.getIndexerConfig("default.enable_shard_affinity").Bool()
+	}
 }
 
 // Int assumes config value is an integer and returns the same.

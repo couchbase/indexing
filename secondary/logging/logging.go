@@ -1,16 +1,20 @@
 package logging
 
-import "io"
-import "os"
-import "fmt"
-import "strings"
-import "time"
-import "bytes"
-import "net/http"
-import "io/ioutil"
-import "runtime/debug"
-import l "log"
-import "runtime"
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"runtime/debug"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	l "log"
+	"runtime"
+)
 
 // Log levels
 type LogLevel int16
@@ -269,10 +273,8 @@ func SetLogWriter(w io.Writer) {
 	SystemLogger = destination{baselevel: Info, target: dest}
 }
 
-//
 // A set of convenience methods to log to default logger
 // See correspond methods on destination for details
-//
 func Warnf(format string, v ...interface{}) {
 	SystemLogger.printf(Warn, format, v...)
 }
@@ -392,4 +394,70 @@ func TagUD(arg interface{}) interface{} {
 // Tag user data in string format
 func TagStrUD(arg interface{}) interface{} {
 	return fmt.Sprintf("%s(%s)%s", udtag_begin, arg, udtag_end)
+}
+
+type TimedStackTrace struct {
+	last   uint64
+	period uint64
+}
+
+func NewTimedStackTrace(period time.Duration) *TimedStackTrace {
+	return &TimedStackTrace{
+		period: uint64(period),
+	}
+}
+
+// Log only once over a TimedLogger.Period of time
+func (tl *TimedStackTrace) TryLogStackTrace(level LogLevel, errStr string) {
+	new := uint64(time.Now().UnixNano())
+	old := atomic.LoadUint64(&tl.last)
+	if new-old > tl.period && atomic.CompareAndSwapUint64(&tl.last, old, new) {
+		SystemLogger.printf(level, "%v: %v", errStr, StackTrace())
+	}
+}
+
+// TimedNStackTraces is not Concurrent safe
+type TimedNStackTraces struct {
+	maxSize int
+	period  time.Duration
+	errList []string
+	curIdx  int
+	lgrMap  map[string]*TimedStackTrace
+}
+
+func NewTimedNStackTraces(maxSize int, period time.Duration) *TimedNStackTraces {
+	return &TimedNStackTraces{
+		maxSize: maxSize,
+		period:  period,
+		errList: make([]string, maxSize),
+		lgrMap:  make(map[string]*TimedStackTrace),
+	}
+}
+
+func (tl *TimedNStackTraces) TryLogStackTrace(level LogLevel, errStr string) {
+	if errStr == "" {
+		return
+	}
+
+	lgr, ok := tl.lgrMap[errStr]
+	if !ok {
+		// cleanup old one if available
+		oldErrStr := tl.errList[tl.curIdx]
+		if oldErrStr != "" {
+			delete(tl.lgrMap, oldErrStr)
+		}
+
+		// create new logger
+		tl.errList[tl.curIdx] = errStr
+		lgr = NewTimedStackTrace(tl.period)
+		tl.lgrMap[errStr] = lgr
+
+		// update curIdx
+		tl.curIdx = tl.curIdx + 1
+		if tl.curIdx >= tl.maxSize {
+			tl.curIdx = 0
+		}
+	}
+
+	lgr.TryLogStackTrace(level, errStr)
 }
