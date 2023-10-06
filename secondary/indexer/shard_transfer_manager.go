@@ -877,8 +877,8 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 
 	dir := stm.config["storage_dir"].String()
 
-	cfg := plasma.DefaultRPCHTTPServerConfig()
-	cfg.DoServe = false
+	cfg := loadRPCServerConfig(stm.config)
+	cfg.RPCHttpServerCfg.DoServe = false
 
 	httpSrv := &http.Server{
 		Addr: nodeAddr,
@@ -902,7 +902,7 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 
 	mux := http.NewServeMux()
 	rpcSrv, err := plasma.NewRPCServerWithHTTP(nodeAddr, httpSrv, lst, mux,
-		dir, plasma.DefaultConfig().Environment, plasma.GetOpRateLimiter(plasma.GSIRebalanceId), cfg)
+		dir, plasma.DefaultConfig().Environment, plasma.GetOpRateLimiter(plasma.GSIRebalanceId), cfg.RPCHttpServerCfg)
 	if err != nil {
 		lstClose()
 		logging.Errorf("ShardTransferManager::initPeerRPCServerNoLock failed to create Plasma RPC server with error %v",

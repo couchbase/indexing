@@ -441,6 +441,13 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
 
+		// shard transfer
+		// note: server config is set in shard transfer manager during spawn
+		cfg.RPCHttpClientCfg.MaxRetries = int64(slice.sysconf["plasma.shardCopy.maxRetries"].Int())
+		cfg.RPCHttpClientCfg.MaxPartSize = int64(slice.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+		cfg.RPCHttpClientCfg.RateAdjInterval = time.Duration(slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
+		cfg.RPCHttpClientCfg.Debug = slice.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
+
 		if common.IsServerlessDeployment() {
 			cfg.MaxInstsPerShard = slice.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
 			cfg.MaxDiskPerShard = slice.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
@@ -3101,6 +3108,11 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
+	mdb.mainstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
+	mdb.mainstore.RPCHttpClientCfg.MaxPartSize = int64(mdb.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+	mdb.mainstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
+	mdb.mainstore.RPCHttpClientCfg.Debug = mdb.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
+
 	if common.IsServerlessDeployment() {
 		mdb.mainstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
 		mdb.mainstore.MaxDiskPerShard = mdb.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
@@ -3209,6 +3221,11 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
+		mdb.backstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
+		mdb.backstore.RPCHttpClientCfg.MaxPartSize = int64(mdb.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+		mdb.backstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
+		mdb.backstore.RPCHttpClientCfg.Debug = mdb.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
+
 		if common.IsServerlessDeployment() {
 			mdb.backstore.MaxInstsPerShard = mdb.sysconf["plasma.serverless.maxInstancePerShard"].Uint64()
 			mdb.backstore.MaxDiskPerShard = mdb.sysconf["plasma.serverless.maxDiskUsagePerShard"].Uint64()
@@ -3239,6 +3256,21 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 			atomic.AddInt32(&mdb.keySzConfChanged[i], 1)
 		}
 	}
+}
+
+func loadRPCServerConfig(cfg common.Config) plasma.Config {
+	pCfg := plasma.DefaultConfig()
+	if cfg != nil {
+		pCfg.RPCHttpServerCfg.MaxPartSize = int64(cfg["plasma.shardCopy.rpc.maxPartSize"].Int())
+		pCfg.RPCHttpServerCfg.MemQuota = int64(cfg["plasma.shardCopy.rpc.server.memQuota"].Int())
+		pCfg.RPCHttpServerCfg.RateControl = cfg["plasma.shardCopy.rpc.server.rateControl"].Bool()
+		pCfg.RPCHttpServerCfg.LowMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.lowMemRatio"].Float64()
+		pCfg.RPCHttpServerCfg.HighMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.highMemRatio"].Float64()
+		pCfg.RPCHttpServerCfg.CommitDataSize = int64(cfg["plasma.shardCopy.rpc.server.periodicSyncSize"].Int())
+		pCfg.RPCHttpServerCfg.FileIdleInterval = time.Duration(cfg["plasma.shardCopy.rpc.server.fileIdleInterval"].Int()) * time.Second
+		pCfg.RPCHttpServerCfg.Debug = cfg["plasma.shardCopy.rpc.server.dbg"].Int()
+	}
+	return pCfg
 }
 
 func (mdb *plasmaSlice) String() string {
