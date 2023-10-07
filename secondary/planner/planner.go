@@ -1227,6 +1227,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							cloned := index.clone()
 							cloned.Instance.ReplicaId = replicaId
 							cloned.initialNode = nil
+							cloned.ShardIds = nil //reset ShardIds
 
 							if indexSlot != 0 {
 								msAltId := &common.AlternateShardId{SlotId: indexSlot, ReplicaId: uint8(replicaId), GroupId: 0}
@@ -1353,6 +1354,7 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 				cloned.initialNode = nil
 				cloned.overrideExclude = true
 				cloned.AlternateShardIds = nil
+				cloned.ShardIds = nil
 
 				// repair only if there is no replica, otherwise, replica repair would have handle this.
 				if s.findNumReplica(cloned) == 0 {

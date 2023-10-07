@@ -566,7 +566,7 @@ func getRenamePath(index *IndexUsage, newInstId common.IndexInstId) (string, str
 		fmt.Sprintf("%v_%v_%v_%v.index", index.Bucket, index.Name, newInstId, index.PartnId)
 }
 
-func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInstId common.IndexInstId) {
+func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInstId common.IndexInstId, targetShardIds []common.ShardId) {
 	if index.initialNode != nil || index.siblingIndex == nil {
 		return
 	}
@@ -577,13 +577,13 @@ func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInst
 		token.InstRenameMap = make(map[common.ShardId]map[string]string)
 	}
 
-	for i, shardId := range index.ShardIds {
+	for i, shardId := range targetShardIds {
 		if _, ok := token.InstRenameMap[shardId]; !ok {
 			token.InstRenameMap[shardId] = make(map[string]string)
 		}
 		if i == 0 { // Main index only
 			token.InstRenameMap[shardId][currPathInMeta+"/mainIndex"] = newPathInMeta + "/mainIndex"
-		} else { // Back index only
+		} else if index.IsPrimary == false { // Back index only
 			token.InstRenameMap[shardId][currPathInMeta+"/docIndex"] = newPathInMeta + "/docIndex"
 		}
 	}
@@ -708,7 +708,7 @@ func genShardTransferToken(solution *Solution, masterId string, topologyChange s
 				if common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
 					newInstId = token.RealInstIds[sliceIndex]
 				}
-				addToInstRenamePath(token, index, newInstId)
+				addToInstRenamePath(token, index, newInstId, index.ShardIds)
 			}
 
 			// If there is a build token for the definition, set index STATE to INITIAL so the
@@ -1220,16 +1220,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					if realIndex.siblingIndex != nil &&
 						token.TransferMode == common.TokenTransferModeCopy {
 						// set InstRenameMap in the root token itself
-						addToInstRenamePath(&token, realIndex, realIndex.InstId)
-					}
-
-					if !realIndex.pendingCreate {
-						childTokens[0].IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
-						if realIndex.IsPrimary {
-							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds[:1]
-						} else {
-							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds
-						}
+						addToInstRenamePath(&token, realIndex, realIndex.InstId, targetShardIds)
 					}
 
 					if realIndex.pendingBuild && !realIndex.PendingDelete &&
@@ -1293,6 +1284,13 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					index.AlternateShardIds = index.AlternateShardIds[:1]
 				}
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
+			}
+
+			token.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+			if index.IsPrimary {
+				token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = targetShardIds[:1]
+			} else {
+				token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = targetShardIds
 			}
 
 			token.IndexInst.Pc = nil
