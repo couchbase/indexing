@@ -220,6 +220,19 @@ func waitForRebalanceFinish(serverAddr, username, password string) error {
 				task := v.(map[string]interface{})
 				if task["errorMessage"] != nil {
 					log.Println(task["errorMessage"].(string))
+					if task["lastReportURI"] != nil {
+						r, err := makeRequest(username, password, "GET", &strings.Reader{}, prependHttp(serverAddr)+task["lastReportURI"].(string))
+						var rebalanceReport map[string]interface{}
+						if err == nil {
+							err = json.Unmarshal(r, &rebalanceReport)
+						}
+						if err != nil {
+							log.Printf("Failed to get rebalance report with err %v", err)
+							return ErrRebalanceFailed
+						}
+
+						log.Printf("Reb report - %v", rebalanceReport)
+					}
 					return ErrRebalanceFailed
 				}
 				if task["type"].(string) == "rebalance" && task["status"].(string) == "running" {

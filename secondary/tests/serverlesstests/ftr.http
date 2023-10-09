@@ -58,6 +58,7 @@ Content-Type: application/json
 	"indexer.planner.enableShardAffinity": true,
 	"indexer.settings.rebalance.redistribute_indexes": true,
 	"indexer.settings.enableShardAffinity": true,
+	"indexer.settings.enable_shard_affinity": true,
 	"indexer.rebalance.transferBatchSize": 4,
 	"indexer.rebalance.perNodeTransferBatchSize": 4,
 	"indexer.planner.honourNodesInDefn": true
