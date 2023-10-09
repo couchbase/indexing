@@ -164,6 +164,7 @@ const (
 	UPDATE_MAP_WORKER
 	ADD_INDEX_INSTANCE
 	UPDATE_SHARDID_MAP
+	UPDATE_FLUSHER_MAPS
 
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
@@ -823,6 +824,14 @@ func (m *MsgUpdatePartnMap) String() string {
 	str := "\n\tMessage: MsgUpdatePartnMap"
 	str += fmt.Sprintf("%v", m.indexPartnMap)
 	return str
+}
+
+// UPDATE_FLUSHER_MAPS
+type MsgUpdateFlusherMaps struct {
+}
+
+func (m *MsgUpdateFlusherMaps) GetMsgType() MsgType {
+	return UPDATE_FLUSHER_MAPS
 }
 
 // UPDATE_KEYSPACE_STATS_MAP
@@ -3329,6 +3338,8 @@ func (m MsgType) String() string {
 		return "UPDATE_KEYSPACE_STATS_MAP"
 	case UPDATE_MAP_WORKER:
 		return "UPDATE_MAP_WORKER"
+	case UPDATE_FLUSHER_MAPS:
+		return "UPDATE_FLUSHER_MAPS"
 
 	case OPEN_STREAM:
 		return "OPEN_STREAM"

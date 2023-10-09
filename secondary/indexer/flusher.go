@@ -69,10 +69,15 @@ type Flusher interface {
 }
 
 type flusher struct {
+	// Lock is needed to give mutation_manager exclusive access to maps on soft deletes
+	// after the soft deletion indexer can close and destroy the slice so no mutations
+	// shuold be posted to slice
+	sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
-	config        common.Config
-	stats         *IndexerStats
+
+	config common.Config
+	stats  *IndexerStats
 }
 
 //NewFlusher returns new instance of flusher
@@ -80,11 +85,42 @@ func NewFlusher(config common.Config, stats *IndexerStats) *flusher {
 	return &flusher{config: config, stats: stats}
 }
 
-//PersistUptoTS will flush the mutation queue upto the
-//Timestamp provided.  This function will be used when:
-//1. Flushing Maintenance Queue
-//2. Flushing Maintenance Catchup Queue
-//3. Flushing Backfill Queue
+func (f *flusher) GetInst(instId common.IndexInstId) (common.IndexInst, bool) {
+	f.RLock()
+	defer f.RUnlock()
+
+	instMap := f.indexInstMap
+	inst, ok := instMap[instId]
+	return inst, ok
+}
+
+func (f *flusher) GetPartn(instId common.IndexInstId) (PartitionInstMap, bool) {
+	f.RLock()
+	defer f.RUnlock()
+
+	partnMap := f.indexPartnMap
+	pm, ok := partnMap[instId]
+	return pm, ok
+}
+
+func (f *flusher) UpdateMaps(indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap) {
+	f.Lock()
+	defer f.Unlock()
+
+	if indexInstMap != nil {
+		f.indexInstMap = indexInstMap
+	}
+
+	if indexPartnMap != nil {
+		f.indexPartnMap = indexPartnMap
+	}
+}
+
+// PersistUptoTS will flush the mutation queue upto the
+// Timestamp provided.  This function will be used when:
+// 1. Flushing Maintenance Queue
+// 2. Flushing Maintenance Catchup Queue
+// 3. Flushing Backfill Queue
 //
 //Can be stopped anytime by closing StopChannel.
 //Sends SUCCESS on the MsgChannel when its done flushing till timestamp.
@@ -422,7 +458,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
 		var idxInst common.IndexInst
 		var ok bool
-		if idxInst, ok = f.indexInstMap[mut.uuid]; !ok {
+		if idxInst, ok = f.GetInst(mut.uuid); !ok {
 			logging.LazyTrace(func() string {
 				return fmt.Sprintf("Flusher::flush Unknown Index Instance Id %v. "+
 					"Skipped Mutation Key %v", mut.uuid, logging.TagUD(mut.key))
@@ -491,13 +527,16 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
 func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta) {
 
-	idxInst, _ := f.indexInstMap[mut.uuid]
+	idxInst, valid := f.GetInst(mut.uuid)
+	if !valid {
+		return
+	}
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
 
 	var partnInstMap PartitionInstMap
 	var ok bool
-	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
+	if partnInstMap, ok = f.GetPartn(mut.uuid); !ok {
 		logging.Errorf("Flusher::processUpsert Missing Partition Instance Map"+
 			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
@@ -529,13 +568,13 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 	var partnInstMap PartitionInstMap
 	var indexInst common.IndexInst
 	var ok bool
-	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
+	if partnInstMap, ok = f.GetPartn(mut.uuid); !ok {
 		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
 			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
 	}
 
-	if indexInst, ok = f.indexInstMap[mut.uuid]; !ok {
+	if indexInst, ok = f.GetInst(mut.uuid); !ok {
 		logging.Errorf("Flusher:processDelete Missing in Index Instance Map"+
 			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
@@ -573,7 +612,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 
 func (f *flusher) processUpsertDelete(mut *Mutation, docid []byte, meta *MutationMeta) {
 
-	idxInst, _ := f.indexInstMap[mut.uuid]
+	idxInst, _ := f.GetInst(mut.uuid)
 	if !common.IsPartitioned(idxInst.Defn.PartitionScheme) || len(mut.partnkey) == 0 {
 		// Delete from all partitions if partition key is empty or it is a non partitioned index
 		f.processDelete(mut, docid, meta)
@@ -582,7 +621,7 @@ func (f *flusher) processUpsertDelete(mut *Mutation, docid []byte, meta *Mutatio
 
 	var partnInstMap PartitionInstMap
 	var ok bool
-	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
+	if partnInstMap, ok = f.GetPartn(mut.uuid); !ok {
 		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
 			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
