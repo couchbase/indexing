@@ -2969,6 +2969,7 @@ func (m *LifecycleMgr) broadcastStats() {
 	// stats_manager is ahead and by the time lifecycle manager reads the stats
 	// for broadcast, it contains latest stats
 	time.Sleep(1 * time.Second)
+	startTime := time.Now()
 
 	m.done.Add(1)
 	defer m.done.Done()
@@ -2997,7 +2998,7 @@ func (m *LifecycleMgr) broadcastStats() {
 				} else {
 					idxStats2 := convertToIndexStats2(*stats)
 					var statsToBroadCast *client.IndexStats2
-					if shortSends < resendFullTicks {
+					if shortSends < resendFullTicks && time.Since(startTime) > time.Duration(5*time.Minute) {
 						statsToBroadCast = m.getDiffFromLastSent(idxStats2)
 						shortSends++
 					} else {
