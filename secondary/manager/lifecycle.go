@@ -2080,10 +2080,6 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 				logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
 			}
 
-			// Reset any previous error
-			m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
-				inst.RState, nil, nil, -1)
-
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
 			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
 		}
@@ -2102,60 +2098,77 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 	if m.notifier != nil && len(instIdList) != 0 {
 
-		if errMap2 := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx); len(errMap2) != 0 {
+		errMap2 := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx)
+		if len(errMap2) != 0 {
 			logging.Errorf("LifecycleMgr::handleBuildIndexes: received build errors for instIds %v", errMap2)
+		}
 
-			// Handle all the errors from the build attempt(s)
-			for instId, build_err := range errMap2 {
+		// Handle all the errors from the build attempt(s) and for builds that passed update error string to ""
+		for _, instId := range instIdList {
+			build_err, ok := errMap2[instId]
+			if ok {
 				errMap[instId] = build_err.Error() // add to return map
-
-				defnId, ok := inst2DefnMap[instId]
-				if !ok {
-					logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
-					continue
-				}
-
-				defn, err := m.repo.GetIndexDefnById(defnId)
-				if err != nil || defn == nil {
-					logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
-					continue
-				}
-
-				inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId, instId)
-				if inst != nil && err == nil {
-					if m.canRetryBuildError(inst, build_err, isRebal) {
-						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
-					}
-					m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1)
-				} else {
-					logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist, error in index instance (%v, %v, %v, %v, %v).",
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-				}
-
-				if m.canRetryBuildError(inst, build_err, isRebal) {
-					logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
-						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-
-					if inst != nil && !inst.Scheduled {
-						if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
-							msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
-								defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
-							logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
-						}
-					}
-
-					retryList = append(retryList, defn)
-					retryErrList = append(retryErrList, build_err)
-				} else {
-					errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
-				}
 			}
 
-			// Schedule retriable failed index builds for retry
-			for _, defn := range retryList {
-				m.builder.notifych <- defn
+			defnId, ok := inst2DefnMap[instId]
+			if !ok {
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
+				continue
 			}
+
+			defn, err := m.repo.GetIndexDefnById(defnId)
+			if err != nil || defn == nil {
+				logging.Warnf("LifecycleMgr::handleBuildIndexes: Cannot find index defn for index inst %v when processing build error.")
+				continue
+			}
+
+			// Note: If inst is there in prev loop in this func it shuld be found here too as there is no
+			// concurrent writer
+			inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId, instId)
+			if inst == nil || err != nil {
+				logging.Errorf("LifecycleMgr::handleBuildIndexes: Failed to find index instance for index (%v, %v, %v, %v) for defnId %v. err: %v. Skipping this index.",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, defnId, err)
+			}
+
+			var errStr string
+			if build_err == nil {
+				errStr = ""
+			} else if m.canRetryBuildError(inst, build_err, isRebal) {
+				build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
+				errStr = build_err.Error()
+
+				logging.Infof("LifecycleMgr::handleBuildIndexes: Encountered build error.  Retry building index (%v, %v, %v, %v, %v) at later time.",
+					defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
+
+				if inst != nil && !inst.Scheduled {
+					if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
+						msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v). err: %v",
+							defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, err)
+						logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
+					}
+				}
+
+				retryList = append(retryList, defn)
+				retryErrList = append(retryErrList, build_err)
+			} else { // Non retriable build error
+				errStr = build_err.Error()
+				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
+			}
+
+			// TODO: Handle scenario where we fail to update the error string in the metadata
+			if inst != nil && err == nil {
+				err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId),
+					common.INDEX_STATE_NIL, common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1)
+				if err != nil {
+					logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to update build error in index instance (%v, %v, %v, %v, %v). err: %v build_error: %v",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId, err, build_err)
+				}
+			}
+		}
+
+		// Schedule retriable failed index builds for retry
+		for _, defn := range retryList {
+			m.builder.notifych <- defn
 		}
 	}
 	logging.Debugf("LifecycleMgr.buildIndexesLifecycleMgr() : buildIndexRebalance completes")
