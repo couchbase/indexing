@@ -252,6 +252,9 @@ type GreedyPlanner struct {
 	numNewIndexes int
 
 	shardAffinity bool
+
+	// SGs which have atleast one node without an equivalent index
+	sgHasNodeWithoutEquivIdx map[string]bool
 }
 
 type TenantAwarePlanner struct {
@@ -1798,12 +1801,13 @@ func newGreedyPlanner(cost CostMethod, constraint ConstraintMethod, placement Pl
 	sizing SizingMethod, indexes []*IndexUsage) *GreedyPlanner {
 
 	return &GreedyPlanner{
-		cost:          cost,
-		constraint:    constraint,
-		placement:     placement,
-		sizing:        sizing,
-		newIndexes:    indexes,
-		equivIndexMap: make(map[string]bool),
+		cost:                     cost,
+		constraint:               constraint,
+		placement:                placement,
+		sizing:                   sizing,
+		newIndexes:               indexes,
+		equivIndexMap:            make(map[string]bool),
+		sgHasNodeWithoutEquivIdx: make(map[string]bool),
 	}
 }
 
@@ -1958,6 +1962,7 @@ func (p *GreedyPlanner) initEquivIndexMap(solution *Solution) {
 
 		if !found {
 			p.equivIndexMap[indexer.IndexerId] = false
+			p.sgHasNodeWithoutEquivIdx[indexer.ServerGroup] = true
 		}
 	}
 }
@@ -2047,6 +2052,13 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 		checkEquivalent = false
 	}
 
+	maxSGsForced := len(indexes)
+	if len(indexes) > numServerGroups {
+		maxSGsForced = numServerGroups
+	}
+
+	numForceEquivForSGConstraint := maxSGsForced - len(p.sgHasNodeWithoutEquivIdx)
+
 	getNextIndexer := func(i int) *IndexerNode {
 		// Update the filled nodes map, server group map and forced equivalent index
 		// placement count before returning the node
@@ -2059,6 +2071,28 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 
 			filledServerGroups[node.ServerGroup] = true
 			filledNodes[node.NodeId] = true
+		}
+
+		// If required, forcefully fill any SGs which have equiv on every node in the SG
+		// to maintain availability across SGs
+		if numForceEquivForSGConstraint > 0 && numServerGroups > len(filledServerGroups) {
+			for _, node := range filteredNodeList {
+				if _, ok := filledNodes[node.NodeId]; ok {
+					continue
+				}
+
+				if _, ok := filledServerGroups[node.ServerGroup]; ok {
+					continue
+				}
+
+				if hasNode, ok := p.sgHasNodeWithoutEquivIdx[node.ServerGroup]; ok && hasNode {
+					continue
+				}
+
+				useNode(node)
+				numForceEquivForSGConstraint--
+				return node
+			}
 		}
 
 		// Check if Server Group Constraint needs to be honored.
