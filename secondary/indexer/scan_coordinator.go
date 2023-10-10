@@ -315,14 +315,36 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	var readUnits uint64 = 0
+
+	if req.ScanType == HeloReq {
+		s.handleHeloRequest(req, w)
+		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion))
+
+		if req.Timeout != nil {
+			req.Timeout.Stop()
+		}
+		return
+	}
+
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion))
 		req.Done()
 	}()
 
-	if req.ScanType == HeloReq {
-		s.handleHeloRequest(req, w)
-		return
+	if req.Stats != nil {
+		req.Stats.numRequests.Add(1)
+		stats.TotalRequests.Add(1)
+		if req.GroupAggr != nil {
+			req.Stats.numRequestsAggr.Add(1)
+		} else {
+			req.Stats.numRequestsRange.Add(1)
+		}
+		for _, partitionId := range req.PartitionIds {
+			req.Stats.updatePartitionStats(partitionId,
+				func(stats *IndexStats) {
+					stats.numRequests.Add(1)
+				})
+		}
 	}
 
 	logging.LazyVerbose(func() string {
@@ -359,19 +381,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		req.Stats.scanReqInitLatDist.Add(elapsed)
 
 		now := time.Now().UnixNano()
-		req.Stats.numRequests.Add(1)
-		stats.TotalRequests.Add(1)
 		req.Stats.lastScanTime.Set(now)
-		if req.GroupAggr != nil {
-			req.Stats.numRequestsAggr.Add(1)
-		} else {
-			req.Stats.numRequestsRange.Add(1)
-		}
 
 		for _, partitionId := range req.PartitionIds {
 			req.Stats.updatePartitionStats(partitionId,
 				func(stats *IndexStats) {
-					stats.numRequests.Add(1)
 					stats.lastScanTime.Set(now)
 				})
 		}
