@@ -2862,7 +2862,10 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 			r.bigMutex.Lock()
 			defer r.bigMutex.Unlock()
 
-			r.transferTokens[ttid] = tt
+			if _, ok := r.transferTokens[ttid]; ok {
+				r.transferTokens[ttid].IsEmptyNodeBatch = tt.IsEmptyNodeBatch
+				r.transferTokens[ttid].IsPendingReady = tt.IsPendingReady
+			}
 		}()
 
 		// Finish rebalance at master so that shard rebalance master will start token merging
