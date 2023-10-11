@@ -4368,6 +4368,11 @@ func (config Config) GetDeploymentModelAwareCfgBool(k string) bool {
 	return config.getIndexerConfig(key).Bool()
 }
 
+func (config Config) GetEnableEmptyNodeBatching() bool {
+	clusterVersion := GetClusterVersion()
+	return clusterVersion >= INDEXER_76_VERSION && config.getIndexerConfig("rebalance.enableEmptyNodeBatching").Bool()
+}
+
 // GetDeploymentAwareShardAffinity - get the value of `enable_shard_affinity` from config being
 // aware of the deployment model
 func (config Config) GetDeploymentAwareShardAffinity() bool {

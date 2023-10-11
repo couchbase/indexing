@@ -1275,7 +1275,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 
 	//emptyNodeBatching uses large batch size for transfer and need more time for
 	//async cleanup of index to finish in case of failure
-	enableEmptyNodeBatching := m.config.Load()["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := m.config.Load().GetEnableEmptyNodeBatching()
 	if dropIssued && enableEmptyNodeBatching {
 		logging.Infof("RebalanceServiceManager::cleanupTransferTokens Wait for async cleanup to finish")
 		time.Sleep(30 * time.Second)

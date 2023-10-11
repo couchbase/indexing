@@ -590,7 +590,7 @@ func (r *Rebalancer) resetAlternateShardIds() {
 func (r *Rebalancer) publishFirstTransferBatch() {
 
 	cfg := r.config.Load()
-	enableEmptyNodeBatching := cfg["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := cfg.GetEnableEmptyNodeBatching()
 
 	hasEmptyNodeBatch := false
 	if enableEmptyNodeBatching {
@@ -612,7 +612,7 @@ func (r *Rebalancer) publishFirstTransferBatch() {
 func (r *Rebalancer) publishNextTransferBatch() {
 
 	cfg := r.config.Load()
-	enableEmptyNodeBatching := cfg["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := cfg.GetEnableEmptyNodeBatching()
 
 	hasEmptyNodeBatch := false
 	if enableEmptyNodeBatching {

@@ -5706,7 +5706,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	}
 
 	//override projector config for rebalance stream
-	enableEmptyNodeBatching := idx.config["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := idx.config.GetEnableEmptyNodeBatching()
 	if isRebalBuild && enableEmptyNodeBatching {
 		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
 		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
@@ -7779,7 +7779,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 	//override projector config for rebalance stream
 	isRebalBuild := idx.streamKeyspaceIdIsRebalance[streamId][keyspaceId]
-	enableEmptyNodeBatching := idx.config["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := idx.config.GetEnableEmptyNodeBatching()
 	if isRebalBuild && enableEmptyNodeBatching {
 		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
 		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
