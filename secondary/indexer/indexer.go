@@ -1730,7 +1730,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 		if common.GetStorageMode() == common.FORESTDB ||
 			common.GetStorageMode() == common.NOT_SET {
-			logging.Infof("Indexer::handleConfigUpdate restart indexer due to memory_quota")
+			logging.Infof("Indexer::handleConfigUpdate restart indexer due to memory_quota change from %v to %v",
+				oldConfig["settings.memory_quota"].Uint64(), newConfig["settings.memory_quota"].Uint64())
 			idx.stats.needsRestart.Set(true)
 			os.Exit(0)
 		}
