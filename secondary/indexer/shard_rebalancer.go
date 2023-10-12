@@ -590,23 +590,9 @@ func (sr *ShardRebalancer) enableEmptyNodeBatching() {
 		return
 	}
 
-	if len(sr.dcpTokens) == 0 {
-		logging.Infof("ShardRebalancer::enableEmptyNodeBatching Skip empty node batching " +
-			"there are no DCP tokens in rebalance")
-		return
-	}
-
-	dcpTokenMap := make(map[string]bool) //destId -> true
-	for _, dcpToken := range sr.dcpTokens {
-		dcpTokenMap[dcpToken.DestId] = true
-	}
-
 	for ttid, token := range sr.transferTokens {
-		_, ok1 := dcpTokenMap[token.DestId] // Check if there are DCP tokens to destination
-		_, ok2 := emptyNodes[token.DestId]  // Check if destination node is empty
 
-		if ok1 && ok2 {
-			// Destination node is empty and there are DCP tokens to destination node
+		if _, ok := emptyNodes[token.DestId]; ok { // Check if destination node is empty
 			// Enable empty node batching
 			token.IsEmptyNodeBatch = true
 			logging.Infof("ShardRebalancer::enableEmptyNodeBatching Enabled empty node batching "+
@@ -1737,23 +1723,27 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	}
 	defer sr.wg.Done()
 
-	select {
-	case sr.waitQ <- true:
-	case <-sr.cancel:
-		return
-	case <-sr.done:
-		return
+	if tt.IsEmptyNodeBatch == false {
+		select {
+		case sr.waitQ <- true:
+		case <-sr.cancel:
+			return
+		case <-sr.done:
+			return
+		}
 	}
 
 	logging.Infof("ShardRebalancer::startShardRecovery Starting to recover index instance for ttid: %v", ttid)
 
 	defer func() {
-		select {
-		case <-sr.waitQ:
-		case <-sr.cancel:
-			return
-		case <-sr.done:
-			return
+		if tt.IsEmptyNodeBatch == false {
+			select {
+			case <-sr.waitQ:
+			case <-sr.cancel:
+				return
+			case <-sr.done:
+				return
+			}
 		}
 		logging.Infof("ShardRebalancer::startShardRecovery Done with recovery for ttid: %v", ttid)
 	}()
