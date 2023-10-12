@@ -869,6 +869,12 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 		}
 	}
 
+	if val, ok := newConfig["indexer.settings.maxNumPartitions"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("maxNumPartitions should be an integer greater than 0")
+		}
+	}
+
 	if val, ok := newConfig["indexer.statsPersistenceInterval"]; ok {
 		if val.Uint64() < 0 {
 			return errors.New("statsPersistenceInterval should be an integer 0 or greater")

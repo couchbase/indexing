@@ -58,6 +58,7 @@ var (
 type Settings interface {
 	NumReplica() int32
 	NumPartition() int32
+	MaxNumPartition() int32
 	StorageMode() string
 	UsePlanner() bool
 	AllowPartialQuorum() bool
@@ -1335,6 +1336,11 @@ func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
 	plan map[string]interface{}, ctime int64) error {
 
 	// TODO: Check for existing idxDefn.DefnId.
+
+	if idxDefn.NumPartitions > uint32(o.settings.MaxNumPartition()) {
+		return c.ErrPartitionsLimitReached
+	}
+
 	return o.recoverableCreateIndex(idxDefn, plan, false, true, ctime, true)
 }
 
@@ -2276,6 +2282,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		numPartition, err, retry = o.getNumPartitionParam(partitionScheme, plan, version)
 		if err != nil {
 			return nil, err, retry
+		}
+
+		if numPartition > int(o.settings.MaxNumPartition()) {
+			errStr := "Fails to create index. "
+			errStr += fmt.Sprintf("Please ensure that parameter 'num_partition':%v is not greater than setting 'indexer.settings.maxNumPartitions':%v .", numPartition, o.settings.MaxNumPartition())
+			return nil, errors.New(errStr), false
 		}
 
 		immutable, err, retry = o.getImmutableParam(partitionScheme, plan, whereExpr)

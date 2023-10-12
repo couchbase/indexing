@@ -51,6 +51,8 @@ type ClientSettings struct {
 	isShardAffinityEnabled uint32
 	binSize                uint64
 
+	maxNumPartition int32
+
 	//serverless configs
 	memHighThreshold int32
 	memLowThreshold  int32
@@ -147,9 +149,24 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for num_replica=%v", numReplica)
 	}
 
+	maxNumPartition := int32(config["indexer.settings.maxNumPartitions"].Int())
+	if maxNumPartition > 0 {
+		atomic.StoreInt32(&s.maxNumPartition, maxNumPartition)
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for maxNumPartitions=%v", maxNumPartition)
+	}
+
 	numPartition := int32(config["indexer.numPartitions"].Int())
 	if numPartition > 0 {
-		atomic.StoreInt32(&s.numPartition, numPartition)
+		if numPartition <= s.MaxNumPartition() {
+			atomic.StoreInt32(&s.numPartition, numPartition)
+		} else if numPartition > s.MaxNumPartition() {
+			//handle case when maxNumPartition is decreased but numPartition remains unchanged
+			atomic.StoreInt32(&s.numPartition, s.MaxNumPartition())
+			logging.Infof("ClientSettings: use value of maxNumPartitions=%v to reset old numPartitions=%v", s.MaxNumPartition(), numPartition)
+		} else {
+			logging.Errorf("ClientSettings: invalid setting value for numPartitions=%v, maxNumPartitions=%v", numPartition, s.MaxNumPartition())
+		}
 	} else {
 		logging.Errorf("ClientSettings: invalid setting value for numPartitions=%v", numPartition)
 	}
@@ -397,6 +414,10 @@ func (s *ClientSettings) NumReplica() int32 {
 
 func (s *ClientSettings) NumPartition() int32 {
 	return atomic.LoadInt32(&s.numPartition)
+}
+
+func (s *ClientSettings) MaxNumPartition() int32 {
+	return atomic.LoadInt32(&s.maxNumPartition)
 }
 
 func (s *ClientSettings) StorageMode() string {

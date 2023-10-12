@@ -70,6 +70,8 @@ type ddlSettings struct {
 	numReplica   int32
 	numPartition int32
 
+	maxNumPartition int32
+
 	storageMode      string
 	storageModeMutex sync.RWMutex // protects storageMode
 
@@ -2000,6 +2002,10 @@ func (s *ddlSettings) NumPartition() int32 {
 	return atomic.LoadInt32(&s.numPartition)
 }
 
+func (s *ddlSettings) MaxNumPartition() int32 {
+	return atomic.LoadInt32(&s.maxNumPartition)
+}
+
 func (s *ddlSettings) StorageMode() string {
 	s.storageModeMutex.RLock()
 	defer s.storageModeMutex.RUnlock()
@@ -2068,9 +2074,24 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		logging.Errorf("DDLServiceMgr: invalid setting value for num_replica=%v", numReplica)
 	}
 
+	maxNumPartition := int32(config["settings.maxNumPartitions"].Int())
+	if maxNumPartition > 0 {
+		atomic.StoreInt32(&s.maxNumPartition, maxNumPartition)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for maxNumPartition=%v", maxNumPartition)
+	}
+
 	numPartition := int32(config["numPartitions"].Int())
 	if numPartition > 0 {
-		atomic.StoreInt32(&s.numPartition, numPartition)
+		if numPartition <= s.MaxNumPartition() {
+			atomic.StoreInt32(&s.numPartition, numPartition)
+		} else if numPartition > s.MaxNumPartition() {
+			//handle case when maxNumPartition is decreased but numPartition remains unchanged
+			atomic.StoreInt32(&s.numPartition, s.MaxNumPartition())
+			logging.Infof("ClientSettings: use value of maxNumPartitions=%v to reset old numPartitions=%v", s.MaxNumPartition(), numPartition)
+		} else {
+			logging.Errorf("ClientSettings: invalid setting value for numPartitions=%v, maxNumPartitions=%v", numPartition, s.MaxNumPartition())
+		}
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for numPartitions=%v", numPartition)
 	}
