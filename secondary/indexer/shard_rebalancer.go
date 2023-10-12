@@ -2365,6 +2365,13 @@ loop:
 						delete(processedInsts, instKey)
 
 						if tt.IsEmptyNodeBatch {
+							// Indexer can pick-up realInstId or proxy "instId" depending on the presence
+							// of the index on the node. In a normal flow, the proxy will be merged to realInstId.
+							// Hence, processedInst should always contain realInstId. With empty node batching,
+							// since the merge is skipped, it is possible that proxy is ready but rebalancer will
+							// not know whether indexer has picked up proxy "instId" or realInstId.
+							// Hence, delete the realInstId as well from the book-keeping
+							delete(processedInsts, realInstId)
 							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, ttid: %v as empty node batching is enabled for this token", instId, ttid)
 						} else {
 							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
