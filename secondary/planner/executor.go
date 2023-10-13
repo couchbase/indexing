@@ -1035,6 +1035,130 @@ func setSiblingIndexForRealIndex(realIndex, proxySiblingIndex *IndexUsage) {
 	}
 }
 
+func alternateShardExistsInCluster(index *IndexUsage) bool {
+	if len(index.AlternateShardIds) < 1 {
+		return false
+	}
+
+	// for move index
+	if index.initialNode != nil {
+		if len(index.initialAlternateShardIds) > 0 {
+			newAsi, err1 := common.ParseAlternateId(index.AlternateShardIds[0])
+			oldAsi, err2 := common.ParseAlternateId(index.initialAlternateShardIds[0])
+			if err1 != nil {
+				logging.Warnf("genShardTransferToken2:alternateShardExistsInCluster invalid new Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
+					index.AlternateShardIds[0], err1, index)
+				return false
+			}
+			if err2 != nil {
+				logging.Warnf("genShardTransferToken2:alternateShardExistsInCluster invalid old Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
+					index.initialAlternateShardIds[0], err2, index)
+				return false
+			}
+			return newAsi.SlotId == oldAsi.SlotId
+		}
+		return false
+	}
+
+	// for shard/replica repair
+	if index.siblingIndex != nil {
+		if len(index.siblingIndex.initialAlternateShardIds) > 0 {
+			newAsi, err1 := common.ParseAlternateId(index.AlternateShardIds[0])
+			oldAsi, err2 := common.ParseAlternateId(index.siblingIndex.initialAlternateShardIds[0])
+			if err1 != nil {
+				logging.Errorf("genShardTransferToken2:alternateSshardExistsInCluster invalid new Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
+					index.AlternateShardIds[0], err1, index)
+				return false
+			}
+			if err2 != nil {
+				logging.Errorf("genShardTransferToken2:alternateSshardExistsInCluster invalid old Alternate Shard ID %v (err - %v). Fallback to DCP for index %v",
+					index.siblingIndex.initialAlternateShardIds[0], err2, index)
+				return false
+			}
+			return newAsi.SlotId == oldAsi.SlotId
+		}
+		return false
+	}
+
+	return false
+}
+
+// only if we have both source and dest on or above 7.6 and all partn exists in
+// original shards then can we use Shard based movements; this ensures that
+// shard movement only happens on 7.6 or above nodes which are part of shard
+func shardMovementCompatCheck(index, realIndex *IndexUsage) bool {
+	// do shard rebalance if shard is undergoing movement
+	// if shard in not moving then rebuild indices under ASI on destNode via DCP
+	shardIsMoving := index.initialNode != nil &&
+		index.initialNode.NodeId != index.destNode.NodeId
+	shardIsMoving = shardIsMoving || (index.siblingIndex != nil &&
+		index.siblingIndex.initialNode != nil &&
+		index.siblingIndex.initialNode.NodeId != index.destNode.NodeId) // for copy, set to true
+
+	// Shard rebalance is only possible if both source and destination are >= 7.6 version
+	canDestDoShardRebalance := realIndex.destNode.NodeVersion >= common.INDEXER_76_VERSION
+
+	canSrcDoShardRebalance := (index.initialNode != nil && index.initialNode.NodeVersion >= common.INDEXER_76_VERSION)
+	// Incase of replica repair, source node is derived from sibling index
+	canSrcDoShardRebalance = canSrcDoShardRebalance || (index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
+		index.siblingIndex.initialNode.NodeVersion >= common.INDEXER_76_VERSION)
+
+	// Check if destination can support the shard version of the source. If it can, then
+	// shard rebalance is possible. Otherwise, shard rebalance is not possible and DCP
+	// rebalance is used instead
+	isShardTransferCompatible := false
+	if index.initialNode != nil &&
+		realIndex.destNode.ShardCompatVersion >= index.initialNode.ShardCompatVersion &&
+		index.initialNode.ShardCompatVersion > 0 {
+		isShardTransferCompatible = true
+	} else if index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
+		realIndex.destNode.ShardCompatVersion >= index.siblingIndex.initialNode.ShardCompatVersion &&
+		index.siblingIndex.initialNode.ShardCompatVersion > 0 {
+		isShardTransferCompatible = true
+	}
+
+	return shardIsMoving && canSrcDoShardRebalance && canDestDoShardRebalance &&
+		isShardTransferCompatible && alternateShardExistsInCluster(realIndex)
+}
+
+// genShardTransferToken2 - create TransferTokens for Shard rebalancer to perform shard/index movement
+//
+// To create a token we have the following steps -
+//
+//  0. traverse through all index usages in a solution. this solution should have AlternateShardIds for grouped indices set
+//
+//  1. if it is a non-proxy index usage, create DCP transfer token if there is a movement/copy.
+//     if initialNode is nil - token is for copy else if initialNode != destNode - token is for move
+//     note - for DCP based tokens, we ignore the Shard Ids from metadata. Alternate Shard Ids (by planner) will be set in the defn
+//     for any kind of repair, we should rely on plasma reusing existing shard (if any) on node mapped to the give Alternate shard Id
+//     this is done to keep the DCP rebalance free of shardIds
+//
+//  2. if it is a proxy index usage, for initialNode = nil - token is for copy. for shard copy to happen, we need index.siblingIndex != nil else we fallback to DCP
+//
+//  3. set targetShardIds -
+//     * if move token - from proxy index usage shardIds
+//     * if copy token - from sibling usage (of proxy index usage) shardIds - here siblingIndex is assumed to be proxy (this can fail and we fallback to DCP)
+//
+//  4. do the following for each grouped real index usage in proxy index usage:
+//
+//     * Repeat step `1` and create a DCP transfer token bf default. this is for backwards compatibilty as DCP should be supported by all nodes.
+//
+//     * use <Alternate Shard Ids, destNode> from proxy index (set by planner) for realIndex as shard repair may not set these values
+//
+//     * pre-exist check: if this is a shard repair, find a realIndex in proxy.siblingIndex (proxy of replica shard)
+//
+//     * compat check: if the source and dest for index usage support shard based movement and pre-exist check
+//
+//     * If the compat check pass, we can treat this as Shard Transfer Index Inst
+//
+//     a) set ShardIdsForDest in Defn from targetShardIds
+//     b) save insts to merge into one Shard Transfer Token.
+//
+//     * If the compat check fails, then we fallback to DCP Transfer for this real index usage.
+//
+//  5. For shard token from above step, add all saved insts to []IndexInst and respective fields. set token shardIds as torgetShardIds.
+//
+//  6. Once all tokens are generated, we merge tokens that are undergoing movement in similar batch (mainly to merge partitions of same Index Inst).
 func genShardTransferToken2(soln *Solution, masterId string, topologyChange service.TopologyChange,
 	isServerless bool) (map[string]*common.TransferToken, error) {
 
@@ -1072,27 +1196,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			return false
 		}
 		return true
-	}
-
-	// indexExistInAlternateShard - checks if index (aka defn-partn) exists in a shard prior
-	// new solution or not; this helps us understand if we can truly perform shard rebalance or not
-	alternateShardExistsInCluster := func(index *IndexUsage) bool {
-
-		if len(index.AlternateShardIds) < 1 {
-			return false
-		}
-
-		// for move index
-		if index.initialNode != nil {
-			return len(index.initialAlternateShardIds) > 0
-		}
-
-		// for shard/replica repair
-		if index.siblingIndex != nil {
-			return len(index.siblingIndex.initialAlternateShardIds) > 0
-		}
-
-		return false
 	}
 
 	var createTokenForIndex func(*IndexUsage) ([]*common.TransferToken, []string, error)
@@ -1189,38 +1292,21 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					continue
 				}
 
-				// Shard rebalance is only possible if both source and destination are >= 7.6 version
-				canDestDoShardRebalance := realIndex.destNode.NodeVersion >= common.INDEXER_76_VERSION
-				canSrcDoShardRebalance := (index.initialNode != nil && index.initialNode.NodeVersion >= common.INDEXER_76_VERSION)
-
-				// Incase of replica repair, source node is derived from sibling index
-				canSrcDoShardRebalance = canSrcDoShardRebalance || (index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
-					index.siblingIndex.initialNode.NodeVersion >= common.INDEXER_76_VERSION)
-
-				// Check if destination can support the shard version of the source. If it can, then
-				// shard rebalance is possible. Otherwise, shard rebalance is not possible and DCP
-				// rebalance is used instead
-				isShardTransferCompatible := false
-				if index.initialNode != nil &&
-					realIndex.destNode.ShardCompatVersion >= index.initialNode.ShardCompatVersion &&
-					index.initialNode.ShardCompatVersion > 0 {
-					isShardTransferCompatible = true
-				} else if index.siblingIndex != nil && index.siblingIndex.initialNode != nil &&
-					realIndex.destNode.ShardCompatVersion >= index.siblingIndex.initialNode.ShardCompatVersion &&
-					index.siblingIndex.initialNode.ShardCompatVersion > 0 {
-					isShardTransferCompatible = true
-				}
-
-				// only if we have both source and dest on or above 7.6 and all partn exists in
-				// original shards then can we use Shard based movements; this ensures that
-				// shard movement only happens on 7.6 or above nodes which are part of shard
-				if canSrcDoShardRebalance && canDestDoShardRebalance &&
-					isShardTransferCompatible && alternateShardExistsInCluster(realIndex) {
+				if shardMovementCompatCheck(index, realIndex) {
 
 					if realIndex.siblingIndex != nil &&
 						token.TransferMode == common.TokenTransferModeCopy {
 						// set InstRenameMap in the root token itself
 						addToInstRenamePath(&token, realIndex, realIndex.InstId, targetShardIds)
+					}
+
+					if !realIndex.pendingCreate {
+						childTokens[0].IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
+						if realIndex.IsPrimary && len(targetShardIds) != 0 {
+							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds[:1]
+						} else {
+							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds
+						}
 					}
 
 					if realIndex.pendingBuild && !realIndex.PendingDelete &&
@@ -1284,13 +1370,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 					index.AlternateShardIds = index.AlternateShardIds[:1]
 				}
 				token.IndexInst.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
-			}
-
-			token.IndexInst.Defn.ShardIdsForDest = make(map[common.PartitionId][]common.ShardId)
-			if index.IsPrimary {
-				token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = targetShardIds[:1]
-			} else {
-				token.IndexInst.Defn.ShardIdsForDest[index.PartnId] = targetShardIds
 			}
 
 			token.IndexInst.Pc = nil

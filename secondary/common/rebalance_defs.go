@@ -132,6 +132,12 @@ const (
 	// KV streams
 	ShardTokenRecoverShard
 
+	// When empty node batching is enabled, shard rebalancer will move
+	// the transfer token state to "ShardTokenMerge". Destination
+	// would read this token and change the RState of all the indexes in
+	// the transfer token
+	ShardTokenMerge
+
 	// After all the indexes in a shard are recovered successfully, then the
 	// state of the transfer token is moved to "ShardTokenReady". In case of
 	// any errors during restore/recovery, index movements belonging to this
@@ -153,12 +159,6 @@ const (
 	// nodes can be dropped as the destination indexes have successfully
 	// caught up with KV nodes
 	ShardTokenDropOnSource
-
-	// Placeholder for partitioned indexes where in the proxy instance can
-	// be merged to real instance after the state of the transfer token is
-	// moved to "ShardTokenReady". On a successful merge, the state of the
-	// transfer token is moved to "ShardTokenMerged"
-	ShardTokenMerged
 
 	// This token state means that index instances on source node have
 	// been successfully deleted. The in-mem tokens would move to this
@@ -193,8 +193,8 @@ func (sts ShardTokenState) String() string {
 		return "ShardTokenReady"
 	case ShardTokenDropOnSource:
 		return "ShardTokenDropOnSource"
-	case ShardTokenMerged:
-		return "ShardTokenMerged"
+	case ShardTokenMerge:
+		return "ShardTokenMerge"
 	case ShardTokenCommit:
 		return "ShardTokenCommit"
 	case ShardTokenDeleted:
@@ -399,8 +399,9 @@ func (tt *TransferToken) String() string {
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}
-	fmt.Fprintf(sbp, "State: %v ", tt.State)
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
@@ -430,12 +431,16 @@ func (tt *TransferToken) String() string {
 			fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInsts[i].Defn.Versions)
 			fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInsts[i])
 		}
+		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
 		fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInst.Defn.Partitions)
 		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
 		fmt.Fprintf(sbp, "Inst: %v\n", tt.IndexInst)
+		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
 	}
 
 	return sb.String()
@@ -458,8 +463,9 @@ func (tt *TransferToken) LessVerboseString() string {
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
 	}
-	fmt.Fprintf(sbp, "State: %v ", tt.State)
 
 	fmt.Fprintf(sbp, "BuildSource: %v ", tt.BuildSource)
 	fmt.Fprintf(sbp, "TransferMode: %v ", tt.TransferMode)
@@ -489,7 +495,9 @@ func (tt *TransferToken) LessVerboseString() string {
 				tt.IndexInsts[i].Defn.Scope, tt.IndexInsts[i].Defn.ScopeId,
 				tt.IndexInsts[i].Defn.Collection, tt.IndexInsts[i].Defn.CollectionId)
 			fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInsts[i].Defn.Partitions)
-			fmt.Fprintf(sbp, "Versions: %v\n", tt.IndexInsts[i].Defn.Versions)
+			fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInsts[i].Defn.Versions)
+			fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+			fmt.Fprintf(sbp, "IsPendingReady: %v", tt.IsPendingReady)
 		}
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
