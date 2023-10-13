@@ -495,10 +495,10 @@ func (tt *TransferToken) LessVerboseString() string {
 				tt.IndexInsts[i].Defn.Scope, tt.IndexInsts[i].Defn.ScopeId,
 				tt.IndexInsts[i].Defn.Collection, tt.IndexInsts[i].Defn.CollectionId)
 			fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInsts[i].Defn.Partitions)
-			fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInsts[i].Defn.Versions)
-			fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
-			fmt.Fprintf(sbp, "IsPendingReady: %v", tt.IsPendingReady)
+			fmt.Fprintf(sbp, "Versions: %v\n", tt.IndexInsts[i].Defn.Versions)
 		}
+		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "IsPendingReady: %v", tt.IsPendingReady)
 	} else {
 		fmt.Fprintf(sbp, "InstId: %v ", tt.InstId)
 		fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstId)
