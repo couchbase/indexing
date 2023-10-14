@@ -3264,7 +3264,7 @@ func (sr *ShardRebalancer) doFinish() {
 	close(sr.done)
 
 	sr.cancelMetakv()
-	if sr.canMaintainShardAffinity {
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
 		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
 		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
 
@@ -3755,8 +3755,6 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 }
 
 func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct{}, doneCh chan struct{}) {
-	sr.wg.Add(1)
-	defer sr.wg.Done()
 	defer func() {
 		if syncCh != nil {
 			close(syncCh)
