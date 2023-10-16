@@ -44,3 +44,20 @@ func (r *RetryHelper) Run() error {
 
 	return err
 }
+
+// Retry until no error or cond(err) returns true
+func (r *RetryHelper) RunWithConditionalError(cond func(error) bool) error {
+	var err error
+
+	for ; r.retries < r.maxRetries+1; r.retries++ {
+		err = r.call(r.retries, err)
+		if err == nil || cond(err) {
+			break
+		} else {
+			time.Sleep(r.interval)
+			r.interval = r.interval * time.Duration(r.factor)
+		}
+	}
+
+	return err
+}

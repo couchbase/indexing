@@ -836,7 +836,7 @@ func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, 
 	var rtoken RebalanceToken
 	var found bool
 	var err error
-	found, err = c.MetakvGet(RebalanceTokenPath, &rtoken)
+	found, err = retriedMetakvGet(RebalanceTokenPath, &rtoken)
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::checkExistingGlobalRToken Error Fetching "+
 			"Rebalance Token From Metakv %v. Path %v", err, RebalanceTokenPath)
@@ -846,7 +846,7 @@ func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, 
 		return &rtoken, nil
 	}
 
-	found, err = c.MetakvGet(MoveIndexTokenPath, &rtoken)
+	found, err = retriedMetakvGet(MoveIndexTokenPath, &rtoken)
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::checkExistingGlobalRToken Error Fetching "+
 			"MoveIndex Token From Metakv %v. Path %v", err, MoveIndexTokenPath)
@@ -970,7 +970,8 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 func (m *RebalanceServiceManager) cleanupGlobalRToken(path string) error {
 
 	var rtoken RebalanceToken
-	found, err := c.MetakvGet(path, &rtoken)
+
+	found, err := retriedMetakvGet(path, &rtoken)
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::cleanupGlobalRToken Error Fetching Rebalance Token From Metakv %v. Path %v", err, path)
 		return err
@@ -979,7 +980,7 @@ func (m *RebalanceServiceManager) cleanupGlobalRToken(path string) error {
 	if found {
 		l.Infof("RebalanceServiceManager::cleanupGlobalRToken Delete Global Rebalance Token %v", rtoken)
 
-		err := c.MetakvDel(path)
+		err = retriedMetakvDel(path)
 		if err != nil {
 			l.Fatalf("RebalanceServiceManager::cleanupGlobalRToken Unable to delete RebalanceToken from "+
 				"Meta Storage. %v. Err %v", rtoken, err)
@@ -1006,7 +1007,7 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 	}
 
 	cleanup := func(path, token string) error {
-		err := c.MetakvDel(path)
+		err := retriedMetakvDel(path)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete %v from "+
 				"Meta Storage. %v. Err %v", token, rtokens.RT, err)
@@ -1072,7 +1073,7 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 				// Initiate cleanup for tranfer token
 				return m.cleanupOrphanShardTransferToken(ttid, tt)
 			} else {
-				err := c.MetakvDel(RebalanceMetakvDir + ttid)
+				err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 				if err != nil {
 					l.Errorf("RebalanceServiceManager::cleanupOrphanTokens Unable to delete TransferToken from "+
 						"Meta Storage. %v. Err %v", ttid, err)
@@ -1281,7 +1282,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForMaster(ttid string, tt
 
 	case c.TransferTokenCommit, c.TransferTokenDeleted:
 		l.Infof("RebalanceServiceManager::cleanupTransferTokensForMaster Cleanup Token %v %v", ttid, tt.LessVerboseString())
-		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", tt, err)
@@ -1309,7 +1310,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForSource(ttid string, tt
 		dropIssued = true
 		err = m.cleanupIndex(defn)
 		if err == nil {
-			err = c.MetakvDel(RebalanceMetakvDir + ttid)
+			err = retriedMetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForSource Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
@@ -1369,7 +1370,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 		defn.RealInstId = tt.RealInstId
 		err = m.cleanupIndex(defn)
 		if err == nil {
-			err = c.MetakvDel(RebalanceMetakvDir + ttid)
+			err = retriedMetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
@@ -1421,7 +1422,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokensForDest(ttid string, tt *
 		}
 
 		if !ok {
-			if err := c.MetakvDel(RebalanceMetakvDir + ttid); err != nil {
+			if err := retriedMetakvDel(RebalanceMetakvDir + ttid); err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
 				return err, false
@@ -1446,7 +1447,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.
 	switch tt.ShardTransferTokenState {
 	case c.ShardTokenCreated, c.ShardTokenDeleted:
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForMaster Cleanup Token %v %v", ttid, tt.LessVerboseString())
-		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForMaster Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", ttid, err)
@@ -1464,7 +1465,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		// TODO: Node may have updated in-memory booking for DDL
 		// during rebalance support. Clean that
 
-		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", ttid, err)
@@ -1489,7 +1490,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			"shardIds: %v, destination: %v, region: %v", ttid, tt.ShardIds, tt.Destination, tt.Region)
 
 		// Delete transfer token from metakv
-		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForSource Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", ttid, err)
@@ -1507,7 +1508,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 				"as token is for replica repair", ttid)
 
 			// Delete the token from metaKV
-			err := c.MetakvDel(RebalanceMetakvDir + ttid)
+			err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 					"Meta Storage. %v. Err %v", tt, err)
@@ -1585,7 +1586,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 	switch tt.ShardTransferTokenState {
 	case c.ShardTokenScheduleAck:
 
-		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForMaster Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", ttid, err)
@@ -1699,7 +1700,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		unlockShards(tt.ShardIds, m.supvMsgch)
 
 		l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleanup Token %v %v", ttid, tt.LessVerboseString())
-		err := c.MetakvDel(RebalanceMetakvDir + ttid)
+		err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupShardTokenForDest Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", tt, err)
@@ -1837,7 +1838,7 @@ func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 				if !ok1 && !ok2 {
 					// Both tokens deleted from metaKV. Clear all tokens with state
 					// ShardTokenDropOnSource
-					err = c.MetakvDel(RebalanceMetakvDir + ttid)
+					err = retriedMetakvDel(RebalanceMetakvDir + ttid)
 					if err != nil {
 						l.Errorf("RebalanceServiceManager::cleanupAllDropOnSourceTokens Unable to delete TransferToken In "+
 							"Meta Storage. %v. Err %v", tt, err)
@@ -1910,7 +1911,7 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 	// In that case, we should go-ahead and delete metaKV token
 	// irrespective of "IndexNotFound error"
 	if err == nil {
-		err = c.MetakvDel(RebalanceMetakvDir + ttid)
+		err = retriedMetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::cleanupTransferTokensForDest Unable to delete TransferToken In "+
 				"Meta Storage. %v. Err %v", tt, err)
@@ -2139,7 +2140,7 @@ func (m *RebalanceServiceManager) rebalanceJanitor() {
 				nodeID := cfg["nodeuuid"].String()
 				if rtokens.MT.Error != "" && rtokens.MT.MasterId == nodeID { // let janitor in master node clean-up the move token
 					l.Infof("%v Found erroneous MoveIndexToken: %v. Cleaning up.", _rebalanceJanitor, rtokens.MT)
-					err := c.MetakvDel(MoveIndexTokenPath)
+					err := retriedMetakvDel(MoveIndexTokenPath)
 					if err != nil {
 						l.Errorf("%v Unable to delete MoveIndexToken from Meta Storage. %v. Err %v", _rebalanceJanitor, rtokens.RT, err)
 					}
@@ -2247,7 +2248,7 @@ func (m *RebalanceServiceManager) registerLocalRebalanceToken(rebalToken *Rebala
 func (m *RebalanceServiceManager) registerRebalanceTokenInMetakv(rebalToken *RebalanceToken) error {
 	const method = "RebalanceServiceManager::registerRebalanceTokenInMetakv:" // for logging
 
-	err := c.MetakvSet(RebalanceTokenPath, rebalToken)
+	err := retriedMetakvSet(RebalanceTokenPath, rebalToken)
 	if err != nil {
 		l.Errorf("%v Unable to set RebalanceToken In Metakv Storage. Err %v", method, err)
 		return err
@@ -2362,7 +2363,7 @@ func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken Rebalan
 	for elapsed < globalTokenWaitTimeout {
 
 		var rtoken RebalanceToken
-		found, err := c.MetakvGet(RebalanceTokenPath, &rtoken)
+		found, err := retriedMetakvGet(RebalanceTokenPath, &rtoken)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::observeGlobalRebalanceToken Error Checking Rebalance Token In Metakv %v", err)
 			continue
@@ -3681,7 +3682,7 @@ func (m *RebalanceServiceManager) setErrorInMoveIndexToken(token *RebalanceToken
 func (m *RebalanceServiceManager) registerMoveIndexTokenInMetakv(token *RebalanceToken, upsert bool) error {
 
 	updateRToken := func() error {
-		err := c.MetakvSet(MoveIndexTokenPath, token)
+		err := retriedMetakvSet(MoveIndexTokenPath, token)
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::registerMoveIndexTokenInMetakv Unable to set "+
 				"RebalanceToken In Meta Storage. Err %v", err)
@@ -3693,7 +3694,7 @@ func (m *RebalanceServiceManager) registerMoveIndexTokenInMetakv(token *Rebalanc
 	}
 
 	var rtoken RebalanceToken
-	found, err := c.MetakvGet(MoveIndexTokenPath, &rtoken)
+	found, err := retriedMetakvGet(MoveIndexTokenPath, &rtoken)
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::registerMoveIndexTokenInMetakv Unable to get "+
 			"RebalanceToken from Meta Storage. Err %v", err)
@@ -4284,7 +4285,7 @@ func (m *RebalanceServiceManager) cleanupOrphanShardTransferToken(ttid string, t
 		// of the cluster
 	}
 
-	err := c.MetakvDel(RebalanceMetakvDir + ttid)
+	err := retriedMetakvDel(RebalanceMetakvDir + ttid)
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::cleanupOrphanShardTransferToken Unable to delete TransferToken from "+
 			"Meta Storage. %v. Err %v", ttid, err)
@@ -4313,4 +4314,48 @@ func (m *RebalanceServiceManager) cleanupTranferredData(ttid string, tt *c.Trans
 	// Getting a response here only means that cleanup has been
 	// initiated by plasma
 	<-respCh
+}
+
+func retriedMetakvGet(path string, val interface{}) (bool, error) {
+	var found bool
+	var err error
+	mkGet := func(attempts int, lastErr error) error {
+		if lastErr != nil {
+			logging.Errorf("retriedMetakvGet: Failed to get metakv token %v with err %v (attempt %v)",
+				path, lastErr, attempts)
+		}
+		found, err = c.MetakvGet(path, val)
+		return err
+	}
+	rh := c.NewRetryHelper(10, 1*time.Millisecond, 5, mkGet)
+	err = rh.Run()
+	return found, err
+}
+
+func retriedMetakvSet(path string, val interface{}) error {
+	mkSet := func(attempts int, lastErr error) error {
+		if lastErr != nil {
+			logging.Errorf("retriedMetakvSet: Failed to set metakv token %v with err %v (attempt %v)",
+				path, lastErr, attempts)
+		}
+		return c.MetakvSet(path, val)
+	}
+	rh := c.NewRetryHelper(10, 1*time.Millisecond, 5, mkSet)
+	return rh.RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), http.StatusText(http.StatusServiceUnavailable))
+	})
+}
+
+func retriedMetakvDel(path string) error {
+	mkDel := func(attempts int, lastErr error) error {
+		if lastErr != nil {
+			logging.Errorf("retriedMetakvDel: Failed to del metakv token %v with err %v (attempt %v)",
+				path, lastErr, attempts)
+		}
+		return c.MetakvDel(path)
+	}
+	rh := c.NewRetryHelper(10, 1*time.Millisecond, 5, mkDel)
+	return rh.RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), http.StatusText(http.StatusServiceUnavailable))
+	})
 }

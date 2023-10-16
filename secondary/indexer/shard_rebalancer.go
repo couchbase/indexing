@@ -2365,6 +2365,13 @@ loop:
 						delete(processedInsts, instKey)
 
 						if tt.IsEmptyNodeBatch {
+							// Indexer can pick-up realInstId or proxy "instId" depending on the presence
+							// of the index on the node. In a normal flow, the proxy will be merged to realInstId.
+							// Hence, processedInst should always contain realInstId. With empty node batching,
+							// since the merge is skipped, it is possible that proxy is ready but rebalancer will
+							// not know whether indexer has picked up proxy "instId" or realInstId.
+							// Hence, delete the realInstId as well from the book-keeping
+							delete(processedInsts, realInstId)
 							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, ttid: %v as empty node batching is enabled for this token", instId, ttid)
 						} else {
 							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
@@ -3257,7 +3264,7 @@ func (sr *ShardRebalancer) doFinish() {
 	close(sr.done)
 
 	sr.cancelMetakv()
-	if sr.canMaintainShardAffinity {
+	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
 		// can't directly use sr.done as it is closed before STOP_PEER_SERVER command
 		sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
 
@@ -3310,44 +3317,9 @@ func (sr *ShardRebalancer) setTransferTokenError(ttid string, tt *c.TransferToke
 func (sr *ShardRebalancer) Cancel() {
 	l.Infof("ShardRebalancer::Cancel Exiting")
 
-	// First stop DCP rebalancer
-	func() {
-		// Invocation of DCP rebalance can race with Cancel(). As Cancel()
-		// is called asynchronously (from rebalance_service_manager), acquire
-		// lock so that the race between startDcpRebalance() and Cancel() is
-		// prevented. Also, exhaust the dcpRebrOnce so that if startDcpRebalance
-		// gets the lock after this function, it would not start DCP rebalance
-		sr.mu.Lock()
-		defer sr.mu.Unlock()
-		if sr.dcpRebr != nil {
-			sr.dcpRebr.Cancel()
-		} else {
-			sr.dcpRebrOnce.Do(func() {
-				logging.Infof("ShardRebalancer::Cancel Exhausting dcpRebrOnce to prevent DCP rebalancer from starting as Cancel() is invoked")
-			})
-		}
-	}()
-
-	// Close the dcpRebrCloseCh
-	sr.dcpRebrCloseOnce.Do(func() {
-		if sr.dcpRebrCloseCh != nil {
-			close(sr.dcpRebrCloseCh)
-		}
-	})
-
-	proceedWithCancel := false
-
-	// Exhaust the cleanupOnce object so that doFinish is not executed again
-	sr.cleanupOnce.Do(func() {
-		proceedWithCancel = true
-		logging.Infof("ShardRebalancer::Cancel Exhausting cleanupOnce as cancel is invoked")
-	})
-
-	// If proceedWithCancel is false, then doFinish is already invoked. Skip processing
-	// cancel further
-	if !proceedWithCancel {
-		logging.Infof("ShardRebalance::Cancel Skipping cancel as doFinish executed")
-		return
+	if sr.cancelMetakv() {
+		close(sr.cancel)
+		sr.wg.Wait()
 	}
 
 	// we are not making any checks here if the RPC server was running or not; if the server is not
@@ -3356,9 +3328,10 @@ func (sr *ShardRebalancer) Cancel() {
 		go sr.sendPeerServerCommand(STOP_PEER_SERVER, nil, nil)
 	}
 
-	if sr.cancelMetakv() {
-		close(sr.cancel)
-		sr.wg.Wait()
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if sr.dcpRebr != nil {
+		sr.dcpRebr.Cancel()
 	}
 }
 
@@ -3782,8 +3755,6 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 }
 
 func (sr *ShardRebalancer) sendPeerServerCommand(cmd MsgType, syncCh chan struct{}, doneCh chan struct{}) {
-	sr.wg.Add(1)
-	defer sr.wg.Done()
 	defer func() {
 		if syncCh != nil {
 			close(syncCh)
@@ -3857,12 +3828,6 @@ func (sr *ShardRebalancer) transitionToDcpOrEndShardRebalance() {
 // processRebalancerChange to start controlled rebalancer according to transition on
 // rToken.ActiveRebalancer; only to be called on change in ActiveRebalancer
 func (sr *ShardRebalancer) processRebalancerChange(rToken *RebalanceToken) {
-
-	if !sr.addToWaitGroup() {
-		return
-	}
-
-	defer sr.wg.Done()
 
 	select {
 	case <-sr.cancel:

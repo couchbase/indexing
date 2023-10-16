@@ -16,6 +16,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"sync"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
@@ -45,13 +46,14 @@ const (
 
 // settingsManager implements dynamic settings management for indexer.
 type settingsManager struct {
-	supvCmdch       MsgChannel
-	supvMsgch       MsgChannel
-	config          common.Config
-	cancelCh        chan struct{}
-	compactionToken []byte
-	indexerReady    bool
-	notifyPending   bool
+	supvCmdch        MsgChannel
+	supvMsgch        MsgChannel
+	config           common.Config
+	cancelCh         chan struct{}
+	compactionToken  []byte
+	indexerReady     bool
+	indexerReadyLock *sync.Mutex
+	notifyPending    bool
 }
 
 // NewSettingsManager is the settingsManager constructor. Indexer creates a child singleton of this.
@@ -59,10 +61,11 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (*settingsManager, common.Config, Message) {
 
 	s := settingsManager{
-		supvCmdch: supvCmdch,
-		supvMsgch: supvMsgch,
-		config:    config,
-		cancelCh:  make(chan struct{}),
+		supvCmdch:        supvCmdch,
+		supvMsgch:        supvMsgch,
+		config:           config,
+		cancelCh:         make(chan struct{}),
+		indexerReadyLock: &sync.Mutex{},
 	}
 
 	// Set cgroup overrides; these will be 0 if cgroups are not supported. Must be set before
@@ -472,13 +475,21 @@ func (s *settingsManager) handleSupervisorCommands(cmd Message) {
 }
 
 func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
-	if !s.indexerReady && (kve.Path == common.IndexingSettingsMetaPath || kve.Path == indexCompactonMetaPath) {
+	var indexerReady bool
+
+	s.indexerReadyLock.Lock()
+	indexerReady = s.indexerReady
+	s.indexerReadyLock.Unlock()
+
+	if !indexerReady && (kve.Path == common.IndexingSettingsMetaPath || kve.Path == indexCompactonMetaPath) {
 		s.notifyPending = true
 		logging.Infof("SettingsMgr::metaKVCallback Dropped request %v %v. Any setting change will get applied once Indexer is ready.", kve.Path, string(kve.Value))
 		return nil
 	}
 
 	if kve.Path == common.IndexingSettingsMetaPath || kve.Path == common.IndexingSettingsShardAffinityMetaPath {
+		logging.Infof("settingsManager::metakvCallback triggered for path %v (rev %v)",
+			kve.Path, kve.Rev)
 		err := s.applySettings(kve.Path, kve.Value, kve.Rev)
 		if err != nil {
 			return err
@@ -520,21 +531,35 @@ func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
 
 func (s *settingsManager) applySettings(path string, value []byte, rev interface{}) error {
 
-	logging.Infof("New settings received on path: %v, value: \n%s", path, string(value))
+	logging.Infof("settingsManager::applySettings: New settings received on path: %v, value: \n%s", path, string(value))
+
+	if len(value) == 0 {
+		logging.Warnf("settingsManager::applySettings: Empty value found for %v. Will skip processing...", path)
+		return nil
+	}
 
 	var err error
-	upgradedConfig, upgraded, minNumShardChanged := tryUpgradeConfig(value)
-	if upgraded {
-		if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
-			return err
+	var minNumShardChanged bool
+	if path == common.IndexingSettingsMetaPath {
+		var upgradedConfig []byte
+		var upgraded bool
+		upgradedConfig, upgraded, minNumShardChanged = tryUpgradeConfig(value)
+		if upgraded {
+			if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
+				return err
+			}
+			return nil
 		}
-		return nil
 	}
 
 	oldConfig := s.config.Clone()
 
 	newConfig := s.config.Clone()
-	newConfig.Update(value)
+	err = newConfig.Update(value)
+	if err != nil {
+		logging.Errorf("settingsManager::applySettings: encountered err in reading new config %v - %v", string(value), err)
+		return err
+	}
 	s.setGlobalSettings(s.config, newConfig)
 
 	// If the minNumShard setting has not been explicitly updated, then compute it based on max_cpu_percent
@@ -606,6 +631,8 @@ func (s *settingsManager) handleIndexerReady() {
 
 	s.supvCmdch <- &MsgSuccess{}
 
+	s.indexerReadyLock.Lock()
+	defer s.indexerReadyLock.Unlock()
 	s.indexerReady = true
 
 	if s.notifyPending {
