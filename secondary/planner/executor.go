@@ -2117,7 +2117,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 
 	if config.EnableShardAffinity {
 		logging.Infof("************ Index Layout After Planning *************")
-		solution.PrintLayout()
+		planner.GetResult()
 		logging.Infof("****************************************")
 
 		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize)

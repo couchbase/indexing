@@ -401,8 +401,8 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			}
 		}
 
-		logging.Infof("Planner::Fail to create plan satisfying constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
-			p.Try, formatTimeStr(uint64(time.Now().Sub(startTime).Nanoseconds())))
+		logging.Infof("Planner::Fail to create plan satisfying constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v, err: %v",
+			p.Try, formatTimeStr(uint64(time.Now().Sub(startTime).Nanoseconds())), err)
 
 		// reduce minimum memory for each round
 		solution.reduceMinimumMemory()
@@ -443,6 +443,9 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	}
 
 	if err != nil {
+		logging.Infof("************ Indexer Layout After Planning *************")
+		solution.PrintLayout()
+		logging.Infof("****************************************")
 		logging.Errorf(err.Error())
 	}
 
@@ -843,18 +846,22 @@ func (p *SAPlanner) SetShardAffinity(shardAffinity bool) {
 func (p *SAPlanner) Validate(s *Solution) error {
 
 	if err := p.sizing.Validate(s); err != nil {
+		logging.Errorf("SAPlanner::Validated Error observed when validating sizing, err: %v", err)
 		return err
 	}
 
 	if err := p.cost.Validate(s); err != nil {
+		logging.Errorf("SAPlanner::Validated Error observed when validating cost, err: %v", err)
 		return err
 	}
 
 	if err := p.constraint.Validate(s); err != nil {
+		logging.Errorf("SAPlanner::Validated Error observed when constraint sizing, err: %v", err)
 		return err
 	}
 
 	if err := p.placement.Validate(s); err != nil {
+		logging.Errorf("SAPlanner::Validated Error observed when placement sizing, err: %v", err)
 		return err
 	}
 
