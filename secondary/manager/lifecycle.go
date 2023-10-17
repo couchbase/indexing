@@ -4391,7 +4391,7 @@ RETRY:
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 		// Force fetch cluster info client
-		err := m.cinfoProvider.FetchWithLock()
+		err := m.cinfoProvider.ForceFetch()
 		if err != nil {
 			return common.BUCKET_UUID_NIL, err
 		}
@@ -4423,7 +4423,7 @@ RETRY:
 		time.Sleep(time.Duration(100) * time.Millisecond)
 
 		// Force fetch cluster info cache
-		err := m.cinfoProvider.FetchWithLock()
+		err := m.cinfoProvider.ForceFetch()
 		if err != nil {
 			return collections.COLLECTION_ID_NIL, err
 		}
@@ -4453,7 +4453,7 @@ RETRY:
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 		// Force fetch cluster info cache
-		err := m.cinfoProvider.FetchWithLock()
+		err := m.cinfoProvider.ForceFetch()
 		if err != nil {
 			return collections.SCOPE_ID_NIL, err
 		}
@@ -4485,7 +4485,7 @@ RETRY:
 		time.Sleep(time.Duration(100) * time.Millisecond)
 
 		// Force fetch cluster info cache on errors
-		err := m.cinfoProvider.FetchWithLock()
+		err := m.cinfoProvider.ForceFetch()
 		if err != nil {
 			return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
 		}

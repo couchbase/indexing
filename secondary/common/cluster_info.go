@@ -403,6 +403,10 @@ func (c *ClusterInfoCache) Fetch() error {
 	return rh.Run()
 }
 
+func (c *ClusterInfoCache) ForceFetch() error {
+	return c.FetchWithLock()
+}
+
 func (c *ClusterInfoCache) FetchWithLock() error {
 	c.Lock()
 	defer c.Unlock()
@@ -1872,6 +1876,10 @@ func (cic *ClusterInfoClient) ClusterVersion() uint64 {
 	defer cinfo.RUnlock()
 
 	return cinfo.GetClusterVersion()
+}
+
+func (c *ClusterInfoClient) ForceFetch() error {
+	return c.FetchWithLock()
 }
 
 func (c *ClusterInfoClient) FetchWithLock() error {

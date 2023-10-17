@@ -1236,7 +1236,7 @@ func (p *Projector) getNodeUUID() (string, error) {
 		if nodeUUID == "" {
 			// Force fetch cluster info cache so that
 			// next attempt might succeed
-			p.cinfoProvider.FetchWithLock()
+			p.cinfoProvider.ForceFetch()
 
 			fmsg := "%v cinfo.GetLocalNodeUUID(), nodeUUID empty\n"
 			logging.Errorf(fmsg, prefix)

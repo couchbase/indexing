@@ -2664,7 +2664,7 @@ func (c *ClusterInfoCacheLiteClient) ValidateCollectionID(bucket, scope,
 }
 
 // Stub function to implement ClusterInfoProvider interface
-func (cicl *ClusterInfoCacheLiteClient) FetchWithLock() error {
+func (cicl *ClusterInfoCacheLiteClient) ForceFetch() error {
 	return nil
 }
 
@@ -2676,7 +2676,7 @@ func (ni *NodesInfo) SetUserAgent(userAgent string)     {}
 func (ni *NodesInfo) FetchNodesAndSvsInfo() (err error) { return nil }
 
 func (ni *bucketInfo) FetchBucketInfo(bucketName string) error { return nil }
-func (ni *bucketInfo) FetchWithLock() error                    { return nil }
+func (ni *bucketInfo) ForceFetch() error                       { return nil }
 
 func (ci *collectionInfo) FetchBucketInfo(bucketName string) error   { return nil }
 func (ci *collectionInfo) FetchManifestInfo(bucketName string) error { return nil }
