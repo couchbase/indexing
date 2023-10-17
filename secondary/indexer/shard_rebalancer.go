@@ -2391,6 +2391,7 @@ loop:
 
 func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 	realInstId c.IndexInstId, ttid string, tt *c.TransferToken, partnMergeWaitGroup *sync.WaitGroup) {
+
 	// There is no proxy (no merge needed)
 	if realInstId == 0 {
 
@@ -2466,14 +2467,35 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken) {
 	logging.Infof("ShardRebalancer::updateRStateToActive Updating RState of indexes in transfer token: %v", ttid)
 
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
-	var partnMergeWaitGroup sync.WaitGroup
-	for _, inst := range tt.IndexInsts {
-		sr.destTokenToMergeOrReady(inst.InstId, inst.RealInstId, ttid, tt, &partnMergeWaitGroup)
+	var partnMergeWaitGroup, wg sync.WaitGroup
+	for i := range tt.IndexInsts {
+		wg.Add(1)
+		// Change RState in go-routines so that all indexes in the token gets a chance to merge
+		// Otherwise, due to the ordering of instances in the token, merge can get stuck in deadlock.
+		// E.g., token_1 [proxy_1, real_2], token_2: [proxy_2, real_1]
+		// Both proxies would wait for RState of real instance to go active and the real instance would
+		// never get a change to move RState active if "destTokenToMergeOrReady" is not spawned asynchronously
+		// Indexer would serialize the RState transitions anyways
+		go func(index int) {
+			defer wg.Done()
+			sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)
+		}(i)
 	}
 	partnMergeWaitGroup.Wait()
+
+	// Ensures that even if partnMergeWaitGroup.Wait() exits before "destTokenToMergeOrReady" gets
+	// a chance to be invoked, this method still waits for merge to finish
+	wg.Wait()
+
+	// For a partitioned index, it is possible that real instace is in one token and proxy instance
+	// is in another token. In such a case, if proxy initiates merge first, then merge fails as
+	// real instance RState is not active. However, the go-routine in "destTokenToMergeOrReady"
+	// would keep waiting for merge to finish. In such a case, acquiring sr.mu.Lock() before
+	// changing the RState would block token with "real instance" to change RState and rebalance
+	// ends up in a deadlock. As "sr.mu" is only to protect token states and shard rebalancer's
+	// book-keeping, delay the locking until merge is finished
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
 
 	// Update state of the transfer token
 	tt.ShardTransferTokenState = c.ShardTokenReady

@@ -1746,8 +1746,8 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 }
 
 func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.TransferToken) error {
-	for _, indexInst := range tt.IndexInsts {
-		if err := m.destTokenToMergeOrReadyForInst(indexInst.InstId, indexInst.RealInstId, ttid); err != nil {
+	for i := range tt.IndexInsts {
+		if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[i], tt.RealInstIds[i], ttid); err != nil {
 			// No error is observed. Update the transfer token state to Ready
 			tt.Error = err.Error()
 			tt.IsPendingReady = false // Reset pending ready so that token will be deleted in next iteration
