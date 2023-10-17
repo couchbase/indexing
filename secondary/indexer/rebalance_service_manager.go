@@ -2886,7 +2886,7 @@ func (m *RebalanceServiceManager) getTransferTokenOwner(ttid string, tt *c.Trans
 		case c.ShardTokenScheduledOnSource, c.ShardTokenTransferShard:
 			return tt.SourceId
 		case c.ShardTokenScheduleAck, c.ShardTokenRestoreShard,
-			c.ShardTokenRecoverShard, c.ShardTokenCommit:
+			c.ShardTokenRecoverShard, c.ShardTokenMerge, c.ShardTokenCommit:
 			return tt.DestId
 		case c.ShardTokenReady:
 			if m.doesDropOnSourceExist(ttid) ||
