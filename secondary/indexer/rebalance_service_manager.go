@@ -721,6 +721,13 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 			return err
 		}
 
+		err = m.cleanupSettingsShardAffinityPath()
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::startRebalance Error during shard affinity settings patch cleanup, err: %v", err)
+			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+			return err
+		}
+
 		rtoken, err := m.checkExistingGlobalRToken()
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::startRebalance Error Checking Global RToken %v", err)
@@ -858,6 +865,24 @@ func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, 
 
 	return nil, nil
 
+}
+
+// If the /settings/config/features/ShardAffinity path exists in metaKV, then
+// ns_server expects GSI to delete the path once cluster is fully upgraded to
+// 7.6+. This function does the check and deletes the metaKV path
+func (m *RebalanceServiceManager) cleanupSettingsShardAffinityPath() error {
+	globalCluterVersion := common.GetClusterVersion()
+	if globalCluterVersion >= common.INDEXER_76_VERSION {
+		logging.Infof("RebalanceServiceManager::cleanupSettingsShardAffinityPath Cleaning up shard affinity settings path as cluster version is: %v", globalCluterVersion)
+
+		if err := retriedMetakvDel(common.IndexingSettingsShardAffinityMetaPath); err != nil {
+			logging.Errorf("RebalanceServiceManager::cleanupSettingsShardAffinityPath Erorr observed while cleaning up path: %v, err: %v", common.IndexingSettingsShardAffinityMetaPath, err)
+			return err
+		}
+	} else {
+		logging.Infof("RebalanceServiceManager::cleanupSettingsShardAffinityPath Skipping cleanup of path as cluster version is: %v", globalCluterVersion)
+	}
+	return nil
 }
 
 // initPreparePhaseRebalance is a helper for prepareRebalance.

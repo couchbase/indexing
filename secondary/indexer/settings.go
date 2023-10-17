@@ -481,7 +481,7 @@ func (s *settingsManager) metaKVCallback(kve metakv.KVEntry) error {
 	indexerReady = s.indexerReady
 	s.indexerReadyLock.Unlock()
 
-	if !indexerReady && (kve.Path == common.IndexingSettingsMetaPath || kve.Path == indexCompactonMetaPath) {
+	if !indexerReady && (kve.Path == common.IndexingSettingsMetaPath || kve.Path == indexCompactonMetaPath || kve.Path == common.IndexingSettingsShardAffinityMetaPath) {
 		s.notifyPending = true
 		logging.Infof("SettingsMgr::metaKVCallback Dropped request %v %v. Any setting change will get applied once Indexer is ready.", kve.Path, string(kve.Value))
 		return nil
