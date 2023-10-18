@@ -285,6 +285,10 @@ if [[ "$MODE" == *"$phase"* ]]; then
     curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_serverless_pprof.log
     echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_2/indexer_serverless_pprof.log"
     curl http://$Username:$Password@127.0.0.1:9114/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_2/indexer_serverless_pprof.log
+    echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_3/indexer_serverless_pprof.log"
+    curl http://$Username:$Password@127.0.0.1:9120/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_3/indexer_serverless_pprof.log
+    echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_4/indexer_serverless_pprof.log"
+    curl http://$Username:$Password@127.0.0.1:9126/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_4/indexer_serverless_pprof.log
 
     collect_logs
     stop_cluster

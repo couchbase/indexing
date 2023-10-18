@@ -173,11 +173,12 @@ type TsListElem struct {
 type RepairState byte
 
 const (
-	REPAIR_NONE RepairState = iota
-	REPAIR_RESTART_VB
-	REPAIR_SHUTDOWN_VB
-	REPAIR_MTR
-	REPAIR_RECOVERY
+	REPAIR_NONE              RepairState = iota
+	REPAIR_RESTART_VB                    // Marked for repair || KVReq sent for restart
+	REPAIR_SHUTDOWN_BEGIN_VB             // KVReq sent for shutdown & restart
+	REPAIR_SHUTDOWN_VB                   // KVResp received tried shutdown
+	REPAIR_MTR                           // Picked up for MTR
+	REPAIR_RECOVERY                      // Not Used
 )
 
 func (s RepairState) String() string {
@@ -186,6 +187,8 @@ func (s RepairState) String() string {
 		return "REPAIR_NONE"
 	case REPAIR_RESTART_VB:
 		return "REPAIR_RESTART_VB"
+	case REPAIR_SHUTDOWN_BEGIN_VB:
+		return "REPAIR_SHUTDOWN_BEGIN_VB"
 	case REPAIR_SHUTDOWN_VB:
 		return "REPAIR_SHUTDOWN_VB"
 	case REPAIR_MTR:
@@ -726,9 +729,12 @@ func (ss *StreamState) updateRepairState(streamId common.StreamId,
 		}
 	}
 
+	// If VB is in the same state as before connection error i.e. no stream begin/end is seen and no other
+	// new repair is triggered for same VB mark it REPAIR_SHUTDOWN_VB. After which this VB is not picked
+	// for shutdown and will on be considered for restart
 	for _, vbno := range shutdownVbs {
 		if ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vbno] == VBS_CONN_ERROR &&
-			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] == REPAIR_RESTART_VB {
+			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] == REPAIR_SHUTDOWN_BEGIN_VB {
 			logging.Infof("StreamState::set repair state to SHUTDOWN_VB for %v keyspaceId %v vb %v", streamId, keyspaceId, vbno)
 			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] = REPAIR_SHUTDOWN_VB
 		}
@@ -783,6 +789,9 @@ func (ss *StreamState) getRepairTsForKeyspaceId(streamId common.StreamId,
 					keyspaceId, streamId, i)
 
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
+
+                // Mark the VBs picked for shutdown & restart as SHUTDOWN_BEGIN
+				ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][i] = REPAIR_SHUTDOWN_BEGIN_VB
 			}
 		}
 	}
@@ -806,6 +815,9 @@ func (ss *StreamState) getRepairTsForKeyspaceId(streamId common.StreamId,
 				count++
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
 				anythingToRepair = true
+
+				// Mark the VBs picked for shutdown & restart as SHUTDOWN_BEGIN
+				ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][i] = REPAIR_SHUTDOWN_BEGIN_VB
 			}
 		}
 	}

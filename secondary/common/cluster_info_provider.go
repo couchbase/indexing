@@ -52,7 +52,13 @@ type ClusterInfoProvider interface {
 	ValidateCollectionID(bucket, scope, collection, collnID string, retry bool) bool
 
 	// Stub functions to make clusterInfoClient and clusterInfoCacheLiteClient compatible
-	FetchWithLock() error
+	// Note:
+	// * cinfoProviderRLock if acquired before this call is for acquiring cinfoProvider object
+	// * cinfoProvider can be cinfoClient or cinfoLiteClient and lock is used in hot swap
+	// * This function will update internal state of cache with lock in case of cinfoClient
+	//   currently is a no-op in case of cinfoLiteClient as internal state management is done
+	//   with atomic update of pointers
+	ForceFetch() error
 }
 
 // NewClusterInfoProvider is factory to get ClusterInfoClient or ClusterInfoCacheLiteClient
@@ -190,7 +196,7 @@ type BucketInfoProvider interface {
 
 	// Stub
 	FetchBucketInfo(bucketName string) error
-	FetchWithLock() error
+	ForceFetch() error
 
 	RWLockable // Stub to make ClusterInfoCache replaceable with BucketInfo
 }

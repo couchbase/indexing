@@ -43,7 +43,7 @@ const (
 	TOPIC_REQUEST_TIMEOUT         int = 300 * 1000 // In Milliseconds
 )
 
-//KVSender provides the mechanism to talk to KV(projector, router etc)
+// KVSender provides the mechanism to talk to KV(projector, router etc)
 type KVSender interface {
 }
 
@@ -101,7 +101,7 @@ func (k *kvSender) FetchCInfoWithLock() {
 	k.cinfoProviderLock.RLock()
 	defer k.cinfoProviderLock.RUnlock()
 
-	k.cinfoProvider.FetchWithLock()
+	k.cinfoProvider.ForceFetch()
 }
 
 func (k *kvSender) getNumVBucketsWithLock(bucket string) (int, error) {
@@ -111,8 +111,8 @@ func (k *kvSender) getNumVBucketsWithLock(bucket string) (int, error) {
 	return k.cinfoProvider.GetNumVBuckets(bucket)
 }
 
-//run starts the kvsender loop which listens to messages
-//from it supervisor(indexer)
+// run starts the kvsender loop which listens to messages
+// from it supervisor(indexer)
 func (k *kvSender) run() {
 
 	//main KVSender loop
@@ -958,7 +958,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, keyspaceId string,
 
 }
 
-//send the actual MutationStreamRequest on adminport
+// send the actual MutationStreamRequest on adminport
 func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 	keyspaceId string, reqTimestamps *protobuf.TsVbuuid, instances []*protobuf.Instance,
 	async bool, sessionId uint64, collectionAware bool, enableOSO bool,
@@ -1052,7 +1052,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	}
 }
 
-//send the actual AddInstances request on adminport
+// send the actual AddInstances request on adminport
 func sendAddInstancesRequest(ap *projClient.Client,
 	topic string, keyspaceId string,
 	instances []*protobuf.Instance) (*protobuf.TimestampResponse, error) {
@@ -1079,7 +1079,7 @@ func sendAddInstancesRequest(ap *projClient.Client,
 
 }
 
-//send the actual DelInstances request on adminport
+// send the actual DelInstances request on adminport
 func sendDelInstancesRequest(ap *projClient.Client,
 	topic string, keyspaceId string,
 	uuids []uint64) error {
@@ -1102,7 +1102,7 @@ func sendDelInstancesRequest(ap *projClient.Client,
 
 }
 
-//send the actual DelBuckets request on adminport
+// send the actual DelBuckets request on adminport
 func sendDelKeyspacesRequest(ap *projClient.Client,
 	topic string,
 	keyspaceIds []string) error {
@@ -1123,7 +1123,7 @@ func sendDelKeyspacesRequest(ap *projClient.Client,
 	}
 }
 
-//send the actual ShutdownStreamRequest on adminport
+// send the actual ShutdownStreamRequest on adminport
 func sendShutdownTopic(ap *projClient.Client,
 	topic string) error {
 
@@ -1699,7 +1699,7 @@ func addPartnInfoToProtoInst(cfg c.Config, cip c.ClusterInfoProvider,
 	}
 }
 
-//create client for node's projectors
+// create client for node's projectors
 func newProjClient(addr string) (*projClient.Client, error) {
 
 	config := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
@@ -1723,7 +1723,7 @@ func compareIfActiveTsEqual(origTs, compTs *c.TsVbuuid) bool {
 
 }
 
-//check if any vb in vbList is part of the given ts
+// check if any vb in vbList is part of the given ts
 func checkVbListInTS(vbList []uint32, ts *protobuf.TsVbuuid) bool {
 
 	for _, vb := range vbList {
