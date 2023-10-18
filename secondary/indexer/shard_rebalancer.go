@@ -2549,10 +2549,7 @@ func getDcpTokens() (map[string]*c.TransferToken, error) {
 			var tt c.TransferToken
 			json.Unmarshal(kv.Value, &tt)
 			rinfo.TT[ttid] = &tt
-		} else {
-			l.Errorf("RebalanceServiceManager::getCurrRebalTokens Unknown Token %v. Ignored.", kv)
 		}
-
 	}
 
 	return rinfo.TT, nil
