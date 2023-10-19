@@ -364,6 +364,8 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	solution = p.adjustInitialSolutionIfNecessary(solution)
 
 	if p.shardAffinity {
+		solution.PrePopulateAlternateShardIds(command)
+
 		for _, indexer := range solution.Placement {
 			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
 		}
@@ -1976,6 +1978,8 @@ func (p *GreedyPlanner) Plan(command CommandType, sol *Solution) (*Solution, err
 	p.initializeSolution(command, solution)
 
 	if p.shardAffinity {
+		solution.PrePopulateAlternateShardIds(command)
+
 		for _, indexer := range solution.Placement {
 			indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
 		}

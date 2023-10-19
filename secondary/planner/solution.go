@@ -2202,3 +2202,52 @@ func (s *Solution) getShardLimits() (int, int) {
 
 	return shardLimitPerTenant, len(shardMap)
 }
+
+func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
+	logging.Infof("ShardRebalancer::PrePopulateAlternateShardIds: Processing command: %v", command)
+	// Pre-populate alternate shardIds only for rebalance cases
+	switch command {
+	case CommandPlan, CommandDrop, CommandRetrieve:
+		return
+	}
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy || len(index.AlternateShardIds) > 0 {
+				continue
+			}
+
+			// Index has zero alternate shardIds.
+			// If any replica of this index has an alternate shardId, then use
+			// that slot number to populate the alterante shardId for the index.
+			defnId := index.DefnId
+			if replicaSlotMap, ok := s.indexSlots[defnId]; ok {
+				found := false
+
+				for replicaId, partnSlotMap := range replicaSlotMap {
+					for partnId, slotId := range partnSlotMap {
+						// For the same definition, there exists a replica with same partitionId and different
+						// replicaId. Use the slot for this index
+						if index.PartnId == partnId && index.Instance.ReplicaId != replicaId {
+							found = true
+							indexReplicaId := index.Instance.ReplicaId
+							msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(indexReplicaId), GroupId: 0}
+							index.AlternateShardIds = []string{msAltId.String()}
+							if index.IsPrimary == false {
+								bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(indexReplicaId), GroupId: 1}
+								index.AlternateShardIds = append(index.AlternateShardIds, bsAltId.String())
+							}
+							logging.Infof("Solution::PrePopulateAlternateShardIds Pre-populating alternate shardIds: %v for index: (%v, %v, %v, %v, %v, %v) on node: %v",
+								index.AlternateShardIds, index.Name, index.Bucket, index.Scope, index.Collection, index.Instance.ReplicaId, index.PartnId, indexer.NodeId)
+							break
+						}
+					}
+					if found { //break here as we are dealing with only one partn at a time
+						break
+					}
+				}
+			}
+		}
+	}
+
+}
