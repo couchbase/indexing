@@ -432,6 +432,7 @@ type AlternateShardMap map[c.IndexDefnId]*struct {
 	NumReplica   int
 	NumPartition int
 	IsPrimary    bool
+	Status       string
 	ReplicaMap   map[int]map[c.PartitionId][]string
 }
 
@@ -440,7 +441,7 @@ func (asm AlternateShardMap) String() string {
 	for defnId, defnStruct := range asm {
 		out.WriteString(fmt.Sprintf("Defn - id %v, name %v, numReplica %v, numPartition %v, isPrimary %v | Replicas - \n", defnId, defnStruct.Name, defnStruct.NumReplica, defnStruct.NumPartition, defnStruct.IsPrimary))
 		for replicaId, partnMap := range defnStruct.ReplicaMap {
-			out.WriteString(fmt.Sprintf("\treplica id %v | Partitions - \n", replicaId))
+			out.WriteString(fmt.Sprintf("\treplica id %v, status %v | Partitions - \n", replicaId, defnStruct.Status))
 			for partnId, asis := range partnMap {
 				out.WriteString(fmt.Sprintf("\t\tpartnId %v, alternate shards %v\n", partnId, asis))
 			}
@@ -459,6 +460,12 @@ func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClust
 	res := make(map[InvalidClusterState][]string)
 	for defnId, defnStruct := range asm {
 		idx := fmt.Sprintf("(defnId %v - name %v)", defnId, defnStruct.Name)
+
+		if strings.Contains(defnStruct.Status, "Scheduled for Creation") {
+			logger("Ignoring index %v as it is not created yet", idx)
+			continue
+		}
+
 		if len(defnStruct.ReplicaMap) != defnStruct.NumReplica+1 {
 			err := fmt.Errorf("'less replicas %v than definition %v for index: %v'", len(defnStruct.ReplicaMap), defnStruct.NumReplica+1, idx)
 			logger("ValidateClusterState: %v", err)
@@ -500,6 +507,8 @@ func ValidateClusterState(asm AlternateShardMap, logFails bool) map[InvalidClust
 				}
 			}
 		}
+
+		// TODO: Add tests to validate per shard index limit
 	}
 	return res
 }

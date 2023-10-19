@@ -1,9 +1,15 @@
 package secondaryindex
 
 import (
+	"bytes"
+	"encoding/json"
 	e "errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -783,4 +789,58 @@ func WaitForIndexOnline(n1qlclient datastore.Indexer, indexName string, index da
 	}
 
 	return nil, fmt.Errorf("index %v fails to come online after 30s", indexName)
+}
+
+func ChangeQuerySettings(configKey string, configValue interface{}, serverUserName, serverPassword,
+	hostaddress string) error {
+
+	host, port, err := net.SplitHostPort(hostaddress)
+	if err != nil {
+		return fmt.Errorf("Failed to split hostport `%s': %s", hostaddress, err)
+	}
+	reqUrl := fmt.Sprintf("http://%s:%s/%s", host, port, "settings/querySettings")
+
+	if len(configKey) > 0 {
+		log.Printf("Changing config key %v to value %v\n", configKey, configValue)
+		pbody := url.Values{}
+		pbody.Set(configKey, fmt.Sprintf("%v", configValue))
+
+		preq, err := http.NewRequest("POST", reqUrl, bytes.NewBuffer([]byte(pbody.Encode())))
+		if err != nil {
+			return err
+		}
+
+		preq.SetBasicAuth(serverUserName, serverPassword)
+		preq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		err = preq.ParseForm()
+		if err != nil {
+			return err
+		}
+
+		client := http.Client{}
+		resp, err := client.Do(preq)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		respStr, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+
+		newSetting := make(map[string]interface{})
+		err = json.Unmarshal(respStr, &newSetting)
+		if err != nil {
+			return err
+		}
+
+		newValue, ok := newSetting[configKey]
+		if !ok || fmt.Sprintf("%v", newValue) != fmt.Sprintf("%v", configValue) {
+			return fmt.Errorf("couldn't change %v to %v. curr value %v", configKey, configValue, newValue)
+		}
+	}
+
+	return nil
 }

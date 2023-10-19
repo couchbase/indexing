@@ -320,12 +320,16 @@ func (s *settingsManager) handlePerNodeSettingsReq(w http.ResponseWriter, r *htt
 			return
 		}
 
+		s.config.Update(newConfig)
+
 		indexerConfig := config.SectionConfig("indexer.", true)
 		s.supvMsgch <- &MsgConfigUpdate{
 			cfg: indexerConfig,
 		}
 
 		s.writeOk(w)
+	} else if r.Method == "GET" {
+		s.writeJson(w, s.config.FilterConfig("thisNodeOnly").Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
