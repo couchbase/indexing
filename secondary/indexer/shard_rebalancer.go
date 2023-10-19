@@ -1435,11 +1435,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 
 	case c.ShardTokenMerge:
 		sr.updateInMemToken(ttid, tt, "dest")
-		sr.updateRStateToActive(ttid, tt)
-
-		if sr.allDestTokensReady() {
-			sr.updateRStateOfDCPTokens()
-		}
+		go sr.updateRStateToActive(ttid, tt)
 
 		return true
 
@@ -2465,6 +2461,12 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 }
 
 func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken) {
+	if !sr.addToWaitGroup() {
+		return
+	}
+
+	defer sr.wg.Done()
+
 	logging.Infof("ShardRebalancer::updateRStateToActive Updating RState of indexes in transfer token: %v", ttid)
 
 	var partnMergeWaitGroup, wg sync.WaitGroup
@@ -2501,13 +2503,14 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 	tt.ShardTransferTokenState = c.ShardTokenReady
 	sr.acceptedTokens[ttid] = tt // Update accpeted tokens
 	setTransferTokenInMetakv(ttid, tt)
+
+	if sr.allDestTokensReadyLOCKED() {
+		sr.updateRStateOfDCPTokens()
+	}
 }
 
-func (sr *ShardRebalancer) allDestTokensReady() bool {
-	logging.Infof("ShardRebalancer::allDestTokensReady Updating RState of indexes in transfer token")
-
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
+func (sr *ShardRebalancer) allDestTokensReadyLOCKED() bool {
+	logging.Infof("ShardRebalancer::allDestTokensReadyLOCKED Updating RState of indexes in transfer token")
 
 	for ttid, token := range sr.acceptedTokens {
 		switch token.ShardTransferTokenState {
@@ -2519,7 +2522,7 @@ func (sr *ShardRebalancer) allDestTokensReady() bool {
 			c.ShardTokenRecoverShard,
 			c.ShardTokenMerge,
 			c.ShardTokenError:
-			logging.Infof("ShardRebalancer::allDestTokensReady Token: %v is still not ready", ttid)
+			logging.Infof("ShardRebalancer::allDestTokensReadyLOCKED Token: %v is still not ready", ttid)
 			return false
 		}
 	}
