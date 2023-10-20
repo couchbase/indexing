@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/service"
-	c "github.com/couchbase/indexing/secondary/common"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -504,27 +503,24 @@ func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
 	bucket := "default"
 	scope := "_default"
 	coll := "_default"
-
+	field := "abcdefgh"
 	// Create 3 indexes on node-1
 	for i := 0; i < 10; i++ {
 		index := fmt.Sprintf("index_%v", i)
-		err := secondaryindex.CreateSecondaryIndex3(index, bucket, scope, coll, indexManagementAddress,
-			"", []string{"abcdefgh"}, []bool{false}, false, []byte("{\"nodes\": [\"127.0.0.1:9001\"]}"), c.SINGLE, nil, true,
-			defaultIndexActiveTimeout, nil)
-		FailTestIfError(err, fmt.Sprintf("Failed while creating index: %v", index), t)
+		n1qlStmt := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(%v) with {\"nodes\": [\"127.0.0.1:9001\"]}", index, bucket, scope, coll, field)
+		executeN1qlStmt(n1qlStmt, BUCKET, _TestFailureAndRebalanceDuringInitialIndexBuild, t)
 	}
 
 	docs := 100000
 	CreateDocs(docs)
 
 	var wg sync.WaitGroup
-	err := secondaryindex.CreateSecondaryIndex3("index_11", bucket, scope, coll, indexManagementAddress,
-		"", []string{"name"}, []bool{false}, false, []byte("{\"nodes\": [\"127.0.0.1:9002\"], \"defer_build\":true}"), c.SINGLE, nil, true,
-		0, nil)
-	FailTestIfError(err, fmt.Sprintf("Failed while creating index_11"), t)
+	n1qlStmt := fmt.Sprintf("create index %v on `%v`.`%v`.`%v`(%v) with {\"nodes\": [\"127.0.0.1:9002\"], \"defer_build\":true}", "index_11", bucket, scope, coll, field)
+	executeN1qlStmt(n1qlStmt, BUCKET, _TestFailureAndRebalanceDuringInitialIndexBuild, t)
+
 	wg.Add(1)
 	go func() {
-		err = secondaryindex.BuildIndex("index_11", BUCKET, indexManagementAddress, defaultIndexActiveTimeout)
+		secondaryindex.BuildIndex("index_11", BUCKET, indexManagementAddress, defaultIndexActiveTimeout)
 		wg.Done()
 	}()
 	time.Sleep(1 * time.Second)

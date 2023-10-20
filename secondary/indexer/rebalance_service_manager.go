@@ -721,6 +721,13 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 			return err
 		}
 
+		err = m.cleanupSettingsShardAffinityPath()
+		if err != nil {
+			l.Errorf("RebalanceServiceManager::startRebalance Error during shard affinity settings patch cleanup, err: %v", err)
+			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+			return err
+		}
+
 		rtoken, err := m.checkExistingGlobalRToken()
 		if err != nil {
 			l.Errorf("RebalanceServiceManager::startRebalance Error Checking Global RToken %v", err)
@@ -858,6 +865,24 @@ func (m *RebalanceServiceManager) checkExistingGlobalRToken() (*RebalanceToken, 
 
 	return nil, nil
 
+}
+
+// If the /settings/config/features/ShardAffinity path exists in metaKV, then
+// ns_server expects GSI to delete the path once cluster is fully upgraded to
+// 7.6+. This function does the check and deletes the metaKV path
+func (m *RebalanceServiceManager) cleanupSettingsShardAffinityPath() error {
+	globalCluterVersion := common.GetClusterVersion()
+	if globalCluterVersion >= common.INDEXER_76_VERSION {
+		logging.Infof("RebalanceServiceManager::cleanupSettingsShardAffinityPath Cleaning up shard affinity settings path as cluster version is: %v", globalCluterVersion)
+
+		if err := retriedMetakvDel(common.IndexingSettingsShardAffinityMetaPath); err != nil {
+			logging.Errorf("RebalanceServiceManager::cleanupSettingsShardAffinityPath Erorr observed while cleaning up path: %v, err: %v", common.IndexingSettingsShardAffinityMetaPath, err)
+			return err
+		}
+	} else {
+		logging.Infof("RebalanceServiceManager::cleanupSettingsShardAffinityPath Skipping cleanup of path as cluster version is: %v", globalCluterVersion)
+	}
+	return nil
 }
 
 // initPreparePhaseRebalance is a helper for prepareRebalance.
@@ -1746,8 +1771,8 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 }
 
 func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.TransferToken) error {
-	for _, indexInst := range tt.IndexInsts {
-		if err := m.destTokenToMergeOrReadyForInst(indexInst.InstId, indexInst.RealInstId, ttid); err != nil {
+	for i := range tt.IndexInsts {
+		if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[i], tt.RealInstIds[i], ttid); err != nil {
 			// No error is observed. Update the transfer token state to Ready
 			tt.Error = err.Error()
 			tt.IsPendingReady = false // Reset pending ready so that token will be deleted in next iteration

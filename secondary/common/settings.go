@@ -25,10 +25,14 @@ const SIGAR_CGROUP_SUPPORTED = 1 // SigarControlGroupInfo.Supported value if cgr
 var maxMetaKVRetries = int32(MAX_METAKV_RETRIES)
 
 const (
-	IndexingMetaDir                       = "/indexing/"
-	IndexingSettingsMetaDir               = IndexingMetaDir + "settings/"
-	IndexingSettingsMetaPath              = IndexingSettingsMetaDir + "config"
-	IndexingSettingsFeaturesMetaPath      = IndexingSettingsMetaPath + "/features/"
+	IndexingMetaDir                  = "/indexing/"
+	IndexingSettingsMetaDir          = IndexingMetaDir + "settings/"
+	IndexingSettingsMetaPath         = IndexingSettingsMetaDir + "config"
+	IndexingSettingsFeaturesMetaPath = IndexingSettingsMetaPath + "/features/"
+
+	// Note: Do not use this path for any setting other than writing the JSON
+	// {"indexer.default.enable_shard_affinity":<true|false>}'
+	// Otherwise, ns_server compatability would break
 	IndexingSettingsShardAffinityMetaPath = IndexingSettingsFeaturesMetaPath + "ShardAffinity"
 )
 
