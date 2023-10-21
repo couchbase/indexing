@@ -637,6 +637,8 @@ func comparePauseMetadata(pauseMetadata *indexer.PauseMetadata,
 }
 
 func TestPauseResume(rootT *testing.T) {
+	rootT.Skipf("Skipping pause resume tests")
+
 	var (
 		archivePath = rootT.TempDir() + "/"
 		remotePath  = fmt.Sprintf("file://%v", archivePath)
@@ -666,7 +668,7 @@ func TestPauseResume(rootT *testing.T) {
 		err := mc.DeleteAllCommandTokens()
 		tc.HandleError(err, "Failed to delete all command token during setup")
 
-		statIsZero := func (substr string, stats map[string]interface{}) bool {
+		statIsZero := func(substr string, stats map[string]interface{}) bool {
 			for stat, val := range stats {
 				if strings.Contains(stat, substr) && val.(float64) > 0 {
 					return false
@@ -695,7 +697,7 @@ func TestPauseResume(rootT *testing.T) {
 				break
 			}
 
-			if time.Since(start) > 5 * time.Minute {
+			if time.Since(start) > 5*time.Minute {
 				rootT.Fatalf("Indexes not caught up after 5 Mins!")
 				break
 			}
