@@ -5663,7 +5663,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
-	useOSO := idx.useOSOForKeyspaceStream(buildStream, keyspaceId)
+	useOSO := idx.useOSOForStream(buildStream)
 
 	if enableOSO &&
 		clusterVer >= common.INDEXER_71_VERSION &&
@@ -7717,7 +7717,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		allowOSO = true
 	}
 
-	useOSO := idx.useOSOForKeyspaceStream(streamId, keyspaceId)
+	useOSO := idx.useOSOForStream(streamId)
 
 	enableOSO := idx.config["build.enableOSO"].Bool()
 	if enableOSO &&
@@ -12045,19 +12045,10 @@ func (idx *indexer) deleteFromInstsPerCollMap(indexList []common.IndexInst) {
 	logging.Verbosef("Indexer::deleteFromInstsPerCollMap: %v", idx.instsPerColl)
 }
 
-// useOSOForStream returns true only for INIT_STREAM on non-default keyspaces
-func (idx *indexer) useOSOForKeyspaceStream(streamId common.StreamId, keyspaceId string) bool {
+// useOSOForStream returns true only for INIT_STREAM
+func (idx *indexer) useOSOForStream(streamId common.StreamId) bool {
 	if streamId == common.MAINT_STREAM {
 		//OSO is used only for the INIT_STREAM
-		return false
-	}
-
-	_, scope, collection := SplitKeyspaceId(keyspaceId)
-	if (scope == "" || scope == common.DEFAULT_SCOPE) &&
-		(collection == "" || collection == common.DEFAULT_COLLECTION) {
-
-		// OSO is used only for the non-default keyspaces
-		logging.Infof("Indexer::useOSOForKeyspaceStream %v %v. OSO not supported for default scope/collection.", streamId, keyspaceId)
 		return false
 	}
 
