@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -582,9 +583,9 @@ func addToInstRenamePath(token *common.TransferToken, index *IndexUsage, newInst
 			token.InstRenameMap[shardId] = make(map[string]string)
 		}
 		if i == 0 { // Main index only
-			token.InstRenameMap[shardId][currPathInMeta+"/mainIndex"] = newPathInMeta + "/mainIndex"
+			token.InstRenameMap[shardId][filepath.Join(currPathInMeta, "mainIndex")] = filepath.Join(newPathInMeta, "mainIndex")
 		} else if index.IsPrimary == false { // Back index only
-			token.InstRenameMap[shardId][currPathInMeta+"/docIndex"] = newPathInMeta + "/docIndex"
+			token.InstRenameMap[shardId][filepath.Join(currPathInMeta, "docIndex")] = filepath.Join(newPathInMeta, "docIndex")
 		}
 	}
 }
