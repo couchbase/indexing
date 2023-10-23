@@ -1,0 +1,164 @@
+@server=127.0.0.1
+@username=Administrator
+@password=asdasd
+@bucket =sample
+
+POST http://{{server}}:9000/clusterInit HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}&dataPath={{$processEnv HOME}}/.tmp/data/n_0/data&indexPath={{$processEnv HOME}}/.tmp/data/n_0/data&eventingPath={{$processEnv HOME}}/.tmp/data/n_0/data&javaHome=&sendStats=true&services=kv,n1ql&analyticsPath={{$processEnv HOME}}/.tmp/data/n_0/data&clusterName=fileTransferRebal&memoryQuota=2048&afamily=ipv4&indexMemoryQuota=2048&afamilyOnly=false&nodeEncryption=on&username={{username}}&password={{password}}&port=SAME
+###
+POST http://{{server}}:9000/pools/default/serverGroups/0/addNode HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19001&user={{username}}&password={{password}}&services=index
+###
+POST http://{{server}}:9000/pools/default/serverGroups/0/addNode HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19002&user={{username}}&password={{password}}&services=index
+###
+POST http://{{server}}:9000/controller/rebalance HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+knownNodes=n_0@{{server}},n_1@{{server}},n_2@{{server}}&ejectedNodes=
+###
+GET http://{{server}}:9000/pools/default/tasks
+Authorization: Basic {{username}} {{password}}
+###
+POST http://{{server}}:9000/pools/default HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+indexMemoryQuota=256
+###
+POST http://{{server}}:9000/settings/indexes HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/x-www-form-urlencoded
+
+storageMode=plasma
+
+###
+POST http://{{server}}:9000/pools/default/buckets HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+name={{bucket}}&width=1&weight=1&bucketType=couchbase&storageBackend=magma&ramQuota=1024
+
+###
+POST http://{{server}}:9108/internal/settings
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"indexer.planner.enableShardAffinity": true,
+	"indexer.settings.rebalance.redistribute_indexes": true,
+	"indexer.settings.enableShardAffinity": true,
+	"indexer.settings.enable_shard_affinity": true,
+	"indexer.rebalance.transferBatchSize": 4,
+	"indexer.rebalance.perNodeTransferBatchSize": 4,
+	"indexer.planner.honourNodesInDefn": true
+}
+
+###
+POST http://{{server}}:9499/query/service HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"statement": "create index idx0 on `{{bucket}}`(Field_1) with {\"num_replica\": 0, \"nodes\": [\"127.0.0.1:9001\",\"127.0.0.1:9002\"]};"
+}
+###
+POST http://{{server}}:9499/query/service HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"statement": "create index idx0 on `{{bucket}}`(Field_1) partition by hash(`Field_2`) with {\"num_replica\": 1, \"num_partition\": 8, \"defer_build\": true};"
+}
+
+###
+POST http://{{server}}:9499/query/service HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"statement": "create index idx1 on `{{bucket}}`(Field_2) partition by hash(`Field_2`) with {\"num_replica\": 1, \"num_partition\": 8};"
+}
+
+###
+POST http://{{server}}:9499/query/service HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"statement": "create index idx2 on `{{bucket}}`(Field_3) partition by hash(`Field_3`) with {\"num_replica\": 1, \"num_partition\": 8};"
+}
+###
+GET http://{{server}}:9108/getIndexStatus?useETag=false
+Authorization: Basic {{username}} {{password}}
+
+###
+GET http://{{server}}:9108/listRebalanceTokens
+Authorization: Basic {{username}} {{password}}
+
+###
+POST http://{{server}}:9000/pools/default/serverGroups/0/addNode HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19003&user={{username}}&password={{password}}&services=index
+###
+POST http://{{server}}:9000/controller/rebalance HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+knownNodes=n_0@{{server}},n_1@{{server}},n_2@{{server}},n_3@{{server}}&ejectedNodes=n_2@{{server}}
+###
+GET http://{{server}}:9000/pools/default/tasks
+Authorization: Basic {{username}} {{password}}
+###
+
+###
+POST http://{{server}}:9499/query/service HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+Content-Type: application/json
+
+{
+	"statement": "build index on `{{bucket}}`(\"idx0\");"
+}
+
+
+### ^^^ swap rebalance
+
+### vvv failover
+
+POST http://{{server}}:9000/controller/startFailover HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+otpNode=n_3@{{server}}&allowUnsafe=false
+###
+POST http://{{server}}:9000/pools/default/serverGroups/0/addNode HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+hostname={{server}}:19002&user={{username}}&password={{password}}&services=index
+###
+POST http://{{server}}:9000/controller/rebalance HTTP/1.1
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Authorization: Basic {{username}} {{password}}
+
+knownNodes=n_0@{{server}},n_1@{{server}},n_2@{{server}},n_3@{{server}}&ejectedNodes=
+###
+GET http://{{server}}:9000/pools/default/tasks
+Authorization: Basic {{username}} {{password}}
+###
+
+POST http://{{server}}:9000/controller/stopRebalance HTTP/1.1
+Authorization: Basic {{username}} {{password}}
+###

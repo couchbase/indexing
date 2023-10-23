@@ -590,7 +590,7 @@ func (r *Rebalancer) resetAlternateShardIds() {
 func (r *Rebalancer) publishFirstTransferBatch() {
 
 	cfg := r.config.Load()
-	enableEmptyNodeBatching := cfg["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := cfg.GetEnableEmptyNodeBatching()
 
 	hasEmptyNodeBatch := false
 	if enableEmptyNodeBatching {
@@ -612,7 +612,7 @@ func (r *Rebalancer) publishFirstTransferBatch() {
 func (r *Rebalancer) publishNextTransferBatch() {
 
 	cfg := r.config.Load()
-	enableEmptyNodeBatching := cfg["rebalance.enableEmptyNodeBatching"].Bool()
+	enableEmptyNodeBatching := cfg.GetEnableEmptyNodeBatching()
 
 	hasEmptyNodeBatch := false
 	if enableEmptyNodeBatching {
@@ -706,9 +706,9 @@ func (r *Rebalancer) publishNextEmptyNodeBatch() bool {
 
 	currDestId := r.currBuildingEmptyNode
 	if destTTs, ok := r.buildingTTsByDestId[currDestId]; ok && len(destTTs) != 0 {
-		for ttid, _ := range destTTs {
+		for ttid := range destTTs {
 			tt := r.transferTokens[ttid]
-			if tt.State != common.TransferTokenDeleted {
+			if !isTokenDone(r.RebalanceOwner, tt) {
 				//all tokens in the batch not done
 				return true
 			}
@@ -807,7 +807,7 @@ func (r *Rebalancer) mapTransferTokensByDestIdLOCKED() {
 func (r *Rebalancer) numBuildingTokensLOCKED() (building int) {
 	for _, buildingTTs := range r.buildingTTsByDestId {
 		for ttid, tt := range buildingTTs {
-			if tt.State == c.TransferTokenDeleted {
+			if isTokenDone(r.RebalanceOwner, tt) {
 				delete(buildingTTs, ttid)
 				continue
 			}
@@ -2869,16 +2869,21 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		}()
 
 		// Finish rebalance at master so that shard rebalance master will start token merging
-		if r.RebalanceOwner == c.SHARD_REBALANCER && r.allTokensPendingReadyOrDeleted() {
-			logging.Infof("Rebalance::processTokenAsMaster Finishing rebalance as all tokens are either in pendingReady state or Deleted")
+		if r.RebalanceOwner == c.SHARD_REBALANCER {
 
-			if r.cb.progress != nil {
-				r.cb.progress(1.0, r.cancel)
+			if r.allTokensPendingReadyOrDeleted() {
+				logging.Infof("Rebalance::processTokenAsMaster Finishing rebalance as all tokens are either in pendingReady state or Deleted")
+
+				if r.cb.progress != nil {
+					r.cb.progress(1.0, r.cancel)
+				}
+
+				// Finish rebalance at rebalance master
+				r.cancelMetakv()
+				go r.finishRebalance(nil)
+			} else if r.currTokensPendingReadyOrDeleted() {
+				r.publishNextTransferBatch()
 			}
-
-			// Finish rebalance at rebalance master
-			r.cancelMetakv()
-			go r.finishRebalance(nil)
 		}
 
 	case c.TransferTokenCommit:
@@ -2967,6 +2972,19 @@ func (r *Rebalancer) allTokensPendingReadyOrDeleted() bool {
 		}
 	}
 	return true // all tokens are either Deleted or in pending Ready state
+}
+
+// currTokensPendingReadyOrDeleted - tests if all curr batch of empty node tokens are in the desired
+// state or not
+// for tokens in `isTokenDone` state, this call will delete them from `r.buildingTTsByDestId`
+func (r *Rebalancer) currTokensPendingReadyOrDeleted() bool {
+	const method = "Rebalancer::currTokensPendingOrDeleted:" // for logging
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, &r.bigMutex, "bigMutex", method, "")
+
+	// deleting happens in numBuildingTokensLOCKED
+	return len(r.currBuildingEmptyNode) != 0 && r.numBuildingTokensLOCKED() == 0
 }
 
 // setTransferTokenInMetakv stores a transfer token in metakv with several retries before
@@ -3416,4 +3434,15 @@ func postWithHandleEOF(data interface{}, host, url, logPrefix string) (*http.Res
 		}
 	}
 	return resp, nil
+}
+
+func isTokenDone(owner c.RebalancerType, tt *c.TransferToken) bool {
+	if tt == nil {
+		return false
+	}
+	if owner == c.SHARD_REBALANCER && tt.IsEmptyNodeBatch {
+		// tokens for emptyNodeBatching require diff logic in controlled mode
+		return tt.IsPendingReady && tt.State == c.TransferTokenInProgress
+	}
+	return tt.State == c.TransferTokenDeleted
 }

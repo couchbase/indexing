@@ -302,6 +302,9 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		if err != nil {
 			return err
 		}
+		if strings.Contains(configKey, "thisNodeOnly") {
+			url = "http://" + host + ":" + strconv.Itoa(ihttp) + "/settings/thisNodeOnly"
+		}
 		preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
 		preq.SetBasicAuth(serverUserName, serverPassword)
 
@@ -311,6 +314,83 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		}
 		defer resp.Body.Close()
 		ioutil.ReadAll(resp.Body)
+	}
+
+	return nil
+}
+
+func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserName, serverPassword, hostaddress string) error {
+
+	// Wait for some time to prevent the possibility of golang
+	// re-using a connection which is about to close
+	time.Sleep(100 * time.Millisecond)
+	qpclient, err := GetOrCreateClient(hostaddress, "2i_settings")
+	if err != nil {
+		return err
+	}
+	nodes, err := qpclient.Nodes()
+	if err != nil {
+		return err
+	}
+
+	var adminurl string
+	for _, indexer := range nodes {
+		adminurl = indexer.Adminport
+		break
+	}
+
+	host, sport, _ := net.SplitHostPort(adminurl)
+	iport, _ := strconv.Atoi(sport)
+
+	if host == "" || iport == 0 {
+		log.Printf("ChangeIndexerSettings: Host %v Port %v Nodes %+v", host, iport, nodes)
+	}
+
+	client := http.Client{}
+	// hack, fix this
+	ihttp := iport + 2
+	url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/internal/settings"
+
+	if len(configs) > 0 {
+		jbody := make(map[string]interface{})
+		jThisNodeBody := make(map[string]interface{})
+		for configKey, configValue := range configs {
+			log.Printf("Changing config key %v to value %v\n", configKey, configValue)
+			if strings.Contains(configKey, "thisNodeOnly") {
+				jThisNodeBody[configKey] = configValue
+			} else {
+				jbody[configKey] = configValue
+			}
+		}
+		pbody, err := json.Marshal(jbody)
+		pThisNodeBody, err1 := json.Marshal(jThisNodeBody)
+		if err != nil {
+			return err
+		} else if err1 != nil {
+			return err1
+		}
+		preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
+		preq.SetBasicAuth(serverUserName, serverPassword)
+
+		resp, err := client.Do(preq)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		ioutil.ReadAll(resp.Body)
+
+		if len(jThisNodeBody) > 0 {
+			pThisNodeReq, _ := http.NewRequest("POST", "http://"+host+":"+strconv.Itoa(ihttp)+"/settings/thisNodeOnly", bytes.NewBuffer(pThisNodeBody))
+			pThisNodeReq.SetBasicAuth(serverUserName, serverPassword)
+
+			respThisNodeOnly, err := client.Do(preq)
+			if err != nil {
+				return err
+			}
+			defer respThisNodeOnly.Body.Close()
+			ioutil.ReadAll(respThisNodeOnly.Body)
+		}
+
 	}
 
 	return nil
