@@ -188,20 +188,21 @@ if [[ "$MODE" == *"$phase"* ]]; then
 fi
 
 # Core dumps
-export GOTRACEBACK=crash
+export GOTRACEBACK=single
 ulimit -c 2097152
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' $WORKSPACE/install/etc/couchbase/static_config
 
-
+arch=`uname -m`
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
-gover="`grep -A20 'TARGET indexer PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\([0-9]\.[0-9]*.[0-9]\).*$/\1/'`"
-golatest="`ls $HOME/.cbdepscache/exploded/x86_64/ | grep $gover | tail -1`"
+gover="`grep -A20 'TARGET indexer PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\(\([0-9]\.[0-9]*.[0-9]\)\|\(SUPPORTED_NEWER\)\|\(SUPPORTED_OLDER\)\).*$/\1/'`"
+newerGover="`cat $WORKSPACE/golang/versions/$gover.txt`"
+golatest="`ls $HOME/.cbdepscache/exploded/$arch/ | grep $newerGover | tail -1`"
 
 mkdir -p "$WORKSPACE/go"
-export GOROOT=$HOME/.cbdepscache/exploded/x86_64/$golatest/go
+export GOROOT=$HOME/.cbdepscache/exploded/$arch/$golatest/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
-export PATH=$PATH:$GOROOT/bin
+export PATH=$GOROOT/bin:$PATH
 export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include
 export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
 export LD_LIBRARY_PATH=$WORKSPACE/install/lib
@@ -210,7 +211,7 @@ export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 export GO111MODULE=auto
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
-go get -t ./... 1>/dev/null 2>&1
+go get -modcacherw -t ./... 1>/dev/null 2>&1
 
 export phase=unit
 if [[ "$MODE" == *"$phase"* ]]; then
@@ -218,31 +219,31 @@ if [[ "$MODE" == *"$phase"* ]]; then
 
   if [ "$STORAGE" = "memdb" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   elif [ "$STORAGE" = "plasma" ]; then
       cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma/zstd
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       # unit test logs will be in the Server Log logs-<timestamp>.tar.gz at logs-unit-test.log
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
+      GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log | grep 'RUN\|PASS\|FAIL\|github'
   fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
-  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
-  GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
 
   collect_logs
 fi
@@ -373,6 +374,7 @@ if [ "$CIBOT" = "true" ]; then
   done
 fi
 
+go clean -modcache
+
 touch ~/.cigreen
 exit 0
-

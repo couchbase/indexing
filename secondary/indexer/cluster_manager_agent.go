@@ -494,13 +494,18 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			partitions := make([]common.PartitionId, len(inst.Partitions))
 			versions := make([]int, len(inst.Partitions))
 			shardIds := make([][]common.ShardId, len(inst.Partitions))
+			alternateShardIds := make(map[common.PartitionId][]string)
 			for i, partn := range inst.Partitions {
 				partitions[i] = common.PartitionId(partn.PartId)
 				versions[i] = int(partn.Version)
 				shardIds[i] = []common.ShardId(partn.ShardIds)
+				alternateShardIds[common.PartitionId(partn.PartId)] = partn.AlternateShardIds
 			}
 			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, shardIds,
 				inst.NumPartitions, idxDefn.PartitionScheme, idxDefn.HashScheme)
+
+			// Populate alterante shardIds for this instance in the index definition
+			idxDefn.AlternateShardIds = alternateShardIds
 
 			// create index instance
 			idxInst := common.IndexInst{

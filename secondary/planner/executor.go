@@ -6004,11 +6004,11 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 
 	// Group indexes for each partition
 	// partnId -> replicaId -> indexerNode to corresponding index usage
-	allPartnDist := getPartnDistribution(solution, indexes)
+	indexesPartnDist, allPartnDist := getPartnDistribution(solution, indexes)
 
 	getTargetNodes := func(defnId common.IndexDefnId, partnId common.PartitionId) map[*IndexerNode]map[*IndexUsage]bool {
 		targetNodes := make(map[*IndexerNode]map[*IndexUsage]bool)
-		if replicaDist, ok := allPartnDist[defnId][partnId]; ok {
+		if replicaDist, ok := indexesPartnDist[defnId][partnId]; ok {
 			for _, indexDist := range replicaDist {
 				for indexer, index := range indexDist {
 					if _, ok := targetNodes[indexer]; !ok {
@@ -6021,7 +6021,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 		return targetNodes
 	}
 
-	for defnId, partnDist := range allPartnDist {
+	for defnId, partnDist := range indexesPartnDist {
 		for partnId, replicaMap := range partnDist {
 
 			shardLimitPerTenant, currShardCount := solution.getShardLimits()
@@ -6051,7 +6051,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 				// If there is an error in generating alternateID's, do not fail
 				// index creation. Ignore the error so that the index can still be
 				// created without alternateId
-				genAlterntateShardIds(replicaMap)
+				genAlterntateShardIds(replicaMap, allPartnDist[defnId][partnId])
 
 			} else {
 				// Atleast one indexer node has reached the capacity of shards
@@ -6080,12 +6080,12 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 						getLoadDist(fullCapNodes), getTargetDist(targetNodes), partnId)
 				})
 
-				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap, binSize)
+				shardSlots, replan := pruneAndSortByLoad(allIndexerNodes, fullCapNodes, targetNodes, replicaMap, allPartnDist[defnId][partnId], binSize)
 				if replan {
 					logging.Warnf("Planner::populateAlternateShardIds Re-planning placement as no common shard has been found")
 
 					// TODO: Do actual replanning instead of just assining new shardIds
-					genAlterntateShardIds(replicaMap)
+					genAlterntateShardIds(replicaMap, allPartnDist[defnId][partnId])
 
 				} else {
 					// Assign alternate Ids based on the least loaded slot
@@ -6093,6 +6093,7 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 					logging.Infof("Planner::populateAlternateShardIds Using slot: %v for placing replicas: %v,\nGlobal dist: %v",
 						slot[0].slotId, getIndexesFromReplicaMap(replicaMap), slot[1])
 					assignAlternateIds(replicaMap, slot, targetNodes)
+					populateSlotsForNonMovingReplicas(replicaMap, allPartnDist[defnId][partnId], slot[0].slotId)
 				}
 			}
 		}
@@ -6334,7 +6335,7 @@ func pruneIndexers(nodes map[common.PartitionId]map[*IndexerNode]map[*IndexUsage
 
 // Generates a distribution map for each partition across all definitions
 // Mapping contains defnId -> partnId -> replicaId -> indexerNode to corresponding index usage
-func getPartnDistribution(solution *Solution, newIndexes []*IndexUsage) map[common.IndexDefnId]PartnDistMap {
+func getPartnDistribution(solution *Solution, newIndexes []*IndexUsage) (map[common.IndexDefnId]PartnDistMap, map[common.IndexDefnId]PartnDistMap) {
 	allPartnDist := make(map[common.IndexDefnId]PartnDistMap)
 
 	for _, indexer := range solution.Placement {
@@ -6381,7 +6382,7 @@ func getPartnDistribution(solution *Solution, newIndexes []*IndexUsage) map[comm
 		filteredPartnDist[defnId][partnId][replicaId] = allPartnDist[defnId][partnId][replicaId]
 	}
 
-	return filteredPartnDist
+	return filteredPartnDist, allPartnDist
 }
 
 func canCreateNewShards(replicaMap ReplicaDistMap) bool {
@@ -6399,7 +6400,27 @@ func canCreateNewShards(replicaMap ReplicaDistMap) bool {
 	return true
 }
 
-func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
+func populateSlotsForNonMovingReplicas(replicaMap, allReplicas ReplicaDistMap, slotId uint64) {
+	// Assign alternate shardIds for the remaining replicas
+	for replicaId, indexerDist := range allReplicas {
+		if _, ok := replicaMap[replicaId]; ok {
+			continue
+		}
+
+		for _, index := range indexerDist {
+			val := index.Instance.ReplicaId
+			msAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 0}
+			bsAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 1}
+			if index.IsPrimary {
+				index.AlternateShardIds = []string{msAltId.String()}
+			} else {
+				index.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
+			}
+		}
+	}
+}
+
+func genAlterntateShardIds(replicaMap ReplicaDistMap, allReplicas ReplicaDistMap) error {
 
 	// All replicas share same slotId. Hence, generate a single slotId
 	// and re-use the slotId for all replicas
@@ -6426,7 +6447,7 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 			alternateId.SetReplicaGroup(uint8(replicaId))
 			if indexUsage.IsPrimary {
 				alternateId.SetInstaceGroup(0)
-				logging.Infof("genAlternateShardIds: Generating new alternageShardId: %v for primary index: (%v, %v, %v, %v)",
+				logging.Infof("genAlternateShardIds: Generating new alternateShardId: %v for primary index: (%v, %v, %v, %v)",
 					alternateId.String(), indexUsage.Name, indexUsage.DefnId,
 					indexUsage.Instance.ReplicaId, indexUsage.PartnId)
 
@@ -6447,6 +6468,8 @@ func genAlterntateShardIds(replicaMap ReplicaDistMap) error {
 			}
 		}
 	}
+
+	populateSlotsForNonMovingReplicas(replicaMap, allReplicas, alternateId.SlotId)
 	return nil
 }
 
@@ -6516,7 +6539,8 @@ func getShardDist(nodes map[*IndexerNode]bool) map[uint64]*ShardLoad {
 
 func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 	targetNodes map[*IndexerNode]map[*IndexUsage]bool,
-	replicaMap map[int]map[*IndexerNode]*IndexUsage, binSize uint64) ([][2]*ShardLoad, bool) {
+	replicaMap map[int]map[*IndexerNode]*IndexUsage,
+	allReplicaPlacement map[int]map[*IndexerNode]*IndexUsage, binSize uint64) ([][2]*ShardLoad, bool) {
 
 	//allShardDist := getShardDist(allIndexerNodes)
 	shardDistOnFullCapNodes := getShardDist(fullCapNodes)
@@ -6618,10 +6642,77 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 		return nil, true
 	}
 
+	// Step-4: Consider the replicas that are not moving. This is done to handle the
+	// cases where there is cyclic dependency in placement (or) a replica can not move
+	// to a node due to the presence of another replica on the node. E.g.,
+	//
+	// Cyclic dependency:
+	// Node n1: i1 (replica 0), i2 (replica 0)
+	// Node n2: i1 (replica 1), i2 (replica 2)
+	// Node n3: i1 (replica 2), i2 (replica 1)
+	//
+	// Node n1 is being swap rebalanced with n4 and planner wants to place i1 and i2 on same slot.
+	//
+	// If index "i2" were to be placed on a slot with "i1", then rebalance would fail
+	// as i2 (replica 1) will be attempted to move to n2 while n2 already has i2 (replica 2)
+	// Unless both n2 and n3 are rebalanced out, the conflict can not be resolved. If the
+	// cyclic dependencies exist across multiple nodes, then it becomes more difficult to
+	// handle such cases. To avoid such cases, also consider replicas that are not moving
+	for replicaId, indexerDist := range allReplicaPlacement {
+
+		// Ignore the replica dist of indexes under movement can be adjusted to map to the replica
+		// numbers of the slots. E.g, i1 (replica 1), i1 (replica 2) are moving to n1 with slot s1-2
+		// and n2 with slot s1-1, then "assignAlternateIds" method would re-adjust the replicas
+		// to match the slots on the destination. The final placement would be i1 (replica 2) on n1
+		// and i1 (replica 1) on n2
+		if _, ok := replicaMap[replicaId]; ok {
+			continue
+		}
+
+		// Replica is not being moved
+		for indexerNode := range indexerDist {
+			for slotId := range shardDistOnFullCapNodes {
+				for _, slotReplica := range globalShardDist[slotId].replicas {
+
+					// Slot has a replica number matching the replicaId of instance that
+					// is not being moved. However the slot with that replica number exists
+					// on a different node. Ignore the slot
+					if slotReplica.ReplicaId == replicaId && slotReplica.node.NodeId != indexerNode.NodeId {
+						delete(shardDistOnFullCapNodes, slotId)
+						break
+					}
+
+					// Slot exists on the node on which the replica which is not moving also exists
+					// But, slot holds a different replica number. Prune the slot from further placement
+					if slotReplica.node.NodeId == indexerNode.NodeId && slotReplica.ReplicaId != replicaId {
+						delete(shardDistOnFullCapNodes, slotId)
+						break
+					}
+
+					// There are two other cases that are possible here:
+					// a. SlotReplicaId == replicaId && slotReplica.NodeId == indexerNodeId
+					// b. SlotReplicaId != replicaId && slotReplica.NodeId != indexerNodeId
+					//
+					// (a) is a desirable state i.e. we accept the slot for placement
+					// (b) can happen when the slot has a replica which is outside the replica range
+					// for the index. E.g., index is created with 2 replicas (0, 1 Id's) but the
+					// slot has 4 replicas(0, 1, 2, 3). In such cases, if the placement of "0" and "1"
+					// replicas match, then we can use the slot irrespective of the placement of "2" and
+					// "3" slots
+				}
+			}
+		}
+
+	}
+
+	if len(shardDistOnFullCapNodes) == 0 {
+		return nil, true
+	}
+
 	var shardSlice [][2]*ShardLoad
 	for slotId, v := range shardDistOnFullCapNodes {
 		globalDist := globalShardDist[slotId]
-		logging.Verbosef("Planner::pruneAndSortByLoad Probable slot: %v for final placement: %v", slotId, globalDist.String())
+		logging.Infof("Planner::pruneAndSortByLoad Probable slot: %v for final placement: %v", slotId, globalDist.String())
 		shardSlice = append(shardSlice, [2]*ShardLoad{v, globalShardDist[slotId]})
 	}
 
@@ -6682,10 +6773,12 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 		for indexerNode, index := range indexDist {
 			if val, ok := slotDist[indexerNode]; ok {
 				index.Instance.ReplicaId = val
+				msAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 0}
+				bsAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 1}
 				if index.IsPrimary {
-					index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val)}
+					index.AlternateShardIds = []string{msAltId.String()}
 				} else {
-					index.AlternateShardIds = []string{fmt.Sprintf("%v-%v-0", slotId, val), fmt.Sprintf("%v-%v-1", slotId, val)}
+					index.AlternateShardIds = []string{msAltId.String(), bsAltId.String()}
 				}
 				assignedReplicas[val] = true
 			} else {

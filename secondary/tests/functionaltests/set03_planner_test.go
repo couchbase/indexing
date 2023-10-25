@@ -3061,3 +3061,326 @@ func TestShardAssignmentFuncTestCases(t *testing.T) {
 		}
 	}
 }
+
+func TestShardAssignmentUpgradeCases_MixedModeEject72NodeMoveSameReplicaId(t *testing.T) {
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_eject_pre_76_node_same_replica_id",
+		"\t In this test, the cluster has 2 indexer nodes. One in 7.6+ version\n" +
+			"\t and one in 7.2 version. The 7.2 node is ejected from cluster. The indexes\n" +
+			"\t which have replicas on 7.6 node should be skipped from movement while the indexes\n" +
+			"\t without replicas should be moved with a valid alterante shardId. In this case\n" +
+			"index with replicaId 1 will be moved to 7.6 node which has alternate shardIds with\n" +
+			"replica number as 1",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_eject_72_node_same_replica.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	for _, indexer := range plan.Placement {
+		if indexer.NodeId == "127.0.0.1:9002" {
+			indexer.MarkDeleted()
+			break
+		}
+	}
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	planner.UngroupIndexes(p.GetResult())
+	// Validation:
+	// a. There should be only 2 shards on node n1
+	// b. No indexes should be present on node n2
+	// c. index3 (replica 1) should have the same alternate shardId as index1, index2
+	expectedIndexCount := map[string]int{"127.0.0.1:9001": 3}
+	expectedShardCount := map[string]int{"127.0.0.1:9001": 2}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+
+			if indexer.NodeId == "127.0.0.1:9001" && index.Name == "index3" {
+				if index.AlternateShardIds[0] != "1234-1-0" || index.AlternateShardIds[1] != "1234-1-1" {
+					p.PrintLayout()
+					t.Fatalf("Mismatch in alteranteshardIds. Expected [1234-1-0, 1234-1-1] for index3. Found: %v", index.AlternateShardIds)
+				}
+			}
+
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
+func TestShardAssignmentUpgradeCases_MixedModeEject72NodeMoveDifferentReplicaId(t *testing.T) {
+
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_eject_pre_76_node_different_replica_id",
+		"\t In this test, the cluster has 2 indexer nodes. One in 7.6+ version\n" +
+			"\t and one in 7.2 version. The 7.2 node is ejected from cluster. The indexes\n" +
+			"\t which have replicas on 7.6 node should be skipped from movement while the indexes\n" +
+			"\t without replicas should be moved with a valid alterante shardId. In this case\n" +
+			"index with replicaId 0 will be moved to 7.6 node which has alternate shardIds with\n" +
+			"replica number as 0",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_eject_72_node_diff_replica.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	for _, indexer := range plan.Placement {
+		if indexer.NodeId == "127.0.0.1:9002" {
+			indexer.MarkDeleted()
+			break
+		}
+	}
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	// Validation:
+	// a. There should be only 2 shards on node n1
+	// b. No indexes should be present on node n2
+	// c. index3 (replica 1) should have the different alternate shardId as index1, index2
+	expectedIndexCount := map[string]int{"127.0.0.1:9001": 3}
+	expectedShardCount := map[string]int{"127.0.0.1:9001": 4}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	planner.UngroupIndexes(p.GetResult())
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+
+			if indexer.NodeId == "127.0.0.1:9001" && index.Name == "index3" {
+				if index.AlternateShardIds[0] == "1234-1-0" || index.AlternateShardIds[1] == "1234-1-1" {
+					p.PrintLayout()
+					t.Fatalf("Mismatch in alteranteshardIds. Did not expect [1234-1-0, 1234-1-1] for index3. Found: %v", index.AlternateShardIds)
+				}
+			}
+
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
+func TestShardAssignmentUpgradeCases_MixedModeEject72NodeDistributedReplicas(t *testing.T) {
+
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_eject_pre_76_node_distributed_replicas",
+		"\t In this test, the cluster has 4 indexer nodes. All in 7.2 version.\n" +
+			"\t Node n1 has i1 (replica 0), i2 (replica 0), i3 (replica 0). \n" +
+			"\t Node n2 has i1 (replica 1)\n" +
+			"\t Node n3 has i2 (replica 1)\n" +
+			"\t Node n4 has i3 (replica 1)\n" +
+			"\t Node n1 is ejected and a new 7.6 node (n5) is rebalanced into the cluster. \n" +
+			"\t Node n5 can hold only 2 shards. Insipte of that, i1 (replica 0), i2 (replica 0)\n" +
+			"\t i3 (replica 0) has to be placed on different shards",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_eject_72_node_distributed_replicas.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	for _, indexer := range plan.Placement {
+		if indexer.NodeId == "127.0.0.1:9001" {
+			indexer.MarkDeleted()
+			break
+		}
+	}
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	// Validation:
+	// a. All indexes on n5 should be on different shards
+	expectedIndexCount := map[string]int{"127.0.0.1:9002": 1, "127.0.0.1:9003": 1, "127.0.0.1:9004": 1, "127.0.0.1:9005": 3}
+	expectedShardCount := map[string]int{"127.0.0.1:9002": 2, "127.0.0.1:9003": 2, "127.0.0.1:9004": 2, "127.0.0.1:9005": 6}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	planner.UngroupIndexes(p.GetResult())
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
+func TestShardAssignmentUpgradeCases_CyclicDependencies(t *testing.T) {
+
+	testcase := shardAssignmentTestCase{
+		"mixed_mode_eject_pre_76_node_cyclic_dependency",
+		"\t In this test, the cluster has 3 indexer nodes. All in 7.2 version.\n" +
+			"\t Node n1 has i1 (replica 0), i2 (replica 0). \n" +
+			"\t Node n2 has i1 (replica 1), i2 (replica 2). \n" +
+			"\t Node n3 has i1 (replica 2), i2 (replica 1). \n" +
+			"\t Node n1 is ejected and a new 7.6 node (n4) is rebalanced into the cluster. \n" +
+			"\t Node n4 can hold only 2 shards. Insipte of that, i1 (replica 0), i2 (replica 0)\n" +
+			"\t has to be placed on different shards",
+		"../testdata/planner/shard_assignment_rebalance/mixed_mode_eject_72_node_cyclic_dependency.json",
+	}
+
+	log.Printf("-------------------------------------------")
+	log.Printf(testcase.comment)
+
+	config := planner.DefaultRunConfig()
+	config.EnableShardAffinity = true
+	config.Resize = false
+
+	s := planner.NewSimulator()
+
+	plan, err := planner.ReadPlan(testcase.topology)
+	FailTestIfError(err, "Fail to read plan", t)
+
+	for _, indexer := range plan.Placement {
+		if indexer.NodeId == "127.0.0.1:9001" {
+			indexer.MarkDeleted()
+			break
+		}
+	}
+
+	p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
+	FailTestIfError(err, "Error in planner test", t)
+
+	expectedIndexCount := map[string]int{"127.0.0.1:9002": 2, "127.0.0.1:9003": 2, "127.0.0.1:9004": 2}
+	expectedShardCount := map[string]int{"127.0.0.1:9002": 4, "127.0.0.1:9003": 4, "127.0.0.1:9004": 4}
+	actualIndexCount := make(map[string]int)
+	actualShardCount := make(map[string]int)
+
+	planner.UngroupIndexes(p.GetResult())
+	for _, indexer := range p.GetResult().Placement {
+		actualIndexCount[indexer.NodeId] = len(indexer.Indexes)
+
+		numShards := make(map[string]int)
+		for _, index := range indexer.Indexes {
+			for _, altId := range index.AlternateShardIds {
+				numShards[altId] = 1
+			}
+		}
+
+		actualShardCount[indexer.NodeId] = len(numShards)
+	}
+
+	if compareMaps(expectedIndexCount, actualIndexCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedIndexCount, actualIndexCount)
+	}
+
+	if compareMaps(expectedShardCount, actualShardCount) == false {
+		logging.SetLogLevel(logging.Info)
+		defer logging.SetLogLevel(logging.Error)
+
+		p.PrintLayout()
+		t.Fatalf("Mismatch in expected vs actual index counts in the cluster, expected: %v, actual: %v", expectedShardCount, actualShardCount)
+	}
+}
+
+func compareMaps(expected, actual map[string]int) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+
+	for k, v := range expected {
+		if v1, ok := actual[k]; !ok || v != v1 {
+			return false
+		}
+	}
+	return true
+}

@@ -2202,3 +2202,156 @@ func (s *Solution) getShardLimits() (int, int) {
 
 	return shardLimitPerTenant, len(shardMap)
 }
+
+func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
+	logging.Infof("ShardRebalancer::PrePopulateAlternateShardIds: Processing command: %v", command)
+	// Pre-populate alternate shardIds only for rebalance cases
+	switch command {
+	case CommandPlan, CommandDrop, CommandRetrieve:
+		return
+	}
+
+	// For a new node coming into the cluster, indexer will not initiate movements by default.
+	// When re-distribute indexes is set to true, then indexer will consider all indexes as
+	// candidates for movement - In which case eligible indexes will be non-zero. Hence,
+	// consider pre-population only when there are indexes eligible for movement
+	if len(s.place.GetEligibleIndexes()) == 0 && s.place.HasOptionalIndexes() == false {
+		logging.Infof("ShardRebalancer::PrePopulateAlternateShardIds: Returning as no-elibigle indexes are found")
+		return
+	}
+
+	// Phase-1: Pre-populate alternate shardIds if atleast one replica of a partition
+	// has an alternate shardId
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsShardProxy || len(index.AlternateShardIds) > 0 {
+				continue
+			}
+
+			// Index has zero alternate shardIds.
+			// If any replica of this index has an alternate shardId, then use
+			// that slot number to populate the alterante shardId for the index.
+			defnId := index.DefnId
+			if replicaSlotMap, ok := s.indexSlots[defnId]; ok {
+				found := false
+
+				for replicaId, partnSlotMap := range replicaSlotMap {
+					for partnId, slotId := range partnSlotMap {
+						// For the same definition, there exists a replica with same partitionId and different
+						// replicaId. Use the slot for this index
+						if index.PartnId == partnId && index.Instance.ReplicaId != replicaId {
+							found = true
+							indexReplicaId := index.Instance.ReplicaId
+							msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(indexReplicaId), GroupId: 0}
+							index.AlternateShardIds = []string{msAltId.String()}
+							if index.IsPrimary == false {
+								bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(indexReplicaId), GroupId: 1}
+								index.AlternateShardIds = append(index.AlternateShardIds, bsAltId.String())
+							}
+							logging.Infof("Solution::PrePopulateAlternateShardIds Pre-populating alternate shardIds: %v for index: (%v, %v, %v, %v, %v, %v) on node: %v",
+								index.AlternateShardIds, index.Name, index.Bucket, index.Scope, index.Collection, index.Instance.ReplicaId, index.PartnId, indexer.NodeId)
+							break
+						}
+					}
+					if found { //break here as we are dealing with only one partn at a time
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Phase-2: move indexes so that all indexes with same alterante shardId
+	// exist on same node
+	s.moveIndexesIfNecessary()
+}
+
+// After populating the alternate shardId for all replicas, it is possible
+// that a replica is wrongly placed. E.g.,
+// a. consider i1 (r0), i1 (r0) trying to move to n3, n4 (from n1, n2)
+// b. i1 (r0) from n1 -> n3 succeeded but i1 (r1) from n2 -> n4 did not happen
+// c. Now, proxy with alternate shardId of i1 (r1) exists on n4 but i1 (r1) exists
+// on n2 which is incorrect.
+//
+// To handle such cases, pre-move the indexes to appropriate destination nodes
+func (s *Solution) moveIndexesIfNecessary() {
+
+	// Step-1: Build a mapping of alteranteShardId -> indexerNode -> Count of indexes with the alternate Id
+	alternateIdCountMap := make(map[string]map[*IndexerNode]int)
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.eligible == false {
+				continue
+			}
+
+			if len(index.AlternateShardIds) > 0 {
+				altId := index.AlternateShardIds[0]
+
+				if _, ok := alternateIdCountMap[altId]; !ok {
+					alternateIdCountMap[altId] = make(map[*IndexerNode]int)
+				}
+
+				if index.IsShardProxy {
+					alternateIdCountMap[altId][indexer] += len(index.GroupedIndexes)
+				} else {
+					alternateIdCountMap[altId][indexer] += 1
+				}
+			}
+		}
+	}
+
+	// Step-2: Prune all the alternate shardIds which exist only on one node
+	for altId, indexerDist := range alternateIdCountMap {
+		if len(indexerDist) <= 1 {
+			delete(alternateIdCountMap, altId)
+		}
+	}
+
+	// Step-3: For all the alterante shardIds which are spread across multiple nodes
+	// pick the node which has maximum indexes as the final placement node
+	finalAltPlacementMap := make(map[string]*IndexerNode)
+	for altId, indexerDist := range alternateIdCountMap {
+		var maxInstNode *IndexerNode
+		var maxInstCount int
+		for indexer, count := range indexerDist {
+			if count > maxInstCount {
+				maxInstNode = indexer
+				maxInstCount = count
+			}
+		}
+
+		getNodeDist := func(indexerDist map[*IndexerNode]int) string {
+			var str string
+			for indexer, numIndexesWithAltId := range indexerDist {
+				str += fmt.Sprintf("[%v:%v],", indexer.NodeId, numIndexesWithAltId)
+			}
+
+			return str[0 : len(str)-1]
+		}
+
+		finalAltPlacementMap[altId] = maxInstNode
+		logging.Infof("Solution::moveIndexesIfNecessary Choosing node: %v for altId: %v as initial owner. "+
+			"AltId existed on %v nodes", maxInstNode, altId, getNodeDist(indexerDist))
+	}
+
+	// Step-4: For all the indexes with alternateId, residing on a node which is not the same as
+	// the node in "finalAltPlacementMap", move the index to the node in "finalAltPlacementMap"
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			if len(index.AlternateShardIds) > 0 {
+
+				altId := index.AlternateShardIds[0]
+				if finalNode, ok := finalAltPlacementMap[altId]; ok && indexer.IndexerId != finalNode.IndexerId {
+					logging.Infof("Solution::moveIndexesIfNecessary Moving index: (%v, %v, %v, %v, %v, %v) from source: %v to target: %v",
+						index.Name, index.Bucket, index.Scope, index.Collection, index.Instance.ReplicaId, index.PartnId, indexer.IndexerId, finalNode.IndexerId)
+					s.moveIndex(indexer, index, finalNode, true)
+				}
+			}
+		}
+	}
+
+	// Update slotmap after all index movements
+	s.updateSlotMap()
+}
