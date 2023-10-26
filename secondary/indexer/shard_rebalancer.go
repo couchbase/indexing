@@ -1892,7 +1892,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				retry := true
 				lastlog := time.Now()
 				for retry {
-					skipDefns, retryDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
+					skipDefns, retryInsts, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
 					if err != nil {
 						setErrInTransferToken(err)
 						return
@@ -1908,10 +1908,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 							}
 						}
 					}
-					retry = len(retryDefns) > 0
+					retry = len(retryInsts) > 0
 					if retry {
 						if time.Since(lastlog) > time.Duration(60*time.Second) {
-							logging.Infof("ShardRebalancer::startShardRecovery Retrying index build for defns: %v", retryDefns)
+							logging.Infof("ShardRebalancer::startShardRecovery Retrying index build for insts: %v", retryInsts)
 							lastlog = time.Now()
 						}
 						// Retry build after 5 seconds
@@ -2029,7 +2029,7 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 	return false, nil
 }
 
-func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
+func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, error) {
 	select {
 	case <-sr.cancel:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance cancel received")
@@ -2057,20 +2057,20 @@ func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, tt
 		}
 
 		if response.Error != "" {
-			skipDefns, retryDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+			skipDefns, retryInsts, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
 			if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
 				l.Errorf("ShardRebalancer::postBuildIndexesReq Error received for defnIdList: %v, err: %v",
 					defnIdList.DefnIds, response.Error)
 				return nil, nil, errors.New(response.Error)
 			} else {
-				return skipDefns, retryDefns, nil
+				return skipDefns, retryInsts, nil
 			}
 		}
 	}
 	return nil, nil, nil
 }
 
-func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
+func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, error) {
 	errMap := make(map[common.IndexDefnId]string)
 
 	err := json.Unmarshal([]byte(errStr), &errMap)
@@ -2081,18 +2081,18 @@ func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (ma
 	}
 
 	skipDefns := make(map[common.IndexDefnId]bool)
-	retryDefns := make(map[common.IndexDefnId]bool)
+	retryInsts := make(map[common.IndexInstId]bool)
 
-	for defnId, buildErr := range errMap {
+	for instOrDefnId, buildErr := range errMap {
 		if isIndexDeletedDuringRebal(buildErr) || isIndexNotFoundRebal(buildErr) {
-			skipDefns[defnId] = true
+			skipDefns[instOrDefnId] = true
 		}
 
-		if strings.Contains(buildErr, "Build Already In Progress") {
-			retryDefns[defnId] = true
+		if isBuildAlreadyInProgress(buildErr) {
+			retryInsts[c.IndexInstId(instOrDefnId)] = true
 		}
 	}
-	return skipDefns, retryDefns, nil
+	return skipDefns, retryInsts, nil
 }
 
 func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
@@ -3994,6 +3994,10 @@ func isIndexDeletedDuringRebal(errMsg string) bool {
 
 func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
+}
+
+func isBuildAlreadyInProgress(errMsg string) bool {
+	return strings.Contains(errMsg, "Build Already In Progress")
 }
 
 func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel, lockedForRecovery bool) error {
