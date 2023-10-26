@@ -37,11 +37,11 @@ var auditService *cbaudit.AuditSvc
 // capitalizing since their type is a member of that package, but it's less
 // confusing to capitalize all fields).
 type AuditEvent struct {
-	Common  cbaudit.CommonAuditFields `json:"common"`            // timestamp, real_userid, local, remote
-	Service string                    `json:"service"`           // will always be set to "Index"
-	Method  string                    `json:"method"`            // "Class::Method"
-	Url     string                    `json:"url"`               // string version of URL from request
-	Message string                    `json:"message,omitempty"` // optional additional message
+	cbaudit.CommonAuditFields        // timestamp, real_userid, local, remote
+	Service                   string `json:"service"`           // will always be set to "Index"
+	Method                    string `json:"method"`            // "Class::Method"
+	Url                       string `json:"url"`               // string version of URL from request
+	Message                   string `json:"message,omitempty"` // optional additional message
 }
 
 // InitAuditService initializes the singleton auditService.
@@ -77,7 +77,7 @@ func Audit(eventId uint32, req *http.Request, method string, msg string) error {
 		Method:  method,
 		Url:     fmt.Sprintf("%v", req.URL),
 		Message: msg} // optional
-	event.Common = cbaudit.GetCommonAuditFields(req)
+	event.CommonAuditFields = cbaudit.GetCommonAuditFields(req)
 
 	// Write the event to audit.log if auditing is enabled (else this is a no-op)
 	err := auditService.Write(eventId, event)
