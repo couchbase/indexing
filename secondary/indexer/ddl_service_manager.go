@@ -2105,19 +2105,37 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		}()
 	}
 
-	allowPartialQuorum := config["allowPartialQuorum"].Bool()
-	if allowPartialQuorum {
-		atomic.StoreUint32(&s.allowPartialQuorum, 1)
+	allowPartialQuorum, ok := config["allowPartialQuorum"]
+	if ok {
+		if allowPartialQuorum.Bool() {
+			atomic.StoreUint32(&s.allowPartialQuorum, 1)
+		} else {
+			atomic.StoreUint32(&s.allowPartialQuorum, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.allowPartialQuorum, setting to false")
+		atomic.StoreUint32(&s.allowPartialQuorum, 0)
 	}
 
-	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
-	if useGreedyPlanner {
+	useGreedyPlanner, ok := config["planner.useGreedyPlanner"]
+	if ok {
+		if useGreedyPlanner.Bool() {
+			atomic.StoreUint32(&s.useGreedyPlanner, 1)
+		} else {
+			atomic.StoreUint32(&s.useGreedyPlanner, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.planner.useGreedyPlanner, setting to true")
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
 	}
 
 	isShardAffinityEnabled := config.GetDeploymentAwareShardAffinity()
 	if isShardAffinityEnabled {
 		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
+	} else {
+		atomic.StoreUint32(&s.isShardAffinityEnabled, 0)
 	}
 
 	binSize := common.GetBinSize(config)
@@ -2144,14 +2162,30 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		logging.Errorf("DDLServiceMgr: invalid setting value for indexLimit = %v", indexLimit)
 	}
 
-	allowDDLDuringScaleUp := config["allow_ddl_during_scaleup"].Bool()
-	if allowDDLDuringScaleUp {
-		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+	allowDDLDuringScaleUp, ok := config["allow_ddl_during_scaleup"]
+	if ok {
+		if allowDDLDuringScaleUp.Bool() {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+		} else {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.allow_ddl_during_scaleup, setting to false")
+		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
 	}
 
-	allowNodesClause := config["planner.honourNodesInDefn"].Bool()
-	if allowNodesClause {
-		atomic.StoreUint32(&s.allowNodesClause, 1)
+	allowNodesClause, ok := config["planner.honourNodesInDefn"]
+	if ok {
+		if allowNodesClause.Bool() {
+			atomic.StoreUint32(&s.allowNodesClause, 1)
+		} else {
+			atomic.StoreUint32(&s.allowNodesClause, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.planner.honourNodesInDefn, setting to false")
+		atomic.StoreUint32(&s.allowNodesClause, 0)
 	}
 }
 
