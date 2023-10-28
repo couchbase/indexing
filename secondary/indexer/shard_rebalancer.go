@@ -826,9 +826,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				sr.mu.Lock()
 				defer sr.mu.Unlock()
 
-				// Upload is completed on source node. Download starts on destination node
-				// Decrement active transfer count for source node and increment for
-				// destination node
+				// Download is completed on destination node. Decrement the active
+				// transfer count for destination so that new tokens can be scheduled
 				sr.activeTransferCount[tt.DestId]--
 
 				sr.initiatePerNodeTransferAsMaster()
@@ -3446,7 +3445,7 @@ func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
 	// To keep things simple, we don't keep copy and move tokens in the same group
 	sr.batchedTokens = append(sr.batchedTokens, groupTokens(mTokens, windowSz)...)
 
-	l.Infof("ShardRebalancer::orderCopyAndMoveTransferTokens greated a batch of %v tokens with window of %v",
+	l.Infof("ShardRebalancer::orderCopyAndMoveTransferTokens created a batch of %v tokens with window of %v",
 		len(sr.batchedTokens), windowSz)
 }
 
@@ -3753,13 +3752,13 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	if common.IsServerlessDeployment() {
 		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			logging.Verbosef("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
 			return false
 		}
 	} else {
 		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			logging.Verbosef("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
 			return false
 		}
 	}
