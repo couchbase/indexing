@@ -104,7 +104,7 @@ type ShardRebalancer struct {
 	runParams *runParams // For DDL during rebalance
 	statsMgr  *statsManager
 
-	activeTransferCount map[string]int // key -> sourceId, value -> number of active transfers
+	activeTransfers map[string]map[string]bool // key -> sourceId, value -> map of shard tokenIds in transfer
 
 	// During scale-out operation, it is possible for multiple nodes to upload
 	// shard data to same destination node. In that case, there can be more than
@@ -188,12 +188,12 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		topologyChange: topologyChange,
 		transferStats:  make(map[string]map[common.ShardId]*ShardTransferStatistics),
 
-		dropQueue:           make(chan string, 10000),
-		dropQueued:          make(map[string]bool),
-		lastKnownProgress:   make(map[c.IndexInstId]float64),
-		activeTransferCount: make(map[string]int),
-		waitQ:               make(chan bool, perNodeBatchSize),
-		schedulingVersion:   c.ShardRebalanceSchedulingVersion(schedulingVersion),
+		dropQueue:         make(chan string, 10000),
+		dropQueued:        make(map[string]bool),
+		lastKnownProgress: make(map[c.IndexInstId]float64),
+		activeTransfers:   make(map[string]map[string]bool),
+		waitQ:             make(chan bool, perNodeBatchSize),
+		schedulingVersion: c.ShardRebalanceSchedulingVersion(schedulingVersion),
 
 		rpcCommandSyncChannel: make(chan struct{}),
 
@@ -800,10 +800,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				defer sr.mu.Unlock()
 
 				// Upload is completed on source node. Download starts on destination node
-				// Decrement active transfer count for source node and increment for
+				// Remove token from active transfers for source node and add for
 				// destination node
-				sr.activeTransferCount[tt.SourceId]--
-				sr.activeTransferCount[tt.DestId]++
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
+				sr.addTokenToActiveTransfersLOCKED(ttid, tt.DestId)
 
 				sr.initiatePerNodeTransferAsMaster()
 			}()
@@ -826,9 +826,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				sr.mu.Lock()
 				defer sr.mu.Unlock()
 
+				// In some cases, rebalance master can observe only Transfer -> Recover
+				// transition missing Restore. This will lead to stale book-keeping
+				// for source node and further tokens may not be scheduled. Clear
+				// source book-keeping to avoid such inconsistencies.
+
+				// Incase, master has observed Transfer -> Restore -> Recover, then
+				// clearing book-keeping on source is a no-op
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
+
 				// Download is completed on destination node. Decrement the active
 				// transfer count for destination so that new tokens can be scheduled
-				sr.activeTransferCount[tt.DestId]--
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.DestId)
 
 				sr.initiatePerNodeTransferAsMaster()
 			}()
@@ -915,8 +924,9 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			sr.mu.Lock()
 			defer sr.mu.Unlock()
 			if sr.schedulingVersion >= common.PER_NODE_TRANSFER_LIMIT {
-				// Decrese the active transfer count on destination
-				sr.activeTransferCount[tt.DestId]--
+				// Remove token from active transfers on source and destination
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.DestId)
 				sr.initiatePerNodeTransferAsMaster()
 			} else {
 				// Decrement the batchSize as token has finished processing
@@ -3466,7 +3476,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
-	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster activeTransferCount: %v, batchSize: %v", sr.activeTransferCount, batchSize)
+	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster activeTransferCount: %v, batchSize: %v", sr.activeTransfers, batchSize)
 	for i, groupedTokens := range sr.batchedTokens {
 		publish := (groupedTokens != nil)
 		if !publish {
@@ -3478,7 +3488,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 		// batch from current transfer - Choose a different batch
 		for _, tt := range groupedTokens {
 			if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
-				if sr.activeTransferCount[tt.SourceId] >= batchSize {
+				if len(sr.activeTransfers[tt.SourceId]) >= batchSize {
 					publish = false
 					break
 				}
@@ -3497,7 +3507,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 					ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
 					setTransferTokenInMetakv(ttid, ttClone)
 					publishedIds[tt.SourceId] = ttid
-					sr.activeTransferCount[tt.SourceId]++
+					sr.addTokenToActiveTransfersLOCKED(ttid, tt.SourceId)
 				}
 			}
 
@@ -3507,7 +3517,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 
 	if len(publishedIds) > 0 {
 		l.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster Published transfer token batch: %v, "+
-			"currActiveTransfers: %v", publishedIds, sr.activeTransferCount)
+			"currActiveTransfers: %v", publishedIds, sr.activeTransfers)
 	}
 }
 
@@ -4087,5 +4097,19 @@ func asyncCollectProgress(progHolder *float64Holder, collector func() float64, d
 			l.Infof("%v:asyncCollectProgress done received. progress collector stopped", caller)
 			return
 		}
+	}
+}
+
+func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId string) {
+	if _, ok := sr.activeTransfers[nodeId]; !ok {
+		sr.activeTransfers[nodeId] = make(map[string]bool)
+	}
+
+	sr.activeTransfers[nodeId][ttid] = true
+}
+
+func (sr *ShardRebalancer) removeTokenFromActiveTransfersLOCKED(ttid string, nodeId string) {
+	if _, ok := sr.activeTransfers[nodeId]; ok {
+		delete(sr.activeTransfers[nodeId], ttid)
 	}
 }
