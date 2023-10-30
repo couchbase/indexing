@@ -1442,7 +1442,11 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		// If pendingReady is set to true, then recovery is already finished.
 		// Skip recovering again
 		if tt.IsEmptyNodeBatch == false || tt.IsPendingReady == false {
-			go sr.startShardRecovery(ttid, tt)
+			if common.IsServerlessDeployment() {
+				go sr.startShardRecovery(ttid, tt)
+			} else {
+				go sr.startShardRecoveryNonServerless(ttid, tt)
+			}
 		}
 
 		return true
@@ -1663,7 +1667,9 @@ func (sr *ShardRebalancer) initiateLocalShardCleanup(ttid string, shardPaths map
 	<-respCh
 }
 
-func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn, ttid string, tt *c.TransferToken, isDeferred, pendingCreate bool) (bool, error) {
+func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
+	ttid string, tt *c.TransferToken, isDeferred, pendingCreate bool,
+	recoveryListener chan c.IndexInstId) (bool, error) {
 
 	// TODO: Use ShardIds for desintaion when changing the shardIds
 	if len(defn.ShardIdsForDest) == 0 {
@@ -1713,7 +1719,7 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn, ttid string, t
 		testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_DEFERRED_INDEX_RECOVERY)
 		///////////////////////////////////////////////////////////////////
 
-		if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredInsts, ttid, tt); err != nil {
+		if err := sr.waitForIndexState(c.INDEX_STATE_READY, deferredInsts, ttid, tt, recoveryListener); err != nil {
 			return false, err
 		}
 
@@ -1864,7 +1870,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				(defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
 					defn.InstStateAtRebal == c.INDEX_STATE_READY)
 
-			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false); err != nil {
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false, nil); err != nil {
 				setErrInTransferToken(err)
 				return
 			} else if skip {
@@ -1884,7 +1890,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_NON_DEFERRED_INDEX_RECOVERY)
 				///////////////////////////////////////////////////////////////////
 
-				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts[currIndex], ttid, tt); err != nil {
+				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, nonDeferredInsts[currIndex], ttid, tt, nil); err != nil {
 					sr.setTransferTokenError(ttid, tt, err.Error())
 					return
 				}
@@ -1937,7 +1943,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				logging.Infof("ShardRebalancer::startShardRecovery Waiting for index state to "+
 					"become active for insts: %v", nonDeferredInsts[i])
 
-				if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts[i], ttid, tt); err != nil {
+				if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts[i], ttid, tt, nil); err != nil {
 					setErrInTransferToken(err)
 					return
 				}
@@ -1950,7 +1956,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 	// DDL service manager will take care of building the indexes after
 	// rebalance is done
 	for _, defn := range pendingCreateDefnList {
-		if skip, err := sr.createDeferredIndex(defn, ttid, tt, false, true); err != nil {
+		if skip, err := sr.createDeferredIndex(defn, ttid, tt, false, true, nil); err != nil {
 			setErrInTransferToken(err)
 			return
 		} else if skip {
@@ -1967,6 +1973,158 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 		// the DCP indexes to be placed on the shard (incase of replica-repair) that is
 		// just moved to destination node.
 
+		// restore the shard as recovery is complete
+		restoreShardDone(tt.ShardIds, sr.supvMsgch)
+
+		// Unlock the shards that are locked before initiating recovery
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+
+		l.Infof("ShardRebalancer::startShardRecovery Set pendingReady to true as empty node batching is enabled for token: %v", ttid)
+		setTransferTokenInMetakv(ttid, tt)
+	} else {
+		// Coming here means that all indexes are actively build without any error
+		// Move the transfer token state to Ready
+		tt.ShardTransferTokenState = c.ShardTokenReady
+		setTransferTokenInMetakv(ttid, tt)
+	}
+}
+
+// startShardRecoveryNonServerless deviates from startShardRecovery in the
+// following ways:
+//
+// a. Batches index builds across multiple transfer tokens. This will help
+// to group indexes beloning to same collection across multiple transfer
+// tokens to be built at the same time.
+//
+// b. Avoids waitQ throttling - startShardRecovery skips waitQ throttling
+// when empty node batching is enabled and enforces it when empty node
+// batching is disabled. Both are not optimal. When waitQ throttling is
+// disabled, then indexer can establish INIT_STREAMs for 100's of collections
+// at the same time - overloading KV with a pool of connections. When waitQ
+// throttling is enabled, indexes beloning to only 2 collections will be
+// recovered at a time (while indexer can potentially establish upto 10
+// streams).
+//
+// Indexer will now enforce maxParallelCollectionBuilds for building recovered
+// indexes for non-serverless deployments. Hence, waitQ throttling is disabled
+//
+// c. Consider only ACTIVE instances in transfer tokens. In serverless, with DDL
+// during rebalance support, rebalancer has to consider the INITIAL, CATCHUP and
+// ACTIVE instances. Each of these indexes are built in a separate batch so that
+// the restart timestamp of all indexes sharing same state are with in 10min disk
+// snapshot boundary. For non-serverless, as DDL during rebalance is not supported,
+// there is no need to handle this additional complexity
+func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.TransferToken) {
+	if !sr.addToWaitGroup() {
+		return
+	}
+	defer sr.wg.Done()
+
+	start := time.Now()
+	logging.Infof("ShardRebalancer::startShardRecovery Starting to recover index instance for ttid: %v", ttid)
+
+	defer func() {
+		logging.Infof("ShardRebalancer::startShardRecovery Done with recovery for ttid: %v, elapsed: %v", ttid, time.Since(start))
+	}()
+
+	if err := lockShards(tt.ShardIds, sr.supvMsgch, true); err != nil {
+		logging.Errorf("ShardRebalancer::startShardRecovery, error observed while locking shards: %v, err: %v", tt.ShardIds, err)
+
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+		sr.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
+
+	setErrInTransferToken := func(err error) {
+		if err != ErrRebalanceCancel && err != ErrRebalanceDone {
+			sr.setTransferTokenError(ttid, tt, err.Error())
+		}
+	}
+
+	recoveryListener := make(chan c.IndexInstId, 1)
+
+	// Group index definitions for each collection
+	groupedDefns := groupInstsPerColl(tt)
+	for _, defns := range groupedDefns {
+		for _, defn := range defns {
+
+			isDeferred := defn.Deferred && (defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				defn.InstStateAtRebal == c.INDEX_STATE_READY)
+
+			if skip, err := sr.createDeferredIndex(&defn, ttid, tt, isDeferred, false, recoveryListener); err != nil {
+				setErrInTransferToken(err)
+				return
+			} else if skip {
+				// bucket (or) scope (or) collection (or) index are dropped.
+				// Continue instead of failing rebalance
+				continue
+			}
+
+			// "createDeferredIndex" method will wait for index state to move to READY phase
+			// for deferred indexes
+			// For non-deferred indexes, wait for index state to move to RECOVERED phase
+			if !isDeferred {
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.DEST_SHARDTOKEN_DURING_NON_DEFERRED_INDEX_RECOVERY)
+				///////////////////////////////////////////////////////////////////
+
+				recoveryInsts := make(map[c.IndexInstId]bool)
+				if defn.RealInstId != 0 {
+					recoveryInsts[defn.RealInstId] = true
+				} else {
+					recoveryInsts[defn.InstId] = true
+				}
+
+				if err := sr.waitForIndexState(c.INDEX_STATE_RECOVERED, recoveryInsts, ttid, tt, recoveryListener); err != nil {
+					sr.setTransferTokenError(ttid, tt, err.Error())
+					return
+				}
+			}
+		}
+	}
+
+	nonDeferredInsts := make(map[c.IndexInstId]bool)
+	// At this point, indexes belonging to all collections are recovered
+	// Post build reqs to batchBuildReqCh
+	for _, defns := range groupedDefns {
+		for _, defn := range defns {
+			isDeferred := defn.Deferred && (defn.InstStateAtRebal == c.INDEX_STATE_CREATED ||
+				defn.InstStateAtRebal == c.INDEX_STATE_READY)
+
+			if !isDeferred {
+
+				if defn.RealInstId != 0 {
+					nonDeferredInsts[defn.RealInstId] = true
+				} else {
+					nonDeferredInsts[defn.InstId] = true
+				}
+
+				req := &batchBuildReq{
+					instId:     defn.InstId,
+					realInstId: defn.RealInstId,
+					defn:       defn,
+					ttid:       ttid,
+					tt:         tt,
+					listenerCh: recoveryListener,
+				}
+
+				sr.batchBuildReqCh <- req // queue the build request for further processing
+			}
+		}
+	}
+
+	// Wait for all indexes to reach ACTIVE state
+	if err := sr.waitForIndexState(c.INDEX_STATE_ACTIVE, nonDeferredInsts, ttid, tt, recoveryListener); err != nil {
+		setErrInTransferToken(err)
+		return
+	}
+
+	if tt.IsEmptyNodeBatch {
+
+		tt.IsPendingReady = true
+		// As recovery is complete, restore and unlock the shards. This will facilitate
+		// the DCP indexes to be placed on the shard (incase of replica-repair) that is
+		// just moved to destination node.
 		// restore the shard as recovery is complete
 		restoreShardDone(tt.ShardIds, sr.supvMsgch)
 
@@ -2153,7 +2311,12 @@ func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid s
 }
 
 func (sr *ShardRebalancer) waitForIndexState(expectedState c.IndexState,
-	processedInsts map[c.IndexInstId]bool, ttid string, tt *c.TransferToken) error {
+	processedInsts map[c.IndexInstId]bool, ttid string, tt *c.TransferToken,
+	recoveryListener chan c.IndexInstId) error {
+
+	if recoveryListener == nil {
+		recoveryListener = make(chan c.IndexInstId)
+	}
 
 	buildStartTime := time.Now()
 	cfg := sr.config.Load()
@@ -2181,6 +2344,13 @@ loop:
 		case <-sr.done:
 			l.Infof("ShardRebalancer::waitForIndexState Done Received")
 			return ErrRebalanceDone
+
+			// If bucket/scope/collection/index are dropped during rebalance,
+			// then "processBatchBuildReqs" will post the instanceId to be
+			// removed from processedInsts in this channel
+		case instId := <-recoveryListener:
+			delete(processedInsts, instId)
+			continue
 
 		default:
 			allStats := sr.statsMgr.stats.Get()
@@ -4180,6 +4350,8 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 					defnIdList.DefnIds = append(defnIdList.DefnIds, uint64(req.defn.DefnId))
 				}
 
+				logging.Infof("ShardRebalancer::processBatchBuildReqs processing indexDefns: %v", defnIdList.DefnIds)
+
 				skipDefns, retryInsts, err := sr.postBuildIndexesReq(defnIdList, "", nil)
 				if err != nil {
 					// Set error in transfer token and return
@@ -4203,8 +4375,8 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 						"as scope/collection/index is dropped", skipDefns)
 					for _, req := range perKeyspaceReqs {
 						if _, ok := skipDefns[req.defn.DefnId]; ok {
-							req.listenerCh <- req.InstId
-							req.listenerCh <- req.RealInstId
+							req.listenerCh <- req.instId
+							req.listenerCh <- req.realInstId
 						}
 					}
 				}

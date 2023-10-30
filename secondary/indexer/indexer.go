@@ -3783,6 +3783,21 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 			}
 		}
 
+		// Limit the number of collections that can be recovered for non-serverless deployments
+		if common.IsServerlessDeployment() == false {
+			if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
+				maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+				logging.Errorf("Indexer::handleBuildIndex Build Already In Progress for %v collections."+
+					" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, keyspaceId, instIdList)
+				if idx.enableManager {
+					delete(keyspaceIdIndexList, keyspaceId)
+					continue
+				} else {
+					return
+				}
+			}
+		}
+
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
 
