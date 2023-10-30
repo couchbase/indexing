@@ -2,6 +2,8 @@ package memdb
 
 import (
 	"encoding/binary"
+	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"hash/crc32"
 	"io"
 	"reflect"
@@ -97,6 +99,10 @@ func (m *MemDB) DecodeItem(ver int, buf []byte, r io.Reader) (*Item, uint32, err
 	}
 
 	return nil, checksum, nil
+}
+
+func (itm *Item) String() string {
+	return fmt.Sprintf("bornSn[%d] deadSn[%d] dataLen[%d] bytes[%s]", itm.bornSn, itm.deadSn, itm.dataLen, logging.TagStrUD(itm.Bytes()))
 }
 
 // Return copy of bytes

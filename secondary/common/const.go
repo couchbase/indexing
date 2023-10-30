@@ -88,6 +88,7 @@ var ErrIndexInAsyncRecovery = errors.New("Index is in async recovery. Index drop
 var ErrIndexDeletedDuringRebal = errors.New("Fail to create index as index is already deleted. Skipping index creation during rebalance")
 var ErrRebalanceOrCleanupPending = errors.New("Rebalance in progress or cleanup pending from previous rebalance.")
 var ErrTransientError = errors.New("Encountered transient error")
+var ErrPartitionsLimitReached = errors.New("Number of partitions for index can not be greater than 'indexer.settings.maxNumPartitions'. Please reduce num_partition or increase maxNumPartitions.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
@@ -102,6 +103,7 @@ var NonRetryableErrorsInCreate = []error{
 	ErrIndexScopeLimitReached,
 	ErrIndexBucketLimitReached,
 	ErrDiskLimitReached,
+	ErrPartitionsLimitReached,
 }
 
 var RetryableErrorsInCreate = []error{

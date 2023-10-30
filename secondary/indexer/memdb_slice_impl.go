@@ -708,12 +708,24 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		for _, item := range entriesToRemove {
 			tmpCount := secondaryIndexEntry(item).Count()
 			node := list.Remove(item)
+
+			nItem := (*memdb.Item)(node.Item())
+			bs := nItem.BytesCopy()
+
 			oldSz := getNodeItemSize(node)
 			success := mdb.main[workerId].DeleteNode(node)
 			if success {
 				mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
 				subtractKeySizeStat(mdb.idxStats, oldSz)
 				mdb.idxStats.arrItemsCount.Add(0 - int64(tmpCount))
+			}
+
+			// Check if item has been deleted
+			if gotNode := mdb.main[workerId].GetNode(bs); gotNode != nil {
+				gotItem := (*memdb.Item) (gotNode.Item())
+				logging.Warnf("MemDBSlice::insertSecArrayIndex::emptyList: Found node with deleted bytes in" +
+					" mainstore: success[%v] bytes[%s] docid[%s] item[%s]",
+					success, logging.TagStrUD(bs), logging.TagStrUD(docid), gotItem.String())
 			}
 		}
 		mdb.isDirty = true
@@ -734,6 +746,10 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			}
 			oldSz := len(entry)
 			node := list.Remove(entry)
+
+			nItem := (*memdb.Item)(node.Item())
+			bs := nItem.BytesCopy()
+
 			success := mdb.main[workerId].DeleteNode(node)
 			if success {
 				mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
@@ -741,6 +757,14 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				mdb.idxStats.arrItemsCount.Add(0 - int64(oldKeyCount[i]))
 			}
 			nmut++
+
+			// Check if item has been deleted
+			if gotNode := mdb.main[workerId].GetNode(bs); gotNode != nil {
+				gotItem := (*memdb.Item) (gotNode.Item())
+				logging.Warnf("MemDBSlice::insertSecArrayIndex::entryBytesToDeleted: Found node with deleted bytes in" +
+					" mainstore: success[%v] bytes[%s] docid[%s] item[%s]",
+					success, logging.TagStrUD(bs), logging.TagStrUD(docid), gotItem.String())
+			}
 		}
 	}
 
@@ -767,6 +791,12 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				addKeySizeStat(mdb.idxStats, len(entry))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 				mdb.idxStats.arrItemsCount.Add(int64(newKeyCount[i]))
+			} else {
+				// Found a duplicate key
+				logging.Warnf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
+					"Found duplicate key while inserting into mainstore: docid[%s] key[%s] entry[%s]",
+					mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), logging.TagStrUD(key),
+					logging.TagStrUD(entry))
 			}
 		}
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
@@ -896,12 +926,24 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	for _, item := range oldEntriesBytes {
 		tmpCount := secondaryIndexEntry(item).Count()
 		node := list.Remove(item)
+
+		item := (*memdb.Item)(node.Item())
+		bs := item.BytesCopy()
+
 		oldSz := getNodeItemSize(node)
 		success := mdb.main[workerId].DeleteNode(node)
 		if success {
 			mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
 			subtractKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.arrItemsCount.Add(0 - int64(tmpCount))
+		}
+
+		// Check if item has been deleted
+		if gotNode := mdb.main[workerId].GetNode(bs); gotNode != nil {
+			gotItem := (*memdb.Item) (gotNode.Item())
+			logging.Warnf("MemDBSlice::deleteSecArrayIndex: Found node with deleted bytes in mainstore." +
+				"success[%v] bytes[%s] docid[%s] item[%s]",
+				success, logging.TagStrUD(bs), logging.TagStrUD(docid), gotItem.String())
 		}
 	}
 

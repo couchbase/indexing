@@ -70,6 +70,8 @@ type ddlSettings struct {
 	numReplica   int32
 	numPartition int32
 
+	maxNumPartition int32
+
 	storageMode      string
 	storageModeMutex sync.RWMutex // protects storageMode
 
@@ -2000,6 +2002,10 @@ func (s *ddlSettings) NumPartition() int32 {
 	return atomic.LoadInt32(&s.numPartition)
 }
 
+func (s *ddlSettings) MaxNumPartition() int32 {
+	return atomic.LoadInt32(&s.maxNumPartition)
+}
+
 func (s *ddlSettings) StorageMode() string {
 	s.storageModeMutex.RLock()
 	defer s.storageModeMutex.RUnlock()
@@ -2068,9 +2074,24 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		logging.Errorf("DDLServiceMgr: invalid setting value for num_replica=%v", numReplica)
 	}
 
+	maxNumPartition := int32(config["settings.maxNumPartitions"].Int())
+	if maxNumPartition > 0 {
+		atomic.StoreInt32(&s.maxNumPartition, maxNumPartition)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for maxNumPartition=%v", maxNumPartition)
+	}
+
 	numPartition := int32(config["numPartitions"].Int())
 	if numPartition > 0 {
-		atomic.StoreInt32(&s.numPartition, numPartition)
+		if numPartition <= s.MaxNumPartition() {
+			atomic.StoreInt32(&s.numPartition, numPartition)
+		} else if numPartition > s.MaxNumPartition() {
+			//handle case when maxNumPartition is decreased but numPartition remains unchanged
+			atomic.StoreInt32(&s.numPartition, s.MaxNumPartition())
+			logging.Infof("ClientSettings: use value of maxNumPartitions=%v to reset old numPartitions=%v", s.MaxNumPartition(), numPartition)
+		} else {
+			logging.Errorf("ClientSettings: invalid setting value for numPartitions=%v, maxNumPartitions=%v", numPartition, s.MaxNumPartition())
+		}
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for numPartitions=%v", numPartition)
 	}
@@ -2084,19 +2105,37 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		}()
 	}
 
-	allowPartialQuorum := config["allowPartialQuorum"].Bool()
-	if allowPartialQuorum {
-		atomic.StoreUint32(&s.allowPartialQuorum, 1)
+	allowPartialQuorum, ok := config["allowPartialQuorum"]
+	if ok {
+		if allowPartialQuorum.Bool() {
+			atomic.StoreUint32(&s.allowPartialQuorum, 1)
+		} else {
+			atomic.StoreUint32(&s.allowPartialQuorum, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.allowPartialQuorum, setting to false")
+		atomic.StoreUint32(&s.allowPartialQuorum, 0)
 	}
 
-	useGreedyPlanner := config["planner.useGreedyPlanner"].Bool()
-	if useGreedyPlanner {
+	useGreedyPlanner, ok := config["planner.useGreedyPlanner"]
+	if ok {
+		if useGreedyPlanner.Bool() {
+			atomic.StoreUint32(&s.useGreedyPlanner, 1)
+		} else {
+			atomic.StoreUint32(&s.useGreedyPlanner, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.planner.useGreedyPlanner, setting to true")
 		atomic.StoreUint32(&s.useGreedyPlanner, 1)
 	}
 
 	isShardAffinityEnabled := config.GetDeploymentAwareShardAffinity()
 	if isShardAffinityEnabled {
 		atomic.StoreUint32(&s.isShardAffinityEnabled, 1)
+	} else {
+		atomic.StoreUint32(&s.isShardAffinityEnabled, 0)
 	}
 
 	binSize := common.GetBinSize(config)
@@ -2123,14 +2162,30 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		logging.Errorf("DDLServiceMgr: invalid setting value for indexLimit = %v", indexLimit)
 	}
 
-	allowDDLDuringScaleUp := config["allow_ddl_during_scaleup"].Bool()
-	if allowDDLDuringScaleUp {
-		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+	allowDDLDuringScaleUp, ok := config["allow_ddl_during_scaleup"]
+	if ok {
+		if allowDDLDuringScaleUp.Bool() {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 1)
+		} else {
+			atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.allow_ddl_during_scaleup, setting to false")
+		atomic.StoreUint32(&s.allowDDLDuringScaleUp, 0)
 	}
 
-	allowNodesClause := config["planner.honourNodesInDefn"].Bool()
-	if allowNodesClause {
-		atomic.StoreUint32(&s.allowNodesClause, 1)
+	allowNodesClause, ok := config["planner.honourNodesInDefn"]
+	if ok {
+		if allowNodesClause.Bool() {
+			atomic.StoreUint32(&s.allowNodesClause, 1)
+		} else {
+			atomic.StoreUint32(&s.allowNodesClause, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("DDLServiceMgr: missing indexer.planner.honourNodesInDefn, setting to false")
+		atomic.StoreUint32(&s.allowNodesClause, 0)
 	}
 }
 

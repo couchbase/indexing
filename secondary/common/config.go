@@ -3067,6 +3067,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.maxNumPartitions": ConfigValue{
+		64,
+		"Maximum number of partitions for creating an index.",
+		64,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",
