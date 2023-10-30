@@ -140,6 +140,8 @@ type ShardRebalancer struct {
 	globalTopology *manager.ClusterIndexMetadata
 
 	emptyNodeBatchingEnabled bool
+
+	batchBuildReqCh chan *batchBuildReq
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -202,6 +204,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		canMaintainShardAffinity: canMaintainShardAffinity,
 
 		dcpRebrCloseCh: make(chan struct{}),
+
+		batchBuildReqCh: make(chan *batchBuildReq, 100),
 	}
 
 	sr.config.Store(config)
@@ -222,6 +226,7 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 	go sr.processDropShards()
 	go sr.updateTransferProgress()
+	go sr.processBatchBuildReqs()
 
 	return sr
 }
@@ -4111,5 +4116,119 @@ func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId s
 func (sr *ShardRebalancer) removeTokenFromActiveTransfersLOCKED(ttid string, nodeId string) {
 	if _, ok := sr.activeTransfers[nodeId]; ok {
 		delete(sr.activeTransfers[nodeId], ttid)
+	}
+}
+
+type batchBuildReq struct {
+	instId     c.IndexInstId
+	realInstId c.IndexInstId
+	defn       c.IndexDefn
+	ttid       string
+	tt         *c.TransferToken
+	listenerCh chan c.IndexInstId
+}
+
+func getKeyspaceName(defn c.IndexDefn) string {
+	return fmt.Sprintf("%v/%v/%v", defn.Bucket, defn.Scope, defn.Collection)
+}
+
+func (sr *ShardRebalancer) processBatchBuildReqs() {
+
+	pendingBulidReqs := make(map[string][]*batchBuildReq)
+
+	// Batch index build requests for every 3 seconds
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	lastlog := time.Now()
+
+	for {
+		select {
+		case <-sr.cancel:
+			logging.Infof("ShardRebalancer::processBatchBuildReqs Cancel received. Exiting")
+			return
+
+		case <-sr.done:
+			logging.Infof("ShardRebalancer::processBatchBuildReqs Done received. Exiting")
+			return
+
+		case req, ok := <-sr.batchBuildReqCh:
+			if !ok {
+				logging.Infof("ShardRebalancer::processBatchBuildReqs batchBuildReqCh is closed. Exiting")
+				return
+			}
+
+			key := getKeyspaceName(req.defn)
+			pendingBulidReqs[key] = append(pendingBulidReqs[key], req)
+
+		case <-ticker.C:
+
+			forceLog := false
+			if time.Since(lastlog) > time.Duration(60*time.Second) {
+				forceLog = true
+				lastlog = time.Now()
+			}
+
+			for keyspace, perKeyspaceReqs := range pendingBulidReqs {
+
+				// Delete from pendingBuildReqs. If retry has to be performed,
+				// then the definition IDs will be added again to pendingBulidReqs
+				delete(pendingBulidReqs, keyspace)
+
+				var defnIdList client.IndexIdList
+				for _, req := range perKeyspaceReqs {
+					defnIdList.DefnIds = append(defnIdList.DefnIds, uint64(req.defn.DefnId))
+				}
+
+				skipDefns, retryInsts, err := sr.postBuildIndexesReq(defnIdList, "", nil)
+				if err != nil {
+					// Set error in transfer token and return
+					logging.Errorf("ShardRebalancer::processBatchBuildReqs Error observed while posting build reqs for defnIds: %v", defnIdList.DefnIds)
+					if err != ErrRebalanceCancel && err != ErrRebalanceDone {
+						for _, req := range perKeyspaceReqs {
+							sr.setTransferTokenError(req.ttid, req.tt, err.Error())
+							break
+						}
+						sr.cancelMetakv()
+						go sr.finishRebalance(err)
+					}
+
+					// If error is ErrRebalanceCancel or ErrRebalanceDone, no point in continuing further
+					// Hence return
+					return
+				}
+
+				if len(skipDefns) > 0 {
+					logging.Infof("ShardRebalancer::processBatchBuildReqs Skipping state monitoring for insts: %v "+
+						"as scope/collection/index is dropped", skipDefns)
+					for _, req := range perKeyspaceReqs {
+						if _, ok := skipDefns[req.defn.DefnId]; ok {
+							req.listenerCh <- req.InstId
+							req.listenerCh <- req.RealInstId
+						}
+					}
+				}
+
+				if len(retryInsts) > 0 {
+					var queueReqs []*batchBuildReq
+					if forceLog {
+						logging.Infof("ShardRebalancer::processBatchBuildReqs Retrying index build for insts: %v", retryInsts)
+					}
+
+					// Indexer can pickup either proxy instId  or realInstId based on the presence of an partition
+					// on the node. Since rebalancer does not know that information, queue the build request based
+					// if either proxyInstId or realInstId are present in retryInst list
+					for _, req := range perKeyspaceReqs {
+						_, ok1 := retryInsts[req.instId]
+						_, ok2 := retryInsts[req.realInstId]
+						if ok1 || ok2 {
+							queueReqs = append(queueReqs, req)
+						}
+					}
+
+					pendingBulidReqs[keyspace] = queueReqs
+				}
+			}
+		}
 	}
 }
