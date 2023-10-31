@@ -104,7 +104,7 @@ type ShardRebalancer struct {
 	runParams *runParams // For DDL during rebalance
 	statsMgr  *statsManager
 
-	activeTransferCount map[string]int // key -> sourceId, value -> number of active transfers
+	activeTransfers map[string]map[string]bool // key -> sourceId, value -> map of shard tokenIds in transfer
 
 	// During scale-out operation, it is possible for multiple nodes to upload
 	// shard data to same destination node. In that case, there can be more than
@@ -188,12 +188,12 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		topologyChange: topologyChange,
 		transferStats:  make(map[string]map[common.ShardId]*ShardTransferStatistics),
 
-		dropQueue:           make(chan string, 10000),
-		dropQueued:          make(map[string]bool),
-		lastKnownProgress:   make(map[c.IndexInstId]float64),
-		activeTransferCount: make(map[string]int),
-		waitQ:               make(chan bool, perNodeBatchSize),
-		schedulingVersion:   c.ShardRebalanceSchedulingVersion(schedulingVersion),
+		dropQueue:         make(chan string, 10000),
+		dropQueued:        make(map[string]bool),
+		lastKnownProgress: make(map[c.IndexInstId]float64),
+		activeTransfers:   make(map[string]map[string]bool),
+		waitQ:             make(chan bool, perNodeBatchSize),
+		schedulingVersion: c.ShardRebalanceSchedulingVersion(schedulingVersion),
 
 		rpcCommandSyncChannel: make(chan struct{}),
 
@@ -800,10 +800,10 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				defer sr.mu.Unlock()
 
 				// Upload is completed on source node. Download starts on destination node
-				// Decrement active transfer count for source node and increment for
+				// Remove token from active transfers for source node and add for
 				// destination node
-				sr.activeTransferCount[tt.SourceId]--
-				sr.activeTransferCount[tt.DestId]++
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
+				sr.addTokenToActiveTransfersLOCKED(ttid, tt.DestId)
 
 				sr.initiatePerNodeTransferAsMaster()
 			}()
@@ -826,10 +826,18 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				sr.mu.Lock()
 				defer sr.mu.Unlock()
 
-				// Upload is completed on source node. Download starts on destination node
-				// Decrement active transfer count for source node and increment for
-				// destination node
-				sr.activeTransferCount[tt.DestId]--
+				// In some cases, rebalance master can observe only Transfer -> Recover
+				// transition missing Restore. This will lead to stale book-keeping
+				// for source node and further tokens may not be scheduled. Clear
+				// source book-keeping to avoid such inconsistencies.
+
+				// Incase, master has observed Transfer -> Restore -> Recover, then
+				// clearing book-keeping on source is a no-op
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
+
+				// Download is completed on destination node. Decrement the active
+				// transfer count for destination so that new tokens can be scheduled
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.DestId)
 
 				sr.initiatePerNodeTransferAsMaster()
 			}()
@@ -916,8 +924,9 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			sr.mu.Lock()
 			defer sr.mu.Unlock()
 			if sr.schedulingVersion >= common.PER_NODE_TRANSFER_LIMIT {
-				// Decrese the active transfer count on destination
-				sr.activeTransferCount[tt.DestId]--
+				// Remove token from active transfers on source and destination
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
+				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.DestId)
 				sr.initiatePerNodeTransferAsMaster()
 			} else {
 				// Decrement the batchSize as token has finished processing
@@ -1893,7 +1902,7 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 				retry := true
 				lastlog := time.Now()
 				for retry {
-					skipDefns, retryDefns, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
+					skipDefns, retryInsts, err := sr.postBuildIndexesReq(buildDefnIdList[i], ttid, tt)
 					if err != nil {
 						setErrInTransferToken(err)
 						return
@@ -1909,10 +1918,10 @@ func (sr *ShardRebalancer) startShardRecovery(ttid string, tt *c.TransferToken) 
 							}
 						}
 					}
-					retry = len(retryDefns) > 0
+					retry = len(retryInsts) > 0
 					if retry {
 						if time.Since(lastlog) > time.Duration(60*time.Second) {
-							logging.Infof("ShardRebalancer::startShardRecovery Retrying index build for defns: %v", retryDefns)
+							logging.Infof("ShardRebalancer::startShardRecovery Retrying index build for insts: %v", retryInsts)
 							lastlog = time.Now()
 						}
 						// Retry build after 5 seconds
@@ -2030,7 +2039,7 @@ func (sr *ShardRebalancer) postRecoverIndexReq(indexDefn common.IndexDefn, ttid 
 	return false, nil
 }
 
-func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
+func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, ttid string, tt *c.TransferToken) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, error) {
 	select {
 	case <-sr.cancel:
 		l.Infof("ShardRebalancer::postBuildIndexesReq rebalance cancel received")
@@ -2058,20 +2067,20 @@ func (sr *ShardRebalancer) postBuildIndexesReq(defnIdList client.IndexIdList, tt
 		}
 
 		if response.Error != "" {
-			skipDefns, retryDefns, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
+			skipDefns, retryInsts, err := unmarshalAndProcessBuildReqResponse(response.Error, defnIdList.DefnIds)
 			if err != nil { // Error while unmarshalling - Return the error to caller and fail rebalance
 				l.Errorf("ShardRebalancer::postBuildIndexesReq Error received for defnIdList: %v, err: %v",
 					defnIdList.DefnIds, response.Error)
 				return nil, nil, errors.New(response.Error)
 			} else {
-				return skipDefns, retryDefns, nil
+				return skipDefns, retryInsts, nil
 			}
 		}
 	}
 	return nil, nil, nil
 }
 
-func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexDefnId]bool, error) {
+func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (map[common.IndexDefnId]bool, map[common.IndexInstId]bool, error) {
 	errMap := make(map[common.IndexDefnId]string)
 
 	err := json.Unmarshal([]byte(errStr), &errMap)
@@ -2082,18 +2091,18 @@ func unmarshalAndProcessBuildReqResponse(errStr string, defnIdList []uint64) (ma
 	}
 
 	skipDefns := make(map[common.IndexDefnId]bool)
-	retryDefns := make(map[common.IndexDefnId]bool)
+	retryInsts := make(map[common.IndexInstId]bool)
 
-	for defnId, buildErr := range errMap {
+	for instOrDefnId, buildErr := range errMap {
 		if isIndexDeletedDuringRebal(buildErr) || isIndexNotFoundRebal(buildErr) {
-			skipDefns[defnId] = true
+			skipDefns[instOrDefnId] = true
 		}
 
-		if strings.Contains(buildErr, "Build Already In Progress") {
-			retryDefns[defnId] = true
+		if isBuildAlreadyInProgress(buildErr) {
+			retryInsts[c.IndexInstId(instOrDefnId)] = true
 		}
 	}
-	return skipDefns, retryDefns, nil
+	return skipDefns, retryInsts, nil
 }
 
 func (sr *ShardRebalancer) postCreateIndexReq(indexDefn common.IndexDefn, ttid string, tt *common.TransferToken) (bool, error) {
@@ -3446,7 +3455,7 @@ func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
 	// To keep things simple, we don't keep copy and move tokens in the same group
 	sr.batchedTokens = append(sr.batchedTokens, groupTokens(mTokens, windowSz)...)
 
-	l.Infof("ShardRebalancer::orderCopyAndMoveTransferTokens greated a batch of %v tokens with window of %v",
+	l.Infof("ShardRebalancer::orderCopyAndMoveTransferTokens created a batch of %v tokens with window of %v",
 		len(sr.batchedTokens), windowSz)
 }
 
@@ -3467,7 +3476,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
-	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster activeTransferCount: %v, batchSize: %v", sr.activeTransferCount, batchSize)
+	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster activeTransferCount: %v, batchSize: %v", sr.activeTransfers, batchSize)
 	for i, groupedTokens := range sr.batchedTokens {
 		publish := (groupedTokens != nil)
 		if !publish {
@@ -3479,7 +3488,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 		// batch from current transfer - Choose a different batch
 		for _, tt := range groupedTokens {
 			if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
-				if sr.activeTransferCount[tt.SourceId] >= batchSize {
+				if len(sr.activeTransfers[tt.SourceId]) >= batchSize {
 					publish = false
 					break
 				}
@@ -3498,7 +3507,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 					ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
 					setTransferTokenInMetakv(ttid, ttClone)
 					publishedIds[tt.SourceId] = ttid
-					sr.activeTransferCount[tt.SourceId]++
+					sr.addTokenToActiveTransfersLOCKED(ttid, tt.SourceId)
 				}
 			}
 
@@ -3508,7 +3517,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 
 	if len(publishedIds) > 0 {
 		l.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster Published transfer token batch: %v, "+
-			"currActiveTransfers: %v", publishedIds, sr.activeTransferCount)
+			"currActiveTransfers: %v", publishedIds, sr.activeTransfers)
 	}
 }
 
@@ -3753,13 +3762,13 @@ func (sr *ShardRebalancer) canAllowDDLDuringRebalance() bool {
 	if common.IsServerlessDeployment() {
 		canAllowDDLDuringRebalance := config["serverless.allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
+			logging.Verbosef("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: serverless.allowDDLDuringRebalance is false")
 			return false
 		}
 	} else {
 		canAllowDDLDuringRebalance := config["allowDDLDuringRebalance"].Bool()
 		if !canAllowDDLDuringRebalance {
-			logging.Warnf("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
+			logging.Verbosef("ShardRebalancer::canAllowDDLDuringRebalance Disallowing DDL as config: allowDDLDuringRebalance is false")
 			return false
 		}
 	}
@@ -3997,6 +4006,10 @@ func isIndexInAsyncRecovery(errMsg string) bool {
 	return errMsg == common.ErrIndexInAsyncRecovery.Error()
 }
 
+func isBuildAlreadyInProgress(errMsg string) bool {
+	return strings.Contains(errMsg, "Build Already In Progress")
+}
+
 func lockShards(shardIds []common.ShardId, supvMsgch MsgChannel, lockedForRecovery bool) error {
 
 	respCh := make(chan map[common.ShardId]error)
@@ -4084,5 +4097,19 @@ func asyncCollectProgress(progHolder *float64Holder, collector func() float64, d
 			l.Infof("%v:asyncCollectProgress done received. progress collector stopped", caller)
 			return
 		}
+	}
+}
+
+func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId string) {
+	if _, ok := sr.activeTransfers[nodeId]; !ok {
+		sr.activeTransfers[nodeId] = make(map[string]bool)
+	}
+
+	sr.activeTransfers[nodeId][ttid] = true
+}
+
+func (sr *ShardRebalancer) removeTokenFromActiveTransfersLOCKED(ttid string, nodeId string) {
+	if _, ok := sr.activeTransfers[nodeId]; ok {
+		delete(sr.activeTransfers[nodeId], ttid)
 	}
 }
