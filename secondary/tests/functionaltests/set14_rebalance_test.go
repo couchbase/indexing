@@ -405,13 +405,58 @@ func TestIndexNodeRebalanceOut(t *testing.T) {
 	log.Printf("%v 1. Rebalancing index node %v out of the cluster", _TestIndexNodeRebalanceOut, clusterconfig.Nodes[node])
 	removeNode(clusterconfig.Nodes[node], t)
 
-	status := getClusterStatus()
-	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[2]) && !isNodeIndex(status, clusterconfig.Nodes[3]) {
-		t.Fatalf("%v Unexpected cluster configuration: %v", _TestIndexNodeRebalanceOut, status)
-	}
+	expectedStatus := map[string][]string{clusterconfig.Nodes[0]: []string{"kv", "n1ql"}, clusterconfig.Nodes[2]: []string{"index"}, clusterconfig.Nodes[3]: []string{"index"}}
+	validateClusterStatus(expectedStatus, _TestIndexNodeRebalanceOut, t)
 
 	printClusterConfig(_TestIndexNodeRebalanceOut, "exit")
 	waitForRebalanceCleanup()
+}
+
+func validateClusterStatus(expectedStatus map[string][]string, test string, t *testing.T) {
+
+	maxRetry := 10
+	var status map[string][]string
+loop:
+	for i := 0; i < maxRetry; i++ {
+
+		status = getClusterStatus()
+		if len(status) != len(expectedStatus) {
+			log.Printf("Mismatch in cluster status: %v. Expected: %v. Re-tyring(%v)...", status, expectedStatus, i)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for node, services := range expectedStatus {
+			if liveServices, ok := status[node]; !ok {
+				time.Sleep(5 * time.Second)
+				goto loop
+			} else {
+				// services should be a subset of liveServices
+				for _, service := range services {
+					found := false
+
+					for _, liveService := range liveServices {
+						if liveService == service {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						log.Printf("Service: %v not found. cluster status: %v. Expected: %v. Re-tyring(%v)...", service, status, expectedStatus, i)
+						time.Sleep(5 * time.Second)
+						goto loop
+					}
+				}
+				// Coming here means that all services are found. Hence return
+				return
+			}
+		}
+	}
+	// Coming here means that server did not reach the expected status
+	log.Printf("Expected cluster status: %v", expectedStatus)
+	log.Printf("Actual cluster status: %v", status)
+	t.Fatalf(" Unexpected cluster configuration: %v", status)
 }
 
 // TestFailoverAndRebalance fails over node [2: index] from the cluster and rebalances.
