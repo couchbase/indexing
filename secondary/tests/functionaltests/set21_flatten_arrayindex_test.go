@@ -1,6 +1,7 @@
 package functionaltests
 
 import (
+	"fmt"
 	"log"
 	"testing"
 
@@ -774,6 +775,372 @@ func TestEmptyArrayFlattenArrayIndex(t *testing.T) {
 		}
 	}
 
+}
+
+func genBaseDocs(numDocs int) tc.KeyValues {
+	allDocs := make(tc.KeyValues)
+	for i := 0; i < numDocs; i++ {
+		doc := make(map[string]interface{})
+		doc["name"] = randString(10)
+		doc["company"] = randString(10)
+		doc["number"] = randomNum(0, 100000)
+
+		arr := make([]interface{}, 0)
+		arrEntries := randomNum(0, 100)
+		if arrEntries%3 == 0 {
+			doc["friends"] = nil // JSON null
+		} else if arrEntries%5 == 0 {
+			allDocs[randString(10)] = doc
+			continue // Missing array
+		} else {
+			for j := 0; j < 3; j++ {
+				subDoc := make(map[string]interface{})
+				randNumber := randomNum(0, 10)
+				if randNumber%5 != 0 {
+					subDoc["name"] = randString(5)
+				} else if randNumber%3 == 0 {
+					subDoc["name"] = nil
+				}
+				subDoc["age"] = randomNum(0, 100)
+				arr = append(arr, subDoc)
+			}
+			doc["friends"] = arr
+		}
+		allDocs[randString(10)] = doc
+	}
+	return allDocs
+}
+
+func addLevelToDocs(docs tc.KeyValues, levelId string) tc.KeyValues {
+	for docId, docVal := range docs {
+		docs[docId] = map[string]interface{}{"name": randString(10), levelId: []interface{}{docVal, map[string]interface{}{"name": randString(10)}}}
+	}
+	return docs
+}
+
+func TestNestedFlattenedArrayIndex(t *testing.T) {
+	bucket := "default"
+	numDocs := 1000
+	err := secondaryindex.DropAllSecondaryIndexes(kvaddress)
+	FailTestIfError(err, "Error while dropping all secondary indexes", t)
+	kvutility.FlushBucket(bucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	baseDocs := genBaseDocs(numDocs)
+	level1Docs := addLevelToDocs(baseDocs, "level1")
+	kvutility.SetKeyValues(level1Docs, bucket, "", kvaddress)
+
+	n1qlstatement := fmt.Sprintf("create primary index on default")
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+	FailTestIfError(err, "Error while creating secondary index", t)
+
+	// Scenario-1: Nested flatten array index as non-leading key
+	func() {
+
+		idx := "idx_nested_flatten_non_leading"
+		n1qlstatement = fmt.Sprintf("create index `%v` on default(name, distinct array(distinct array flatten_keys(v.name, v.age) for v in r.friends end) for r in level1 end)", idx)
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		log.Printf("Scenario-1: Scanning for non-missing and non-null entires")
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 3)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))} // name is not missing
+		filter1[1] = &qc.CompositeElementFilter{Low: "A", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[2] = &qc.CompositeElementFilter{Low: 0, High: 100, Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err := secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent := "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY r in level1 SATISFIES  ANY v in r.friends SATISFIES v.name >= \"A\" and v.name <= \"Z\" AND v.age >= 0 AND v.age <= 100 END END"
+
+		scanResultsPrimary, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		// Scan for null entries for flatten keys
+		log.Printf("Scenario-1: Scanning for null entries for flatten keys")
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 3)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))} // name is not missing
+		filter1[1] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}            // v.name is null
+		filter1[2] = &qc.CompositeElementFilter{Low: 0, High: 100, Inclusion: qc.Inclusion(uint32(3))}              // v.age >= 0 and v.age <= 100
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent = "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY r in level1 SATISFIES  ANY v in r.friends SATISFIES v.name is NULL AND v.age >= 0 AND v.age <= 100 END END"
+
+		scanResultsPrimary, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		// Scan for missing entries for flatten keys
+		log.Printf("Scenario-1: Scanning for missing entries for flatten keys")
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 3)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))} // name is not missing
+		filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))} // v.name is missing
+		filter1[2] = &qc.CompositeElementFilter{Low: 0, High: 100, Inclusion: qc.Inclusion(uint32(3))}              // v.age >= 0 and v.age <= 100
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent = "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY r in level1 SATISFIES  ANY v in r.friends SATISFIES v.name is MISSING AND v.age >= 0 AND v.age <= 100 END END"
+
+		scanResultsPrimary, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+	}()
+
+	err = secondaryindex.DropAllSecondaryIndexes(kvaddress)
+	FailTestIfError(err, "Error while dropping all secondary indexes", t)
+
+	// Scenario-2: Create nested flattened array index as leading key
+	func() {
+		n1qlstatement := fmt.Sprintf("create primary index on default")
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		idx := "idx_nested_flatten_leading_key"
+		n1qlstatement = fmt.Sprintf("create index `%v` on default(distinct array(distinct array flatten_keys(v.name, v.age) for v in r.friends end) for r in level1 end, name)", idx)
+		_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		log.Printf("Scenario-2: Scanning for non-missing and non-nil values")
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: "A", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: int64(0), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err := secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent := "select meta().id from default USE INDEX(`#primary`) where " +
+			"ANY r in level1 SATISFIES  ANY v in r.friends SATISFIES v.name >= \"A\" and v.name <= \"Z\" AND v.age >= 0 AND v.age <= 100 END END"
+
+		scanResultsPrimary, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		log.Printf("Scenario-2: Scanning for null values")
+		// scan for null entries in the leading key
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: int64(0), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent = "select meta().id from default USE INDEX(`#primary`) where " +
+			"ANY r in level1 SATISFIES  ANY v in r.friends SATISFIES v.name is NULL AND v.age >= 0 AND v.age <= 100 END END"
+
+		scanResultsPrimary, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		log.Printf("Scenario-2: Scanning for missing values")
+		// scan for missing entries in the leading key
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+		filter1[1] = &qc.CompositeElementFilter{Low: int64(0), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		if len(scanResults) != 0 {
+			t.Fatalf("Expected 0 rows as missing leading key will not be indexed. Actual: %v", scanResults)
+		}
+
+	}()
+
+	err = secondaryindex.DropAllSecondaryIndexes(kvaddress)
+	FailTestIfError(err, "Error while dropping all secondary indexes", t)
+
+	// Add another level to the docs
+	level2Docs := addLevelToDocs(level1Docs, "level2")
+	kvutility.SetKeyValues(level2Docs, bucket, "", kvaddress)
+
+	// Scenario-3: Create 3 levels of nesting with flattened array index as non-leading key
+	func() {
+		n1qlstatement := fmt.Sprintf("create primary index on default")
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		idx := "idx_nested_flatten_non_leading_3levels"
+		n1qlstatement = fmt.Sprintf("create index `%v` on default(name, distinct array(distinct array(distinct array flatten_keys(v.name, v.age) for v in r.friends end) for r in l.level1 end) for l in level2 end)", idx)
+		_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 3)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))} // name is not missing
+		filter1[1] = &qc.CompositeElementFilter{Low: "A", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[2] = &qc.CompositeElementFilter{Low: 0, High: 100, Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err := secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent := "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY l in level2 SATISFIES ANY r in l.level1 SATISFIES ANY v in r.friends SATISFIES v.name >= \"A\" and v.name <= \"Z\" AND v.age >= 0 AND v.age <= 100 END END END"
+
+		scanResultsPrimary, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		// Scan for null entries for flatten keys
+		log.Printf("Scenario-3: Scanning for null entries for flatten keys")
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 3)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))} // name is not missing
+		filter1[1] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}            // v.name is null
+		filter1[2] = &qc.CompositeElementFilter{Low: 0, High: 100, Inclusion: qc.Inclusion(uint32(3))}              // v.age >= 0 and v.age <= 100
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent = "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY l in level2 SATISFIES ANY r in l.level1 SATISFIES ANY v in r.friends SATISFIES v.name is NULL AND v.age >= 0 AND v.age <= 100 END END END"
+
+		scanResultsPrimary, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		// Scan for missing entries for flatten keys
+		log.Printf("Scenario-3: Scanning for missing entries for flatten keys")
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 3)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))} // name is not missing
+		filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))} // v.name is missing
+		filter1[2] = &qc.CompositeElementFilter{Low: 0, High: 100, Inclusion: qc.Inclusion(uint32(3))}              // v.age >= 0 and v.age <= 100
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent = "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY l in level2 SATISFIES ANY r in l.level1 SATISFIES ANY v in r.friends SATISFIES v.name is MISSING AND v.age >= 0 AND v.age <= 100 END END END"
+
+		scanResultsPrimary, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+	}()
+
+	err = secondaryindex.DropAllSecondaryIndexes(kvaddress)
+	FailTestIfError(err, "Error while dropping all secondary indexes", t)
+
+	// Scenario-4: Create 3 levels of nesting with flattened array index as leading key
+	func() {
+		n1qlstatement = fmt.Sprintf("create primary index on default")
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		idx := "idx_nested_flatten_leading_3levels"
+		n1qlstatement := fmt.Sprintf("create index `%v` on default( distinct array(distinct array(distinct array flatten_keys(v.name, v.age) for v in `r`.`friends` end) for `r` in l.level1 end) for l in level2 end, name)", idx)
+		_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.RequestPlus)
+		FailTestIfError(err, "Error while creating secondary index", t)
+
+		log.Printf("Scenario-4: Scanning for non-null and non-missing entries for flatten keys")
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: "A", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: int64(0), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err := secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent := "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY l in level2 SATISFIES ANY r in l.level1 SATISFIES  ANY v in r.friends SATISFIES v.name >= \"A\" and v.name <= \"Z\" AND v.age >= 0 AND v.age <= 100 END END END"
+
+		scanResultsPrimary, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		// Scan for null entries for flatten keys
+		log.Printf("Scenario-4: Scanning for null entries for flatten keys")
+		// scan for null entries in the leading key
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: nil, High: nil, Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: int64(0), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		// Scan using primary index
+		n1qlEquivalent = "select meta().id from default USE INDEX(`#primary`) where name is NOT MISSING AND " +
+			"ANY l in level2 SATISFIES ANY r in l.level1 SATISFIES ANY v in r.friends SATISFIES v.name is NULL AND v.age >= 0 AND v.age <= 100 END END END"
+
+		scanResultsPrimary, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlEquivalent, true, gocb.RequestPlus)
+		FailTestIfError(err, "Error while scanning primary index", t)
+
+		validateScanResults(scanResultsPrimary, scanResults, t)
+
+		// Scan for missing entries for flatten keys
+		log.Printf("Scenario-4: Scanning for missing entries for flatten keys")
+		// scan for null entries in the leading key
+		scans = make(qc.Scans, 1)
+		filter1 = make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: nil, Inclusion: qc.Inclusion(uint32(0))}
+		filter1[1] = &qc.CompositeElementFilter{Low: int64(0), High: int64(100), Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, _, err = secondaryindex.Scan3(idx, bucket, kvaddress, scans, false, false, nil, 0, defaultlimit, nil, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error during secondary index scan", t)
+
+		if len(scanResults) != 0 {
+			t.Fatalf("Expected 0 rows as missing leading key will not be indexed. Actual: %v", scanResults)
+		}
+	}()
+
+}
+
+func validateScanResults(scanResultsPrimary []interface{}, scanResultsSecondary tc.ScanResponseActual, t *testing.T) {
+	if len(scanResultsPrimary) != len(scanResultsSecondary) {
+		log.Printf("ScanResultsPrimary: %v", scanResultsPrimary)
+		log.Printf("ScanResultsSecondary: %v", scanResultsSecondary)
+		t.Fatalf("Mismatch in scan results. Len(primary): %v, len(secondary): %v", len(scanResultsPrimary), len(scanResultsSecondary))
+	}
+	for _, doc := range scanResultsPrimary {
+		docId := doc.(map[string]interface{})["id"].(string)
+		if _, ok := scanResultsSecondary[docId]; !ok {
+			log.Printf("ScanResultsPrimary: %v", scanResultsPrimary)
+			log.Printf("ScanResultsSecondary: %v", scanResultsSecondary)
+			t.Fatalf("Mismatch in scan results")
+		}
+	}
 }
 
 func validateScanResultsWithExpectedValues(actual tc.ScanResponseActual, expected map[string]bool, lenCheck bool, t *testing.T) {
