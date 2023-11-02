@@ -154,8 +154,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 	l.Infof("NewShardRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
 		rebalToken, master, localaddr, runPlanner, runParams, clusterVersion)
 
-	perNodeBatchSize := config["rebalance.serverless.perNodeTransferBatchSize"].Int()
-	schedulingVersion := config["rebalance.serverless.scheduleVersion"].String()
+	perNodeBatchSize := config.GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
+	schedulingVersion := config.GetDeploymentModelAwareCfgString("rebalance.scheduleVersion")
 	transferScheme := getTransferScheme(config)
 	canMaintainShardAffinity := c.CanMaintanShardAffinity(config)
 
@@ -3538,9 +3538,11 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 		sr.batchShardTransferTokensForServerless()
 	} else if sr.canMaintainShardAffinity {
 		if sr.schedulingVersion >= c.PER_NODE_TRANSFER_LIMIT {
-			sr.orderTransferTokensPerNode()
+			windowSz := sr.config.Load().GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
+			sr.orderTransferTokensPerNode(windowSz)
 		} else {
-			sr.orderCopyAndMoveTransferTokens()
+			windowSz := sr.config.Load().GetDeploymentModelAwareCfgInt("rebalance.transferBatchSize")
+			sr.orderCopyAndMoveTransferTokens(windowSz)
 		}
 	}
 }
@@ -3581,9 +3583,7 @@ func (sr *ShardRebalancer) batchShardTransferTokensForServerless() {
 	}
 }
 
-func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
-	cfg := sr.config.Load()
-	windowSz := cfg["rebalance.transferBatchSize"].Int()
+func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens(windowSz int) {
 	if windowSz == 0 {
 		sr.batchedTokens = []map[string]*c.TransferToken{sr.transferTokens}
 		return
@@ -3634,20 +3634,14 @@ func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
 		len(sr.batchedTokens), windowSz)
 }
 
-func (sr *ShardRebalancer) orderTransferTokensPerNode() {
+func (sr *ShardRebalancer) orderTransferTokensPerNode(windowSz int) {
 	// TODO: add batching by source node
-	sr.orderCopyAndMoveTransferTokens()
+	sr.orderCopyAndMoveTransferTokens(windowSz)
 }
 
 func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	config := sr.config.Load()
-	var batchSize int
-
-	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
-		batchSize = config["rebalance.perNodeTransferBatchSize"].Int()
-	} else if c.IsServerlessDeployment() {
-		batchSize = config["rebalance.serverless.perNodeTransferBatchSize"].Int()
-	}
+	batchSize := config.GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
@@ -3702,13 +3696,7 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 
 	config := sr.config.Load()
 
-	var batchSize int
-
-	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
-		batchSize = config["rebalance.transferBatchSize"].Int()
-	} else if c.IsServerlessDeployment() {
-		batchSize = config["rebalance.serverless.transferBatchSize"].Int()
-	}
+	batchSize := config.GetDeploymentModelAwareCfgInt("rebalance.transferBatchSize")
 
 	publishAllTokens := false
 	if batchSize == 0 { // Disable batching and publish all tokens
