@@ -649,8 +649,9 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 
 	// If the first index in the list is a primay index, then we can end-up
 	// copying only one shardId. Hence, always copy until we see a secondary
-	// index which will have 2 shardIds
-	if len(o.ShardIds) < 2 {
+	// index which will have 2 shardIds. Also, use the shardIds only from
+	// indexes which have valid initialAlternateShardIds
+	if len(o.ShardIds) < 2 && len(in.initialAlternateShardIds) > 0 {
 		o.ShardIds = in.ShardIds
 	}
 }
