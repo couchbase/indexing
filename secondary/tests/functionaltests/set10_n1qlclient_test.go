@@ -450,6 +450,10 @@ func (ctxt *qcmdContext) FirstCreds() (string, bool) {
 	return "", true
 }
 
+func (ctxt *qcmdContext) GetErrors() []qerrors.Error {
+	return nil
+}
+
 func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)
