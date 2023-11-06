@@ -3116,6 +3116,8 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 			partitions: partitions,
 		}
 
+		idx.monitorSliceForPrunedPartitions(&spec)
+
 		idx.prunePartitionList = append(idx.prunePartitionList, spec)
 
 		if ok, _ := idx.streamKeyspaceIdFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
@@ -5463,6 +5465,30 @@ func (idx *indexer) sendMonitorSliceMsg(sliceList []Slice) {
 
 	idx.storageMgrCmdCh <- msg
 	<-idx.storageMgrCmdCh
+}
+
+// Unlike dropIndex, partition prune would immediately return to caller
+// if flush is in progress. DropIndex would wait until flush is done.
+// During rebalance, if partition prune happens while flush is in progress,
+// rebalancer would assume that partition pruning was successful and initiate
+// shard destruction while data processing is still active (as shard tranfer
+// manager would not know what slices needs to be closed until prune is initiated)
+//
+// To avoid such cases, indexer would send a message to shard transfer manager
+// to monitor for slices irrespective of flush so that at the time of pruning,
+// it is guaranteed that shard transfer manager knows about the slices that
+// needs to be closed before destroying a shard.
+func (idx *indexer) monitorSliceForPrunedPartitions(spec *pruneSpec) {
+	instId := spec.instId
+	partns := spec.partitions
+
+	for _, partnId := range partns {
+		if partnInst, ok := idx.indexPartnMap[instId][partnId]; ok {
+			logging.Infof("Indexer::monitorSliceForPrunedPartitions sending monitorSlice message for "+
+				"instId: %v, partnId: %v", instId, partnId)
+			idx.sendMonitorSliceMsg(partnInst.Sc.GetAllSlices())
+		}
+	}
 }
 
 func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []string) {
