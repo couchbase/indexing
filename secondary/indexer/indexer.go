@@ -245,6 +245,10 @@ type indexer struct {
 
 	// This map contains the list of instances that are in async recovery
 	recoveryChMap map[common.IndexInstId]chan bool
+
+	// Contains instance Ids of instances for which RState is RebalPending
+	// For partitioned index, contains proxy instance Id
+	droppedIndexesDuringRebal map[common.IndexInstId]bool
 }
 
 type kvRequest struct {
@@ -357,6 +361,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		instsPerColl:     make(map[string]map[string]map[common.IndexInstId]bool),
 		bucketPauseState: make(map[string]bucketStateEnum),
 		recoveryChMap:    make(map[common.IndexInstId]chan bool),
+
+		droppedIndexesDuringRebal: make(map[common.IndexInstId]bool),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -2596,6 +2602,12 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 
 	inst, ok := idx.indexInstMap[srcInstId]
 	if !ok {
+		if _, ok1 := idx.droppedIndexesDuringRebal[srcInstId]; ok1 {
+			delete(idx.droppedIndexesDuringRebal, srcInstId)
+			logging.Errorf("Indexer::preValidateMergePartition Unable to find Index %v. Index could be deleted", srcInstId)
+			return common.ErrIndexDeletedDuringRebal
+		}
+
 		if tgtInstId != 0 {
 			if _, ok := idx.indexInstMap[tgtInstId]; !ok {
 				err := fmt.Errorf("MergePartition: Both proxy index Instance %v and real index instance %v are not found",
@@ -5322,6 +5334,15 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 		common.CrashOnError(err)
 	}
 
+	// Keep a track of indexes that are being dropped during rebalance
+	for _, instId := range instIdList {
+		if inst, ok := idx.indexInstMap[instId]; ok {
+			if inst.RState == common.REBAL_PENDING {
+				idx.droppedIndexesDuringRebal[inst.InstId] = true
+			}
+		}
+	}
+
 	if !idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] {
 		idx.cleanupIndexDataForCollectionDrop(streamId, keyspaceId, instIdList)
 	} else {
@@ -6675,6 +6696,11 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	inst, ok := idx.indexInstMap[instId]
 	if !ok {
 		if idx.canAllowDDLDuringRebalance() { // Index could be dropped during rebalance
+			logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v. Index could be deleted", instId)
+			respCh <- common.ErrIndexDeletedDuringRebal
+			return
+		} else if _, ok := idx.droppedIndexesDuringRebal[instId]; ok {
+			delete(idx.droppedIndexesDuringRebal, instId)
 			logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v. Index could be deleted", instId)
 			respCh <- common.ErrIndexDeletedDuringRebal
 			return
@@ -10037,9 +10063,11 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			if common.IsServerlessDeployment() {
 				idx.clearRebalancePhase(true)
 				idx.globalRebalPhase = common.RebalanceInitated
-				idx.slicePendingClosure = make(map[string][]Slice)
 				idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
 			}
+
+			idx.slicePendingClosure = make(map[string][]Slice)
+			idx.droppedIndexesDuringRebal = make(map[common.IndexInstId]bool) // reset the book-keeping
 
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
 			idx.sendMsgToClustMgrAndProcessResponse(msg)

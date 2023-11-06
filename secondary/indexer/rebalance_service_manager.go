@@ -1746,7 +1746,7 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 			rstate: c.REBAL_ACTIVE,
 			respch: respch}
 		err := <-respch
-		if err != nil {
+		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 			//cleanup the index
 			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
 			return err
@@ -1761,7 +1761,7 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 			respCh:     respch}
 
 		err := <-respch
-		if err != nil {
+		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
 			return err
 		}
@@ -2087,7 +2087,7 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReady(ttid string, tt *c.Tra
 			rstate: c.REBAL_ACTIVE,
 			respch: respch}
 		err := <-respch
-		if err != nil {
+		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 			//cleanup the index
 			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
 			return err
@@ -2113,7 +2113,7 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReady(ttid string, tt *c.Tra
 			respCh:     respch}
 
 		err := <-respch
-		if err != nil {
+		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
 			return err
 		}
