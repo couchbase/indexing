@@ -8268,9 +8268,16 @@ func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
 	realInstIdMap := make(common.IndexInstMap)
 	for _, inst := range idx.indexInstMap {
 		if inst.IsProxy() {
-			newInst := inst
-			newInst.Pc = inst.Pc.Clone()
-			realInstIdMap[inst.RealInstId] = newInst
+			if _, ok := realInstIdMap[inst.RealInstId]; !ok {
+				newInst := inst
+				newInst.Pc = inst.Pc.Clone()
+				realInstIdMap[inst.RealInstId] = newInst
+			} else {
+				instPartns := inst.Pc.GetAllPartitions()
+				for _, instPartn := range instPartns {
+					realInstIdMap[inst.RealInstId].Pc.AddPartition(instPartn.GetPartitionId(), instPartn)
+				}
+			}
 		}
 	}
 	return realInstIdMap
