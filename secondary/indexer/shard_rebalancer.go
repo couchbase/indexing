@@ -1679,7 +1679,9 @@ func (sr *ShardRebalancer) createDeferredIndex(defn *c.IndexDefn,
 		defn.ShardIdsForDest = make(map[c.PartitionId][]c.ShardId)
 	}
 	for _, partnId := range defn.Partitions {
-		defn.ShardIdsForDest[partnId] = tt.ShardIds
+		if len(defn.ShardIdsForDest[partnId]) == 0 {
+			defn.ShardIdsForDest[partnId] = tt.ShardIds[:len(defn.AlternateShardIds[partnId])]
+		}
 	}
 
 	if !pendingCreate {

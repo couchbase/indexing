@@ -1238,8 +1238,6 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 				targetShardIds = index.siblingIndex.ShardIds
 			}
 
-			// reset instance version for new replicas being created
-			token.IndexInst.Version = 0
 		} else if index.initialNode.NodeId != index.destNode.NodeId {
 			// move
 			token.TransferMode = common.TokenTransferModeMove
@@ -1271,6 +1269,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 				}
 
 			}
+
+			// if there are only primary indices to copy, then we need to have only one shardId in token
+			allIndicesArePrimary := true
 
 			for _, realIndex := range index.GroupedIndexes {
 				// set siblingIndex for realIndex
@@ -1307,6 +1308,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds[:1]
 						} else {
 							childTokens[0].IndexInst.Defn.ShardIdsForDest[realIndex.PartnId] = targetShardIds
+							allIndicesArePrimary = false
 						}
 					}
 
@@ -1343,6 +1345,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 				token.RealInstIds = append(token.RealInstIds, childToken.RealInstId)
 			}
 
+			if allIndicesArePrimary && len(targetShardIds) > 1 {
+				targetShardIds = targetShardIds[:1]
+			}
 			token.ShardIds = targetShardIds
 			tokenKey = fmt.Sprintf("asi_%v_%v-%v-%v", asi.SlotId, asi.ReplicaId, token.SourceId,
 				token.DestId)
@@ -1357,6 +1362,9 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 
 			token.IndexInst = *index.Instance
 			token.InstId = index.InstId
+			if token.TransferMode == common.TokenTransferModeCopy {
+				token.IndexInst.Version = 0
+			}
 
 			token.IndexInst.Defn.InstStateAtRebal = token.IndexInst.State
 			token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
