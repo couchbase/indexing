@@ -2204,7 +2204,7 @@ func (s *Solution) getShardLimits() (int, int) {
 }
 
 func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
-	logging.Infof("ShardRebalancer::PrePopulateAlternateShardIds: Processing command: %v", command)
+	logging.Verbosef("ShardRebalancer::PrePopulateAlternateShardIds: Processing command: %v", command)
 	// Pre-populate alternate shardIds only for rebalance cases
 	switch command {
 	case CommandPlan, CommandDrop, CommandRetrieve:
