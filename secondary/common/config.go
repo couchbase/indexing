@@ -3278,6 +3278,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.scheduleVersion": ConfigValue{
+		"v2",
+		"v2 means to use per node transfer batch. v1 is used for global transfer",
+		"v2",
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.rebalance.serverless.scheduleVersion": ConfigValue{
 		"v2",
 		"v2 means to use per node transfer batch. v1 is used for global transfer",
@@ -3899,9 +3906,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.rpc.maxPartSize": ConfigValue{
-		1 * 1024 *1024,
+		1 * 1024 * 1024,
 		"RPC transfer chunk size (in bytes)",
-		1 * 1024 *1024,
+		1 * 1024 * 1024,
 		false,
 		false,
 	},
@@ -3913,9 +3920,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.rpc.server.memQuota": ConfigValue{
-		50 * 1024 *1024,
+		50 * 1024 * 1024,
 		"RPC Server Memory Quota (in bytes)",
-		50 * 1024 *1024,
+		50 * 1024 * 1024,
 		false,
 		false,
 	},
@@ -4414,8 +4421,11 @@ func (config Config) String() string {
 }
 
 var indexerServerLessConfigMap = map[string]string{
-	"max_parallel_collection_builds": "serverless.max_parallel_collection_builds",
-	"max_parallel_per_bucket_builds": "serverless.max_parallel_per_bucket_builds",
+	"max_parallel_collection_builds":     "serverless.max_parallel_collection_builds",
+	"max_parallel_per_bucket_builds":     "serverless.max_parallel_per_bucket_builds",
+	"rebalance.perNodeTransferBatchSize": "rebalance.serverless.perNodeTransferBatchSize",
+	"rebalance.scheduleVersion":          "rebalance.serverless.scheduleVersion",
+	"rebalance.transferBatchSize":        "rebalance.serverless.transferBatchSize",
 }
 
 var indexerProvisionedConfigMap = map[string]string{
@@ -4427,10 +4437,16 @@ var indexerProvisionedConfigMap = map[string]string{
 
 func (config Config) GetDeploymentModelAwareCfgInt(k string) int {
 	key := k
-	if IsServerlessDeployment() {
-		key = indexerServerLessConfigMap[k]
-	} else if IsProvisionedDeployment() {
-		key = indexerProvisionedConfigMap[k]
+	if serverlessKey, exists := indexerProvisionedConfigMap[k]; IsServerlessDeployment() &&
+		exists {
+
+		key = serverlessKey
+
+	} else if provisionedKey, exists := indexerProvisionedConfigMap[k]; IsProvisionedDeployment() &&
+		exists {
+
+		key = provisionedKey
+
 	}
 	return config.getIndexerConfigInt(key)
 }
@@ -4443,6 +4459,16 @@ func (config Config) GetDeploymentModelAwareCfgBool(k string) bool {
 		key = indexerProvisionedConfigMap[k]
 	}
 	return config.getIndexerConfig(key).Bool()
+}
+
+func (config Config) GetDeploymentModelAwareCfgString(k string) string {
+	key := k
+	if IsServerlessDeployment() {
+		key = indexerServerLessConfigMap[k]
+	} else if IsProvisionedDeployment() {
+		key = indexerProvisionedConfigMap[k]
+	}
+	return config.getIndexerConfigString(key)
 }
 
 func (config Config) GetEnableEmptyNodeBatching() bool {

@@ -1115,6 +1115,9 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 							found = true
 							defn.Partitions = append(defn.Partitions, index.PartnId)
 							defn.Versions = append(defn.Versions, 0)
+							if len(index.AlternateShardIds) > 0 {
+								defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
+							}
 							break
 						}
 					}
@@ -1135,6 +1138,13 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 							index.Instance.Defn.Versions = []int{0}
 							index.Instance.Defn.InstVersion = 0
 							index.Instance.Defn.NumPartitions = uint32(index.Instance.Pc.GetNumPartitions())
+
+							if len(index.Instance.Defn.AlternateShardIds) == 0 {
+								index.Instance.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
+							}
+							if len(index.AlternateShardIds) > 0 {
+								index.Instance.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
+							}
 
 							result[indexer.RestUrl] = append(result[indexer.RestUrl], &index.Instance.Defn)
 						} else {

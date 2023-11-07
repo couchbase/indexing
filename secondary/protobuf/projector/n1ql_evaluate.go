@@ -97,23 +97,17 @@ func N1QLTransform(
 				}
 
 				if isFlattened {
-					if isArrayNull(vector) { // Populate "null" for all keys
-						vector = populateValueForFlattenKeys(numFlattenKeys, qvalue.NULL_VALUE)
-					} else {
-						vector = filterVectorForMissingEntries(vector)
-						if len(vector) == 0 {
-							return nil, nil, nil
-						}
+					vector = explodeVectorEntries(vector, numFlattenKeys, isLeadingKey)
+					if len(vector) == 0 {
+						return nil, nil, nil
 					}
 				}
 			} else {
 				if isFlattened {
 					if isArrayEmpty(vector) { // Populate "missing" for all keys
 						vector = populateValueForFlattenKeys(numFlattenKeys, missing)
-					} else if isArrayMissing(vector) { // Populate qvalue.MISSING_VALUE for all "keys"
-						vector = populateValueForFlattenKeys(numFlattenKeys, qvalue.MISSING_VALUE)
-					} else if isArrayNull(vector) { // Populate "null" for all keys
-						vector = populateValueForFlattenKeys(numFlattenKeys, qvalue.NULL_VALUE)
+					} else {
+						vector = explodeVectorEntries(vector, numFlattenKeys, isLeadingKey)
 					}
 				} else {
 					//if array is non-leading key and empty, treat it as missing
@@ -163,6 +157,36 @@ func N1QLTransform(
 		return out, nil, err // return as JSON array
 	}
 	return nil, nil, nil
+}
+
+// EvaluateForIndex will cache the evaluated values for a document. Therefore, it is
+// not advisable to populate vector directly. E.g., if vector[i] is [null] and if we
+// explode vector[i] for numFlattenKeys = 2, then vector[i] would become [[null, null]].
+// When an index with numFlattenKeys = 3 has to be evalated, query can use the cached
+// vector and it returns [[null, null]] instead of [null]. This would lead to incorrect
+// results as the check vector[i].Type() == qvalue.NULL would fail. Hence, do not directly
+// override vector
+func explodeVectorEntries(vector qvalue.Values, numFlattenKeys int, isLeadingKey bool) qvalue.Values {
+	var newValues []qvalue.Value
+
+	for i := range vector {
+		if vector[i].Type() == qvalue.NULL {
+			newValues = append(newValues, populateValueForFlattenKeys(numFlattenKeys, qvalue.NULL_VALUE)[0])
+		} else if vector[i].Type() == qvalue.MISSING {
+			if isLeadingKey { // Skip indexing missing leading key
+				continue
+			}
+			newValues = append(newValues, populateValueForFlattenKeys(numFlattenKeys, qvalue.MISSING_VALUE)[0])
+		} else {
+			leadingVal, ok := vector[i].Index(0)
+			if isLeadingKey && ok && leadingVal.Type() == qvalue.MISSING { // Skip indexing missing leading key
+				continue
+			}
+			newValues = append(newValues, vector[i])
+		}
+	}
+
+	return newValues
 }
 
 func populateValueForFlattenKeys(numFlattenKeys int, value qvalue.Value) []qvalue.Value {

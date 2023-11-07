@@ -125,6 +125,7 @@ type ShardRebalancer struct {
 	cinfo                    *c.ClusterInfoCache
 	transferScheme           string
 	canMaintainShardAffinity bool
+	dcpRebalStarted          bool // set to true if DCP rebalance is initiated
 
 	dcpRebr          RebalanceProvider // controlled rebalancer (DCP rebalancer)
 	dcpTokens        map[string]*common.TransferToken
@@ -154,8 +155,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 	l.Infof("NewShardRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
 		rebalToken, master, localaddr, runPlanner, runParams, clusterVersion)
 
-	perNodeBatchSize := config["rebalance.serverless.perNodeTransferBatchSize"].Int()
-	schedulingVersion := config["rebalance.serverless.scheduleVersion"].String()
+	perNodeBatchSize := config.GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
+	schedulingVersion := config.GetDeploymentModelAwareCfgString("rebalance.scheduleVersion")
 	transferScheme := getTransferScheme(config)
 	canMaintainShardAffinity := c.CanMaintanShardAffinity(config)
 
@@ -941,7 +942,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			}
 		}()
 
-		if sr.checkAllTokensDone() { // rebalance completed
+		if sr.allTokensPendingReadyOrDone() {
 
 			////////////// Testing code - Not used in production //////////////
 			testcode.TestActionAtTag(sr.config.Load(), testcode.MASTER_SHARDTOKEN_ALL_TOKENS_PROCESSED)
@@ -952,15 +953,17 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			}
 			l.Infof("ShardRebalancer::processShardTransferTokenAsMaster No Tokens Found. Mark Done.")
 
-			if sr.isEmptyNodeBatchingEnabled() == false {
-				// There are no shard transfers with empty node batching. Move to DCP rebalance to check if there
-				// are any DCP tokens to be processed. If empty-node batching is enabled, shard rebalancer would
-				// have started DCP rebalancer after all tokens moved to PendingReady = true state. Hence, transition
-				// to DCP rebalance at this point, only when empty node batching is not enabled
+			dcpRebalanceStarted := sr.isDcpRebalanceStarted()
+
+			// If DCP rebalance is not already started, then start DCP rebalance as there can be DCP
+			// tokens waiting to be processed. Once DCP rebalance finishes, shard rebalance would finish
+			// via: processRebalancerChange() method (or) changes the state of pendingReady tokens to
+			// shardTokenMerge would move all tokens to ShardTokenDeleted and rebalance would finish
+			if dcpRebalanceStarted == false {
 				sr.transitionToDcpOrEndShardRebalance()
 			} else {
-				// Empty node batching is enabled. Master would move the transfer token stats to ShardTokenMerged
-				// Once all tokens are done, finish rebalance
+				// Either empty node batching is disabled (or) DCP rebalance is already started
+				// Finish rebalance
 				sr.cancelMetakv()
 				go sr.finishRebalance(nil)
 			}
@@ -3538,9 +3541,11 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 		sr.batchShardTransferTokensForServerless()
 	} else if sr.canMaintainShardAffinity {
 		if sr.schedulingVersion >= c.PER_NODE_TRANSFER_LIMIT {
-			sr.orderTransferTokensPerNode()
+			windowSz := sr.config.Load().GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
+			sr.orderTransferTokensPerNode(windowSz)
 		} else {
-			sr.orderCopyAndMoveTransferTokens()
+			windowSz := sr.config.Load().GetDeploymentModelAwareCfgInt("rebalance.transferBatchSize")
+			sr.orderCopyAndMoveTransferTokens(windowSz)
 		}
 	}
 }
@@ -3581,9 +3586,7 @@ func (sr *ShardRebalancer) batchShardTransferTokensForServerless() {
 	}
 }
 
-func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
-	cfg := sr.config.Load()
-	windowSz := cfg["rebalance.transferBatchSize"].Int()
+func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens(windowSz int) {
 	if windowSz == 0 {
 		sr.batchedTokens = []map[string]*c.TransferToken{sr.transferTokens}
 		return
@@ -3634,20 +3637,14 @@ func (sr *ShardRebalancer) orderCopyAndMoveTransferTokens() {
 		len(sr.batchedTokens), windowSz)
 }
 
-func (sr *ShardRebalancer) orderTransferTokensPerNode() {
+func (sr *ShardRebalancer) orderTransferTokensPerNode(windowSz int) {
 	// TODO: add batching by source node
-	sr.orderCopyAndMoveTransferTokens()
+	sr.orderCopyAndMoveTransferTokens(windowSz)
 }
 
 func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	config := sr.config.Load()
-	var batchSize int
-
-	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
-		batchSize = config["rebalance.perNodeTransferBatchSize"].Int()
-	} else if c.IsServerlessDeployment() {
-		batchSize = config["rebalance.serverless.perNodeTransferBatchSize"].Int()
-	}
+	batchSize := config.GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
@@ -3702,13 +3699,7 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 
 	config := sr.config.Load()
 
-	var batchSize int
-
-	if sr.canMaintainShardAffinity && !c.IsServerlessDeployment() {
-		batchSize = config["rebalance.transferBatchSize"].Int()
-	} else if c.IsServerlessDeployment() {
-		batchSize = config["rebalance.serverless.transferBatchSize"].Int()
-	}
+	batchSize := config.GetDeploymentModelAwareCfgInt("rebalance.transferBatchSize")
 
 	publishAllTokens := false
 	if batchSize == 0 { // Disable batching and publish all tokens
@@ -3902,6 +3893,8 @@ func (sr *ShardRebalancer) moveToDcpRebr() {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
+	sr.dcpRebalStarted = true
+
 	if sr.rebalToken.ActiveRebalancer != c.DCP_REBALANCER {
 
 		temp := *sr.rebalToken
@@ -3928,6 +3921,9 @@ func (sr *ShardRebalancer) moveToDcpRebr() {
 				go sr.finishRebalance(err)
 			}
 		}
+	} else {
+		sr.cancelMetakv()
+		go sr.finishRebalance(nil)
 	}
 }
 
@@ -4169,6 +4165,13 @@ func (sr *ShardRebalancer) dcpRebrProgressCallback(progress float64, cancel <-ch
 
 func (sr *ShardRebalancer) InitGlobalTopology(globalTopology *manager.ClusterIndexMetadata) {
 	// no-op for shard rebalancer
+}
+
+func (sr *ShardRebalancer) isDcpRebalanceStarted() bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	return sr.dcpRebalStarted
 }
 
 // isIndexDeletedDuringRebal returns true if an index is deleted while
