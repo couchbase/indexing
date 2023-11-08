@@ -508,10 +508,8 @@ func TestSwapRebalance(t *testing.T) {
 	log.Printf("%v 2. Swap rebalancing index node %v out of the cluster", _TestSwapRebalance, clusterconfig.Nodes[node])
 	removeNode(clusterconfig.Nodes[node], t)
 
-	status := getClusterStatus()
-	if len(status) != 2 || !isNodeIndex(status, clusterconfig.Nodes[1]) {
-		t.Fatalf("%v Unexpected cluster configuration: %v", _TestSwapRebalance, status)
-	}
+	expectedStatus := map[string][]string{clusterconfig.Nodes[0]: []string{"kv", "n1ql"}, clusterconfig.Nodes[1]: []string{"index"}}
+	validateClusterStatus(expectedStatus, _TestSwapRebalance, t)
 
 	printClusterConfig(_TestSwapRebalance, "exit")
 	waitForRebalanceCleanup()
