@@ -155,8 +155,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 	l.Infof("NewShardRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v clusterVersion %v", nodeUUID,
 		rebalToken, master, localaddr, runPlanner, runParams, clusterVersion)
 
-	perNodeBatchSize := config.GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
-	schedulingVersion := config.GetDeploymentModelAwareCfgString("rebalance.scheduleVersion")
+	perNodeBatchSize := config.GetDeploymentModelAwareCfg("rebalance.perNodeTransferBatchSize").Int()
+	schedulingVersion := config.GetDeploymentModelAwareCfg("rebalance.scheduleVersion").String()
 	transferScheme := getTransferScheme(config)
 	canMaintainShardAffinity := c.CanMaintanShardAffinity(config)
 
@@ -3543,10 +3543,10 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 		sr.batchShardTransferTokensForServerless()
 	} else if sr.canMaintainShardAffinity {
 		if sr.schedulingVersion >= c.PER_NODE_TRANSFER_LIMIT {
-			windowSz := sr.config.Load().GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
+			windowSz := sr.config.Load().GetDeploymentModelAwareCfg("rebalance.perNodeTransferBatchSize").Int()
 			sr.orderTransferTokensPerNode(windowSz)
 		} else {
-			windowSz := sr.config.Load().GetDeploymentModelAwareCfgInt("rebalance.transferBatchSize")
+			windowSz := sr.config.Load().GetDeploymentModelAwareCfg("rebalance.transferBatchSize").Int()
 			sr.orderCopyAndMoveTransferTokens(windowSz)
 		}
 	}
@@ -3646,7 +3646,7 @@ func (sr *ShardRebalancer) orderTransferTokensPerNode(windowSz int) {
 
 func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	config := sr.config.Load()
-	batchSize := config.GetDeploymentModelAwareCfgInt("rebalance.perNodeTransferBatchSize")
+	batchSize := config.GetDeploymentModelAwareCfg("rebalance.perNodeTransferBatchSize").Int()
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
@@ -3701,7 +3701,7 @@ func (sr *ShardRebalancer) initiateShardTransferAsMaster() {
 
 	config := sr.config.Load()
 
-	batchSize := config.GetDeploymentModelAwareCfgInt("rebalance.transferBatchSize")
+	batchSize := config.GetDeploymentModelAwareCfg("rebalance.transferBatchSize").Int()
 
 	publishAllTokens := false
 	if batchSize == 0 { // Disable batching and publish all tokens

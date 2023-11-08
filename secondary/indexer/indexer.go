@@ -3583,7 +3583,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		// Limit the number of concurrent build streams at bucket level
 		if ok := idx.checkParallelPerBucketBuilds(bucket, instIdList, clientCh, errMap); !ok {
-			maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+			maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_per_bucket_builds").Int()
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
 				" KeyspaceID: %v. Instances in error: %v", maxParallelPerBucketBuilds, keyspaceId, instIdList)
 			if idx.enableManager {
@@ -3596,7 +3596,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		// Limit the number of concurrent build streams at indexer level
 		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
 				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, keyspaceId, instIdList)
 			if idx.enableManager {
@@ -3800,7 +3800,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		// Limit the number of collections that can be recovered for non-serverless deployments
 		if common.IsServerlessDeployment() == false {
 			if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-				maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+				maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 				logging.Errorf("Indexer::handleBuildIndex Build Already In Progress for %v collections."+
 					" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, keyspaceId, instIdList)
 				if idx.enableManager {
@@ -6543,7 +6543,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 func (idx *indexer) checkParallelPerBucketBuilds(bucket string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+	maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_per_bucket_builds").Int()
 	if maxParallelPerBucketBuilds == 0 {
 		return true
 	}
@@ -6600,7 +6600,7 @@ func (idx *indexer) checkParallelPerBucketBuilds(bucket string,
 func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+	maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 
 	parallelCollectionBuildMap := make(map[string]bool)
 	// Find all the keyspaces on which initial build is in progress
