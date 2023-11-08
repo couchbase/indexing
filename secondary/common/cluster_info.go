@@ -793,6 +793,19 @@ func (c *ClusterInfoCache) GetActiveIndexerNodes() (nodes []couchbase.Node) {
 	return
 }
 
+func (c *ClusterInfoCache) GetActiveIndexerNodesStrMap() map[string]bool {
+	out := make(map[string]bool)
+	for _, n := range c.nodes {
+		for _, s := range n.Services {
+			if s == "index" {
+				out[n.NodeUUID] = true
+			}
+		}
+	}
+
+	return out
+}
+
 func (c *ClusterInfoCache) GetServiceFromPort(addr string) (string, error) {
 
 	_, port, err := net.SplitHostPort(addr)

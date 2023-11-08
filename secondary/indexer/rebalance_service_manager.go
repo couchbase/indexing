@@ -1842,15 +1842,42 @@ func (m *RebalanceServiceManager) doesDropOnSourceExist(ttid string) bool {
 //	b. Tokens that have failed cleanup and owner is alive
 //	c. Tokens that have failed cleanup and owner is not alive
 //
-// For tokens of type (b) and (c), this method will cleanup tranferred data
-// on S3 irrespective of whether the node is alive or not. It will not cleanup
-// any token. The token will be cleaned by either“ by the respective owner (or)
-// during next rebalance by orphan token cleaner
+// For tokens of type (b), corresponding owner would cleanup the token.
+// Rebalancer can not cleanup as owner might be in the middle of processing
+// the token and cleaning it up can lead to unwanted side effects.
+//
+// For tokens of type (c), this method will cleanup tranferred data on S3.
+// It will not cleanup any token. The token will be cleaned by either by
+// the respective owner (or) during next rebalance by orphan token cleaner
 func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 	rtokens, err := m.getCurrRebalTokens()
 	if err != nil {
 		l.Errorf("RebalanceServiceManager::cleanupAllDropOnSourceTokens Error Fetching Metakv Tokens %v", err)
 		c.CrashOnError(err)
+	}
+
+	var activeNodes map[string]bool
+	func() {
+		m.genericMgr.cinfo.RLock()
+		defer m.genericMgr.cinfo.RUnlock()
+
+		activeNodes = m.genericMgr.cinfo.GetActiveIndexerNodesStrMap()
+	}()
+
+	isNodeActive := func(nodeUUID string) bool {
+		// Given that an "index" service node is executing this code, it should
+		// not be possible to have activeIndexNodes as empty. This suggests that
+		// there has been an error in getting activeIndexNodes in the cluster.
+		// Consider the node is active in such cases so that transfers are not
+		// cleaned-up
+		if len(activeNodes) == 0 {
+			return true
+		}
+
+		if _, ok := activeNodes[nodeUUID]; ok {
+			return true
+		}
+		return false
 	}
 
 	if rtokens != nil {
@@ -1870,14 +1897,25 @@ func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 						return err
 					}
 				}
-			} else if tt.ShardTransferTokenState == c.ShardTokenTransferShard ||
-				tt.ShardTransferTokenState == c.ShardTokenRestoreShard ||
+			} else if tt.ShardTransferTokenState == c.ShardTokenTransferShard {
+				if isNodeActive(tt.SourceId) {
+					continue
+				} else {
+					logging.Infof("RebalanceServiceManager::cleanupAllDropOnSourceTokens Cleaning up transferred data for ttid: %v", ttid)
+					// Cleanup only the tranferred data. Token cleanup will be
+					//  done by orphanToken cleaner or by the corresponding owner
+					m.cleanupTranferredData(ttid, tt)
+				}
+			} else if tt.ShardTransferTokenState == c.ShardTokenRestoreShard ||
 				tt.ShardTransferTokenState == c.ShardTokenRecoverShard {
-
-				logging.Infof("RebalanceServiceManager::cleanupAllDropOnSourceTokens Cleaning up transferred data for ttid: %v", ttid)
-				// Cleanup only the tranferred data. Token cleanup will be
-				//  done by orphanToken cleaner or by the corresponding owner
-				m.cleanupTranferredData(ttid, tt)
+				if isNodeActive(tt.DestId) {
+					continue
+				} else {
+					logging.Infof("RebalanceServiceManager::cleanupAllDropOnSourceTokens Cleaning up transferred data for ttid: %v", ttid)
+					// Cleanup only the tranferred data. Token cleanup will be
+					//  done by orphanToken cleaner or by the corresponding owner
+					m.cleanupTranferredData(ttid, tt)
+				}
 			}
 		}
 	}
