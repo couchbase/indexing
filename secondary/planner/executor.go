@@ -2641,6 +2641,11 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 		}
 	}
 
+	// During rebalance, if the highest version of active indexer node is <7.6, then
+	// do not enable shard affinity
+	skipShardAffinity := solution.CanSkipShardAffinity(command)
+	config.EnableShardAffinity = config.EnableShardAffinity && !skipShardAffinity
+
 	// run planner
 	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
@@ -2729,6 +2734,9 @@ func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, inc
 	// create an initial solution from plan
 	sizing = newGeneralSizingMethod()
 	solution, constraint, _, _, _ = solutionFromPlan(CommandRepair, config, sizing, plan, false)
+
+	skipShardAffinity := solution.CanSkipShardAffinity(CommandRepair)
+	config.EnableShardAffinity = config.EnableShardAffinity && !skipShardAffinity
 
 	// run planner
 	placement = newRandomPlacement(nil, config.AllowSwap, false)
