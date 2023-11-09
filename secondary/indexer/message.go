@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
 )
 
 type MsgType int16
@@ -3024,6 +3025,7 @@ func (m *MsgMonitorSliceStatus) GetSliceList() []Slice {
 type MsgUpdateRebalancePhase struct {
 	GlobalRebalancePhase common.RebalancePhase
 	BucketTransferPhase  map[string]common.RebalancePhase
+	InstsTransferPhase   map[common.IndexInstId]common.RebalancePhase
 }
 
 func (m *MsgUpdateRebalancePhase) GetMsgType() MsgType {
@@ -3036,6 +3038,10 @@ func (m *MsgUpdateRebalancePhase) GetGlobalRebalancePhase() common.RebalancePhas
 
 func (m *MsgUpdateRebalancePhase) GetBucketTransferPhase() map[string]common.RebalancePhase {
 	return m.BucketTransferPhase
+}
+
+func (m *MsgUpdateRebalancePhase) GetInstsTransferPhase() map[c.IndexInstId]common.RebalancePhase {
+	return m.InstsTransferPhase
 }
 
 type MsgLockUnlockShards struct {

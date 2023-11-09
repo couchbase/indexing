@@ -993,7 +993,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 	case c.ShardTokenCreated:
 
 		sr.updateInMemToken(ttid, tt, "source")
-		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceInitated)
+		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceInitated)
 		sr.updateEmptyNodeBatching(tt.IsEmptyNodeBatch)
 
 		tt.ShardTransferTokenState = c.ShardTokenScheduledOnSource
@@ -1019,7 +1019,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		// This will allow lifecycle manager to unblock any drop
 		// index commands that have been issued while transfer is
 		// in progress
-		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, c.RebalanceTransferDone)
+		sr.updateInstsTransferPhase(ttid, tt, c.RebalanceTransferDone)
 		return false
 
 	case c.ShardTokenDropOnSource:
@@ -1053,7 +1053,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		// During the plan phase (which happens after prepare phase),
 		// planner will decide which node the index will land-on
 		sr.updateInMemToken(ttid, tt, "source")
-		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
+		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceDone)
 
 		return false // Return false as this is source node. Destination node should also process the token
 
@@ -1415,7 +1415,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 	case c.ShardTokenScheduledOnSource:
 
 		sr.updateInMemToken(ttid, tt, "dest")
-		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceInitated)
+		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceInitated)
 		sr.updateEmptyNodeBatching(tt.IsEmptyNodeBatch)
 
 		tt.ShardTransferTokenState = c.ShardTokenScheduleAck
@@ -1433,7 +1433,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		// This will allow lifecycle manager to unblock any drop
 		// index commands that have been issued while transfer is
 		// in progress
-		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, c.RebalanceTransferDone)
+		sr.updateInstsTransferPhase(ttid, tt, c.RebalanceTransferDone)
 
 		go sr.startShardRestore(ttid, tt)
 
@@ -1511,7 +1511,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 
 		// If nodes sees a commit token, then DDL can be allowed on
 		// the bucket
-		sr.updateBucketTransferPhase(tt.IndexInsts[0].Defn.Bucket, common.RebalanceDone)
+		sr.updateInstsTransferPhase(ttid, tt, common.RebalanceDone)
 
 		tt.ShardTransferTokenState = c.ShardTokenDeleted
 		setTransferTokenInMetakv(ttid, tt)
@@ -3858,12 +3858,19 @@ func (sr *ShardRebalancer) updateRebalancePhaseInGlobalRebalToken() {
 	// Do not return the error - In case of error all DDL's during rebalance will be blocked, but rebalance can proceed
 }
 
-func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhase common.RebalancePhase) {
+func (sr *ShardRebalancer) updateInstsTransferPhase(ttid string, tt *c.TransferToken, tranfserPhase common.RebalancePhase) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
-	bucketPhase := make(map[string]common.RebalancePhase)
-	bucketPhase[bucket] = tranfserPhase
+	instsTransferPhase := make(map[c.IndexInstId]common.RebalancePhase)
+	for i := range tt.IndexInsts {
+		if tt.RealInstIds[i] != 0 {
+			instsTransferPhase[tt.RealInstIds[i]] = tranfserPhase
+		} else {
+			instsTransferPhase[tt.InstIds[i]] = tranfserPhase
+		}
+	}
+
 	globalPh := common.RebalanceInitated
 	if sr.rebalToken.RebalPhase == common.RebalanceTransferInProgress {
 		globalPh = common.RebalanceTransferInProgress
@@ -3871,7 +3878,7 @@ func (sr *ShardRebalancer) updateBucketTransferPhase(bucket string, tranfserPhas
 
 	msg := &MsgUpdateRebalancePhase{
 		GlobalRebalancePhase: globalPh,
-		BucketTransferPhase:  bucketPhase,
+		InstsTransferPhase:   instsTransferPhase,
 	}
 
 	sr.supvMsgch <- msg
