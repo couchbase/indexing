@@ -2046,7 +2046,7 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 		}
 	}
 
-	recoveryListener := make(chan c.IndexInstId, 1)
+	recoveryListener := make(chan c.IndexInstId, 2*len(tt.IndexInsts))
 
 	// Group index definitions for each collection
 	groupedDefns := groupInstsPerColl(tt)
