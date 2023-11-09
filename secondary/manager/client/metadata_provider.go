@@ -7192,8 +7192,14 @@ func (w *watcher) excludeIn() bool {
 
 func (provider *MetadataProvider) ShouldMaintainShardAffinity() bool {
 	storageMode := strings.ToLower(provider.settings.StorageMode())
+
+	intVer := c.GetInternalVersion()
+	if intVer.LessThan(provider.internalVersion) {
+		intVer = provider.internalVersion
+	}
+
 	return provider.settings.IsShardAffinityEnabled() &&
-		!provider.internalVersion.LessThan(c.MIN_VER_SHARD_AFFINITY) &&
+		!intVer.LessThan(c.MIN_VER_SHARD_AFFINITY) &&
 		storageMode == c.PlasmaDB
 }
 
