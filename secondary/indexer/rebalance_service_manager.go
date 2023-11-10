@@ -1127,8 +1127,15 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	indexStateMap := make(map[c.IndexInstId]c.RebalanceState)
 	respch := make(chan error)
 	for _, tt := range tts {
-		indexStateMap[tt.InstId] = c.REBAL_NIL
-		indexStateMap[tt.RealInstId] = c.REBAL_NIL
+		if tt.IsDcpTransferToken() {
+			indexStateMap[tt.InstId] = c.REBAL_NIL
+			indexStateMap[tt.RealInstId] = c.REBAL_NIL
+		} else if tt.IsShardTransferToken() {
+			for i := range tt.IndexInsts {
+				indexStateMap[tt.InstIds[i]] = c.REBAL_NIL
+				indexStateMap[tt.RealInstIds[i]] = c.REBAL_NIL
+			}
+		}
 	}
 	m.supvMsgch <- &MsgCancelMergePartition{
 		indexStateMap: indexStateMap,
@@ -1773,7 +1780,8 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.TransferToken) error {
 	for i := range tt.IndexInsts {
 		if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[i], tt.RealInstIds[i], ttid); err != nil {
-			// No error is observed. Update the transfer token state to Ready
+			logging.Errorf("RebalanceServiceManager::updateRStateForShardToken Error observed when changing "+
+				"RState of instId: %v, realInstId: %v, ttid: %v", tt.InstIds[i], tt.RealInstIds[i], ttid)
 			tt.Error = err.Error()
 			tt.IsPendingReady = false // Reset pending ready so that token will be deleted in next iteration
 			setTransferTokenInMetakv(ttid, tt)

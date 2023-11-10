@@ -143,6 +143,8 @@ type ShardRebalancer struct {
 	emptyNodeBatchingEnabled bool
 
 	batchBuildReqCh chan *batchBuildReq
+
+	droppedInstsInRebal map[c.IndexInstId]bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -206,7 +208,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 		dcpRebrCloseCh: make(chan struct{}),
 
-		batchBuildReqCh: make(chan *batchBuildReq, 100),
+		batchBuildReqCh:     make(chan *batchBuildReq, 100),
+		droppedInstsInRebal: make(map[c.IndexInstId]bool),
 	}
 
 	sr.config.Store(config)
@@ -2061,7 +2064,8 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 				return
 			} else if skip {
 				// bucket (or) scope (or) collection (or) index are dropped.
-				// Continue instead of failing rebalance
+				// Continue instead of failing rebalance. Add to dropped insts
+				sr.addInstToDroppedInsts(&defn)
 				continue
 			}
 
@@ -2669,7 +2673,13 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 		// Indexer would serialize the RState transitions anyways
 		go func(index int) {
 			defer wg.Done()
-			sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)
+			// merge only if instance is not dropped during rebalance
+			if sr.isInstDroppedDuringRebal(tt.InstIds[index], tt.RealInstIds[index]) == false {
+				sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)
+			} else {
+				logging.Infof("ShardRebalancer::updateRStateToActive Skip updating RState for instId: %v, realInstId: %v, ttid: %v",
+					tt.InstIds[index], tt.RealInstIds[index], ttid)
+			}
 		}(i)
 	}
 	partnMergeWaitGroup.Wait()
@@ -4415,4 +4425,25 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 			}
 		}
 	}
+}
+
+func (sr *ShardRebalancer) addInstToDroppedInsts(defn *common.IndexDefn) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	// Add both instId and realInstId as rebalancer does not know whether indexer
+	// has picked instId or realInstId for the instance. Also, if realInst is dropped
+	// proxy will be dropped and vice versa
+	sr.droppedInstsInRebal[defn.InstId] = true
+	sr.droppedInstsInRebal[defn.RealInstId] = true
+}
+
+func (sr *ShardRebalancer) isInstDroppedDuringRebal(instId, realInstId c.IndexInstId) bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	_, ok1 := sr.droppedInstsInRebal[instId]
+	_, ok2 := sr.droppedInstsInRebal[realInstId]
+
+	return ok1 || ok2
 }
