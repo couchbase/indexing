@@ -16,6 +16,8 @@
             "maxInstancesPerShard": 100,
             "maxDiskUsagePerShard": 268435456000,
             "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5,
             "indexes": [
                 {
                     "defnId": 1111,
@@ -98,6 +100,8 @@
             "maxInstancesPerShard": 100,
             "maxDiskUsagePerShard": 268435456000,
             "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5,
             "indexes": [
                 {
                     "defnId": 1111,
@@ -179,6 +183,8 @@
             "maxInstancesPerShard": 100,
             "maxDiskUsagePerShard": 268435456000,
             "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5,
             "indexes": [
                 {
                     "defnId": 3333,
@@ -215,6 +221,8 @@
             "maxInstancesPerShard": 100,
             "maxDiskUsagePerShard": 268435456000,
             "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5,
             "indexes": [
                 {
                     "defnId": 2222,
@@ -254,7 +262,9 @@
             "minShardCapacity": 4,
             "maxInstancesPerShard": 100,
             "maxDiskUsagePerShard": 268435456000,
-            "diskUsageThreshold": 50.0
+            "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5
         }
     ],
     "memQuota": 100000000000,

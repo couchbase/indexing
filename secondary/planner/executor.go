@@ -6084,6 +6084,15 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 					}
 				}
 
+				// If there are no fullCapNodes, then this code path is being executed because
+				// global shard limits are being hit. In such a case, consider all targetNodes
+				// as fullCapNodes and prune slots accordingly
+				if len(fullCapNodes) == 0 {
+					for indexer := range targetNodes {
+						fullCapNodes[indexer] = true
+					}
+				}
+
 				logging.LazyVerbose(func() string {
 					return fmt.Sprintf("Planner::PopulateAlternateShardIds Full capacity nodes are: %v, targetNodes: %v, partnId: %v",
 						getLoadDist(fullCapNodes), getTargetDist(targetNodes), partnId)
@@ -6721,7 +6730,7 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 	var shardSlice [][2]*ShardLoad
 	for slotId, v := range shardDistOnFullCapNodes {
 		globalDist := globalShardDist[slotId]
-		logging.Infof("Planner::pruneAndSortByLoad Probable slot: %v for final placement: %v", slotId, globalDist.String())
+		logging.Verbosef("Planner::pruneAndSortByLoad Probable slot: %v for final placement: %v", slotId, globalDist.String())
 		shardSlice = append(shardSlice, [2]*ShardLoad{v, globalShardDist[slotId]})
 	}
 

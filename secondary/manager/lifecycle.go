@@ -2260,7 +2260,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			}
 
 			if canProcessBuild { // Set schedule flag and update instIdList
-				m.setScheduleFlagAndUpdateErr(defn, inst, true, true, "")
+				m.setScheduleFlagAndUpdateErr(defn, inst, true, false, "")
 
 				instIdList = append(instIdList, common.IndexInstId(inst.InstId))
 				inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
@@ -2303,8 +2303,11 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 		}
 
 		// Handle all the errors from the build attempt(s)
-		for instId, build_err := range errMap2 {
-			errMap[instId] = build_err.Error() // add to return map
+		for _, instId := range instIdList {
+			build_err, ok := errMap2[instId]
+			if ok {
+				errMap[instId] = build_err.Error() // add to return map
+			}
 
 			defnId, ok := inst2DefnMap[instId]
 			if !ok {
@@ -2324,7 +2327,9 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, defnId, err)
 			}
 
-			if m.canRetryBuildError(inst, build_err, isRebalOrResume) {
+			if build_err == nil {
+				m.setScheduleFlagAndUpdateErr(defn, *inst, false, true, "")
+			} else if m.canRetryBuildError(inst, build_err, isRebalOrResume) {
 				if common.IsServerlessDeployment() {
 					build_err = errors.New(fmt.Sprintf("%v. Index build will be retried in background.", common.ErrTransientError))
 				} else {

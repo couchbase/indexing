@@ -2735,7 +2735,9 @@ func (r *Rebalancer) destTokenToMergeOrReadyLOCKED(ttid string, tt *c.TransferTo
 			rstate: c.REBAL_ACTIVE,
 			respch: respch}
 		err := <-respch
-		c.CrashOnError(err)
+		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
+			c.CrashOnError(err)
+		}
 
 		if tt.TransferMode == c.TokenTransferModeMove {
 			tt.State = c.TransferTokenReady
@@ -2768,7 +2770,7 @@ func (r *Rebalancer) destTokenToMergeOrReadyLOCKED(ttid string, tt *c.TransferTo
 				return
 			case err = <-respch:
 			}
-			if err != nil {
+			if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 				// If there is an error, rewind state to TransferTokenInProgress so cleanup
 				// will be done after the intentional crash this block then produces.
 				// An error condition indicates that merge has not been
