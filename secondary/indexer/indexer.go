@@ -32,6 +32,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -237,8 +238,8 @@ type indexer struct {
 
 	// Shard rebalance related book-keeping
 	globalRebalPhase    common.RebalancePhase
-	perBucketRebalPhase map[string]common.RebalancePhase
-	slicePendingClosure map[string][]Slice
+	instRebalPhase      map[c.IndexInstId]common.RebalancePhase
+	slicePendingClosure map[c.IndexInstId][]Slice
 
 	//maintains bucket->bucketStateEnum mapping for pause state
 	bucketPauseState map[string]bucketStateEnum
@@ -755,7 +756,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	if refreshEncrypt {
 		// reset memcached connection
 		logging.Infof("handleSecurityChange: restarting keyspace sequence cache")
-		common.ResetBucketSeqnos()
+		common.ResetBucketStats()
 	}
 
 	idx.storageMgrCmdCh <- msg
@@ -1630,7 +1631,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.handleInstRecoveryResponse(msg)
 
 	case UPDATE_REBALANCE_PHASE:
-		idx.updateRebalancePhase(msg)
+		bucketTransferPhase := idx.updateRebalancePhase(msg)
+		msg.(*MsgUpdateRebalancePhase).BucketTransferPhase = bucketTransferPhase
 		idx.sendMsgToClustMgr(msg)
 
 	case METERING_MGR_START_WRITE_BILLING,
@@ -1789,7 +1791,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		if newConfig["vbseqnos.workers_per_reader"].Int() !=
 			oldConfig["vbseqnos.workers_per_reader"].Int() {
 			common.UpdateVbSeqnosWorkersPerReader(int32(workersPerReader.Int()))
-			common.ResetBucketSeqnos()
+			common.ResetBucketStats()
 		}
 	}
 
@@ -3382,7 +3384,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 					if idx.shouldSkipSliceClose(inst.Defn.Bucket, inst.InstId) {
 						logging.Infof("PrunePartition: skipping slice closure as rebalance transfer is in progress for bucket: %v, instId: %v, partnId: %v",
 							inst.Defn.Bucket, inst.InstId, partnInst.Defn.GetPartitionId())
-						idx.slicePendingClosure[inst.Defn.Bucket] = append(idx.slicePendingClosure[inst.Defn.Bucket], slice)
+						idx.slicePendingClosure[inst.InstId] = append(idx.slicePendingClosure[inst.InstId], slice)
 						continue
 					}
 
@@ -3583,7 +3585,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		// Limit the number of concurrent build streams at bucket level
 		if ok := idx.checkParallelPerBucketBuilds(bucket, instIdList, clientCh, errMap); !ok {
-			maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+			maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_per_bucket_builds").Int()
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
 				" KeyspaceID: %v. Instances in error: %v", maxParallelPerBucketBuilds, keyspaceId, instIdList)
 			if idx.enableManager {
@@ -3596,7 +3598,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		// Limit the number of concurrent build streams at indexer level
 		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+			maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
 				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, keyspaceId, instIdList)
 			if idx.enableManager {
@@ -3800,7 +3802,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		// Limit the number of collections that can be recovered for non-serverless deployments
 		if common.IsServerlessDeployment() == false {
 			if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
-				maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+				maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 				logging.Errorf("Indexer::handleBuildIndex Build Already In Progress for %v collections."+
 					" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, keyspaceId, instIdList)
 				if idx.enableManager {
@@ -5441,7 +5443,7 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 					if idx.shouldSkipSliceClose(indexInst.Defn.Bucket, indexInst.InstId) {
 						logging.Infof("Indexer::cleanupIndexData skipping slice closure as rebalance transfer is in progress for bucket: %v instId: %v, partnId: %v",
 							indexInst.Defn.Bucket, indexInst.InstId, pid)
-						idx.slicePendingClosure[indexInst.Defn.Bucket] = append(idx.slicePendingClosure[indexInst.Defn.Bucket], slice)
+						idx.slicePendingClosure[indexInst.InstId] = append(idx.slicePendingClosure[indexInst.InstId], slice)
 						continue
 					}
 
@@ -6543,7 +6545,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 func (idx *indexer) checkParallelPerBucketBuilds(bucket string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+	maxParallelPerBucketBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_per_bucket_builds").Int()
 	if maxParallelPerBucketBuilds == 0 {
 		return true
 	}
@@ -6600,7 +6602,7 @@ func (idx *indexer) checkParallelPerBucketBuilds(bucket string,
 func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+	maxParallelCollectionBuilds := idx.config.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 
 	parallelCollectionBuildMap := make(map[string]bool)
 	// Find all the keyspaces on which initial build is in progress
@@ -10060,13 +10062,11 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true
 
-			if common.IsServerlessDeployment() {
-				idx.clearRebalancePhase(true)
-				idx.globalRebalPhase = common.RebalanceInitated
-				idx.perBucketRebalPhase = make(map[string]common.RebalancePhase)
-			}
+			idx.clearRebalancePhase(true)
+			idx.globalRebalPhase = common.RebalanceInitated
+			idx.instRebalPhase = make(map[common.IndexInstId]common.RebalancePhase)
 
-			idx.slicePendingClosure = make(map[string][]Slice)
+			idx.slicePendingClosure = make(map[common.IndexInstId][]Slice)
 			idx.droppedIndexesDuringRebal = make(map[common.IndexInstId]bool) // reset the book-keeping
 
 			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
@@ -12186,40 +12186,50 @@ func (idx *indexer) canAllowDDLDuringRebalance() bool {
 	}
 }
 
-func (idx *indexer) updateRebalancePhase(cmd Message) error {
-
-	// update rebalance phase only for serverless deployments
-	if !common.IsServerlessDeployment() {
-		return nil
-	}
+func (idx *indexer) updateRebalancePhase(cmd Message) map[string]c.RebalancePhase {
 
 	logging.Infof("Indexer:updateRebalancePhase %v", cmd)
 
 	globalRebalPhase := cmd.(*MsgUpdateRebalancePhase).GetGlobalRebalancePhase()
-	bucketTransferPhase := cmd.(*MsgUpdateRebalancePhase).GetBucketTransferPhase()
+	instsTransferPhase := cmd.(*MsgUpdateRebalancePhase).GetInstsTransferPhase()
 	idx.globalRebalPhase = globalRebalPhase
-	for bucket, transferPhase := range bucketTransferPhase {
-		idx.perBucketRebalPhase[bucket] = transferPhase
+
+	// Update indexer level book-keeping about instances whose rebalance is in progress
+	for instId, transferPhase := range instsTransferPhase {
+		idx.instRebalPhase[instId] = transferPhase
 	}
 
 	// If transfer is completed for any buckets, then close the slices
 	// of the index instances belonging to those buckets
-	for bucket, transferPhase := range idx.perBucketRebalPhase {
-		if sliceList, ok := idx.slicePendingClosure[bucket]; ok {
+	for instId, transferPhase := range idx.instRebalPhase {
+		if sliceList, ok := idx.slicePendingClosure[instId]; ok {
 			if transferPhase >= common.RebalanceTransferDone {
 				closeSlices(sliceList, "Indexer::updateRebalancePhase")
-				delete(idx.slicePendingClosure, bucket)
+				delete(idx.slicePendingClosure, instId)
 			}
 		}
 	}
 
-	return nil
+	// For each bucket, build a bucket-transfer phase so that lifecycle
+	// manager can allow/dis-allow based on bucket transfer in progress
+	bucketTransferPhase := make(map[string]common.RebalancePhase)
+	for instId, transferPhase := range idx.instRebalPhase {
+		if inst, ok := idx.indexInstMap[instId]; ok {
+			bucket := inst.Defn.Bucket
+
+			if val, ok := bucketTransferPhase[bucket]; !ok || transferPhase < val {
+				bucketTransferPhase[bucket] = transferPhase
+			}
+		}
+	}
+
+	return bucketTransferPhase
 }
 
 func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	logging.Infof("Indexer:clearRebalancePhase Clearing book-keeping on rebalance done")
 	idx.globalRebalPhase = common.RebalanceNotRunning
-	idx.perBucketRebalPhase = nil
+	idx.instRebalPhase = nil
 
 	// At the start of a new rebalance request, if there are slices left over
 	// in idx.slicePendingClosure, it is a bug in indexer book-keeping. Log fatal
@@ -12227,9 +12237,9 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	if newRebal {
 		if len(idx.slicePendingClosure) > 0 {
 			var str string
-			for bucket, sliceList := range idx.slicePendingClosure {
+			for instId, sliceList := range idx.slicePendingClosure {
 				for _, slice := range sliceList {
-					str += fmt.Sprintf("bucket: %v, instId: %v, partnId: %v\n", bucket, slice.IndexInstId(), slice.IndexPartnId())
+					str += fmt.Sprintf("InstId: %v, instId: %v, partnId: %v\n", instId, slice.IndexInstId(), slice.IndexPartnId())
 				}
 			}
 			logging.Fatalf("Indexer::clearRebalancePhase slicePendingClosure has some slices waiting to be closed "+
@@ -12237,22 +12247,23 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 		}
 	}
 
-	for bucket, sliceList := range idx.slicePendingClosure {
+	for instId, sliceList := range idx.slicePendingClosure {
 		closeSlices(sliceList, "Indexer::clearRebalancePhase")
-		delete(idx.slicePendingClosure, bucket)
+		delete(idx.slicePendingClosure, instId)
 	}
 	idx.slicePendingClosure = nil
 }
 
 func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId) bool {
 
-	// Always close slices for non-serverless deployments
-	if !common.IsServerlessDeployment() {
+	// Always close slices for non-serverless deployments if shard affinity is disabled
+	shardAffinity := common.CanMaintanShardAffinity(idx.config)
+	if !common.IsServerlessDeployment() && (shardAffinity == false) {
 		return false
 	}
 
 	if idx.globalRebalPhase == common.RebalanceInitated {
-		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in drop phase, inst: %v", instId)
+		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in plan phase, inst: %v", instId)
 		return true
 	}
 
@@ -12261,15 +12272,15 @@ func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstI
 	if idx.globalRebalPhase == common.RebalanceTransferInProgress {
 		// Slice closure is allowed on a bucket only after transfer is done
 
-		if bucketTransferPhase, ok := idx.perBucketRebalPhase[bucket]; ok {
+		if instTransferPhase, ok := idx.instRebalPhase[instId]; ok {
 			// If bucket transfer has moved past the minimum rebalance phase
 			// required to allow the DDL on the bucket, then return true
-			if bucketTransferPhase >= common.RebalanceTransferDone {
+			if instTransferPhase >= common.RebalanceTransferDone {
 				return false
 			}
 			return true
 		}
-		// Bucket is not a part of rebalance. Allow slice closure on the bucket
+		// Inst is not a part of rebalance. Allow slice closure on the bucket
 		return false
 	}
 	return false // Rebalance is done - Allow slice closure

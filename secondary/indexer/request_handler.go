@@ -1036,7 +1036,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
 							defn.Name, int(instance.ReplicaId), 0, false)
 
-						completion := int(0)
+						completion := 0
 						key := common.GetIndexStatKey(prefix, "build_progress")
 						if progress, ok := stats.ToMap()[key]; ok {
 							completion = int(progress.(float64))
@@ -1433,6 +1433,7 @@ func (m *requestHandlerContext) consolidateIndexStatus(statuses []IndexStatus) [
 			s2.Hosts = append(s2.Hosts, status.Hosts...)
 			s2.Completion = (s2.Completion + status.Completion) / 2
 			s2.Progress = (s2.Progress + status.Progress) / 2.0
+
 			s2.NumPartition += status.NumPartition
 			s2.NodeUUID = ""
 			if len(status.Error) != 0 {

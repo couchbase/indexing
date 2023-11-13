@@ -3059,7 +3059,6 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
 	"indexer.settings.num_replica": ConfigValue{
 		0,
 		"Number of additional replica for each index.",
@@ -4435,40 +4434,15 @@ var indexerProvisionedConfigMap = map[string]string{
 	"max_parallel_per_bucket_builds":       "max_parallel_per_bucket_builds",
 }
 
-func (config Config) GetDeploymentModelAwareCfgInt(k string) int {
+// Config accessed must be present in SystemConfig
+func (config Config) GetDeploymentModelAwareCfg(k string) ConfigValue {
 	key := k
-	if serverlessKey, exists := indexerProvisionedConfigMap[k]; IsServerlessDeployment() &&
-		exists {
-
+	if serverlessKey, exists := indexerServerLessConfigMap[k]; IsServerlessDeployment() && exists {
 		key = serverlessKey
-
-	} else if provisionedKey, exists := indexerProvisionedConfigMap[k]; IsProvisionedDeployment() &&
-		exists {
-
+	} else if provisionedKey, exists := indexerProvisionedConfigMap[k]; IsProvisionedDeployment() && exists {
 		key = provisionedKey
-
 	}
-	return config.getIndexerConfigInt(key)
-}
-
-func (config Config) GetDeploymentModelAwareCfgBool(k string) bool {
-	key := k
-	if IsServerlessDeployment() {
-		key = indexerServerLessConfigMap[k]
-	} else if IsProvisionedDeployment() {
-		key = indexerProvisionedConfigMap[k]
-	}
-	return config.getIndexerConfig(key).Bool()
-}
-
-func (config Config) GetDeploymentModelAwareCfgString(k string) string {
-	key := k
-	if IsServerlessDeployment() {
-		key = indexerServerLessConfigMap[k]
-	} else if IsProvisionedDeployment() {
-		key = indexerProvisionedConfigMap[k]
-	}
-	return config.getIndexerConfigString(key)
+	return config.getIndexerConfig(key)
 }
 
 func (config Config) GetEnableEmptyNodeBatching() bool {

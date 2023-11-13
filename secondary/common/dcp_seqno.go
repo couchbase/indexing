@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"math"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +25,7 @@ import (
 )
 
 const seqsReqChanSize = 20000
+const itemCountReqChanSize = 1000
 const seqsBufSize = 64 * 1024
 
 var workersPerReader int32 = 10
@@ -33,10 +36,11 @@ var clusterVersion int64
 
 var errConnClosed = errors.New("dcpSeqnos - conn closed already")
 var errFetchSeqnosPanic = errors.New("Recovered from an error in FetchSeqnos")
+var errFetchItemCountPanic = errors.New("Recovered from an error in FetchItemCount")
 
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
-var dcp_buckets_seqnos struct {
+var dcp_buckets_stats struct {
 	rw        sync.RWMutex
 	buckets   map[string]*couchbase.Bucket // bucket ->*couchbase.Bucket
 	errors    map[string]error             // bucket -> error
@@ -44,9 +48,9 @@ var dcp_buckets_seqnos struct {
 }
 
 func init() {
-	dcp_buckets_seqnos.buckets = make(map[string]*couchbase.Bucket)
-	dcp_buckets_seqnos.errors = make(map[string]error)
-	dcp_buckets_seqnos.readerMap.Init()
+	dcp_buckets_stats.buckets = make(map[string]*couchbase.Bucket)
+	dcp_buckets_stats.errors = make(map[string]error)
+	dcp_buckets_stats.readerMap.Init()
 }
 
 // Holder for VbSeqnosReaderHolder
@@ -79,6 +83,25 @@ func (readerHolder *VbSeqnosReaderHolder) Clone() map[string]*vbSeqnosReader {
 		}
 	}
 	return clone
+}
+
+type vbItemCountResponse struct {
+	itemCount uint64
+	err       error
+}
+
+type vbItemCountRequest struct {
+	cid    string
+	respCh chan *vbItemCountResponse
+}
+
+func (req *vbItemCountRequest) Reply(response *vbItemCountResponse) {
+	req.respCh <- response
+}
+
+func (req *vbItemCountRequest) Response() (uint64, error) {
+	response := <-req.respCh
+	return response.itemCount, response.err
 }
 
 type vbSeqnosResponse struct {
@@ -176,11 +199,11 @@ func newWorker(workerid int, bucket string, dispCh chan *workerDoneMsg,
 }
 
 // Listens to messages on three channels:
-// 1. reqCh: Receives message from dispatcher and sends cid to the other goroutine
-//    if not already being processed
-// 2. internalCh: Receives result from other goroutine and replies on all queued
-//    response channels for that collection.
-// 3. donech: shutdown message from dispatcher (vbSeqnosReader)
+//  1. reqCh: Receives message from dispatcher and sends cid to the other goroutine
+//     if not already being processed
+//  2. internalCh: Receives result from other goroutine and replies on all queued
+//     response channels for that collection.
+//  3. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) processRequest() {
 
 	respondWithError := func(req *vbSeqnosRequest) {
@@ -202,9 +225,9 @@ func (w *worker) processRequest() {
 		}
 
 		if resp.err != nil {
-			dcp_buckets_seqnos.rw.Lock()
-			dcp_buckets_seqnos.errors[w.bucket] = resp.err
-			dcp_buckets_seqnos.rw.Unlock()
+			dcp_buckets_stats.rw.Lock()
+			dcp_buckets_stats.errors[w.bucket] = resp.err
+			dcp_buckets_stats.rw.Unlock()
 		}
 
 		for i := 0; i < resp.numQueued; i++ {
@@ -283,10 +306,10 @@ loop:
 }
 
 // Listens to messages on two channels:
-// 1. workerQueue: Receives message from other worker routine and fetches sequence
-//    numbers for the collection.
-//    if not already being processed
-// 2. donech: shutdown message from dispatcher (vbSeqnosReader)
+//  1. workerQueue: Receives message from other worker routine and fetches sequence
+//     numbers for the collection.
+//     if not already being processed
+//  2. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) fetchSeqnos() {
 
 	defer func() {
@@ -342,8 +365,9 @@ loop:
 
 // Bucket level seqnos reader for the cluster
 type vbSeqnosReader struct {
-	bucket     string
-	seqsTiming stats.TimingStat
+	bucket          string
+	seqsTiming      stats.TimingStat
+	itemCountTiming stats.TimingStat
 
 	requestCh    chan interface{}    // request channel for Seqnos processing
 	donech       chan bool           // channel used to shut down the vbSeqnosReader main routine
@@ -355,9 +379,8 @@ type vbSeqnosReader struct {
 	// is currently queued in any worker for processing
 	dispatcherMap map[string]int
 
-	kvfeeds     map[string]*kvConn       // Connections used for MinSeqnos processings
-	minSeqReqCh chan *vbMinSeqnosRequest // request channel for MinSeqnos processing
-
+	kvfeeds                 map[string]*kvConn // Connections used for MinSeqnos and Item count processing
+	minSeqAndItemCountReqCh chan interface{}   // request channel for MinSeqnos and Itemcount processing
 }
 
 func newVbSeqnosReader(cluster, pooln, bucket string,
@@ -365,17 +388,18 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 
 	numWorkers := atomic.LoadInt32(&workersPerReader)
 	r := &vbSeqnosReader{
-		bucket:        bucket,
-		requestCh:     make(chan interface{}, seqsReqChanSize),
-		donech:        make(chan bool),
-		workers:       make([]*worker, numWorkers),
-		workerRespCh:  make(chan *workerDoneMsg, numWorkers*10),
-		dispatcherMap: make(map[string]int),
-		kvfeeds:       kvfeeds,
-		minSeqReqCh:   make(chan *vbMinSeqnosRequest, seqsReqChanSize),
+		bucket:                  bucket,
+		requestCh:               make(chan interface{}, seqsReqChanSize),
+		donech:                  make(chan bool),
+		workers:                 make([]*worker, numWorkers),
+		workerRespCh:            make(chan *workerDoneMsg, numWorkers*10),
+		dispatcherMap:           make(map[string]int),
+		kvfeeds:                 kvfeeds,
+		minSeqAndItemCountReqCh: make(chan interface{}, seqsReqChanSize+itemCountReqChanSize),
 	}
 
 	r.seqsTiming.Init()
+	r.itemCountTiming.Init()
 
 	mu := &sync.Mutex{}
 	errSlice := make([]error, numWorkers)
@@ -417,7 +441,7 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 	}
 
 	go r.Routine()
-	go r.processMinSeqNos()
+	go r.processMinSeqAndItemCount()
 
 	return r, nil
 }
@@ -475,6 +499,12 @@ func (r *vbSeqnosReader) enqueueRequest(req interface{}) {
 				seqnos: nil,
 				err:    errConnClosed,
 			}
+
+			itemCountResponse := &vbItemCountResponse{
+				itemCount: 0,
+				err:       errConnClosed,
+			}
+
 			switch req.(type) {
 
 			case *vbSeqnosRequest:
@@ -486,6 +516,10 @@ func (r *vbSeqnosReader) enqueueRequest(req interface{}) {
 				//anything else goes back
 				inReq := req.(*vbMinSeqnosRequest)
 				inReq.Reply(response)
+
+			case *vbItemCountRequest:
+				inReq := req.(*vbItemCountRequest)
+				inReq.Reply(itemCountResponse)
 			}
 		}
 	}()
@@ -497,19 +531,19 @@ func (r *vbSeqnosReader) enqueueRequest(req interface{}) {
 // This routine is responsible for computing request batches on the fly
 // and issue single 'dcp seqno' per batch which is actually done in worker routines
 // This main routine listens on three channels:
-// 1. requestCh: The requests of type vbSeqnosRequest are "dispatched" to workers
-//    to be processed in batched way. vbMinSeqnosRequest are sent to another routine
-//    that does not batch. This is because minSeqnos requests are infrequent and they
-//    do not need to be batched.
-// 2. workerRespCh: a message from worker that it is done with a collection id (and its
-//    batch of requests so that dispatcher (i.e. the vbSeqnosReader) can clear its book-keeping
-// 3. donech: shutdown down the vbSeqnosReader
+//  1. requestCh: The requests of type vbSeqnosRequest are "dispatched" to workers
+//     to be processed in batched way. vbMinSeqnosRequest are sent to another routine
+//     that does not batch. This is because minSeqnos requests are infrequent and they
+//     do not need to be batched.
+//  2. workerRespCh: a message from worker that it is done with a collection id (and its
+//     batch of requests so that dispatcher (i.e. the vbSeqnosReader) can clear its book-keeping
+//  3. donech: shutdown down the vbSeqnosReader
 func (r *vbSeqnosReader) Routine() {
 
 	defer func() {
 		close(r.workerRespCh)
 		close(r.requestCh)
-		close(r.minSeqReqCh)
+		close(r.minSeqAndItemCountReqCh)
 
 		// drain the request channel
 		for req := range r.requestCh {
@@ -517,6 +551,12 @@ func (r *vbSeqnosReader) Routine() {
 				seqnos: nil,
 				err:    errors.New("vbSeqnosReader is closed. Retry the operation"),
 			}
+
+			itemCountResp := &vbItemCountResponse{
+				itemCount: 0,
+				err:       errors.New("vbSeqnosReader is closed. Retry the operation"),
+			}
+
 			switch req.(type) {
 			case *vbSeqnosRequest:
 				sreq := req.(*vbSeqnosRequest)
@@ -524,6 +564,9 @@ func (r *vbSeqnosReader) Routine() {
 			case *vbMinSeqnosRequest:
 				sreq := req.(*vbMinSeqnosRequest)
 				sreq.Reply(resp)
+			case *vbItemCountRequest:
+				ireq := req.(*vbItemCountRequest)
+				ireq.Reply(itemCountResp)
 			}
 		}
 	}()
@@ -550,7 +593,10 @@ loop:
 					}
 				case *vbMinSeqnosRequest:
 					sreq := req.(*vbMinSeqnosRequest)
-					r.minSeqReqCh <- sreq
+					r.minSeqAndItemCountReqCh <- sreq
+				case *vbItemCountRequest:
+					ireq := req.(*vbItemCountRequest)
+					r.minSeqAndItemCountReqCh <- ireq
 				}
 			}
 
@@ -586,19 +632,39 @@ func (r *vbSeqnosReader) getNextWorker() int {
 	return randomNum(0, len(r.workers)-1)
 }
 
-func (r *vbSeqnosReader) processMinSeqNos() {
-	for req := range r.minSeqReqCh {
-		seqnos, err := FetchMinSeqnos(r.kvfeeds, req.cid, req.bucketLevel, r.bucket)
-		response := &vbSeqnosResponse{
-			seqnos: seqnos,
-			err:    err,
+func (r *vbSeqnosReader) processMinSeqAndItemCount() {
+	for req := range r.minSeqAndItemCountReqCh {
+		switch req.(type) {
+		case *vbMinSeqnosRequest:
+			sreq := req.(*vbMinSeqnosRequest)
+			seqnos, err := FetchMinSeqnos(r.kvfeeds, sreq.cid, sreq.bucketLevel, r.bucket)
+			response := &vbSeqnosResponse{
+				seqnos: seqnos,
+				err:    err,
+			}
+			if err != nil {
+				dcp_buckets_stats.rw.Lock()
+				dcp_buckets_stats.errors[r.bucket] = err
+				dcp_buckets_stats.rw.Unlock()
+			}
+			sreq.Reply(response)
+		case *vbItemCountRequest:
+			ireq := req.(*vbItemCountRequest)
+
+			t0 := time.Now()
+			itemcount, err := FetchItemCount(r.kvfeeds, ireq.cid)
+			r.itemCountTiming.Put(time.Since(t0))
+
+			response := &vbItemCountResponse{itemCount: itemcount, err: err}
+
+			if err != nil {
+				dcp_buckets_stats.rw.Lock()
+				dcp_buckets_stats.errors[r.bucket] = err
+				dcp_buckets_stats.rw.Unlock()
+			}
+
+			ireq.Reply(response)
 		}
-		if err != nil {
-			dcp_buckets_seqnos.rw.Lock()
-			dcp_buckets_seqnos.errors[r.bucket] = err
-			dcp_buckets_seqnos.rw.Unlock()
-		}
-		req.Reply(response)
 	}
 
 	// Cleanup all feeds
@@ -678,6 +744,7 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 	}
 
 	logging.Infof("{bucket,feeds} %q created for dcp_seqno worker cache..., established connections: %v\n", bucketn, connMap)
+
 	return kvfeeds, nil
 }
 
@@ -695,25 +762,27 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	kvfeeds := make(map[string]*kvConn)
 
 	defer func() {
-		if err == nil {
-			reader, e := newVbSeqnosReader(cluster, pooln, bucketn, kvfeeds)
-			if e == nil {
-				dcp_buckets_seqnos.buckets[bucketn] = bucket
-				cloneReaderMap := dcp_buckets_seqnos.readerMap.Clone()
-				cloneReaderMap[bucketn] = reader
-				dcp_buckets_seqnos.readerMap.Set(cloneReaderMap)
-			} else {
-				err = e
-				for _, kvfeed := range kvfeeds {
-					kvfeed.mc.Close()
-				}
-				bucket.Close()
-			}
-		} else {
+
+		closeKVFeedsAndBucket := func() {
 			for _, kvfeed := range kvfeeds {
 				kvfeed.mc.Close()
 			}
 			bucket.Close()
+		}
+
+		if err == nil {
+			reader, e := newVbSeqnosReader(cluster, pooln, bucketn, kvfeeds)
+			if e == nil {
+				dcp_buckets_stats.buckets[bucketn] = bucket
+				cloneReaderMap := dcp_buckets_stats.readerMap.Clone()
+				cloneReaderMap[bucketn] = reader
+				dcp_buckets_stats.readerMap.Set(cloneReaderMap)
+			} else {
+				err = e
+				closeKVFeedsAndBucket()
+			}
+		} else {
+			closeKVFeedsAndBucket()
 		}
 	}()
 
@@ -767,41 +836,50 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 }
 
 func delDBSbucket(bucketn string, checkErr bool) {
-	dcp_buckets_seqnos.rw.Lock()
-	defer dcp_buckets_seqnos.rw.Unlock()
+	dcp_buckets_stats.rw.Lock()
+	defer dcp_buckets_stats.rw.Unlock()
 
-	if !checkErr || dcp_buckets_seqnos.errors[bucketn] != nil {
-		bucket, ok := dcp_buckets_seqnos.buckets[bucketn]
+	if !checkErr || dcp_buckets_stats.errors[bucketn] != nil {
+		bucket, ok := dcp_buckets_stats.buckets[bucketn]
 		if ok && bucket != nil {
 			bucket.Close()
 		}
-		delete(dcp_buckets_seqnos.buckets, bucketn)
+		delete(dcp_buckets_stats.buckets, bucketn)
 
-		cloneReaderMap := dcp_buckets_seqnos.readerMap.Clone()
+		cloneReaderMap := dcp_buckets_stats.readerMap.Clone()
 		reader, ok := cloneReaderMap[bucketn]
 		if ok && reader != nil {
 			reader.Close()
 		}
 		delete(cloneReaderMap, bucketn)
-		dcp_buckets_seqnos.readerMap.Set(cloneReaderMap)
+		dcp_buckets_stats.readerMap.Set(cloneReaderMap)
 
-		delete(dcp_buckets_seqnos.errors, bucketn)
+		delete(dcp_buckets_stats.errors, bucketn)
 	}
 }
 
 func BucketSeqsTiming(bucket string) *stats.TimingStat {
-	readerMap := dcp_buckets_seqnos.readerMap.Get()
+	readerMap := dcp_buckets_stats.readerMap.Get()
 	if reader, ok := readerMap[bucket]; ok {
 		return &reader.seqsTiming
 	}
 	return nil
 }
 
+func BucketItemCountTiming(bucket string) *stats.TimingStat {
+	readerMap := dcp_buckets_stats.readerMap.Get()
+	if reader, ok := readerMap[bucket]; ok {
+		return &reader.itemCountTiming
+	}
+	return nil
+}
+
 // BucketSeqnos return list of {{vbno,seqno}..} for all vbuckets.
 // this call might fail due to,
-// - concurrent access that can preserve a deleted/failed bucket object.
-// - pollForDeletedBuckets() did not get a chance to cleanup
-//   a deleted bucket.
+//   - concurrent access that can preserve a deleted/failed bucket object.
+//   - pollForDeletedBuckets() did not get a chance to cleanup
+//     a deleted bucket.
+//
 // in both the cases if the call is retried it should get fixed, provided
 // a valid bucket exists.
 // This method fetches Bucket level seqnos
@@ -816,20 +894,20 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		readerMap := dcp_buckets_seqnos.readerMap.Get()
+		readerMap := dcp_buckets_stats.readerMap.Get()
 		reader, ok := readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
-			dcp_buckets_seqnos.rw.Lock()
-			defer dcp_buckets_seqnos.rw.Unlock()
+			dcp_buckets_stats.rw.Lock()
+			defer dcp_buckets_stats.rw.Unlock()
 
 			// Recheck if reader is still not present since we acquired write lock
 			// after releasing the read lock.
-			readerMap = dcp_buckets_seqnos.readerMap.Get()
+			readerMap = dcp_buckets_stats.readerMap.Get()
 			if reader, ok = readerMap[bucketn]; !ok {
 				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 					return nil, err
 				}
-				readerMap = dcp_buckets_seqnos.readerMap.Get()
+				readerMap = dcp_buckets_stats.readerMap.Get()
 				// addDBSbucket has populated the reader
 				reader = readerMap[bucketn]
 			}
@@ -861,20 +939,20 @@ func CollectionSeqnos(cluster, pooln, bucketn string,
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		readerMap := dcp_buckets_seqnos.readerMap.Get()
+		readerMap := dcp_buckets_stats.readerMap.Get()
 		reader, ok := readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
-			dcp_buckets_seqnos.rw.Lock()
-			defer dcp_buckets_seqnos.rw.Unlock()
+			dcp_buckets_stats.rw.Lock()
+			defer dcp_buckets_stats.rw.Unlock()
 
 			// Recheck if reader is still not present since we acquired write lock
 			// after releasing the read lock.
-			readerMap = dcp_buckets_seqnos.readerMap.Get()
+			readerMap = dcp_buckets_stats.readerMap.Get()
 			if reader, ok = readerMap[bucketn]; !ok {
 				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 					return nil, err
 				}
-				readerMap = dcp_buckets_seqnos.readerMap.Get()
+				readerMap = dcp_buckets_stats.readerMap.Get()
 				// addDBSbucket has populated the reader
 				reader = readerMap[bucketn]
 			}
@@ -915,22 +993,105 @@ func GetMinSeqnos(cluster, pool, bucket, cid string) (l_seqnos []uint64, err err
 	return BucketMinSeqnos(cluster, pool, bucket)
 }
 
-func ResetBucketSeqnos() error {
-	dcp_buckets_seqnos.rw.Lock()
+func ResetBucketStats() error {
+	dcp_buckets_stats.rw.Lock()
 
-	bucketns := make([]string, 0, len(dcp_buckets_seqnos.buckets))
+	bucketns := make([]string, 0, len(dcp_buckets_stats.buckets))
 
-	for bucketn, _ := range dcp_buckets_seqnos.buckets {
+	for bucketn, _ := range dcp_buckets_stats.buckets {
 		bucketns = append(bucketns, bucketn)
 	}
 
-	dcp_buckets_seqnos.rw.Unlock()
+	dcp_buckets_stats.rw.Unlock()
 
 	for _, bucketn := range bucketns {
 		delDBSbucket(bucketn, false)
 	}
 
 	return nil
+}
+
+func FetchItemCount(kvfeeds map[string]*kvConn, cid string) (itemCount uint64, err error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			// Return error as callers take care of retry.
+			logging.Errorf("%v: number of kvfeeds is %d", errFetchItemCountPanic, len(kvfeeds))
+			itemCount = 0
+			err = errFetchItemCountPanic
+		}
+	}()
+
+	cidInt, err := strconv.ParseUint(cid, 16, 32)
+	if err != nil {
+		return 0, err
+	}
+	key := fmt.Sprintf("collections-byid 0x%x", cidInt)
+
+	var wg sync.WaitGroup
+
+	// Buffer for storing item counts from each node
+	kv_itemcount_node := make(map[string]uint64)
+	fetchErrors := make(map[string]error, len(kvfeeds))
+	var mu sync.Mutex
+
+	for kvaddr, feed := range kvfeeds {
+		wg.Add(1)
+		go func(kvaddress string, feed *kvConn) {
+			defer wg.Done()
+
+			var cnt int64
+			statsMap, err := feed.mc.StatsMap(key)
+			if len(statsMap) > 0 {
+
+				resKey := ""
+				// the key encodes the scope and collection id
+				// we don't have the scope id, so we have to find it...
+				for k, _ := range statsMap {
+					resKey = strings.TrimRightFunc(k, func(r rune) bool {
+						return r != ':'
+					}) + "items"
+					break
+				}
+
+				cnt, err = strconv.ParseInt(statsMap[resKey], 10, 64)
+				if err != nil {
+					mu.Lock()
+					fetchErrors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
+			}
+
+			if err != nil {
+				mu.Lock()
+				fetchErrors[kvaddress] = err
+				mu.Unlock()
+				return
+			}
+
+			mu.Lock()
+			kv_itemcount_node[kvaddress] = uint64(cnt)
+			mu.Unlock()
+
+		}(kvaddr, feed)
+	}
+
+	wg.Wait()
+
+	for kvaddr, err := range fetchErrors {
+		if err != nil {
+			conn := kvfeeds[kvaddr].mc
+			logging.Errorf("feed.StatsMap(): %v from node: %v\n", err, conn.GetRemoteAddr())
+			return 0, err
+		}
+	}
+
+	for _, ic := range kv_itemcount_node {
+		itemCount += ic
+	}
+
+	return itemCount, nil
 }
 
 func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
@@ -1024,10 +1185,10 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
 	// this is not yet supported in KV, GET_SEQNOS returns all
 	// seqnos.
 	numVBuckets, ok := func() (int, bool) {
-		dcp_buckets_seqnos.rw.RLock()
-		defer dcp_buckets_seqnos.rw.RUnlock()
+		dcp_buckets_stats.rw.RLock()
+		defer dcp_buckets_stats.rw.RUnlock()
 
-		nvb, nvbok := dcp_buckets_seqnos.buckets[bucketName]
+		nvb, nvbok := dcp_buckets_stats.buckets[bucketName]
 		if !nvbok {
 			return 0, nvbok
 		}
@@ -1089,16 +1250,16 @@ loop:
 		var bucket *couchbase.Bucket
 
 		func() {
-			dcp_buckets_seqnos.rw.RLock()
+			dcp_buckets_stats.rw.RLock()
 			defer func() {
 				if r := recover(); r != nil {
 					logging.Warnf("PollForDeletedBucketsV2: failover race in bucket: %v", r)
 					todels = append(todels, bucketn)
 				}
-				dcp_buckets_seqnos.rw.RUnlock()
+				dcp_buckets_stats.rw.RUnlock()
 			}()
 
-			for bucketn, bucket = range dcp_buckets_seqnos.buckets {
+			for bucketn, bucket = range dcp_buckets_stats.buckets {
 				bucketInfo, err := cicl.GetBucketInfo(bucketn)
 				if err != nil {
 					logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
@@ -1115,7 +1276,7 @@ loop:
 					continue
 				}
 
-				readerMap := dcp_buckets_seqnos.readerMap.Get()
+				readerMap := dcp_buckets_stats.readerMap.Get()
 				if m, err := bucketInfo.GetVBmap(nil); err != nil {
 					logging.Infof("pollForDeletedBucketsV2: Deleting bucket: %v from book-keeping "+
 						"as some vbuckets are not active due to failed KV nodes, err: %v", bucketn, err)
@@ -1143,9 +1304,9 @@ func pollForDeletedBuckets() {
 		todels := []string{}
 		func() {
 			// Listen to pool change notification and get bucket names from there
-			dcp_buckets_seqnos.rw.Lock()
-			defer dcp_buckets_seqnos.rw.Unlock()
-			for bucketn, bucket := range dcp_buckets_seqnos.buckets {
+			dcp_buckets_stats.rw.Lock()
+			defer dcp_buckets_stats.rw.Unlock()
+			for bucketn, bucket := range dcp_buckets_stats.buckets {
 				if bucket.Refresh() != nil {
 					// lazy detect bucket deletes
 					todels = append(todels, bucketn)
@@ -1156,16 +1317,16 @@ func pollForDeletedBuckets() {
 			var bucketn string
 			var bucket *couchbase.Bucket
 
-			dcp_buckets_seqnos.rw.RLock()
+			dcp_buckets_stats.rw.RLock()
 			defer func() {
 				if r := recover(); r != nil {
 					logging.Warnf("failover race in bucket: %v", r)
 					todels = append(todels, bucketn)
 				}
-				dcp_buckets_seqnos.rw.RUnlock()
+				dcp_buckets_stats.rw.RUnlock()
 			}()
-			readerMap := dcp_buckets_seqnos.readerMap.Get()
-			for bucketn, bucket = range dcp_buckets_seqnos.buckets {
+			readerMap := dcp_buckets_stats.readerMap.Get()
+			for bucketn, bucket = range dcp_buckets_stats.buckets {
 				if m, err := bucket.GetVBmap(nil); err != nil {
 					// idle detect failures.
 					todels = append(todels, bucketn)
@@ -1185,7 +1346,7 @@ func SetDcpMemcachedTimeout(val uint32) {
 	memcached.SetDcpMemcachedTimeout(val)
 }
 
-//MinSeqnos Implementation
+// MinSeqnos Implementation
 type vbMinSeqnosRequest struct {
 	cid         string
 	bucketLevel bool
@@ -1204,9 +1365,10 @@ func (req *vbMinSeqnosRequest) Response() ([]uint64, error) {
 
 // BucketMinSeqnos return list of {{vbno,seqno}..} for all vbuckets.
 // this call might fail due to,
-// - concurrent access that can preserve a deleted/failed bucket object.
-// - pollForDeletedBuckets() did not get a chance to cleanup
-//   a deleted bucket.
+//   - concurrent access that can preserve a deleted/failed bucket object.
+//   - pollForDeletedBuckets() did not get a chance to cleanup
+//     a deleted bucket.
+//
 // in both the cases if the call is retried it should get fixed, provided
 // a valid bucket exists.
 // This method fetches Bucket level min seqnos
@@ -1221,20 +1383,20 @@ func BucketMinSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err err
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		readerMap := dcp_buckets_seqnos.readerMap.Get()
+		readerMap := dcp_buckets_stats.readerMap.Get()
 		reader, ok := readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
-			dcp_buckets_seqnos.rw.Lock()
-			defer dcp_buckets_seqnos.rw.Unlock()
+			dcp_buckets_stats.rw.Lock()
+			defer dcp_buckets_stats.rw.Unlock()
 
 			// Recheck if reader is still not present since we acquired write lock
 			// after releasing the read lock.
-			readerMap = dcp_buckets_seqnos.readerMap.Get()
+			readerMap = dcp_buckets_stats.readerMap.Get()
 			if reader, ok = readerMap[bucketn]; !ok {
 				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 					return nil, err
 				}
-				readerMap = dcp_buckets_seqnos.readerMap.Get()
+				readerMap = dcp_buckets_stats.readerMap.Get()
 				// addDBSbucket has populated the reader
 				reader = readerMap[bucketn]
 			}
@@ -1246,6 +1408,50 @@ func BucketMinSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err err
 	}
 
 	l_seqnos, err = reader.GetBucketMinSeqnos()
+	return
+}
+
+func CollectionItemCount(cluster, pooln, bucketn string, cid string) (itemCount uint64, err error) {
+	// any type of error will cleanup the bucket and its kvfeeds.
+	defer func() {
+		if err != nil {
+			// Do not close DCP connections for unknown scope or collection error
+			// Stats API throws "Memcached error #136 -> 0x88:  UNKNOWN_COLLECTION"
+			if memcached.IsUnknownScopeOrCollection(err) == false {
+				delDBSbucket(bucketn, true)
+			}
+		}
+	}()
+
+	var reader *vbSeqnosReader
+
+	reader, err = func() (*vbSeqnosReader, error) {
+		readerMap := dcp_buckets_stats.readerMap.Get()
+		reader, ok := readerMap[bucketn]
+		if !ok { // no {bucket,kvfeeds} found, create!
+			dcp_buckets_stats.rw.Lock()
+			defer dcp_buckets_stats.rw.Unlock()
+
+			// Recheck if reader is still not present since we acquired write lock
+			// after releasing the read lock.
+			readerMap = dcp_buckets_stats.readerMap.Get()
+			if reader, ok = readerMap[bucketn]; !ok {
+				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
+					return nil, err
+				}
+				// addDBSbucket has populated the reader
+				readerMap = dcp_buckets_stats.readerMap.Get()
+				reader = readerMap[bucketn]
+			}
+		}
+		return reader, nil
+	}()
+
+	if err != nil {
+		return 0, err
+	}
+
+	itemCount, err = reader.GetCollectionItemCount(cid)
 	return
 }
 
@@ -1264,21 +1470,21 @@ func CollectionMinSeqnos(cluster, pooln, bucketn string, cid string) (l_seqnos [
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		readerMap := dcp_buckets_seqnos.readerMap.Get()
+		readerMap := dcp_buckets_stats.readerMap.Get()
 		reader, ok := readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
-			dcp_buckets_seqnos.rw.Lock()
-			defer dcp_buckets_seqnos.rw.Unlock()
+			dcp_buckets_stats.rw.Lock()
+			defer dcp_buckets_stats.rw.Unlock()
 
 			// Recheck if reader is still not present since we acquired write lock
 			// after releasing the read lock.
-			readerMap = dcp_buckets_seqnos.readerMap.Get()
+			readerMap = dcp_buckets_stats.readerMap.Get()
 			if reader, ok = readerMap[bucketn]; !ok {
 				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 					return nil, err
 				}
 				// addDBSbucket has populated the reader
-				readerMap = dcp_buckets_seqnos.readerMap.Get()
+				readerMap = dcp_buckets_stats.readerMap.Get()
 				reader = readerMap[bucketn]
 			}
 		}
@@ -1325,6 +1531,23 @@ func (r *vbSeqnosReader) GetCollectionMinSeqnos(cid string) (seqs []uint64, err 
 
 	r.requestCh <- req
 	seqs, err = req.Response()
+	return
+}
+
+func (r *vbSeqnosReader) GetCollectionItemCount(cid string) (itemCount uint64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errConnClosed
+		}
+	}()
+
+	req := &vbItemCountRequest{
+		cid:    cid,
+		respCh: make(chan *vbItemCountResponse, 1),
+	}
+
+	r.requestCh <- req
+	itemCount, err = req.Response()
 	return
 }
 
@@ -1424,10 +1647,10 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool,
 	// this is not yet supported in KV, GET_SEQNOS returns all
 	// seqnos.
 	numVBuckets, ok := func() (int, bool) {
-		dcp_buckets_seqnos.rw.RLock()
-		defer dcp_buckets_seqnos.rw.RUnlock()
+		dcp_buckets_stats.rw.RLock()
+		defer dcp_buckets_stats.rw.RUnlock()
 
-		nvb, nvbok := dcp_buckets_seqnos.buckets[bucketName]
+		nvb, nvbok := dcp_buckets_stats.buckets[bucketName]
 		if !nvbok {
 			return 0, nvbok
 		}

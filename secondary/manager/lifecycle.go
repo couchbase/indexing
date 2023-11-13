@@ -4273,7 +4273,7 @@ func (m *LifecycleMgr) canBuildIndex(bucket, scope, collection string) bool {
 			}
 		}
 
-		return len(parallelCollBuildMap) < m.configHolder.Load().GetDeploymentModelAwareCfgInt("max_parallel_per_bucket_builds")
+		return len(parallelCollBuildMap) < m.configHolder.Load().GetDeploymentModelAwareCfg("max_parallel_per_bucket_builds").Int()
 	} else {
 
 		t, _ := m.repo.GetTopologyByCollection(bucket, scope, collection)

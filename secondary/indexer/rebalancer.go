@@ -957,7 +957,7 @@ func (r *Rebalancer) selectSmartToBuildTokensLOCKED(batchSize int, numToSelect i
 
 	cfg := r.config.Load()
 	// indexer will error if builds need more than this
-	maxStreamsPerNode := cfg.GetDeploymentModelAwareCfgInt("max_parallel_collection_builds")
+	maxStreamsPerNode := cfg.GetDeploymentModelAwareCfg("max_parallel_collection_builds").Int()
 
 	// Calculate number of tokens we could select for each node (not considering numToSelect overall limit)
 	// and the sets of already-building streams for each, which we cannot reuse due to indexer limitations.

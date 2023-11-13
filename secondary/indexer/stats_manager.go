@@ -130,6 +130,9 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	if st := common.BucketSeqsTiming(bucket); st != nil {
 		statMap.AddStatValueFiltered("timings/dcp_getseqs", st)
 	}
+	if st := common.BucketItemCountTiming(bucket); st != nil {
+		statMap.AddStatValueFiltered("timings/dcp_coll_itemcount", st)
+	}
 }
 
 type IndexTimingStats struct {
