@@ -5227,6 +5227,15 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	logging.Infof("Indexer::handleKeyspaceNotFound Updated Index State to DELETED %v",
 		deletedInstIds)
 
+	// Keep a track of indexes that are being dropped during rebalance
+	for _, instId := range deletedInstIds {
+		if inst, ok := idx.indexInstMap[instId]; ok {
+			if inst.RState == common.REBAL_PENDING {
+				idx.droppedIndexesDuringRebal[inst.InstId] = true
+			}
+		}
+	}
+
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	deletedInsts := idx.getInsts(deletedInstIds)
 	msgUpdateIndexInstMap.AppendUpdatedInsts(deletedInsts)

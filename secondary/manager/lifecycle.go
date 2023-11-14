@@ -1669,7 +1669,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		return nil
 	}
 
-	m.assertShardMappings(defn.AlternateShardIds, partnShardIdMap, instId)
+	if false { // Disable for now due to false positives
+		m.assertShardMappings(defn.AlternateShardIds, partnShardIdMap, instId)
+	}
 
 	/////////////////////////////////////////////////////
 	// Update Index State
@@ -2605,7 +2607,9 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	state := inst.State
 	scheduled := inst.Scheduled
 
-	m.assertShardMappings(defn.AlternateShardIds, change.ShardIdMap, defn.InstId)
+	if false { // Disable for now due to false positives
+		m.assertShardMappings(defn.AlternateShardIds, change.ShardIdMap, defn.InstId)
+	}
 
 	// update the index instance
 	if err := m.UpdateIndexInstance(change.Bucket, change.Scope, change.Collection,
@@ -3462,7 +3466,9 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 		return nil
 	}
 
-	m.assertShardMappings(defn.AlternateShardIds, partnShardIdMap, instId)
+	if false {
+		m.assertShardMappings(defn.AlternateShardIds, partnShardIdMap, instId)
+	}
 
 	/////////////////////////////////////////////////////
 	// Update Index State

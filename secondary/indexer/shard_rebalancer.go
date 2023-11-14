@@ -143,6 +143,8 @@ type ShardRebalancer struct {
 	emptyNodeBatchingEnabled bool
 
 	batchBuildReqCh chan *batchBuildReq
+
+	droppedInstsInRebal map[c.IndexInstId]bool
 }
 
 func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -206,7 +208,8 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 		dcpRebrCloseCh: make(chan struct{}),
 
-		batchBuildReqCh: make(chan *batchBuildReq, 100),
+		batchBuildReqCh:     make(chan *batchBuildReq, 100),
+		droppedInstsInRebal: make(map[c.IndexInstId]bool),
 	}
 
 	sr.config.Store(config)
@@ -2061,7 +2064,8 @@ func (sr *ShardRebalancer) startShardRecoveryNonServerless(ttid string, tt *c.Tr
 				return
 			} else if skip {
 				// bucket (or) scope (or) collection (or) index are dropped.
-				// Continue instead of failing rebalance
+				// Continue instead of failing rebalance. Add to dropped insts
+				sr.addInstToDroppedInsts(&defn)
 				continue
 			}
 
@@ -2340,8 +2344,6 @@ func (sr *ShardRebalancer) waitForIndexState(expectedState c.IndexState,
 loop:
 	for {
 
-		activeIndexes := make(map[c.IndexInstId]bool) // instId -> bool
-
 		select {
 		case <-sr.cancel:
 			l.Infof("ShardRebalancer::waitForIndexState Cancel Received")
@@ -2536,30 +2538,25 @@ loop:
 							instId, realInstId)
 					}
 					if indexState == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-						activeIndexes[instKey] = true
 						delete(processedInsts, instKey)
+						// remove realInstId irrespective of merge as the instance is processed
+						delete(processedInsts, realInstId)
 
 						if tt.IsEmptyNodeBatch {
-							// Indexer can pick-up realInstId or proxy "instId" depending on the presence
-							// of the index on the node. In a normal flow, the proxy will be merged to realInstId.
-							// Hence, processedInst should always contain realInstId. With empty node batching,
-							// since the merge is skipped, it is possible that proxy is ready but rebalancer will
-							// not know whether indexer has picked up proxy "instId" or realInstId.
-							// Hence, delete the realInstId as well from the book-keeping
-							delete(processedInsts, realInstId)
-							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, ttid: %v as empty node batching is enabled for this token", instId, ttid)
+							l.Infof("ShardRebalancer::waitForIndexState Skip changing RState for instId: %v, realInstId: %v, ttid: %v "+
+								"as empty node batching is enabled for this token", instId, realInstId, ttid)
 						} else {
 							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
+							// Wait for merge of partitioned indexes (or) RState update to finish before returning
+							partnMergeWaitGroup.Wait()
 						}
 					}
 				}
 
 				// If all indexes are built, defnIdMap will have no entries
 				if len(processedInsts) == 0 {
-					l.Infof("ShardRebalancer::waitForIndexState All indexes: %v are active and caught up. "+
-						"Waiting for pending merge to finish", activeIndexes)
-					// Wait for merge of partitioned indexes to finish before returning
-					partnMergeWaitGroup.Wait()
+					l.Infof("ShardRebalancer::waitForIndexState All indexes are active and "+
+						"caught up for token: %v. Returning from waitForIndexState", ttid)
 					return nil
 				}
 			}
@@ -2600,7 +2597,8 @@ func (sr *ShardRebalancer) destTokenToMergeOrReady(instId c.IndexInstId,
 		go func(ttid string, tt *c.TransferToken) {
 			defer partnMergeWaitGroup.Done()
 
-			ticker := time.NewTicker(time.Duration(20) * time.Second)
+			ticker := time.NewTicker(time.Duration(5) * time.Minute)
+			defer ticker.Stop()
 
 			// Create a non-blocking channel so that even if rebalance fails,
 			// indexer can still push a response to the response channel with
@@ -2669,7 +2667,13 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 		// Indexer would serialize the RState transitions anyways
 		go func(index int) {
 			defer wg.Done()
-			sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)
+			// merge only if instance is not dropped during rebalance
+			if sr.isInstDroppedDuringRebal(tt.InstIds[index], tt.RealInstIds[index]) == false {
+				sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)
+			} else {
+				logging.Infof("ShardRebalancer::updateRStateToActive Skip updating RState for instId: %v, realInstId: %v, ttid: %v",
+					tt.InstIds[index], tt.RealInstIds[index], ttid)
+			}
 		}(i)
 	}
 	partnMergeWaitGroup.Wait()
@@ -4415,4 +4419,25 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 			}
 		}
 	}
+}
+
+func (sr *ShardRebalancer) addInstToDroppedInsts(defn *common.IndexDefn) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	// Add both instId and realInstId as rebalancer does not know whether indexer
+	// has picked instId or realInstId for the instance. Also, if realInst is dropped
+	// proxy will be dropped and vice versa
+	sr.droppedInstsInRebal[defn.InstId] = true
+	sr.droppedInstsInRebal[defn.RealInstId] = true
+}
+
+func (sr *ShardRebalancer) isInstDroppedDuringRebal(instId, realInstId c.IndexInstId) bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	_, ok1 := sr.droppedInstsInRebal[instId]
+	_, ok2 := sr.droppedInstsInRebal[realInstId]
+
+	return ok1 || ok2
 }
