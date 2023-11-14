@@ -2094,6 +2094,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
+	ephemeral, numVBuckets, err := idx.getBucketInfoForIndexInst(indexInst, clientCh)
+	if err != nil {
+		return
+	}
+
 	partitions := indexInst.Pc.GetAllPartitions()
 	for _, partnDefn := range partitions {
 		idx.stats.AddPartitionStats(indexInst, partnDefn.GetPartitionId())
@@ -2107,7 +2112,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -2338,7 +2343,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 	} else {
 		if common.IndexTypeToStorageMode(indexInst.Defn.Using) != common.GetStorageMode() {
 
-			errStr := fmt.Sprintf("Cannot Create Index with Using %v. Indexer "+
+			errStr := fmt.Sprintf("Cannot Recover Index with Using %v. Indexer "+
 				"Storage Mode %v", indexInst.Defn.Using, common.GetStorageMode())
 
 			logging.Errorf(errStr)
@@ -2366,9 +2371,14 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		realInstRecoveryCh = idx.recoveryChMap[indexInst.RealInstId]
 	}
 
+	ephemeral, numVBuckets, err := idx.getBucketInfoForIndexInst(indexInst, clientCh)
+	if err != nil {
+		return // Logging and response to client channel will be taken care of getBucketInfoForIndexInst
+	}
+
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true)
+		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true, ephemeral, numVBuckets)
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
@@ -6190,8 +6200,47 @@ func (idx *indexer) sendBucketNameNumVBucketsMap() {
 	<-idx.scanCoordCmdCh
 }
 
+func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh MsgChannel) (bool, int, error) {
+	idx.cinfoProviderLock.RLock()
+	defer idx.cinfoProviderLock.RUnlock()
+
+	ephemeral, err := idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
+	if err != nil {
+		logging.Errorf("Indexer::getBucketInfoForIndexInst Failed to check bucket type ephemeral: %v\n", err)
+		return false, 0, err
+	}
+
+	var ok bool
+	var numVBuckets int
+	if numVBuckets, ok = idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket]; !ok {
+		numVBuckets, err = idx.cinfoProvider.GetNumVBuckets(indexInst.Defn.Bucket)
+		if err != nil {
+			logging.Errorf("Indexer::getBucketInfoForIndexInst Failed to get numVBuckets: %v\n", err)
+			return false, 0, err
+		}
+		idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket] = numVBuckets
+		idx.sendBucketNameNumVBucketsMap()
+	}
+
+	if err != nil {
+		errStr := fmt.Sprintf("Indexer::getBucketInfoForIndexInst Error getting cluster info for creating slice %v", err)
+		err1 := errors.New(errStr)
+
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    err1,
+					category: INDEXER}}
+		}
+		return false, 0, err1
+	}
+	return ephemeral, numVBuckets, nil
+}
+
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
-	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
+	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
+	ephemeral bool, numVBuckets int) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
@@ -6213,43 +6262,6 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		//add a single slice per partition for now
 		var slice Slice
 		var err error
-		var ephemeral bool
-		var numVBuckets int
-
-		func() {
-			idx.cinfoProviderLock.RLock()
-			defer idx.cinfoProviderLock.RUnlock()
-
-			ephemeral, err = idx.cinfoProvider.IsEphemeral(indexInst.Defn.Bucket)
-			if err != nil {
-				logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
-				return
-			}
-
-			var ok bool
-			if numVBuckets, ok = idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket]; !ok {
-				numVBuckets, err = idx.cinfoProvider.GetNumVBuckets(indexInst.Defn.Bucket)
-				if err != nil {
-					logging.Errorf("Indexer::initPartnInstance Failed to get numVBuckets: %v\n", err)
-					return
-				}
-				idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket] = numVBuckets
-				idx.sendBucketNameNumVBucketsMap()
-			}
-		}()
-		if err != nil {
-			errStr := fmt.Sprintf("Error getting cluster info for creating slice %v", err)
-			err1 := errors.New(errStr)
-
-			if respCh != nil {
-				respCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-						severity: FATAL,
-						cause:    err1,
-						category: INDEXER}}
-			}
-			return nil, nil, nil, err1
-		}
 
 		partnId := partnInst.Defn.GetPartitionId()
 		var shardIds []common.ShardId
@@ -8861,6 +8873,11 @@ func (idx *indexer) initFromPersistedState() error {
 
 	for _, inst := range idx.indexInstMap {
 
+		ephemeral, numVBuckets, err := idx.getBucketInfoForIndexInst(inst, nil)
+		if err != nil {
+			return err
+		}
+
 		for _, partnDefn := range inst.Pc.GetAllPartitions() {
 			// Since bootstrapStats does not have index stats yet, initialize index and partition stats
 			bootstrapStats.AddPartitionStats(inst, partnDefn.GetPartitionId())
@@ -8870,8 +8887,8 @@ func (idx *indexer) initFromPersistedState() error {
 		var partnInstMap PartitionInstMap
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
-		var err error
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false); err != nil {
+
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets); err != nil {
 			return err
 		}
 
