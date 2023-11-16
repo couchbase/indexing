@@ -1140,8 +1140,13 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 			if !found {
 				keepCandidates = append(keepCandidates, index)
 			} else {
-				logging.Warnf("There is more replica than available nodes.  Will not move index replica (%v,%v,%v,%v) from ejected node %v",
-					index.Bucket, index.Scope, index.Collection, index.Name, indexer.NodeId)
+				if index.Instance != nil {
+					logging.Warnf("There is more replica than available nodes.  Will not move index replica (%v,%v,%v,%v,%v,%v) from ejected node %v",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, indexer.NodeId)
+				} else {
+					logging.Warnf("There is more replica than available nodes.  Will not move index replica (%v,%v,%v,%v,<nil>,%v) from ejected node %v",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, indexer.NodeId)
+				}
 
 				c := []*IndexUsage{index}
 				p.placement.RemoveEligibleIndex(c)
