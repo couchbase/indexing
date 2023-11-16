@@ -412,7 +412,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
 	if err != nil {
-		logging.Infof("%s Error in getRequestedIndexSnapshot %v", req.LogPrefix, err)
+		logging.Errorf("%s Error in getRequestedIndexSnapshot, instId: %v, partnIds: %v, err: %v", req.LogPrefix, req.IndexInstId, req.PartitionIds, err)
 
 		if err == common.ErrScanTimedOut {
 			getSnapTs := func() *common.TsVbuuid {
@@ -1016,18 +1016,21 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest)
 
 	rollbackTimes := (*map[string]int64)(atomic.LoadPointer(&s.rollbackTimes))
 	if rollbackTimes == nil {
-		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time not initialized")
+		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time not initialized for instId: %v, partnIds: %v",
+			scan.IndexInstId, scan.PartitionIds)
 		return ErrIndexRollbackOrBootstrap
 	}
 
 	rollbackTime, ok := (*rollbackTimes)[scan.Bucket]
 	if !ok {
-		logging.Errorf("ScanCoordinator.isScanAllowed: missing rollback time for bucket %v", scan.Bucket)
+		logging.Errorf("ScanCoordinator.isScanAllowed: missing rollback time for bucket %v, instId: %v",
+			scan.Bucket, scan.IndexInstId)
 		return ErrIndexRollbackOrBootstrap
 	}
 
 	if scan.rollbackTime != rollbackTime {
-		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time mismatch. Req %v indexer %v", scan.rollbackTime, rollbackTime)
+		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time mismatch. Req %v indexer %v, instId: %v, partnIds: %v",
+			scan.rollbackTime, rollbackTime, scan.IndexInstId, scan.PartitionIds)
 		return ErrIndexRollbackOrBootstrap
 	}
 
