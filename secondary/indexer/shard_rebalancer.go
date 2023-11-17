@@ -1014,7 +1014,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 
 		return true
 
-	case c.ShardTokenRestoreShard:
+	case c.ShardTokenRestoreShard, c.ShardTokenRecoverShard:
 		// Update in-mem book keeping and do not process the token
 		sr.updateInMemToken(ttid, tt, "source")
 

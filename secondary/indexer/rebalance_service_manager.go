@@ -975,7 +975,8 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 		}
 	}
 
-	if common.IsServerlessDeployment() {
+	canMaintainShardAffinity := c.CanMaintanShardAffinity(m.config.Load())
+	if common.IsServerlessDeployment() || canMaintainShardAffinity {
 		m.RestoreAndUnlockShards(cleanupFailedShards)
 	}
 
