@@ -2678,11 +2678,13 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 			}
 		}(i)
 	}
-	partnMergeWaitGroup.Wait()
 
-	// Ensures that even if partnMergeWaitGroup.Wait() exits before "destTokenToMergeOrReady" gets
-	// a chance to be invoked, this method still waits for merge to finish
+	// Ensures that partnMergeWaitGroup.Add(1) gets a chance inside "destTokenToMergeOrReady"
 	wg.Wait()
+
+	// Wait for actual partition merge to finish
+	partnMergeWaitGroup.Wait()
+	logging.Infof("ShardRebalancer::updateRStateToActive Done with partition merge for ttid: %v", ttid)
 
 	// For a partitioned index, it is possible that real instace is in one token and proxy instance
 	// is in another token. In such a case, if proxy initiates merge first, then merge fails as
