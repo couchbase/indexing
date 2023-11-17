@@ -2823,21 +2823,21 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 
 	if source, ok := idx.indexInstMap[sourceId]; ok {
 
-		logging.Infof("MergePartition: Merge instance %v to instance %v", source.InstId, targetId)
-
 		// Only merge partition from the given bucket
 		if source.Defn.Bucket != bucket {
-			logging.Warnf("MergePartition: Source Index Instance %v is not in bucket %v.  Do not merge now.",
+			logging.Verbosef("MergePartition: Source Index Instance %v is not in bucket %v.  Do not merge now.",
 				source.InstId, bucket)
 			return false
 		}
 
 		// Only merge partition from the given stream
 		if source.Stream != streamId {
-			logging.Warnf("MergePartition: Source Index Instance %v is not in stream %v.  Do not merge now.",
+			logging.Verbosef("MergePartition: Source Index Instance %v is not in stream %v.  Do not merge now.",
 				source.InstId, streamId)
 			return false
 		}
+
+		logging.Infof("MergePartition: Merge instance %v to instance %v", source.InstId, targetId)
 
 		// Only merge when source is in MAINT_STREAM or NIL_STREAM (deferred index)
 		if source.Stream != common.MAINT_STREAM && source.Stream != common.NIL_STREAM {

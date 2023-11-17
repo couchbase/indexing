@@ -2770,6 +2770,14 @@ func (mdb *plasmaSlice) PrepareStats() {
 
 func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, error) {
 
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("PlasmaSlice::Statistics Error observed when processing Statistics on instId: %v, partnId: %v",
+				mdb.IndexInstId(), mdb.IndexPartnId())
+			panic(r)
+		}
+	}()
+
 	if consumerFilter == statsMgmt.N1QLStorageStatsFilter {
 		return mdb.handleN1QLStorageStatistics()
 	}
