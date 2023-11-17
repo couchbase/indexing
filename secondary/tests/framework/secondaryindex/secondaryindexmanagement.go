@@ -7,11 +7,13 @@ import (
 	"log"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/natsort"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -581,6 +583,33 @@ func DropAllSecondaryIndexes(server string) error {
 	return nil
 }
 
+func DropAllNonSystemIndexes(server string) error {
+	log.Printf("In DropAllNonSystemIndexes()")
+	client, e := GetOrCreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+
+	indexes, _, _, _, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		isSystemIndex := strings.Contains(defn.Scope, "system")
+		exists := IndexExistsWithClient(defn.Name, defn.Bucket, defn.Scope, defn.Collection, server, client)
+		if exists && !isSystemIndex {
+			e := client.DropIndex(uint64(defn.DefnId), defn.Bucket)
+			if e != nil {
+				if !strings.Contains(e.Error(), "cleanup will happen in the background") {
+					log.Printf("Issued drop for %v index. Will get cleaned up in background", defn.Name)
+				}
+				return e
+			}
+			log.Printf("Dropped index %v", defn.Name)
+		}
+	}
+	return nil
+}
+
 func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	log.Printf("Dropping the secondary index %v", indexDefnID)
 	client, e := GetOrCreateClient(server, "2itest")
@@ -771,4 +800,55 @@ func CorruptMOIIndexBySnapshotPath(snapPath string) {
 	// corrupt checksums.json. This ensures corruption even in case of empty partition.
 	// TODO: Don't assume 8 shards.
 	ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), []byte("[1,1,1,1,1,1,1,1]"), 0755)
+}
+
+func WaitForSystemIndices(server string, timeout time.Duration) error {
+	now := time.Now()
+	if timeout == 0 {
+		timeout = time.Minute * 5
+	}
+	qclient, e := GetOrCreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+
+	indices, _, _, _, err := qclient.Refresh()
+	if err != nil {
+		return err
+	}
+	waitForIndices := make([]*mclient.IndexMetadata, 0)
+	for _, index := range indices {
+		if strings.Contains(index.Definition.Scope, "system") &&
+			index.State != c.INDEX_STATE_ACTIVE ||
+			(index.Definition.Deferred && index.State != c.INDEX_STATE_READY) ||
+			index.Scheduled {
+			waitForIndices = append(waitForIndices, index)
+		}
+	}
+	log.Printf("Waiting for _system indices %v", waitForIndices)
+
+	for time.Since(now) < timeout {
+		time.Sleep(1 * time.Second)
+		for i, indexToDrop := range waitForIndices {
+			state, err := qclient.IndexState(uint64(indexToDrop.Definition.DefnId))
+			if err != nil {
+				continue
+			}
+			switch state {
+			case c.INDEX_STATE_ACTIVE:
+				log.Printf("Index %v is now active", indexToDrop.Definition.Name)
+				waitForIndices = append(waitForIndices[:i], waitForIndices[i+1:]...)
+			case c.INDEX_STATE_READY:
+				if indexToDrop.Definition.Deferred {
+					log.Printf("Index %v is now active", indexToDrop.Definition.Name)
+					waitForIndices = append(waitForIndices[:i], waitForIndices[i+1:]...)
+				}
+			default:
+			}
+		}
+		if len(waitForIndices) == 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("indices %v not active even after %v duration", waitForIndices, timeout)
 }

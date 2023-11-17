@@ -496,7 +496,7 @@ func InitWebCreds(serverAddr, username, password string) error {
 	return nil
 }
 
-func InitDataAndIndexQuota(serverAddr, username, password, dataQuota, indexQuota string) error {
+func SetDataAndIndexQuota(serverAddr, username, password, dataQuota, indexQuota string) error {
 	if res, err := setQuotaUsingRest(serverAddr, username, password, dataQuota, indexQuota); err != nil {
 		return fmt.Errorf("Error while setting index and data quota using REST, err: %v", err)
 	} else {

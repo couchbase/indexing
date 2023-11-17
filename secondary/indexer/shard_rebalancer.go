@@ -1026,6 +1026,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		return false
 
 	case c.ShardTokenDropOnSource:
+		sr.updateInMemToken(ttid, tt, "source")
 
 		// For this token type, compare the sourceId of the corresponding
 		// tokens with ID's as tt.TokenId or tt.SiblingTokenId.
@@ -1464,6 +1465,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsDest(ttid string, tt *c.Tr
 		return true
 
 	case c.ShardTokenDropOnSource:
+		sr.updateInMemToken(ttid, tt, "dest")
 		// Process write billing only for serverless deployments
 		if c.IsServerlessDeployment() == false {
 			return false

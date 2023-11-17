@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -262,6 +264,7 @@ func WaitForIndexerActive(username, password, hostaddress string) error {
 	return nil
 }
 
+// Don't use this for per node settings
 func ChangeIndexerSettings(configKey string, configValue interface{}, serverUserName, serverPassword, hostaddress string) error {
 
 	// Wait for some time to prevent the possibility of golang
@@ -302,9 +305,6 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		if err != nil {
 			return err
 		}
-		if strings.Contains(configKey, "thisNodeOnly") {
-			url = "http://" + host + ":" + strconv.Itoa(ihttp) + "/settings/thisNodeOnly"
-		}
 		preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
 		preq.SetBasicAuth(serverUserName, serverPassword)
 
@@ -323,33 +323,12 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 
 	// Wait for some time to prevent the possibility of golang
 	// re-using a connection which is about to close
-	time.Sleep(100 * time.Millisecond)
-	qpclient, err := GetOrCreateClient(hostaddress, "2i_settings")
-	if err != nil {
-		return err
-	}
-	nodes, err := qpclient.Nodes()
-	if err != nil {
-		return err
-	}
-
-	var adminurl string
-	for _, indexer := range nodes {
-		adminurl = indexer.Adminport
-		break
-	}
-
-	host, sport, _ := net.SplitHostPort(adminurl)
-	iport, _ := strconv.Atoi(sport)
-
-	if host == "" || iport == 0 {
-		log.Printf("ChangeIndexerSettings: Host %v Port %v Nodes %+v", host, iport, nodes)
+	addr := GetIndexHttpAddrOnNode(serverUserName, serverPassword, hostaddress)
+	if len(addr) == 0 {
+		return fmt.Errorf("failed to get indexer port for node %v", hostaddress)
 	}
 
 	client := http.Client{}
-	// hack, fix this
-	ihttp := iport + 2
-	url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/internal/settings"
 
 	if len(configs) > 0 {
 		jbody := make(map[string]interface{})
@@ -369,26 +348,56 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 		} else if err1 != nil {
 			return err1
 		}
-		preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
-		preq.SetBasicAuth(serverUserName, serverPassword)
 
-		resp, err := client.Do(preq)
-		if err != nil {
-			return err
+		if len(jbody) > 0 {
+			url := "http://" + addr + "/internal/settings"
+
+			preq, _ := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
+			preq.SetBasicAuth(serverUserName, serverPassword)
+
+			resp, err := client.Do(preq)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			ioutil.ReadAll(resp.Body)
 		}
-		defer resp.Body.Close()
-		ioutil.ReadAll(resp.Body)
 
 		if len(jThisNodeBody) > 0 {
-			pThisNodeReq, _ := http.NewRequest("POST", "http://"+host+":"+strconv.Itoa(ihttp)+"/settings/thisNodeOnly", bytes.NewBuffer(pThisNodeBody))
+			// sleep to wait for above settings to propogate
+			time.Sleep(1 * time.Second)
+			url := "http://" + addr + "/settings/thisNodeOnly"
+
+			pThisNodeReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(pThisNodeBody))
 			pThisNodeReq.SetBasicAuth(serverUserName, serverPassword)
 
-			respThisNodeOnly, err := client.Do(preq)
+			respThisNodeOnly, err := client.Do(pThisNodeReq)
 			if err != nil {
 				return err
 			}
 			defer respThisNodeOnly.Body.Close()
 			ioutil.ReadAll(respThisNodeOnly.Body)
+
+			err = c.NewRetryHelper(5, 1*time.Millisecond, 10, func(attempt int, lastErr error) error {
+				pThisNodeGet, _ := http.NewRequest("GET", url, nil)
+				pThisNodeGet.SetBasicAuth(serverUserName, serverPassword)
+
+				respThisNodeOnly, err = client.Do(pThisNodeGet)
+				if err != nil {
+					return err
+				}
+				defer respThisNodeOnly.Body.Close()
+
+				config := make(map[string]interface{})
+				respB, _ := io.ReadAll(respThisNodeOnly.Body)
+				json.Unmarshal(respB, &config)
+				if !maps.Equal[map[string]interface{}](config, jThisNodeBody) {
+					return fmt.Errorf("failed to change node setting to %v. Current value is %v", jThisNodeBody, config)
+				}
+				return nil
+			}).Run()
+
+			return err
 		}
 
 	}
@@ -485,6 +494,10 @@ func GetIndexHttpAddrOnNode(serverUserName, serverPassword, hostaddress string) 
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("ERR - Req for pools endpoint failed with err %v", err)
+		return ""
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		log.Printf(address)
 		log.Printf("%v", req)

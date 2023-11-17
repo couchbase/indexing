@@ -165,7 +165,7 @@ func initClusterFromREST() error {
 		}
 
 		time.Sleep(100 * time.Millisecond)
-		if err := cluster.InitDataAndIndexQuota(serverAddr, username, password, "1500", "1500"); err != nil {
+		if err := cluster.SetDataAndIndexQuota(serverAddr, username, password, "1500", "1500"); err != nil {
 			return err
 		}
 		time.Sleep(100 * time.Millisecond)

@@ -2355,3 +2355,25 @@ func (s *Solution) moveIndexesIfNecessary() {
 	// Update slotmap after all index movements
 	s.updateSlotMap()
 }
+
+func (s *Solution) CanSkipShardAffinity(command CommandType) bool {
+
+	switch command {
+	case CommandPlan, CommandRetrieve, CommandDrop:
+		return false
+	}
+
+	var version int
+	for _, indexer := range s.Placement {
+		if indexer.IsDeleted() {
+			continue
+		}
+
+		version = int(max(uint64(version), uint64(indexer.NodeVersion)))
+	}
+
+	// If the highest version in the cluster less than 7.6 version for all
+	// active nodes in the cluster, then return true as shard affinity can
+	// not be enabled
+	return version < common.INDEXER_76_VERSION
+}
