@@ -36,6 +36,8 @@ type BucketQueueMap map[string]IndexerMutationQueue
 //Map from keyspaceId to flusher stop channel
 type KeyspaceIdStopChMap map[string]StopChannel
 
+type KeyspaceIdFlusherMap map[string]*flusher
+
 // KeyspaceId -> map of vbucket to hostname
 type VBMap map[string]map[Vbucket]string
 
@@ -50,9 +52,10 @@ type mutationMgr struct {
 	streamReaderCmdChMap  map[common.StreamId]MsgChannel  //Command msg channel for StreamReader
 	streamReaderExitChMap map[common.StreamId]DoneChannel //Channel to indicate stream reader exited
 
-	streamFlusherStopChMap    map[common.StreamId]KeyspaceIdStopChMap //stop channels for flusher
-	streamKeyspaceIdSessionId map[common.StreamId]KeyspaceIdSessionId
-	streamKeyspaceIdEnableOSO map[common.StreamId]KeyspaceIdEnableOSO
+	streamFlusherStopChMap     map[common.StreamId]KeyspaceIdStopChMap //stop channels for flusher
+	streamKeyspaceIdFlusherMap map[common.StreamId]KeyspaceIdFlusherMap
+	streamKeyspaceIdSessionId  map[common.StreamId]KeyspaceIdSessionId
+	streamKeyspaceIdEnableOSO  map[common.StreamId]KeyspaceIdEnableOSO
 
 	mutMgrRecvCh   MsgChannel //Receive msg channel for Mutation Manager
 	internalRecvCh MsgChannel //Buffered channel to queue worker messages
@@ -98,14 +101,15 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 	//Init the mutationMgr struct
 	m := &mutationMgr{
-		streamKeyspaceIdQueueMap:  make(map[common.StreamId]KeyspaceIdQueueMap),
-		streamIndexQueueMap:       make(map[common.StreamId]IndexQueueMap),
-		streamReaderMap:           make(map[common.StreamId]MutationStreamReader),
-		streamReaderCmdChMap:      make(map[common.StreamId]MsgChannel),
-		streamReaderExitChMap:     make(map[common.StreamId]DoneChannel),
-		streamFlusherStopChMap:    make(map[common.StreamId]KeyspaceIdStopChMap),
-		streamKeyspaceIdSessionId: make(map[common.StreamId]KeyspaceIdSessionId),
-		streamKeyspaceIdEnableOSO: make(map[common.StreamId]KeyspaceIdEnableOSO),
+		streamKeyspaceIdQueueMap:   make(map[common.StreamId]KeyspaceIdQueueMap),
+		streamIndexQueueMap:        make(map[common.StreamId]IndexQueueMap),
+		streamReaderMap:            make(map[common.StreamId]MutationStreamReader),
+		streamReaderCmdChMap:       make(map[common.StreamId]MsgChannel),
+		streamReaderExitChMap:      make(map[common.StreamId]DoneChannel),
+		streamFlusherStopChMap:     make(map[common.StreamId]KeyspaceIdStopChMap),
+		streamKeyspaceIdFlusherMap: make(map[common.StreamId]KeyspaceIdFlusherMap),
+		streamKeyspaceIdSessionId:  make(map[common.StreamId]KeyspaceIdSessionId),
+		streamKeyspaceIdEnableOSO:  make(map[common.StreamId]KeyspaceIdEnableOSO),
 
 		mutMgrRecvCh:   make(MsgChannel),
 		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
@@ -333,6 +337,9 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case UPDATE_INDEX_PARTITION_MAP:
 		m.handleUpdateIndexPartnMap(cmd)
 
+	case UPDATE_FLUSHER_MAPS:
+		m.handleUpdateFlusherMaps(cmd)
+
 	case UPDATE_KEYSPACE_STATS_MAP:
 		m.handleUpdateKeyspaceStatsMap(cmd)
 
@@ -530,6 +537,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 			m.flock.Lock()
 			defer m.flock.Unlock()
 			m.streamFlusherStopChMap[streamId] = make(KeyspaceIdStopChMap)
+			m.streamKeyspaceIdFlusherMap[streamId] = make(KeyspaceIdFlusherMap)
 		}()
 
 		//send success on supv channel
@@ -998,7 +1006,7 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 	m.flock.Lock()
 	defer m.flock.Unlock()
 	delete(m.streamFlusherStopChMap, streamId)
-
+	delete(m.streamKeyspaceIdFlusherMap, streamId)
 }
 
 //handlePersistMutationQueue handles persist queue message from
@@ -1037,6 +1045,9 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	m.streamFlusherStopChMap[streamId][keyspaceId] = stopch
 	m.flusherWaitGroup.Add(1)
 
+	flusher := NewFlusher(m.config, stats)
+	m.streamKeyspaceIdFlusherMap[streamId][keyspaceId] = flusher
+
 	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
@@ -1048,10 +1059,10 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 			time.Sleep(time.Duration(cpuThrottleDelayMs) * time.Millisecond)
 		}
 
-		flusher := NewFlusher(config, stats)
 		sts := Timestamp(ts.Seqnos)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, keyspaceId,
 			m.indexInstMap.Get(), m.indexPartnMap.Get(), sts, changeVec, countVec, stopch)
+
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -1062,6 +1073,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 
 			//delete the stop channel from the map
 			delete(m.streamFlusherStopChMap[streamId], keyspaceId)
+			delete(m.streamKeyspaceIdFlusherMap[streamId], keyspaceId)
 		}()
 
 		stats.memoryUsedQueue.Set(atomic.LoadInt64(&m.memUsed))
@@ -1121,10 +1133,12 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	m.streamFlusherStopChMap[streamId][keyspaceId] = stopch
 	m.flusherWaitGroup.Add(1)
 
+	flusher := NewFlusher(m.config, stats)
+	m.streamKeyspaceIdFlusherMap[streamId][keyspaceId] = flusher
+
 	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
-		flusher := NewFlusher(config, stats)
 		sts := Timestamp(ts.Seqnos)
 		msgch := flusher.DrainUptoTS(q.queue, streamId, keyspaceId,
 			sts, changeVec, stopch)
@@ -1138,6 +1152,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 
 			//delete the stop channel from the map
 			delete(m.streamFlusherStopChMap[streamId], keyspaceId)
+			delete(m.streamKeyspaceIdFlusherMap[streamId], keyspaceId)
 		}()
 
 		//send the response to supervisor
@@ -1258,6 +1273,22 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 	m.supvCmdch <- &MsgSuccess{}
 
+}
+
+// handleUpdateFlusherMaps updates the index inst and partn maps in the flusher
+// after this flusher will not use slice for flusing new mutations to storage
+func (m *mutationMgr) handleUpdateFlusherMaps(cmd Message) {
+
+	m.flock.Lock()
+	defer m.flock.Unlock()
+
+	for _, keyspaceFlusherMap := range m.streamKeyspaceIdFlusherMap {
+		for _, f := range keyspaceFlusherMap {
+			f.UpdateMaps(m.indexInstMap.Get(), m.indexPartnMap.Get())
+		}
+	}
+
+	m.supvCmdch <- &MsgSuccess{}
 }
 
 // handleUpdateKeyspaceStatsMap atomically swaps in the pointer to a new KeyspaceStatsMap and forwards

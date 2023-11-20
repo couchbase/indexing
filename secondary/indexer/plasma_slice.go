@@ -108,8 +108,9 @@ type plasmaSlice struct {
 
 	shardIds []common.ShardId
 
-	cmdCh  []chan *indexMutation
-	stopCh []DoneChannel
+	cmdCh     []chan *indexMutation
+	stopCh    []DoneChannel
+	cmdStopCh DoneChannel
 
 	fatalDbErr error
 
@@ -875,6 +876,10 @@ func (mdb *plasmaSlice) DecrRef() {
 }
 
 func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+	if mdb.CheckCmdChStopped() {
+		return mdb.fatalDbErr
+	}
+
 	op := opUpdate
 	if meta.firstSnap {
 		op = opInsert
@@ -889,17 +894,39 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 
 	atomic.AddInt64(&mdb.qCount, 1)
 	atomic.StoreUint32(&mdb.flushActive, 1)
-	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
+	workerId := int(meta.vbucket) % mdb.numWriters
+
+	select {
+	case mdb.cmdCh[workerId] <- mut:
+		break
+	case <-mdb.cmdStopCh:
+		atomic.AddInt64(&mdb.qCount, -1)
+		return mdb.fatalDbErr
+	}
+
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
 }
 
 func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 	if !meta.firstSnap {
+		if mdb.CheckCmdChStopped() {
+			return mdb.fatalDbErr
+		}
+
 		atomic.AddInt64(&mdb.qCount, 1)
 		mdb.idxStats.numDocsFlushQueued.Add(1)
 		atomic.StoreUint32(&mdb.flushActive, 1)
-		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
+		workerId := int(meta.vbucket) % mdb.numWriters
+
+		select {
+		case mdb.cmdCh[workerId] <- &indexMutation{op: opDelete, docid: docid}:
+			break
+		case <-mdb.cmdStopCh:
+			atomic.AddInt64(&mdb.qCount, -1)
+			return mdb.fatalDbErr
+		}
+
 	}
 	return mdb.fatalDbErr
 }
@@ -1847,12 +1874,12 @@ type plasmaSnapshot struct {
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
 func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
-	mainSnap := mdb.mainstore.NewSnapshot()
+	if mdb.CheckCmdChStopped() {
+		return nil, common.ErrSliceClosed
+	}
 
 	snapInfo := info.(*plasmaSnapshotInfo)
-	snapInfo.Count = mainSnap.Count()
 
-	mdb.snapCount++
 	s := &plasmaSnapshot{slice: mdb,
 		idxDefnId:  mdb.idxDefnId,
 		idxInstId:  mdb.idxInstId,
@@ -1860,17 +1887,22 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		info:       snapInfo,
 		ts:         snapInfo.Timestamp(),
 		committed:  info.IsCommitted(),
-		MainSnap:   mainSnap,
-		id:         mdb.snapCount,
 	}
+
+	s.Open()
+	if !s.slice.CheckAndIncrRef() {
+		return nil, common.ErrSliceClosed
+	}
+	mdb.snapCount++
+	s.id = mdb.snapCount
+	s.slice.idxStats.numOpenSnapshots.Add(1)
+
+	s.MainSnap = mdb.mainstore.NewSnapshot()
+	s.info.Count = s.MainSnap.Count()
 
 	if !mdb.isPrimary {
 		s.BackSnap = mdb.backstore.NewSnapshot()
 	}
-
-	s.Open()
-	s.slice.IncrRef()
-	s.slice.idxStats.numOpenSnapshots.Add(1)
 
 	if s.committed && mdb.hasPersistence {
 		mdb.doPersistSnapshot(s)
@@ -1907,6 +1939,14 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 var plasmaPersistenceMutex sync.Mutex
 
 func (mdb *plasmaSlice) persistSnapshot(s *plasmaSnapshot) {
+	if mdb.CheckCmdChStopped() {
+		mdb.persistorLock.Lock()
+		defer mdb.persistorLock.Unlock()
+
+		mdb.isPersistorActive = false
+		return
+	}
+
 	logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v SnapshotId %v "+
 		"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId, s.id)
 	t0 := time.Now()
@@ -2017,6 +2057,10 @@ func (mdb *plasmaSlice) closeQueuedSnapNoLock() {
 }
 
 func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
+	if mdb.CheckCmdChStopped() {
+		return
+	}
+
 	snapshotStats := make(map[string]interface{})
 	snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
 	snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
@@ -2309,6 +2353,7 @@ func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 
 	numWriters := mdb.numWriters
 	mdb.freeAllWriters()
+	mdb.resetBuffers()
 
 	mdb.mainstore.Close()
 	if !mdb.isPrimary {
@@ -2493,7 +2538,9 @@ func (mdb *plasmaSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
 // This method provides a mechanism to wait till internal
 // queue is empty.
 func (mdb *plasmaSlice) waitPersist() {
-
+	start := time.Now()
+	logging.Tracef("plasmaSlice::waitPersist waiting for cmdCh to be empty Id %v, IndexInstId %v, PartitionId %v, "+
+		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 	if !mdb.checkAllWorkersDone() {
 		//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 		//check for outstanding mutations. If there are
@@ -2509,7 +2556,8 @@ func (mdb *plasmaSlice) waitPersist() {
 			time.Sleep(time.Millisecond * time.Duration(commitPollInterval))
 		}
 	}
-
+	logging.Tracef("plasmaSlice::waitPersist waited %v for cmdCh to be empty Id %v, IndexInstId %v, PartitionId %v, "+
+		"IndexDefnId %v", time.Since(start), mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 }
 
 // Commit persists the outstanding writes in underlying
@@ -2518,6 +2566,10 @@ func (mdb *plasmaSlice) waitPersist() {
 func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
 	mdb.waitPersist()
+
+	if mdb.CheckCmdChStopped() {
+		return nil, common.ErrSliceClosed
+	}
 
 	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
@@ -2567,28 +2619,48 @@ func (mdb *plasmaSlice) checkAllWorkersDone() bool {
 	return true
 }
 
+func (mdb *plasmaSlice) CheckCmdChStopped() bool {
+	select {
+	case <-mdb.cmdStopCh:
+		return true
+	default:
+		return false
+	}
+}
+
 func (mdb *plasmaSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	//signal shutdown for command handler routines
+	// Stop consumer of cmdCh - this will return after the current in process
+	// mutation completes and consumer loop is terminated
 	mdb.cleanupWritersOnClose()
 
+	// Stop producer of cmdCh - if producer is blocked on cmdCh it will by
+	// pass and quit processing that mutation. Any mutation thereafter will
+	// be no-op
+	close(mdb.cmdStopCh)
+
+	// After producer and consumer is closed set the qCount to 0 so that any
+	// routine waiting for queue to be empty can go ahead. Mutations remaining
+	// in cmdCh will be garbage collected eventually upon close
+	atomic.StoreInt64(&mdb.qCount, 0)
+
+	// If we are closing after a Snapshot is created we refcount will be non 0
+	// close will be tried after that snapshot is destroyed
 	if mdb.refCount > 0 {
 		mdb.isSoftClosed = true
 		logging.Infof("plasmaSlice::Close Soft Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
 			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
-
 	} else {
 		mdb.isClosed = true
 		tryCloseplasmaSlice(mdb)
+		mdb.resetBuffers()
 	}
 }
 
 func (mdb *plasmaSlice) cleanupWritersOnClose() {
-
 	mdb.token.increment(mdb.numWriters)
-
 	mdb.freeAllWriters()
 	close(mdb.samplerStopCh)
 }
@@ -4236,6 +4308,7 @@ func (slice *plasmaSlice) setupWriters() {
 	// initialize comand handler
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
 	slice.stopCh = make([]DoneChannel, 0, slice.maxNumWriters)
+	slice.cmdStopCh = make(DoneChannel)
 
 	// initialize writers
 	slice.main = make([]*plasma.Writer, 0, slice.maxNumWriters)
@@ -4350,7 +4423,9 @@ func (slice *plasmaSlice) freeAllWriters() {
 		stopCh <- true
 		<-stopCh
 	}
+}
 
+func (slice *plasmaSlice) resetBuffers() {
 	slice.stopWriters(0)
 
 	slice.encodeBuf = slice.encodeBuf[:0]

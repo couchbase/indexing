@@ -90,6 +90,8 @@ var ErrRebalanceOrCleanupPending = errors.New("Rebalance in progress or cleanup 
 var ErrTransientError = errors.New("Encountered transient error")
 var ErrPartitionsLimitReached = errors.New("Number of partitions for index can not be greater than 'indexer.settings.maxNumPartitions'. Please reduce num_partition or increase maxNumPartitions.")
 
+var ErrSliceClosed = errors.New("Encountered slice operation after its closed")
+
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
 	ErrIndexAlreadyExists,

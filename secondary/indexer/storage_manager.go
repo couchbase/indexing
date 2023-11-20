@@ -577,11 +577,13 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 
 				snapCreateStart := time.Now()
 				if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
-					logging.Errorf("handleCreateSnapshot::handleCreateSnapshot Error "+
-						"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-						slice.Id(), err)
 					isSnapCreated = false
-					common.CrashOnError(err)
+					if err != common.ErrSliceClosed {
+						logging.Errorf("handleCreateSnapshot::handleCreateSnapshot Error "+
+							"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+							slice.Id(), err)
+						common.CrashOnError(err)
+					}
 					continue
 				}
 				snapCreateDur := time.Since(snapCreateStart)
@@ -590,11 +592,13 @@ func (s *storageMgr) createSnapshotForIndex(streamId common.StreamId,
 
 				snapOpenStart := time.Now()
 				if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
-					logging.Errorf("StorageMgr::handleCreateSnapshot Error Creating Snapshot "+
-						"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-						slice.Id(), err)
 					isSnapCreated = false
-					common.CrashOnError(err)
+					if err != common.ErrSliceClosed {
+						logging.Errorf("StorageMgr::handleCreateSnapshot Error Creating Snapshot "+
+							"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+							slice.Id(), err)
+						common.CrashOnError(err)
+					}
 					continue
 				}
 				snapOpenDur := time.Since(snapOpenStart)
@@ -2268,7 +2272,9 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 		// non-partitioned index has partitionId 0
 		if partnInst.Defn.GetPartitionId() == req.GetPartitionId() {
 			for _, slice := range partnInst.Sc.GetAllSlices() {
-				slice.IncrRef()
+				if !slice.CheckAndIncrRef() {
+					continue
+				}
 				slices = append(slices, slice)
 			}
 		}

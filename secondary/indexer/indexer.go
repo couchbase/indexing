@@ -4166,8 +4166,12 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	//wait for the flush to finish before drop
 	streamId := indexInst.Stream
 	keyspaceId := indexInst.Defn.KeyspaceId(streamId)
+	storage := common.GetStorageMode()
 
-	if ok, _ := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; ok {
+	// If storage is not plasma and there is flush in progress wait for flush for plasma
+	// flush and index deletion are decoupled. Deletion getting stuck due to flush is not
+	// more common in MOI or ForestDB
+	if ok, _ := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; storage != common.PLASMA && ok {
 		notifyCh := make(MsgChannel)
 		idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId] = notifyCh
 		go idx.processDropAfterFlushDone(indexInst, notifyCh, clientCh)
@@ -5412,6 +5416,23 @@ func (idx *indexer) newKeyspaceStatsMsg() *MsgUpdateKeyspaceStatsMap {
 // the deletion of a set of instances and deletes the associated slices.
 func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 	clientCh MsgChannel) {
+
+	storage := common.GetStorageMode()
+	if storage == common.PLASMA {
+		// Soft Deletion of instances will be udpated to flusher so that mutations to deleted inst can be skipped
+		msgUpdateFlusherMap := &MsgUpdateFlusherMaps{}
+		if err := idx.sendMessageToWorker(msgUpdateFlusherMap, idx.mutMgrCmdCh, "MutationMgr"); err != nil {
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err,
+						category: INDEXER}}
+			}
+			common.CrashOnError(err)
+		}
+		logging.Infof("Indexer::cleanupIndexData Flusher maps are updated with index delete state")
+	}
 
 	idx.deleteFromInstsPerCollMap(indexInsts)
 	// Delete all instances from internal maps
