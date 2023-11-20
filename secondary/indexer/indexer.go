@@ -2622,6 +2622,13 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 
 		if tgtInstId != 0 {
 			if _, ok := idx.indexInstMap[tgtInstId]; !ok {
+				if _, ok1 := idx.droppedIndexesDuringRebal[tgtInstId]; ok1 {
+					delete(idx.droppedIndexesDuringRebal, tgtInstId)
+					logging.Errorf("Indexer::preValidateMergePartition Unable to find target index %v. Index could be deleted", tgtInstId)
+					return common.ErrIndexDeletedDuringRebal
+				}
+
+				// tgtInstId is not dropped during rebalance and it does not exist
 				err := fmt.Errorf("MergePartition: Both proxy index Instance %v and real index instance %v are not found",
 					srcInstId, tgtInstId)
 				logging.Errorf(err.Error())
