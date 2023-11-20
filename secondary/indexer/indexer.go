@@ -45,6 +45,7 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/testcode"
 )
 
 type Indexer interface {
@@ -2414,6 +2415,10 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 	memQuota := idx.stats.memoryQuota.Value()
 
 	go func() {
+
+		// testcode - not used in production
+		testcode.CorruptIndex(idx.config, &indexInst)
+
 		//allocate partition/slice
 		partnInstMap, failedPartnInstances, partnShardIdMap, err := idx.initPartnInstance(
 			indexInst,        // common.IndexInst

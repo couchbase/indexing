@@ -53,6 +53,25 @@ func GetIndexerNodesHttpAddresses(hostaddress string) ([]string, error) {
 	return indexNodes, nil
 }
 
+func GetIndexerNodesHttpAddressForNode(hostaddress string) (string, error) {
+	clusterURL, err := c.ClusterAuthUrl(hostaddress)
+	if err != nil {
+		return "", err
+	}
+
+	cinfo, err := c.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		return "", err
+	}
+
+	if err := cinfo.Fetch(); err != nil {
+		return "", err
+	}
+
+	return cinfo.TranslatePort(hostaddress, c.MGMT_SERVICE, c.INDEX_HTTP_SERVICE)
+
+}
+
 func GetIndexerNodes(clusterAddr string) ([]couchbase.Node, error) {
 	clusterUrl, err := c.ClusterAuthUrl(clusterAddr)
 	if err != nil {

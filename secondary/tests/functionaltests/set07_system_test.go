@@ -1142,8 +1142,8 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 	tc.ClearMap(docs)
 }
 
-//5. bucket delete when initial index build is in progress. there needs to be
-//   multiple buckets with valid indexes.
+//  5. bucket delete when initial index build is in progress. there needs to be
+//     multiple buckets with valid indexes.
 func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	log.Printf("In TestDeleteBucketWhileInitialIndexBuild()")
 
