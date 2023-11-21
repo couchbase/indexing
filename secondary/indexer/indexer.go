@@ -2622,6 +2622,13 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 
 		if tgtInstId != 0 {
 			if _, ok := idx.indexInstMap[tgtInstId]; !ok {
+				if _, ok1 := idx.droppedIndexesDuringRebal[tgtInstId]; ok1 {
+					delete(idx.droppedIndexesDuringRebal, tgtInstId)
+					logging.Errorf("Indexer::preValidateMergePartition Unable to find target index %v. Index could be deleted", tgtInstId)
+					return common.ErrIndexDeletedDuringRebal
+				}
+
+				// tgtInstId is not dropped during rebalance and it does not exist
 				err := fmt.Errorf("MergePartition: Both proxy index Instance %v and real index instance %v are not found",
 					srcInstId, tgtInstId)
 				logging.Errorf(err.Error())
@@ -3293,21 +3300,21 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 
 	if inst, ok := idx.indexInstMap[instId]; ok {
 
-		logging.Infof("PrunePartition: Prune instance %v partitions %v", instId, partitions)
-
 		// Only prune partition from the given bucket
 		if inst.Defn.Bucket != bucket {
-			logging.Warnf("PurnePartition: Index Instance %v is not in bucket %v.  Do not prune now.",
+			logging.Verbosef("PurnePartition: Index Instance %v is not in bucket %v.  Do not prune now.",
 				inst.InstId, bucket)
 			return false
 		}
 
 		// Only prune partition from the given streamId
 		if inst.Stream != streamId {
-			logging.Warnf("PurnePartition: Index Instance %v is not in stream %v.  Do not prune now.",
+			logging.Verbosef("PurnePartition: Index Instance %v is not in stream %v.  Do not prune now.",
 				inst.InstId, streamId)
 			return false
 		}
+
+		logging.Infof("PrunePartition: Prune instance %v partitions %v", instId, partitions)
 
 		// Only prune when source is in MAINT_STREAM or NIL_STREAM (deferred index)
 		// A index instance is pruned when some of its partition has moved during rebalance.   Rebalance can happen if
