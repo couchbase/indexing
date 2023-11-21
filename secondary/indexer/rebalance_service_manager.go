@@ -253,8 +253,8 @@ func (m *RebalanceServiceManager) updateNodeList() {
 	l.Infof("%v Initialized with %v NodeUUIDs: %v", _updateNodeList, len(nodeList), nodeList)
 }
 
-//run starts the rebalance manager loop which listens to messages
-//from it supervisor(indexer)
+// run starts the rebalance manager loop which listens to messages
+// from it supervisor(indexer)
 func (m *RebalanceServiceManager) run() {
 
 	//main Rebalance Manager loop
@@ -401,8 +401,8 @@ func (m *RebalanceServiceManager) GetCurrentTopology(rev service.Revision,
 // to prepare for a rebalance or failover that will later be started by StartTopologyChange
 // on the rebalance/failover master indexer node.
 //
-//All errors need to be reported as return value. Status of prepared task is not
-//considered for failure reporting.
+// All errors need to be reported as return value. Status of prepared task is not
+// considered for failure reporting.
 func (m *RebalanceServiceManager) PrepareTopologyChange(change service.TopologyChange) error {
 	l.Infof("RebalanceServiceManager::PrepareTopologyChange %v", change)
 
@@ -1796,9 +1796,9 @@ func (m *RebalanceServiceManager) observeGlobalRebalanceToken(rebalToken Rebalan
 }
 
 // runRebalanceCallback is a callback used by Rebalancer used for all of:
-//   1. Rebalance progress
-//   2. Rebalance done
-//   3. MoveIndex done
+//  1. Rebalance progress
+//  2. Rebalance done
+//  3. MoveIndex done
 func (m *RebalanceServiceManager) runRebalanceCallback(cancel <-chan struct{}, body func()) {
 	done := make(chan struct{})
 	const method = "RebalanceServiceManager::runRebalanceCallback:" // for logging
@@ -2111,7 +2111,9 @@ func (m *RebalanceServiceManager) cancelRebalanceTaskLOCKED(task *service.Task) 
 // cancelRunningRebalanceTaskLOCKED cancels a currently running rebalance.
 // Caller should be holding mutex svcMgrMu write locked.
 func (m *RebalanceServiceManager) cancelRunningRebalanceTaskLOCKED() error {
-	m.rebalancer.Cancel()
+	if m.rebalancer != nil {
+		m.rebalancer.Cancel()
+	}
 	m.onRebalanceDoneLOCKED(nil, true)
 	return nil
 }
