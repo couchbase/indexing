@@ -2879,6 +2879,12 @@ func (m *LifecycleMgr) deleteCreateTokenForCollection(bucket, scope, collection 
 
 // Cleanup any deferred and active MAINT_STREAM indexes from invalid keyspace.
 func (m *LifecycleMgr) handleCleanupIndexFromInvalidKeyspace(keyspace string) error {
+
+	if m.isRebalanceRunning() {
+		logging.Infof("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace Skip processing as rebalance is in progress. keyspace: %v", keyspace)
+		return nil
+	}
+
 	bucket, scope, collection := SplitKeyspaceId(keyspace)
 
 	// Get bucket UUID.  if err==nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
@@ -2906,11 +2912,15 @@ func (m *LifecycleMgr) handleCleanupIndexFromInvalidKeyspace(keyspace string) er
 		deleteToken := false
 		for _, defnRef := range topology.Definitions {
 			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+
 				if defn.BucketUUID != currentUUID || defn.CollectionId != collectionID {
+
 					for _, instRef := range defnRef.Instances {
+
 						if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 							(common.StreamId(instRef.StreamId) == common.MAINT_STREAM ||
 								common.StreamId(instRef.StreamId) == common.NIL_STREAM) {
+
 							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, false, common.NewUserRequestContext()); err != nil {
 								logging.Errorf("LifecycleMgr::handleCleanupIndexFromInvalidKeyspace: Encountered error %v", err)
 								continue
