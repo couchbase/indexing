@@ -378,6 +378,8 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		solution.resetReplicaMap()
 		solution.generateReplicaMap()
 		solution.initializeServerGroupMap()
+
+		p.dropReplicaIfNecessary(solution)
 	}
 
 	solution.enforceConstraint = true
@@ -1060,7 +1062,14 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 
 		if s.command == CommandRebalance || s.command == CommandSwap {
 			p.addPartitionIfNecessary(cloned)
-			p.dropReplicaIfNecessary(cloned)
+			// When shard affinity is enabled, then do not drop the replica yet.
+			// Replica will be dropped after grouping the indexes. Otherwise,
+			// a proxy may initially contain 'n' indexes and due to the drop here,
+			// planner may consider only 'm' indexes for tranfser (n < m). This can
+			// lead to partial transfer of idnexes on a shard which is incorrect.
+			if p.shardAffinity == false {
+				p.dropReplicaIfNecessary(cloned)
+			}
 		}
 	}
 	p.suppressEqivIndexIfNecessary(cloned)
@@ -1142,7 +1151,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 			} else {
 				if index.Instance != nil {
 					logging.Warnf("There is more replica than available nodes.  Will not move index replica (%v,%v,%v,%v,%v,%v) from ejected node %v",
-						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, indexer.NodeId)
+						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, index.PartnId, indexer.NodeId)
 				} else {
 					logging.Warnf("There is more replica than available nodes.  Will not move index replica (%v,%v,%v,%v,<nil>,%v) from ejected node %v",
 						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, indexer.NodeId)
