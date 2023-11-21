@@ -3388,54 +3388,48 @@ func getReqBody(data interface{}, url, logPrefix string) (*bytes.Buffer, *IndexR
 
 func postWithHandleEOF(data interface{}, host, url, logPrefix string) (*http.Response, error) {
 
-	bodybuf, req, err := getReqBody(data, url, logPrefix)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := postWithAuth(host+url, "application/json", bodybuf)
-	if err != nil {
-		// Error from HTTP layer, not from index processing code
-		l.Errorf("%v Error during %v, req: %v, err: %v, retrying", logPrefix, host+url, req, err)
-		// If the error is io.EOF, then it is possible that server side
-		// may have closed the connection while client is about the send the request.
-		// Though this is extremely unlikely, this is observed for multiple users
-		// in golang community. See: https://github.com/golang/go/issues/19943,
-		// https://groups.google.com/g/golang-nuts/c/A46pBUjdgeM/m/jrn35_IxAgAJ for
-		// more details
-		//
-		// In such a case, instead of failing the rebalance with io.EOF error, retry
-		// the POST request. Two scenarios exist here:
-		// (a) Server has received the request and closed the connection (Very unlikely)
-		//     In this case, the request will be processed by server but client will see
-		//     EOF error. Retry will fail rebalance that index definition already exists.
-		// (b) Server has not received this request. Then retry will work and rebalance
-		//     will not fail.
-		//
-		// Instead of failing rebalance with io.EOF error, we retry the request and reduce
-		// probability of failure
-
-		if strings.HasSuffix(err.Error(), ": EOF") {
-			// Retry build again before failing rebalance
-			bodybuf, req, err = getReqBody(data, url, logPrefix)
-			if err != nil {
-				return nil, err
-			}
-
-			resp, err = postWithAuth(host+url, "application/json", bodybuf)
-			if err != nil {
-				l.Errorf("%v Error during retry on %v, req: %v, err: %v",
-					logPrefix, host+url, req, err)
-				return nil, err
-			} else {
-				l.Infof("%v Successful POST of %v during retry, req: %v",
-					logPrefix, host+url, req)
-				return resp, nil
-			}
-		} else {
+	var err1 error
+	for i := 1; i <= 10; i++ {
+		bodybuf, req, err := getReqBody(data, url, logPrefix)
+		if err != nil {
 			return nil, err
 		}
+		resp, err := postWithAuth(host+url, "application/json", bodybuf)
+		if err != nil {
+			// Error from HTTP layer, not from index processing code
+			l.Errorf("%v Error during %v, req: %v, err: %v", logPrefix, host+url, req, err)
+			// If the error is io.EOF, then it is possible that server side
+			// may have closed the connection while client is about the send the request.
+			// Though this is extremely unlikely, this is observed for multiple users
+			// in golang community. See: https://github.com/golang/go/issues/19943,
+			// https://groups.google.com/g/golang-nuts/c/A46pBUjdgeM/m/jrn35_IxAgAJ for
+			// more details
+			//
+			// In such a case, instead of failing the rebalance with io.EOF error, retry
+			// the POST request. Two scenarios exist here:
+			// (a) Server has received the request and closed the connection (Very unlikely)
+			//     In this case, the request will be processed by server but client will see
+			//     EOF error. Retry will fail rebalance that index definition already exists.
+			// (b) Server has not received this request. Then retry will work and rebalance
+			//     will not fail.
+			//
+			// Instead of failing rebalance with io.EOF error, we retry the request and reduce
+			// probability of failure
+
+			if strings.HasSuffix(err.Error(), ": EOF") {
+				err1 = err
+				logging.Infof("%v Retrying request due to EOF error, retryCount: %v", logPrefix, i)
+				time.Sleep(100 * time.Millisecond) // retry after 100ms
+				continue
+			} else {
+				return nil, err
+			}
+		}
+		l.Infof("%v Successful POST of %v during retry(%v), req: %v",
+			logPrefix, host+url, i, req)
+		return resp, nil
 	}
-	return resp, nil
+	return nil, err1 // Reaching this code path means all retries are exhaused. Return last observed error
 }
 
 func isTokenDone(owner c.RebalancerType, tt *c.TransferToken) bool {
