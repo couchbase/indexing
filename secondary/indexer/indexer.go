@@ -2385,7 +2385,16 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 	idxStats := idx.stats.Clone()
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true, ephemeral, numVBuckets, idxStats)
+		partnInstMap, failedPartnInstances, partnShardIdMap, err := idx.initPartnInstance(
+			indexInst,
+			nil,  // respCh
+			true, // bootstrapPhase
+			true, // shardRebalance
+			ephemeral,
+			numVBuckets,
+			idxStats,
+		)
+
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
@@ -2398,6 +2407,24 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 				"inst: %v, realInstId: %v", indexInst.InstId, indexInst.RealInstId)
 
 			<-realInstRecoveryCh
+		}
+
+		rebalId := "shard_rebalance_DEFAULT_TAG"
+		if idx.rebalanceToken != nil {
+			rebalId = fmt.Sprintf("shard_rebalance_%v", idx.rebalanceToken.RebalId)
+		}
+
+		// backup failed partn instance
+		for partId := range failedPartnInstances {
+			if c.IsServerlessDeployment() {
+				// TODO: - handle backup of corrupted instances for serverless;
+				// for serverless, we could have instances under a collection with finished
+				// recovery and we would have started streams for them.
+				// because of that, we cannot run backup here as some instances could be out
+				// of recovery already
+			} else {
+				idx.backupCorruptIndexDataFiles(&indexInst, partId, SliceId(0), rebalId)
+			}
 		}
 
 		idx.internalRecvCh <- &MsgRecoverIndexResp{
@@ -6322,11 +6349,13 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			idx.meteringMgr, numVBuckets, shardIds)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
-			if (bootstrapPhase && err == errStorageCorrupted) && !shardRebalance {
-				errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
-				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+			if bootstrapPhase && err == errStorageCorrupted {
 				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
-				continue
+				if !shardRebalance {
+					errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
+					logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+					continue
+				}
 			}
 
 			if (bootstrapPhase && err == errStoragePathNotFound) && !shardRebalance {
@@ -6347,7 +6376,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						cause:    err1,
 						category: INDEXER}}
 			}
-			return nil, nil, nil, err1
+			return nil, failedPartnInstances, nil, err1
 		}
 
 		if shardRebalance {
@@ -9158,7 +9187,7 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 // return true if any error has occured during backup and cleanup is needed.
 // return false if "move" is successful and no need to cleanup data.
 func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
-	partnId common.PartitionId, sliceId SliceId) (needsDataCleanup bool) {
+	partnId common.PartitionId, sliceId SliceId, rebalanceId string) (needsDataCleanup bool) {
 	logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v take backup of corrupt data files",
 		indexInst.InstId, partnId)
 
@@ -9179,8 +9208,14 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 	}
 
 	err := MoveSlice(common.IndexTypeToStorageMode(indexInst.Defn.Using), indexInst, partnId, sliceId,
-		storageDir, storageDir, corruptDataDir)
+		storageDir, storageDir, corruptDataDir, rebalanceId)
 	if err != nil {
+		warnStr := fmt.Sprintf("Indexer::backupCorruptIndexDataFiles: failed to backup index %v partn %v from %v to %v with error <%v>",
+			indexInst, partnId, storageDir, corruptDataDir, err)
+		if len(rebalanceId) > 0 {
+			warnStr = fmt.Sprintf("%v for rebalance %v", warnStr, rebalanceId)
+		}
+		logging.Warnf(warnStr)
 		needsDataCleanup = true
 		return
 	}
@@ -9218,7 +9253,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 	// backup the corrupt index data files, if enabled
 	needsDataCleanup := true
 	if idx.config["settings.enable_corrupt_index_backup"].Bool() {
-		needsDataCleanup = idx.backupCorruptIndexDataFiles(indexInst, partnId, SliceId(0))
+		needsDataCleanup = idx.backupCorruptIndexDataFiles(indexInst, partnId, SliceId(0), "")
 	}
 
 	if needsDataCleanup {
@@ -10561,7 +10596,7 @@ func ListSlices(mode common.StorageMode, storageDir string) ([]string, error) {
 }
 
 func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
-	storageDir string, sourceDir string, targetDir string) error {
+	storageDir, sourceDir, targetDir, rebalanceId string) error {
 
 	// Given any path, rename() will add a timestamp to the first sub-directory
 	// after sourceDir.  The renamed sub-directory will be added to the targetDir
@@ -10587,10 +10622,16 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 
 		indexPath := path[sourceDirLen:]
 
-		strTime := fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", uptime.Year(), uptime.Month(),
-			uptime.Day(), uptime.Hour(), uptime.Minute(), uptime.Second(), uptime.Nanosecond()/1000/1000)
+		var renameId string
 
-		destIndexPath := strTime + "_" + indexPath
+		if len(rebalanceId) != 0 {
+			renameId = rebalanceId
+		} else {
+			renameId = fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", uptime.Year(), uptime.Month(),
+				uptime.Day(), uptime.Hour(), uptime.Minute(), uptime.Second(), uptime.Nanosecond()/1000/1000)
+		}
+
+		destIndexPath := renameId + "_" + indexPath
 		return filepath.Join(targetDir, destIndexPath), nil
 	}
 
