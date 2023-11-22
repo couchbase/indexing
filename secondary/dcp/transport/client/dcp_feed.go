@@ -930,12 +930,7 @@ func (feed *DcpFeed) doDcpOpen(
 			return ErrorConnection
 		}
 
-		// If atomic mutation queue is enabled, then send buffer-ack for complete buffer
-		if feed.useAtomicMutationQueue {
-			feed.maxAckBytes = bufsize
-		} else {
-			feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
-		}
+		feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
 	}
 
 	// send a DCP control message to enable_noop
