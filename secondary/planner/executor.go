@@ -287,6 +287,7 @@ func filterSolution(placement []*IndexerNode) {
 	for _, indexer := range placement {
 		indexerMap[indexer.NodeId] = indexer
 		for _, index := range indexer.Indexes {
+
 			// Update destNode for each of the index as planner has
 			// finished the run and generated a tentative placement.
 			// A transfer token will not be generated if initialNode
@@ -348,6 +349,12 @@ func filterSolution(placement []*IndexerNode) {
 					replicaRepair = true
 				} else {
 					initialNodeId = index.initialNode.NodeId
+				}
+
+				// Index is not moved as a part of rebalance
+				// Skip the index from further filtering as index is not moving
+				if initialNodeId == index.destNode.NodeId {
+					continue
 				}
 
 				if destNodeId, ok := transferMap[initialNodeId]; ok {
