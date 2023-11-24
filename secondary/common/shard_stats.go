@@ -23,6 +23,10 @@ type ShardStats struct {
 	CachedRecords int64
 	TotalRecords  int64
 	Instances     map[string]bool
+
+	// DiskStats of the shards
+	LSSDiskSize      int64
+	RecoveryDiskSize int64
 }
 
 func NewShardStats(alternateShardId string) *ShardStats {

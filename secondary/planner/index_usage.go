@@ -645,6 +645,7 @@ func (o *IndexUsage) Union(in *IndexUsage) {
 
 	o.ActualRecsInMem += in.ActualRecsInMem
 	o.TotalRecords += in.TotalRecords
+	// For proxied shards, we will recalculate this value from ShardStats
 	o.ActualDiskSize += in.ActualDiskSize
 
 	// If the first index in the list is a primay index, then we can end-up
@@ -701,6 +702,7 @@ func (in *IndexUsage) updateProxyStats(shardStats *common.ShardStats) {
 	in.ActualMemUsage = uint64(shardStats.MemSz) + uint64(shardStats.MemSzIndex)
 	in.ActualRecsInMem = uint64(shardStats.CachedRecords)
 	in.TotalRecords = uint64(shardStats.TotalRecords)
+	in.ActualDiskSize = uint64(shardStats.LSSDiskSize)
 
 	// For indexes getting added to the proxy as a part of replica repair (or)
 	// due to upgrade, shard stats may not have the index information. Update
@@ -722,6 +724,7 @@ func (in *IndexUsage) updateProxyStats(shardStats *common.ShardStats) {
 			in.ActualMemUsage += index.MemUsage
 			in.ActualRecsInMem += index.ActualRecsInMem
 			in.TotalRecords += index.TotalRecords
+			in.ActualDiskSize += index.ActualDiskSize
 		}
 	}
 
