@@ -1264,6 +1264,42 @@ func (s *Solution) getServerGroupsWithReplica(u *IndexUsage) map[string]bool {
 	return groups
 }
 
+// Finds the SGs which has atleast one node without any Equivalent Index(replicas are not considered
+// as equivalent), excluding the nodes present in the excluded ServerGroups.
+func (s *Solution) sgsHasNodeWithoutEquiv(u *IndexUsage, excludeSGs map[string]bool) map[string]bool {
+
+	SGsAtleastOneNodeWithoutEquiv := make(map[string]bool)
+	for _, indexer := range s.Placement {
+		if indexer.isDelete {
+			continue
+		}
+
+		if indexerInExcludedSG, ok := excludeSGs[indexer.ServerGroup]; ok && indexerInExcludedSG {
+			continue
+		}
+
+		if _, ok := SGsAtleastOneNodeWithoutEquiv[indexer.ServerGroup]; ok {
+			continue
+		}
+
+		found := false
+		for _, index := range indexer.Indexes {
+
+			// only check for Equivalent index is made. If replica is present,
+			// the IsEquivalentIndex() will return false
+			if index.IsEquivalentIndex(u, false) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			SGsAtleastOneNodeWithoutEquiv[indexer.ServerGroup] = true
+		}
+	}
+
+	return SGsAtleastOneNodeWithoutEquiv
+}
+
 // Check if any server group without this replica (excluding self)
 //
 // hasServerGroupWithNoReplica gets called only if solution.numServerGroup > 1
