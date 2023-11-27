@@ -2988,6 +2988,9 @@ func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.Shar
 	ss.LSSDataSize = val.Stats.LSSDataSize
 	ss.ItemsCount = val.Stats.ItemsCount
 
+	ss.LSSDiskSize = val.Stats.LSSDiskSize
+	ss.RecoveryDiskSize = val.Stats.RecoveryDiskSize
+
 	// For computing resident ratio
 	ss.CachedRecords = val.Stats.CachedRecords
 	ss.TotalRecords = val.Stats.TotalRecords
@@ -3013,6 +3016,9 @@ func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.Shar
 		// For computing resident ratio
 		ss.CachedRecords += val.Stats.CachedRecords
 		ss.TotalRecords += val.Stats.TotalRecords
+
+		ss.LSSDiskSize += val.Stats.LSSDiskSize
+		ss.RecoveryDiskSize += val.Stats.RecoveryDiskSize
 	}
 
 	return ss

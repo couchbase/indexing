@@ -787,7 +787,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			sr.updateRebalancePhaseInGlobalRebalToken()
 			sr.batchTransferTokens()
 			if sr.schedulingVersion >= common.PER_NODE_TRANSFER_LIMIT {
-				sr.initiatePerNodeTransferAsMaster()
+				sr.initiateDeploymentAwarePerNodeTransferAsMaster()
 			} else {
 				sr.initiateShardTransferAsMaster()
 			}
@@ -814,7 +814,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
 				sr.addTokenToActiveTransfersLOCKED(ttid, tt.DestId)
 
-				sr.initiatePerNodeTransferAsMaster()
+				sr.initiateDeploymentAwarePerNodeTransferAsMaster()
 			}()
 		}
 
@@ -848,7 +848,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				// transfer count for destination so that new tokens can be scheduled
 				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.DestId)
 
-				sr.initiatePerNodeTransferAsMaster()
+				sr.initiateDeploymentAwarePerNodeTransferAsMaster()
 			}()
 		}
 		return false
@@ -936,7 +936,7 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 				// Remove token from active transfers on source and destination
 				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.SourceId)
 				sr.removeTokenFromActiveTransfersLOCKED(ttid, tt.DestId)
-				sr.initiatePerNodeTransferAsMaster()
+				sr.initiateDeploymentAwarePerNodeTransferAsMaster()
 			} else {
 				// Decrement the batchSize as token has finished processing
 				sr.currBatchSize--
@@ -3551,8 +3551,15 @@ func (sr *ShardRebalancer) batchTransferTokens() {
 		sr.batchShardTransferTokensForServerless()
 	} else if sr.canMaintainShardAffinity {
 		if sr.schedulingVersion >= c.PER_NODE_TRANSFER_LIMIT {
-			windowSz := sr.config.Load().GetDeploymentModelAwareCfg("rebalance.perNodeTransferBatchSize").Int()
-			sr.orderTransferTokensPerNode(windowSz)
+			// according to current algorithm, we don't need to group tokens
+			// since per group has only one token, we take care of selecting right amount of token
+			// per batch in scheduling
+			// if this windowSz is more than 1, we have inefficient transfers happening as currently
+			// we only order tokens by copy and move; inefficiency comes in scheduling as we won't
+			// publish more tokens for other nodes which were eligible for transfers
+			// also if the windowSz is more than 1 then we need to ensure no move is scheduled
+			// before copy of same shard which can happen today
+			sr.orderTransferTokensPerNode(1)
 		} else {
 			windowSz := sr.config.Load().GetDeploymentModelAwareCfg("rebalance.transferBatchSize").Int()
 			sr.orderCopyAndMoveTransferTokens(windowSz)
@@ -3652,13 +3659,95 @@ func (sr *ShardRebalancer) orderTransferTokensPerNode(windowSz int) {
 	sr.orderCopyAndMoveTransferTokens(windowSz)
 }
 
+func (sr *ShardRebalancer) initiateDeploymentAwarePerNodeTransferAsMaster() {
+	if c.IsServerlessDeployment() {
+		sr.initiatePerNodeTransferAsMasterForServerless()
+	} else {
+		sr.initiatePerNodeTransferAsMaster()
+	}
+}
+
 func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	config := sr.config.Load()
 	batchSize := config.GetDeploymentModelAwareCfg("rebalance.perNodeTransferBatchSize").Int()
 
 	publishedIds := make(map[string]string) // Source ID to transfer token ID
 
-	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster activeTransferCount: %v, batchSize: %v", sr.activeTransfers, batchSize)
+	shardsInCopy := func() map[c.ShardId]bool {
+		res := make(map[c.ShardId]bool)
+		for _, tokenMap := range sr.activeTransfers {
+			for ttid, active := range tokenMap {
+				tt := sr.transferTokens[ttid]
+				if active && tt != nil && tt.TransferMode == c.TokenTransferModeCopy {
+					for _, shardId := range tt.ShardIds {
+						res[shardId] = true
+					}
+				}
+			}
+		}
+		return res
+	}()
+
+	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster activeTransferCount: %v, activeShardsInCopy %v, batchSize: %v",
+		sr.activeTransfers, shardsInCopy, batchSize)
+	for _, groupedTokens := range sr.batchedTokens {
+		publish := (len(groupedTokens) != 0)
+		if !publish {
+			continue
+		}
+
+		// For any source node in the groupedTokens, if the active transfer
+		// count is greater than the per node transfer batch size, skip that
+		// batch from current transfer - Choose a different batch
+		for _, tt := range groupedTokens {
+			if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
+				if len(sr.activeTransfers[tt.SourceId]) >= batchSize {
+					publish = false
+					break
+				}
+			}
+		}
+
+		if publish {
+			for ttid, tt := range groupedTokens {
+				shardInCopy := false
+				for _, shardId := range tt.ShardIds {
+					shardInCopy = shardInCopy || shardsInCopy[shardId]
+				}
+				if tt.TransferMode == c.TokenTransferModeMove && shardInCopy {
+					continue
+				}
+				if tt.ShardTransferTokenState == c.ShardTokenScheduleAck {
+					// Used a cloned version so that the master token list
+					// will not be updated until the transfer token with
+					// updated state is persisted in metaKV
+					ttClone := tt.Clone()
+
+					// Change state of transfer token to TransferTokenTransferShard
+					ttClone.ShardTransferTokenState = c.ShardTokenTransferShard
+					setTransferTokenInMetakv(ttid, ttClone)
+					publishedIds[tt.SourceId] = ttid
+					sr.addTokenToActiveTransfersLOCKED(ttid, tt.SourceId)
+
+					delete(groupedTokens, ttid)
+				}
+			}
+		}
+	}
+
+	if len(publishedIds) > 0 {
+		l.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster Published transfer token batch: %v, "+
+			"currActiveTransfers: %v", publishedIds, sr.activeTransfers)
+	}
+}
+
+func (sr *ShardRebalancer) initiatePerNodeTransferAsMasterForServerless() {
+	config := sr.config.Load()
+	batchSize := config.GetDeploymentModelAwareCfg("rebalance.perNodeTransferBatchSize").Int()
+
+	publishedIds := make(map[string]string) // Source ID to transfer token ID
+
+	logging.Infof("ShardRebalancer::initiatePerNodeTransferAsMasterForServerless activeTransferCount: %v, batchSize: %v", sr.activeTransfers, batchSize)
 	for i, groupedTokens := range sr.batchedTokens {
 		publish := (groupedTokens != nil)
 		if !publish {
@@ -3698,7 +3787,7 @@ func (sr *ShardRebalancer) initiatePerNodeTransferAsMaster() {
 	}
 
 	if len(publishedIds) > 0 {
-		l.Infof("ShardRebalancer::initiatePerNodeTransferAsMaster Published transfer token batch: %v, "+
+		l.Infof("ShardRebalancer::initiatePerNodeTransferAsMasterForServerless Published transfer token batch: %v, "+
 			"currActiveTransfers: %v", publishedIds, sr.activeTransfers)
 	}
 }
