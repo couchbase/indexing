@@ -71,6 +71,8 @@ type heterogenousRebalTestCase struct {
 	excludeValueOnDeleteNodes string
 }
 
+type equivIndexAcrossSGTestCase heterogenousRebalTestCase
+
 type excludeInTestCase struct {
 	comment        string
 	memQuotaFactor float64
@@ -165,6 +167,21 @@ var rebalanceTestCases = []rebalanceTestCase{
 
 var heterogenousRebalTestCases = []heterogenousRebalTestCase{
 	{"heterogenous rebalance - keep vertically scaled Node, swap 1, 1x", 1, 1, "../testdata/planner/scaleup/heterogenous-6-2_3-nodes-1-scaled_1-sg.json", 0, 1, 1, true, []string{"127.0.0.1:9000"}, "in"},
+}
+
+var equivIndexAcrossSGTestCases = []equivIndexAcrossSGTestCase{
+	{
+		"Place outgoing Idx in a SG with no replica but has equivalent index, delete 1, 1x",
+		1,
+		1,
+		"../testdata/planner/servergroup/sg-3_8_nodes-3_empty_nodes.json",
+		0,
+		0,
+		1,
+		false,
+		[]string{"127.0.0.1:9000", "127.0.0.1:9001", "127.0.0.1:9002", "127.0.0.1:9003", "127.0.0.1:9004", "127.0.0.1:9005", "127.0.0.1:9007"},
+		"",
+	},
 }
 
 var excludeInTestCases = []excludeInTestCase{
@@ -571,6 +588,7 @@ func TestPlanner(t *testing.T) {
 	iterationTest(t)
 	excludeInTest(t)
 	heterogenousRebalanceTest(t)
+	equivIndexRebalanceTest(t)
 }
 
 func TestGreedyPlanner(t *testing.T) {
@@ -864,6 +882,57 @@ func heterogenousRebalanceTest(t *testing.T) {
 				}
 			}
 		}
+
+		// check number of indexes are the same after rebalancing
+		count1 := 0
+		for _, indexer := range solution.Placement {
+			count1 += len(indexer.Indexes)
+		}
+
+		count2 := 0
+		for _, indexer := range plan.Placement {
+			count2 += len(indexer.Indexes)
+		}
+
+		if count1 != count2 {
+			t.Fatalf("number of indexes are different before (%v) and after (%v) rebalance",
+				count2, count1)
+		}
+
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// This tests the cases where every SG except for one, has a replica present and there are enough empty nodes to
+// NOT suppress the equivalent Index check. The planner deems the SG without any replica to be the most
+// appropriate position, but due to equivalent Idx present, planning fails - MB-55628
+func equivIndexRebalanceTest(t *testing.T) {
+
+	for _, testcase := range equivIndexAcrossSGTestCases {
+		log.Printf("-------------------------------------------")
+		log.Printf(testcase.comment)
+
+		config := planner.DefaultRunConfig()
+		config.MemQuotaFactor = testcase.memQuotaFactor
+		config.CpuQuotaFactor = testcase.cpuQuotaFactor
+		config.Shuffle = testcase.shuffle
+		config.AddNode = testcase.addNode
+		config.DeleteNode = testcase.deleteNode
+		config.Resize = false
+
+		s := planner.NewSimulator()
+
+		plan, err := planner.ReadPlan(testcase.plan)
+		FailTestIfError(err, "Fail to read plan", t)
+
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, testcase.keepNodesByNodeID, testcase.excludeValueOnDeleteNodes)
+		FailTestIfError(err, "Error in planner test", t)
+
+		solution := p.GetResult()
+
+		// No need to check if there was index movement. Omitted use of testcase.checkMovement flag
 
 		// check number of indexes are the same after rebalancing
 		count1 := 0

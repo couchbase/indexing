@@ -1,0 +1,272 @@
+{
+    "placement": [
+        {
+            "nodeId": "127.0.0.1:9000",
+            "nodeUUID": "00",
+            "indexerId": "00",
+            "serverGroup": "sg1",
+            "indexes": [
+                {
+                    "defnId": 1,
+                    "instId": 0,
+                    "name": "1",
+                    "bucket": "bucket1",
+                    "host": null,
+                    "isMOI": false,
+                    "numOfDocs": 1
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9001",
+            "nodeUUID": "01",
+            "indexerId": "01",
+            "serverGroup": "sg1",
+            "indexes": [
+                {
+                    "defnId": 1062966916559205800,
+                    "instId": 200,
+                    "name": "replica",
+                    "bucket": "default",
+                    "numOfDocs": 168168,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "instance": {
+                        "InstId": 200,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 0,
+                        "Defn": {
+                            "defnId": 1062966916559205800,
+                            "name": "replica",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE",
+                            "numReplica": 2
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9002",
+            "nodeUUID": "02",
+            "indexerId": "02",
+            "serverGroup": "sg1",
+            "indexes": [
+                {
+                    "defnId": 4650686066397790000,
+                    "instId": 100,
+                    "name": "equiv",
+                    "bucket": "default",
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "instance": {
+                        "InstId": 100,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 0,
+                        "Defn": {
+                            "defnId": 4650686066397790000,
+                            "name": "equiv",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE",
+                            "numReplica": 2
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9003",
+            "nodeUUID": "03",
+            "indexerId": "03",
+            "serverGroup": "sg2",
+            "indexes": [
+                {
+                    "defnId": 2,
+                    "instId": 0,
+                    "name": "2",
+                    "bucket": "bucket1",
+                    "host": null,
+                    "isMOI": false,
+                    "numOfDocs": 1
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9004",
+            "nodeUUID": "04",
+            "indexerId": "04",
+            "serverGroup": "sg2",
+            "indexes": [
+                {
+                    "defnId": 1062966916559205800,
+                    "instId": 201,
+                    "name": "replica",
+                    "bucket": "default",
+                    "numOfDocs": 168168,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "instance": {
+                        "InstId": 201,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 1,
+                        "Defn": {
+                            "defnId": 1062966916559205800,
+                            "name": "replica",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE",
+                            "numReplica": 2
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9005",
+            "nodeUUID": "05",
+            "indexerId": "05",
+            "serverGroup": "sg2",
+            "indexes": [
+                {
+                    "defnId": 4650686066397790000,
+                    "instId": 101,
+                    "name": "equiv",
+                    "bucket": "default",
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "instance": {
+                        "InstId": 101,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 1,
+                        "Defn": {
+                            "defnId": 4650686066397790000,
+                            "name": "equiv",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE",
+                            "numReplica": 2
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9006",
+            "nodeUUID": "06",
+            "indexerId": "06",
+            "serverGroup": "sg3",
+            "indexes": [
+                {
+                    "defnId": 1062966916559205800,
+                    "instId": 202,
+                    "name": "replica",
+                    "bucket": "default",
+                    "numOfDocs": 168168,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "instance": {
+                        "InstId": 202,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 2,
+                        "Defn": {
+                            "defnId": 1062966916559205800,
+                            "name": "replica",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE",
+                            "numReplica": 2
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9007",
+            "nodeUUID": "07",
+            "indexerId": "07",
+            "serverGroup": "sg3",
+            "indexes": [
+                {
+                    "defnId": 4650686066397790000,
+                    "instId": 102,
+                    "name": "equiv",
+                    "bucket": "default",
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "instance": {
+                        "InstId": 102,
+                        "State": 4,
+                        "RState": 0,
+                        "Stream": 1,
+                        "Pc": null,
+                        "Error": "",
+                        "BuildTs": null,
+                        "Version": 0,
+                        "ReplicaId": 2,
+                        "Defn": {
+                            "defnId": 4650686066397790000,
+                            "name": "equiv",
+                            "bucket": "default",
+                            "bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+                            "secExprs": [
+                                "equivField"
+                            ],
+                            "partitionScheme": "SINGLE",
+                            "numReplica": 2
+                        }
+                    }
+                }
+            ]
+        }
+    ],
+    "memQuota": 6000000000,
+    "cpuQuota": 8,
+    "isLive": true
+}
