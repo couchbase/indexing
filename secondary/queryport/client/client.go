@@ -1802,7 +1802,7 @@ func makeWithMetaProvider(
 		config:       config,
 		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
 		metaCh:       make(chan bool, 1),
-		settings:     NewClientSettings(needRefresh),
+		settings:     NewClientSettings(needRefresh, config),
 		killch:       make(chan bool, 1),
 		needsAuth:    &needsAuth,
 	}

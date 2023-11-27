@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -16,6 +20,47 @@ import (
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/security"
 )
+
+func doRequest(method, url string) (body []byte, err error) {
+
+	r, err := security.GetWithAuthNonTLS(url, nil)
+	if err != nil {
+		errMsg := "Error while getting with auth, err: " + err.Error()
+		fmt.Fprintln(os.Stderr, errMsg)
+		return
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		err := url + " returned: " + r.Status
+		return nil, errors.New(err)
+	}
+
+	return ioutil.ReadAll(r.Body)
+}
+
+func get(url string) (value []byte, err error) {
+
+	config, err := doRequest("GET", url)
+	if err != nil {
+		errMsg := "Cbindex get returned err: " + err.Error()
+		fmt.Fprintln(os.Stderr, errMsg)
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func updateConfig(value []byte, config c.Config) {
+
+	newConfig, err := c.NewConfig(value)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cbindex updateConfig err: "+err.Error())
+	}
+	// queryport.client configs used with & without prefix trim because
+	// metadataClient refers 'servicesNotifierRetryTm'
+	// but ClientSettings refers 'queryport.client.servicesNotifierRetryTm'
+	config.Update(newConfig.Json())
+}
 
 func usage(fset *flag.FlagSet) {
 	fmt.Fprintln(os.Stderr, "Usage: cbindex [options]")
@@ -113,8 +158,30 @@ func main() {
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 
-	if cmdOptions.RefreshSettings {
+	if cmdOptions.RefreshSettings && !cmdOptions.UseTools {
 		config.Set("needsRefresh", c.ConfigValue{true, "read upto date settings from metakv", true, false, false})
+	} else if cmdOptions.RefreshSettings && cmdOptions.UseTools {
+		//get indexer config from server to avoid metakv
+
+		server := cmdOptions.Server
+		server, _, _ = net.SplitHostPort(server)
+		if !strings.HasPrefix(server, "https://") {
+			server = "https://" + server
+		}
+
+		current, err := get(server + ":" + cmdOptions.IndexerPort + "/settings?internal=ok")
+		if err != nil {
+			msg := "Cbindex Config skipping update to config: " + config.String()
+			fmt.Fprintln(os.Stderr, msg)
+		} else {
+			msg := "Cbindex Config before update: " + config.String()
+			fmt.Fprintln(os.Stderr, msg)
+
+			updateConfig(current, config)
+
+			msg = "Cbindex Config after update: " + config.String()
+			fmt.Fprintln(os.Stderr, msg)
+		}
 	}
 
 	client, err := qclient.NewGsiClient(cmdOptions.Server, config)
