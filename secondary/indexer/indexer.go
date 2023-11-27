@@ -250,6 +250,11 @@ type indexer struct {
 	// Contains instance Ids of instances for which RState is RebalPending
 	// For partitioned index, contains proxy instance Id
 	droppedIndexesDuringRebal map[common.IndexInstId]bool
+
+	//Contains instanceIds of instances for which async slice
+	//cleanup(Close/Destroy) has been issued but not yet complete.
+	muDropCleanup      sync.Mutex
+	dropCleanupPending map[c.IndexInstId][]Slice
 }
 
 type kvRequest struct {
@@ -364,6 +369,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		recoveryChMap:    make(map[common.IndexInstId]chan bool),
 
 		droppedIndexesDuringRebal: make(map[common.IndexInstId]bool),
+		dropCleanupPending:        make(map[common.IndexInstId][]Slice),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -3411,7 +3417,10 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 						continue
 					}
 
+					idx.addDropCleanupPending(slice)
 					go func(partnInst PartitionInst, slice Slice) {
+						defer idx.removeDropCleanupPending(slice)
+
 						slice.Close()
 						//wipe the physical files
 						slice.Destroy()
@@ -5500,7 +5509,10 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 						continue
 					}
 
+					idx.addDropCleanupPending(slice)
 					go func(slice Slice, pid common.PartitionId) {
+						defer idx.removeDropCleanupPending(slice)
+
 						slice.Close()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
 							slice.IndexInstId(), pid)
@@ -6707,13 +6719,14 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
 	var ddlInProgress bool
 	var inProgressIndexNames []string
+	var dropCleanupPending bool
 
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
 	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
 		ddlInProgress, inProgressIndexNames = idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames
 	} else {
-		ddlInProgress, inProgressIndexNames = idx.checkDDLInProgress()
+		ddlInProgress, inProgressIndexNames, dropCleanupPending = idx.checkDDLInProgress()
 	}
 
 	if bucketName := ddlMsg.GetBucketName(); bucketName != "" {
@@ -6722,14 +6735,17 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
 	respCh <- &MsgDDLInProgressResponse{
 		ddlInProgress:        ddlInProgress,
-		inProgressIndexNames: inProgressIndexNames}
+		inProgressIndexNames: inProgressIndexNames,
+		dropCleanupPending:   dropCleanupPending}
 
 	return
 }
 
 // checkDDLInProgress returns true and a slice of index names currently in DDL
 // processing if DDL is currently running, else false and an empty slice.
-func (idx *indexer) checkDDLInProgress() (bool, []string) {
+// If a drop cleanup in pending, this function will also return a bool
+// indicating the same.
+func (idx *indexer) checkDDLInProgress() (bool, []string, bool) {
 
 	ddlInProgress := false
 	inProgressIndexNames := make([]string, 0, len(idx.indexInstMap))
@@ -6741,7 +6757,9 @@ func (idx *indexer) checkDDLInProgress() (bool, []string) {
 			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Bucket+":"+index.Defn.Name)
 		}
 	}
-	return ddlInProgress, inProgressIndexNames
+
+	dropCleanupPending := idx.checkDropCleanupPending()
+	return ddlInProgress, inProgressIndexNames, dropCleanupPending
 }
 
 func (idx *indexer) handleUpdateIndexRState(msg Message) {
@@ -8270,7 +8288,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 	}
 	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
 
-	idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames = idx.checkDDLInProgress()
+	idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames, _ = idx.checkDDLInProgress()
 
 	go func() {
 		//set topic names based on indexer id
@@ -10111,13 +10129,14 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 	checkDDL := msg.(*MsgClustMgrLocal).GetCheckDDL()
 
 	if key == RebalanceRunning && checkDDL {
-		if inProgress, indexList := idx.checkDDLInProgress(); inProgress {
+		if inProgress, indexList, dropCleanupPending := idx.checkDDLInProgress(); inProgress || dropCleanupPending {
 			respch <- &MsgClustMgrLocal{
-				mType:             CLUST_MGR_SET_LOCAL,
-				key:               key,
-				value:             value,
-				err:               ErrDDLRunning,
-				inProgressIndexes: indexList,
+				mType:              CLUST_MGR_SET_LOCAL,
+				key:                key,
+				value:              value,
+				err:                ErrDDLRunning,
+				inProgressIndexes:  indexList,
+				dropCleanupPending: dropCleanupPending,
 			}
 			return
 		}
@@ -12272,7 +12291,7 @@ func (idx *indexer) updateRebalancePhase(cmd Message) map[string]c.RebalancePhas
 	for instId, transferPhase := range idx.instRebalPhase {
 		if sliceList, ok := idx.slicePendingClosure[instId]; ok {
 			if transferPhase >= common.RebalanceTransferDone {
-				closeSlices(sliceList, "Indexer::updateRebalancePhase")
+				idx.closeSlices(sliceList, "Indexer::updateRebalancePhase")
 				delete(idx.slicePendingClosure, instId)
 			}
 		}
@@ -12316,7 +12335,7 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	}
 
 	for instId, sliceList := range idx.slicePendingClosure {
-		closeSlices(sliceList, "Indexer::clearRebalancePhase")
+		idx.closeSlices(sliceList, "Indexer::clearRebalancePhase")
 		delete(idx.slicePendingClosure, instId)
 	}
 	idx.slicePendingClosure = nil
@@ -12354,9 +12373,12 @@ func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstI
 	return false // Rebalance is done - Allow slice closure
 }
 
-func closeSlices(sliceList []Slice, logPrefix string) {
+func (idx *indexer) closeSlices(sliceList []Slice, logPrefix string) {
 	for _, s := range sliceList {
+		idx.addDropCleanupPending(s)
 		go func(slice Slice) {
+			defer idx.removeDropCleanupPending(slice)
+
 			slice.Close()
 			logging.Infof("%v IndexInst %v Partition %v Close Done",
 				logPrefix, slice.IndexInstId(), slice.IndexPartnId())
@@ -12583,4 +12605,51 @@ func (idx *indexer) runHeapController() {
 		}
 		time.Sleep(time.Minute)
 	}
+}
+
+func (idx *indexer) addDropCleanupPending(toAdd Slice) {
+
+	idx.muDropCleanup.Lock()
+	defer idx.muDropCleanup.Unlock()
+
+	logging.Infof("Indexer::addDropCleanupPending Added %v %v", toAdd.IndexInstId(), toAdd.IndexPartnId())
+	idx.dropCleanupPending[toAdd.IndexInstId()] = append(idx.dropCleanupPending[toAdd.IndexInstId()], toAdd)
+}
+
+func (idx *indexer) removeDropCleanupPending(toRemove Slice) {
+
+	idx.muDropCleanup.Lock()
+	defer idx.muDropCleanup.Unlock()
+
+	if sliceList, ok := idx.dropCleanupPending[toRemove.IndexInstId()]; ok {
+		for i, slice := range sliceList {
+			if slice.IndexPartnId() == toRemove.IndexPartnId() {
+				logging.Infof("Indexer::removeDropCleanupPending Removed %v %v", toRemove.IndexInstId(),
+					toRemove.IndexPartnId())
+				if len(sliceList) > 1 {
+					sliceList = append(sliceList[:i], sliceList[i+1:]...)
+					idx.dropCleanupPending[toRemove.IndexInstId()] = sliceList
+					break
+				} else {
+					delete(idx.dropCleanupPending, toRemove.IndexInstId())
+				}
+			}
+		}
+	} else {
+		logging.Errorf("Indexer::removeDropCleanupPending Missing %v %v", toRemove.IndexInstId(),
+			toRemove.IndexPartnId())
+	}
+}
+
+func (idx *indexer) checkDropCleanupPending() bool {
+
+	dropCleanupPending := false
+
+	idx.muDropCleanup.Lock()
+	defer idx.muDropCleanup.Unlock()
+	if len(idx.dropCleanupPending) > 0 {
+		dropCleanupPending = true
+	}
+
+	return dropCleanupPending
 }
