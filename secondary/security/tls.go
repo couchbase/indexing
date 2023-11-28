@@ -537,6 +537,7 @@ func MakeClient(u string) (*http.Client, error) {
 type RequestParams struct {
 	Timeout   time.Duration
 	UserAgent string
+	Close     bool
 }
 
 // GetWithAuthAndTimeout submits a REST call with the specified timeoutSecs and returns
@@ -712,6 +713,9 @@ func PostWithAuth(u string, bodyType string, body io.Reader, params *RequestPara
 		return nil, err
 	}
 	req.Header.Set("Content-Type", bodyType)
+	if params != nil && params.Close {
+		req.Close = true
+	}
 
 	err = cbauth.SetRequestAuthVia(req, nil)
 	if err != nil {

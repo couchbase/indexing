@@ -3394,7 +3394,8 @@ func postWithHandleEOF(data interface{}, host, url, logPrefix string) (*http.Res
 		if err != nil {
 			return nil, err
 		}
-		resp, err := postWithAuth(host+url, "application/json", bodybuf)
+
+		resp, err := postWithAuth2(host+url, "application/json", bodybuf)
 		if err != nil {
 			// Error from HTTP layer, not from index processing code
 			l.Errorf("%v Error during %v, req: %v, err: %v", logPrefix, host+url, req, err)

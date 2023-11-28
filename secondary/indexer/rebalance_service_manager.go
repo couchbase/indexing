@@ -4175,6 +4175,11 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 	return security.PostWithAuth(url, bodyType, body, params)
 }
 
+func postWithAuth2(url string, bodyType string, body io.Reader) (*http.Response, error) {
+	params := &security.RequestParams{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second, Close: true}
+	return security.PostWithAuth(url, bodyType, body, params)
+}
+
 func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {
 	res := &IndexResponse{Code: RESP_ERROR, Error: msg}
 	send(status, w, res)
