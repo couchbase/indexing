@@ -1105,7 +1105,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 				// if there are more replica than the number of nodes, then
 				// do not move this index if this node is going away.
 				numReplica := s.findNumReplica(index)
-				if (numReplica > numLiveNode) && indexer.isDelete {
+				if (numReplica > numLiveNode) && (indexer.isDelete || index.initialNode == nil) {
 					deleteCandidates[index.GetPartitionName()] = append(deleteCandidates[index.GetPartitionName()], index)
 					numReplicas[index.GetPartitionName()] = numReplica
 				}
