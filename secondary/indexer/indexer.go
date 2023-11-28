@@ -3368,6 +3368,11 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 
 		if len(pruned) != 0 {
 
+			if len(inst.Pc.GetAllPartitions()) == 0 {
+				logging.Warnf("PrunePartition: All partitions of inst: %v are pruned. Changing the index RState to ACTIVE", inst.InstId)
+				inst.RState = c.REBAL_ACTIVE
+			}
+
 			idx.indexInstMap[instId] = inst
 
 			// Prune partitions in storage manager snapshot.  This must be done before metadata is updated.
@@ -8904,6 +8909,13 @@ func (idx *indexer) initFromPersistedState() error {
 		ephemeral, numVBuckets, err := idx.getBucketInfoForIndexInst(inst, nil)
 		if err != nil {
 			return err
+		}
+
+		if len(inst.Pc.GetAllPartitions()) == 0 {
+			logging.Infof("initFromPersistedState Empty partitions are observed for inst: %v, changing RState to Active", inst.InstId)
+			inst.RState = c.REBAL_ACTIVE
+			idx.indexInstMap[inst.InstId] = inst
+			continue
 		}
 
 		for _, partnDefn := range inst.Pc.GetAllPartitions() {
