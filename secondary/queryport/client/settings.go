@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 type ClientSettings struct {
@@ -63,7 +64,7 @@ type ClientSettings struct {
 	allowNodesClause uint32
 }
 
-func NewClientSettings(needRefresh bool) *ClientSettings {
+func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
 
 	s := &ClientSettings{
 		config:               nil,
@@ -79,6 +80,8 @@ func NewClientSettings(needRefresh bool) *ClientSettings {
 		} else {
 			s.config = config
 		}
+	} else if security.IsToolsConfigUsed() {
+		s.config = toolsConfig
 	}
 
 	if s.config == nil {

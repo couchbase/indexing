@@ -101,6 +101,7 @@ type Command struct {
 	CACert      string
 	UseTLS      bool
 	UseTools    bool
+	IndexerPort string
 	UseLogLevel string
 }
 
@@ -216,6 +217,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.BoolVar(&cmdOptions.UseTLS, "use_tls", false, "Enable TLS connections")
 	fset.StringVar(&cmdOptions.CACert, "cacert", "", "CACert")
 	fset.BoolVar(&cmdOptions.UseTools, "use_tools", false, "Use Tools config instead of CBAuth")
+	fset.StringVar(&cmdOptions.IndexerPort, "indexer_port_https", "19102", "Input indexer https port number if non-default port")
 	fset.StringVar(&cmdOptions.UseLogLevel, "log_level", "Warn", "Select log level from options: Silent, Fatal, Error, Warn, Info, Verbose, Timing, Debug & Trace (default Warn)")
 
 	// not useful to expose in sherlock
