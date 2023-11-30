@@ -2112,7 +2112,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets, idx.stats)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -2376,9 +2376,10 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		return // Logging and response to client channel will be taken care of getBucketInfoForIndexInst
 	}
 
+	idxStats := idx.stats.Clone()
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true, ephemeral, numVBuckets)
+		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true, ephemeral, numVBuckets, idxStats)
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
@@ -6273,7 +6274,7 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
-	ephemeral bool, numVBuckets int) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
+	ephemeral bool, numVBuckets int, idxStats *IndexerStats) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
@@ -6304,7 +6305,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		if shardRebalance {
 			shardIds = indexInst.Defn.ShardIdsForDest[partnId]
 		}
-		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, ephemeral, !bootstrapPhase,
+
+		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idxStats, ephemeral, !bootstrapPhase,
 			idx.meteringMgr, numVBuckets, shardIds)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
@@ -8928,7 +8930,7 @@ func (idx *indexer) initFromPersistedState() error {
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
 
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets); err != nil {
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets, idx.stats); err != nil {
 			return err
 		}
 
