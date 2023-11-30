@@ -3975,6 +3975,9 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return err
 	}
 
+	logging.Infof("LifecycleMgr.PrunePartition() Generated tombstoneInstId: %v for pruning inst: %v, partitions: %v",
+		tombstoneInstId, instId, newPartitions)
+
 	if err := m.repo.splitPartitionFromTopology(defn.Bucket, defn.Scope, defn.Collection, id, instId, tombstoneInstId, newPartitions); err != nil {
 		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index.  Reason = %v", err)
 		return err

@@ -1072,8 +1072,8 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 			}
 		}
 	}
-	p.suppressEqivIndexIfNecessary(cloned)
 	cloned.generateReplicaMap()
+	p.suppressEqivIndexIfNecessary(cloned)
 
 	cloned.evaluateNodes() // must be after all the adjustments and before Validate
 	if s.command != CommandPlan {
@@ -1105,7 +1105,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 				// if there are more replica than the number of nodes, then
 				// do not move this index if this node is going away.
 				numReplica := s.findNumReplica(index)
-				if (numReplica > numLiveNode) && indexer.isDelete {
+				if (numReplica > numLiveNode) && (indexer.isDelete || index.initialNode == nil) {
 					deleteCandidates[index.GetPartitionName()] = append(deleteCandidates[index.GetPartitionName()], index)
 					numReplicas[index.GetPartitionName()] = numReplica
 				}
@@ -1196,6 +1196,44 @@ func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
 					}
 				} else {
 					index.suppressEquivIdxCheck = false
+
+					// An Edge case, where for an index on Deleted Node there
+					// exist atleast one Server Group which does not contain
+					// replica of the index, but every node on this SG
+					// has an equivalent index, causing rebalance failure.
+					// This can happen even if numReplica <= numServerGroup.
+					// An Equivalent Index should not prevent HA across SGs for
+					// a replica. The replicas are to be treated as first class
+					// citizen
+					// A preliminary check is made to confirm if the index can
+					// be placed on that SG. If the check fails, there is no
+					// other place this index can be moved without suppressing
+					// the check
+
+					// Currently only 1 node removal is supported i.e. only 1
+					// replica instance causing the issue
+					if s.numDeletedNode != 1 || s.numServerGroup <= 1 {
+						continue
+					}
+
+					if !indexer.IsDeleted() {
+						continue
+					}
+
+					// If index is already present on all the SGs, incorrect
+					// ServerGroup Violation won't be triggered, dont suppress
+					SGsWithReplica := s.getServerGroupsWithReplica(index)
+					if len(SGsWithReplica) == s.numServerGroup {
+						continue
+					}
+
+					// No node in the SG-without-replica on which the index can
+					// be placed without EquivIdx Violation. Suppress the check
+					SGsWithNodesWithoutEquiv := s.sgsHasNodeWithoutEquiv(index, SGsWithReplica)
+					if len(SGsWithNodesWithoutEquiv) == 0 {
+						index.suppressEquivIdxCheck = true
+					}
+
 				}
 			}
 		}
