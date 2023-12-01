@@ -1602,10 +1602,13 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, false)
 		} else {
 			// Else, cleanup on destination will be triggered as rebalance is not complete for this tenant
-			// Shards will be unlocked for source (by rebalance_service_manager) after cleanup
-			// is complete
+
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Skipping cleaning up token: %v on source "+
-				"as ShardTokenDropOnSource is not posted for this token", ttid)
+				"as ShardTokenDropOnSource is not posted for this token. Unlocking shards: %v", ttid, tt.ShardIds)
+
+			// Unlock shards on source
+			unlockShards(tt.ShardIds, m.supvMsgch)
+
 		}
 	}
 	return nil
@@ -1701,25 +1704,36 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
 			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, false)
-		} else if common.IsServerlessDeployment() {
-			// On Destination if we see a token in ShardTokenDropOnSource state
-			// it implies that source instance will be cleaned up and hence there
-			// wont be any metering there. Destination may or may not have started
-			// metering so enable it.
-			msg := &MsgMeteringUpdate{
-				mType:   METERING_MGR_START_WRITE_BILLING,
-				InstIds: make([]c.IndexInstId, 0),
-				respCh:  make(chan error, 0),
-			}
-			msg.InstIds = append(msg.InstIds, tt.InstIds...)
-			m.supvMsgch <- msg
-			<-msg.respCh
+		} else {
 
-			// Else, cleanup on source will be triggered as rebalance is complete for this tenant
-			// Shards will be unlocked for destination (by rebalance_service_manager) after cleanup
-			// is complete
-			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
-				"as ShardTokenDropOnSource is posted for this token", ttid)
+			// Destination will call RestoreShardDone for the shardId involved in the
+			// rebalance as coming here means that rebalance is successful for the
+			// tenant. After RestoreShardDone, the shards will be unlocked
+			restoreShardDone(tt.ShardIds, m.supvMsgch)
+
+			// Unlock the shards that are locked before initiating recovery
+			unlockShards(tt.ShardIds, m.supvMsgch)
+
+			if common.IsServerlessDeployment() {
+				// On Destination if we see a token in ShardTokenDropOnSource state
+				// it implies that source instance will be cleaned up and hence there
+				// wont be any metering there. Destination may or may not have started
+				// metering so enable it.
+				msg := &MsgMeteringUpdate{
+					mType:   METERING_MGR_START_WRITE_BILLING,
+					InstIds: make([]c.IndexInstId, 0),
+					respCh:  make(chan error, 0),
+				}
+				msg.InstIds = append(msg.InstIds, tt.InstIds...)
+				m.supvMsgch <- msg
+				<-msg.respCh
+
+				// Else, cleanup on source will be triggered as rebalance is complete for this tenant
+				// Shards will be unlocked for destination (by rebalance_service_manager) after cleanup
+				// is complete
+				l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Skipping cleaning up token: %v on dest "+
+					"as ShardTokenDropOnSource is posted for this token", ttid)
+			}
 		}
 
 	case c.ShardTokenCommit:
