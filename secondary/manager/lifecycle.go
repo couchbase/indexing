@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"strings"
 	"sync"
@@ -104,6 +105,10 @@ func (h *StatsHolder) Clone() common.Statistics {
 		clone[k] = v
 	}
 	return clone
+}
+
+func (h *StatsHolder) Cas(old, new *common.Statistics) bool {
+	return atomic.CompareAndSwapPointer(&h.ptr, unsafe.Pointer(old), unsafe.Pointer(new))
 }
 
 type topologyChange struct {
@@ -2726,15 +2731,18 @@ func (m *LifecycleMgr) broadcastStats() {
 
 			clusterVersion := common.GetClusterVersion()
 
-			stats := m.stats.Get()
-			if stats != nil {
+			currStats := m.stats.Get()
+
+			if currStats != nil {
+				stats := maps.Clone(*currStats)
 				if clusterVersion < (int64)(common.INDEXER_70_VERSION) {
-					idxStats := &client.IndexStats{Stats: *stats}
+					idxStats := &client.IndexStats{Stats: stats}
 					if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
 						logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
 					}
 				} else {
-					idxStats2 := convertToIndexStats2(*stats)
+					lenOfStatsBefore := len(stats)
+					idxStats2 := convertToIndexStats2(stats)
 					var statsToBroadCast *client.IndexStats2
 					if shortSends < resendFullTicks {
 						statsToBroadCast = m.getDiffFromLastSent(idxStats2)
@@ -2750,6 +2758,13 @@ func (m *LifecycleMgr) broadcastStats() {
 
 					if err := m.repo.BroadcastIndexStats2(statsToBroadCast); err != nil {
 						logging.Errorf("lifecycleMgr: fail to send indexStats2.  Error = %v", err)
+					}
+
+					if lenOfStatsBefore > len(stats) {
+						// we should do a Cas here because it could be that we have received an
+						// update in parallel and the stats object has changed since then
+						// so if we perform a Store here then we have `Lost Update` problem
+						m.stats.Cas(currStats, &stats)
 					}
 				}
 			}
