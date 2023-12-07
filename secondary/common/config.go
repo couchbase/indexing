@@ -3897,10 +3897,10 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.maxRetries": ConfigValue{
-		2,
+		4,
 		"Maximum retry attempts for transient network errors." +
 			"For e.g, connection resets on downloads are not retried by the aws sdk",
-		2,
+		4,
 		false,
 		false,
 	},
@@ -3926,9 +3926,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.rpc.server.periodicSyncSize": ConfigValue{
-		300 * 100 * 100,
+		10 * 1024 * 1024,
 		"batch size for periodic sync per file (in bytes)",
-		300 * 100 * 100,
+		10 * 1024 * 1024,
 		false,
 		false,
 	},
@@ -3947,9 +3947,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.rpc.server.rateControl.highMemRatio": ConfigValue{
-		1.2,
+		1.5,
 		"High watermark for used channel memory above which server signals client to drop request rate",
-		1.2,
+		1.5,
 		false,
 		false,
 	},
@@ -3960,10 +3960,25 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.shardCopy.rpc.client.memQuota": ConfigValue{
+		32 * 1024 * 1024,
+		"RPC Client Memory Quota (in bytes)",
+		32 * 1024 * 1024,
+		false,
+		false,
+	},
 	"indexer.plasma.shardCopy.rpc.client.rateControl.adjustInterval": ConfigValue{
 		120,
 		"Client request rate adjustment interval (in seconds)",
 		120,
+		false,
+		false,
+	},
+	"indexer.plasma.shardCopy.rpc.client.rateControl.adjustRatioMax": ConfigValue{
+		0.75,
+		"Client request rate maximum adjustment factor during rate control."+
+			"We can use this to limit congestion at server",
+		0.75,
 		false,
 		false,
 	},
