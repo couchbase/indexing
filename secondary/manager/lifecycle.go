@@ -3013,9 +3013,9 @@ func (m *LifecycleMgr) broadcastStats() {
 			clusterVersion := common.GetClusterVersion()
 
 			currStats := m.stats.Get()
-			stats := maps.Clone(*currStats)
 
-			if stats != nil {
+			if currStats != nil {
+				stats := maps.Clone(*currStats)
 				if clusterVersion < (int64)(common.INDEXER_70_VERSION) {
 					idxStats := &client.IndexStats{Stats: stats}
 					if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
