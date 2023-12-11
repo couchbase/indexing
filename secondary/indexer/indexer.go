@@ -2530,13 +2530,19 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	// Update index snapshot map for this index
-	idx.internalRecvCh <- &MsgUpdateSnapMap{
+	// update index snapshot map for this index
+	err := idx.sendMessageToWorker(&MsgUpdateSnapMap{
 		idxInstId:  indexInst.InstId,
 		idxInst:    indexInst,
 		partnMap:   partnInstMap,
 		streamId:   common.ALL_STREAMS,
 		keyspaceId: "",
+	}, idx.storageMgrCmdCh, "StorageMgr")
+
+	if err != nil {
+		logging.Fatalf("Indexer::handleInstRecoveryResponse: failed to send MsgUpdateSnapMap to StorageMgr with err %v",
+			err)
+		c.CrashOnError(err)
 	}
 
 	return
