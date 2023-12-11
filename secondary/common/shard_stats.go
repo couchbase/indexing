@@ -2,7 +2,8 @@ package common
 
 type ShardStats struct {
 	// UUID of the shard
-	ShardId ShardId
+	ShardId          ShardId
+	BackstoreShardId ShardId
 
 	// AlternateShardId of the shard
 	AlternateShardId string

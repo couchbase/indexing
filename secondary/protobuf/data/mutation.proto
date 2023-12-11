@@ -28,6 +28,7 @@ enum ProjectorVersion {
     V5_5_1 = 3;
     V5_6_5 = 4;
     V7_0_0 = 5;
+    V7_6_0 = 6;
 }
 
 // A single mutation message that will framed and transported by router.

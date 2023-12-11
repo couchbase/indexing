@@ -2980,6 +2980,22 @@ func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.Shar
 		logging.Infof("plasmaSlice::ShardStatistics ShardInfo is not available for shard: %v, err: %v", msAlternateShardId, err)
 		return nil
 	}
+
+	getShardId := func(alternateShardId string) common.ShardId {
+		alternateId, err := plasma.ParseAlternateId(alternateShardId)
+		if err != nil {
+			logging.Errorf("plasmaSlice::ShardStatistics: plasma failed to parse alternate id %v for instance %v - partnId %v",
+				alternateShardId, mdb.idxDefn.InstId, partnId)
+			return 0
+		}
+		shard := plasma.AcquireShardByAltId(alternateId)
+		defer plasma.ReleaseShard(shard)
+
+		return common.ShardId(shard.GetShardId())
+	}
+
+	ss.ShardId = getShardId(msAlternateShardId)
+
 	ss.MemSz = val.Stats.MemSz
 	ss.MemSzIndex = val.Stats.MemSzIndex
 	ss.BufMemUsed = val.Stats.BufMemUsed
@@ -3019,6 +3035,8 @@ func (mdb *plasmaSlice) ShardStatistics(partnId common.PartitionId) *common.Shar
 
 		ss.LSSDiskSize += val.Stats.LSSDiskSize
 		ss.RecoveryDiskSize += val.Stats.RecoveryDiskSize
+
+		ss.BackstoreShardId = getShardId(bsAlternateShardId)
 	}
 
 	return ss
