@@ -4480,6 +4480,10 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 					defnIdList.DefnIds = append(defnIdList.DefnIds, uint64(req.defn.DefnId))
 				}
 
+				if len(defnIdList.DefnIds) == 0 {
+					continue
+				}
+
 				logging.Infof("ShardRebalancer::processBatchBuildReqs processing indexDefns: %v", defnIdList.DefnIds)
 
 				skipDefns, retryInsts, err := sr.postBuildIndexesReq(defnIdList, "", nil)
