@@ -823,7 +823,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 
 func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId common.IndexInstId,
 	replicaId int, partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId,
-	reqCtx *common.MetadataRequestContext) error {
+	reqCtx *common.MetadataRequestContext, cancelCh chan bool) error {
 	const _OnIndexCreate = "clustMgrAgent::OnIndexRecover:"
 
 	logging.Infof("clustMgrAgent::OnIndexRecover Notification received for "+
@@ -852,6 +852,7 @@ func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId com
 	meta.adminCh <- &MsgRecoverIndex{mType: CLUST_MGR_RECOVER_INDEX,
 		indexInst: idxInst,
 		respCh:    respCh,
+		cancelCh:  cancelCh,
 		reqCtx:    reqCtx}
 
 	//wait for response

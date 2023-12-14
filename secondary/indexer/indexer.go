@@ -2118,7 +2118,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets, idx.stats)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets, idx.stats, nil)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -2210,6 +2210,8 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 	indexInst := msg.(*MsgRecoverIndex).GetIndexInst()
 	clientCh := msg.(*MsgRecoverIndex).GetResponseChannel()
+	cancelRecoveryCh := msg.(*MsgRecoverIndex).GetCancelCh()
+
 	logging.Infof("Indexer::handleRecoverIndex %v", indexInst)
 
 	// NOTE
@@ -2393,6 +2395,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 			ephemeral,
 			numVBuckets,
 			idxStats,
+			cancelRecoveryCh, // cancelCh
 		)
 
 		// In case of nil error, send a message to indexer to add this instance
@@ -2457,7 +2460,6 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	// they it will be deleted after async recovery is done as simultaneous
 	// index recovery and drop can lead to unwanted race conditions in plasma
 	defer func() {
-
 		err := idx.notifyAsyncRecoveryDone(indexInst)
 		if err != nil {
 			logging.Errorf("Indexer::handleInstRecoveryResponse Error observed while notifying "+
@@ -6319,7 +6321,8 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
-	ephemeral bool, numVBuckets int, idxStats *IndexerStats) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
+	ephemeral bool, numVBuckets int, idxStats *IndexerStats, cancelCh chan bool) (
+	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
@@ -6352,7 +6355,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		}
 
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idxStats, ephemeral, !bootstrapPhase,
-			idx.meteringMgr, numVBuckets, shardIds)
+			idx.meteringMgr, numVBuckets, shardIds, cancelCh)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if bootstrapPhase && err == errStorageCorrupted {
@@ -8983,7 +8986,7 @@ func (idx *indexer) initFromPersistedState() error {
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
 
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets, idx.stats); err != nil {
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets, idx.stats, nil); err != nil {
 			return err
 		}
 
@@ -10537,7 +10540,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
 	meteringMgr *MeteringThrottlingMgr, numVBuckets int,
-	shardIds []common.ShardId) (slice Slice, err error) {
+	shardIds []common.ShardId, cancelCh chan bool) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -10567,7 +10570,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh)
 	}
 
 	return

@@ -1119,10 +1119,11 @@ func (m *MsgCreateIndex) GetString() string {
 }
 
 type MsgRecoverIndex struct {
-	mType     MsgType
-	indexInst common.IndexInst
 	respCh    MsgChannel
 	reqCtx    *common.MetadataRequestContext
+	cancelCh  chan bool
+	indexInst common.IndexInst
+	mType     MsgType
 }
 
 func (m *MsgRecoverIndex) GetMsgType() MsgType {
@@ -1139,6 +1140,10 @@ func (m *MsgRecoverIndex) GetResponseChannel() MsgChannel {
 
 func (m *MsgRecoverIndex) GetRequestCtx() *common.MetadataRequestContext {
 	return m.reqCtx
+}
+
+func (m *MsgRecoverIndex) GetCancelCh() chan bool {
+	return m.cancelCh
 }
 
 func (m *MsgRecoverIndex) GetString() string {

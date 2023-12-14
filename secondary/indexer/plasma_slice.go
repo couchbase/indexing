@@ -212,7 +212,8 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats,
 	isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
-	numVBuckets int, replicaId int, shardIds []common.ShardId) (*plasmaSlice, error) {
+	numVBuckets int, replicaId int, shardIds []common.ShardId, cancelCh chan bool) (
+	*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -285,7 +286,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		}
 	}
 
-	if err := slice.initStores(isInitialBuild); err != nil {
+	if err := slice.initStores(isInitialBuild, cancelCh); err != nil {
 		// Index is unusable. Remove the data files and reinit
 		if err == errStorageCorrupted || err == errStoragePathNotFound {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v isNew %v"+
@@ -356,7 +357,7 @@ func backupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(st
 	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
-func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
+func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) error {
 	var err error
 
 	// This function encapsulates confLock.RLock + defer confLock.RUnlock
@@ -598,7 +599,16 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 		}
 
 		shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment() || slice.sysconf["plasma.useSharedLSS"].Bool()
-		slice.mainstore, mErr = plasma.New6(tenant, alternateShardId, *mCfg, shared, slice.newBorn, MAIN_INDEX, isInitialBuild, nil)
+		slice.mainstore, mErr = plasma.New6(
+			tenant,           // string
+			alternateShardId, // plasma.AlternateId
+			*mCfg,            // config plasma.Config
+			shared,           // bool
+			slice.newBorn,    // new bool
+			MAIN_INDEX,       // group int
+			isInitialBuild,   // init bool
+			cancelCh,         // cancelCh chan bool
+		)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -618,7 +628,16 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			}
 
 			shared := slice.idxDefn.IndexOnCollection() || common.IsServerlessDeployment() || slice.sysconf["plasma.useSharedLSS"].Bool()
-			slice.backstore, bErr = plasma.New6(tenant, alternateShardId, *bCfg, shared, slice.newBorn, BACK_INDEX, isInitialBuild, nil)
+			slice.backstore, bErr = plasma.New6(
+				tenant,           // string
+				alternateShardId, // plasma.AlternateId
+				*bCfg,            // config plasma.Config
+				shared,           // bool
+				slice.newBorn,    // new bool
+				BACK_INDEX,       // group int
+				isInitialBuild,   // init bool
+				cancelCh,         // cancelCh chan bool
+			)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
@@ -658,6 +677,12 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool) error {
 			return errStoragePathNotFound
 		}
 		return errStorageCorrupted
+	}
+
+	if (mErr != nil && plasma.IsRecoveryCancelError(mErr)) ||
+		(bErr != nil && plasma.IsRecoveryCancelError(bErr)) {
+		logging.Warnf("plasmaSlice:NewplasmaSlice recovery cancelled for inst %v", slice.idxInstId)
+		return errRecoveryCancelled
 	}
 
 	// If both mErr and bErr are not fatal, return mErr with higher priority
@@ -2367,7 +2392,7 @@ func (mdb *plasmaSlice) resetStores(initBuild bool) error {
 	}
 
 	mdb.newBorn = true
-	if err := mdb.initStores(initBuild); err != nil {
+	if err := mdb.initStores(initBuild, nil); err != nil {
 		return err
 	}
 
