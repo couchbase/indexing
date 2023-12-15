@@ -1,0 +1,127 @@
+{
+    "placement": [
+        {
+            "nodeId": "127.0.0.1:9001",
+            "nodeUUID": "fdb15192216a984a53fc19de249e0ba4",
+            "indexerId": "",
+            "restUrl": "",
+            "serverGroup": "SG 1",
+            "memUsage": 15728640,
+            "cpuUsage": 1,
+            "memOverhead": 10485760,
+            "dataSize": 5242880,
+            "memQuota": 104857600,
+            "nodeVersion": 9,
+            "minShardCapacity": 2,
+            "maxInstancesPerShard": 100,
+            "maxDiskUsagePerShard": 268435456000,
+            "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5,
+            "indexes": [
+                {
+                    "defnId": 1111,
+                    "instId": 11110,
+                    "partnId": 0,
+                    "name": "index1",
+                    "bucket": "bucket2",
+                    "host": null,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 15728640,
+                    "cpuUsage": 1,
+                    "memOverhead": 165423720,
+                    "instance": {
+                        "replicaId": 0
+                    },
+                    "alternateShardIds": [
+                        "1234-0-0",
+                        "1234-0-1"
+                    ]
+                },
+                {
+                    "defnId": 1111,
+                    "instId": 11111,
+                    "partnId": 1,
+                    "name": "index1",
+                    "bucket": "bucket2",
+                    "host": null,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 15728640,
+                    "cpuUsage": 1,
+                    "memOverhead": 165423720,
+                    "instance": {
+                        "replicaId": 1
+                    }
+                }
+            ]
+        },
+        {
+            "nodeId": "127.0.0.1:9002",
+            "nodeUUID": "abc15192216a984a53fc19de249e0ba4",
+            "indexerId": "",
+            "restUrl": "",
+            "serverGroup": "SG 1",
+            "memUsage": 0,
+            "cpuUsage": 0,
+            "memOverhead": 0,
+            "nodeVersion": 9,
+            "maxInstancesPerShard": 100,
+            "maxDiskUsagePerShard": 268435456000,
+            "diskUsageThreshold": 50.0,
+            "shardLimitPerTenant": 2000,
+            "shardTenantMultiplier": 5,
+            "minShardCapacity": 2,
+            "indexes": [
+                {
+                    "defnId": 1111,
+                    "instId": 11110,
+                    "partnId": 1,
+                    "name": "index1",
+                    "bucket": "bucket2",
+                    "host": null,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 15728640,
+                    "cpuUsage": 1,
+                    "memOverhead": 165423720,
+                    "instance": {
+                        "replicaId": 0
+                    }
+                },
+                {
+                    "defnId": 1111,
+                    "instId": 11111,
+                    "partnId": 0,
+                    "name": "index1",
+                    "bucket": "bucket2",
+                    "host": null,
+                    "avgArrSize": 0,
+                    "avgArrKeySize": 0,
+                    "mutationRate": 0,
+                    "scanRate": 0,
+                    "memUsage": 15728640,
+                    "cpuUsage": 1,
+                    "memOverhead": 165423720,
+                    "instance": {
+                        "replicaId": 1
+                    },
+                    "alternateShardIds": [
+                        "1234-1-0",
+                        "1234-1-1"
+                    ]
+                }
+            ]
+        }
+    ],
+    "memQuota": 100000000000,
+    "cpuQuota": 30,
+    "isLive": true
+}

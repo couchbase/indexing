@@ -6802,10 +6802,29 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 		slotDist[replica.node] = replica.ReplicaId
 	}
 
+	instIdsForReplicas := make(map[int]common.IndexInstId)
+	for replicaId, indexDist := range replicaMap {
+		for _, index := range indexDist {
+			instIdsForReplicas[replicaId] = index.InstId
+		}
+	}
+
+	// At this point, the slot to which this index has to go to is decided.
+	// Assigning alternate shardIds may require reassignment of replicas
+	// to handle cases where replicas being spread like {1, 0, 2} while slot
+	// is spread like {0, 1, 2} on same set of nodes. Since replicas can
+	// be re-arranged, change the replicaId and corresponding index instanceIds
+	// on the target nodes to suite slot distribution
+
 	for _, indexDist := range replicaMap {
 		for indexerNode, index := range indexDist {
 			if val, ok := slotDist[indexerNode]; ok {
 				index.Instance.ReplicaId = val
+
+				// Update instance Ids belogning to corresponding replicas as well
+				index.InstId = instIdsForReplicas[val]
+				index.Instance.InstId = index.InstId
+
 				msAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 0}
 				bsAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 1}
 				if index.IsPrimary {
@@ -6829,6 +6848,11 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 		if _, ok := assignedReplicas[replicaId]; !ok {
 			index := remainingIndexes[i]
 			index.Instance.ReplicaId = replicaId
+
+			// Update instance Ids belogning to corresponding replicas as well
+			index.InstId = instIdsForReplicas[replicaId]
+			index.Instance.InstId = index.InstId
+
 			if index.IsPrimary {
 				msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
 				index.AlternateShardIds = []string{msAltId.String()}

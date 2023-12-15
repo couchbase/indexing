@@ -2864,6 +2864,13 @@ var shardAssignmentTestCases = []shardAssignmentTestCase{
 		"../testdata/planner/shard_assignment/2_nodes_1_new_index.json",
 	},
 	{
+		"2_nodes_2_replicas_2_partns",
+		"\t Place single new instance on a node.\n " +
+			"\t\t\t New alternate shard Ids are to be generated for the index",
+		"../testdata/planner/shard_assignment/2_nodes_2_replicas_2_partns.json",
+	},
+
+	{
 		"2_nodes_2_new_index",
 		"\t Place two new instance on a node.\n " +
 			"\t\t\t New alternate shard Ids has to be generated for 2 indexes ",
@@ -2956,19 +2963,32 @@ func validateShardIds(solution *planner.Solution, expectedShards int, t *testing
 	shardMap := make(map[string]bool)
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
+
 			if len(index.AlternateShardIds) == 0 {
 				t.Fatalf("Alternate shardIds are empty for index: %v, node: %v", index.Name, indexer.NodeId)
 			}
+
 			var msAltId, bsAltId *common.AlternateShardId
 			var err error
 			msAltId, err = common.ParseAlternateId(index.AlternateShardIds[0])
 			FailTestIfError(err, fmt.Sprintf("Error parsing mainstore alternateId: %v", index.AlternateShardIds[0]), t)
+
+			if index.Instance != nil && msAltId.ReplicaId != uint8(index.Instance.ReplicaId) {
+				t.Fatalf("Mismatch in instance replica vs slot replica. Inst: %v, Instance replicaId: %v, slotReplicaId: %v",
+					index.InstId, index.Instance.ReplicaId, msAltId.ReplicaId)
+			}
+
 			if !index.IsPrimary {
 				bsAltId, err = common.ParseAlternateId(index.AlternateShardIds[1])
 				FailTestIfError(err, fmt.Sprintf("Error parsing backstore alternateId: %v", index.AlternateShardIds[1]), t)
 				if msAltId.SlotId != bsAltId.SlotId || msAltId.ReplicaId != bsAltId.ReplicaId {
 					t.Fatalf("Mismatch in slot or replicaId between mainstore and backstore. "+
 						"Mainstore altId: %v, backstore altId: %v", msAltId.String(), bsAltId.String())
+				}
+
+				if index.Instance != nil && bsAltId.ReplicaId != uint8(index.Instance.ReplicaId) {
+					t.Fatalf("Mismatch in instance replica vs backstore slot replica. Inst: %v, Instance replicaId: %v, slotReplicaId: %v",
+						index.InstId, index.Instance.ReplicaId, bsAltId.ReplicaId)
 				}
 			}
 			for _, altId := range index.AlternateShardIds {
@@ -3049,6 +3069,24 @@ func TestShardAssignmentFuncTestCases(t *testing.T) {
 		// For this test, the new index that got created should have non-empty shardIds
 		case "2_nodes_1_new_index":
 			validateShardIds(solution, 2, t)
+			break
+		case "2_nodes_2_replicas_2_partns":
+			validateShardIds(solution, 4, t)
+
+			// InstId: 11110 should have replicaId: 0 and instId: 11111 should have replicaId:1
+			for _, indexer := range solution.Placement {
+				for _, index := range indexer.Indexes {
+					if index.InstId == 11111 {
+						if index.Instance != nil && index.Instance.ReplicaId != 1 {
+							t.Fatalf("Mismatch in replicaId. Expected replicaId: 1 for instId: 11111. Got : %v", index.Instance.ReplicaId)
+						}
+					} else if index.InstId == 11110 {
+						if index.Instance != nil && index.Instance.ReplicaId != 0 {
+							t.Fatalf("Mismatch in replicaId. Expected replicaId: 0 for instId: 11110. Got : %v", index.Instance.ReplicaId)
+						}
+					}
+				}
+			}
 			break
 		// For these tests, there should be 4 different alterante shardIds in total
 		// as minShardCapacity is defined as 4
