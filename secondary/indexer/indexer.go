@@ -250,6 +250,11 @@ type indexer struct {
 	// Contains instance Ids of instances for which RState is RebalPending
 	// For partitioned index, contains proxy instance Id
 	droppedIndexesDuringRebal map[common.IndexInstId]bool
+
+	//Contains instanceIds of instances for which async slice
+	//cleanup(Close/Destroy) has been issued but not yet complete.
+	muDropCleanup      sync.Mutex
+	dropCleanupPending map[c.IndexInstId][]Slice
 }
 
 type kvRequest struct {
@@ -364,6 +369,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		recoveryChMap:    make(map[common.IndexInstId]chan bool),
 
 		droppedIndexesDuringRebal: make(map[common.IndexInstId]bool),
+		dropCleanupPending:        make(map[common.IndexInstId][]Slice),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -2379,7 +2385,16 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 	idxStats := idx.stats.Clone()
 	go func() {
 		//allocate partition/slice
-		partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, nil, true, true, ephemeral, numVBuckets, idxStats)
+		partnInstMap, failedPartnInstances, partnShardIdMap, err := idx.initPartnInstance(
+			indexInst,
+			nil,  // respCh
+			true, // bootstrapPhase
+			true, // shardRebalance
+			ephemeral,
+			numVBuckets,
+			idxStats,
+		)
+
 		// In case of nil error, send a message to indexer to add this instance
 		// to the index instance map. Otherwise, dont do anything as the error
 		// must have been passed via clientCh to the caller
@@ -2392,6 +2407,24 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 				"inst: %v, realInstId: %v", indexInst.InstId, indexInst.RealInstId)
 
 			<-realInstRecoveryCh
+		}
+
+		rebalId := "shard_rebalance_DEFAULT_TAG"
+		if idx.rebalanceToken != nil {
+			rebalId = fmt.Sprintf("shard_rebalance_%v", idx.rebalanceToken.RebalId)
+		}
+
+		// backup failed partn instance
+		for partId := range failedPartnInstances {
+			if c.IsServerlessDeployment() {
+				// TODO: - handle backup of corrupted instances for serverless;
+				// for serverless, we could have instances under a collection with finished
+				// recovery and we would have started streams for them.
+				// because of that, we cannot run backup here as some instances could be out
+				// of recovery already
+			} else {
+				idx.backupCorruptIndexDataFiles(&indexInst, partId, SliceId(0), rebalId)
+			}
 		}
 
 		idx.internalRecvCh <- &MsgRecoverIndexResp{
@@ -2497,13 +2530,19 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	// Update index snapshot map for this index
-	idx.internalRecvCh <- &MsgUpdateSnapMap{
+	// update index snapshot map for this index
+	err := idx.sendMessageToWorker(&MsgUpdateSnapMap{
 		idxInstId:  indexInst.InstId,
 		idxInst:    indexInst,
 		partnMap:   partnInstMap,
 		streamId:   common.ALL_STREAMS,
 		keyspaceId: "",
+	}, idx.storageMgrCmdCh, "StorageMgr")
+
+	if err != nil {
+		logging.Fatalf("Indexer::handleInstRecoveryResponse: failed to send MsgUpdateSnapMap to StorageMgr with err %v",
+			err)
+		c.CrashOnError(err)
 	}
 
 	return
@@ -3411,7 +3450,10 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 						continue
 					}
 
+					idx.addDropCleanupPending(slice)
 					go func(partnInst PartitionInst, slice Slice) {
+						defer idx.removeDropCleanupPending(slice)
+
 						slice.Close()
 						//wipe the physical files
 						slice.Destroy()
@@ -5500,7 +5542,10 @@ func (idx *indexer) cleanupIndexData(indexInsts []common.IndexInst,
 						continue
 					}
 
+					idx.addDropCleanupPending(slice)
 					go func(slice Slice, pid common.PartitionId) {
+						defer idx.removeDropCleanupPending(slice)
+
 						slice.Close()
 						logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
 							slice.IndexInstId(), pid)
@@ -6310,11 +6355,13 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			idx.meteringMgr, numVBuckets, shardIds)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
-			if (bootstrapPhase && err == errStorageCorrupted) && !shardRebalance {
-				errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
-				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+			if bootstrapPhase && err == errStorageCorrupted {
 				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
-				continue
+				if !shardRebalance {
+					errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
+					logging.Errorf("Indexer:: initPartnInstance %v", errStr)
+					continue
+				}
 			}
 
 			if (bootstrapPhase && err == errStoragePathNotFound) && !shardRebalance {
@@ -6335,7 +6382,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						cause:    err1,
 						category: INDEXER}}
 			}
-			return nil, nil, nil, err1
+			return nil, failedPartnInstances, nil, err1
 		}
 
 		if shardRebalance {
@@ -6707,13 +6754,14 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
 	var ddlInProgress bool
 	var inProgressIndexNames []string
+	var dropCleanupPending bool
 
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
 	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
 		ddlInProgress, inProgressIndexNames = idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames
 	} else {
-		ddlInProgress, inProgressIndexNames = idx.checkDDLInProgress()
+		ddlInProgress, inProgressIndexNames, dropCleanupPending = idx.checkDDLInProgress()
 	}
 
 	if bucketName := ddlMsg.GetBucketName(); bucketName != "" {
@@ -6722,14 +6770,17 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 
 	respCh <- &MsgDDLInProgressResponse{
 		ddlInProgress:        ddlInProgress,
-		inProgressIndexNames: inProgressIndexNames}
+		inProgressIndexNames: inProgressIndexNames,
+		dropCleanupPending:   dropCleanupPending}
 
 	return
 }
 
 // checkDDLInProgress returns true and a slice of index names currently in DDL
 // processing if DDL is currently running, else false and an empty slice.
-func (idx *indexer) checkDDLInProgress() (bool, []string) {
+// If a drop cleanup in pending, this function will also return a bool
+// indicating the same.
+func (idx *indexer) checkDDLInProgress() (bool, []string, bool) {
 
 	ddlInProgress := false
 	inProgressIndexNames := make([]string, 0, len(idx.indexInstMap))
@@ -6741,7 +6792,9 @@ func (idx *indexer) checkDDLInProgress() (bool, []string) {
 			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Bucket+":"+index.Defn.Name)
 		}
 	}
-	return ddlInProgress, inProgressIndexNames
+
+	dropCleanupPending := idx.checkDropCleanupPending()
+	return ddlInProgress, inProgressIndexNames, dropCleanupPending
 }
 
 func (idx *indexer) handleUpdateIndexRState(msg Message) {
@@ -8270,7 +8323,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych []chan IndexSnapshot, snapshotRe
 	}
 	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v, elapsed: %v", idx.indexInstMap, time.Since(start))
 
-	idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames = idx.checkDDLInProgress()
+	idx.bsRunParams.ddlRunning, idx.bsRunParams.ddlRunningIndexNames, _ = idx.checkDDLInProgress()
 
 	go func() {
 		//set topic names based on indexer id
@@ -9140,7 +9193,7 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 // return true if any error has occured during backup and cleanup is needed.
 // return false if "move" is successful and no need to cleanup data.
 func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
-	partnId common.PartitionId, sliceId SliceId) (needsDataCleanup bool) {
+	partnId common.PartitionId, sliceId SliceId, rebalanceId string) (needsDataCleanup bool) {
 	logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v take backup of corrupt data files",
 		indexInst.InstId, partnId)
 
@@ -9161,8 +9214,14 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 	}
 
 	err := MoveSlice(common.IndexTypeToStorageMode(indexInst.Defn.Using), indexInst, partnId, sliceId,
-		storageDir, storageDir, corruptDataDir)
+		storageDir, storageDir, corruptDataDir, rebalanceId)
 	if err != nil {
+		warnStr := fmt.Sprintf("Indexer::backupCorruptIndexDataFiles: failed to backup index %v partn %v from %v to %v with error <%v>",
+			indexInst, partnId, storageDir, corruptDataDir, err)
+		if len(rebalanceId) > 0 {
+			warnStr = fmt.Sprintf("%v for rebalance %v", warnStr, rebalanceId)
+		}
+		logging.Warnf(warnStr)
 		needsDataCleanup = true
 		return
 	}
@@ -9200,7 +9259,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 	// backup the corrupt index data files, if enabled
 	needsDataCleanup := true
 	if idx.config["settings.enable_corrupt_index_backup"].Bool() {
-		needsDataCleanup = idx.backupCorruptIndexDataFiles(indexInst, partnId, SliceId(0))
+		needsDataCleanup = idx.backupCorruptIndexDataFiles(indexInst, partnId, SliceId(0), "")
 	}
 
 	if needsDataCleanup {
@@ -10111,13 +10170,14 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 	checkDDL := msg.(*MsgClustMgrLocal).GetCheckDDL()
 
 	if key == RebalanceRunning && checkDDL {
-		if inProgress, indexList := idx.checkDDLInProgress(); inProgress {
+		if inProgress, indexList, dropCleanupPending := idx.checkDDLInProgress(); inProgress || dropCleanupPending {
 			respch <- &MsgClustMgrLocal{
-				mType:             CLUST_MGR_SET_LOCAL,
-				key:               key,
-				value:             value,
-				err:               ErrDDLRunning,
-				inProgressIndexes: indexList,
+				mType:              CLUST_MGR_SET_LOCAL,
+				key:                key,
+				value:              value,
+				err:                ErrDDLRunning,
+				inProgressIndexes:  indexList,
+				dropCleanupPending: dropCleanupPending,
 			}
 			return
 		}
@@ -10542,7 +10602,7 @@ func ListSlices(mode common.StorageMode, storageDir string) ([]string, error) {
 }
 
 func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
-	storageDir string, sourceDir string, targetDir string) error {
+	storageDir, sourceDir, targetDir, rebalanceId string) error {
 
 	// Given any path, rename() will add a timestamp to the first sub-directory
 	// after sourceDir.  The renamed sub-directory will be added to the targetDir
@@ -10568,10 +10628,16 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 
 		indexPath := path[sourceDirLen:]
 
-		strTime := fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", uptime.Year(), uptime.Month(),
-			uptime.Day(), uptime.Hour(), uptime.Minute(), uptime.Second(), uptime.Nanosecond()/1000/1000)
+		var renameId string
 
-		destIndexPath := strTime + "_" + indexPath
+		if len(rebalanceId) != 0 {
+			renameId = rebalanceId
+		} else {
+			renameId = fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", uptime.Year(), uptime.Month(),
+				uptime.Day(), uptime.Hour(), uptime.Minute(), uptime.Second(), uptime.Nanosecond()/1000/1000)
+		}
+
+		destIndexPath := renameId + "_" + indexPath
 		return filepath.Join(targetDir, destIndexPath), nil
 	}
 
@@ -12272,7 +12338,7 @@ func (idx *indexer) updateRebalancePhase(cmd Message) map[string]c.RebalancePhas
 	for instId, transferPhase := range idx.instRebalPhase {
 		if sliceList, ok := idx.slicePendingClosure[instId]; ok {
 			if transferPhase >= common.RebalanceTransferDone {
-				closeSlices(sliceList, "Indexer::updateRebalancePhase")
+				idx.closeSlices(sliceList, "Indexer::updateRebalancePhase")
 				delete(idx.slicePendingClosure, instId)
 			}
 		}
@@ -12316,7 +12382,7 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 	}
 
 	for instId, sliceList := range idx.slicePendingClosure {
-		closeSlices(sliceList, "Indexer::clearRebalancePhase")
+		idx.closeSlices(sliceList, "Indexer::clearRebalancePhase")
 		delete(idx.slicePendingClosure, instId)
 	}
 	idx.slicePendingClosure = nil
@@ -12354,9 +12420,12 @@ func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstI
 	return false // Rebalance is done - Allow slice closure
 }
 
-func closeSlices(sliceList []Slice, logPrefix string) {
+func (idx *indexer) closeSlices(sliceList []Slice, logPrefix string) {
 	for _, s := range sliceList {
+		idx.addDropCleanupPending(s)
 		go func(slice Slice) {
+			defer idx.removeDropCleanupPending(slice)
+
 			slice.Close()
 			logging.Infof("%v IndexInst %v Partition %v Close Done",
 				logPrefix, slice.IndexInstId(), slice.IndexPartnId())
@@ -12583,4 +12652,51 @@ func (idx *indexer) runHeapController() {
 		}
 		time.Sleep(time.Minute)
 	}
+}
+
+func (idx *indexer) addDropCleanupPending(toAdd Slice) {
+
+	idx.muDropCleanup.Lock()
+	defer idx.muDropCleanup.Unlock()
+
+	logging.Infof("Indexer::addDropCleanupPending Added %v %v", toAdd.IndexInstId(), toAdd.IndexPartnId())
+	idx.dropCleanupPending[toAdd.IndexInstId()] = append(idx.dropCleanupPending[toAdd.IndexInstId()], toAdd)
+}
+
+func (idx *indexer) removeDropCleanupPending(toRemove Slice) {
+
+	idx.muDropCleanup.Lock()
+	defer idx.muDropCleanup.Unlock()
+
+	if sliceList, ok := idx.dropCleanupPending[toRemove.IndexInstId()]; ok {
+		for i, slice := range sliceList {
+			if slice.IndexPartnId() == toRemove.IndexPartnId() {
+				logging.Infof("Indexer::removeDropCleanupPending Removed %v %v", toRemove.IndexInstId(),
+					toRemove.IndexPartnId())
+				if len(sliceList) > 1 {
+					sliceList = append(sliceList[:i], sliceList[i+1:]...)
+					idx.dropCleanupPending[toRemove.IndexInstId()] = sliceList
+					break
+				} else {
+					delete(idx.dropCleanupPending, toRemove.IndexInstId())
+				}
+			}
+		}
+	} else {
+		logging.Errorf("Indexer::removeDropCleanupPending Missing %v %v", toRemove.IndexInstId(),
+			toRemove.IndexPartnId())
+	}
+}
+
+func (idx *indexer) checkDropCleanupPending() bool {
+
+	dropCleanupPending := false
+
+	idx.muDropCleanup.Lock()
+	defer idx.muDropCleanup.Unlock()
+	if len(idx.dropCleanupPending) > 0 {
+		dropCleanupPending = true
+	}
+
+	return dropCleanupPending
 }

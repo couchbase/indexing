@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3968,6 +3969,26 @@ func (sr *ShardRebalancer) updateInstsTransferPhase(ttid string, tt *c.TransferT
 		}
 	}
 
+	// Incase of copy (replica repair cases), update the transfer phase for
+	// actual instances on source node (as instances can get renamed in the
+	// transfer token)
+	if tt.TransferMode == c.TokenTransferModeCopy && tt.ShardTransferTokenState <= c.ShardTokenTransferShard {
+		for _, instRenameMap := range tt.InstRenameMap {
+			for origPath := range instRenameMap {
+				splitPath := strings.Split(origPath, ".index")
+				if len(splitPath) > 0 {
+					// Last 2 entires of splitPath[0] would be instanceID and partnID
+					newSplit := strings.Split(splitPath[0], "_")
+					origInstId, _ := strconv.ParseUint(newSplit[len(newSplit)-2], 10, 64)
+					instsTransferPhase[common.IndexInstId(origInstId)] = tranfserPhase
+				} else {
+					logging.Fatalf("ShardRebalancer::updateInstsTransferPhase Invalid path seen for token: %v, "+
+						"path: %v, instRenameMap: %v", ttid, origPath, tt.InstRenameMap)
+				}
+			}
+		}
+	}
+
 	globalPh := common.RebalanceInitated
 	if sr.rebalToken.RebalPhase == common.RebalanceTransferInProgress {
 		globalPh = common.RebalanceTransferInProgress
@@ -4457,6 +4478,10 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 				var defnIdList client.IndexIdList
 				for _, req := range perKeyspaceReqs {
 					defnIdList.DefnIds = append(defnIdList.DefnIds, uint64(req.defn.DefnId))
+				}
+
+				if len(defnIdList.DefnIds) == 0 {
+					continue
 				}
 
 				logging.Infof("ShardRebalancer::processBatchBuildReqs processing indexDefns: %v", defnIdList.DefnIds)

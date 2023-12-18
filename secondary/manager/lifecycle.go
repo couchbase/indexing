@@ -2001,7 +2001,7 @@ func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *commo
 				for _, inst := range insts {
 					state, _ := topology.GetStatusByInst(existDefn.DefnId, common.IndexInstId(inst.InstId))
 					if state != common.INDEX_STATE_NIL && state != common.INDEX_STATE_DELETED {
-						return existDefn, errors.New(fmt.Sprintf("Index %s.%s already exists", defn.Bucket, defn.Name))
+						return existDefn, errors.New(fmt.Sprintf("Index %v already exists", getKeyspaceId(defn)))
 					}
 				}
 			}
@@ -5683,6 +5683,14 @@ func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 		return "", "", ""
 	}
 
+}
+
+func getKeyspaceId(defn *common.IndexDefn) string {
+	if (defn.Scope == common.DEFAULT_SCOPE && defn.Collection == common.DEFAULT_COLLECTION) ||
+		(defn.Scope == "" && defn.Collection == "") {
+		return strings.Join([]string{defn.Bucket, defn.Name}, ".")
+	}
+	return strings.Join([]string{defn.Bucket, defn.Scope, defn.Collection, defn.Name}, ".")
 }
 
 type indexNameRequest struct {

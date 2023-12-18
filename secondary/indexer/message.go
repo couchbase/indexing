@@ -2282,14 +2282,15 @@ func (m *MsgClustMgrTopology) String() string {
 // CLUST_MGR_SET_LOCAL
 // CLUST_MGR_DEL_LOCAL
 type MsgClustMgrLocal struct {
-	mType             MsgType
-	key               string
-	value             string
-	err               error
-	respch            MsgChannel
-	checkDDL          bool
-	inProgressIndexes []string
-	values            map[string]string
+	mType              MsgType
+	key                string
+	value              string
+	err                error
+	respch             MsgChannel
+	checkDDL           bool
+	inProgressIndexes  []string
+	values             map[string]string
+	dropCleanupPending bool
 }
 
 func (m *MsgClustMgrLocal) GetMsgType() MsgType {
@@ -2322,6 +2323,10 @@ func (m *MsgClustMgrLocal) GetInProgressIndexes() []string {
 
 func (m *MsgClustMgrLocal) GetValues() map[string]string {
 	return m.values
+}
+
+func (m *MsgClustMgrLocal) GetDropCleanupPending() bool {
+	return m.dropCleanupPending
 }
 
 type MsgConfigUpdate struct {
@@ -2424,6 +2429,7 @@ func (m *MsgCheckDDLInProgress) GetBucketName() string {
 type MsgDDLInProgressResponse struct {
 	ddlInProgress        bool
 	inProgressIndexNames []string
+	dropCleanupPending   bool
 }
 
 func (m *MsgDDLInProgressResponse) GetMsgType() MsgType {
@@ -2436,6 +2442,10 @@ func (m *MsgDDLInProgressResponse) GetInProgressIndexNames() []string {
 
 func (m *MsgDDLInProgressResponse) GetDDLInProgress() bool {
 	return m.ddlInProgress
+}
+
+func (m *MsgDDLInProgressResponse) GetDropCleanupPending() bool {
+	return m.dropCleanupPending
 }
 
 type MsgUpdateIndexRState struct {

@@ -137,6 +137,7 @@ func newState() state {
 type runParams struct {
 	ddlRunning           bool
 	ddlRunningIndexNames []string
+	dropCleanupPending   bool
 }
 
 func filterRunParamsByBucket(ddlRunning bool, ddlRunningIndexNames []string, bucketName string) (
@@ -599,8 +600,8 @@ func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange
 	}
 
 	if c.GetBuildMode() == c.ENTERPRISE {
-		m.p.ddlRunning, m.p.ddlRunningIndexNames = m.checkDDLRunning()
-		l.Infof("%v Found DDL Running %v", method, m.p.ddlRunningIndexNames)
+		m.p.ddlRunning, m.p.ddlRunningIndexNames, m.p.dropCleanupPending = m.checkDDLRunning()
+		l.Infof("%v Found DDL Running %v %v", method, m.p.ddlRunningIndexNames, m.p.dropCleanupPending)
 	}
 
 	l.Infof("%v Init Prepare Phase", method)
@@ -819,7 +820,7 @@ func (m *RebalanceServiceManager) isNoOpRebal(change service.TopologyChange) boo
 // get a quick reply even if indexer is processing other work, to try to avoid causing
 // a rebalance timeout failure. It returns true and a slice of index names currently
 // in DDL processing if DDL is currently running, else false and an empty slice.
-func (m *RebalanceServiceManager) checkDDLRunning() (bool, []string) {
+func (m *RebalanceServiceManager) checkDDLRunning() (bool, []string, bool) {
 
 	respCh := make(MsgChannel)
 	m.supvPrioMsgch <- &MsgCheckDDLInProgress{respCh: respCh}
@@ -827,7 +828,8 @@ func (m *RebalanceServiceManager) checkDDLRunning() (bool, []string) {
 
 	ddlInProgress := msg.(*MsgDDLInProgressResponse).GetDDLInProgress()
 	inProgressIndexNames := msg.(*MsgDDLInProgressResponse).GetInProgressIndexNames()
-	return ddlInProgress, inProgressIndexNames
+	dropCleanupPending := msg.(*MsgDDLInProgressResponse).GetDropCleanupPending()
+	return ddlInProgress, inProgressIndexNames, dropCleanupPending
 }
 
 func (m *RebalanceServiceManager) checkRebalanceRunning() bool {
@@ -927,7 +929,8 @@ func (m *RebalanceServiceManager) registerRebalanceRunning(checkDDL bool) error 
 		if errMsg == ErrDDLRunning {
 			m.p.ddlRunning = true
 			m.p.ddlRunningIndexNames = resp.GetInProgressIndexes()
-			l.Infof("RebalanceServiceManager::registerRebalanceRunning Found DDL Running %v", m.p.ddlRunningIndexNames)
+			m.p.dropCleanupPending = resp.GetDropCleanupPending()
+			l.Infof("RebalanceServiceManager::registerRebalanceRunning Found DDL Running %v %v", m.p.ddlRunningIndexNames, m.p.dropCleanupPending)
 		} else {
 			l.Errorf("RebalanceServiceManager::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
 				"Meta Storage. Err %v", errMsg)
@@ -4142,6 +4145,7 @@ func (m *RebalanceServiceManager) getLocalMeta(key string) (string, error) {
 func (m *RebalanceServiceManager) resetRunParams() {
 	m.p.ddlRunning = false
 	m.p.ddlRunningIndexNames = nil
+	m.p.dropCleanupPending = false
 }
 
 func (m *RebalanceServiceManager) writeOk(w http.ResponseWriter) {

@@ -3152,11 +3152,19 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 
 func (rp *runParams) checkDDLRunning(caller string) (bool, error) {
 
-	if rp != nil && rp.ddlRunning {
-		l.Errorf("%v::doRebalance Found index build running. Cannot process rebalance.", caller)
-		fmtMsg := "%v indexer rebalance failure - index build is in progress for indexes: %v."
-		err := errors.New(fmt.Sprintf(fmtMsg, caller, rp.ddlRunningIndexNames))
-		return true, err
+	if rp != nil {
+		if rp.ddlRunning && len(rp.ddlRunningIndexNames) != 0 {
+			l.Errorf("%v::doRebalance Found index build running. Cannot process rebalance.", caller)
+			fmtMsg := "%v indexer rebalance failure - index build is in progress for indexes: %v."
+			err := errors.New(fmt.Sprintf(fmtMsg, caller, rp.ddlRunningIndexNames))
+			return true, err
+		} else if rp.dropCleanupPending {
+			l.Errorf("%v::doRebalance Found index drop cleanup pending. Cannot process rebalance.", caller)
+			fmtMsg := "%v indexer rebalance failure - index drop cleanup is in progress."
+			err := errors.New(fmt.Sprintf(fmtMsg, caller))
+			return true, err
+
+		}
 	}
 	return false, nil
 }

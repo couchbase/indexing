@@ -2401,6 +2401,17 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 		}
 	}
 
+	// safety check
+	_, indexExists := s.indexInstMap.Get()[idxInstId]
+	if !indexExists {
+		_, indexExists = s.indexPartnMap.Get()[idxInstId]
+	}
+
+	if !indexExists {
+		logging.Warnf("StorageMgr::updateIndexSnapMapForIndex skipping snapshot creation for index inst %v as it does not exist or is deleted", idxInstId)
+		return
+	}
+
 	partitionIDs, _ := idxInst.Pc.GetAllPartitionIds()
 	logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Partitions %v",
 		idxInstId, partitionIDs)
