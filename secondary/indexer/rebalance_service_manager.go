@@ -1115,6 +1115,11 @@ func (m *RebalanceServiceManager) cleanupOrphanTokens(change service.TopologyCha
 
 }
 
+type failedShardsContainer struct {
+	sync.Mutex
+	cleanupFailedShards map[common.ShardId]bool
+}
+
 func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.TransferToken) (map[c.ShardId]bool, error) {
 
 	if tts == nil || len(tts) == 0 {
@@ -1124,7 +1129,10 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 
 	// List of all shards that could not be cleaned up due to some error
 	// For these shards, unlock and restore shard done will be skipped
-	cleanupFailedShards := make(map[common.ShardId]bool)
+
+	failedShardIds := failedShardsContainer{
+		cleanupFailedShards: make(map[common.ShardId]bool),
+	}
 
 	// cancel any merge
 	indexStateMap := make(map[c.IndexInstId]c.RebalanceState)
@@ -1254,6 +1262,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	updateTokenMap := true
 	dropIssued := false
 	// cleanup transfer token
+	var shardTokenCleanupWaitGroup sync.WaitGroup
 	for _, t := range ttList {
 
 		if t.tt.IsShardTransferToken() {
@@ -1262,10 +1271,10 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 				m.cleanupShardTokenForMaster(t.ttid, t.tt)
 			}
 			if t.tt.SourceId == string(m.nodeInfo.NodeID) {
-				m.cleanupShardTokenForSource(t.ttid, t.tt, tokenMap, cleanupFailedShards, &updateTokenMap)
+				m.cleanupShardTokenForSource(t.ttid, t.tt, tokenMap, &failedShardIds, &updateTokenMap)
 			}
 			if t.tt.DestId == string(m.nodeInfo.NodeID) {
-				m.cleanupShardTokenForDest(t.ttid, t.tt, tokenMap, cleanupFailedShards, &updateTokenMap)
+				m.cleanupShardTokenForDest(t.ttid, t.tt, tokenMap, &failedShardIds, &updateTokenMap, &shardTokenCleanupWaitGroup)
 			}
 		} else {
 			l.Infof("RebalanceServiceManager::cleanupTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
@@ -1280,6 +1289,9 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 			}
 		}
 	}
+	// Wait for all the cleanup across shard tokens to complete. With the wait we are ensuring that the cleanup for a
+	// shard token concludes before the cleanup is called again from janitor
+	shardTokenCleanupWaitGroup.Wait()
 
 	m.cleanupAllDropOnSourceTokens()
 
@@ -1291,7 +1303,7 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 		time.Sleep(30 * time.Second)
 	}
 
-	return cleanupFailedShards, nil
+	return failedShardIds.cleanupFailedShards, nil
 }
 
 func (m *RebalanceServiceManager) isProxyFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (bool, error) {
@@ -1492,7 +1504,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForMaster(ttid string, tt *c.
 	return nil
 }
 
-func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, cleanupFailedShards map[c.ShardId]bool, updateTokenMap *bool) error {
+func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, failedShardContainer *failedShardsContainer, updateTokenMap *bool) error {
 
 	switch tt.ShardTransferTokenState {
 	case c.ShardTokenScheduledOnSource:
@@ -1601,7 +1613,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 		if dropOnSource {
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForSource Cleaning up token: %v on source "+
 				"as ShardTokenDropOnSource is posted for this token", ttid)
-			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, false)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, failedShardContainer, false)
 		} else {
 			// Else, cleanup on destination will be triggered as rebalance is not complete for this tenant
 
@@ -1616,7 +1628,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForSource(ttid string, tt *c.
 	return nil
 }
 
-func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, cleanupFailedShards map[c.ShardId]bool, updateTokenMap *bool) error {
+func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.TransferToken, tokenMap map[string]*c.TransferToken, failedShardContainer *failedShardsContainer, updateTokenMap *bool, shardTokenCleanupWaitGroup *sync.WaitGroup) error {
 
 	// TODO: Node may have updated in-memory booking for DDL
 	// during rebalance support. Clean that
@@ -1637,23 +1649,28 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		m.cleanupTranferredData(ttid, tt)
 
 		// Clean up local index instances
-		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, false, cleanupFailedShards, false)
+		return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, false, failedShardContainer, false)
 
 	case c.ShardTokenRecoverShard, c.ShardTokenMerge:
 		var cleanup = func(skipTokenDelete bool) error {
 			m.cleanupTranferredData(ttid, tt)
 
 			// Drop all indexes on destination and cleanup the data locally
-			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, skipTokenDelete)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, failedShardContainer, skipTokenDelete)
 		}
 
-		if tt.IsPendingReady {
-			if err := m.updateRStateForShardToken(ttid, tt); err != nil {
-				return cleanup(true)
+		shardTokenCleanupWaitGroup.Add(1)
+		go func(ttid string, tt *c.TransferToken) {
+			defer shardTokenCleanupWaitGroup.Done()
+			if tt.IsPendingReady {
+				err := m.updateRStateForShardToken(ttid, tt)
+				if err != nil {
+					cleanup(true)
+				}
+			} else {
+				cleanup(false)
 			}
-		} else {
-			return cleanup(false)
-		}
+		}(ttid, tt)
 
 	case c.ShardTokenReady:
 
@@ -1705,7 +1722,7 @@ func (m *RebalanceServiceManager) cleanupShardTokenForDest(ttid string, tt *c.Tr
 		if dropOnDest {
 			l.Infof("RebalanceServiceManager::cleanupShardTokenForDest Cleaning up token: %v on dest "+
 				"as ShardTokenDropOnSource is not posted for this token", ttid)
-			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, cleanupFailedShards, false)
+			return m.cleanupLocalIndexInstsAndShardToken(ttid, tt, true, failedShardContainer, false)
 		} else {
 
 			// Destination will call RestoreShardDone for the shardId involved in the
@@ -1772,10 +1789,12 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 		err := <-respch
 		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
 			//cleanup the index
-			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
+			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReadyForInst %v Err %v", ttid, err)
 			return err
 		}
 	} else {
+		ticker := time.NewTicker(time.Duration(2) * time.Minute)
+		defer ticker.Stop()
 
 		respch := make(chan error)
 		m.supvMsgch <- &MsgMergePartition{
@@ -1784,10 +1803,19 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 			rebalState: c.REBAL_ACTIVE,
 			respCh:     respch}
 
-		err := <-respch
-		if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
-			logging.Infof("RebalanceServiceManager::destTokenToMergeOrReady %v Err %v", ttid, err)
-			return err
+		for {
+			select {
+			case err := <-respch:
+				if err != nil && !isIndexDeletedDuringRebal(err.Error()) {
+					logging.Infof("RebalanceServiceManager::destTokenToMergeOrReadyForInst %v Err %v", ttid, err)
+					return err
+				} else {
+					return nil
+				}
+			case <-ticker.C:
+				logging.Warnf("RebalanceServiceManager::destTokenToMergeOrReadyForInst waiting for partition"+
+                                              "merge to finish for ttid: %v, index instance: %v, realInst: %v", ttid, instId, realInstId)
+			}
 		}
 	}
 
@@ -1795,15 +1823,39 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 }
 
 func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.TransferToken) error {
+	var wg sync.WaitGroup
+
+	var errList struct {
+		sync.Mutex
+		list []error
+	}
+
 	for i := range tt.IndexInsts {
-		if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[i], tt.RealInstIds[i], ttid); err != nil {
-			logging.Errorf("RebalanceServiceManager::updateRStateForShardToken Error observed when changing "+
-				"RState of instId: %v, realInstId: %v, ttid: %v", tt.InstIds[i], tt.RealInstIds[i], ttid)
-			tt.Error = err.Error()
-			tt.IsPendingReady = false // Reset pending ready so that token will be deleted in next iteration
-			setTransferTokenInMetakv(ttid, tt)
-			return err
-		}
+		wg.Add(1)
+
+		go func(idx int) {
+			defer wg.Done()
+			if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[idx], tt.RealInstIds[idx], ttid); err != nil {
+				errList.Lock()
+				errList.list = append(errList.list, err)
+				errList.Unlock()
+				logging.Errorf("RebalanceServiceManager::updateRStateForShardToken Error observed when changing "+
+					"RState of instId: %v, realInstId: %v, ttid: %v", tt.InstIds[idx], tt.RealInstIds[idx], ttid)
+			}
+		}(i)
+	}
+
+	// wait for all the IndexInsts in the tt to get a response back
+	wg.Wait()
+
+	if len(errList.list) != 0 {
+		err := errList.list[0]
+
+		tt.Error = err.Error()
+		tt.IsPendingReady = false // Reset pending ready so that token will be deleted in next iteration
+		setTransferTokenInMetakv(ttid, tt)
+
+		return err
 	}
 
 	// No error is observed. Update the transfer token state to Ready
@@ -1948,7 +2000,7 @@ func (m *RebalanceServiceManager) cleanupAllDropOnSourceTokens() error {
 }
 
 func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid string, tt *c.TransferToken,
-	dropIndexes bool, cleanupFailedShards map[c.ShardId]bool, skipTokenDelete bool) error {
+	dropIndexes bool, failedShardContainer *failedShardsContainer, skipTokenDelete bool) error {
 
 	logging.Infof("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Cleaning up for "+
 		"ttid: %v, dropIndexes: %v", ttid, dropIndexes)
@@ -1970,7 +2022,9 @@ func (m *RebalanceServiceManager) cleanupLocalIndexInstsAndShardToken(ttid strin
 	// will take care of cleaning up the index and the shards once the errors are resolved
 	if err != nil {
 		for _, shardId := range tt.ShardIds {
-			cleanupFailedShards[shardId] = true
+			failedShardContainer.Lock()
+			failedShardContainer.cleanupFailedShards[shardId] = true
+			failedShardContainer.Unlock()
 		}
 		logging.Errorf("RebalanceServiceManager::cleanupLocalIndexInstsAndShardToken Error observed while dropping indexes. Skipping shard destruction. err: %v", err)
 		return err
