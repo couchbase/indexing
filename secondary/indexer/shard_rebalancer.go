@@ -135,6 +135,7 @@ type ShardRebalancer struct {
 	dcpRebrCloseOnce sync.Once     // sync construct to handle the closure of 'dcpRebrCloseCh'
 
 	shardProgressRatio, dcpProgressRatio float64
+	shardProgress, dcpProgress           float64Holder
 
 	removeDupIndex bool
 
@@ -212,6 +213,9 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 		batchBuildReqCh:     make(chan *batchBuildReq, 100),
 		droppedInstsInRebal: make(map[c.IndexInstId]bool),
 	}
+
+	sr.shardProgress.SetFloat64(0)
+	sr.dcpProgress.SetFloat64(0)
 
 	sr.config.Store(config)
 
@@ -3080,10 +3084,8 @@ func (sr *ShardRebalancer) updateProgress() {
 
 	l.Infof("ShardRebalancer::updateProgress goroutine started")
 
-	progHolder := float64Holder{}
-	progHolder.SetFloat64(0)
 	// set progress
-	go asyncCollectProgress(&progHolder, sr.computeProgress, 5*time.Second,
+	go asyncCollectProgress(&sr.shardProgress, sr.computeProgress, 5*time.Second,
 		"ShardRebalancer::updateProgress", sr.cancel, sr.done)
 
 	// report progress
@@ -3093,8 +3095,7 @@ func (sr *ShardRebalancer) updateProgress() {
 	for {
 		select {
 		case <-ticker.C:
-			progress := progHolder.GetFloat64()
-			sr.cb.progress(progress, sr.cancel)
+			sr.cb.progress(sr.getCurrentTotalProgress(), sr.cancel)
 		case <-sr.cancel:
 			l.Infof("ShardRebalancer::updateProgress Cancel Received. progress reporter stapped")
 			return
@@ -4357,8 +4358,9 @@ func (sr *ShardRebalancer) dcpRebrProgressCallback(progress float64, cancel <-ch
 	if sr.cb.progress == nil {
 		return
 	}
+	sr.dcpProgress.SetFloat64(progress)
 
-	sr.cb.progress(sr.shardProgressRatio+progress*sr.dcpProgressRatio, cancel)
+	sr.cb.progress(sr.getCurrentTotalProgress(), cancel)
 }
 
 func (sr *ShardRebalancer) InitGlobalTopology(globalTopology *manager.ClusterIndexMetadata) {
@@ -4641,4 +4643,9 @@ func (sr *ShardRebalancer) unlockShardsOnSourcePostTransfer(ttid string, tt *c.T
 			tt.ShardIds, ttid)
 		unlockShards(tt.ShardIds, sr.supvMsgch)
 	}
+}
+
+func (sr *ShardRebalancer) getCurrentTotalProgress() float64 {
+	return (sr.shardProgress.GetFloat64() * sr.shardProgressRatio) +
+		(sr.dcpProgress.GetFloat64() * sr.dcpProgressRatio)
 }
