@@ -886,7 +886,8 @@ func (sr *ShardRebalancer) processShardTransferTokenAsMaster(ttid string, tt *c.
 			setTransferTokenInMetakv(dropOnSourceTokenId, dropOnSourceToken)
 		}
 
-		return true
+		// return false so that source can update its book-keeping if source and master are same
+		return false
 
 	case c.ShardTokenDropOnSource:
 		// Just update in-mem book keeping
@@ -1026,8 +1027,28 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		sr.updateInstsTransferPhase(ttid, tt, c.RebalanceTransferDone)
 		return false
 
+	case c.ShardTokenReady:
+		sr.updateInMemToken(ttid, tt, "source")
+		if sr.isDropOnSourceTokenPosted(ttid) {
+			logging.Infof("ShardRebalancer::processShardTransferTokenAsSource Queuing indexes for drop as DropOnSource "+
+				"token is posted for this tokenId: %v", ttid)
+			return sr.checkAndQueueTokenForDrop(tt, ttid, tt.SiblingTokenId)
+		}
+		return false
+
 	case c.ShardTokenDropOnSource:
 		sr.updateInMemToken(ttid, tt, "source")
+
+		if sr.getSourceIdForTokenId(tt.SourceTokenId) != sr.nodeUUID &&
+			sr.getSourceIdForTokenId(tt.SiblingTokenId) != sr.nodeUUID {
+			return false // return as the dropOnSource token was not meant for the tokens on this node
+		}
+
+		if sr.shouldProcessDropOnSource(tt) == false {
+			logging.Infof("ShardRebalancer::processShardTransferTokenAsSource Skipping dropOnSource token: %v as "+
+				"either the source(%v)/sibling token(%v) is not in Ready state", ttid, tt.SourceTokenId, tt.SiblingTokenId)
+			return true
+		}
 
 		// For this token type, compare the sourceId of the corresponding
 		// tokens with ID's as tt.TokenId or tt.SiblingTokenId.
@@ -1356,6 +1377,47 @@ func (sr *ShardRebalancer) getSiblingState(tt *c.TransferToken) c.ShardTokenStat
 		return siblingToken.ShardTransferTokenState
 	}
 	return c.ShardTokenError // Return error as the default state
+}
+
+func (sr *ShardRebalancer) shouldProcessDropOnSource(tt *c.TransferToken) bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if tt.ShardTransferTokenState != c.ShardTokenDropOnSource {
+		return false
+	}
+
+	// If token is in ready state, process the token
+	// Otherwise, skip processing the dropOnSource token
+	srcToken, ok := sr.sourceTokens[tt.SourceTokenId]
+	if ok && srcToken.ShardTransferTokenState == c.ShardTokenReady && srcToken.SourceId == sr.nodeUUID {
+		return true
+	}
+
+	// If sibling token is in ready state, process the token
+	// Otherwise, skip processing the dropOnSource token
+	sibToken, ok := sr.sourceTokens[tt.SiblingTokenId]
+	if ok && sibToken.ShardTransferTokenState == c.ShardTokenReady && sibToken.SourceId == sr.nodeUUID {
+		return true
+	}
+
+	return false
+}
+
+func (sr *ShardRebalancer) isDropOnSourceTokenPosted(ttid string) bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	for _, token := range sr.sourceTokens {
+		if token.ShardTransferTokenState != c.ShardTokenDropOnSource {
+			continue
+		}
+
+		if token.SourceTokenId == ttid || token.SiblingTokenId == ttid {
+			return true
+		}
+	}
+	return false
 }
 
 func (sr *ShardRebalancer) getSourceIdForTokenId(ttid string) string {
