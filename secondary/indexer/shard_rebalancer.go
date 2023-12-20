@@ -1025,6 +1025,13 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 		// index commands that have been issued while transfer is
 		// in progress
 		sr.updateInstsTransferPhase(ttid, tt, c.RebalanceTransferDone)
+
+		// in new rebalance scheme, we can have some indices being created on a shard being copied
+		// via DCP rebalance. with empty node batching in mind, we should unlock copied shards
+		// to avoid index creation failure when DCP rebalance tries to create the index on a shard
+		// on source node
+		sr.unlockShardsOnSourcePostTransfer(ttid, tt)
+
 		return false
 
 	case c.ShardTokenReady:
@@ -1091,11 +1098,13 @@ func (sr *ShardRebalancer) processShardTransferTokenAsSource(ttid string, tt *c.
 func (sr *ShardRebalancer) checkAndQueueTokenForDrop(token *c.TransferToken, sourceId, siblingId string) bool {
 	sourceToken := sr.getTokenById(sourceId)
 	if sourceToken != nil && sourceToken.TransferMode == common.TokenTransferModeCopy && siblingId == "" { // only replica repair case
-		// Since this is replica repair, do not drop the shard data. Only cleanup the transferred data
-		// and unlock the shards
-		l.Infof("ShardRebalancer::checkAndQueueTokenForDrop Initiating shard unlocking for token: %v", sourceId)
+		if !sourceToken.IsEmptyNodeBatch || c.IsServerlessDeployment() {
+			// Since this is replica repair, do not drop the shard data. Only cleanup the transferred data
+			// and unlock the shards
+			l.Infof("ShardRebalancer::checkAndQueueTokenForDrop Initiating shard unlocking for token: %v", sourceId)
 
-		unlockShards(sourceToken.ShardIds, sr.supvMsgch)
+			unlockShards(sourceToken.ShardIds, sr.supvMsgch)
+		}
 		sr.initiateShardTransferCleanup(sourceToken.ShardPaths, sourceToken.Destination, sourceToken.Region, sourceId, sourceToken, nil, false)
 
 		sourceToken.ShardTransferTokenState = common.ShardTokenCommit
@@ -4620,4 +4629,16 @@ func (sr *ShardRebalancer) isInstDroppedDuringRebal(instId, realInstId c.IndexIn
 	_, ok2 := sr.droppedInstsInRebal[realInstId]
 
 	return ok1 || ok2
+}
+
+func (sr *ShardRebalancer) unlockShardsOnSourcePostTransfer(ttid string, tt *c.TransferToken) {
+	if !c.IsServerlessDeployment() && tt != nil && tt.SourceId == sr.nodeUUID &&
+		tt.TransferMode == c.TokenTransferModeCopy &&
+		tt.ShardTransferTokenState == c.ShardTokenRecoverShard &&
+		tt.IsEmptyNodeBatch && tt.IsPendingReady {
+
+		logging.Infof("ShardRebalancer::unlockShardsOnSourcePostTransfer unlocking shards %v as token %v has finished transfer and recovery on destination",
+			tt.ShardIds, ttid)
+		unlockShards(tt.ShardIds, sr.supvMsgch)
+	}
 }

@@ -549,17 +549,16 @@ func (m *RebalanceServiceManager) prepareFailover(change service.TopologyChange)
 func (m *RebalanceServiceManager) prepareRebalance(change service.TopologyChange) error {
 	const method = "RebalanceServiceManager::prepareRebalance:" // for logging
 
-	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
-	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
-
 	var err error
 	if m.isCleanupPending() {
-		m.setStateIsBalanced(false)
 		err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
 			"failed/aborted rebalance/failover/move index. please retry the request later.")
 		l.Errorf("%v %v", method, err)
 		return err
 	}
+
+	lockTime := c.TraceRWMutexLOCK(c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
+	defer c.TraceRWMutexUNLOCK(lockTime, c.LOCK_WRITE, m.svcMgrMu, "svcMgrMu", method, "")
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 		err = errors.New("indexer rebalance failure - move index in progress")
