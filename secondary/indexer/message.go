@@ -209,6 +209,7 @@ const (
 	SHARD_TRANSFER_STAGING_CLEANUP
 	START_SHARD_RESTORE
 	DESTROY_LOCAL_SHARD
+	DESTROY_EMPTY_SHARD
 	MONITOR_SLICE_STATUS
 	UPDATE_REBALANCE_PHASE
 	LOCK_SHARDS
@@ -3185,6 +3186,14 @@ func (m *MsgPeerServerCommand) GetRespCh() chan error {
 	return m.respCh
 }
 
+type MsgDestroyEmptyShard struct {
+	mType MsgType
+}
+
+func (m *MsgDestroyEmptyShard) GetMsgType() MsgType {
+	return DESTROY_EMPTY_SHARD
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3499,6 +3508,8 @@ func (m MsgType) String() string {
 		return "START_SHARD_RESTORE"
 	case DESTROY_LOCAL_SHARD:
 		return "DESTROY_LOCAL_SHARD"
+	case DESTROY_EMPTY_SHARD:
+		return "DESTROY_EMPTY_SHARD"
 	case MONITOR_SLICE_STATUS:
 		return "MONITOR_SLICE_STATUS"
 	case LOCK_SHARDS:

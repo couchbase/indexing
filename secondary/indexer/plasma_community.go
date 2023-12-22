@@ -53,3 +53,11 @@ func RecoveryDone() {
 func GetShardCompactVersion() int {
 	return 0
 }
+
+func GetEmptyShardInfo() ([]common.ShardId, error) {
+	return nil, nil
+}
+
+func DestroyShard(shardId common.ShardId) error {
+	return nil
+}

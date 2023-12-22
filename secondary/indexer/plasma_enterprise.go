@@ -59,3 +59,16 @@ func GetShardCompactVersion() int {
 	}
 	return plasma.ShardCompatVersion
 }
+
+func GetEmptyShardInfo() ([]common.ShardId, error) {
+	plasmaShards, err := plasma.GetCurrentEmptyShardsInfo()
+	var gsiShards []common.ShardId
+	for _, shard := range plasmaShards {
+		gsiShards = append(gsiShards, common.ShardId(shard))
+	}
+	return gsiShards, err
+}
+
+func DestroyShard(shardId common.ShardId) error {
+	return plasma.DestroyShardID(plasma.ShardId(shardId))
+}
