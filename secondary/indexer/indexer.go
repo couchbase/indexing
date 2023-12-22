@@ -592,6 +592,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, genericMgr, pauseMgr, rebalMgr, serverlessMgr)
 
 	go idx.monitorKVNodes()
+	go idx.destroyEmptyShards()
 
 	// enable inMemoryCompression feature on 7.1 cluster upgrade
 	go idx.enablePlasmaInMemCompression()
@@ -1627,6 +1628,14 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case DESTROY_EMPTY_SHARD:
+		if idx.rebalanceRunning || idx.rebalanceToken != nil {
+			logging.Infof("Indexer::handleWorkerMsgs Skipping to process DESTROY_EMPTY_SHARD as rebalance is running")
+		} else {
+			idx.storageMgrCmdCh <- msg
+			<-idx.storageMgrCmdCh
+		}
+
 	case INDEXER_INST_RECOVERY_RESPONSE:
 		idx.handleInstRecoveryResponse(msg)
 
@@ -1804,6 +1813,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	idx.cpuThrottle.SetCpuTarget(throttleVal)
 
 	idx.config = newConfig
+
+	emptyShardDestroyInterval := oldConfig["empty_shard_destroy_interval"].Int()
+	if emptyShardDestroyInterval == 0 && newConfig["empty_shard_destroy_interval"].Int() > 0 {
+		go idx.destroyEmptyShards() // Spawn a go-routine to destroy empty shards
+	}
 
 	idx.compactMgrCmdCh <- msg
 	<-idx.compactMgrCmdCh
@@ -11928,6 +11942,47 @@ func (idx *indexer) monitorKVNodes() {
 
 		case <-idx.shutdownInitCh:
 			return
+		}
+	}
+}
+
+func (idx *indexer) destroyEmptyShards() {
+
+	if common.GetStorageMode() != common.PLASMA {
+		logging.Infof("Indexer::destroyEmptyShards Exiting as storage mode is not plasma")
+		return
+	}
+
+	destroyTickerInterval := idx.config["empty_shard_destroy_interval"].Int()
+	if destroyTickerInterval == 0 {
+		logging.Infof("Indexer::destroyEmptyShards Exiting as destroy interval is set to 0")
+		return
+	}
+	logging.Infof("Indexer::destroyEmptyShards Starting destroyEmptyShards go-routine with interval of: %v min", destroyTickerInterval)
+
+	destroyShardsTicker := time.NewTicker(time.Duration(destroyTickerInterval) * time.Minute)
+	defer destroyShardsTicker.Stop()
+
+	for {
+		select {
+		case <-destroyShardsTicker.C:
+			// Send a message to indexer internal receive channel to destroy empty shards
+			idx.internalRecvCh <- &MsgDestroyEmptyShard{}
+
+			newDestroyTickerInterval := idx.config["empty_shard_destroy_interval"].Int()
+			if newDestroyTickerInterval != destroyTickerInterval {
+
+				if newDestroyTickerInterval == 0 {
+					logging.Infof("Indexer::destroyEmptyShards Exiting as destroy interval is set to 0")
+					return
+				}
+
+				logging.Infof("Indexer::destroyEmptyShards Updating empty shard destroy interval to: %v", newDestroyTickerInterval)
+				destroyTickerInterval = newDestroyTickerInterval
+
+				destroyShardsTicker.Stop()
+				destroyShardsTicker = time.NewTicker(time.Duration(destroyTickerInterval) * time.Minute)
+			}
 		}
 	}
 }

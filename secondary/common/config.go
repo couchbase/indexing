@@ -3797,6 +3797,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.empty_shard_destroy_interval": ConfigValue{
+		30,
+		"Time in minutes at which all the empty shards will be removed by GSI",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.serverless.maxInstancePerShard": ConfigValue{
 		uint64(math.MaxInt64),
 		"Maximum number of instances per shard for serverless",
