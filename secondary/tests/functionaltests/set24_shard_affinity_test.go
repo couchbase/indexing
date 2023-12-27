@@ -16,6 +16,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/indexing/secondary/testcode"
 	"github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -399,6 +400,116 @@ func TestWithShardAffinity(t *testing.T) {
 		performClusterStateValidation(subt, false)
 	})
 
+	// entry cluster config - [0: kv n1ql] [1: index] [2: index]
+	// exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
+	t.Run("TestRebalanceCancelIndexerBeforeRecovery", func(subt *testing.T) {
+		log.Print("In TestRebalanceCancelIndexerBeforeRecovery")
+		status := getClusterStatus()
+		if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[2]) {
+			subt.Fatalf("%v Unexpected cluster configuration: %v", subt.Name(), status)
+		}
+
+		printClusterConfig(subt.Name(), "entry")
+
+		log.Print("** Setting TestAction REBALANCE_CANCEL for DEST_INDEXER_BEFORE_INDEX_RECOVERY")
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
+			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Failed to activate testactions")
+
+		defer func() {
+			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
+				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			tc.HandleError(err, "Failed to activate testactions")
+
+			removeNode(clusterconfig.Nodes[3], subt)
+
+			printClusterConfig(subt.Name(), "exit")
+		}()
+
+		tag := testcode.DEST_INDEXER_BEFORE_INDEX_RECOVERY
+		err = testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[3], clusterconfig.Username,
+			clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
+		FailTestIfError(err, "Error while posting request to metaKV", subt)
+
+		log.Print("** Starting Shard Rebalance (node n2 <=> n3)")
+		swapRebalance(subt, 3, 2)
+
+		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
+			clusterconfig.Password)
+		tc.HandleError(err, "Failed to get last rebalance report")
+		if completionMsg, exists := report["completionMessage"]; exists &&
+			!strings.Contains(completionMsg.(string), "stopped by user") {
+			subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
+				report)
+		} else if !exists {
+			subt.Fatalf("Rebalance report does not have any completion message - %v",
+				report)
+		}
+
+		waitForRebalanceCleanup()
+
+		performClusterStateValidation(subt, false)
+	})
+
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
+	t.Run("TestRebalanceCancelIndexerAfterRecovery", func(subt *testing.T) {
+		log.Print("In TestRebalanceCancelIndexerAfterRecovery")
+		status := getClusterStatus()
+		if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+			!isNodeIndex(status, clusterconfig.Nodes[2]) {
+			subt.Fatalf("%v Unexpected cluster configuration: %v", subt.Name(), status)
+		}
+
+		printClusterConfig(subt.Name(), "entry")
+
+		log.Print("** Setting TestAction REBALANCE_CANCEL for DEST_INDEXER_AFTER_INDEX_RECOVERY")
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
+			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Failed to activate testactions")
+
+		defer func() {
+			err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
+				clusterconfig.Username, clusterconfig.Password, kvaddress)
+			tc.HandleError(err, "Failed to activate testactions")
+
+			removeNode(clusterconfig.Nodes[3], subt)
+
+			printClusterConfig(subt.Name(), "exit")
+		}()
+
+		tag := testcode.DEST_INDEXER_AFTER_INDEX_RECOVERY
+		err = testcode.PostOptionsRequestToMetaKV(clusterconfig.Nodes[3], clusterconfig.Username,
+			clusterconfig.Password, tag, testcode.REBALANCE_CANCEL, "", 0)
+		FailTestIfError(err, "Error while posting request to metaKV", subt)
+
+		log.Print("** Starting Shard Rebalance (node n2 <=> n3)")
+		swapRebalance(subt, 3, 2)
+
+		report, err := getLastRebalanceReport(kvaddress, clusterconfig.Username,
+			clusterconfig.Password)
+		tc.HandleError(err, "Failed to get last rebalance report")
+		if completionMsg, exists := report["completionMessage"]; exists &&
+			!strings.Contains(completionMsg.(string), "stopped by user") {
+			subt.Fatalf("Expected rebalance to be cancelled but it did not cancel. Report - %v",
+				report)
+		} else if !exists {
+			subt.Fatalf("Rebalance report does not have any completion message - %v",
+				report)
+		}
+
+		waitForRebalanceCleanup()
+
+		performClusterStateValidation(subt, false)
+	})
+
+	t.Run("TestResetMetakvActions", func(subt *testing.T) {
+		subt.Log("In TestResetMetakvActions")
+
+		tc.HandleError(testcode.ResetMetaKV(), "Failed to reset metakv testactions")
+	})
 }
 
 // In an existing cluster with indices, we enable the shard affinity feature
@@ -918,7 +1029,7 @@ func swapRebalance(t *testing.T, nidIn, nidOut int) {
 
 func getLocalMetaWithRetry(nodeAddress string) (*manager.LocalIndexMetadata, error) {
 	meta := (*manager.LocalIndexMetadata)(nil)
-	err := c.NewRetryHelper(10, 10*time.Millisecond, 5,
+	err := c.NewRetryHelper(5, 1*time.Millisecond, 5,
 		func(attempts int, lastErr error) error {
 			if attempts > 0 {
 				log.Printf("WARN - failed to get local meta from %v for %v times. Last err - %v",
@@ -933,4 +1044,27 @@ func getLocalMetaWithRetry(nodeAddress string) (*manager.LocalIndexMetadata, err
 		})
 
 	return meta, err
+}
+
+func getLastRebalanceReport(kvaddress, username, password string) (map[string]interface{}, error) {
+	var res map[string]interface{}
+	var err = c.NewRetryHelper(5, 1*time.Millisecond, 5, func(attemp int, lastErr error) error {
+		resp, err := http.Get(fmt.Sprintf("http://%v:%v@%v/logs/rebalanceReport", username, password, kvaddress))
+		if resp.Body != nil {
+			defer resp.Body.Close()
+		}
+
+		if err != nil {
+			return err
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+
+		return json.Unmarshal(body, &res)
+	}).Run()
+
+	return res, err
 }
