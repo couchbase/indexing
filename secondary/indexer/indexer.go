@@ -3704,7 +3704,12 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		cluster := idx.config["clusterAddr"].String()
-		numVBuckets := idx.bucketNameNumVBucketsMap[inst.Defn.Bucket]
+		numVBuckets, found := idx.bucketNameNumVBucketsMap[inst.Defn.Bucket]
+
+		if !found || numVBuckets < common.MIN_VBUCKETS_ALLOWED || numVBuckets > common.MAX_VBUCKETS_ALLOWED {
+			logging.Errorf("Indexer::handleBuildIndex, err: %v, keyspace: %v, numVBuckets:%v, found: %v",
+				common.ErrNumVbRange, keyspaceId, numVBuckets, found)
+		}
 
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
@@ -5221,7 +5226,13 @@ func (idx *indexer) initRecoveryForOSO(streamId common.StreamId,
 
 	//create zero ts for rollback to 0
 	bucketName := GetBucketFromKeyspaceId(keyspaceId)
-	numVbuckets := idx.bucketNameNumVBucketsMap[bucketName]
+	numVbuckets, found := idx.bucketNameNumVBucketsMap[bucketName]
+
+	if !found || numVbuckets < common.MIN_VBUCKETS_ALLOWED || numVbuckets > common.MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("Indexer::initRecoveryForOSO, err: %v, keyspace: %v, numVBuckets: %v, found: %v",
+			common.ErrNumVbRange, keyspaceId, numVbuckets, found)
+	}
+
 	restartTs := common.NewTsVbuuid(bucketName, numVbuckets)
 
 	idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -6365,8 +6376,9 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		partnInst := PartitionInst{Defn: partnDefn,
 			Sc: NewHashedSliceContainer()}
 
-		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v, shardIds: %v, alternateShardIds: %v",
-			indexInst.InstId, partnInst, indexInst.Defn.ShardIdsForDest, indexInst.Defn.AlternateShardIds)
+		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t"+
+			"Index: %v Partition: %v shardIds: %v, alternateShardIds: %v, numVbuckets: %v",
+			indexInst.InstId, partnInst, indexInst.Defn.ShardIdsForDest, indexInst.Defn.AlternateShardIds, numVBuckets)
 
 		//add a single slice per partition for now
 		var slice Slice
@@ -7061,7 +7073,13 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 
 	//use bucket as keyspaceId for MAINT_STREAM
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
-	numVBuckets := idx.bucketNameNumVBucketsMap[bucket]
+	numVBuckets, found := idx.bucketNameNumVBucketsMap[bucket]
+
+	if !found || numVBuckets < common.MIN_VBUCKETS_ALLOWED || numVBuckets > common.MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("Indexer::processBuildDoneCatchup, err: %v, keyspace: %v, numVBuckets: %v, found: %v",
+			keyspaceId, common.ErrNumVbRange, keyspaceId, numVBuckets, found)
+	}
+
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 		streamId:    common.MAINT_STREAM,
 		keyspaceId:  bucket,
@@ -7909,7 +7927,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	}
 
 	clustAddr := idx.config["clusterAddr"].String()
-	numVBuckets := idx.bucketNameNumVBucketsMap[GetBucketFromKeyspaceId(keyspaceId)]
+	numVBuckets, found := idx.bucketNameNumVBucketsMap[GetBucketFromKeyspaceId(keyspaceId)]
+	if !found || numVBuckets < common.MIN_VBUCKETS_ALLOWED || numVBuckets > common.MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("Indexer::startKeyspaceIdStream, err: %v, keyspace: %v, numVBuckets: %v, found: %v",
+			keyspaceId, common.ErrNumVbRange, keyspaceId, numVBuckets, found)
+	}
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
 	idx.cinfoProviderLock.RLock()

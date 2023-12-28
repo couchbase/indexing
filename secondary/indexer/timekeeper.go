@@ -296,6 +296,11 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if numVBuckets < common.MIN_VBUCKETS_ALLOWED || numVBuckets > common.MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("Timekeeper::handleStreamOpen, err: %v recieved for stream %v, keyspace: %v",
+			common.ErrNumVbRange, streamId, keyspaceId)
+	}
+
 	if tk.ss.streamStatus[streamId] != STREAM_ACTIVE {
 		tk.ss.initNewStream(streamId)
 		logging.Infof("Timekeeper::handleStreamOpen Stream %v "+
