@@ -453,7 +453,7 @@ func TestWithShardAffinity(t *testing.T) {
 		performClusterStateValidation(subt, false)
 	})
 
-	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index] [3: index]
+	// entry and exit cluster config - [0: kv n1ql] [1: index] [2: index]
 	t.Run("TestRebalanceCancelIndexerAfterRecovery", func(subt *testing.T) {
 		log.Print("In TestRebalanceCancelIndexerAfterRecovery")
 		status := getClusterStatus()
@@ -501,6 +501,14 @@ func TestWithShardAffinity(t *testing.T) {
 		}
 
 		waitForRebalanceCleanup()
+
+		performClusterStateValidation(subt, false)
+	})
+
+	// entry config - [0: kv n1ql] [1: index] [2: index]
+	// exit config - [0: kv n1ql] [1: index]            [3: index]
+	t.Run("TestShardRebalanceWithCreateCommandToken", func(subt *testing.T) {
+		TestRebalanceWithCreateCommandToken(subt)
 
 		performClusterStateValidation(subt, false)
 	})

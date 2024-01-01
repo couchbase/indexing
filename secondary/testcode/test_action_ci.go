@@ -4,6 +4,7 @@
 package testcode
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -16,10 +17,10 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 )
 
-func TestActionAtTag(cfg common.Config, tag TestActionTag) {
+func TestActionAtTag(cfg common.Config, tag TestActionTag) error {
 	execTestAction := cfg["shardRebalance.execTestAction"].Bool()
 	if !execTestAction {
-		return
+		return nil
 	}
 
 	var option TestOptions
@@ -28,14 +29,14 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 	_, err := common.MetakvGet(common.IndexingMetaDir+METAKV_TEST_PATH, &option)
 	if err != nil {
 		logging.Errorf("TestCode::TestActionAtTag: Error while retrieving options from metaKV, err: %v", err)
-		return
+		return nil
 	}
 
 	clusterAddr := cfg["clusterAddr"].String()
 	// For non-master nodes, take action only for the node specified in the action
 	if !isMasterTag(option.ActionAtTag) {
 		if option.ActionOnNode != clusterAddr {
-			return
+			return nil
 		}
 	}
 
@@ -62,11 +63,14 @@ func TestActionAtTag(cfg common.Config, tag TestActionTag) {
 
 		case EXEC_N1QL_STATEMENT:
 			// TODO: Add support for n1ql statement execution
+		case INJECT_ERROR:
+			logging.Infof("TestCode::TestActionAtTag: raising error %.*s...", min(10, len(option.InduceErr)), option.InduceErr)
+			return errors.New(option.InduceErr)
 		}
 	}
 
 	// No-op for other states
-	return
+	return nil
 }
 
 func IgnoreAlternateShardIds(cfg common.Config, defn *common.IndexDefn) {

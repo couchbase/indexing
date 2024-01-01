@@ -7,9 +7,10 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
-func TestActionAtTag(cfg common.Config, tag TestActionTag) {
+func TestActionAtTag(cfg common.Config, tag TestActionTag) error {
 	// Note: This function is a no-op for non-CI builds. See test_action_ci.go
 	// for the implementation for CI builds
+	return nil
 }
 
 func IgnoreAlternateShardIds(cfg common.Config, defn *common.IndexDefn) {

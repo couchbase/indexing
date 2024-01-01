@@ -21,6 +21,9 @@ type TestOptions struct {
 
 	// Time (in milliseconds) to sleep when the test hits the tag
 	SleepTime int `json:"sleepTime,omitempty"`
+
+	// error to inject at tag (per node setting)
+	InduceErr string `json:"induceErr,omitempty"`
 }
 
 func MarshalTestOptions(clusterAddr string,
@@ -60,12 +63,20 @@ func PostOptionsRequestToMetaKV(actionAtNode, username, password string,
 	actionAtTag TestActionTag, action TestAction,
 	n1qlStatement string, sleepTime int) error {
 
+	return PostOptionsRequestToMetaKV2(actionAtNode, username, password, actionAtTag, action, n1qlStatement, sleepTime, "")
+}
+
+func PostOptionsRequestToMetaKV2(actionAtNode, username, password string,
+	actionAtTag TestActionTag, action TestAction,
+	n1qlStatement string, sleepTime int, injectionErr string) error {
+
 	option := &TestOptions{
 		ActionOnNode:  actionAtNode,
 		ActionAtTag:   actionAtTag,
 		N1QLStatement: n1qlStatement,
 		SleepTime:     sleepTime,
 		Action:        action,
+		InduceErr:     injectionErr,
 	}
 
 	if err := common.MetakvSet(common.IndexingMetaDir+METAKV_TEST_PATH, option); err != nil {
