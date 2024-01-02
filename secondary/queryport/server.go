@@ -386,7 +386,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	for req := range rcvch {
 		s.callb(req.r, ctx, conn, req.quitch, clientVersion) // blocking call
-		if clientVersion < common.INDEXER_72_VERSION && req.r != Ping {
+		if clientVersion < common.INDEXER_76_VERSION && req.r != Ping {
 			transport.SendResponseEnd(conn)
 		}
 	}
