@@ -252,7 +252,7 @@ func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, 
 		connectn, err1, poolClosed = c.pool.Renew(connectn)
 
 		if connectn != nil && err1 == nil {
-			logging.Verbosef("%v renew connection from %v to %v", requestId, connectn.conn.LocalAddr(), connectn.conn.RemoteAddr())
+			logging.Verbosef("%v GsiScanClient::doStreamingWithRetry req(%v) renew connection from %v to %v", c.logPrefix, requestId, connectn.conn.LocalAddr(), connectn.conn.RemoteAddr())
 		}
 
 		return err1 == nil
@@ -1309,7 +1309,7 @@ func (c *GsiScanClient) doRequestResponse(req interface{}, requestId string,
 	}()
 
 	renew := func() bool {
-		logging.Verbosef("%v renew connection %v", requestId, c.pool.host)
+		logging.Verbosef("%v GsiScanClient::doRequestResponse req(%v) renew connection %v", c.logPrefix, requestId, c.pool.host)
 
 		var err1 error
 		connectn, err1, poolClosed = c.pool.Renew(connectn)
@@ -1333,9 +1333,9 @@ REQUEST_RESPONSE_RETRY:
 		goto REQUEST_RESPONSE_RETRY
 	}
 	if err != nil {
-		fmsg := "%v %T(%v) request transport failed `%v`\n"
+		fmsg := "%v GsiScanClient::doRequestResponse req(%v) %T request transport failed `%v`\n"
 		arg1 := logging.TagUD(req)
-		logging.Errorf(fmsg, c.logPrefix, arg1, requestId, err)
+		logging.Errorf(fmsg, c.logPrefix, requestId, arg1, err)
 		healthy = false
 		return nil, 0, err
 	}
@@ -1366,8 +1366,8 @@ REQUEST_RESPONSE_RETRY:
 
 			if rsp.GetCode() == transport.AUTH_MISSING && !authRetry {
 				// Do not count this as a "retry"
-				logging.Infof("%v server needs authentication information. Retrying "+
-					"request with auth req(%v)", c.logPrefix, requestId)
+				logging.Infof("%v GsiScanClient::doRequestResponse req(%v) server needs authentication information. Retrying "+
+					"request with auth", c.logPrefix, requestId)
 				renew()
 				authRetry = true
 				goto REQUEST_RESPONSE_RETRY
@@ -1380,7 +1380,7 @@ REQUEST_RESPONSE_RETRY:
 		goto REQUEST_RESPONSE_RETRY
 	}
 	if err != nil {
-		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
+		fmsg := "%v GsiScanClient::doRequestResponse req(%v) connection %v response %T transport failed `%v`\n"
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
 		healthy = false
@@ -1396,7 +1396,7 @@ REQUEST_RESPONSE_RETRY:
 		goto REQUEST_RESPONSE_RETRY
 	}
 	if err != nil {
-		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
+		fmsg := "%v GsiScanClient::doRequestResponse req(%v) connection %v response %T transport failed `%v`\n"
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
 		healthy = false
@@ -1438,16 +1438,16 @@ func (c *GsiScanClient) streamResponse(
 		//callb(resp) // callback with error
 		cont, healthy = false, false
 		if err == io.EOF {
-			fmsg := "%v req(%v) connection %q closed `%v` \n"
+			fmsg := "%v GsiScanClient::streamResponse req(%v) connection %q closed `%v` \n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 		} else {
-			fmsg := "%v req(%v) connection %q response transport failed `%v`\n"
+			fmsg := "%v GsiScanClient::streamResponse req(%v) connection %q response transport failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 		}
 
 	} else if resp == nil {
 		finish = true
-		logging.Tracef("%v req(%v) connection %q received StreamEndResponse", c.logPrefix, requestId, laddr)
+		logging.Tracef("%v GsiScanClient::streamResponse req(%v) connection %q received StreamEndResponse", c.logPrefix, requestId, laddr)
 		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
@@ -1459,8 +1459,8 @@ func (c *GsiScanClient) streamResponse(
 
 		if ar.GetCode() == transport.AUTH_MISSING {
 			// Do not count this as a "retry"
-			logging.Infof("%v server needs authentication information. Retrying "+
-				"request with auth req(%v)", c.logPrefix, requestId)
+			logging.Infof("%v GsiScanClient::streamResponse req(%v) server needs authentication information. Retrying "+
+				"request with auth", c.logPrefix, requestId)
 			// TODO: Update cluster version
 
 			// Perform authRetry only once.
@@ -1501,13 +1501,13 @@ func (c *GsiScanClient) closeStream(
 	// request server to end the stream.
 	err = c.sendRequest(conn, pkt, &protobuf.EndStreamRequest{})
 	if err != nil {
-		fmsg := "%v closeStream(%v) request transport failed `%v`\n"
+		fmsg := "%v GsiScanClient::closeStream req(%v) request transport failed `%v`\n"
 		logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		healthy = false
 		return
 	}
 
-	logging.Tracef("%v req(%v) connection %q transmitted protobuf.EndStreamRequest", c.logPrefix, requestId, laddr)
+	logging.Tracef("%v GsiScanClient::closeStream req(%v) connection %q transmitted protobuf.EndStreamRequest", c.logPrefix, requestId, laddr)
 
 	// flush the connection until stream has ended.
 	for true {
@@ -1516,11 +1516,11 @@ func (c *GsiScanClient) closeStream(
 		if err != nil {
 			healthy = false
 			if err == io.EOF {
-				fmsg := "%v req(%v) connection %q closed `%v`\n"
+				fmsg := "%v GsiScanClient::closeStream req(%v) connection %q closed `%v`\n"
 				logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 				return
 			}
-			fmsg := "%v req(%v) connection %q response transport failed `%v`\n"
+			fmsg := "%v GsiScanClient::closeStream req(%v) connection %q response transport failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 			return
 
