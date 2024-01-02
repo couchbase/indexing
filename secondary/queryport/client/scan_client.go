@@ -1526,6 +1526,8 @@ func (c *GsiScanClient) closeStream(
 
 		} else if resp == nil { // End of stream marker
 			return
+		} else if _, ok := resp.(*protobuf.StreamEndResponse); ok { // New End of stream marker
+			return
 		}
 	}
 	return

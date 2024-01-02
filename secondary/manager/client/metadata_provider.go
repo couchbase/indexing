@@ -747,7 +747,7 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defn *c.IndexDefn, watcherM
 				return
 			}
 
-			logging.Infof("send cancel create request to watcher %v", watcher.getAdminAddr())
+			logging.Infof("send cancel create request to watcher %v for defnId: %v, sched: %v", watcher.getAdminAddr(), defnId, sched)
 
 			_, err = watcher.makeRequest(OPCODE_PREPARE_CREATE_INDEX, key, content)
 			if err != nil {
@@ -1428,7 +1428,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 			sched = false
 		}
 
-		o.cancelPrepareIndexRequest(idxDefn, watcherMap, sched)
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap, sched || asyncCreate)
 		msg := fmt.Sprintf("Index creation for index %v, bucket %v, scope %v, collection %v"+
 			" cannot start. Reason: %v.", idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, err)
 
