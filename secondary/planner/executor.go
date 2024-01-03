@@ -1376,7 +1376,7 @@ func genShardTransferToken2(soln *Solution, masterId string, topologyChange serv
 			token.IndexInst.Defn.InstStateAtRebal = token.IndexInst.State
 			token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
 			token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
-			token.IndexInst.Defn.Using = common.IndexType(index.StorageMode)
+			token.IndexInst.Defn.Using = common.IndexType(index.destNode.StorageMode)
 			token.IndexInst.Defn.Partitions = []common.PartitionId{index.PartnId}
 			token.IndexInst.Defn.Versions = []int{token.IndexInst.Version + 1}
 			token.IndexInst.Defn.NumPartitions = uint32(token.IndexInst.Pc.GetNumPartitions())
