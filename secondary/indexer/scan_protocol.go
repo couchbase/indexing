@@ -165,7 +165,7 @@ func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32) error
 		}
 	}
 
-	if clientVersion >= common.INDEXER_72_VERSION {
+	if clientVersion >= common.INDEXER_76_VERSION {
 		res := &protobuf.StreamEndResponse{
 			ReadUnits: proto.Uint64(readUnits),
 		}
