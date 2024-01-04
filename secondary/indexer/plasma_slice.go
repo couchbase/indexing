@@ -409,6 +409,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
 		cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
 		cfg.EnableFullReplayOnError = slice.sysconf["plasma.recovery.enableFullReplayOnError"].Bool()
+		cfg.RecoveryEvictMemCheckInterval = time.Duration(slice.sysconf["plasma.recovery.evictMemCheckInterval"].Uint64()) * time.Millisecond
 
 		cfg.EnableReaderPurge = slice.sysconf["plasma.reader.purge.enabled"].Bool()
 		cfg.ReaderPurgeThreshold = slice.sysconf["plasma.reader.purge.threshold"].Float64()
@@ -3217,6 +3218,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 	mdb.mainstore.RecoveryCheckpointInterval = cfg["plasma.recovery.checkpointInterval"].Uint64()
 	mdb.mainstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
+	mdb.mainstore.RecoveryEvictMemCheckInterval = time.Duration(cfg["plasma.recovery.evictMemCheckInterval"].Uint64()) * time.Millisecond
 
 	mdb.mainstore.EnableInMemoryCompression = mdb.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
 	mdb.mainstore.CompressDuringBurst = mdb.sysconf["plasma.mainIndex.enableCompressDuringBurst"].Bool()
@@ -3332,6 +3334,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 		mdb.backstore.RecoveryCheckpointInterval = cfg["plasma.recovery.checkpointInterval"].Uint64()
 		mdb.backstore.EnableFullReplayOnError = cfg["plasma.recovery.enableFullReplayOnError"].Bool()
+		mdb.backstore.RecoveryEvictMemCheckInterval = time.Duration(cfg["plasma.recovery.evictMemCheckInterval"].Uint64()) * time.Millisecond
 
 		mdb.backstore.EnableInMemoryCompression = mdb.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
 		mdb.backstore.CompressDuringBurst = mdb.sysconf["plasma.backIndex.enableCompressDuringBurst"].Bool()

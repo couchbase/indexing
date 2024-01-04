@@ -2331,6 +2331,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.recovery.evictMemCheckInterval": ConfigValue{
+		uint64(100),
+		"interval with which to check for memory pressure during recovery in evictPlasma in milliseconds",
+		uint64(100),
+		false,
+		false,
+	},
 	"indexer.plasma.shardLimitPerNode": ConfigValue{
 		200,
 		"Maximum number of shards that can be created per node",
