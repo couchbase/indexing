@@ -1635,7 +1635,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.storageMgrCmdCh
 
 	case DESTROY_EMPTY_SHARD:
-		if idx.rebalanceRunning || idx.rebalanceToken != nil {
+		force := msg.(*MsgDestroyEmptyShard).IsForced()
+
+		// force is set to true when shard rebalancer initiates cleanup (which happens
+		// at the start of rebalance. So, cleanup can safely be initiated)
+		if !force && (idx.rebalanceRunning || idx.rebalanceToken != nil) {
 			logging.Infof("Indexer::handleWorkerMsgs Skipping to process DESTROY_EMPTY_SHARD as rebalance is running")
 		} else {
 			idx.storageMgrCmdCh <- msg

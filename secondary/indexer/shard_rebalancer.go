@@ -219,6 +219,11 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 	sr.config.Store(config)
 
+	// Clean-up any empty shards at the start of rebalance
+	sr.supvMsgch <- &MsgDestroyEmptyShard{
+		force: true,
+	}
+
 	if master {
 		go sr.initRebalAsync()
 	} else {

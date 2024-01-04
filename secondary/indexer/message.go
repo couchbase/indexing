@@ -3188,10 +3188,15 @@ func (m *MsgPeerServerCommand) GetRespCh() chan error {
 
 type MsgDestroyEmptyShard struct {
 	mType MsgType
+	force bool
 }
 
 func (m *MsgDestroyEmptyShard) GetMsgType() MsgType {
 	return DESTROY_EMPTY_SHARD
+}
+
+func (m *MsgDestroyEmptyShard) IsForced() bool {
+	return m.force
 }
 
 // MsgType.String is a helper function to return string for message type.
