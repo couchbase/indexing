@@ -3428,12 +3428,21 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 
 		if len(pruned) != 0 {
 
+			updateRState := false
 			if len(inst.Pc.GetAllPartitions()) == 0 {
 				logging.Warnf("PrunePartition: All partitions of inst: %v are pruned. Changing the index RState to ACTIVE", inst.InstId)
 				inst.RState = c.REBAL_ACTIVE
+				updateRState = true
 			}
 
 			idx.indexInstMap[instId] = inst
+
+			if updateRState {
+				if err := idx.updateMetaInfoForIndexList([]c.IndexInstId{instId}, false, false, false, false, true, false, false, false, nil, nil); err != nil {
+					logging.Errorf("PrunePartition: Error observed while updating RState for inst: %v", instId)
+					common.CrashOnError(err)
+				}
+			}
 
 			// Prune partitions in storage manager snapshot.  This must be done before metadata is updated.
 			// This is to make sure that once the metadata is published to client, scan will not fail since
