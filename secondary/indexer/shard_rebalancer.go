@@ -305,7 +305,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					return
 				} else {
 					sr.globalTopology = globalTopology
-					l.Infof("ShardRebalancer::initRebalAsync Global Topology %v", globalTopology)
+					l.Debugf("ShardRebalancer::initRebalAsync Global Topology %v", globalTopology)
 				}
 
 				var err error
