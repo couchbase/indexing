@@ -1778,10 +1778,10 @@ func (sv ServerPriority) String() string {
 // and storage mode is Plasma.
 // Should only be called from *indexer* and not from client/metadata_provider
 func ShouldMaintainShardAffinity(config Config) bool {
-	intVer := GetInternalVersion()
+	clusterVer := GetClusterVersion()
 	isShardAffinityEnabled := config.GetDeploymentAwareShardAffinity()
 	isStoragePlasma := GetClusterStorageMode() == PLASMA
-	return !intVer.LessThan(MIN_VER_SHARD_AFFINITY) && isShardAffinityEnabled && isStoragePlasma
+	return clusterVer >= INDEXER_76_VERSION && isShardAffinityEnabled && isStoragePlasma
 }
 
 // CanMaintainShardAffinity - if shard affinity is enabled and storage mode is Plasma

@@ -66,8 +66,6 @@ const MIN_VER_SRV_AUTH = "7.0.4"
 
 const MIN_VER_MISSING_LEADING_KEY = "7.1.2"
 
-const MIN_VER_SHARD_AFFINITY = "7.6.0"
-
 const ENABLE_INT_VER_TICKER = false
 
 const INT_VER_TICKER_INTERVAL = 30 // Seconds
@@ -82,21 +80,17 @@ type InternalVersionJson struct {
 	Version string `json:"version,omitempty"`
 }
 
-//
 // Couchbase nodes can transition from active -> failed -> active any
 // number of times. While node is failed, it may not respond to the
 // rest call for getting internal version. So, last known value of
 // internal version will be cached and used for failed nodes.
-//
 type internalVersionCache struct {
 	lck  sync.RWMutex
 	cmap map[string]InternalVersion // node uuid -> last known internal version
 }
 
-//
 // nodeList encapsulates list of nodes by type, needed by internal
 // version checker.
-//
 type nodeList struct {
 
 	// node uuid -> node object
@@ -109,10 +103,8 @@ type nodeList struct {
 	fn1qls map[string]couchbase.Node
 }
 
-//
 // internalVersionChecker is responsible for getting internal version
 // of all nodes of the specified type.
-//
 type internalVersionChecker struct {
 	ninfo            NodesInfoProvider
 	svcs             []string
@@ -126,10 +118,8 @@ type internalVersionChecker struct {
 	cache            *internalVersionCache
 }
 
-//
 // internalVersionMonitor periodically checks for version upgrades
 // and stops monitoring when expected version is reached.
-//
 type internalVersionMonitor struct {
 	ninfo        NodesInfoProvider
 	cache        *internalVersionCache
@@ -758,9 +748,9 @@ func (mon *internalVersionMonitor) close() {
 	close(mon.tickerStopCh)
 }
 
-//------------------------------------------------------------
+// ------------------------------------------------------------
 // APIs and utility functions
-//------------------------------------------------------------
+// ------------------------------------------------------------
 func GetLocalInternalVersion() InternalVersion {
 
 	return InternalVersion(localVersion)
@@ -785,20 +775,16 @@ func UnmarshalInternalVersion(data []byte) (InternalVersion, error) {
 	return InternalVersion(iv.Version), nil
 }
 
-//
 // GetInternalClusterVersion gets the internal version for the entire GSI cluster.
 // The version check considers all gsi services ie. indexer, projector and gsi n1ql client.
-//
 func GetInternalClusterVersion(ninfo NodesInfoProvider, checkFailedNodes bool) (InternalVersion, error) {
 
 	ivc := newInternalVersionChecker(ninfo, []string{"index", "kv", "n1ql"}, checkFailedNodes, nil)
 	return ivc.getVersion()
 }
 
-//
 // GetInternalIndexerVersion gets the internal version for all the indexer nodes.
 // It ignores the projector version and gsi n1ql client version.
-//
 func GetInternalIndexerVersion(ninfo NodesInfoProvider, checkFailedNodes bool) (InternalVersion, error) {
 
 	ivc := newInternalVersionChecker(ninfo, []string{"index"}, checkFailedNodes, nil)

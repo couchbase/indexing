@@ -107,7 +107,7 @@ type IndexProjection struct {
 	PrimaryKey bool
 }
 
-//Groupby/Aggregate
+// Groupby/Aggregate
 type GroupKey struct {
 	EntryKeyId int32  // Id that can be used in IndexProjection
 	KeyPos     int32  // >=0 means use expr at index key position otherwise use Expr
@@ -1183,9 +1183,9 @@ func (c *GsiClient) Scan3Internal(
 	return
 }
 
-//-------------------------------------
+// -------------------------------------
 // StorageStatistics implementation
-//-------------------------------------
+// -------------------------------------
 type StorageStats struct {
 	Index       string
 	Id          uint64
@@ -1211,11 +1211,11 @@ const STAT_AVG_PAGE_SIZE = "AVG_PAGE_SIZE"
 // API should retry in case of error.
 //
 // Steps to retrieve StorageStatistics:
-// 1. Get a set of queryports, corresponding targetInstanceIds and partitions per InstanceId
-// 2. Get adminports from queryports and construct statsUrls for participating indexer nodes
-// 3. For stats of each node, get targetInstanceId of corresponding node and pick partition stats
-//    for that targetInstanceId.
-// 4. Filter relevant storage stats as needed by CBO
+//  1. Get a set of queryports, corresponding targetInstanceIds and partitions per InstanceId
+//  2. Get adminports from queryports and construct statsUrls for participating indexer nodes
+//  3. For stats of each node, get targetInstanceId of corresponding node and pick partition stats
+//     for that targetInstanceId.
+//  4. Filter relevant storage stats as needed by CBO
 func (c *GsiClient) StorageStatistics(defnID uint64, requestId string) ([]map[string]interface{}, error) {
 
 	var excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool
@@ -1383,12 +1383,10 @@ func (c *GsiClient) Close() {
 	close(c.killch)
 }
 
-//
 // This function updates the scan clients based on the list of available
 // scan ports. The list of scan ports is maintained by looking at the
 // indexer nodes from the cluster topology (currmeta).
 // Note that this function is not responsible for updating currmeta itself.
-//
 func (c *GsiClient) updateScanClients() {
 
 	newclients, staleclients, closedclients := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -2043,6 +2041,6 @@ var watchingClusterVer uint32
 func watchClusterVer(cluster string) {
 	if atomic.CompareAndSwapUint32(&watchingClusterVer, 0, 1) {
 		go common.WatchClusterVersionChanges(cluster, int64(common.INDEXER_76_VERSION))
-		go common.MonitorInternalVersion(int64(common.INDEXER_76_VERSION), common.MIN_VER_SHARD_AFFINITY, cluster)
+		go common.MonitorInternalVersion(int64(common.INDEXER_76_VERSION), common.MIN_VER_SRV_AUTH, cluster)
 	}
 }
