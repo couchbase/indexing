@@ -961,7 +961,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 		if err := provider.SendBuildIndexRequest(m.indexerId, buildList, m.localAddr); err != nil {
 			// All errors received from build index are expected to be recoverable.
 			logging.Warnf("DDLServiceMgr: Failed to build index after creation. Error = %v.", err)
-			return
+			// Do-not return. Continue with processing deleteMap
 		}
 	}
 
