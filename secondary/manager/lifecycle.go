@@ -218,7 +218,7 @@ func NewLifecycleMgr(clusterURL string, config common.Config) (*LifecycleMgr, er
 		parallels:                  make(chan *requestHolder, 100000),
 		outgoings:                  make(chan c.Packet, 100000),
 		killch:                     make(chan bool),
-		bootstraps:                 make(chan *requestHolder, 1000),
+		bootstraps:                 make(chan *requestHolder, 10000),
 		indexerReady:               false,
 		lastSendClientStats:        &client.IndexStats2{},
 		clientStatsRefreshInterval: 5000,
