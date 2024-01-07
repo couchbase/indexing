@@ -209,6 +209,7 @@ const (
 	SHARD_TRANSFER_STAGING_CLEANUP
 	START_SHARD_RESTORE
 	DESTROY_LOCAL_SHARD
+	DESTROY_EMPTY_SHARD
 	MONITOR_SLICE_STATUS
 	UPDATE_REBALANCE_PHASE
 	LOCK_SHARDS
@@ -1119,10 +1120,11 @@ func (m *MsgCreateIndex) GetString() string {
 }
 
 type MsgRecoverIndex struct {
-	mType     MsgType
-	indexInst common.IndexInst
 	respCh    MsgChannel
 	reqCtx    *common.MetadataRequestContext
+	cancelCh  chan bool
+	indexInst common.IndexInst
+	mType     MsgType
 }
 
 func (m *MsgRecoverIndex) GetMsgType() MsgType {
@@ -1139,6 +1141,10 @@ func (m *MsgRecoverIndex) GetResponseChannel() MsgChannel {
 
 func (m *MsgRecoverIndex) GetRequestCtx() *common.MetadataRequestContext {
 	return m.reqCtx
+}
+
+func (m *MsgRecoverIndex) GetCancelCh() chan bool {
+	return m.cancelCh
 }
 
 func (m *MsgRecoverIndex) GetString() string {
@@ -3180,6 +3186,19 @@ func (m *MsgPeerServerCommand) GetRespCh() chan error {
 	return m.respCh
 }
 
+type MsgDestroyEmptyShard struct {
+	mType MsgType
+	force bool
+}
+
+func (m *MsgDestroyEmptyShard) GetMsgType() MsgType {
+	return DESTROY_EMPTY_SHARD
+}
+
+func (m *MsgDestroyEmptyShard) IsForced() bool {
+	return m.force
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3494,6 +3513,8 @@ func (m MsgType) String() string {
 		return "START_SHARD_RESTORE"
 	case DESTROY_LOCAL_SHARD:
 		return "DESTROY_LOCAL_SHARD"
+	case DESTROY_EMPTY_SHARD:
+		return "DESTROY_EMPTY_SHARD"
 	case MONITOR_SLICE_STATUS:
 		return "MONITOR_SLICE_STATUS"
 	case LOCK_SHARDS:

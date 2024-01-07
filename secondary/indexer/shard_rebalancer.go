@@ -219,6 +219,11 @@ func NewShardRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *
 
 	sr.config.Store(config)
 
+	// Clean-up any empty shards at the start of rebalance
+	sr.supvMsgch <- &MsgDestroyEmptyShard{
+		force: true,
+	}
+
 	if master {
 		go sr.initRebalAsync()
 	} else {
@@ -300,7 +305,7 @@ func (sr *ShardRebalancer) initRebalAsync() {
 					return
 				} else {
 					sr.globalTopology = globalTopology
-					l.Infof("ShardRebalancer::initRebalAsync Global Topology %v", globalTopology)
+					l.Debugf("ShardRebalancer::initRebalAsync Global Topology %v", globalTopology)
 				}
 
 				var err error

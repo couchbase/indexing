@@ -598,6 +598,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.masterMgr = NewMasterServiceManager(autofailoverMgr, genericMgr, pauseMgr, rebalMgr, serverlessMgr)
 
 	go idx.monitorKVNodes()
+	go idx.destroyEmptyShards()
 
 	// enable inMemoryCompression feature on 7.1 cluster upgrade
 	go idx.enablePlasmaInMemCompression()
@@ -1633,6 +1634,18 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case DESTROY_EMPTY_SHARD:
+		force := msg.(*MsgDestroyEmptyShard).IsForced()
+
+		// force is set to true when shard rebalancer initiates cleanup (which happens
+		// at the start of rebalance. So, cleanup can safely be initiated)
+		if !force && (idx.rebalanceRunning || idx.rebalanceToken != nil) {
+			logging.Infof("Indexer::handleWorkerMsgs Skipping to process DESTROY_EMPTY_SHARD as rebalance is running")
+		} else {
+			idx.storageMgrCmdCh <- msg
+			<-idx.storageMgrCmdCh
+		}
+
 	case INDEXER_INST_RECOVERY_RESPONSE:
 		idx.handleInstRecoveryResponse(msg)
 
@@ -1810,6 +1823,11 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	idx.cpuThrottle.SetCpuTarget(throttleVal)
 
 	idx.config = newConfig
+
+	emptyShardDestroyInterval := oldConfig["empty_shard_destroy_interval"].Int()
+	if emptyShardDestroyInterval == 0 && newConfig["empty_shard_destroy_interval"].Int() > 0 {
+		go idx.destroyEmptyShards() // Spawn a go-routine to destroy empty shards
+	}
 
 	idx.compactMgrCmdCh <- msg
 	<-idx.compactMgrCmdCh
@@ -2118,7 +2136,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets, idx.stats)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets, idx.stats, nil)
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -2210,6 +2228,8 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 
 	indexInst := msg.(*MsgRecoverIndex).GetIndexInst()
 	clientCh := msg.(*MsgRecoverIndex).GetResponseChannel()
+	cancelRecoveryCh := msg.(*MsgRecoverIndex).GetCancelCh()
+
 	logging.Infof("Indexer::handleRecoverIndex %v", indexInst)
 
 	// NOTE
@@ -2393,6 +2413,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 			ephemeral,
 			numVBuckets,
 			idxStats,
+			cancelRecoveryCh, // cancelCh
 		)
 
 		// In case of nil error, send a message to indexer to add this instance
@@ -2457,7 +2478,6 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	// they it will be deleted after async recovery is done as simultaneous
 	// index recovery and drop can lead to unwanted race conditions in plasma
 	defer func() {
-
 		err := idx.notifyAsyncRecoveryDone(indexInst)
 		if err != nil {
 			logging.Errorf("Indexer::handleInstRecoveryResponse Error observed while notifying "+
@@ -3408,12 +3428,21 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 
 		if len(pruned) != 0 {
 
+			updateRState := false
 			if len(inst.Pc.GetAllPartitions()) == 0 {
 				logging.Warnf("PrunePartition: All partitions of inst: %v are pruned. Changing the index RState to ACTIVE", inst.InstId)
 				inst.RState = c.REBAL_ACTIVE
+				updateRState = true
 			}
 
 			idx.indexInstMap[instId] = inst
+
+			if updateRState {
+				if err := idx.updateMetaInfoForIndexList([]c.IndexInstId{instId}, false, false, false, false, true, false, false, false, nil, nil); err != nil {
+					logging.Errorf("PrunePartition: Error observed while updating RState for inst: %v", instId)
+					common.CrashOnError(err)
+				}
+			}
 
 			// Prune partitions in storage manager snapshot.  This must be done before metadata is updated.
 			// This is to make sure that once the metadata is published to client, scan will not fail since
@@ -6319,7 +6348,8 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
-	ephemeral bool, numVBuckets int, idxStats *IndexerStats) (PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
+	ephemeral bool, numVBuckets int, idxStats *IndexerStats, cancelCh chan bool) (
+	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
@@ -6352,7 +6382,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		}
 
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idxStats, ephemeral, !bootstrapPhase,
-			idx.meteringMgr, numVBuckets, shardIds)
+			idx.meteringMgr, numVBuckets, shardIds, cancelCh)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if bootstrapPhase && err == errStorageCorrupted {
@@ -8983,7 +9013,7 @@ func (idx *indexer) initFromPersistedState() error {
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
 
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets, idx.stats); err != nil {
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets, idx.stats, nil); err != nil {
 			return err
 		}
 
@@ -10537,7 +10567,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
 	meteringMgr *MeteringThrottlingMgr, numVBuckets int,
-	shardIds []common.ShardId) (slice Slice, err error) {
+	shardIds []common.ShardId, cancelCh chan bool) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
 		return indInst.State == common.INDEX_STATE_INITIAL || indInst.State == common.INDEX_STATE_CATCHUP ||
@@ -10567,7 +10597,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh)
 	}
 
 	return
@@ -12008,6 +12038,47 @@ func (idx *indexer) monitorKVNodes() {
 
 		case <-idx.shutdownInitCh:
 			return
+		}
+	}
+}
+
+func (idx *indexer) destroyEmptyShards() {
+
+	if common.GetStorageMode() != common.PLASMA {
+		logging.Infof("Indexer::destroyEmptyShards Exiting as storage mode is not plasma")
+		return
+	}
+
+	destroyTickerInterval := idx.config["empty_shard_destroy_interval"].Int()
+	if destroyTickerInterval == 0 {
+		logging.Infof("Indexer::destroyEmptyShards Exiting as destroy interval is set to 0")
+		return
+	}
+	logging.Infof("Indexer::destroyEmptyShards Starting destroyEmptyShards go-routine with interval of: %v min", destroyTickerInterval)
+
+	destroyShardsTicker := time.NewTicker(time.Duration(destroyTickerInterval) * time.Minute)
+	defer destroyShardsTicker.Stop()
+
+	for {
+		select {
+		case <-destroyShardsTicker.C:
+			// Send a message to indexer internal receive channel to destroy empty shards
+			idx.internalRecvCh <- &MsgDestroyEmptyShard{}
+
+			newDestroyTickerInterval := idx.config["empty_shard_destroy_interval"].Int()
+			if newDestroyTickerInterval != destroyTickerInterval {
+
+				if newDestroyTickerInterval == 0 {
+					logging.Infof("Indexer::destroyEmptyShards Exiting as destroy interval is set to 0")
+					return
+				}
+
+				logging.Infof("Indexer::destroyEmptyShards Updating empty shard destroy interval to: %v", newDestroyTickerInterval)
+				destroyTickerInterval = newDestroyTickerInterval
+
+				destroyShardsTicker.Stop()
+				destroyShardsTicker = time.NewTicker(time.Duration(destroyTickerInterval) * time.Minute)
+			}
 		}
 	}
 }

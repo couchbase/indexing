@@ -1192,9 +1192,9 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// ignore any index with RState being pending.
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
 			if index.Instance.RState != common.REBAL_ACTIVE {
-				logging.Infof("Planner: Skip index (%v, %v, %v, %v, %v, %v) that is not RState ACTIVE (%v)",
+				logging.Infof("Planner: Skip index (%v, %v, %v, %v, %v, %v) on node: %v that is not RState ACTIVE (%v).",
 					index.Bucket, index.Scope, index.Collection, index.Name, index.InstId, index.PartnId,
-					index.Instance.RState)
+					indexer.NodeId, index.Instance.RState)
 				//bucket's indexes are under movement during rebalance or pending cleanup after
 				//a failed rebalance
 				indexer.BucketsInRebalance[index.Bucket] = true
@@ -1364,7 +1364,8 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 					for _, partition := range defn.Partitions {
 						if !findPartition(defn.InstId, partition) {
 							if addIndex(indexerId, makeIndexUsage(&defn, partition, nil)) {
-								logging.Infof("Planner::processCreateToken: Add index (%v, %v, %v)", defn.DefnId, defn.InstId, partition)
+								logging.Infof("Planner::processCreateToken: Add index (%v, %v, %v, %v, %v, %v, %v)",
+									defn.DefnId, defn.InstId, partition, defn.Name, defn.Bucket, defn.Scope, defn.Collection)
 							}
 						}
 					}

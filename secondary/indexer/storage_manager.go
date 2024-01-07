@@ -290,6 +290,15 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
+	case DESTROY_EMPTY_SHARD:
+
+		// Note: The response to indexer has to be sent after processing "handleDestroyEmptyShards"
+		// Otherwise, indexer main loop can get unblocked and a new index creation might start
+		// while plasma has returned shard info. This can lead to a race where storage manager
+		// is trying to delete a shard on which indexer is trying placing a new shard
+		s.handleDestroyEmptyShards()
+		s.supvCmdch <- &MsgSuccess{}
+
 	case LOCK_SHARDS:
 		s.SetRebalanceRunning(cmd)
 
@@ -2771,5 +2780,23 @@ func (sm *storageMgr) waitForTransferCompletion(shardIds []common.ShardId) {
 	// At this point, transfer is complete. Clear the book-keeping
 	for _, shardId := range shardIds {
 		delete(sm.shardsInTransfer, shardId)
+	}
+}
+
+func (sm *storageMgr) handleDestroyEmptyShards() {
+	sm.muSnap.Lock()
+	defer sm.muSnap.Unlock()
+
+	emptyShards, err := GetEmptyShardInfo()
+	if err != nil {
+		logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while retrieving empty shardInfo, err: %v", err)
+	} else {
+		logging.Infof("StorageMgr::handleDestroyEmptyShards destroying empty shards: %v", emptyShards)
+		for _, shardId := range emptyShards {
+			err := DestroyShard(shardId)
+			if err != nil {
+				logging.Errorf("StorageMgr::handleDestroyEmptyShards Error observed while destroying shard: %v, err: %v", shardId, err)
+			}
+		}
 	}
 }

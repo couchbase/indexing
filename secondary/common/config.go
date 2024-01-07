@@ -2331,6 +2331,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.recovery.evictMemCheckInterval": ConfigValue{
+		uint64(100),
+		"interval with which to check for memory pressure during recovery in evictPlasma in milliseconds",
+		uint64(100),
+		false,
+		false,
+	},
 	"indexer.plasma.shardLimitPerNode": ConfigValue{
 		200,
 		"Maximum number of shards that can be created per node",
@@ -3794,6 +3801,13 @@ var SystemConfig = Config{
 			"at which data will be written to is " +
 			"'blob_storage_scheme' + 'blob_storage_bucket' + 'blob_storage_prefix'",
 		"",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.empty_shard_destroy_interval": ConfigValue{
+		30,
+		"Time in minutes at which all the empty shards will be removed by GSI",
+		30,
 		false, // mutable
 		false, // case-insensitive
 	},

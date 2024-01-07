@@ -361,6 +361,31 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 			}
 			defer resp.Body.Close()
 			ioutil.ReadAll(resp.Body)
+
+			err = c.NewRetryHelper(5, 1*time.Millisecond, 10, func(attempt int, lastErr error) error {
+				var metakvConfigBytes []byte
+				_, err = c.MetakvBigValueGet(c.IndexingSettingsMetaPath, metakvConfigBytes)
+
+				if err != nil {
+					return err
+				}
+
+				var metakvConfig c.Config
+				if err = metakvConfig.Update(metakvConfigBytes); err != nil {
+					return err
+				}
+
+				for k, v := range jbody {
+					metaV, ok := metakvConfig[k]
+					if !ok {
+						return fmt.Errorf("config %v value does not match; expected %v actual N/A", k, v)
+					} else if metaV.Value != v {
+						return fmt.Errorf("config %v value does not match; expected %v actual %v", k, v, metaV.Value)
+					}
+				}
+
+				return nil
+			}).Run()
 		}
 
 		if len(jThisNodeBody) > 0 {

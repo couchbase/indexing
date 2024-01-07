@@ -18,19 +18,23 @@ import (
 	"github.com/couchbase/plasma"
 )
 
-var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
-var errStoragePathNotFound = fmt.Errorf("Storage path not found for recovery")
+var (
+	errStorageCorrupted    = fmt.Errorf("Storage corrupted and unrecoverable")
+	errStoragePathNotFound = fmt.Errorf("Storage path not found for recovery")
+	errRecoveryCancelled   = fmt.Errorf("storage recovery is cancelled")
+)
 
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int, replicaId int, shardIds []common.ShardId) (*plasmaSlice, error) {
+	meteringMgr *MeteringThrottlingMgr, numVBuckets int, replicaId int, shardIds []common.ShardId,
+	cancelCh chan bool) (*plasmaSlice, error) {
 
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
 		sysconf, idxStats, indexerStats, isNew, isInitialBuild, meteringMgr,
-		numVBuckets, replicaId, shardIds)
+		numVBuckets, replicaId, shardIds, cancelCh)
 }
 
 func DestroyPlasmaSlice(storageDir string, path string) error {
@@ -54,4 +58,17 @@ func GetShardCompactVersion() int {
 		return plasma.ShardCompatVersionServerless
 	}
 	return plasma.ShardCompatVersion
+}
+
+func GetEmptyShardInfo() ([]common.ShardId, error) {
+	plasmaShards, err := plasma.GetCurrentEmptyShardsInfo()
+	var gsiShards []common.ShardId
+	for _, shard := range plasmaShards {
+		gsiShards = append(gsiShards, common.ShardId(shard))
+	}
+	return gsiShards, err
+}
+
+func DestroyShard(shardId common.ShardId) error {
+	return plasma.DestroyShardID(plasma.ShardId(shardId))
 }

@@ -108,7 +108,7 @@ type IndexManager struct {
 //     B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) (common.PartnShardIdMap, error)
-	OnIndexRecover(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
+	OnIndexRecover(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext, chan bool) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
 	OnRecoveredIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
