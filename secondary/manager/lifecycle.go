@@ -1798,6 +1798,11 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 
 	scopeId, collectionId, err := m.verifyScopeAndCollection(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil {
+		if strings.Contains(err.Error(), "Scope does not exist") && scopeId == collections.SCOPE_ID_NIL {
+			return common.ErrScopeNotFound
+		} else if strings.Contains(err.Error(), "Collection does not exist") && collectionId == collections.COLLECTION_ID_NIL {
+			return common.ErrCollectionNotFound
+		}
 		return err
 	}
 
