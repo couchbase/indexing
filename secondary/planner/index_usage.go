@@ -236,7 +236,7 @@ func newProxyIndexUsage(slotId uint64, replicaId int) (*IndexUsage, error) {
 		//      proxy-2 can have i1 (replica 1), i2 (replica 1) - No i3
 		suppressEquivIdxCheck: true,
 		eligible:              true,
-		overrideExclude:       true,
+		overrideExclude:       false,
 	}
 
 	return proxy, nil
@@ -616,11 +616,24 @@ func (o *IndexUsage) HasAlternateShardIds() bool {
 func (o *IndexUsage) AddToGroupedIndexes(in *IndexUsage) {
 	o.GroupedIndexes = append(o.GroupedIndexes, in)
 
-	// All indexes of a proxy must be eligible for the proxy to move
+	// Case-1: All indices have eligible = true.
+	// 		This is a case of shard repair and we need eligible as true
+	// Case-2: Atleast one index has eligible = true. Others have eligible = false
+	//		This is a case of replica repair where we are adding an index to an existing shard for repair
+	//		In this case, only the replica is do be added to that proxy but the proxy does not move
+	//		So eligible remains false
+	// Case-3: All indices have eligible = false
+	//		Here there is no need for any movement
 	o.eligible = o.eligible && in.eligible
 
-	// Any index of a proxy can go to exclude node. Hence,
-	o.overrideExclude = o.overrideExclude && in.overrideExclude
+	// Case-1: All indices have overrideExclude = true.
+	// 		This is a case of shard repair and we need overrideExclude as true
+	// Case-2: Atleast one index has overrideExclude = true. Others have overrideExclude = false
+	//		This is a case of replica repair where we are adding an index to an existing shard for repair
+	//		In this case, we need overrideExclude as true
+	// Case-3: All indices have overrideExclude = false
+	//		Here there is no need for repair so we can ignore overrideExclude
+	o.overrideExclude = o.overrideExclude || in.overrideExclude
 
 	in.ProxyIndex = o
 }
