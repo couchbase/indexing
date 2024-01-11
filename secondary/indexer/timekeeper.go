@@ -4501,7 +4501,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 				// If seqNos are used, don't compute progress based on item count.
 				if seqNosUsedInFlushedCountMap[stream][keyspaceId] {
-					logging.Infof("Timekeeper::handleStats Some vbuckets are streamed without OSO in "+
+					logging.Tracef("Timekeeper::handleStats Some vbuckets are streamed without OSO in "+
 						"the stream: %v, keyspaceId: %v . "+
 						"Disabling item count based index build progress", stream, keyspaceId)
 					return progress, false
