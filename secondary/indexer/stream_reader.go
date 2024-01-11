@@ -26,8 +26,8 @@ import (
 
 var transactionMutationPrefix = []byte("_txn:")
 
-//MutationStreamReader reads a Dataport and stores the incoming mutations
-//in mutation queue. This is the only component writing to a mutation queue.
+// MutationStreamReader reads a Dataport and stores the incoming mutations
+// in mutation queue. This is the only component writing to a mutation queue.
 type MutationStreamReader interface {
 	Shutdown()
 }
@@ -68,9 +68,9 @@ type mutationStreamReader struct {
 	config common.Config
 }
 
-//CreateMutationStreamReader creates a new mutation stream and starts
-//a reader to listen and process the mutations.
-//In case returned MutationStreamReader is nil, Message will have the error msg.
+// CreateMutationStreamReader creates a new mutation stream and starts
+// a reader to listen and process the mutations.
+// In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap KeyspaceIdQueueMap,
 	keyspaceIdFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
@@ -142,8 +142,8 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 	return r, &MsgSuccess{}
 }
 
-//Shutdown shuts down the mutation stream and all workers.
-//This call doesn't return till shutdown is complete.
+// Shutdown shuts down the mutation stream and all workers.
+// This call doesn't return till shutdown is complete.
 func (r *mutationStreamReader) Shutdown() {
 
 	logging.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
@@ -169,8 +169,8 @@ func (r *mutationStreamReader) Shutdown() {
 
 }
 
-//run starts the stream reader loop which listens to message from
-//mutation stream
+// run starts the stream reader loop which listens to message from
+// mutation stream
 func (r *mutationStreamReader) run() {
 
 	//panic handler
@@ -216,8 +216,8 @@ func (r *mutationStreamReader) run() {
 
 }
 
-//run starts the stream reader loop which listens to message from
-//the supervisor
+// run starts the stream reader loop which listens to message from
+// the supervisor
 func (r *mutationStreamReader) listenSupvCmd() {
 
 	//panic handler
@@ -252,7 +252,7 @@ func (r *mutationStreamReader) handleVbKeyVersions(vbKeyVers []*protobuf.VbKeyVe
 
 }
 
-//handleStreamInfoMsg handles the error messages from Dataport
+// handleStreamInfoMsg handles the error messages from Dataport
 func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 
 	var supvMsg Message
@@ -295,7 +295,7 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 	}
 }
 
-//handleSupervisorCommands handles the messages from Supervisor
+// handleSupervisorCommands handles the messages from Supervisor
 func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 	switch cmd.GetMsgType() {
@@ -369,7 +369,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 	}
 }
 
-//panicHandler handles the panic from underlying stream library
+// panicHandler handles the panic from underlying stream library
 func (r *mutationStreamReader) panicHandler() {
 
 	//panic recovery
@@ -440,7 +440,7 @@ func (r *mutationStreamReader) syncWorker() {
 	}
 }
 
-//send a sync message if its due
+// send a sync message if its due
 func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 
 	if !fastpath {
@@ -555,7 +555,7 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 
 }
 
-//check if any worker has sync due
+// check if any worker has sync due
 func (r *mutationStreamReader) checkAnySyncDue() bool {
 
 	syncDue := false
@@ -600,7 +600,7 @@ func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
 	r.indexerState = is
 }
 
-//Stream Worker
+// Stream Worker
 type firstSnapFlag []bool
 
 type streamWorker struct {
@@ -706,8 +706,8 @@ func (w *streamWorker) handleKeyVersions(keyspaceId string, vbucket Vbucket, vbu
 
 }
 
-//handleSingleKeyVersion processes a single mutation based on the command type
-//A mutation is put in a worker queue and control message is sent to supervisor
+// handleSingleKeyVersion processes a single mutation based on the command type
+// A mutation is put in a worker queue and control message is sent to supervisor
 func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket, vbuuid Vbuuid,
 	opaque uint64, kv *protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
@@ -907,7 +907,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 
 }
 
-//handleSingleMutation enqueues mutation in the mutation queue
+// handleSingleMutation enqueues mutation in the mutation queue
 func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChannel) {
 
 	logging.LazyTrace(func() string {
@@ -933,7 +933,7 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 	}
 }
 
-//initKeyspaceIdFilter initializes the keyspaceId filter
+// initKeyspaceIdFilter initializes the keyspaceId filter
 func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.TsVbuuid,
 	keyspaceIdSessionId KeyspaceIdSessionId, keyspaceIdEnableOSO KeyspaceIdEnableOSO) {
 
@@ -944,14 +944,15 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 	//have a filter yet
 	for b, q := range w.reader.keyspaceIdQueueMap {
 		if _, ok := w.keyspaceIdFilter[b]; !ok {
-			logging.Debugf("MutationStreamReader::initKeyspaceIdFilter Added new filter "+
+			logging.Infof("MutationStreamReader::initKeyspaceIdFilter Added new filter "+
 				"for KeyspaceId %v Stream %v", b, w.streamId)
 
 			//if there is non-nil filter, use that. otherwise use a zero filter.
 			if filter, ok := keyspaceIdFilter[b]; ok && filter != nil {
 				w.keyspaceIdFilter[b] = filter.Copy()
 				w.keyspaceIdPrevSnapMap[b] = filter.Copy()
-				//reset vbuuids to 0 in filter. mutations for a vbucket are
+
+				//reset vbuuids to 0 in filter. mutations for a vbucket key
 				//only processed after streambegin is received, which will set
 				//the vbuuid again.
 				for i := 0; i < len(filter.Vbuuids); i++ {
@@ -998,8 +999,8 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 
 }
 
-//setKeyspaceIdFilter sets the keyspaceId filter based on seqno/vbuuid of mutation.
-//filter is set when stream begin is received.
+// setKeyspaceIdFilter sets the keyspaceId filter based on seqno/vbuuid of mutation.
+// filter is set when stream begin is received.
 func (w *streamWorker) setKeyspaceIdFilter(meta *MutationMeta) {
 
 	w.lock.Lock()
@@ -1017,11 +1018,11 @@ func (w *streamWorker) setKeyspaceIdFilter(meta *MutationMeta) {
 
 }
 
-//checkAndSetKeyspaceIdFilter checks if mutation can be processed
-//based on the current filter. Filter is also updated with new
-//seqno/vbuuid if mutations can be processed.
-//Returns {skip, firstSnap} to indicate if mutations needs to be "skipped" and
-//if it belongs for first DCP snapshot.
+// checkAndSetKeyspaceIdFilter checks if mutation can be processed
+// based on the current filter. Filter is also updated with new
+// seqno/vbuuid if mutations can be processed.
+// Returns {skip, firstSnap} to indicate if mutations needs to be "skipped" and
+// if it belongs for first DCP snapshot.
 func (w *streamWorker) checkAndSetKeyspaceIdFilter(meta *MutationMeta) (bool, bool) {
 
 	w.lock.Lock()
@@ -1220,7 +1221,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 
 }
 
-//updates snapshot information in keyspaceId filter
+// updates snapshot information in keyspaceId filter
 func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	snapStart uint64, snapEnd uint64) {
 
@@ -1258,8 +1259,9 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 
 		w.setFirstSnap(filter, meta, snapStart, snapEnd)
 
-		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
-			filter.Vbuuids[meta.vbucket] != 0 {
+		if (snapEnd > filter.Snapshots[meta.vbucket][1] && filter.Vbuuids[meta.vbucket] != 0) ||
+			(snapEnd < filter.Snapshots[meta.vbucket][1] && snapEnd >= filter.Seqnos[meta.vbucket] &&
+				filter.Vbuuids[meta.vbucket] != 0) {
 
 			enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
 			if enableOSO {
@@ -1308,6 +1310,14 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 
 			//store the existing snap marker in prevSnap map
 			prevSnap := w.keyspaceIdPrevSnapMap[meta.keyspaceId]
+
+			if snapEnd < filter.Snapshots[meta.vbucket][1] && snapEnd >= filter.Seqnos[meta.vbucket] {
+				logging.Infof("MutationStreamReader::updateSnapInFilter New snapshot range received"+
+					"keyspaceId %v Stream %v vb %v Snapshot %v-%v Prev Snapshot %v-%v Prev Snapshot vbuuid %v",
+					meta.keyspaceId, w.streamId, meta.vbucket, snapStart, snapEnd, prevSnap.Snapshots[meta.vbucket][0],
+					prevSnap.Snapshots[meta.vbucket][1], prevSnap.Vbuuids[meta.vbucket])
+			}
+
 			prevSnap.Snapshots[meta.vbucket][0] = filter.Snapshots[meta.vbucket][0]
 			prevSnap.Snapshots[meta.vbucket][1] = filter.Snapshots[meta.vbucket][1]
 			prevSnap.Vbuuids[meta.vbucket] = filter.Vbuuids[meta.vbucket]
@@ -1372,7 +1382,7 @@ func (w *streamWorker) setFirstSnap(filter *common.TsVbuuid,
 
 }
 
-//updates vbuuid information in keyspaceId filter
+// updates vbuuid information in keyspaceId filter
 func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 
 	w.lock.Lock()
