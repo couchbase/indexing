@@ -12767,6 +12767,11 @@ func (idx *indexer) checkDropCleanupPending() bool {
 	defer idx.muDropCleanup.Unlock()
 	if len(idx.dropCleanupPending) > 0 {
 		dropCleanupPending = true
+		for k := range idx.dropCleanupPending {
+			logging.Infof("Indexer::checkDropCleanupPending cleanup is pending for atleast: %v instances. "+
+				"First instance in map: %v", len(idx.dropCleanupPending), k)
+			break
+		}
 	}
 
 	return dropCleanupPending

@@ -241,6 +241,7 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/rebalanceCleanupStatus", m.handleRebalanceCleanupStatus)
 	mux.HandleFunc("/lockShards", m.handleLockShards)
 	mux.HandleFunc("/unlockShards", m.handleUnlockShards)
+	mux.HandleFunc("/dropCleanupPending", m.handleDropCleanupPending)
 }
 
 // updateNodeList initializes RebalanceServiceManager.state.servers node list on start or restart.
@@ -1814,7 +1815,7 @@ func (m *RebalanceServiceManager) destTokenToMergeOrReadyForInst(instId, realIns
 				}
 			case <-ticker.C:
 				logging.Warnf("RebalanceServiceManager::destTokenToMergeOrReadyForInst waiting for partition"+
-                                              "merge to finish for ttid: %v, index instance: %v, realInst: %v", ttid, instId, realInstId)
+					"merge to finish for ttid: %v, index instance: %v, realInst: %v", ttid, instId, realInstId)
 			}
 		}
 	}
@@ -4407,6 +4408,31 @@ func (m *RebalanceServiceManager) RestoreAndUnlockShards(skipShards map[c.ShardI
 	}
 	<-respCh
 	l.Infof("RebalanceServiceManager::RestoreAndUnlockShards Exiting")
+}
+
+func (m *RebalanceServiceManager) handleDropCleanupPending(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleDropCleanupPending Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleDropCleanupPending") {
+		return
+	}
+
+	if r.Method == "GET" {
+
+		_, _, dropCleanupPending := m.checkDDLRunning()
+		if dropCleanupPending {
+			m.writeBytes(w, []byte("true"))
+		} else {
+			m.writeBytes(w, []byte("false"))
+		}
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
 }
 
 // An orphan shard token is the once for which the owner is not alive
