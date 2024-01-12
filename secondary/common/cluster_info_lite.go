@@ -451,6 +451,13 @@ func newBucketInfo(tb *couchbase.Bucket, connHost string) *bucketInfo {
 	bi := &bucketInfo{
 		bucket: tb,
 	}
+	numVBs := bi.bucket.NumVBuckets
+
+	if numVBs < MIN_VBUCKETS_ALLOWED || numVBs > MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("ClusterInfoCache::GetNumVBuckets, err: %v, bucket: %v, numVBuckets: %v",
+			ErrNumVbRange, bi.bucket.Name, numVBs)
+	}
+
 	bi.bucket.NormalizeHostnames(connHost)
 
 	bi.valid = true
@@ -2405,7 +2412,13 @@ func (bi *bucketInfo) IsMagmaStorage(bucket string) (bool, error) {
 }
 
 func (bi *bucketInfo) GetNumVBuckets(bucket string) (int, error) {
-	return bi.bucket.NumVBuckets, nil
+	numVBs := bi.bucket.NumVBuckets
+
+	if numVBs < MIN_VBUCKETS_ALLOWED || numVBs > MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("bucketInfo::GetNumVBuckets, err: %v, bucket: %v, numVBuckets: %v",
+			ErrNumVbRange, bucket, numVBs)
+	}
+	return numVBs, nil
 }
 
 func (bi *bucketInfo) GetLocalVBuckets(bucketName string) (

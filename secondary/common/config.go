@@ -1335,7 +1335,7 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.flushBufferQuota": ConfigValue{
-		4.0,
+		4.0, // keep in sync with plasma.fbtuner.minQuotaRatio
 		"Percentage of indexer memory quota that can be used for plasma flush " +
 			"buffer allocations. Default is 4.0% i.e. 0.04 * memory_quota",
 		4.0,
@@ -2054,17 +2054,24 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.fbtuner.maxQuotaRatio": ConfigValue{
-		float64(0.04),
-		"Maximum ratio between flush buffer memory and plasma assigned quota",
-		float64(0.04),
+	"indexer.plasma.fbtuner.minQuotaRatio": ConfigValue{
+		float64(0.02), // keep half of flushBufferQuota (which is percent based),
+		"Minimum ratio between flush buffer memory and plasma assigned quota",
+		float64(0.02),
 		false,
 		false,
 	},
-	"indexer.plasma.fbtuner.minQuotaRatio": ConfigValue{
-		float64(0.02),
-		"Minimum ratio between flush buffer memory and plasma assigned quota",
-		float64(0.02),
+	"indexer.plasma.fbtuner.flushBufferMinSize": ConfigValue{
+		512 * 1024,
+		"Minimum flush buffer size for data log",
+		512 * 1024,
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.recoveryFlushBufferMinSize": ConfigValue{
+		256 * 1024, // with 128K, observed relatively more cpu utilization in scan tests
+		"Minimum flush buffer size for recovery log",
+		256 * 1024,
 		false,
 		false,
 	},
@@ -2075,10 +2082,24 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.fbtuner.adjustMinSize": ConfigValue{
+		100 * 1024 * 1024,
+		"minimum reclaimable size (in bytes) at which tuner performs trim readjustments",
+		100 * 1024 * 1024,
+		false,
+		false,
+	},
+	"indexer.plasma.fbtuner.gcBytes": ConfigValue{
+		200 * 1024 * 1024,
+		"minimum adjustment size (in bytes) after which tuner attempts to release heap memory",
+		200 * 1024 * 1024,
+		false,
+		false,
+	},
 	"indexer.plasma.fbtuner.adjustInterval": ConfigValue{
-		120,
+		300,
 		"interval (in seconds) at which tuner performs readjustments",
-		120,
+		300,
 		false,
 		false,
 	},
@@ -2089,10 +2110,17 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.fbtuner.rebalInterval": ConfigValue{
+		1800,
+		"interval (in seconds) at which tuner performs rebalance adjustments",
+		1800,
+		false,
+		false,
+	},
 	"indexer.plasma.fbtuner.debug": ConfigValue{
-		true,
+		false,
 		"enable tuner debug logging",
-		true,
+		false,
 		false,
 		false,
 	},

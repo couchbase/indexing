@@ -1165,7 +1165,14 @@ func (c *ClusterInfoCache) GetNumVBuckets(bucket string) (numVBuckets int, err e
 	}
 	defer b.Close()
 
-	return b.NumVBuckets, nil
+	numVBs := b.NumVBuckets
+
+	if numVBs < MIN_VBUCKETS_ALLOWED || numVBs > MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("ClusterInfoCache::GetNumVBuckets, err: %v, bucket: %v, numVBuckets: %v",
+			ErrNumVbRange, bucket, numVBs)
+	}
+
+	return numVBs, nil
 }
 
 func (c *ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {

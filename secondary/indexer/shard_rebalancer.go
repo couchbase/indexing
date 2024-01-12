@@ -144,7 +144,8 @@ type ShardRebalancer struct {
 
 	emptyNodeBatchingEnabled bool
 
-	batchBuildReqCh chan *batchBuildReq
+	batchBuildReqCh          chan *batchBuildReq
+	batchBuildReqChCloseOnce sync.Once
 
 	droppedInstsInRebal map[c.IndexInstId]bool
 }
@@ -3564,6 +3565,12 @@ func (sr *ShardRebalancer) doFinish() {
 
 	sr.wg.Wait()
 
+	// Call this function after sr.wg.Wait() to ensures that there will be no
+	// go-routine trying to write to batchBuildReqCh
+	sr.batchBuildReqChCloseOnce.Do(func() {
+		close(sr.batchBuildReqCh)
+	})
+
 	// we want to log the last err we send to callback once all components are done processing
 	l.Infof("ShardRebalancer::doFinish Cleanup: %v", sr.retErr)
 	sr.cb.done(sr.retErr, sr.cancel)
@@ -3607,6 +3614,12 @@ func (sr *ShardRebalancer) Cancel() {
 	if sr.cancelMetakv() {
 		close(sr.cancel)
 		sr.wg.Wait()
+
+		// Call this function after sr.wg.Wait() to ensures that there will be no
+		// go-routine trying to write to batchBuildReqCh
+		sr.batchBuildReqChCloseOnce.Do(func() {
+			close(sr.batchBuildReqCh)
+		})
 	}
 
 	// we are not making any checks here if the RPC server was running or not; if the server is not
@@ -4512,6 +4525,12 @@ func getKeyspaceName(defn c.IndexDefn) string {
 
 func (sr *ShardRebalancer) processBatchBuildReqs() {
 
+	defer func() {
+		for req := range sr.batchBuildReqCh {
+			logging.Infof("ShardRebalancer::processBatchBuildReqs Draining req: %v as channel is closed", *req)
+		}
+	}()
+
 	pendingBulidReqs := make(map[string][]*batchBuildReq)
 
 	// Batch index build requests for every 3 seconds
@@ -4567,7 +4586,7 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 				skipDefns, retryInsts, err := sr.postBuildIndexesReq(defnIdList, "", nil)
 				if err != nil {
 					// Set error in transfer token and return
-					logging.Errorf("ShardRebalancer::processBatchBuildReqs Error observed while posting build reqs for defnIds: %v", defnIdList.DefnIds)
+					logging.Errorf("ShardRebalancer::processBatchBuildReqs Error observed while posting build reqs for defnIds: %v, err: %v", defnIdList.DefnIds, err)
 					if err != ErrRebalanceCancel && err != ErrRebalanceDone {
 						for _, req := range perKeyspaceReqs {
 							sr.setTransferTokenError(req.ttid, req.tt, err.Error())
@@ -4577,6 +4596,7 @@ func (sr *ShardRebalancer) processBatchBuildReqs() {
 						go sr.finishRebalance(err)
 					}
 
+					logging.Infof("ShardRebalancer::processBatchBuildReqs Exiting as error is received, err: %v", err)
 					// If error is ErrRebalanceCancel or ErrRebalanceDone, no point in continuing further
 					// Hence return
 					return

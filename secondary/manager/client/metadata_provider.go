@@ -7199,13 +7199,10 @@ func (w *watcher) excludeIn() bool {
 func (provider *MetadataProvider) ShouldMaintainShardAffinity() bool {
 	storageMode := strings.ToLower(provider.settings.StorageMode())
 
-	intVer := c.GetInternalVersion()
-	if intVer.LessThan(provider.internalVersion) {
-		intVer = provider.internalVersion
-	}
+	clusterVer := max(c.GetClusterVersion(), int64(provider.GetClusterVersion()))
 
 	return provider.settings.IsShardAffinityEnabled() &&
-		!intVer.LessThan(c.MIN_VER_SHARD_AFFINITY) &&
+		clusterVer >= c.INDEXER_76_VERSION &&
 		storageMode == c.PlasmaDB
 }
 

@@ -60,6 +60,8 @@ var ErrUnmarshalFailed = errors.New("json.Unmarshal failed")
 
 var ErrAuthMissing = errors.New("Unauthenticated access. Missing authentication information.")
 
+var ErrNumVbRange = errors.New("NumVbs out of valid range")
+
 // List of errors leading to failure of index creation
 var ErrAnotherIndexCreation = errors.New("Create index or Alter replica cannot proceed due to another concurrent create index request.")
 var ErrRebalanceRunning = errors.New("Create index or Alter replica cannot proceed due to rebalance in progress.")
@@ -152,6 +154,9 @@ const SYSTEM_SCOPE = "_system"
 const NON_PARTITION_ID = PartitionId(0)
 
 var NULL = []byte("null")
+
+const MIN_VBUCKETS_ALLOWED = 1
+const MAX_VBUCKETS_ALLOWED = 1024
 
 // HTTP header fields
 const HTTP_KEY_CONTENT_TYPE = "Content-Type"  // usually application/json

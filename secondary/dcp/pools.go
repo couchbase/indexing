@@ -42,6 +42,12 @@ var HttpRequestTimeout = time.Duration(120) * time.Second
 // pool.
 var PoolOverflow = PoolSize
 
+// Redifining the  constants to avoid cyclic dependency
+const MIN_VBUCKETS_ALLOWED = 1
+const MAX_VBUCKETS_ALLOWED = 1024
+
+var ErrNumVbRange = errors.New("NumVbs out of valid range")
+
 // AuthHandler is a callback that gets the auth username and password
 // for the given bucket.
 type AuthHandler interface {
@@ -718,6 +724,14 @@ func (p *Pool) getTerseBucket(bucketn string) (bool, *Bucket, error) {
 		}
 		return retry, nil, err
 	}
+
+	numVBs := nb.NumVBuckets
+
+	if numVBs < MIN_VBUCKETS_ALLOWED || numVBs > MAX_VBUCKETS_ALLOWED {
+		logging.Errorf("ClusterInfoCache::GetNumVBuckets, err: %v, bucket: %v, numVBuckets: %v",
+			ErrNumVbRange, nb.Name, numVBs)
+	}
+
 	return retry, nb, nil
 }
 

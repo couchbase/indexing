@@ -435,13 +435,19 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		cfg.MaxSMRInstPerCtx = slice.sysconf["plasma.MaxSMRInstPerCtx"].Uint64()
 
 		cfg.AutoTuneLSSFlushBuffer = slice.sysconf["plasma.fbtuner.enable"].Bool()
-		cfg.AutoTuneFlushBufferMaxQuota = slice.sysconf["plasma.fbtuner.maxQuotaRatio"].Float64()
+		cfg.AutoTuneFlushBufferMaxQuota = slice.sysconf["plasma.flushBufferQuota"].Float64() / 100.0
 		cfg.AutoTuneFlushBufferMinQuota = slice.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
+		cfg.AutoTuneFlushBufferMinSize = slice.sysconf["plasma.fbtuner.flushBufferMinSize"].Int()
+		cfg.AutoTuneFlushBufferRecoveryMinSize = slice.sysconf["plasma.fbtuner.recoveryFlushBufferMinSize"].Int()
+		cfg.AutoTuneFlushBufferMinAdjustSz = int64(slice.sysconf["plasma.fbtuner.adjustMinSize"].Int())
+		cfg.AutoTuneFlushBufferGCBytes = int64(slice.sysconf["plasma.fbtuner.gcBytes"].Int())
 		cfg.AutoTuneFlushBufferAdjustRate = slice.sysconf["plasma.fbtuner.adjustRate"].Float64()
 		cfg.AutoTuneFlushBufferAdjustInterval =
-			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second)
+			time.Duration(slice.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second
 		cfg.AutoTuneFlushBufferLSSSampleInterval =
-			time.Duration(time.Duration(slice.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
+			time.Duration(slice.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second
+		cfg.AutoTuneFlushBufferRebalInterval =
+			time.Duration(slice.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 		cfg.AutoTuneFlushBufferDebug = slice.sysconf["plasma.fbtuner.debug"].Bool()
 
 		// shard transfer
@@ -3234,11 +3240,17 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 	mdb.mainstore.AutoTuneLSSFlushBuffer = mdb.sysconf["plasma.fbtuner.enable"].Bool()
 	mdb.mainstore.AutoTuneFlushBufferMinQuota = mdb.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
+	mdb.mainstore.AutoTuneFlushBufferMinSize = mdb.sysconf["plasma.fbtuner.flushBufferMinSize"].Int()
+	mdb.mainstore.AutoTuneFlushBufferRecoveryMinSize = mdb.sysconf["plasma.fbtuner.recoveryFlushBufferMinSize"].Int()
+	mdb.mainstore.AutoTuneFlushBufferMinAdjustSz = int64(mdb.sysconf["plasma.fbtuner.adjustMinSize"].Int())
+	mdb.mainstore.AutoTuneFlushBufferGCBytes = int64(mdb.sysconf["plasma.fbtuner.gcBytes"].Int())
 	mdb.mainstore.AutoTuneFlushBufferAdjustRate = mdb.sysconf["plasma.fbtuner.adjustRate"].Float64()
 	mdb.mainstore.AutoTuneFlushBufferAdjustInterval =
-		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second)
+		time.Duration(mdb.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second
 	mdb.mainstore.AutoTuneFlushBufferLSSSampleInterval =
-		time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
+		time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second
+	mdb.mainstore.AutoTuneFlushBufferRebalInterval =
+		time.Duration(mdb.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 	mdb.mainstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
@@ -3350,11 +3362,17 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 		mdb.backstore.AutoTuneLSSFlushBuffer = mdb.sysconf["plasma.fbtuner.enable"].Bool()
 		mdb.backstore.AutoTuneFlushBufferMinQuota = mdb.sysconf["plasma.fbtuner.minQuotaRatio"].Float64()
+		mdb.backstore.AutoTuneFlushBufferMinSize = mdb.sysconf["plasma.fbtuner.flushBufferMinSize"].Int()
+		mdb.backstore.AutoTuneFlushBufferRecoveryMinSize = mdb.sysconf["plasma.fbtuner.recoveryFlushBufferMinSize"].Int()
+		mdb.backstore.AutoTuneFlushBufferMinAdjustSz = int64(mdb.sysconf["plasma.fbtuner.adjustMinSize"].Int())
+		mdb.backstore.AutoTuneFlushBufferGCBytes = int64(mdb.sysconf["plasma.fbtuner.gcBytes"].Int())
 		mdb.backstore.AutoTuneFlushBufferAdjustRate = mdb.sysconf["plasma.fbtuner.adjustRate"].Float64()
 		mdb.backstore.AutoTuneFlushBufferAdjustInterval =
-			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second)
+			time.Duration(mdb.sysconf["plasma.fbtuner.adjustInterval"].Int()) * time.Second
 		mdb.backstore.AutoTuneFlushBufferLSSSampleInterval =
-			time.Duration(time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second)
+			time.Duration(mdb.sysconf["plasma.fbtuner.lssSampleInterval"].Int()) * time.Second
+		mdb.mainstore.AutoTuneFlushBufferRebalInterval =
+			time.Duration(mdb.sysconf["plasma.fbtuner.rebalInterval"].Int()) * time.Second
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 		mdb.backstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
