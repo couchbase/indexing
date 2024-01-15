@@ -2776,14 +2776,20 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 	// ends up in a deadlock. As "sr.mu" is only to protect token states and shard rebalancer's
 	// book-keeping, delay the locking until merge is finished
 	sr.mu.Lock()
-	defer sr.mu.Unlock()
 
 	// Update state of the transfer token
 	tt.ShardTransferTokenState = c.ShardTokenReady
 	sr.acceptedTokens[ttid] = tt // Update accpeted tokens
 	setTransferTokenInMetakv(ttid, tt)
 
-	if sr.allDestTokensReadyLOCKED() {
+	var allTokensReady = sr.allDestTokensReadyLOCKED()
+	sr.mu.Unlock()
+
+	// only one go-routine of updateRStateToActive will run this as only the last go-routine
+	// will set the acceptedTokens[ttid] as ShardTokenReady and hence only one go-routine
+	// will get the allTokensReady as true; this should not change as we should not issue
+	// merge for the same partns again else we can get stuck
+	if allTokensReady {
 		sr.updateRStateOfDCPTokens()
 	}
 }
@@ -2850,21 +2856,25 @@ func (sr *ShardRebalancer) updateRStateOfDCPTokens() {
 		return
 	}
 
+	var partnMergeWaitGroup sync.WaitGroup
 	// Step-2: Change Rstate of each of the DCP tokens
 	for dcpTokenId, dcpToken := range dcpTokens {
 
 		if dcpToken.IsEmptyNodeBatch == false || dcpToken.IsPendingReady == false {
+			delete(dcpTokens, dcpTokenId)
 			continue
 		}
 
 		if dcpToken.DestId != sr.nodeUUID {
+			delete(dcpTokens, dcpTokenId)
 			continue
 		}
 
-		var partnMergeWaitGroup sync.WaitGroup
 		sr.destTokenToMergeOrReady(dcpToken.InstId, dcpToken.RealInstId, dcpTokenId, dcpToken, &partnMergeWaitGroup)
-		partnMergeWaitGroup.Wait()
+	}
+	partnMergeWaitGroup.Wait()
 
+	for dcpTokenId, dcpToken := range dcpTokens {
 		// At this point, index is merged & RState of the index is changed.
 		// Otherwise, indexer would have crashed
 		// Update transfer token state
@@ -2873,7 +2883,8 @@ func (sr *ShardRebalancer) updateRStateOfDCPTokens() {
 		} else {
 			dcpToken.State = c.TransferTokenCommit // no source to delete in non-move case
 		}
-		logging.Infof("ShardRebalancer::updateRStateOfDCPTokens Changing RState of dcpToken: %v to %v", dcpTokenId, dcpToken.State)
+		logging.Infof("ShardRebalancer::updateRStateOfDCPTokens Changing RState of dcpToken: %v to %v",
+			dcpTokenId, dcpToken.State)
 		setTransferTokenInMetakv(dcpTokenId, dcpToken)
 	}
 }
