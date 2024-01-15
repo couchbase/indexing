@@ -7087,7 +7087,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 
 	if !found || numVBuckets < common.MIN_VBUCKETS_ALLOWED || numVBuckets > common.MAX_VBUCKETS_ALLOWED {
 		logging.Errorf("Indexer::processBuildDoneCatchup, err: %v, keyspace: %v, numVBuckets: %v, found: %v",
-			keyspaceId, common.ErrNumVbRange, keyspaceId, numVBuckets, found)
+			common.ErrNumVbRange, keyspaceId, numVBuckets, found)
 	}
 
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
@@ -7940,7 +7940,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	numVBuckets, found := idx.bucketNameNumVBucketsMap[GetBucketFromKeyspaceId(keyspaceId)]
 	if !found || numVBuckets < common.MIN_VBUCKETS_ALLOWED || numVBuckets > common.MAX_VBUCKETS_ALLOWED {
 		logging.Errorf("Indexer::startKeyspaceIdStream, err: %v, keyspace: %v, numVBuckets: %v, found: %v",
-			keyspaceId, common.ErrNumVbRange, keyspaceId, numVBuckets, found)
+			common.ErrNumVbRange, keyspaceId, numVBuckets, found)
 	}
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
