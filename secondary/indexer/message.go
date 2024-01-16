@@ -219,6 +219,7 @@ const (
 	METERING_MGR_STOP_WRITE_BILLING
 	METERING_MGR_START_WRITE_BILLING
 	PAUSE_UPDATE_BUCKET_STATE
+	PERSISTANCE_STATUS
 
 	START_PEER_SERVER
 	STOP_PEER_SERVER
@@ -3204,6 +3205,19 @@ func (m *MsgDestroyEmptyShard) IsForced() bool {
 	return m.force
 }
 
+type MsgPersistanceStatus struct {
+	mType  MsgType
+	respCh chan bool
+}
+
+func (m *MsgPersistanceStatus) GetMsgType() MsgType {
+	return PERSISTANCE_STATUS
+}
+
+func (m *MsgPersistanceStatus) GetRespCh() chan bool {
+	return m.respCh
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3540,6 +3554,8 @@ func (m MsgType) String() string {
 		return "START_PEER_SERVER"
 	case STOP_PEER_SERVER:
 		return "STOP_PEER_SERVER"
+	case PERSISTANCE_STATUS:
+		return "PERSISTANCE_STATUS"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

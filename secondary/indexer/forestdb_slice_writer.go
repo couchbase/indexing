@@ -1344,6 +1344,10 @@ func (fdb *fdbSlice) IsCleanupDone() bool {
 	return fdb.isClosed && fdb.isDeleted
 }
 
+func (fdb *fdbSlice) IsPersistanceActive() bool {
+	return false
+}
+
 // IsActive returns if the slice is active
 func (fdb *fdbSlice) IsActive() bool {
 	return fdb.isActive

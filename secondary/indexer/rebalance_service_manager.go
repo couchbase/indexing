@@ -242,6 +242,7 @@ func (m *RebalanceServiceManager) initService(cleanupPending bool) {
 	mux.HandleFunc("/lockShards", m.handleLockShards)
 	mux.HandleFunc("/unlockShards", m.handleUnlockShards)
 	mux.HandleFunc("/dropCleanupPending", m.handleDropCleanupPending)
+	mux.HandleFunc("/isPersistanceActive", m.handleIsPersistanceActive)
 }
 
 // updateNodeList initializes RebalanceServiceManager.state.servers node list on start or restart.
@@ -4435,6 +4436,31 @@ func (m *RebalanceServiceManager) handleDropCleanupPending(w http.ResponseWriter
 	}
 }
 
+func (m *RebalanceServiceManager) handleIsPersistanceActive(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
+		l.Errorf("RebalanceServiceManager::handleIsPersistanceActive Validation Failure req: %v", c.GetHTTPReqInfo(r))
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.admin.internal.index!write"}, r, w, "RebalanceServiceManager:handleDropCleanupPending") {
+		return
+	}
+
+	if r.Method == "GET" {
+
+		isPersistorActive := m.checkIfPersistanceActive()
+		if isPersistorActive {
+			m.writeBytes(w, []byte("progress"))
+		} else {
+			m.writeBytes(w, []byte("done"))
+		}
+	} else {
+		m.writeError(w, errors.New("Unsupported method"))
+	}
+}
+
 // An orphan shard token is the once for which the owner is not alive
 // i.e. owner is out of the cluster. If the transfer token is in a state
 // where the data on S3 might not have been deleted, then initaite cleanup
@@ -4532,4 +4558,13 @@ func retriedMetakvDel(path string) error {
 	return rh.RunWithConditionalError(func(err error) bool {
 		return !strings.Contains(err.Error(), http.StatusText(http.StatusServiceUnavailable))
 	})
+}
+
+func (m *RebalanceServiceManager) checkIfPersistanceActive() bool {
+
+	respCh := make(chan bool)
+	m.supvPrioMsgch <- &MsgPersistanceStatus{respCh: respCh}
+	isPersistorActive := <-respCh
+
+	return isPersistorActive
 }

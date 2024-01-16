@@ -722,8 +722,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 			// Check if item has been deleted
 			if gotNode := mdb.main[workerId].GetNode(bs); gotNode != nil {
-				gotItem := (*memdb.Item) (gotNode.Item())
-				logging.Warnf("MemDBSlice::insertSecArrayIndex::emptyList: Found node with deleted bytes in" +
+				gotItem := (*memdb.Item)(gotNode.Item())
+				logging.Warnf("MemDBSlice::insertSecArrayIndex::emptyList: Found node with deleted bytes in"+
 					" mainstore: success[%v] bytes[%s] docid[%s] item[%s]",
 					success, logging.TagStrUD(bs), logging.TagStrUD(docid), gotItem.String())
 			}
@@ -760,8 +760,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 			// Check if item has been deleted
 			if gotNode := mdb.main[workerId].GetNode(bs); gotNode != nil {
-				gotItem := (*memdb.Item) (gotNode.Item())
-				logging.Warnf("MemDBSlice::insertSecArrayIndex::entryBytesToDeleted: Found node with deleted bytes in" +
+				gotItem := (*memdb.Item)(gotNode.Item())
+				logging.Warnf("MemDBSlice::insertSecArrayIndex::entryBytesToDeleted: Found node with deleted bytes in"+
 					" mainstore: success[%v] bytes[%s] docid[%s] item[%s]",
 					success, logging.TagStrUD(bs), logging.TagStrUD(docid), gotItem.String())
 			}
@@ -940,8 +940,8 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 
 		// Check if item has been deleted
 		if gotNode := mdb.main[workerId].GetNode(bs); gotNode != nil {
-			gotItem := (*memdb.Item) (gotNode.Item())
-			logging.Warnf("MemDBSlice::deleteSecArrayIndex: Found node with deleted bytes in mainstore." +
+			gotItem := (*memdb.Item)(gotNode.Item())
+			logging.Warnf("MemDBSlice::deleteSecArrayIndex: Found node with deleted bytes in mainstore."+
 				"success[%v] bytes[%s] docid[%s] item[%s]",
 				success, logging.TagStrUD(bs), logging.TagStrUD(docid), gotItem.String())
 		}
@@ -1155,6 +1155,10 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 		s.info.MainSnap.Close()
 	}
+}
+
+func (mdb *memdbSlice) IsPersistanceActive() bool {
+	return false
 }
 
 // cleanupOldSnapshotFiles deletes old disk snapshots.

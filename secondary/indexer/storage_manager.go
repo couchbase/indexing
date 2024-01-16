@@ -319,6 +319,11 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 		}
 		s.supvCmdch <- &MsgSuccess{}
 
+	case PERSISTANCE_STATUS:
+		s.supvCmdch <- &MsgSuccess{}
+
+		s.handlePersistanceStatus(cmd)
+
 	case INDEXER_SECURITY_CHANGE:
 		if s.stm != nil {
 			s.stm.ProcessCommand(cmd)
@@ -2799,4 +2804,37 @@ func (sm *storageMgr) handleDestroyEmptyShards() {
 			}
 		}
 	}
+}
+
+func (sm *storageMgr) handlePersistanceStatus(msg Message) {
+	sm.muSnap.Lock()
+	indexInstMap := sm.indexInstMap.Get()
+	indexPartnMap := sm.indexPartnMap.Get()
+	sm.muSnap.Unlock()
+
+	go func() {
+		respCh := msg.(*MsgPersistanceStatus).GetRespCh()
+		for instId, inst := range indexInstMap {
+			if inst.State != common.INDEX_STATE_ACTIVE {
+				continue
+			}
+
+			partnMap, ok := indexPartnMap[instId]
+			if !ok {
+				continue
+			}
+
+			for _, partnInst := range partnMap {
+				sc := partnInst.Sc
+
+				for _, slice := range sc.GetAllSlices() {
+					if slice.IsCleanupDone() == false && slice.IsPersistanceActive() {
+						respCh <- true
+						return
+					}
+				}
+			}
+		}
+		respCh <- false
+	}()
 }

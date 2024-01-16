@@ -3847,6 +3847,10 @@ func (mdb *plasmaSlice) isPersistorRunning() bool {
 	return mdb.isPersistorActive
 }
 
+func (mdb *plasmaSlice) IsPersistanceActive() bool {
+	return mdb.isPersistorRunning()
+}
+
 // waitForPersistorThread will gracefully stop the persistor. User is expected
 // to perform the necessary action and call doPersistSnapshot and not concurrently
 // to action which needs persistor to be stopped
