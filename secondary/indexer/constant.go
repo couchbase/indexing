@@ -72,6 +72,8 @@ const PLASMA_MEMQUOTA_FRAC = 0.9
 
 const SCAN_ROLLBACK_ERROR_BATCHSIZE = 1000
 
+const SCAN_SHUTDOWN_ERROR_BATCHSIZE = 1000
+
 const MAX_PROJ_RETRY = 20
 
 // Constants for stats persistence in snapshot meta
