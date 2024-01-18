@@ -2455,6 +2455,7 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 			partnShardIdMap: partnShardIdMap,
 			err:             err,
 			recoveryDoneCh:  recoveryDoneCh,
+			numVbs:          numVBuckets,
 		}
 
 		return
@@ -2471,6 +2472,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	partnInstMap := msg.(*MsgRecoverIndexResp).GetPartnInstMap()
 	partnShardIdMap := msg.(*MsgRecoverIndexResp).GetPartnShardIdMap()
 	recoveryDoneCh := msg.(*MsgRecoverIndexResp).GetRecoveryDoneCh()
+	numVBs := msg.(*MsgRecoverIndexResp).GetNumVbs()
 	recoveryErr := msg.(*MsgRecoverIndexResp).GetError()
 
 	// Notify lifecycle manager that the async recovery is done.
@@ -2548,6 +2550,14 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
+	}
+
+	// Update bucketNameNumVBucketsMap to prevent condition where entry for a bucket is removed
+	// from map due to updateBucketNameNumVBucketsMap being called by other index instance of
+	// same bucket, before the indexInst map is updated
+	if _, ok := idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket]; !ok {
+		idx.bucketNameNumVBucketsMap[indexInst.Defn.Bucket] = numVBs
+		idx.sendBucketNameNumVBucketsMap()
 	}
 
 	// update index snapshot map for this index
@@ -5653,23 +5663,22 @@ func (idx *indexer) monitorSliceForPrunedPartitions(spec *pruneSpec) {
 }
 
 func (idx *indexer) updateBucketNameNumVBucketsMap(deletedInstBucketNames []string) {
-	bucketNameNumVBucketsMap := make(map[string]int)
+	bucketsRemaining := make(map[string]bool)
 	for _, inst := range idx.indexInstMap {
-		if _, ok := bucketNameNumVBucketsMap[inst.Defn.Bucket]; !ok {
-			bucketNameNumVBucketsMap[inst.Defn.Bucket] = idx.bucketNameNumVBucketsMap[inst.Defn.Bucket]
+		if _, ok := bucketsRemaining[inst.Defn.Bucket]; !ok {
+			bucketsRemaining[inst.Defn.Bucket] = true
 		}
 	}
 
 	anyBucketRemoved := false
 	for _, bucketName := range deletedInstBucketNames {
-		if _, ok := bucketNameNumVBucketsMap[bucketName]; !ok {
+		if _, ok := bucketsRemaining[bucketName]; !ok {
 			anyBucketRemoved = true
-			break
+			delete(idx.bucketNameNumVBucketsMap, bucketName)
 		}
 	}
 
 	if anyBucketRemoved {
-		idx.bucketNameNumVBucketsMap = bucketNameNumVBucketsMap
 		idx.sendBucketNameNumVBucketsMap()
 	}
 }
