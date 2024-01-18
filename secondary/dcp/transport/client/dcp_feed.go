@@ -12,6 +12,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -91,6 +92,8 @@ type DcpFeed struct {
 	useAtomicMutationQueue bool
 	closeMutQueue          chan bool
 	dequeueDoneCh          chan bool // DequeueMutations will close this channel upon exit
+
+	mu sync.Mutex // Avoid concurrent setting of connection deadline.
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -680,6 +683,28 @@ func (feed *DcpFeed) handleSystemEvent(pkt *transport.MCRequest, dcpEvent *DcpEv
 	}
 }
 
+// Transmit request with mutex by setting read/write deadline
+func (feed *DcpFeed) TransmitWithDeadline(rq *transport.MCRequest) error {
+	feed.mu.Lock()
+	defer feed.mu.Unlock()
+
+	feed.conn.SetMcdConnectionDeadline()
+	defer feed.conn.ResetMcdConnectionDeadline()
+
+	return feed.conn.Transmit(rq)
+}
+
+// Transmit request with mutex by setting write deadline
+func (feed *DcpFeed) TransmitWithWriteDeadline(rq *transport.MCRequest) error {
+	feed.mu.Lock()
+	defer feed.mu.Unlock()
+
+	feed.conn.SetMcdConnectionWriteDeadline()
+	defer feed.conn.ResetMcdConnectionWriteDeadline()
+
+	return feed.conn.Transmit(rq)
+}
+
 func (feed *DcpFeed) doDcpGetFailoverLog(
 	opaque uint16,
 	vblist []uint16,
@@ -704,10 +729,8 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 
 		var msg []interface{}
 		err1 := func() error {
-			feed.conn.SetMcdConnectionDeadline()
-			defer feed.conn.ResetMcdConnectionDeadline()
 
-			if err := feed.conn.Transmit(rq); err != nil {
+			if err := feed.TransmitWithDeadline(rq); err != nil {
 				fmsg := "%v ##%x doDcpGetFailoverLog.Transmit(): %v"
 				logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 				return err
@@ -779,14 +802,12 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 	rq.Extras = make([]byte, 4)
 	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
 
-	feed.conn.SetMcdConnectionDeadline()
-	defer feed.conn.ResetMcdConnectionDeadline()
-
-	if err := feed.conn.Transmit(rq); err != nil {
+	if err := feed.TransmitWithDeadline(rq); err != nil {
 		fmsg := "%v ##%x doDcpGetSeqnos.Transmit(): %v"
 		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
 		return nil, err
 	}
+
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	msg, ok := <-rcvch
 	if !ok {
@@ -838,9 +859,6 @@ func (feed *DcpFeed) doDcpOpen(
 		feed.conn.SetMcdMutationReadDeadline()
 	}()
 
-	feed.conn.SetMcdConnectionDeadline()
-	defer feed.conn.ResetMcdConnectionDeadline()
-
 	if feed.collectionsAware {
 		if err := feed.enableCollections(rcvch); err != nil {
 			return err
@@ -857,9 +875,13 @@ func (feed *DcpFeed) doDcpOpen(
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
-	if err := feed.conn.Transmit(rq); err != nil {
+	err := feed.TransmitWithDeadline(rq)
+	if err != nil {
+		fmsg := "%v ##%x doDcpOpen.DCP_OPEN.Transmit(): %v"
+		logging.Errorf(fmsg, prefix, opaque, err)
 		return err
 	}
+
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	msg, ok := <-rcvch
 	if !ok {
@@ -898,11 +920,13 @@ func (feed *DcpFeed) doDcpOpen(
 			Key:    []byte("connection_buffer_size"),
 			Body:   []byte(strconv.Itoa(int(bufsize))),
 		}
-		if err := feed.conn.Transmit(rq); err != nil {
+
+		if err := feed.TransmitWithDeadline(rq); err != nil {
 			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.Transmit(connection_buffer_size): %v"
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
+
 		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		msg, ok := <-rcvch
 		if !ok {
@@ -940,7 +964,8 @@ func (feed *DcpFeed) doDcpOpen(
 			Key:    []byte("enable_noop"),
 			Body:   []byte("true"),
 		}
-		if err := feed.conn.Transmit(rq); err != nil {
+
+		if err := feed.TransmitWithDeadline(rq); err != nil {
 			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.Transmit(enable_noop): %v"
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
@@ -974,11 +999,13 @@ func (feed *DcpFeed) doDcpOpen(
 			Key:    []byte("set_noop_interval"),
 			Body:   []byte("20"),
 		}
-		if err := feed.conn.Transmit(rq); err != nil {
+
+		if err := feed.TransmitWithDeadline(rq); err != nil {
 			fmsg := "%v ##%x doDcpOpen.Transmit(set_noop_interval): %v"
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
+
 		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		logging.Infof("%v ##%x sending set_noop_interval", prefix, opaque)
 		msg, ok := <-rcvch
@@ -1056,14 +1083,13 @@ func (feed *DcpFeed) doDcpRequestStream(
 	// in the projector feed takes care of cleanning up of the connections.
 	// After closing connections, pressure on memcached may get eased, and
 	// retry (from indexer side) may succeed.
-	feed.conn.SetMcdConnectionWriteDeadline()
-	defer feed.conn.ResetMcdConnectionWriteDeadline()
 
-	if err := feed.conn.Transmit(rq); err != nil {
-		fmsg := "%v ##%x doDcpRequestStream.Transmit(): %v"
-		logging.Errorf(fmsg, prefix, opaqueMSB, err)
+	if err := feed.TransmitWithWriteDeadline(rq); err != nil {
+		fmsg := "%v ##%x doDcpRequestStream.Transmit(): for vb:%v %v"
+		logging.Errorf(fmsg, prefix, opaqueMSB, vbno, err)
 		return err
 	}
+
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	stream := &DcpStream{
 		AppOpaque:        opaqueMSB,
@@ -1117,11 +1143,12 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 		Body:   []byte{0x00, transport.FEATURE_COLLECTIONS},
 	}
 
-	if err := feed.conn.Transmit(rq); err != nil {
+	if err := feed.TransmitWithDeadline(rq); err != nil {
 		fmsg := "%v ##%x doDcpOpen.Transmit DCP_HELO (feature_collections): %v"
 		logging.Errorf(fmsg, prefix, opaque, err)
 		return err
 	}
+
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	logging.Infof("%v ##%x sending DCP_HELO (feature_collections)", prefix, opaque)
 	msg, ok := <-rcvch
@@ -1158,11 +1185,13 @@ func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
 		Key:    []byte("enable_out_of_order_snapshots"),
 		Body:   []byte("true_with_seqno_advanced"),
 	}
-	if err := feed.conn.Transmit(rq); err != nil {
+
+	if err := feed.TransmitWithDeadline(rq); err != nil {
 		fmsg := "%v ##%x doDcpOpen.Transmit DCP_CONTROL (enable_out_of_order_snapshots): %v"
 		logging.Errorf(fmsg, prefix, opaque, err)
 		return err
 	}
+
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	logging.Infof("%v ##%x sending DCP_CONTROL (enable_out_of_order_snapshots)", prefix, opaque)
 	msg, ok := <-rcvch
@@ -1276,10 +1305,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) error {
 
 			func() {
 				// Timeout here will unblock genServer() thread after some time.
-				feed.conn.SetMcdConnectionWriteDeadline()
-				defer feed.conn.ResetMcdConnectionWriteDeadline()
-
-				if err := feed.conn.Transmit(bufferAck); err != nil {
+				if err := feed.TransmitWithWriteDeadline(bufferAck); err != nil {
 					logging.Errorf("%v buffer-ack Transmit(): %v, lastAckTime: %v", prefix, err, feed.lastAckTime.UnixNano())
 					err1 = err
 				} else {
@@ -1796,6 +1822,9 @@ loop:
 
 			func() {
 				// Timeout here will unblock doReceive() thread after some time.
+				feed.mu.Lock()
+				defer feed.mu.Unlock()
+
 				conn.SetMcdConnectionDeadline()
 				defer conn.ResetMcdConnectionDeadline()
 
