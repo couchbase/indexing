@@ -655,7 +655,7 @@ func (ss *StreamState) decVbRefCount(streamId common.StreamId, keyspaceId string
 	vbs[vb] = vbs[vb] - 1
 }
 
-//computes the restart Ts for the given keyspaceId and stream
+// computes the restart Ts for the given keyspaceId and stream
 func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 	keyspaceId string) *common.TsVbuuid {
 
@@ -670,7 +670,7 @@ func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 	return restartTs
 }
 
-//computes the rollback Ts for the given keyspaceId and stream
+// computes the rollback Ts for the given keyspaceId and stream
 func (ss *StreamState) computeRollbackTs(streamId common.StreamId, keyspaceId string) *common.TsVbuuid {
 
 	if rollTs, ok := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]; ok && rollTs.Len() > 0 {
@@ -790,7 +790,7 @@ func (ss *StreamState) getRepairTsForKeyspaceId(streamId common.StreamId,
 
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
 
-                // Mark the VBs picked for shutdown & restart as SHUTDOWN_BEGIN
+				// Mark the VBs picked for shutdown & restart as SHUTDOWN_BEGIN
 				ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][i] = REPAIR_SHUTDOWN_BEGIN_VB
 			}
 		}
@@ -964,10 +964,8 @@ func (ss *StreamState) hasConnectionError(streamId common.StreamId, keyspaceId s
 	return false
 }
 
-//
 // When making a vb to have connection error, the ref count must also set to 0.  No counting
 // will start until it gets its first StreamBegin message.
-//
 func (ss *StreamState) makeConnectionError(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
 	ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vbno] = VBS_CONN_ERROR
@@ -1198,11 +1196,9 @@ func (ss *StreamState) clearAllRepairState(streamId common.StreamId, keyspaceId 
 	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(bucket, numVbuckets)
 }
 
-//
 // Return true if all vb has received streamBegin regardless of rollbackTs.
 // If indexer has seen StreamBegin for a vb, but the vb has later received
 // StreamEnd or ConnErr, this function will still return false.
-//
 func (ss *StreamState) seenAllVbs(streamId common.StreamId, keyspaceId string,
 	numVBuckets int) bool {
 
@@ -1249,11 +1245,10 @@ func (ss *StreamState) canRollbackNow(streamId common.StreamId, keyspaceId strin
 	return needsRollback, canRollback
 }
 
-//If a snapshot marker has been received but no mutation for that snapshot,
-//the repairTs seqno will be outside the snapshot marker range and
-//DCP will refuse to accept such seqno for restart. Such VBs need to
-//use lastFlushTs or restartTs.
-//
+// If a snapshot marker has been received but no mutation for that snapshot,
+// the repairTs seqno will be outside the snapshot marker range and
+// DCP will refuse to accept such seqno for restart. Such VBs need to
+// use lastFlushTs or restartTs.
 func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 	streamId common.StreamId, keyspaceId string, repairVbs []Vbucket, forStreamRepair bool) {
 
@@ -1353,8 +1348,8 @@ func (ss *StreamState) checkAllStreamBeginsReceived(streamId common.StreamId,
 	return true
 }
 
-//checks snapshot markers have been received for all vbuckets where
-//the buildTs is non-nil.
+// checks snapshot markers have been received for all vbuckets where
+// the buildTs is non-nil.
 func (ss *StreamState) checkAllSnapMarkersReceived(streamId common.StreamId,
 	keyspaceId string, buildTs Timestamp) bool {
 
@@ -1370,7 +1365,7 @@ func (ss *StreamState) checkAllSnapMarkersReceived(streamId common.StreamId,
 	return true
 }
 
-//checks if the given keyspaceId in this stream has any flush in progress
+// checks if the given keyspaceId in this stream has any flush in progress
 func (ss *StreamState) checkAnyFlushPending(streamId common.StreamId,
 	keyspaceId string) bool {
 
@@ -1385,7 +1380,7 @@ func (ss *StreamState) checkAnyFlushPending(streamId common.StreamId,
 	return false
 }
 
-//checks if none of the keyspaceIds in this stream has any flush abort in progress
+// checks if none of the keyspaceIds in this stream has any flush abort in progress
 func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
 	keyspaceId string) bool {
 
@@ -1397,8 +1392,8 @@ func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
 	return false
 }
 
-//updateHWT will update the HW Timestamp for a keyspaceId in the stream
-//based on the Sync message received.
+// updateHWT will update the HW Timestamp for a keyspaceId in the stream
+// based on the Sync message received.
 func (ss *StreamState) updateHWT(streamId common.StreamId,
 	keyspaceId string, hwt *common.TsVbuuid, hwtOSO *common.TsVbuuid, prevSnap *common.TsVbuuid) {
 
@@ -1434,7 +1429,16 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
 		}
 		//if snapEnd is greater than current hwt snapEnd
-		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
+		if (hwt.Snapshots[i][1] > ts.Snapshots[i][1]) ||
+			(hwt.Snapshots[i][1] < ts.Snapshots[i][1] && hwt.Snapshots[i][1] >= ts.Seqnos[i]) {
+
+			if hwt.Snapshots[i][1] < ts.Snapshots[i][1] && hwt.Snapshots[i][1] >= ts.Seqnos[i] {
+				logging.Infof("StreamState::updateHWT Received New Snapshot Range in HWT "+
+					"KeyspaceId %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					keyspaceId, streamId, i, hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i], ts.Vbuuids[i],
+					ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i])
+			}
+
 			lastSnap := ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]
 			//store the prev snap marker in the lastSnapMarker map
 			lastSnap.Snapshots[i][0] = prevSnap.Snapshots[i][0]
@@ -1456,8 +1460,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 				partialSnap = true
 
 			}
-
-		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
+		} else {
 			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
 			logging.Debugf("StreamState::updateHWT.  Recieved a snapshot marker older than current hwt snapshot. "+
 				"KeyspaceId %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
@@ -1512,7 +1515,7 @@ func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, keyspaceId s
 	return false
 }
 
-//gets the stability timestamp based on the current HWT
+// gets the stability timestamp based on the current HWT
 func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	keyspaceId string) *TsListElem {
 
@@ -1551,8 +1554,8 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	return tsElem
 }
 
-//align the snap boundary of TS if the seqno of the TS falls within the range of
-//last snap marker
+// align the snap boundary of TS if the seqno of the TS falls within the range of
+// last snap marker
 func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 	keyspaceId string, tsElem *TsListElem, enableOSO bool) {
 
@@ -1634,7 +1637,7 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 	}
 }
 
-//check for presence of large snapshot in a TS and set the flag
+// check for presence of large snapshot in a TS and set the flag
 func (ss *StreamState) checkLargeSnapshot(ts *common.TsVbuuid) {
 
 	largeSnapshotThreshold := ss.config["settings.largeSnapshotThreshold"].Uint64()
@@ -1667,7 +1670,7 @@ func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
 
 }
 
-//computes which vbuckets have mutations compared to last flush
+// computes which vbuckets have mutations compared to last flush
 func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 	keyspaceId string, tsElem *TsListElem) ([]bool, bool, []uint64) {
 
@@ -1782,8 +1785,8 @@ func (ss *StreamState) UpdateConfig(cfg common.Config) {
 	logging.Infof("StreamState::UpdateConfig %v", cfg["settings.smallSnapshotThreshold"].Uint64())
 }
 
-//helper function to update Seqnos in TsVbuuid to
-//high seqnum of snapshot markers
+// helper function to update Seqnos in TsVbuuid to
+// high seqnum of snapshot markers
 func updateTsSeqNumToSnapshot(ts *common.TsVbuuid) {
 
 	for i, s := range ts.Snapshots {
@@ -1861,10 +1864,10 @@ func (ss *StreamState) adjustVbuuids(restartTs *common.TsVbuuid,
 	return
 }
 
-//if there is a different vbuuid for the same seqno, use that to
-//retry dcp stream request in case of rollback. this scenario could
-//happen if a node fails over and we have more recent vbuuid than
-//kv replica
+// if there is a different vbuuid for the same seqno, use that to
+// retry dcp stream request in case of rollback. this scenario could
+// happen if a node fails over and we have more recent vbuuid than
+// kv replica
 func (ss *StreamState) computeRetryTs(streamId common.StreamId,
 	keyspaceId string, restartTs *common.TsVbuuid) *common.TsVbuuid {
 

@@ -191,7 +191,14 @@ func (s *IndexScanSource) Routine() error {
 	fn := func(entry []byte) error {
 		if iterCount%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && r.hasRollback != nil && r.hasRollback.Load() == true {
 			return ErrIndexRollback
+		} else if iterCount%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 {
+			hasErr := s.HasShutdown()
+			if hasErr != nil {
+				l.Verbosef("Index scan source - Exiting scan as err observed, err: %v", hasErr)
+				return hasErr
+			}
 		}
+
 		iterCount++
 		s.p.rowsScanned++
 
@@ -1374,8 +1381,8 @@ type entryCache struct {
 	compkeybuf []byte
 	valid      bool
 
-	hit  int64
-	miss int64
+	hit           int64
+	miss          int64
 	compareDocIDs bool
 }
 
