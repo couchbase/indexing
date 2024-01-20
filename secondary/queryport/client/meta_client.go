@@ -78,6 +78,8 @@ type metadataClient struct {
 	refreshWaitCnt int
 
 	schedTokenMon *schedTokenMonitor // singleton with goroutine to monitor scheduled index tokens
+
+	safeupdateTracker uint64
 }
 
 // comboIndexCacheEntry is a data class that caches both the most recent list of scheduled plus
@@ -112,12 +114,13 @@ func newMetaBridgeClient(
 	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster:    cluster,
-		finch:      make(chan bool),
-		metaCh:     metaCh,
-		mdNotifyCh: make(chan bool, 1),
-		stNotifyCh: make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
-		settings:   settings,
+		cluster:           cluster,
+		finch:             make(chan bool),
+		metaCh:            metaCh,
+		mdNotifyCh:        make(chan bool, 1),
+		stNotifyCh:        make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
+		settings:          settings,
+		safeupdateTracker: 0,
 	}
 
 	if !security.IsToolsConfigUsed() {
@@ -1679,7 +1682,7 @@ func (b *metadataClient) updateIndexer(
 //		Timeit for b.loads
 
 func (b *metadataClient) updateTopology(
-	adminports map[string]common.IndexerId, force bool) *indexTopology {
+	adminports map[string]common.IndexerId, force bool, ctx uint64) *indexTopology {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
@@ -1757,8 +1760,8 @@ func (b *metadataClient) updateTopology(
 		for _, index := range indexes {
 			indexes2, ok := newmeta.topology[indexerId]
 			if !ok {
-				fmsg := "indexer node %v not available"
-				logging.Fatalf(fmsg, indexerId)
+				logging.Fatalf("metadataClient::updateTopology: index %v on node %v which is not yet valid for tracker %v. Valid indexers in topology - %v.",
+					index.Definition.DefnId, indexerId, ctx, newmeta.adminports)
 				continue
 			}
 			newmeta.topology[indexerId] = append(indexes2, index)
@@ -1805,6 +1808,7 @@ func (b *metadataClient) safeupdate(
 	adminports map[string]common.IndexerId, force bool) {
 
 	var currmeta, newmeta *indexTopology
+	var ctx = atomic.AddUint64(&b.safeupdateTracker, 1)
 
 	done := false
 	for done == false {
@@ -1815,13 +1819,15 @@ func (b *metadataClient) safeupdate(
 			return
 		}
 
+		var iterAdminPorts = adminports
+
 		// if adminport is nil, then safeupdate is not triggered by
 		// topology change.  Get the adminports from currmeta.
 		if currmeta != nil && adminports == nil {
-			adminports = currmeta.adminports
+			iterAdminPorts = currmeta.adminports
 		}
 
-		newmeta = b.updateTopology(adminports, force)
+		newmeta = b.updateTopology(iterAdminPorts, force, ctx)
 		if currmeta == nil {
 			// This should happen only during bootstrap
 
@@ -1857,6 +1863,8 @@ func (b *metadataClient) safeupdate(
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
 		if done {
 			atomic.StorePointer(&b.comboIndexCache, nil)
+		} else {
+			logging.Infof("metadataClient::safeupdate CAS mismatch. retying update for %v", ctx)
 		}
 		b.comboIndexCacheMut.Unlock()
 
@@ -1869,8 +1877,8 @@ func (b *metadataClient) safeupdate(
 			}
 		}
 	}
-	fmsg := "switched currmeta from %v -> %v force %v \n"
-	logging.Infof(fmsg, currmeta.version, newmeta.version, force)
+	logging.Infof("metadataClient::safeupdate switched currmeta from %v -> %v force %v tracker %v",
+		currmeta.version, newmeta.version, force, ctx)
 }
 
 func (b *metadataClient) hasIndexersChanged(
