@@ -25,7 +25,7 @@ const (
 	SLICE_STATUS_TERMINATE
 )
 
-//Slice represents the unit of physical storage for index
+// Slice represents the unit of physical storage for index
 type Slice interface {
 	Id() SliceId
 	Path() string
@@ -51,6 +51,7 @@ type Slice interface {
 	GetShardIds() []common.ShardId
 	ClearRebalRunning()
 	SetRebalRunning()
+	IsPersistanceActive() bool
 
 	GetWriteUnits() uint64
 	SetStopWriteUnitBilling(disableBilling bool)

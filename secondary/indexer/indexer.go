@@ -1629,7 +1629,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		RESTORE_SHARD_DONE,
 		RESTORE_AND_UNLOCK_LOCKED_SHARDS,
 		START_PEER_SERVER,
-		STOP_PEER_SERVER:
+		STOP_PEER_SERVER,
+		PERSISTANCE_STATUS:
 
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh

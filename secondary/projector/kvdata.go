@@ -654,6 +654,12 @@ func (kvdata *KVData) scatterMutation(m *mc.DcpEvent) (seqno uint64, err error) 
 			arg1 := logging.TagUD(m)
 			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m.Status, arg1)
 
+			// Propagate the error to downstream so that indexer can take corrective
+			// action immediately
+			if err = worker.Event(m); err != nil {
+				return
+			}
+
 		} else if m.VBuuid, _, err = m.FailoverLog.Latest(); err != nil {
 			return
 

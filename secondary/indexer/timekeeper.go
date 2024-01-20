@@ -1275,6 +1275,30 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 				"KeyspaceId %v vbucket %v", streamId, meta.keyspaceId, meta.vbucket)
 		}
 
+		if cmdStatus == common.STREAM_FAIL {
+			keyspaceId := meta.keyspaceId
+			vbno := meta.vbucket
+			errCode := cmd.(*MsgStream).GetErrorCode()
+
+			logging.Infof("Timekeeper::handleStreamBegin Received %v status from KV for StreamId %v "+
+				"KeyspaceId %v vbucket %v. Repairing stream", errCode, streamId, meta.keyspaceId, meta.vbucket)
+
+			tk.ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vbno] = VBS_CONN_ERROR
+			tk.ss.clearVbRefCount(streamId, keyspaceId, vbno)
+
+			// clear rollbackTs and failTs for this vbucket
+			tk.ss.clearKVActiveTs(streamId, keyspaceId, vbno)
+			tk.ss.clearKVPendingTs(streamId, keyspaceId, vbno)
+			tk.ss.clearKVRollbackTs(streamId, keyspaceId, vbno)
+
+			// Set status to REPAIR_SHUTDOWN_VB as shutdown is not required
+			tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] = REPAIR_SHUTDOWN_VB
+			tk.ss.setLastRepairTime(streamId, keyspaceId, vbno)
+
+			// set needsRepair to true so that indexer will trigger repair immediately
+			needRepair = true
+		}
+
 		// Trigger stream repair.
 		if needRepair {
 			if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[streamId][meta.keyspaceId]; !ok || stopCh == nil {
