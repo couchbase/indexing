@@ -3141,6 +3141,7 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MFragThreshold = cfg["plasma.memFragThreshold"].Float64()
 	plasma.EnableContainerSupport = cfg["plasma.EnableContainerSupport"].Bool()
 	plasma.DQThreshold = float64(cfg["settings.thresholds.mem_low"].Int()) / 100
+	plasma.HighMemFragRatio = cfg["plasma.highMemFragThreshold"].Float64()
 
 	highWatermark := cfg["plasma.memtuner.freeMemHighWatermark"].Float64()
 	lowWatermark := cfg["plasma.memtuner.freeMemLowWatermark"].Float64()

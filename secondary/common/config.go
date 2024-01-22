@@ -2359,6 +2359,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.highMemFragThreshold": ConfigValue{
+		1.0,
+		"Ratio of fragmented memory to the allocated memory in use to consider for high memory fragmentation. If fragmentation is higher than this, then allocations will be allowed without evicting",
+		1.0,
+		false,
+		false,
+	},
 	"indexer.plasma.recovery.evictMemCheckInterval": ConfigValue{
 		uint64(100),
 		"interval with which to check for memory pressure during recovery in evictPlasma in milliseconds",
