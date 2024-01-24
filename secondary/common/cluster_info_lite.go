@@ -454,7 +454,7 @@ func newBucketInfo(tb *couchbase.Bucket, connHost string) *bucketInfo {
 	numVBs := bi.bucket.NumVBuckets
 
 	if numVBs < MIN_VBUCKETS_ALLOWED || numVBs > MAX_VBUCKETS_ALLOWED {
-		logging.Errorf("ClusterInfoCache::GetNumVBuckets, err: %v, bucket: %v, numVBuckets: %v",
+		logging.Errorf("ClusterInfoCache::newBucketInfo, err: %v, bucket: %v, numVBuckets: %v",
 			ErrNumVbRange, bi.bucket.Name, numVBs)
 	}
 
