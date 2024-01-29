@@ -2930,6 +2930,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 		tsElem := e.Value.(*TsListElem)
 		tsVbuuid := tsElem.ts
 		tsList.Remove(e)
+		tk.decrTsQueueStats(streamId)
 		ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
 		if tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId] == STREAM_PREPARE_RECOVERY ||
