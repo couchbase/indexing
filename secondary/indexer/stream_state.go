@@ -1460,7 +1460,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 				partialSnap = true
 
 			}
-		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
+		} else {
 			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
 			logging.Debugf("StreamState::updateHWT.  Recieved a snapshot marker older than current hwt snapshot. "+
 				"KeyspaceId %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",

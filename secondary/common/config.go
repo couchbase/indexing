@@ -4032,9 +4032,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.shardCopy.rpc.client.dbg": ConfigValue{
-		0,
-		"rpc debug level - default logs only errors (see plasma rpc.go for levels)",
-		0,
+		1,
+		"rpc debug level - default logs only control requests (see plasma rpc.go for levels)",
+		1,
 		false,
 		false,
 	},

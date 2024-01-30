@@ -3196,14 +3196,7 @@ func (m *RebalanceServiceManager) handleRebalanceCleanupStatus(w http.ResponseWr
 		if m.isCleanupPending() {
 			m.writeBytes(w, []byte("progress"))
 		} else {
-			// Check if there are any rebalance tokens pending for cleanup
-			rtokens, _ := m.getCurrRebalTokens()
-
-			if rtokens != nil && len(rtokens.TT) != 0 {
-				m.writeBytes(w, []byte("progress"))
-			} else {
-				m.writeBytes(w, []byte("done"))
-			}
+			m.writeBytes(w, []byte("done"))
 		}
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))
