@@ -1229,11 +1229,17 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 
 	ttPrependRealInst := []ttListElement{}
 	ttAppendRealInst := []ttListElement{}
+
+	for _, ttElem := range ttListRealInst {
+		if ttElem.tt.IsShardTransferToken() {
+			ttPrependRealInst = append(ttPrependRealInst, ttElem)
+		}
+	}
+
 	for _, ttElem := range ttListRealInst {
 
 		if ttElem.tt.IsShardTransferToken() {
-			ttPrependRealInst = append(ttPrependRealInst, ttElem)
-			continue
+			continue // Continue as shard tokens are already added to the list
 		}
 
 		//if emptyNodeBatching is enabled and instance is ready, then
