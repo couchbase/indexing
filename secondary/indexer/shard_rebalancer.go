@@ -3059,9 +3059,10 @@ func (sr *ShardRebalancer) checkValidNotifyState(ttid string, tt *c.TransferToke
 	// do not check for valid state changes for this state.
 	//
 	// When empty node batching is enabled, a notification will be sent via metaKV with
-	// "pendingReady" flag set to true in transfer token. Master should always process
+	// "pendingReady" flag set to true in transfer token. Master and source should always process
 	// ShardTokenRecoverShard state in such a case
-	if tt.ShardTransferTokenState == c.ShardTokenCreated || (tt.ShardTransferTokenState == c.ShardTokenRecoverShard && sr.isMaster) {
+	if tt.ShardTransferTokenState == c.ShardTokenCreated ||
+		(tt.ShardTransferTokenState == c.ShardTokenRecoverShard && (caller == "master" || caller == "source")) {
 		return true
 	}
 
