@@ -889,18 +889,19 @@ func (meta *metaNotifier) OnIndexRecover(indexDefn *common.IndexDefn, instId com
 }
 
 func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
-	buckets []string, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
+	buckets []string, isEmptyNodeBatch bool, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
 
 	logging.Infof("clustMgrAgent::OnIndexBuild Notification "+
-		"Received for Build Index %v %v", indexInstList, reqCtx)
+		"Received for Build Index %v %v %v", indexInstList, reqCtx, isEmptyNodeBatch)
 
 	respCh := make(MsgChannel)
 
 	meta.adminCh <- &MsgBuildIndex{mType: CLUST_MGR_BUILD_INDEX_DDL,
-		indexInstList: indexInstList,
-		respCh:        respCh,
-		bucketList:    buckets,
-		reqCtx:        reqCtx}
+		indexInstList:    indexInstList,
+		respCh:           respCh,
+		bucketList:       buckets,
+		reqCtx:           reqCtx,
+		isEmptyNodeBatch: isEmptyNodeBatch}
 
 	//wait for response
 	if res, ok := <-respCh; ok {

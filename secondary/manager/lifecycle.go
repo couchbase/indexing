@@ -526,7 +526,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key, common.NewUserRequestContext())
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
@@ -542,15 +542,17 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_CREATE_RECOVER_INDEX_REBAL:
 		err = m.handleCreateIndexDeferBuild(key, content, common.NewShardRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
-		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
+		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext(), false)
+	case client.OPCODE_BUILD_INDEX_REBAL_EMPTY_NODE:
+		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext(), true)
 	case client.OPCODE_BUILD_RECOVERED_INDEXES_REBAL:
-		err = m.handleBuildIndexes(content, common.NewShardRebalanceRequestContext())
+		err = m.handleBuildIndexes(content, common.NewShardRebalanceRequestContext(), false)
 	case client.OPCODE_RESUME_RECOVERED_INDEXES:
-		err = m.handleBuildIndexes(content, common.NewResumeRequestContext())
+		err = m.handleBuildIndexes(content, common.NewResumeRequestContext(), false)
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_RETRY:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleNotifyStats(content)
 	case client.OPCODE_BOOTSTRAP_STATS_UPDATE:
@@ -1116,7 +1118,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 
 		if !definitions[0].Deferred && len(definitions) == 1 && !asyncCreate {
 			// If there is only one definition, then try to do the build as well.
-			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defnId}, reqCtx, false)
+			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defnId}, reqCtx, false, false)
 
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
@@ -1711,7 +1713,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndex() : start Index Build")
 
-			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
+			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false, false)
 
 			if len(retryList) != 0 {
 				return fmt.Errorf("Build index failed. %v. Index build will be retried in background.", common.ErrTransientError)
@@ -2109,7 +2111,7 @@ func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
 
 // handleBuildIndexes handles all kinds of build index requests
 // (OPCODE_BUILD_INDEX, OPCODE_BUILD_INDEX_REBAL, OPCODE_BUILD_INDEX_RETRY).
-func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
+func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext, isEmptyNodeBatch bool) error {
 	isRebalOrResume := (reqCtx.ReqSource == common.DDLRequestSourceRebalance ||
 		reqCtx.ReqSource == common.DDLRequestSourceShardRebalance ||
 		reqCtx.ReqSource == common.DDLRequestSourceResume) // is this call from Rebalance or Resume?
@@ -2125,7 +2127,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 		input[i] = common.IndexDefnId(id)
 	}
 
-	retryList, skipList, errList, errMap := m.buildIndexesLifecycleMgr(input, reqCtx, isRebalOrResume)
+	retryList, skipList, errList, errMap := m.buildIndexesLifecycleMgr(input, reqCtx, isRebalOrResume, isEmptyNodeBatch)
 	var errMsg string
 	if !isRebalOrResume {
 		if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 { // at least one reportable error
@@ -2187,7 +2189,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 //     messages added here for failures in skipList since Indexer was never called for these
 //     (and the keys for these will be defnId instead of instId as we don't have the latter)
 func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
-	reqCtx *common.MetadataRequestContext, isRebalOrResume bool) (
+	reqCtx *common.MetadataRequestContext, isRebalOrResume bool, isEmptyNodeBatch bool) (
 	retryErrList []error, skipList []common.IndexDefnId, errList []error, errMap map[common.IndexInstId]string) {
 
 	errMap = make(map[common.IndexInstId]string)
@@ -2308,7 +2310,7 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 			reqCtx.ReqSource == common.DDLRequestSourceResume {
 			errMap2 = m.notifier.OnRecoveredIndexBuild(instIdList, buckets, reqCtx)
 		} else {
-			errMap2 = m.notifier.OnIndexBuild(instIdList, buckets, reqCtx)
+			errMap2 = m.notifier.OnIndexBuild(instIdList, buckets, isEmptyNodeBatch, reqCtx)
 		}
 
 		if len(errMap2) != 0 {
@@ -3539,7 +3541,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndexInstance() : start Index Build")
 
-			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
+			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defn.DefnId}, reqCtx, false, false)
 
 			if len(retryList) != 0 {
 				return fmt.Errorf(" Build index failed. %v. Index build will be retried in background.", common.ErrTransientError)

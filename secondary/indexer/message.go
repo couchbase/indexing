@@ -1411,11 +1411,12 @@ func (m *MsgClustMgrPrunePartition) GetString() string {
 // CLUST_MGR_BUILD_INDEX_DDL
 // CLUST_MGR_BUILD_RECOVERED_INDEXES
 type MsgBuildIndex struct {
-	mType         MsgType
-	indexInstList []common.IndexInstId
-	bucketList    []string
-	respCh        MsgChannel
-	reqCtx        *common.MetadataRequestContext
+	mType            MsgType
+	indexInstList    []common.IndexInstId
+	bucketList       []string
+	respCh           MsgChannel
+	reqCtx           *common.MetadataRequestContext
+	isEmptyNodeBatch bool
 }
 
 func (m *MsgBuildIndex) GetMsgType() MsgType {
@@ -1436,6 +1437,10 @@ func (m *MsgBuildIndex) GetRespCh() MsgChannel {
 
 func (m *MsgBuildIndex) GetRequestCtx() *common.MetadataRequestContext {
 	return m.reqCtx
+}
+
+func (m *MsgBuildIndex) IsEmptyNodeBatch() bool {
+	return m.isEmptyNodeBatch
 }
 
 func (m *MsgBuildIndex) GetString() string {

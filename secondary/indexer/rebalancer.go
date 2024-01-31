@@ -2330,7 +2330,12 @@ func (r *Rebalancer) buildAcceptedIndexesBatch(buildTokens map[string]*common.Tr
 	url := "/buildIndexRebalance"
 	var errStr string
 
-	resp, err := postWithHandleEOF(idList, r.localaddr, url, method)
+	request := IndexRequest{
+		IndexIds:       idList,
+		EmptyNodeBatch: true,
+	}
+
+	resp, err := postWithHandleEOF(request, r.localaddr, url, method)
 	if err != nil {
 		errStr = err.Error()
 		goto cleanup
@@ -3381,6 +3386,8 @@ func getReqBody(data interface{}, url, logPrefix string) (*bytes.Buffer, *IndexR
 		req.Index = *(data).(*common.IndexDefn)
 	case client.IndexIdList:
 		req.IndexIds = (data).(client.IndexIdList)
+	case IndexRequest:
+		req = (data).(IndexRequest)
 	default:
 		return nil, &req, fmt.Errorf("Invalid data type: %T", data)
 	}
