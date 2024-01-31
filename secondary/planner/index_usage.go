@@ -217,7 +217,7 @@ func newProxyIndexUsage(slotId uint64, replicaId int) (*IndexUsage, error) {
 		return nil, err
 	}
 
-	name := fmt.Sprintf("shard_proxy_%v_%v", slotId, replicaId)
+	slotName := fmt.Sprintf("shard_proxy_%v", slotId)
 
 	msAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 0}
 	bsAltId := &common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(replicaId), GroupId: 1}
@@ -225,10 +225,19 @@ func newProxyIndexUsage(slotId uint64, replicaId int) (*IndexUsage, error) {
 	proxy := &IndexUsage{
 		DefnId:            proxyDefnId,
 		InstId:            proxyInstId,
-		Name:              name,
+		Name:              slotName,
 		IsShardProxy:      true,
 		AlternateShardIds: []string{msAltId.String(), bsAltId.String()},
-		Instance:          &common.IndexInst{InstId: proxyInstId, ReplicaId: replicaId},
+		Instance: &common.IndexInst{
+			InstId:    proxyInstId,
+			ReplicaId: replicaId,
+			Defn: common.IndexDefn{
+				DefnId:    common.IndexDefnId(proxyDefnId),
+				InstId:    proxyInstId,
+				Name:      slotName,
+				ReplicaId: replicaId,
+			},
+		},
 
 		// Since each proxy can hold variable number of instances,
 		// supress equivalent index check for proxy
@@ -449,7 +458,7 @@ func (o *IndexUsage) ComputeSizing(useLive bool, sizing SizingMethod) {
 
 func (o *IndexUsage) GetDisplayName() string {
 
-	if o.Instance == nil || o.IsShardProxy {
+	if o.Instance == nil {
 		return o.Name
 	}
 
