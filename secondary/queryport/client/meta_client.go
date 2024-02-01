@@ -1760,7 +1760,7 @@ func (b *metadataClient) updateTopology(
 		for _, index := range indexes {
 			indexes2, ok := newmeta.topology[indexerId]
 			if !ok {
-				logging.Fatalf("metadataClient::updateTopology: index %v on node %v which is not yet valid for tracker %v. Valid indexers in topology - %v.",
+				logging.Infof("metadataClient::updateTopology: index %v on node %v which is not yet valid for tracker %v. Valid indexers in topology - %v.",
 					index.Definition.DefnId, indexerId, ctx, newmeta.adminports)
 				continue
 			}
