@@ -3719,9 +3719,12 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, notify 
 		return nil
 	}
 
-	if len(defn.Partitions) == 0 || stream == common.INIT_STREAM {
+	if len(defn.Partitions) == 0 || (stream == common.INIT_STREAM && reqCtx.ReqSource != common.DDLRequestSourceRebalance && reqCtx.ReqSource != common.DDLRequestSourceShardRebalance) {
 		// 1) If this is coming from drop index, or
-		// 2) It is from INIT_STREAM (cannot prune on INIT_STREAM)
+		// 2) It is from INIT_STREAM (cannot prune on INIT_STREAM), and
+		// 3) Avoid deleting realInst for partitioned index during ShardRebalance cleanup.
+		// OPCODE_DROP_OR_PRUNE_INSTANCE has only DDLRequestSourceRebalance ReqSource for reqCtx.
+		// DeleteOrPruneIndexInstance in handleInstRecoveryResponse can use DDLRequestSourceShardRebalance.
 		return m.DeleteIndexInstance(id, instId, notify, updateStatusOnly, false, reqCtx)
 	}
 

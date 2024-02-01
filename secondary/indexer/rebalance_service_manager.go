@@ -1229,11 +1229,17 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 
 	ttPrependRealInst := []ttListElement{}
 	ttAppendRealInst := []ttListElement{}
+
+	for _, ttElem := range ttListRealInst {
+		if ttElem.tt.IsShardTransferToken() {
+			ttPrependRealInst = append(ttPrependRealInst, ttElem)
+		}
+	}
+
 	for _, ttElem := range ttListRealInst {
 
 		if ttElem.tt.IsShardTransferToken() {
-			ttPrependRealInst = append(ttPrependRealInst, ttElem)
-			continue
+			continue // Continue as shard tokens are already added to the list
 		}
 
 		//if emptyNodeBatching is enabled and instance is ready, then
@@ -3196,14 +3202,7 @@ func (m *RebalanceServiceManager) handleRebalanceCleanupStatus(w http.ResponseWr
 		if m.isCleanupPending() {
 			m.writeBytes(w, []byte("progress"))
 		} else {
-			// Check if there are any rebalance tokens pending for cleanup
-			rtokens, _ := m.getCurrRebalTokens()
-
-			if rtokens != nil && len(rtokens.TT) != 0 {
-				m.writeBytes(w, []byte("progress"))
-			} else {
-				m.writeBytes(w, []byte("done"))
-			}
+			m.writeBytes(w, []byte("done"))
 		}
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))

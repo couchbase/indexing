@@ -6803,11 +6803,9 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 	}
 
 	instIdsForReplicas := make(map[int]common.IndexInstId)
-	initialNodeOfReplicas := make(map[int]*IndexerNode)
 	for replicaId, indexDist := range replicaMap {
 		for _, index := range indexDist {
 			instIdsForReplicas[replicaId] = index.InstId
-			initialNodeOfReplicas[replicaId] = index.initialNode
 		}
 	}
 
@@ -6825,7 +6823,6 @@ func assignAlternateIds(replicaMap map[int]map[*IndexerNode]*IndexUsage, slot [2
 
 				// Update instance Ids belogning to corresponding replicas as well
 				index.InstId = instIdsForReplicas[val]
-				index.initialNode = initialNodeOfReplicas[val]
 				index.Instance.InstId = index.InstId
 
 				msAltId := common.AlternateShardId{SlotId: slotId, ReplicaId: uint8(val), GroupId: 0}
