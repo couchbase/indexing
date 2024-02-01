@@ -2631,11 +2631,12 @@ loop:
 								"as empty node batching is enabled for this token", instId, realInstId, ttid)
 						} else {
 							sr.destTokenToMergeOrReady(instId, realInstId, ttid, tt, &partnMergeWaitGroup)
-							// Wait for merge of partitioned indexes (or) RState update to finish before returning
-							partnMergeWaitGroup.Wait()
 						}
 					}
 				}
+
+				// Wait for merge of partitioned indexes (or) RState update to finish before returning
+				partnMergeWaitGroup.Wait()
 
 				// If all indexes are built, defnIdMap will have no entries
 				if len(processedInsts) == 0 {
