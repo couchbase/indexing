@@ -57,13 +57,13 @@ require (
 )
 
 require (
-	github.com/aws/aws-sdk-go v1.44.299 // indirect
+	github.com/aws/aws-sdk-go v1.48.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/couchbase/clog v0.1.0 // indirect
 	github.com/couchbase/go_json v0.0.0-20220330123059-4473a21887c8 // indirect
 	github.com/couchbase/gocb/v2 v2.5.4 // indirect
-	github.com/couchbase/gocbcore/v10 v10.2.6-0.20230628164442-47b8f45095ec // indirect
+	github.com/couchbase/gocbcore/v10 v10.2.10 // indirect
 	github.com/couchbase/gocbcore/v9 v9.1.8 // indirect
 	github.com/couchbase/gomemcached v0.2.2-0.20230407174933-7d7ce13da8cc // indirect
 	github.com/couchbase/tools-common/cloud v1.0.0 // indirect
@@ -74,7 +74,6 @@ require (
 	github.com/couchbase/tools-common/testing v1.0.0 // indirect
 	github.com/couchbase/tools-common/types v1.0.0 // indirect
 	github.com/couchbase/tools-common/utils v1.0.0 // indirect
-	github.com/couchbasedeps/go-curl v0.0.0-20190830233031-f0b2afc926ec // indirect
 	github.com/couchbaselabs/c-forestdb v0.0.0-20160212203508-1b1267468faa // indirect
 	github.com/couchbaselabs/c-snappy v0.0.0-20160212203049-a52f87e8ffc5 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -93,11 +92,12 @@ require (
 	github.com/stretchr/objx v0.5.0 // indirect
 	github.com/stretchr/testify v1.8.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20201027041543-1326539a0a0a // indirect
-	golang.org/x/crypto v0.11.0 // indirect
-	golang.org/x/exp v0.0.0-20230711153332-06a737ee72cb // indirect
-	golang.org/x/net v0.12.0 // indirect
-	golang.org/x/sys v0.10.0 // indirect
-	golang.org/x/text v0.11.0 // indirect
+	golang.org/x/crypto v0.15.0 // indirect
+	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
+	golang.org/x/net v0.17.0 // indirect
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4 // indirect
+	golang.org/x/sys v0.14.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/couchbase/gocbcore.v7 v7.1.18 // indirect
