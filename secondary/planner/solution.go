@@ -2374,8 +2374,9 @@ func (s *Solution) moveIndexesIfNecessary() {
 	// Step-4: For all the indexes with alternateId, residing on a node which is not the same as
 	// the node in "finalAltPlacementMap", move the index to the node in "finalAltPlacementMap"
 	for _, indexer := range s.Placement {
-		for _, index := range indexer.Indexes {
-
+		curIndexes := make([]*IndexUsage, len(indexer.Indexes))
+		copy(curIndexes, indexer.Indexes)
+		for _, index := range curIndexes {
 			if len(index.AlternateShardIds) > 0 {
 
 				altId := index.AlternateShardIds[0]
