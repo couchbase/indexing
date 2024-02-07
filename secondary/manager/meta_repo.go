@@ -306,6 +306,9 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 	}
 
 	defn.SetCollectionDefaults()
+	if len(defn.UnexplodedSecExprs) == 0 {
+		common.PopulateUnExplodedExprs(defn)
+	}
 
 	c.defnCache[id] = defn
 	return defn, nil
@@ -699,6 +702,10 @@ func (c *MetadataRepo) loadDefn() error {
 				}
 
 				defn.SetCollectionDefaults()
+				if len(defn.UnexplodedSecExprs) == 0 {
+					common.PopulateUnExplodedExprs(defn)
+				}
+
 				c.defnCache[defn.DefnId] = defn
 			}
 		}
