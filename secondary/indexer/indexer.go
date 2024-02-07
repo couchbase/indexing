@@ -9001,8 +9001,17 @@ func (idx *indexer) initFromPersistedState() error {
 	// Initialize stats objects and update stats from persistence
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
-			for _, partnDefn := range inst.Pc.GetAllPartitions() {
-				idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
+
+			if len(inst.Pc.GetAllPartitions()) == 0 {
+				defn := inst.Defn
+				idx.stats.addIndexStats(inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
+					inst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount)
+
+				idx.stats.addBucketStats(defn.Bucket)
+			} else {
+				for _, partnDefn := range inst.Pc.GetAllPartitions() {
+					idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
+				}
 			}
 
 			// Initialise keyspace stats for this stream
