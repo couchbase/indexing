@@ -287,6 +287,14 @@ type IndexDefn struct {
 	// is the partition and the value represents the alternate shardIds
 	// for main and back index shards
 	AlternateShardIds map[PartitionId][]string `json:"alternateShardIds,omitempty"`
+
+	// For flattened array indexes, this field captures the unexploded version
+	// of the secExprs
+	UnexplodedSecExprs []string `json:"unexplodedSecExprs,omitempty"`
+
+	// Pre-built expression statement which can be used in getIndexStatus
+	// to avoid processing every time
+	ExprStmt string `json:"exprStmt,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)
@@ -375,6 +383,8 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		HasArrItemsCount:       idx.HasArrItemsCount,
 		IndexMissingLeadingKey: idx.IndexMissingLeadingKey,
 		IsPartnKeyDocId:        idx.IsPartnKeyDocId,
+		UnexplodedSecExprs:     idx.UnexplodedSecExprs,
+		ExprStmt:               idx.ExprStmt,
 	}
 
 	clone.ShardIdsForDest = make(map[PartitionId][]ShardId)
