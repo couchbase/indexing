@@ -4320,6 +4320,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		defer tk.statsLock.Unlock()
 		// Populate current KV timestamps for all keyspaces
 		keyspaceIdTsMap := make(map[common.StreamId]map[string]Timestamp)
+		streamKeyspaceIdCollectionIdMap := make(map[common.StreamId]map[string]string)
 		keyspaceIdCollectionItemCountMap := make(map[common.StreamId]map[string]uint64)
 		for _, inst := range indexInstMap {
 			//skip deleted indexes
@@ -4329,7 +4330,6 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 			var kvTs Timestamp
 			var err error
-			var itemCount uint64
 
 			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
 			stream := inst.Stream
@@ -4357,13 +4357,39 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 				keyspaceIdTsMap[stream][keyspaceId] = kvTs
 
-				rhItemCount := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
-					enableOSO := tk.ss.streamKeyspaceIdEnableOSO[stream][keyspaceId]
+				if cid != "" {
+					if _, ok := streamKeyspaceIdCollectionIdMap[stream]; !ok {
+						streamKeyspaceIdCollectionIdMap[stream] = make(map[string]string)
+					}
+					streamKeyspaceIdCollectionIdMap[stream][keyspaceId] = cid
+				}
+			}
+		}
 
-					if enableOSO && cid != "" {
+		fetchItemCount := func(stream common.StreamId, keyspaceId string) (itemCount uint64, ok bool) {
+			if collectionItemCountMap, ok := keyspaceIdCollectionItemCountMap[stream]; ok {
+				if itemCount, ok := collectionItemCountMap[keyspaceId]; ok {
+					return itemCount, true
+				}
+			}
+			return 0, false
+		}
+
+		tryPopulateCollectionItemCountMap := func(stream common.StreamId, keyspaceId string) (err error) {
+
+			// return if already present
+			if _, ok := fetchItemCount(stream, keyspaceId); ok {
+				return
+			}
+
+			var itemCount uint64
+			cluster := tk.config["clusterAddr"].String()
+			if KeyspaceIdCollectionIdMap, ok := streamKeyspaceIdCollectionIdMap[stream]; ok {
+				if cid, ok := KeyspaceIdCollectionIdMap[keyspaceId]; ok {
+					rhItemCount := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
 						itemCount, err = GetCollectionItemCount(cluster, "default", keyspaceId, cid)
 						if err != nil {
-							logging.Errorf("Error in fetching the item count fast: %v", err)
+							logging.Errorf("Error in fetching the item count: %v", err)
 							return err
 						}
 
@@ -4371,16 +4397,17 @@ func (tk *timekeeper) handleStats(cmd Message) {
 							keyspaceIdCollectionItemCountMap[stream] = make(map[string]uint64)
 						}
 						keyspaceIdCollectionItemCountMap[stream][keyspaceId] = itemCount
-					}
-					return err
-				})
+						return err
+					})
 
-				if err = rhItemCount.Run(); err != nil {
-					logging.Errorf("Timekeeper::handleStats Error occurred while obtaining Collection item counts - %v", err)
-					replych <- true
-					return
+					if err = rhItemCount.Run(); err != nil {
+						logging.Errorf("Timekeeper::handleStats Error occurred while obtaining Collection item counts - %v", err)
+						replych <- true
+						return
+					}
 				}
 			}
+			return
 		}
 
 		progressStatTime := time.Now().UnixNano()
@@ -4393,7 +4420,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		pendingMap := make(map[common.StreamId]map[string]uint64)
 		totalTobeFlushedMap := make(map[common.StreamId]map[string]uint64)
 
-		func() {
+		preComputeStats := func() (err error) {
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
 
@@ -4430,6 +4457,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					}
 					flushedCountMap[stream][keyspaceId] = flushedCount
 					seqNosUsedInFlushedCountMap[stream][keyspaceId] = usesSeqNo
+
+					// try to populate item count if OSO is enabled
+					if !usesSeqNo {
+						if err = tryPopulateCollectionItemCountMap(stream, keyspaceId); err != nil {
+							return err
+						}
+					}
 				}
 			}
 
@@ -4500,7 +4534,14 @@ func (tk *timekeeper) handleStats(cmd Message) {
 							}
 						}
 					}
-					if itemCount, ok := keyspaceIdCollectionItemCountMap[stream][keyspaceId]; ok && isOSOExclusiveStream {
+
+					if isOSOExclusiveStream {
+						if err = tryPopulateCollectionItemCountMap(stream, keyspaceId); err != nil {
+							return err
+						}
+					}
+
+					if itemCount, ok := fetchItemCount(stream, keyspaceId); ok && isOSOExclusiveStream {
 						if itemCount > receivedItemCount {
 							pendingMap[stream][keyspaceId] = itemCount - receivedItemCount
 						} else {
@@ -4513,7 +4554,12 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					totalTobeFlushedMap[stream][keyspaceId] = sum
 				}
 			}
-		}()
+			return
+		}
+
+		if err := preComputeStats(); err != nil {
+			return
+		}
 
 		getCollectionIndexProgress := func(stream common.StreamId, keyspaceId string) (float64, bool) {
 			progress := 0.00
@@ -4521,7 +4567,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 			// if the item count is present for the given stream and keyspace, then the OSO must have been enabled and cid is present.
 			// assign to collectionIndexProgress in that case.
-			if itemCount, ok := keyspaceIdCollectionItemCountMap[stream][keyspaceId]; ok {
+			if itemCount, ok := fetchItemCount(stream, keyspaceId); ok {
 
 				// If seqNos are used, don't compute progress based on item count.
 				if seqNosUsedInFlushedCountMap[stream][keyspaceId] {
