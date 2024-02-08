@@ -5627,14 +5627,6 @@ func (idx *indexer) sendMonitorSliceMsg(sliceList []Slice) {
 		return
 	}
 
-	shardAffinityEnabled := common.CanMaintanShardAffinity(idx.config)
-	// ShardAffinity is always enabled for serverless deployments
-	shardAffinityEnabled = shardAffinityEnabled || common.IsServerlessDeployment()
-
-	if !shardAffinityEnabled {
-		return
-	}
-
 	msg := &MsgMonitorSliceStatus{
 		sliceList: sliceList,
 	}
@@ -10267,7 +10259,15 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 			idx.rebalanceRunning = true
 
 			idx.clearRebalancePhase(true)
-			idx.globalRebalPhase = common.RebalanceInitated
+
+			// Set global rebalance phase only if shard affinity is enabled or
+			// for serverless deployments. For all other cases, globalRebalPhase
+			// will be RebalanceNotRunning so that slice close is never skipped.
+			// For shard rebalance, slice closure if skipped if transfer is in progress
+			if c.IsServerlessDeployment() || c.CanMaintanShardAffinity(idx.config) {
+				idx.globalRebalPhase = common.RebalanceInitated
+			}
+
 			idx.instRebalPhase = make(map[common.IndexInstId]common.RebalancePhase)
 
 			idx.slicePendingClosure = make(map[common.IndexInstId][]Slice)
@@ -12506,12 +12506,6 @@ func (idx *indexer) clearRebalancePhase(newRebal bool) {
 }
 
 func (idx *indexer) shouldSkipSliceClose(bucket string, instId common.IndexInstId) bool {
-
-	// Always close slices for non-serverless deployments if shard affinity is disabled
-	shardAffinity := common.CanMaintanShardAffinity(idx.config)
-	if !common.IsServerlessDeployment() && (shardAffinity == false) {
-		return false
-	}
 
 	if idx.globalRebalPhase == common.RebalanceInitated {
 		logging.Warnf("Indexer::shouldSkipSliceClose Skipping slice closure as rebalance is still in plan phase, inst: %v", instId)
