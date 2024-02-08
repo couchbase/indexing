@@ -764,6 +764,28 @@ func SetNumCPUs(percent int) int {
 	return ncpu
 }
 
+func ConstructIndexExprs(defn *IndexDefn) ([]string, string) {
+	exprStmt := ""
+	secExprs, desc, _ := GetUnexplodedExprs(defn.SecExprs, defn.Desc)
+	for i, exp := range secExprs {
+		if exprStmt != "" {
+			exprStmt += ","
+		}
+		exprStmt += exp
+		if desc != nil && desc[i] {
+			exprStmt += " DESC"
+		}
+
+		if i == 0 && defn.IndexMissingLeadingKey { // Missing is implicit for non leading keys
+			_, _, isFlatten, _ := queryutil.IsArrayExpression(exp) // For flatten MISSING is present in exp
+			if !isFlatten {
+				exprStmt += " INCLUDE MISSING"
+			}
+		}
+	}
+	return secExprs, exprStmt
+}
+
 func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes bool) string {
 	var stmt string
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
@@ -798,22 +820,10 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 
 	} else {
 		exprs := ""
-		secExprs, desc, _ := GetUnexplodedExprs(def.SecExprs, def.Desc)
-		for i, exp := range secExprs {
-			if exprs != "" {
-				exprs += ","
-			}
-			exprs += exp
-			if desc != nil && desc[i] {
-				exprs += " DESC"
-			}
-
-			if i == 0 && def.IndexMissingLeadingKey { // Missing is implicit for non leading keys
-				_, _, isFlatten, _ := queryutil.IsArrayExpression(exp) // For flatten MISSING is present in exp
-				if !isFlatten {
-					exprs += " INCLUDE MISSING"
-				}
-			}
+		if def.ExprStmt != "" {
+			exprs = def.ExprStmt
+		} else {
+			_, exprs = ConstructIndexExprs(&def)
 		}
 
 		if def.IndexOnCollection() {
@@ -938,6 +948,10 @@ func GetUnexplodedExprs(secExprs []string, desc []bool) ([]string, []bool, bool)
 	}
 
 	return origSecExprs, origDesc, isFlatten
+}
+
+func PopulateUnExplodedExprs(defn *IndexDefn) {
+	defn.UnexplodedSecExprs, defn.ExprStmt = ConstructIndexExprs(defn)
 }
 
 func LogRuntime() string {

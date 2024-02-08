@@ -1516,6 +1516,8 @@ func (m *LifecycleMgr) CreateIndexOrInstance(defn *common.IndexDefn, scheduled b
 		return err
 	}
 
+	common.PopulateUnExplodedExprs(defn)
+
 	////////////// Testing code - Not used in production //////////////
 	testcode.IgnoreAlternateShardIds(m.configHolder.Load(), defn)
 	///////////////////////////////////////////////////////////////////
