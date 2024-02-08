@@ -119,7 +119,8 @@ type indexer struct {
 	streamKeyspaceIdCollectionId map[common.StreamId]map[string]string
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 	streamKeyspaceIdMinMergeTs   map[common.StreamId]KeyspaceIdMinMergeTs
-	streamKeyspaceIdIsRebalance  map[common.StreamId]map[string]bool
+
+	streamKeyspaceIdIsEmptyNodeRebalBuild map[common.StreamId]map[string]bool
 
 	streamKeyspaceIdPendBuildDone      map[common.StreamId]map[string]*buildDoneSpec
 	streamKeyspaceIdPendStart          map[common.StreamId]map[string]bool
@@ -344,7 +345,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdSessionId:          make(map[common.StreamId]map[string]uint64),
 		streamKeyspaceIdCollectionId:       make(map[common.StreamId]map[string]string),
 		streamKeyspaceIdOSOException:       make(map[common.StreamId]map[string]bool),
-		streamKeyspaceIdIsRebalance:        make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendBuildDone:      make(map[common.StreamId]map[string]*buildDoneSpec),
 		streamKeyspaceIdPendStart:          make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendCollectionDrop: make(map[common.StreamId]map[string][]common.IndexInstId),
@@ -354,6 +354,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		keyspaceIdCreateClientChMap:        make(map[string]MsgChannel),
 		bucketNameNumVBucketsMap:           make(map[string]int),
 		streamOpenTimeBarrier:              make(map[common.StreamId]time.Time),
+
+		streamKeyspaceIdIsEmptyNodeRebalBuild: make(map[common.StreamId]map[string]bool),
 
 		activeKVNodes: make(map[string]bool),
 
@@ -3582,7 +3584,9 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	instIdList := msg.(*MsgBuildIndex).GetIndexList()
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
 	bucketList := msg.(*MsgBuildIndex).GetBucketList()
-	logging.Infof("Indexer::handleBuildIndex %v", instIdList)
+	isEmptyNodeBatch := msg.(*MsgBuildIndex).IsEmptyNodeBatch()
+
+	logging.Infof("Indexer::handleBuildIndex %v isEmptyNodeBatch %v", instIdList, isEmptyNodeBatch)
 
 	// NOTE
 	// If this function adds new validation or changes error message, need
@@ -3788,13 +3792,13 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		//send Stream Update to workers
-		isRebalBuild := false
-		if reqCtx.ReqSource == common.DDLRequestSourceRebalance {
-			isRebalBuild = true
-			idx.streamKeyspaceIdIsRebalance[buildStream][keyspaceId] = true
+		isEmptyNodeRebalBuild := false
+		if reqCtx.ReqSource == common.DDLRequestSourceRebalance && isEmptyNodeBatch {
+			isEmptyNodeRebalBuild = true
+			idx.streamKeyspaceIdIsEmptyNodeRebalBuild[buildStream][keyspaceId] = true
 		}
 		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId,
-			reqcid, clusterVer, buildTs, clientCh, numVBuckets, isRebalBuild)
+			reqcid, clusterVer, buildTs, clientCh, numVBuckets, isEmptyNodeRebalBuild)
 
 		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
 
@@ -5858,8 +5862,7 @@ func (idx *indexer) Shutdown() Message {
 // all other cases.)
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
 	buildStream common.StreamId, keyspaceId string, cid string, clusterVer uint64,
-	buildTs Timestamp, clientCh MsgChannel, numVBuckets int,
-	isRebalBuild bool) {
+	buildTs Timestamp, clientCh MsgChannel, numVBuckets int, isEmptyNodeRebalBuild bool) {
 
 	var indexList []common.IndexInst
 	var bucketUUIDList []string
@@ -5919,9 +5922,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	//override projector config for rebalance stream
 	enableEmptyNodeBatching := idx.config.GetEnableEmptyNodeBatching()
-	if isRebalBuild && enableEmptyNodeBatching {
+	if isEmptyNodeRebalBuild && enableEmptyNodeBatching {
 		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
 		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
+
+		idx.streamKeyspaceIdIsEmptyNodeRebalBuild[buildStream][keyspaceId] = true
 	}
 
 	// Create the corresponding KeyspaceStats object before starting the stream
@@ -8018,9 +8023,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	}
 
 	//override projector config for rebalance stream
-	isRebalBuild := idx.streamKeyspaceIdIsRebalance[streamId][keyspaceId]
+	isEmptyNodeRebalBuild := idx.streamKeyspaceIdIsEmptyNodeRebalBuild[streamId][keyspaceId]
 	enableEmptyNodeBatching := idx.config.GetEnableEmptyNodeBatching()
-	if isRebalBuild && enableEmptyNodeBatching {
+	if isEmptyNodeRebalBuild && enableEmptyNodeBatching {
 		cmd.projNumVbWorkers = idx.config["rebalance.projNumVbWorkers"].Int()
 		cmd.projNumDcpConns = idx.config["rebalance.projNumDcpConns"].Int()
 	}
@@ -8299,7 +8304,7 @@ func (idx *indexer) initStreamCollectionIdMap() {
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdCollectionId[common.StreamId(i)] = make(map[string]string)
 		idx.streamKeyspaceIdOSOException[common.StreamId(i)] = make(map[string]bool)
-		idx.streamKeyspaceIdIsRebalance[common.StreamId(i)] = make(map[string]bool)
+		idx.streamKeyspaceIdIsEmptyNodeRebalBuild[common.StreamId(i)] = make(map[string]bool)
 	}
 }
 
@@ -9001,8 +9006,17 @@ func (idx *indexer) initFromPersistedState() error {
 	// Initialize stats objects and update stats from persistence
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
-			for _, partnDefn := range inst.Pc.GetAllPartitions() {
-				idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
+
+			if len(inst.Pc.GetAllPartitions()) == 0 {
+				defn := inst.Defn
+				idx.stats.addIndexStats(inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
+					inst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount)
+
+				idx.stats.addBucketStats(defn.Bucket)
+			} else {
+				for _, partnDefn := range inst.Pc.GetAllPartitions() {
+					idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
+				}
 			}
 
 			// Initialise keyspace stats for this stream
@@ -11852,7 +11866,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendCollectionDrop[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdMinMergeTs[streamId], keyspaceId)
-	delete(idx.streamKeyspaceIdIsRebalance[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdIsEmptyNodeRebalBuild[streamId], keyspaceId)
 }
 
 func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(

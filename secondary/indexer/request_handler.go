@@ -57,11 +57,12 @@ const (
 )
 
 type IndexRequest struct {
-	Version  uint64                 `json:"version,omitempty"`
-	Type     RequestType            `json:"type,omitempty"`
-	Index    common.IndexDefn       `json:"index,omitempty"`
-	IndexIds client.IndexIdList     `json:"indexIds,omitempty"`
-	Plan     map[string]interface{} `json:"plan,omitempty"`
+	Version        uint64                 `json:"version,omitempty"`
+	Type           RequestType            `json:"type,omitempty"`
+	Index          common.IndexDefn       `json:"index,omitempty"`
+	IndexIds       client.IndexIdList     `json:"indexIds,omitempty"`
+	Plan           map[string]interface{} `json:"plan,omitempty"`
+	EmptyNodeBatch bool                   `json:"emptyNodeBatch,omitempty"`
 }
 
 type IndexResponse struct {
@@ -552,7 +553,17 @@ func (m *requestHandlerContext) buildIndexRequestRebalance(w http.ResponseWriter
 
 	// call the index manager to handle the DDL
 	indexIds := request.IndexIds
-	if err := m.mgr.HandleBuildIndexRebalDDL(indexIds); err == nil {
+	isEmptyNodeBatch := request.EmptyNodeBatch
+
+	var err error
+
+	if isEmptyNodeBatch {
+		err = m.mgr.HandleBuildIndexRebalDDLEmptyNode(indexIds)
+	} else {
+		err = m.mgr.HandleBuildIndexRebalDDL(indexIds)
+	}
+
+	if err == nil {
 		// No error, return success
 		rhSendIndexResponse(w)
 	} else {
