@@ -12,6 +12,7 @@ import (
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
@@ -1591,7 +1592,8 @@ func CreateIndexThread(wg *sync.WaitGroup, t *testing.T, indexName, bucketName, 
 
 	_, err := client.CreateIndex(indexName, bucketName, secondaryindex.IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err != nil {
-		if strings.Contains(err.Error(), "Terminate Request due to client termination") {
+		if strings.Contains(err.Error(), mclient.ErrClientTermination.Error()) ||
+			strings.Contains(err.Error(), "Terminate Request during cleanup") {
 			log.Printf("Create Index call failed as expected due to error : %v", err)
 		} else {
 			FailTestIfError(err, "Error in index create", t)
@@ -1603,6 +1605,6 @@ func CloseClientThread(wg *sync.WaitGroup, t *testing.T, client *qc.GsiClient) {
 	log.Printf("In CloseClientThread")
 	defer wg.Done()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(2*time.Second + 200*time.Millisecond)
 	client.Close()
 }
