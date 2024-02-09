@@ -74,6 +74,7 @@ type RebalanceServiceManager struct {
 	indexerReady     bool
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
+	shardAffinity    bool
 
 	p runParams
 }
@@ -776,11 +777,13 @@ func (m *RebalanceServiceManager) startRebalance(change service.TopologyChange) 
 	canMaintainShardAffintiy := c.CanMaintanShardAffinity(cfg)
 
 	if canMaintainShardAffintiy || (c.IsServerlessDeployment() && isShardAwareRebalance) {
+		m.shardAffinity = true
 		m.rebalancer = NewShardRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
 			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr,
 			m.genericMgr.cinfo)
 	} else {
+		m.shardAffinity = false
 		m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 			true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
 			m.localhttp, m.config.Load(), &change, runPlanner, &m.p, m.genericMgr.statsMgr, nil, c.DCP_REBALANCER)
@@ -979,8 +982,7 @@ func (m *RebalanceServiceManager) runCleanupPhaseLOCKED(path string, isMaster bo
 		}
 	}
 
-	canMaintainShardAffinity := c.CanMaintanShardAffinity(m.config.Load())
-	if common.IsServerlessDeployment() || canMaintainShardAffinity {
+	if common.IsServerlessDeployment() || m.shardAffinity {
 		m.RestoreAndUnlockShards(cleanupFailedShards)
 	}
 
@@ -3314,11 +3316,13 @@ func (m *RebalanceServiceManager) handleRegisterRebalanceToken(w http.ResponseWr
 			canMaintainShardAffinity := c.CanMaintanShardAffinity(cfg)
 
 			if canMaintainShardAffinity || (c.IsServerlessDeployment() && isShardAwareRebalance) {
+				m.shardAffinity = true
 				m.rebalancerF = NewShardRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 					m.localhttp, m.config.Load(), nil, false, &m.p,
 					m.genericMgr.statsMgr, m.genericMgr.cinfo)
 			} else {
+				m.shardAffinity = false
 				m.rebalancerF = NewRebalancer(nil, m.rebalanceToken, string(m.nodeInfo.NodeID),
 					false, nil, m.rebalanceDoneCallback, m.supvMsgch,
 					m.localhttp, m.config.Load(), nil, false, &m.p,
