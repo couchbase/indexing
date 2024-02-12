@@ -6651,18 +6651,36 @@ func pruneAndSortByLoad(allIndexerNodes, fullCapNodes map[*IndexerNode]bool,
 				_, ok1 := replicaMap[replica.ReplicaId]
 				_, ok2 := targetNodes[replica.node]
 
+				// "ok1 && ok2" means that there is a slot on target nodes with required replicaId.
+				// Consider this slot for further placement
+
 				// "ok1 && !ok2" means that replica of interest for this shard exists outside
 				// target nodes. Skip this shard
-				//
-				// Note: Do not check for !ok1 case as the shard can have replica: 3 on a
-				// different node but planner wants to create only replicas 0, 1 and 2. In
-				// that case !ok1 will be true but the shard can still be eligible for placement
 				if ok1 && !ok2 {
 					logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as shards of interest are outside target nodes. "+
 						"shardLoad: %v, replicaDist: %v", slotId, shardLoad.String(), getIndexesFromReplicaMap(replicaMap))
 					delete(shardDistOnFullCapNodes, slotId)
 					break
 				}
+
+				// "!ok1 && ok2" means that target nodes has this slot with replicaId outside our interest.
+				// E.g., if n0, n1 are target nodes and planner wants to place replicaIds: 0, 1 on
+				// these nodes, but if there exists a slot with n0 (replicaId: 0) and n1 (replicaId 2)
+				// then the slot can not be used
+				if !ok1 && ok2 {
+					logging.Verbosef("Planner::pruneAndSortByLoad pruning slot: %v as replicas of interest are outside target nodes. "+
+						"shardLoad: %v, replicaDist: %v", slotId, shardLoad.String(), getIndexesFromReplicaMap(replicaMap))
+					delete(shardDistOnFullCapNodes, slotId)
+					break
+				}
+
+				// "!ok1 && !ok2" means the case where the replica of the slot is beyond our
+				// interest and does not exist on target nodes as well. E.g., if a slot exits
+				// on n0 (replica 0), n1 (replica 1), n2 (replica 2), n3 (replica 3) and planner
+				// wants to create indexes with replicas 0, 1, 2 on n0, n1, n2- Then for n3 (replica 3)
+				// "!ok1 && !ok2" will be true but the slot can still be considered for placement
+				// as n0, n1, n2 still contain the slot with on required nodes
+
 			}
 
 		} else {
