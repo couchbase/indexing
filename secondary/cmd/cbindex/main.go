@@ -182,6 +182,15 @@ func main() {
 			msg = "Cbindex Config after update: " + config.String()
 			fmt.Fprintln(os.Stderr, msg)
 		}
+	} else if cmdOptions.UseTools {
+		// GsiClient.config is set from config passed here
+		// - ClientSettings.handleSettings read "queryport.client.*"						from GsiClient.config
+		// - GsiScanClient reads "readDeadline" instead of "queryport.client.readDeadline"	from GsiClient.config
+		// Use SystemConfig for ClientSettings
+		// Before MB-59788, ClientSettings.config was nil & overridden by common.SystemConfig.Clone()
+		// For useTools, config needs to be passed explicitly
+		sysConfig := c.SystemConfig.Clone()
+		config.Update(sysConfig.Json())
 	}
 
 	client, err := qclient.NewGsiClient(cmdOptions.Server, config)

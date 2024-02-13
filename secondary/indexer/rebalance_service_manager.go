@@ -1845,6 +1845,13 @@ func (m *RebalanceServiceManager) updateRStateForShardToken(ttid string, tt *c.T
 
 		go func(idx int) {
 			defer wg.Done()
+			defn := tt.IndexInsts[idx].Defn
+
+			if defn.Deferred && (defn.InstStateAtRebal == common.INDEX_STATE_CREATED || defn.InstStateAtRebal == common.INDEX_STATE_READY) {
+				logging.Infof("RebalanceServiceManager::updateRStateForShardToken Returning as inst is deferred, instId: %v, realInstId: %v", tt.InstIds[idx], tt.RealInstIds[idx])
+				return // For deferred indexes, RState is already changed. Hence, return
+			}
+
 			if err := m.destTokenToMergeOrReadyForInst(tt.InstIds[idx], tt.RealInstIds[idx], ttid); err != nil {
 				errList.Lock()
 				errList.list = append(errList.list, err)

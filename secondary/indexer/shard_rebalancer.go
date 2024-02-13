@@ -2752,6 +2752,13 @@ func (sr *ShardRebalancer) updateRStateToActive(ttid string, tt *c.TransferToken
 		// Indexer would serialize the RState transitions anyways
 		go func(index int) {
 			defer wg.Done()
+
+			inst := tt.IndexInsts[index]
+			defn := inst.Defn
+			if defn.Deferred && (defn.InstStateAtRebal == common.INDEX_STATE_CREATED || defn.InstStateAtRebal == common.INDEX_STATE_READY) {
+				logging.Infof("ShardRebalancer::updateRStateToActive Returning as inst is deferred, instId: %v, realInstId: %v", tt.InstIds[index], tt.RealInstIds[index])
+				return // For deferred indexes, RState is already changed. Hence, return
+			}
 			// merge only if instance is not dropped during rebalance
 			if sr.isInstDroppedDuringRebal(tt.InstIds[index], tt.RealInstIds[index]) == false {
 				sr.destTokenToMergeOrReady(tt.InstIds[index], tt.RealInstIds[index], ttid, tt, &partnMergeWaitGroup)

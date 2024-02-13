@@ -2957,6 +2957,14 @@ var shardAssignmentTestCases = []shardAssignmentTestCase{
 			"\t\t\t as there is no placement on nodes n1, n2 for any partition",
 		"../testdata/planner/shard_assignment/5_nodes_1_new_partn_index_slot_grouping.json",
 	},
+	{
+		"3_nodes_prune_unwanted_slots",
+		"\t Node-0 is full with shard capacity of 2. Nodes-1, 2 have more capacity. \n" +
+			"\t\t\t There exists only one slot with placement n0 (r0), n1 (r2), n2 (r3) and \n" +
+			"\t\t\t planner wants to place on index on n0: r0, n2: r1. Ideally, this slot should \n" +
+			"\t\t\t not be used as it has r3 on n2 while index creation requires r1 on n2",
+		"../testdata/planner/shard_assignment/3_nodes_prune_unwanted_slots.json",
+	},
 }
 
 func validateShardIds(solution *planner.Solution, expectedShards int, t *testing.T) {
@@ -3190,6 +3198,9 @@ func TestShardAssignmentFuncTestCases(t *testing.T) {
 				}
 			}
 			break
+
+		case "3_nodes_prune_unwanted_slots":
+			validateShardIds(solution, 10, t)
 		}
 	}
 }

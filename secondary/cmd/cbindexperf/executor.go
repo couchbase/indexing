@@ -167,7 +167,7 @@ func ResultAggregator(ch chan *JobResult, sw io.Writer, wg *sync.WaitGroup) {
 	}
 }
 
-func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error) {
+func RunCommands(cluster string, cfg *Config, statsW io.Writer, useTools bool) (*Result, error) {
 	t0 := time.Now()
 	var result Result
 
@@ -188,6 +188,17 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 	config.SetValue("settings.poolSize", int(cfg.Concurrency*2))
 	config.SetValue("readDeadline", 0)
 	config.SetValue("writeDeadline", 0)
+
+	if useTools {
+		// GsiClient.config is set from config passed here
+		// - ClientSettings.handleSettings read "queryport.client.*"						from GsiClient.config
+		// - GsiScanClient reads "readDeadline" instead of "queryport.client.readDeadline"	from GsiClient.config
+		// Use SystemConfig for ClientSettings
+		// Before MB-59788, ClientSettings.config was nil & overridden by common.SystemConfig.Clone()
+		// For useTools, config needs to be passed explicitly
+		sysConfig := c.SystemConfig.Clone()
+		config.Update(sysConfig.Json())
+	}
 
 	client, err := qclient.NewGsiClient(cluster, config)
 	if err != nil {
