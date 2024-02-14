@@ -2715,6 +2715,9 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 		}
 
 		if len(needsNewAlteranteShardIds) > 0 {
+			logging.Infof("rebalance: filtering solution before populating alternate shardIds")
+			filterSolution(solution.Placement)
+
 			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize)
 		}
 
