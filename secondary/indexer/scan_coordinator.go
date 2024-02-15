@@ -333,7 +333,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 
 	if req.ScanType == HeloReq {
 		s.handleHeloRequest(req, w)
-		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion))
+		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, nil))
 
 		if req.Timeout != nil {
 			req.Timeout.Stop()
@@ -342,7 +342,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 	}
 
 	defer func() {
-		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion))
+		s.handleError(req.LogPrefix, w.Done(readUnits, clientVersion, req.ScanReport))
 		req.Done()
 	}()
 
@@ -633,6 +633,13 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
+
+	if req.ScanReport != nil {
+		req.ScanReport.WaitDur = waitTime
+		req.ScanReport.NumRowsReturned = scanPipeline.RowsReturned()
+		req.ScanReport.NumRowsScanned = scanPipeline.RowsScanned()
+		req.ScanReport.ScanDur = scanTime
+	}
 
 	stats := s.stats.Get()
 

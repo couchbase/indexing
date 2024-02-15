@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	report "github.com/couchbase/indexing/secondary/scanreport"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/golang/protobuf/proto"
 
@@ -64,6 +65,7 @@ type ScanRequest struct {
 	Consistency  *common.Consistency
 	Stats        *IndexStats
 	IndexInst    common.IndexInst
+	ScanReport   *report.IndexerScanReport
 
 	Ctxs []IndexReaderContext
 
@@ -498,6 +500,9 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 		r.Offset = req.GetOffset()
 		r.SkipReadMetering = req.GetSkipReadMetering()
+		// Commenting to prevent any perf impact
+		//r.ScanReport = &report.IndexerScanReport{}
+
 		r.indexKeyNames = req.GetIndexKeyNames()
 		r.inlineFilter = req.GetInlineFilter()
 
@@ -1786,7 +1791,11 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 			r.LogPrefix, cluster, r.Bucket, r.CollectionId,
 			cfg["use_bucket_seqnos"].Bool())
 		if localErr == nil && r.Stats != nil {
-			r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
+			timeSince := time.Since(t0)
+			r.Stats.Timings.dcpSeqs.Put(timeSince)
+			if r.ScanReport != nil {
+				r.ScanReport.GetSeqnosDur = timeSince
+			}
 		}
 		r.Ts.Crc64 = 0
 		r.Ts.Bucket = r.Bucket
