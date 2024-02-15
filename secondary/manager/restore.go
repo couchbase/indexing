@@ -1191,10 +1191,8 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 							index.Instance.Defn.Versions = []int{0}
 							index.Instance.Defn.InstVersion = 0
 							index.Instance.Defn.NumPartitions = uint32(index.Instance.Pc.GetNumPartitions())
+							index.Instance.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
 
-							if len(index.Instance.Defn.AlternateShardIds) == 0 {
-								index.Instance.Defn.AlternateShardIds = make(map[common.PartitionId][]string)
-							}
 							if len(index.AlternateShardIds) > 0 {
 								index.Instance.Defn.AlternateShardIds[index.PartnId] = index.AlternateShardIds
 							}
