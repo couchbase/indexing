@@ -247,7 +247,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 		return nil, nil, err
 	}
 
-	filterSolution(p.Result.Placement)
+	filterSolution(p.Result)
 
 	var transferTokens map[string]*common.TransferToken
 	if enableShardAffinity {
@@ -276,7 +276,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 //
 // Similarly, if there are any cyclic movements i.e. n1->n2,n2->n3,n3->n1,
 // all such movements will be avoided
-func filterSolution(placement []*IndexerNode) {
+func filterSolution(solution *Solution) {
 
 	indexDefnMap := make(map[common.IndexDefnId]map[common.PartitionId][]*IndexUsage)
 	indexerMap := make(map[string]*IndexerNode)
@@ -284,7 +284,7 @@ func filterSolution(placement []*IndexerNode) {
 	// Group the index based on replica, partition. This grouping
 	// will help to identify if multiple replicas are being moved
 	// between nodes
-	for _, indexer := range placement {
+	for _, indexer := range solution.Placement {
 		indexerMap[indexer.NodeId] = indexer
 		for _, index := range indexer.Indexes {
 
@@ -363,6 +363,9 @@ func filterSolution(placement []*IndexerNode) {
 						destIndexer := indexerMap[destNodeId]
 						preFilterDest := index.destNode
 						index.destNode = destIndexer
+						// Note: Avoiding constraint check as we are just avoiding un necessary movements
+						// not using moveIndex2 for stats update at indexer level
+						solution.moveIndex(preFilterDest, index, index.destNode, true)
 
 						fmsg := "Planner::filterSolution - Planner intended to move the inst: %v, " +
 							"partn: %v from node %v to node %v. Instead the inst is moved to node: %v " +
@@ -387,7 +390,11 @@ func filterSolution(placement []*IndexerNode) {
 							"partn: %v from node %v to node %v. This movement is deemed un-necessary as node: %v "+
 							"already has a replica partition", index.InstId, index.PartnId, index.initialNode.NodeId,
 							index.destNode.NodeId, index.destNode.NodeId)
+						preFilterDest := index.destNode
 						index.destNode = index.initialNode
+						// Note: Avoiding constraint check as we are just avoiding un necessary movements
+						// not using moveIndex2 for stats update at indexer level
+						solution.moveIndex(preFilterDest, index, index.destNode, true)
 					}
 				}
 			}
@@ -2716,7 +2723,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		if len(needsNewAlteranteShardIds) > 0 {
 			logging.Infof("rebalance: filtering solution before populating alternate shardIds")
-			filterSolution(solution.Placement)
+			filterSolution(solution)
 
 			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize)
 		}
@@ -4297,7 +4304,7 @@ func ExecuteTenantAwareRebalanceInternal(clusterUrl string,
 		return nil, nil, err
 	}
 
-	filterSolution(p.Result.Placement)
+	filterSolution(p.Result)
 
 	transferTokens, err := genShardTransferToken(p.Result, masterId,
 		topologyChange, deleteNodes)
