@@ -1,10 +1,10 @@
-//  Copyright 2017-Present Couchbase, Inc.
+// Copyright 2017-Present Couchbase, Inc.
 //
-//  Use of this software is governed by the Business Source License included
-//  in the file licenses/BSL-Couchbase.txt.  As of the Change Date specified
-//  in that file, in accordance with the Business Source License, use of this
-//  software will be governed by the Apache License, Version 2.0, included in
-//  the file licenses/APL2.txt.
+// Use of this software is governed by the Business Source License included
+// in the file licenses/BSL-Couchbase.txt.  As of the Change Date specified
+// in that file, in accordance with the Business Source License, use of this
+// software will be governed by the Apache License, Version 2.0, included in
+// the file licenses/APL2.txt.
 package indexer
 
 import (
@@ -471,7 +471,7 @@ func createSlice1(c *Context) {
 	slice1, err1 := indexer.NewMemDBSlice(c.memDbDir, 0, idxDefn1, instID, common.PartitionId(0), false, true, 1, config, stats)
 	common.CrashOnError(err1)
 	c.memDbSlice = slice1
-	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, c.plasmaDir, 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats, indexerStats, 0)
+	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, c.plasmaDir, "", 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats, int64(config.GetIndexerMemoryQuota()), false, true, nil, 64, 0, nil, nil)
 	common.CrashOnError(err)
 	c.plasmaSlice = slice
 }
