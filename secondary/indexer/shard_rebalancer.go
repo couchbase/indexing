@@ -4665,7 +4665,9 @@ func (sr *ShardRebalancer) addInstToDroppedInsts(defn *common.IndexDefn) {
 	// has picked instId or realInstId for the instance. Also, if realInst is dropped
 	// proxy will be dropped and vice versa
 	sr.droppedInstsInRebal[defn.InstId] = true
-	sr.droppedInstsInRebal[defn.RealInstId] = true
+	if defn.RealInstId != 0 {
+		sr.droppedInstsInRebal[defn.RealInstId] = true
+	}
 }
 
 func (sr *ShardRebalancer) isInstDroppedDuringRebal(instId, realInstId c.IndexInstId) bool {
@@ -4673,9 +4675,13 @@ func (sr *ShardRebalancer) isInstDroppedDuringRebal(instId, realInstId c.IndexIn
 	defer sr.mu.Unlock()
 
 	_, ok1 := sr.droppedInstsInRebal[instId]
-	_, ok2 := sr.droppedInstsInRebal[realInstId]
+	if realInstId != 0 {
+		_, ok2 := sr.droppedInstsInRebal[realInstId]
+		return ok1 || ok2
+	} else {
+		return ok1
+	}
 
-	return ok1 || ok2
 }
 
 func (sr *ShardRebalancer) unlockShardsOnSourcePostTransfer(ttid string, tt *c.TransferToken) {
