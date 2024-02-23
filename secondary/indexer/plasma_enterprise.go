@@ -26,14 +26,14 @@ var (
 
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
-	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool, isInitialBuild bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int, replicaId int, shardIds []common.ShardId,
+	isPrimary bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
+	memQuota int64, isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
+	numVBuckets, replicaId int, shardIds []common.ShardId,
 	cancelCh chan bool) (*plasmaSlice, error) {
 
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
-		sysconf, idxStats, indexerStats, isNew, isInitialBuild, meteringMgr,
+		sysconf, idxStats, memQuota, isNew, isInitialBuild, meteringMgr,
 		numVBuckets, replicaId, shardIds, cancelCh)
 }
 

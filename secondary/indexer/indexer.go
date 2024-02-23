@@ -194,6 +194,7 @@ type indexer struct {
 	clustMgrLock sync.Mutex   // lock to protect concurrent reads and writes from clustMgrAgentCmdCh
 	stateLock    sync.RWMutex //lock to protect the keyspaceIdStatus map
 
+	// DO NOT rewrite this object. Only update it's internal state
 	stats *IndexerStats
 
 	enableManager bool // forced to true in cmd/indexer/main.go, overriding default false in config.go
@@ -2138,8 +2139,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	// partition, initPartnInstance will decide the shardIds based on partnId
 	shardRebal := (reqCtx.ReqSource == common.DDLRequestSourceRebalance)
 
+	partnStats := idx.getPartnStats(&indexInst)
 	//allocate partition/slice
-	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false, shardRebal, ephemeral, numVBuckets, idx.stats, nil)
+	partnInstMap, _, partnShardIdMap, err := idx.initPartnInstance(indexInst, clientCh, false,
+		shardRebal, ephemeral, numVBuckets, partnStats, idx.stats.memoryQuota.Value(), nil)
+
 	if err != nil {
 		for _, partnDefn := range partitions {
 			idx.stats.RemovePartitionStats(indexInst.InstId, partnDefn.GetPartitionId())
@@ -2405,17 +2409,21 @@ func (idx *indexer) handleRecoverIndex(msg Message) {
 		return // Logging and response to client channel will be taken care of getBucketInfoForIndexInst
 	}
 
-	idxStats := idx.stats.Clone()
+	// idxStats := idx.stats.Clone()
+	partnStats := idx.getPartnStats(&indexInst)
+	memQuota := idx.stats.memoryQuota.Value()
+
 	go func() {
 		//allocate partition/slice
 		partnInstMap, failedPartnInstances, partnShardIdMap, err := idx.initPartnInstance(
-			indexInst,
-			nil,  // respCh
-			true, // bootstrapPhase
-			true, // shardRebalance
-			ephemeral,
-			numVBuckets,
-			idxStats,
+			indexInst,        // common.IndexInst
+			nil,              // respCh MsgChannel
+			true,             // bootstrapPhase bool
+			true,             // shardRebalance bool
+			ephemeral,        // bool
+			numVBuckets,      // int
+			partnStats,       // map[common.PartitionId]*IndexStats
+			memQuota,         // int64
 			cancelRecoveryCh, // cancelCh
 		)
 
@@ -6366,7 +6374,9 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
-	ephemeral bool, numVBuckets int, idxStats *IndexerStats, cancelCh chan bool) (
+	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
+	memQuota int64, cancelCh chan bool) (
+	// return values
 	PartitionInstMap, PartitionInstMap, common.PartnShardIdMap, error) {
 
 	//initialize partitionInstMap for this index
@@ -6400,8 +6410,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			shardIds = indexInst.Defn.ShardIdsForDest[partnId]
 		}
 
-		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idxStats, ephemeral, !bootstrapPhase,
-			idx.meteringMgr, numVBuckets, shardIds, cancelCh)
+		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, partnStats, memQuota,
+			ephemeral, !bootstrapPhase, idx.meteringMgr, numVBuckets, shardIds, cancelCh)
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if bootstrapPhase && err == errStorageCorrupted {
@@ -9051,7 +9061,11 @@ func (idx *indexer) initFromPersistedState() error {
 		var failedPartnInstances PartitionInstMap
 		var partnShardIdMap common.PartnShardIdMap
 
-		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst, nil, true, false, ephemeral, numVBuckets, idx.stats, nil); err != nil {
+		partnStats := idx.getPartnStats(&inst)
+
+		if partnInstMap, failedPartnInstances, partnShardIdMap, err = idx.initPartnInstance(inst,
+			nil, true, false, ephemeral, numVBuckets, partnStats, idx.stats.memoryQuota.Value(),
+			nil); err != nil {
 			return err
 		}
 
@@ -10611,8 +10625,8 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats, ephemeral, isNew bool,
-	meteringMgr *MeteringThrottlingMgr, numVBuckets int,
+	conf common.Config, partnStats map[c.PartitionId]*IndexStats, memQuota int64,
+	ephemeral, isNew bool, meteringMgr *MeteringThrottlingMgr, numVBuckets int,
 	shardIds []common.ShardId, cancelCh chan bool) (slice Slice, err error) {
 
 	isInitialBuild := func() bool {
@@ -10637,13 +10651,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), numVBuckets)
+			partnStats[partitionId], numVBuckets)
 	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId))
+			partnStats[partitionId])
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh)
+			partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh)
 	}
 
 	return
@@ -12815,4 +12829,14 @@ func (idx *indexer) checkDropCleanupPending() bool {
 	}
 
 	return dropCleanupPending
+}
+
+func (idx *indexer) getPartnStats(indexInst *common.IndexInst) map[common.PartitionId]*IndexStats {
+	res := make(map[common.PartitionId]*IndexStats)
+
+	for _, partnDefn := range indexInst.Pc.GetAllPartitions() {
+		partnId := partnDefn.GetPartitionId()
+		res[partnId] = idx.stats.GetPartitionStats(indexInst.InstId, partnId)
+	}
+	return res
 }

@@ -151,7 +151,7 @@ type plasmaSlice struct {
 
 	hasPersistence bool
 
-	indexerStats *IndexerStats
+	indexerMemoryQuota int64
 
 	clusterAddr string
 
@@ -210,7 +210,7 @@ type plasmaSlice struct {
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats,
+	sysconf common.Config, idxStats *IndexStats, memQuota int64,
 	isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
 	numVBuckets int, replicaId int, shardIds []common.ShardId, cancelCh chan bool) (
 	*plasmaSlice, error) {
@@ -224,7 +224,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.newBorn = isNew
 
 	slice.idxStats = idxStats
-	slice.indexerStats = indexerStats
+	slice.indexerMemoryQuota = memQuota
 	slice.meteringMgr = meteringMgr
 	slice.meteringStats = &meteringStats{}
 
@@ -4351,15 +4351,13 @@ func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
 	sliceBufSize := slice.sysconf["settings.sliceBufSize"].Uint64()
 	slice.confLock.RUnlock()
 
-	memQuota := slice.indexerStats.memoryQuota.Value()
-
 	//use lower config for small memory quota
 	var scaleDownFactor uint64
-	if memQuota <= 4*1024*1024*1024 {
+	if slice.indexerMemoryQuota <= 4*1024*1024*1024 {
 		scaleDownFactor = 8
-	} else if memQuota <= 8*1024*1024*1024 {
+	} else if slice.indexerMemoryQuota <= 8*1024*1024*1024 {
 		scaleDownFactor = 4
-	} else if memQuota <= 16*1024*1024*1024 {
+	} else if slice.indexerMemoryQuota <= 16*1024*1024*1024 {
 		scaleDownFactor = 2
 	} else {
 		scaleDownFactor = 1
