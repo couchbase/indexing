@@ -25,7 +25,7 @@ func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	isPrimary bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
 	memQuota int64, isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
 	numVBuckets, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool) (*plasmaSlice, error) (Slice, error) {
+	cancelCh chan bool) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")
 }
 
