@@ -247,7 +247,10 @@ func ExecuteRebalanceInternal(clusterUrl string,
 		return nil, nil, err
 	}
 
-	filterSolution(p.Result)
+	if err = filterSolution(p.Result); err != nil {
+		p.Result.PrintLayout()
+		return nil, nil, err
+	}
 
 	var transferTokens map[string]*common.TransferToken
 	if enableShardAffinity {
@@ -276,7 +279,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 //
 // Similarly, if there are any cyclic movements i.e. n1->n2,n2->n3,n3->n1,
 // all such movements will be avoided
-func filterSolution(solution *Solution) {
+func filterSolution(solution *Solution) error {
 
 	indexDefnMap := make(map[common.IndexDefnId]map[common.PartitionId][]*IndexUsage)
 	indexerMap := make(map[string]*IndexerNode)
@@ -391,7 +394,18 @@ func filterSolution(solution *Solution) {
 							"already has a replica partition", index.InstId, index.PartnId, index.initialNode.NodeId,
 							index.destNode.NodeId, index.destNode.NodeId)
 						preFilterDest := index.destNode
-						index.destNode = index.initialNode
+
+						// Use the initialNode from indexerMap as the index.initialNode might be coming
+						// from the pre-cloned solution (solution clone happens in adjustInitialSolutionIfNecessary)
+						// Moving directly to index.initialNode will lead to the index moving to wrong object
+						// and can be missing from the final plan
+						if destNode, ok := indexerMap[index.initialNode.NodeId]; ok {
+							index.destNode = destNode
+						} else { // Ideally, this case should never be executed
+							err := fmt.Errorf("Planner::filterSolution Initial node: %v is not a part of final solution", index.initialNode.NodeId)
+							logging.Fatalf(err.Error())
+							return err
+						}
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
 						solution.moveIndex(preFilterDest, index, index.destNode, true)
@@ -400,6 +414,7 @@ func filterSolution(solution *Solution) {
 			}
 		}
 	}
+	return nil
 }
 
 // genTransferToken generates transfer tokens for the plan. Since the addition of the filterSolution
@@ -2723,7 +2738,9 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		if len(needsNewAlteranteShardIds) > 0 {
 			logging.Infof("rebalance: filtering solution before populating alternate shardIds")
-			filterSolution(solution)
+			if err := filterSolution(solution); err != nil {
+				return nil, nil, nil, err
+			}
 
 			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize)
 		}
@@ -4304,7 +4321,10 @@ func ExecuteTenantAwareRebalanceInternal(clusterUrl string,
 		return nil, nil, err
 	}
 
-	filterSolution(p.Result)
+	if err = filterSolution(p.Result); err != nil {
+		p.Result.PrintLayout()
+		return nil, nil, err
+	}
 
 	transferTokens, err := genShardTransferToken(p.Result, masterId,
 		topologyChange, deleteNodes)
