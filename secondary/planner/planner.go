@@ -1343,13 +1343,14 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							numReplica++
 
 							if len(cloned.AlternateShardIds) > 0 {
-								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v) with alternate shardIds: %v "+
+								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v), inst: %v with alternate shardIds: %v "+
 									"with initial placement on node: %v, eligible: %v",
 									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
-									cloned.AlternateShardIds, indexer.NodeId, isEligible)
+									index.InstId, cloned.AlternateShardIds, indexer.NodeId, isEligible)
 							} else {
-								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v) with initial placement on node: %v",
-									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId, indexer.NodeId)
+								logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v,%v), inst: %v with initial placement on node: %v",
+									index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
+									index.InstId, indexer.NodeId)
 							}
 						}
 					}
