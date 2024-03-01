@@ -281,6 +281,17 @@ func ExecuteRebalanceInternal(clusterUrl string,
 // all such movements will be avoided
 func filterSolution(solution *Solution) error {
 
+	// If a shard proxy is moving to a different node, then change the destination
+	// of grouped indexes as well. Otherwise, groupedIndexes will have stale/incorrect
+	// destNode values
+	populateDestNodeForGroupedIndexes := func(index *IndexUsage, destNode *IndexerNode) {
+		if index.IsShardProxy {
+			for _, groupedIndex := range index.GroupedIndexes {
+				groupedIndex.destNode = destNode
+			}
+		}
+	}
+
 	indexDefnMap := make(map[common.IndexDefnId]map[common.PartitionId][]*IndexUsage)
 	indexerMap := make(map[string]*IndexerNode)
 
@@ -296,6 +307,8 @@ func filterSolution(solution *Solution) error {
 			// A transfer token will not be generated if initialNode
 			// and destNode are same.
 			index.destNode = indexer
+			populateDestNodeForGroupedIndexes(index, indexer)
+
 			if _, ok := indexDefnMap[index.DefnId]; !ok {
 				indexDefnMap[index.DefnId] = make(map[common.PartitionId][]*IndexUsage)
 			}
@@ -369,17 +382,23 @@ func filterSolution(solution *Solution) error {
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
 						solution.moveIndex(preFilterDest, index, index.destNode, true)
+						populateDestNodeForGroupedIndexes(index, index.destNode)
 
-						fmsg := "Planner::filterSolution - Planner intended to move the inst: %v, " +
-							"partn: %v from node %v to node %v. Instead the inst is moved to node: %v " +
+						replicaId := 0
+						if index.Instance != nil {
+							replicaId = index.Instance.ReplicaId
+						}
+
+						fmsg := "Planner::filterSolution - Planner intended to move the index (%v,%v,%v,%v,%v,%v), " +
+							"inst: %v from node %v to node %v. Instead the inst is moved to node: %v " +
 							"after eliminating the un-necessary replica movements"
 
 						if replicaRepair { // initialNode would be nil incase of replica repair
-							logging.Infof(fmsg, index.InstId, index.PartnId,
-								"", preFilterDest.NodeId, index.destNode.NodeId)
+							logging.Infof(fmsg, index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
+								index.InstId, "", preFilterDest.NodeId, index.destNode.NodeId)
 						} else {
-							logging.Infof(fmsg, index.InstId, index.PartnId,
-								index.initialNode.NodeId, preFilterDest.NodeId, index.destNode.NodeId)
+							logging.Infof(fmsg, index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
+								index.InstId, index.initialNode.NodeId, preFilterDest.NodeId, index.destNode.NodeId)
 						}
 					} else {
 						// Initial destination and final destination are same. No change
@@ -389,9 +408,15 @@ func filterSolution(solution *Solution) error {
 					// Planner initially planned a movement for this index but after filtering the
 					// solution, the movement is deemed un-necessary
 					if index.initialNode != nil && index.destNode.NodeId != index.initialNode.NodeId {
-						logging.Infof("Planner::filterSolution - Planner intended to move the inst: %v, "+
-							"partn: %v from node %v to node %v. This movement is deemed un-necessary as node: %v "+
-							"already has a replica partition", index.InstId, index.PartnId, index.initialNode.NodeId,
+						replicaId := 0
+						if index.Instance != nil {
+							replicaId = index.Instance.ReplicaId
+						}
+						logging.Infof("Planner::filterSolution - Planner intended to move the index (%v,%v,%v,%v,%v,%v), "+
+							"inst: %v from node %v to node %v. This movement is deemed un-necessary as node: %v "+
+							"already has a replica partition",
+							index.Bucket, index.Scope, index.Collection, index.Name, replicaId, index.PartnId,
+							index.InstId, index.initialNode.NodeId,
 							index.destNode.NodeId, index.destNode.NodeId)
 						preFilterDest := index.destNode
 
@@ -409,6 +434,7 @@ func filterSolution(solution *Solution) error {
 						// Note: Avoiding constraint check as we are just avoiding un necessary movements
 						// not using moveIndex2 for stats update at indexer level
 						solution.moveIndex(preFilterDest, index, index.destNode, true)
+						populateDestNodeForGroupedIndexes(index, index.destNode)
 					}
 				}
 			}
@@ -2738,6 +2764,33 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 
 		if len(needsNewAlteranteShardIds) > 0 {
 			logging.Infof("rebalance: filtering solution before populating alternate shardIds")
+
+			// Group indexes before filtering as NeedsReplan will un-group the indexes
+			// The purpose of this filterSolution() method is to achieve final index placement
+			// so that the alternate shardIds are populated correctly. If the indexes are not
+			// grouped in to shard proxy, then filterSolution() can do incorrect filtering.
+			//
+			// For example, consider the distribution:
+			// node n1: i1 (replica 0), i2 (replica 0), i3 (replica 0), i4 (replica 0)
+			// node n2: i1 (replica 1), i2 (replica 1), i3 (replica 1), i4 (replica 1)
+			// node n3: i2 (replica 2), i3 (replica 2), i4 (replica 2)
+			// node n4: i3 (replica 3), i4 (replica 3)
+			//
+			// The indexes i1, i2, i3, i4 share the same slot (Say s1). Consider a new node (n5)
+			// being added to the cluster.
+			// If planner decides to move shard_proxy_s1 (replica 2) from n3 to n2
+			// and shard_proxy_s1 (replica 1) from n2 to n5, then filterSolution() is ideally
+			// expected to move shard_proxy_s1 (replica 2) from n3 to n5 - as the replica of
+			// a proxy is moving across nodes. However, due to ungrouping of indexes, the
+			// movement of i2, i3, i4 will be filtered but i1 (replica 1) can still move from
+			// n2 to n5 (as it is not jumping across nodes). This can lead subsequent failures
+			// as the shard on n2 which hosts i1 will be moved to n5 and gets destroyed on n2.
+			// Hence, always do filterSolution() on grouped indexes
+
+			for _, indexer := range solution.Placement {
+				indexer.Indexes, indexer.NumShards, _ = GroupIndexes(indexer.Indexes, indexer, command == CommandPlan)
+			}
+
 			if err := filterSolution(solution); err != nil {
 				return nil, nil, nil, err
 			}
