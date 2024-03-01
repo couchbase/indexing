@@ -18,6 +18,13 @@ import (
 	"github.com/couchbase/plasma"
 )
 
+type ShardRefCount struct {
+	refCount int
+
+	// If the shard has been locked for recovery, then this flag will be set to true
+	lockedForRecovery bool
+}
+
 type ShardTransferManager struct {
 	config common.Config
 	cmdCh  chan Message
@@ -31,7 +38,7 @@ type ShardTransferManager struct {
 	// rebalancer acquires lock, this map is updated. The entires
 	// in this map is cleared either when the shard is destroyed
 	// (or) when the shard is unlocked
-	lockedShards map[common.ShardId]bool
+	lockedShards map[common.ShardId]*ShardRefCount
 	mu           sync.Mutex
 
 	maxDiskBW int
@@ -49,7 +56,7 @@ func NewShardTransferManager(config common.Config, supvWrkrCh chan Message) *Sha
 	stm := &ShardTransferManager{
 		config:             config,
 		cmdCh:              make(chan Message),
-		lockedShards:       make(map[common.ShardId]bool),
+		lockedShards:       make(map[common.ShardId]*ShardRefCount),
 		sliceCloseNotifier: make(map[common.ShardId]MsgChannel),
 		supvWrkrCh:         supvWrkrCh,
 
@@ -764,7 +771,16 @@ func (stm *ShardTransferManager) handleLockShardsCommand(cmd Message) {
 		if err != nil {
 			logging.Errorf("ShardTransferManager::handleLockShardsCommand Error observed while locking shard: %v, err: %v", shardId, err)
 		} else {
-			stm.lockedShards[shardId] = isLockedForRecovery
+			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
+				shardRefCount.refCount++
+				shardRefCount.lockedForRecovery = shardRefCount.lockedForRecovery || isLockedForRecovery
+			} else {
+				stm.lockedShards[shardId] = &ShardRefCount{
+					refCount:          1,
+					lockedForRecovery: isLockedForRecovery,
+				}
+			}
+
 		}
 		errMap[shardId] = err
 	}
@@ -792,7 +808,15 @@ func (stm *ShardTransferManager) handleUnlockShardsCommand(cmd Message) {
 		if err != nil {
 			logging.Errorf("ShardTransferManager::handleUnlockShardsCommand Error observed while unlocking shard: %v, err: %v", shardId, err)
 		} else {
-			delete(stm.lockedShards, shardId) // Clear book-keeping as shard is unlocked
+			if shardRefCount, ok := stm.lockedShards[shardId]; ok && shardRefCount != nil {
+				shardRefCount.refCount--
+				if shardRefCount.refCount <= 0 {
+					logging.Infof("ShardTransferManager::handleUnlockShardCommands Clearing the book-keeping for shard: %v, refCount: %v", shardId, shardRefCount.refCount)
+					delete(stm.lockedShards, shardId)
+				}
+			} else {
+				delete(stm.lockedShards, shardId) // clear the book-keeping
+			}
 		}
 		errMap[shardId] = err
 	}
@@ -817,7 +841,7 @@ func (stm *ShardTransferManager) handleRestoreShardDone(cmd Message) {
 }
 
 func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
-	clone := make(map[common.ShardId]bool)
+	clone := make(map[common.ShardId]*ShardRefCount)
 
 	msg := cmd.(*MsgRestoreAndUnlockShards)
 	skipShards := msg.GetSkipShards()
@@ -826,7 +850,7 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 		stm.mu.Lock()
 		defer stm.mu.Unlock()
 
-		for shardId, lockedForRecovery := range stm.lockedShards {
+		for shardId, shardRefCount := range stm.lockedShards {
 			if skipShards != nil {
 				if _, ok := skipShards[shardId]; ok {
 					logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Skipping shard: %v from restore and unlock", shardId)
@@ -834,21 +858,39 @@ func (stm *ShardTransferManager) handleRestoreAndUnlockShards(cmd Message) {
 					continue
 				}
 			}
-			clone[shardId] = lockedForRecovery
+			clone[shardId] = shardRefCount
 		}
 	}()
 
-	for shardId, lockedForRecovery := range clone {
-		if lockedForRecovery {
+	for shardId, shardRefCount := range clone {
+		if shardRefCount == nil {
+			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardRefCount is nil for shardId: %v", shardId)
+			continue
+		}
+
+		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
+
+		if shardRefCount.lockedForRecovery {
 			logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating RestoreShardDone for shardId: %v", shardId)
 			plasma.RestoreShardDone(plasma.ShardId(shardId))
 		}
-		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v", shardId)
-		if err := plasma.UnlockShard(plasma.ShardId(shardId)); err != nil {
-			logging.Errorf("ShardTransferManager::handleRestoreAndUnlockShards Error observed while unlocking shard: %v, err: %v", shardId, err)
-		} else {
+
+		logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Initiating unlock for shardId: %v, refCount: %v", shardId, shardRefCount.refCount)
+		refCount := shardRefCount.refCount
+		for i := 0; i < refCount; i++ {
+			if err := plasma.UnlockShard(plasma.ShardId(shardId)); err != nil {
+				logging.Errorf("ShardTransferManager::handleRestoreAndUnlockShards Error observed while unlocking shard: %v, err: %v", shardId, err)
+			} else {
+				shardRefCount.refCount--
+				logging.Infof("ShardTransferManager::handleRestoreAndUnlockShards Unlock successful for shardId: %v, remaining: %v", shardId, shardRefCount.refCount)
+			}
+		}
+
+		if shardRefCount.refCount <= 0 {
+			logging.Infof("ShardTransferManager::handleUnlockShardCommands Clearing the book-keeping for shard: %v, shardRefCount: %v", shardId, shardRefCount.refCount)
 			delete(stm.lockedShards, shardId) // Clean the book-keeping
 		}
+
 	}
 
 	respCh <- true
