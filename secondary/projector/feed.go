@@ -352,6 +352,56 @@ func (feed *Feed) GetStatistics() c.Statistics {
 	return nil
 }
 
+func (feed *Feed) getFeedStats() *FeedStats {
+
+	feedStats := &FeedStats{}
+	feedStats.Init()
+	// For this feed, iterate through all buckets
+	for bucket, kvdata := range feed.kvdata {
+		keyspaceIdStats := &KeyspaceIdStats{}
+		keyspaceIdStats.topic = feed.topic
+		keyspaceIdStats.keyspaceId = kvdata.keyspaceId
+		keyspaceIdStats.opaque = kvdata.opaque
+
+		if feeder := feed.feeders[bucket]; feeder != nil {
+			keyspaceIdStats.dcpStats = feeder.GetStats()
+		}
+
+		// For this bucket, get kvstats
+		keyspaceIdStats.kvstats = kvdata.GetKVStats()
+
+		// For this bucket, get workerStats
+		keyspaceIdStats.wrkrStats = kvdata.GetWorkerStats()
+
+		// For this bucket, get evaluator stats
+		engines := feed.engines[bucket]
+		keyspaceIdStats.evaluatorStats = make(map[string]interface{})
+		for _, engine := range engines {
+			indexname := engine.GetIndexName()
+			bucketname := engine.Bucket()
+			scopename := engine.Scope()
+			collectionname := engine.Collection()
+			var key string
+			if scopename == "" && collectionname == "" {
+				key = fmt.Sprintf("%v:%v", bucketname, indexname)
+			} else {
+				key = fmt.Sprintf("%v:%v:%v:%v", bucketname, scopename, collectionname, indexname)
+			}
+			keyspaceIdStats.evaluatorStats[key] = engine.GetEvaluatorStats()
+		}
+		// Update feed stats for this bucket
+		feedStats.keyspaceIdStats[bucket] = keyspaceIdStats
+	}
+
+	for _, value := range feed.endpoints {
+		// For each feed, there exists only one end point. Therefore,
+		// this loop is iterated only once
+		feedStats.endpStats = value.GetStats()
+	}
+
+	return feedStats
+}
+
 // Return pointers to the stats objects for this feed.
 // Synchronous call.
 func (feed *Feed) GetStats() *FeedStats {
@@ -807,51 +857,7 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		respch <- []interface{}{feed.getStatistics()}
 
 	case fCmdGetStats:
-		feedStats := &FeedStats{}
-		feedStats.Init()
-		// For this feed, iterate through all buckets
-		for bucket, kvdata := range feed.kvdata {
-			keyspaceIdStats := &KeyspaceIdStats{}
-			keyspaceIdStats.topic = feed.topic
-			keyspaceIdStats.keyspaceId = kvdata.keyspaceId
-			keyspaceIdStats.opaque = kvdata.opaque
-
-			if feeder := feed.feeders[bucket]; feeder != nil {
-				keyspaceIdStats.dcpStats = feeder.GetStats()
-			}
-
-			// For this bucket, get kvstats
-			keyspaceIdStats.kvstats = kvdata.GetKVStats()
-
-			// For this bucket, get workerStats
-			keyspaceIdStats.wrkrStats = kvdata.GetWorkerStats()
-
-			// For this bucket, get evaluator stats
-			engines := feed.engines[bucket]
-			keyspaceIdStats.evaluatorStats = make(map[string]interface{})
-			for _, engine := range engines {
-				indexname := engine.GetIndexName()
-				bucketname := engine.Bucket()
-				scopename := engine.Scope()
-				collectionname := engine.Collection()
-				var key string
-				if scopename == "" && collectionname == "" {
-					key = fmt.Sprintf("%v:%v", bucketname, indexname)
-				} else {
-					key = fmt.Sprintf("%v:%v:%v:%v", bucketname, scopename, collectionname, indexname)
-				}
-				keyspaceIdStats.evaluatorStats[key] = engine.GetEvaluatorStats()
-			}
-
-			// Update feed stats for this bucket
-			feedStats.keyspaceIdStats[bucket] = keyspaceIdStats
-		}
-
-		for _, value := range feed.endpoints {
-			// For each feed, there exists only one end point. Therefore,
-			// this loop is iterated only once
-			feedStats.endpStats = value.GetStats()
-		}
+		feedStats := feed.getFeedStats()
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feedStats}
 
@@ -977,6 +983,12 @@ func (feed *Feed) start(
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// start upstream, after filtering out vbuckets.
+
+		// Ensure feedStats are logged if bukcetFeed takes time
+		topic := req.GetTopic()
+		feedStats := feed.getFeedStats()
+		feed.projector.UpdateStats(topic, nil, feedStats)
+
 		e, _ = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
@@ -1103,6 +1115,12 @@ func (feed *Feed) restartVbuckets(
 		}
 
 		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
+
+		// Ensure feedStats are logged if bukcetFeed takes time
+		topic := req.GetTopic()
+		feedStats := feed.getFeedStats()
+		feed.projector.UpdateStats(topic, nil, feedStats)
+
 		// (re)start the upstream, after filtering out remote vbuckets.
 		e, _ = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -1597,7 +1615,7 @@ func (feed *Feed) shutdown(opaque uint16) error {
 	// Update projector stats to remove the stats belonging to this feed
 	// As finch is closed, GetStats() would return nil value and UpdateStats()
 	// would delete the feed related stats from feed stats
-	feed.projector.UpdateStats(feed.topic, feed)
+	feed.projector.UpdateStats(feed.topic, feed, nil)
 
 	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, feed.opaque)
 	return nil
