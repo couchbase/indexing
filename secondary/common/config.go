@@ -3981,6 +3981,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.shardCopy.rpc.server.readTimeout": ConfigValue{
+		60,
+		"http server request read timeout (in seconds)",
+		60,
+		false,
+		false,
+	},
+	"indexer.plasma.shardCopy.rpc.server.writeTimeout": ConfigValue{
+		60,
+		"http server request read and response write timeout (in seconds)",
+		60,
+		false,
+		false,
+	},
 	"indexer.plasma.shardCopy.rpc.server.periodicSyncSize": ConfigValue{
 		10 * 1024 * 1024,
 		"batch size for periodic sync per file (in bytes)",
