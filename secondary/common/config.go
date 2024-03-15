@@ -4037,6 +4037,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.shardCopy.rpc.client.maxParts": ConfigValue{
+		2,
+		"Number of file chunks transferred parallelly, use 1 for fully sequential io",
+		2,
+		false,
+		false,
+	},
 	"indexer.plasma.shardCopy.rpc.client.rateControl.adjustInterval": ConfigValue{
 		120,
 		"Client request rate adjustment interval (in seconds)",

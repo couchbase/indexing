@@ -454,6 +454,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		// note: server config is set in shard transfer manager during spawn
 		cfg.RPCHttpClientCfg.MaxRetries = int64(slice.sysconf["plasma.shardCopy.maxRetries"].Int())
 		cfg.RPCHttpClientCfg.MaxPartSize = int64(slice.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+		cfg.RPCHttpClientCfg.MaxParts = int64(slice.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
 		cfg.RPCHttpClientCfg.MemQuota = int64(slice.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
 		cfg.RPCHttpClientCfg.RateAdjInterval = time.Duration(slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
 		cfg.RPCHttpClientCfg.RateAdjMaxRatio = slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
@@ -3255,7 +3256,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 	mdb.mainstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-	mdb.mainstore.RPCHttpClientCfg.MaxPartSize = int64(mdb.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+	mdb.mainstore.RPCHttpClientCfg.MaxParts = int64(mdb.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
 	mdb.mainstore.RPCHttpClientCfg.MemQuota = int64(mdb.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
 	mdb.mainstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
 	mdb.mainstore.RPCHttpClientCfg.RateAdjMaxRatio = mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
@@ -3377,7 +3378,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 		mdb.backstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-		mdb.backstore.RPCHttpClientCfg.MaxPartSize = int64(mdb.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+		mdb.backstore.RPCHttpClientCfg.MaxParts = int64(mdb.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
 		mdb.backstore.RPCHttpClientCfg.MemQuota = int64(mdb.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
 		mdb.backstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
 		mdb.backstore.RPCHttpClientCfg.RateAdjMaxRatio = mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
