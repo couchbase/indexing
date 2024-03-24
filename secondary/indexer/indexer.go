@@ -862,6 +862,74 @@ func (idx *indexer) initHTTPMux() {
 	idx.clustMgrAgent.RegisterRestEndpoints()
 }
 
+type proxyDebugRespWriter struct {
+	w          http.ResponseWriter
+	statuscode int
+	resplen    int
+}
+
+func (drw *proxyDebugRespWriter) Write(b []byte) (int, error) {
+	n, err := drw.w.Write(b)
+	drw.resplen = n
+	return n, err
+}
+
+func (drw *proxyDebugRespWriter) WriteHeader(statuscode int) {
+	drw.statuscode = statuscode
+	drw.w.WriteHeader(statuscode)
+}
+
+func (drw *proxyDebugRespWriter) Header() http.Header {
+	return drw.w.Header()
+}
+
+func muxWithPanicRecover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		defer func() {
+			err := recover()
+			if err != nil {
+				trimmedPath := r.URL.Path[:min(100, len(r.URL.Path))]
+				trimmedUa := r.UserAgent()[:min(100, len(r.UserAgent()))]
+				logging.Errorf("indexer::mWPR recovered in req- u=%v, r=%v, m=%v, ua=%v; from panic - \n%v",
+					string(trimmedPath), r.RemoteAddr, r.Method, string(trimmedUa), err)
+
+				jsonBody, _ := json.Marshal(map[string]string{
+					"error": "There was an internal server error",
+					"ts":    fmt.Sprintf("%v", time.Now().UnixMilli()),
+				})
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write(jsonBody)
+			}
+
+		}()
+
+		next.ServeHTTP(w, r)
+
+	})
+}
+
+func muxWithReqLogger(next http.Handler) http.Handler {
+	return (http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var neww = w
+		if logging.IsEnabled(logging.Debug) {
+			neww = &proxyDebugRespWriter{w: w}
+			defer func(start time.Time) {
+				var auth = req.Header.Get("Authorization")
+				auth = string(auth[:min(100, len(auth))]) + "..."
+				logging.Debugf("indexer::mWRL: m=%v u=%v r=%v ua=%v a=%v bl=%v s=%v t=%v",
+					req.Method, req.URL.Path, req.RemoteAddr, req.UserAgent(),
+					logging.TagStrUD(auth), neww.(*proxyDebugRespWriter).resplen,
+					neww.(*proxyDebugRespWriter).statuscode, time.Since(start).String())
+
+			}(time.Now())
+		}
+		next.ServeHTTP(neww, req)
+	}))
+}
+
 func (idx *indexer) initPeriodicProfile() {
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
@@ -884,7 +952,7 @@ func (idx *indexer) initHttpServer() error {
 		WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
 		ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
 		Addr:              addr,
-		Handler:           GetHTTPMux(),
+		Handler:           muxWithReqLogger(muxWithPanicRecover(httpMux)),
 	}
 
 	lsnr, err := security.MakeProtocolAwareTCPListener(addr)
@@ -932,7 +1000,7 @@ func (idx *indexer) initHttpsServer() error {
 		// allow only strong ssl as this is an internal API and interop is not a concern
 		sslsrv := &http.Server{
 			Addr:    sslAddr,
-			Handler: GetHTTPMux(),
+			Handler: muxWithReqLogger(muxWithPanicRecover(httpMux)),
 		}
 		if err := security.SecureHTTPServer(sslsrv); err != nil {
 			return fmt.Errorf("Error in securing HTTPS server: %v", err)
