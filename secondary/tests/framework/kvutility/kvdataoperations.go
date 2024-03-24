@@ -36,7 +36,16 @@ func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, ho
 	defer b.Close()
 
 	for key, value := range keyValues {
-		err = b.Set(key, 0, value)
+
+		retry := 0
+		var err error
+		for ; retry < 5; retry += 1 {
+			err = b.Set(key, 0, value)
+			if err != nil { // Add retry after wait since test can fail for err
+				time.Sleep(5 * time.Second)
+				log.Printf("Error while setting key:%v err:%v , retry: %v", key, err, retry)
+			}
+		}
 		tc.HandleError(err, "set")
 	}
 }
