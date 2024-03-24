@@ -45,7 +45,11 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 		st = append(st, []byte(fmt.Sprintf("%vitems_count %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.ItemsCount))...)
 
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vavg_item_size gauge\n", PLASMA_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vavg_item_size %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.TotalItemSize/aggregatedPlasmaStats.TotalRecords))...)
+		if aggregatedPlasmaStats.TotalRecords != 0 {
+			st = append(st, []byte(fmt.Sprintf("%vavg_item_size %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.TotalItemSize/aggregatedPlasmaStats.TotalRecords))...)
+		} else {
+			st = append(st, []byte(fmt.Sprintf("%vavg_item_size %v\n", PLASMA_METRICS_PREFIX, 0))...)
+		}
 
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vpurges gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vpurges %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.Purges))...)
@@ -93,7 +97,11 @@ func populateAggregatedStorageMetrics(st []byte) []byte {
 		st = append(st, []byte(fmt.Sprintf("%vresident_ratio %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.ResidentRatio))...)
 
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vcompression_ratio gauge\n", PLASMA_METRICS_PREFIX))...)
-		st = append(st, []byte(fmt.Sprintf("%vcompression_ratio %v\n", PLASMA_METRICS_PREFIX, float64(aggregatedPlasmaStats.PageBytesMarshalled)/float64(aggregatedPlasmaStats.PageBytesCompressed)))...)
+		if aggregatedPlasmaStats.PageBytesCompressed != 0 {
+			st = append(st, []byte(fmt.Sprintf("%vcompression_ratio %v\n", PLASMA_METRICS_PREFIX, float64(aggregatedPlasmaStats.PageBytesMarshalled)/float64(aggregatedPlasmaStats.PageBytesCompressed)))...)
+		} else {
+			st = append(st, []byte(fmt.Sprintf("%vcompression_ratio %v\n", PLASMA_METRICS_PREFIX, 0))...)
+		}
 
 		st = append(st, []byte(fmt.Sprintf("# TYPE %vnum_burst_visits gauge\n", PLASMA_METRICS_PREFIX))...)
 		st = append(st, []byte(fmt.Sprintf("%vnum_burst_visits %v\n", PLASMA_METRICS_PREFIX, aggregatedPlasmaStats.NumBurstVisits))...)
