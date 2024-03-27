@@ -6,11 +6,13 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/testcode"
 	cluster "github.com/couchbase/indexing/secondary/tests/framework/clusterutility"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -722,6 +724,56 @@ func TestRedistributeWhenNodeIsAddedForTrue(t *testing.T) {
 	// configures the cluster for test
 	redistributeIndexSetup(_TestRedistributeIndexWhenNodeIsAdded, t, redistributeIndexFlag)
 	redistributeIndexWhenNodeIsAdded(_TestRedistributeIndexWhenNodeIsAdded, t, redistributeIndexFlag)
+}
+
+func TestRebalanceWithCreateCommandToken(t *testing.T) {
+	if strings.Contains(clusterconfig.IndexUsing, "forestdb") {
+		t.Skip("Skipping test for forestdb storage")
+	}
+	log.Printf("In %v", t.Name())
+
+	status := getClusterStatus()
+	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
+		!isNodeIndex(status, clusterconfig.Nodes[2]) {
+		t.Fatalf("%v Unexpected cluster configuration %v", t.Name(), status)
+	}
+
+	printClusterConfig(t.Name(), "entry")
+
+	log.Print("** Setting TestAction to inject index create error")
+	err := secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", true,
+		clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Failed to activate testactions")
+
+	defer func() {
+		err = secondaryindex.ChangeIndexerSettings("indexer.shardRebalance.execTestAction", false,
+			clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Failed to activate testactions")
+
+	}()
+
+	err = testcode.PostOptionsRequestToMetaKV2(clusterconfig.Nodes[2], clusterconfig.Username,
+		clusterconfig.Password, testcode.LIFECYCLE_MANAGER_CREATE_INDEX, testcode.INJECT_ERROR,
+		"", 0, "test induced error")
+	tc.HandleError(err, "Failed to post action to metakv")
+
+	log.Print("** Creating index")
+
+	idxName := strings.ReplaceAll(t.Name(), "/", "_")
+	_, err = tc.ExecuteN1QLStatement(indexManagementAddress, clusterconfig.Username,
+		clusterconfig.Password, BUCKET,
+		fmt.Sprintf("create index %v on %v(`Field_1`) with {\"num_replica\": 1}", idxName, BUCKET),
+		false, nil)
+	if err == nil {
+		t.Fatal("expected index creation to fail but it did not fail")
+	}
+	waitForIndexNameActive(BUCKET, idxName, t)
+
+	log.Print("** Swap rebalancing node (n2 <=> n3)")
+
+	swapRebalance(t, 3, 2)
+
+	printClusterConfig(t.Name(), "exit")
 }
 
 ///////////////////////////////////////////////////////////////////////////////

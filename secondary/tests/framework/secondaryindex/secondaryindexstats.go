@@ -53,6 +53,25 @@ func GetIndexerNodesHttpAddresses(hostaddress string) ([]string, error) {
 	return indexNodes, nil
 }
 
+func GetIndexerNodesHttpAddressForNode(hostaddress string) (string, error) {
+	clusterURL, err := c.ClusterAuthUrl(hostaddress)
+	if err != nil {
+		return "", err
+	}
+
+	cinfo, err := c.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		return "", err
+	}
+
+	if err := cinfo.Fetch(); err != nil {
+		return "", err
+	}
+
+	return cinfo.TranslatePort(hostaddress, c.MGMT_SERVICE, c.INDEX_HTTP_SERVICE)
+
+}
+
 func GetIndexerNodes(clusterAddr string) ([]couchbase.Node, error) {
 	clusterUrl, err := c.ClusterAuthUrl(clusterAddr)
 	if err != nil {
@@ -362,7 +381,7 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 			defer resp.Body.Close()
 			ioutil.ReadAll(resp.Body)
 
-			err = c.NewRetryHelper(5, 1*time.Millisecond, 10, func(attempt int, lastErr error) error {
+			err = c.NewRetryHelper(8, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
 				var metakvConfigBytes []byte
 				_, err = c.MetakvBigValueGet(c.IndexingSettingsMetaPath, metakvConfigBytes)
 
@@ -403,7 +422,7 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 			defer respThisNodeOnly.Body.Close()
 			ioutil.ReadAll(respThisNodeOnly.Body)
 
-			err = c.NewRetryHelper(5, 1*time.Millisecond, 10, func(attempt int, lastErr error) error {
+			err = c.NewRetryHelper(8, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
 				pThisNodeGet, _ := http.NewRequest("GET", url, nil)
 				pThisNodeGet.SetBasicAuth(serverUserName, serverPassword)
 

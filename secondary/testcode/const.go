@@ -12,6 +12,9 @@ const (
 	MASTER_SHARDTOKEN_BEFORE_DROP_ON_SOURCE
 	MASTER_SHARDTOKEN_AFTER_DROP_ON_SOURCE
 	MASTER_SHARDTOKEN_ALL_TOKENS_PROCESSED
+	DEST_INDEXER_BEFORE_INDEX_RECOVERY
+	DEST_INDEXER_AFTER_INDEX_RECOVERY
+	LIFECYCLE_MANAGER_CREATE_INDEX
 )
 
 type TestAction int
@@ -22,6 +25,7 @@ const (
 	REBALANCE_CANCEL                      // Cancel rebalance at the tag
 	EXEC_N1QL_STATEMENT                   // Execute N1QL statement at the tag
 	SLEEP                                 // Sleep at the tag
+	INJECT_ERROR                          // raise custom error at tag
 )
 
 func isMasterTag(tag TestActionTag) bool {

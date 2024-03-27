@@ -3363,6 +3363,13 @@ var SystemConfig = Config{
 		false, // mutabale
 		false, // case-insensitive
 	},
+	"indexer.shardRebalance.corruptIndexOnRecovery": ConfigValue{
+		false,
+		"Option to corrupt an index before recovery. Used only for CI testing. Not a production setting",
+		false,
+		false, // mutabale
+		false, // case-insensitive
+	},
 	"indexer.settings.rebalance.redistribute_indexes": ConfigValue{
 		false, // keep in sync with index_settings_manager.erl
 		"redistribute indexes for optimal placement during rebalance." +

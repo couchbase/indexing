@@ -12,11 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 )
 
-var ErrRebalanceTimedout = errors.New("Rebalance did not finish after 30 minutes")
-var ErrRebalanceFailed = errors.New("Rebalance failed")
+var (
+	ErrRebalanceTimedout  = errors.New("Rebalance did not finish after 30 minutes")
+	ErrRebalanceFailed    = errors.New("Rebalance failed")
+	ErrSystemIndexInBuild = errors.New("index on build for `_system` keyspace")
+)
 
 func getInitServicesUrl(serverAddr string) string {
 	return prependHttp(serverAddr) + "/node/controller/setupServices"
@@ -231,10 +235,19 @@ func waitForRebalanceFinish(serverAddr, username, password string) error {
 							return ErrRebalanceFailed
 						}
 
-						log.Printf("Reb report - %v", rebalanceReport)
+						reportJson, _ := json.MarshalIndent(rebalanceReport, "", "    ")
+						log.Printf("Rebalance report - %s", reportJson)
+
+						errMsg := strings.ToLower(rebalanceReport["completionMessage"].(string))
+						if strings.Contains(errMsg, "index build is in progress for indexes") &&
+							(strings.Contains(errMsg, "_system") ||
+								strings.Contains(errMsg, "#primary")) {
+							return ErrSystemIndexInBuild
+						}
 					}
 					return ErrRebalanceFailed
 				}
+
 				if task["type"].(string) == "rebalance" && task["status"].(string) == "running" {
 					log.Println("Rebalance progress:", task["progress"])
 				}
@@ -375,28 +388,11 @@ func AddNodeWithServerGroup(serverAddr, username, password, hostname, role, serv
 // Adding the node is delegated to AddNode.
 // Rebalance is done by calling the ns_server /controller/rebalance documented REST endpoint.
 func AddNodeAndRebalance(serverAddr, username, password, hostname string, role string) error {
-	err := AddNode(serverAddr, username, password, hostname, role)
-	if err != nil {
-		return err
-	}
-
-	if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
-		return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, err: %v", err)
-	} else if err == nil && res == nil {
-		return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, rebalanceFromRest empty response: %s", res)
-	} else if res != nil {
-		// unmarshall response
-		resp := make(map[string]interface{})
-		json.Unmarshal(res, &resp)
-		if _, ok := resp["rebalance_id"]; !ok {
-			return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, rebalanceFromRest response: %s", res)
+	return common.NewRetryHelper(10, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
+		err := AddNode(serverAddr, username, password, hostname, role)
+		if err != nil {
+			return err
 		}
-	}
-
-	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		log.Printf("AddNodeAndRebalance: Error during rebalance, err: %v, Sleeping for 30 seconds", err)
-		time.Sleep(30 * time.Second)
-		log.Printf("Woke-up from sleep")
 
 		if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
 			return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, err: %v", err)
@@ -412,10 +408,31 @@ func AddNodeAndRebalance(serverAddr, username, password, hostname string, role s
 		}
 
 		if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-			return err
+			log.Printf("AddNodeAndRebalance: Error during rebalance, err: %v, Sleeping for 30 seconds", err)
+			time.Sleep(30 * time.Second)
+			log.Printf("Woke-up from sleep")
+
+			if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
+				return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, err: %v", err)
+			} else if err == nil && res == nil {
+				return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, rebalanceFromRest empty response: %s", res)
+			} else if res != nil {
+				// unmarshall response
+				resp := make(map[string]interface{})
+				json.Unmarshal(res, &resp)
+				if _, ok := resp["rebalance_id"]; !ok {
+					return fmt.Errorf("AddNodeAndRebalance: Error while rebalancing, rebalanceFromRest response: %s", res)
+				}
+			}
+
+			if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	}).RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), ErrSystemIndexInBuild.Error())
+	})
 }
 
 func ServerGroupExists(serverAddr, username, password, serverGroup string) (exists bool, err error) {
@@ -511,45 +528,53 @@ func SetDataAndIndexQuota(serverAddr, username, password, dataQuota, indexQuota 
 // RemoveNode performs a rebalance out (ejection) of the specified node.
 // This is done by calling the ns_server /controller/rebalance documented REST endpoint.
 func RemoveNode(serverAddr, username, password, hostname string) error {
-	if res, err := rebalanceFromRest(serverAddr, username, password, []string{hostname}); err != nil {
-		return fmt.Errorf("RemoveNode: Error while removing node and rebalance, hostname: %v, err: %v", hostname, err)
-	} else if err == nil && res == nil {
-		return fmt.Errorf("RemoveNode: Error removing node and rebalancing, rebalanceFromRest response: %s", res)
-	} else if res != nil {
-		// unmarshall response
-		resp := make(map[string]interface{})
-		json.Unmarshal(res, &resp)
-		if _, ok := resp["rebalance_id"]; !ok {
-			return fmt.Errorf("RemoveNode: Error while rebalancing, rebalanceFromRest response: %s", res)
+	return common.NewRetryHelper(10, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
+		if res, err := rebalanceFromRest(serverAddr, username, password, []string{hostname}); err != nil {
+			return fmt.Errorf("RemoveNode: Error while removing node and rebalance, hostname: %v, err: %v", hostname, err)
+		} else if err == nil && res == nil {
+			return fmt.Errorf("RemoveNode: Error removing node and rebalancing, rebalanceFromRest response: %s", res)
+		} else if res != nil {
+			// unmarshall response
+			resp := make(map[string]interface{})
+			json.Unmarshal(res, &resp)
+			if _, ok := resp["rebalance_id"]; !ok {
+				return fmt.Errorf("RemoveNode: Error while rebalancing, rebalanceFromRest response: %s", res)
+			}
 		}
-	}
 
-	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		return fmt.Errorf("RemoveNode: Error during rebalance, err: %v", err)
-	}
-	return nil
+		if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+			return fmt.Errorf("RemoveNode: Error during rebalance, err: %v", err)
+		}
+		return nil
+	}).RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), ErrSystemIndexInBuild.Error())
+	})
 }
 
 // RemoveNodes performs a rebalance out (ejection) of the specified node.
 // This is done by calling the ns_server /controller/rebalance documented REST endpoint.
 func RemoveNodes(serverAddr, username, password string, hostnames []string) error {
-	if res, err := rebalanceFromRest(serverAddr, username, password, hostnames); err != nil {
-		return fmt.Errorf("RemoveNodes: Error while removing node and rebalance, hostnames: %v, err: %v", hostnames, err)
-	} else if err == nil && res == nil {
-		return fmt.Errorf("RemoveNodes: Error removing node and rebalancing, rebalanceFromRest response: %s", res)
-	} else if res != nil {
-		// unmarshall response
-		resp := make(map[string]interface{})
-		json.Unmarshal(res, &resp)
-		if _, ok := resp["rebalance_id"]; !ok {
-			return fmt.Errorf("RemoveNodes: Error while rebalancing, rebalanceFromRest response: %s", res)
+	return common.NewRetryHelper(10, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
+		if res, err := rebalanceFromRest(serverAddr, username, password, hostnames); err != nil {
+			return fmt.Errorf("RemoveNodes: Error while removing node and rebalance, hostnames: %v, err: %v", hostnames, err)
+		} else if err == nil && res == nil {
+			return fmt.Errorf("RemoveNodes: Error removing node and rebalancing, rebalanceFromRest response: %s", res)
+		} else if res != nil {
+			// unmarshall response
+			resp := make(map[string]interface{})
+			json.Unmarshal(res, &resp)
+			if _, ok := resp["rebalance_id"]; !ok {
+				return fmt.Errorf("RemoveNodes: Error while rebalancing, rebalanceFromRest response: %s", res)
+			}
 		}
-	}
 
-	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		return fmt.Errorf("RemoveNodes: Error during rebalance, err: %v", err)
-	}
-	return nil
+		if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+			return fmt.Errorf("RemoveNodes: Error during rebalance, err: %v", err)
+		}
+		return nil
+	}).RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), ErrSystemIndexInBuild.Error())
+	})
 }
 
 func FailoverNode(serverAddr, username, password, hostname string) error {
@@ -562,22 +587,26 @@ func FailoverNode(serverAddr, username, password, hostname string) error {
 }
 
 func Rebalance(serverAddr, username, password string) error {
-	if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
-		return fmt.Errorf("Rebalance: Error while rebalancing, err: %v", err)
-	} else if err == nil && res == nil {
-		return fmt.Errorf("Rebalance: Error while rebalancing, rebalanceFromRest empty response: %s", res)
-	} else if res != nil {
-		// unmarshall response
-		resp := make(map[string]interface{})
-		json.Unmarshal(res, &resp)
-		if _, ok := resp["rebalance_id"]; !ok {
-			return fmt.Errorf("Rebalance: Error while rebalancing, rebalanceFromRest response: %s", res)
+	return common.NewRetryHelper(10, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
+		if res, err := rebalanceFromRest(serverAddr, username, password, []string{""}); err != nil {
+			return fmt.Errorf("Rebalance: Error while rebalancing, err: %v", err)
+		} else if err == nil && res == nil {
+			return fmt.Errorf("Rebalance: Error while rebalancing, rebalanceFromRest empty response: %s", res)
+		} else if res != nil {
+			// unmarshall response
+			resp := make(map[string]interface{})
+			json.Unmarshal(res, &resp)
+			if _, ok := resp["rebalance_id"]; !ok {
+				return fmt.Errorf("Rebalance: Error while rebalancing, rebalanceFromRest response: %s", res)
+			}
 		}
-	}
-	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		return fmt.Errorf("Rebalance: Error during rebalance, err: %v", err)
-	}
-	return nil
+		if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+			return fmt.Errorf("Rebalance: Error during rebalance, err: %v", err)
+		}
+		return nil
+	}).RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), ErrSystemIndexInBuild.Error())
+	})
 }
 
 func RecoverNode(serverAddr, username, password, hostname, recoveryType string) (err error) {
@@ -599,30 +628,34 @@ func RecoverNode(serverAddr, username, password, hostname, recoveryType string) 
 }
 
 func ResetCluster(serverAddr, username, password string, dropNodes []string, keepNodes map[string]string) error {
-	if res, err := rebalanceFromRest(serverAddr, username, password, dropNodes); err != nil {
-		return fmt.Errorf("ResetCluster: Error while rebalancing-out nodes %v, err: %v", dropNodes, err)
-	} else if err == nil && res == nil {
-		return fmt.Errorf("ResetCluster: Error while rebalancing, rebalanceFromRest empty response: %s", res)
-	} else if res != nil {
-		// unmarshall response
-		resp := make(map[string]interface{})
-		json.Unmarshal(res, &resp)
-		if _, ok := resp["rebalance_id"]; !ok {
-			return fmt.Errorf("ResetCluster: Error while rebalancing, rebalanceFromRest response: %s", res)
+	return common.NewRetryHelper(10, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
+		if res, err := rebalanceFromRest(serverAddr, username, password, dropNodes); err != nil {
+			return fmt.Errorf("ResetCluster: Error while rebalancing-out nodes %v, err: %v", dropNodes, err)
+		} else if err == nil && res == nil {
+			return fmt.Errorf("ResetCluster: Error while rebalancing, rebalanceFromRest empty response: %s", res)
+		} else if res != nil {
+			// unmarshall response
+			resp := make(map[string]interface{})
+			json.Unmarshal(res, &resp)
+			if _, ok := resp["rebalance_id"]; !ok {
+				return fmt.Errorf("ResetCluster: Error while rebalancing, rebalanceFromRest response: %s", res)
+			}
 		}
-	}
 
-	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
-		return fmt.Errorf("AddNodeAndRebalance: Error during rebalance, err: %v", err)
-	}
-
-	for node, role := range keepNodes {
-		err := AddNodeAndRebalance(serverAddr, username, password, node, role)
-		if err != nil {
-			return fmt.Errorf("Error while adding node: %v (role: %v) to cluster, err: %v", node, role, err)
+		if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
+			return fmt.Errorf("AddNodeAndRebalance: Error during rebalance, err: %v", err)
 		}
-	}
-	return nil
+
+		for node, role := range keepNodes {
+			err := AddNodeAndRebalance(serverAddr, username, password, node, role)
+			if err != nil {
+				return fmt.Errorf("Error while adding node: %v (role: %v) to cluster, err: %v", node, role, err)
+			}
+		}
+		return nil
+	}).RunWithConditionalError(func(err error) bool {
+		return !strings.Contains(err.Error(), ErrSystemIndexInBuild.Error())
+	})
 }
 
 func IsNodeIndex(status map[string][]string, hostname string) bool {

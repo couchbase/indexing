@@ -1353,12 +1353,13 @@ func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs
 	}
 }
 
+// index name is expected to be a full name (eg "<index name> (replica <replica id>)")
 func waitForIndexActive(bucket, index string, t *testing.T) {
+	deadline := time.After(time.Duration(3) * time.Minute)
 	for {
 		select {
-		case <-time.After(time.Duration(3 * time.Minute)):
+		case <-deadline:
 			t.Fatalf("Index did not become active after 3 minutes")
-			break
 		default:
 			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
 			if status != nil && err == nil {
@@ -1367,6 +1368,38 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 					entry := indexEntry.(map[string]interface{})
 
 					if index == entry["index"].(string) {
+						if bucket == entry["bucket"].(string) {
+							if "Ready" == entry["status"].(string) {
+								return
+							}
+						}
+					}
+				}
+			}
+			if err != nil {
+				log.Printf("waitForIndexActive:: Error while retrieving GetIndexStatus, err: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+// when creating replicated index, if the req is only for one of the instances to go active,
+// use this func instead of waitForIndexNameActive
+func waitForIndexNameActive(bucket, index string, t *testing.T) {
+	deadline := time.After(time.Duration(3) * time.Minute)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("Index did not become active after 3 minutes")
+		default:
+			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
+			if status != nil && err == nil {
+				indexes := status["indexes"].([]interface{})
+				for _, indexEntry := range indexes {
+					entry := indexEntry.(map[string]interface{})
+
+					if index == entry["indexName"].(string) {
 						if bucket == entry["bucket"].(string) {
 							if "Ready" == entry["status"].(string) {
 								return
