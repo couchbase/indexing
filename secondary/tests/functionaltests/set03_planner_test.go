@@ -663,6 +663,7 @@ func initialPlacementTest(t *testing.T) {
 		}
 
 		if err := planner.ValidateSolution(p.GetResult()); err != nil {
+			p.GetResult().PrintLayout()
 			t.Fatal(err)
 		}
 	}
@@ -705,6 +706,7 @@ func incrPlacementTest(t *testing.T) {
 		}
 
 		if err := planner.ValidateSolution(p.GetResult()); err != nil {
+			p.GetResult().PrintLayout()
 			t.Fatal(err)
 		}
 	}
