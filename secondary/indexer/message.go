@@ -435,11 +435,12 @@ func (m *MsgStreamInfo) String() string {
 
 //STREAM_READER_UPDATE_QUEUE_MAP
 type MsgUpdateKeyspaceIdQueue struct {
-	keyspaceIdQueueMap  KeyspaceIdQueueMap
-	stats               *IndexerStats
-	keyspaceIdFilter    map[string]*common.TsVbuuid
-	keyspaceIdSessionId KeyspaceIdSessionId
-	keyspaceIdEnableOSO KeyspaceIdEnableOSO
+	keyspaceIdQueueMap           KeyspaceIdQueueMap
+	stats                        *IndexerStats
+	keyspaceIdFilter             map[string]*common.TsVbuuid
+	keyspaceIdSessionId          KeyspaceIdSessionId
+	keyspaceIdEnableOSO          KeyspaceIdEnableOSO
+	keyspaceIdAllowMarkFirstSnap map[string]bool
 }
 
 func (m *MsgUpdateKeyspaceIdQueue) GetMsgType() MsgType {
@@ -466,10 +467,15 @@ func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdEnableOSO() KeyspaceIdEnableOSO 
 	return m.keyspaceIdEnableOSO
 }
 
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdAllowMarkFirstSnap() map[string]bool {
+	return m.keyspaceIdAllowMarkFirstSnap
+}
+
 func (m *MsgUpdateKeyspaceIdQueue) String() string {
 
 	str := "\n\tMessage: MsgUpdateKeyspaceIdQueue"
 	str += fmt.Sprintf("\n\tKeyspaceIdQueueMap: %v", m.keyspaceIdQueueMap)
+	str += fmt.Sprintf("\n\tkeyspaceIdAllowMarkFirstSnap: %v", m.keyspaceIdAllowMarkFirstSnap)
 	return str
 
 }
