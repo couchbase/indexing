@@ -80,6 +80,77 @@ func TestIndexIVFPQ(t *testing.T) {
 	t.Logf("Recall@%v is %v", 10, recall)
 }
 
+func TestIndexIVFPQ_HNSW(t *testing.T) {
+
+	var err error
+
+	var indexPQ *faiss.IndexImpl
+
+	dim := 128
+	metric := faiss.MetricL2
+
+	nlist := 128
+	nsub := 8
+	nbits := 8
+
+	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric)
+	if err != nil || indexPQ == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+	indexPQ.SetNProbe(3)
+
+	total_vecs := 50000
+	num_train_vecs := 10000
+
+	//generate random vectors
+	vecs := genRandomVecs(dim, total_vecs)
+
+	//train the index using 10000 vecs
+	train_vecs := convertTo1D(vecs[:num_train_vecs])
+	err = indexPQ.Train(train_vecs)
+
+	if !indexPQ.IsTrained() {
+		t.Errorf("Unable to train index. Err %v", err)
+	}
+
+	//add vectors to the index
+	all_vecs := convertTo1D(vecs)
+	err = indexPQ.Add(all_vecs)
+	if err != nil {
+		t.Errorf("Unable to add data to index. Err %v", err)
+	}
+
+	//search the index
+	query_vec := convertTo1D(vecs[:1])
+	dist, label, err := indexPQ.Search(query_vec, 2)
+	t.Logf("Search results %v %v %v", dist, label, err)
+	for _, l := range label {
+		if l > int64(total_vecs) {
+			t.Errorf("Result label out of range. Total %v. Label %v", total_vecs, l)
+		}
+	}
+
+	indexFlat, err := NewIndexFlat(dim, metric)
+	if err != nil || indexFlat == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+
+	err = indexFlat.Add(all_vecs)
+	if err != nil {
+		t.Errorf("Unable to add data to flat index. Err %v", err)
+	}
+
+	//compute recall with exact match
+	t.Logf("Testing recall with exact match")
+	recall := computeRecall(t, indexPQ, indexFlat, 10, 100, vecs)
+	t.Logf("Recall@%v is %v", 10, recall)
+
+	//compute recall with random query vectors
+	t.Logf("Testing recall with random query vectors")
+	vecs = genRandomVecs(dim, 1000)
+	recall = computeRecall(t, indexPQ, indexFlat, 10, 100, vecs)
+	t.Logf("Recall@%v is %v", 10, recall)
+}
 func computeRecall(t *testing.T,
 	testIndex *faiss.IndexImpl,
 	flatIndex *faiss.IndexImpl,
