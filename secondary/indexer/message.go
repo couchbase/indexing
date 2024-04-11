@@ -669,6 +669,7 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
 	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
 	str += fmt.Sprintf("\n\tEnableOSO: %v", m.enableOSO)
+	str += fmt.Sprintf("\n\tAllowMarkFirstSnap: %v", m.allowMarkFirstSnap)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	if m.numVBuckets != 0 {
 		str += fmt.Sprintf("\n\tNumVBuckets: %v", m.numVBuckets)

@@ -663,3 +663,26 @@ func (ts *TsVbuuid) IsSmallSnapDropped() bool {
 func (ts *TsVbuuid) SetSmallSnapDropped(smallSnapDropped bool) {
 	ts.SmallSnapDropped = smallSnapDropped
 }
+
+//Returns true if all vbs have processsed first DCP snap.
+//This function doesn't not support OSO mode.
+func (ts *TsVbuuid) HasProcessedFirstSnap() bool {
+	if ts == nil {
+		return false
+	}
+
+	for i, s := range ts.Snapshots {
+		//first snap not received. first snap will always
+		//have non zero size as every scope/collection creation
+		//is assigned seq num in vb.
+		if s[0] == 0 && s[1] == 0 {
+			return false
+		}
+
+		//first snap received but not fully processed.
+		if s[0] == 0 && s[1] != 0 && ts.Seqnos[i] != s[1] {
+			return false
+		}
+	}
+	return true
+}
