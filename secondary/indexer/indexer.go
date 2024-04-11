@@ -6519,6 +6519,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		}
 	}
 
+	//Disable the optimization for MAINT_STREAM temporarily as it can lead to
+	//duplicate items in an index merging from INIT_STREAM if MAINT_STREAM is
+	//processing first DCP snapshot after rollback to 0(MB-61387).
+	if streamId == common.MAINT_STREAM {
+		allowMarkFirstSnap = false
+	}
+
 	keyspaceInRecovery := false
 	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_RECOVERY {
 		keyspaceInRecovery = true
