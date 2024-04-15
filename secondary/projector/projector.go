@@ -491,8 +491,11 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	return
 }
 
-func (p *Projector) UpdateStats(topic string, feed *Feed) {
-	feedStats := feed.GetStats()
+// If feedStats are provided, this will not wait for feed.reqch to process fCmdGetStats
+func (p *Projector) UpdateStats(topic string, feed *Feed, feedStats *FeedStats) {
+	if feedStats == nil {
+		feedStats = feed.GetStats()
+	}
 
 	p.statsMutex.Lock()
 	if feedStats != nil {
@@ -653,11 +656,13 @@ func (p *Projector) doMutationTopic(
 			return (&protobuf.TopicResponse{}).SetErr(err)
 		}
 	}
+
 	response, err := feed.MutationTopic(request, opaque)
 	if err != nil {
 		response.SetErr(err)
 	}
-	p.UpdateStats(topic, feed)
+
+	p.UpdateStats(topic, feed, nil)
 	p.AddFeed(topic, feed)
 	return response
 }
@@ -690,8 +695,9 @@ func (p *Projector) doRestartVbuckets(
 	}
 
 	response, err := feed.RestartVbuckets(request, opaque)
+
 	if err == nil {
-		p.UpdateStats(topic, feed)
+		p.UpdateStats(topic, feed, nil)
 		return response
 	}
 	return response.SetErr(err)
@@ -721,7 +727,7 @@ func (p *Projector) doShutdownVbuckets(
 	}
 
 	err = feed.ShutdownVbuckets(request, opaque)
-	p.UpdateStats(topic, feed)
+	p.UpdateStats(topic, feed, nil)
 	return protobuf.NewError(err)
 }
 
@@ -753,7 +759,7 @@ func (p *Projector) doAddBuckets(
 
 	response, err := feed.AddBuckets(request, opaque)
 	if err == nil {
-		p.UpdateStats(topic, feed)
+		p.UpdateStats(topic, feed, nil)
 		return response
 	}
 	return response.SetErr(err)
@@ -782,7 +788,7 @@ func (p *Projector) doDelBuckets(
 	}
 
 	err = feed.DelBuckets(request, opaque)
-	p.UpdateStats(topic, feed)
+	p.UpdateStats(topic, feed, nil)
 	return protobuf.NewError(err)
 }
 
@@ -810,7 +816,7 @@ func (p *Projector) doAddInstances(
 	if err != nil {
 		response.SetErr(err)
 	}
-	p.UpdateStats(topic, feed)
+	p.UpdateStats(topic, feed, nil)
 	return response
 }
 
@@ -834,7 +840,7 @@ func (p *Projector) doDelInstances(
 	}
 
 	err = feed.DelInstances(request, opaque)
-	p.UpdateStats(topic, feed)
+	p.UpdateStats(topic, feed, nil)
 	return protobuf.NewError(err)
 }
 
@@ -859,7 +865,7 @@ func (p *Projector) doRepairEndpoints(
 	}
 
 	err = feed.RepairEndpoints(request, opaque)
-	p.UpdateStats(topic, feed)
+	p.UpdateStats(topic, feed, nil)
 	return protobuf.NewError(err)
 }
 

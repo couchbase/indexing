@@ -3420,6 +3420,8 @@ func loadRPCServerConfig(cfg common.Config) plasma.Config {
 	if cfg != nil {
 		pCfg.RPCHttpServerCfg.MaxPartSize = int64(cfg["plasma.shardCopy.rpc.maxPartSize"].Int())
 		pCfg.RPCHttpServerCfg.MemQuota = int64(cfg["plasma.shardCopy.rpc.server.memQuota"].Int())
+		pCfg.RPCHttpServerCfg.ReadTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.readTimeout"].Int()) * time.Second
+		pCfg.RPCHttpServerCfg.WriteTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.writeTimeout"].Int()) * time.Second
 		pCfg.RPCHttpServerCfg.RateControl = cfg["plasma.shardCopy.rpc.server.rateControl"].Bool()
 		pCfg.RPCHttpServerCfg.LowMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.lowMemRatio"].Float64()
 		pCfg.RPCHttpServerCfg.HighMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.highMemRatio"].Float64()
