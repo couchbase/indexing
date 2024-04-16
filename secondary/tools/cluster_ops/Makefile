@@ -2,6 +2,7 @@ all: clean comp run
 
 export GOPATH=$(PWD)/../../../../../../../../goproj:$(PWD)/../../../../../../../../godeps
 export GO111MODULE=off
+export CGO_CFLAGS=-I$(PWD)/../../../../../../../../sigar/include -I$(PWD)/../../../../../../../../build/tlm/deps/zstd-cpp.exploded/include -I$(PWD)/../../../../../../../../build/tlm/deps/jemalloc.exploded/include -I$(PWD)/../../../../../../../../forestdb/include/ -DJEMALLOC=1
 
 clean:
 	rm -rf ./cluster_ops
