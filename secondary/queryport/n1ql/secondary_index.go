@@ -505,13 +505,61 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
 	where expression.Expression, with value.Value) (si datastore.Index, retErr errors.Error) {
 
+	return gsi.CreateIndex6(requestId, name, false, rangeKey, indexPartition, where, with, nil, nil)
+}
+
+// If there is no error during index creation but if IndexById returns
+// an error, then it could be due to stale list of indexes. Retry
+// Refresh() for upto 3 attempts before concluding the presence
+// of an index
+func (gsi *gsiKeyspace) retryableIndexbyId(defnID uint64) (datastore.Index, errors.Error) {
+	var index datastore.Index
+	var err errors.Error
+	for i := 0; i < 3; i++ {
+		// refresh to get back the newly created index.
+		if err = gsi.Refresh(); err != nil {
+			return nil, err
+		}
+		if index, err = gsi.IndexById(defnID2String(defnID)); err != nil {
+			time.Sleep(1 * time.Millisecond)
+			continue // retry
+		} else {
+			return index, nil
+		}
+	}
+	return index, err
+}
+
+// CreateIndex5 implements datastore.Indexer5{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex5(
+	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
+	where expression.Expression, with value.Value, conn *datastore.IndexConnection) (si datastore.Index, retErr errors.Error) {
+
+	return gsi.CreateIndex6(requestId, name, false, rangeKey, indexPartition, where, with, nil, conn)
+}
+
+// CreateIndex6 implements datastore.Indexer6{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex6(
+	requestId, name string, isBhive bool, rangeKey datastore.IndexKeys,
+	indexPartition *datastore.IndexPartition,
+	where expression.Expression, with value.Value,
+	include expression.Expressions,
+	conn *datastore.IndexConnection) (si datastore.Index, retErr errors.Error) {
+
 	defer func() {
 		if r := recover(); r != nil {
 			si = nil
 			retErr = ErrorInternal
-			l.Errorf("CreateIndex3::Recovered from panic. Stacktrace %v", string(debug.Stack()))
+			l.Errorf("CreateIndex6::Recovered from panic. Stacktrace %v", string(debug.Stack()))
 		}
 	}()
+
+	keyspace := fmt.Sprintf("%s:%s:%s", gsi.bucket, gsi.scope, gsi.keyspace)
+	if isAllowed, err := IsOperationAllowed(with, conn, keyspace, "CreateIndex6"); !isAllowed || err != nil {
+		return nil, err
+	}
 
 	// where
 	var whereStr string
@@ -521,7 +569,9 @@ func (gsi *gsiKeyspace) CreateIndex3(
 
 	// index keys
 	secStrs := make([]string, 0)
+	includeStrs := make([]string, 0)
 	desc := make([]bool, 0)
+	hasVectorAttr := make([]bool, 0)
 	indexMissingLeadingKey := false
 	// For flattened array index, explode the secExprs string. E.g.,
 	// for the index:
@@ -553,6 +603,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 				for pos, _ := range fk.Operands() {
 					secStrs = append(secStrs, s)
 					desc = append(desc, fk.HasDesc(pos))
+					hasVectorAttr = append(hasVectorAttr, fk.HasVector(pos))
 					if keyPos == 0 && pos == 0 {
 						indexMissingLeadingKey = fk.HasMissing(pos)
 					}
@@ -561,10 +612,18 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		} else {
 			secStrs = append(secStrs, s)
 			desc = append(desc, key.HasAttribute(datastore.IK_DESC))
+			hasVectorAttr = append(hasVectorAttr, key.HasAttribute(datastore.IK_VECTOR))
 			if keyPos == 0 {
 				indexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
 			}
 		}
+	}
+
+	// When include expressions are specified, convert them to strings
+	// As "include" is a list of expressions, it is implicit that attributes
+	// like DESC, MISSING, VECTOR are not allowed in include
+	for _, includeKey := range include {
+		includeStrs = append(includeStrs, expression.NewStringer().Visit(includeKey))
 	}
 
 	// with
@@ -586,7 +645,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		}
 	}
 
-	defnID, err := gsi.gsiClient.CreateIndex4(
+	defnID, err := gsi.gsiClient.CreateIndex6(
 		name,
 		gsi.bucket,   /*bucket-name*/
 		gsi.scope,    /*scope-name*/
@@ -596,11 +655,14 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		whereStr,
 		secStrs,
 		desc,
+		hasVectorAttr,
 		indexMissingLeadingKey,
 		false, /*isPrimary*/
 		partitionScheme,
 		partitionKeys,
-		withJSON)
+		withJSON,
+		includeStrs,
+		isBhive)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreateIndex()")
 	}
@@ -608,54 +670,20 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	return gsi.retryableIndexbyId(defnID)
 }
 
-// If there is no error during index creation but if IndexById returns
-// an error, then it could be due to stale list of indexes. Retry
-// Refresh() for upto 3 attempts before concluding the presence
-// of an index
-func (gsi *gsiKeyspace) retryableIndexbyId(defnID uint64) (datastore.Index, errors.Error) {
-	var index datastore.Index
-	var err errors.Error
-	for i := 0; i < 3; i++ {
-		// refresh to get back the newly created index.
-		if err = gsi.Refresh(); err != nil {
-			return nil, err
-		}
-		if index, err = gsi.IndexById(defnID2String(defnID)); err != nil {
-			time.Sleep(1 * time.Millisecond)
-			continue // retry
-		} else {
-			return index, nil
-		}
-	}
-	return index, err
-}
-
-// CreateIndex5 implements datastore.Indexer5{} interface. Create a secondary
-// index on this keyspace
-func (gsi *gsiKeyspace) CreateIndex5(
-	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
-	where expression.Expression, with value.Value, conn *datastore.IndexConnection) (si datastore.Index, retErr errors.Error) {
-
-	keyspace := fmt.Sprintf("%s:%s:%s", gsi.bucket, gsi.scope, gsi.keyspace)
-	if isAllowed, err := IsOperationAllowed(with, conn, keyspace, "CreateIndex5"); isAllowed {
-		return gsi.CreateIndex3(requestId, name, rangeKey, indexPartition, where, with)
-	} else {
-		return nil, err
-	}
-}
-
 func IsOperationAllowed(with value.Value, conn *datastore.IndexConnection, keyspace string, method string) (bool, errors.Error) {
 
-	if common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT && with != nil {
+	if common.GetDeploymentModel() == common.SERVERLESS_DEPLOYMENT && with != nil && conn != nil {
 		var withJSON []byte
 		var err error
 		if withJSON, err = with.MarshalJSON(); err != nil {
+			l.Errorf("%s: Error marshalling WITH clause, err: %v", method, err)
 			return false, errors.NewError(err, "GSI error marshalling WITH clause.")
 		}
 		plan := make(map[string]interface{})
 		if withJSON != nil && len(withJSON) > 0 {
 			err := json.Unmarshal(withJSON, &plan)
 			if err != nil {
+				l.Errorf("%s: Error marshalling WITH clause, err: %v", method, err)
 				return false, errors.NewError(err, "GSI error Unmarshalling WITH clause.")
 			}
 			if IsParameterAllowed(plan) {

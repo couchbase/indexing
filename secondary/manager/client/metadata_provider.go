@@ -27,7 +27,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/query/expression"
-	"github.com/couchbase/query/expression/parser"
+	qparser "github.com/couchbase/query/expression/parser"
 
 	"github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
@@ -431,9 +431,10 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 // scope, collection params are ignored for now
 func (o *MetadataProvider) CreateIndexWithPlan(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
+	secExprs []string, desc []bool, hasVectorAttr []bool,
+	indexMissingLeadingKey, isPrimary bool,
 	scheme c.PartitionScheme, partitionKeys []string,
-	plan map[string]interface{}) (c.IndexDefnId, error, bool) {
+	plan map[string]interface{}, include []string, isBhive bool) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.findIndexByName(name, bucket, scope, collection) != nil {
@@ -442,8 +443,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	// Create index definition
 	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, scope, collection,
-		using, exprType, whereExpr, secExprs, desc, indexMissingLeadingKey,
-		isPrimary, scheme, partitionKeys, plan)
+		using, exprType, whereExpr, secExprs, desc, hasVectorAttr,
+		indexMissingLeadingKey, isPrimary, scheme, partitionKeys, plan,
+		include, isBhive)
 	if err != nil {
 		return c.IndexDefnId(0), err, retry
 	}
@@ -2181,9 +2183,10 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 // Create Index Defnition from DDL
 func (o *MetadataProvider) PrepareIndexDefn(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
+	secExprs []string, desc []bool, hasVectorAttr []bool,
+	indexMissingLeadingKey, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
-	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
+	plan map[string]interface{}, includeExprs []string, isBhive bool) (*c.IndexDefn, error, bool) {
 
 	//
 	// Validation
@@ -2343,6 +2346,8 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		if err != nil {
 			return nil, err, retry
 		}
+
+		// [VECTOR_TODO]: Add support for vector related entries
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v nodes %v", deferred, nodes)
@@ -2351,10 +2356,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	// Array index related information
 	//
 	isArrayIndex := false
+	isArrayDistinct := false
 	isArrayFlattened := false
 	arrayExprCount := 0
+	arrayExprPos := 0
 	skipFlattenExprsTillPos := 0
-	isArrayDistinct := false
+
 	for pos, exp := range secExprs {
 		// As `secExprs` in flattened array index are exploded,
 		// skip some `secExprs`
@@ -2371,6 +2378,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			isArrayFlattened = isFlatten
 			isArrayDistinct = isDistinct
 			arrayExprCount++
+			arrayExprPos = pos
 		}
 		if isArray && isFlatten {
 			numFlattenKeys, err := queryutil.NumFlattenKeys(exp)
@@ -2442,6 +2450,88 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		if internalVersion.LessThan(c.InternalVersion(c.MIN_VER_MISSING_LEADING_KEY)) {
 			return nil,
 				errors.New("Fail to create index with missing attribute. This option is enabled after cluster is fully upgraded to atleast 7.1.2 and there is no failed node."),
+				false
+		}
+	}
+
+	//
+	// Vector index
+	//
+
+	if hasVectorAttr != nil && len(secExprs) != len(hasVectorAttr) {
+		return nil,
+			errors.New("Fail to create vector index.  Vector attribute information is required for all expressions in the index."),
+			false
+	}
+
+	isCompositeVectorIndex := false
+	for _, val := range hasVectorAttr {
+		if val && isCompositeVectorIndex == false {
+			isCompositeVectorIndex = true
+		} else if val && isCompositeVectorIndex {
+			return nil,
+				errors.New("Fails to create index.  Multiple VECTOR attibutes are found. Only one expression with VECTOR attribute is supported per index."),
+				false
+		}
+	}
+
+	if (isBhive || isCompositeVectorIndex) && (version < c.INDEXER_VEC_VERSION || clusterVersion < c.INDEXER_VEC_VERSION) {
+		return nil,
+			errors.New("Fail to create vector index. This option is enabled after cluster is fully upgraded and there is no failed node."),
+			false
+	}
+
+	if isBhive == false && len(includeExprs) > 0 {
+		return nil,
+			errors.New("Fail to create vector index. Include expressions are only supported with BHIVE vector indexes"),
+			false
+	}
+
+	if isBhive {
+		return nil,
+			errors.New("Fail to create BHIVE index. BHIVE indexes are currently not supported"),
+			false
+	}
+
+	// Distinct arrays expressions with VECTOR attributes are not supported
+	if isArrayIndex && isArrayDistinct && hasVectorAttr != nil {
+		if isArrayFlattened == false && hasVectorAttr[arrayExprPos] {
+			return nil,
+				errors.New("Fail to create vector index. DISTINCT is not supported on array expression with VECTOR attributes"),
+				false
+		} else if isArrayFlattened {
+			for i := arrayExprPos; i < skipFlattenExprsTillPos; i++ {
+				if hasVectorAttr[i] {
+					return nil,
+						errors.New("Fail to create vector index. DISTINCT is not supported on array expression with VECTOR attributes"),
+						false
+				}
+			}
+		}
+	}
+
+	if isCompositeVectorIndex || isBhive {
+		storageMode := o.settings.StorageMode()
+
+		if storageMode != c.PlasmaDB {
+			return nil,
+				errors.New("Fail to create vector index. Vector indexes are supported only with Standard Global Secondary storage mode in Enterprise edition"),
+				false
+		}
+	}
+
+	// Validate include for array expression
+	for _, includeExpr := range includeExprs {
+		isIncludeExprArray, _, _, err := queryutil.IsArrayExpression(includeExpr)
+		if err != nil {
+			return nil,
+				errors.New(fmt.Sprintf("Fails to create vector index.  Error in parsing include expression %v : %v", includeExpr, err)),
+				false
+		}
+
+		if isIncludeExprArray {
+			return nil,
+				errors.New(fmt.Sprintf("Fails to create vector index.  Include fields can not be array expressions")),
 				false
 		}
 	}
@@ -3003,7 +3093,7 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 
 	secExprs := make(expression.Expressions, 0, len(secKeys))
 	for _, key := range secKeys {
-		expr, err := parser.Parse(key)
+		expr, err := qparser.Parse(key)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Fails to create index.  Invalid index key %v.", key))
 		}
@@ -3013,7 +3103,7 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 	partnExprs := make(expression.Expressions, 0, len(partitionKeys))
 	for _, key := range partitionKeys {
 
-		expr, err := parser.Parse(key)
+		expr, err := qparser.Parse(key)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Fails to create index.  Invalid partition key %v.", key))
 		}

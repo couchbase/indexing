@@ -181,15 +181,26 @@ type BridgeAccessor interface {
 	// secExprs
 	//      marshalled list of expression of type `exprType` that emits
 	//      an array of secondary-key values from a kv-document.
+	// desc
+	//		For each expression in `secExprs`, specifies whether DESC
+	//		attribute has been specified or not
+	// hasVectorAttr
+	//		For each expression in `secExprs`, specifies whether VECTOR
+	//		attribute has been specified or not
 	// isPrimary
 	//      specify whether the index is created on docid.
 	// with
 	//      JSON marshalled description about index deployment (and more...).
+	// include
+	//		List of secondary expressions used as include columns
+	// isBhive
+	//		Specifies whether an index is BHIVE vector index
 	CreateIndex(
 		name, bucket, scope, collection, using, exprType, whereExpr string,
-		secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
+		secExprs []string, desc []bool, hasVectorAttr []bool,
+		indexMissingLeadingKey, isPrimary bool,
 		scheme common.PartitionScheme, partitionKeys []string,
-		with []byte) (defnID uint64, err error)
+		with []byte, include []string, isBhive bool) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
 	// that indexes specified are already created.
@@ -560,6 +571,20 @@ func (c *GsiClient) CreateIndex4(
 	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
 
+	return c.CreateIndex6(name, bucket, scope, collection,
+		using, exprType, whereExpr, secExprs, desc, nil, false,
+		isPrimary, scheme, partitionKeys, with, nil, false)
+
+}
+
+// scope and collection parameters are ignored as of now.
+func (c *GsiClient) CreateIndex6(
+	name, bucket, scope, collection, using, exprType, whereExpr string,
+	secExprs []string, desc []bool, hasVectorAttr []bool,
+	indexMissingLeadingKey, isPrimary bool,
+	scheme common.PartitionScheme, partitionKeys []string,
+	with []byte, include []string, isBhive bool) (defnID uint64, err error) {
+
 	err = common.IsValidIndexName(name)
 	if err != nil {
 		return 0, err
@@ -573,15 +598,17 @@ func (c *GsiClient) CreateIndex4(
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, scope, collection, using, exprType, whereExpr,
-		secExprs, desc, indexMissingLeadingKey, isPrimary, scheme, partitionKeys, with)
+		secExprs, desc, hasVectorAttr, indexMissingLeadingKey, isPrimary, scheme,
+		partitionKeys, with, include, isBhive)
 	fmsg := "CreateIndex %v %v %v %v/%v using:%v exprType:%v " +
-		"whereExpr:%v secExprs:%v desc:%v indexMissingLeadingKey:%v isPrimary:%v scheme:%v " +
-		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
+		"whereExpr:%v secExprs:%v desc:%v hasVectorAttr:%v indexMissingLeadingKey:%v isPrimary:%v scheme:%v " +
+		" partitionKeys:%v with:%v include:%v isBhive:%v - elapsed(%v) err(%v)"
 
 	origSecExprs, _, _ := common.GetUnexplodedExprs(secExprs, desc)
 	logging.Infof(
 		fmsg, defnID, bucket, scope, collection, name, using, exprType, logging.TagUD(whereExpr),
-		logging.TagUD(origSecExprs), desc, indexMissingLeadingKey, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
+		logging.TagUD(origSecExprs), desc, hasVectorAttr, indexMissingLeadingKey, isPrimary, scheme,
+		logging.TagUD(partitionKeys), string(with), logging.TagStrUD(include), isBhive, time.Since(begin), err)
 	return defnID, err
 }
 
