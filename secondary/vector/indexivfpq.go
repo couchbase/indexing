@@ -3,7 +3,7 @@ package vector
 import (
 	"fmt"
 
-	faiss "github.com/blevesearch/go-faiss"
+	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
 func NewIndexFlat(dim, metric int) (*faiss.IndexImpl, error) {
