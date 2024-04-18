@@ -218,7 +218,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity"}
+	"dimension", "similarity", "description"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2540,6 +2540,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	// For a vector index, extract the fields from with nodes clause
 	var similarity c.VectorSimilarity
 	var dimension int
+	var quantizer *c.VectorQuantizer
 	if isBhive || isCompositeVectorIndex {
 		similarity, err = o.getVectorSimilarity(plan)
 		if err != nil || similarity == "" {
@@ -2549,6 +2550,17 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		dimension, err = o.getVectorDimension(plan)
 		if err != nil || dimension == 0 {
 			return nil, err, false
+		}
+
+		quantizer, err = o.getVectorDescription(plan)
+		if err != nil || quantizer == nil {
+			return nil, err, false
+		}
+
+		if err := quantizer.IsValid(dimension); err != nil {
+			return nil,
+				fmt.Errorf("Failure to create vector index. Invalid product quantization scheme. Err: %v", err),
+				false
 		}
 	}
 
@@ -3597,6 +3609,15 @@ RETRY1:
 	}
 
 	return watchers, nil, false
+}
+
+func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}) (*c.VectorQuantizer, error) {
+	keyword := "description"
+	if val, ok := plan[keyword].(string); !ok {
+		return nil, errors.New("Description is mandatory to create vector index")
+	} else {
+		return c.ParseVectorDesciption(val)
+	}
 }
 
 func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, bool, error) {
