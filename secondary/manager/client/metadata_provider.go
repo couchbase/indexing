@@ -217,7 +217,8 @@ type watcherCallback func(string, c.IndexerId, c.IndexerId)
 var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
-	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio"}
+	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
+	"dimension", "similarity"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2347,7 +2348,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		// [VECTOR_TODO]: Add support for vector related entries
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v nodes %v", deferred, nodes)
@@ -2533,6 +2533,22 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil,
 				errors.New(fmt.Sprintf("Fails to create vector index.  Include fields can not be array expressions")),
 				false
+		}
+	}
+
+	var err error
+	// For a vector index, extract the fields from with nodes clause
+	var similarity c.VectorSimilarity
+	var dimension int
+	if isBhive || isCompositeVectorIndex {
+		similarity, err = o.getVectorSimilarity(plan)
+		if err != nil || similarity == "" {
+			return nil, err, false
+		}
+
+		dimension, err = o.getVectorDimension(plan)
+		if err != nil || dimension == 0 {
+			return nil, err, false
 		}
 	}
 
@@ -3464,6 +3480,41 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	}
 
 	return residentRatio, nil, false
+}
+
+func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}) (c.VectorSimilarity, error) {
+	keyword := "similarity"
+	similarity, ok := plan[keyword].(string)
+	if !ok {
+		return "", fmt.Errorf("Fail to create vector index. `%v` parameter not specified. It should be one of the following strings: `EUCLIDEAN`, `DOT_PRODUCT`, `COSINE_SIM`, `L2`", keyword)
+	}
+
+	switch strings.ToUpper(similarity) {
+	case string(c.EUCLIDEAN), string(c.L2), string(c.COSINE_SIM), string(c.DOT_PRODUCT):
+		return c.VectorSimilarity(similarity), nil
+	default:
+		return "", fmt.Errorf("Fail to create vector index. Invalid `%v` parameter. It should be one of the following strings: `EUCLIDEAN`, `DOT_PRODUCT`, `COSINE_SIM`, `L2`", keyword)
+	}
+}
+
+func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}) (int, error) {
+	keyword := "dimension"
+	dimension_float64, ok1 := plan[keyword].(float64)
+	if !ok1 {
+		dimension_int, ok2 := plan[keyword].(int)
+		if !ok2 {
+			return 0, fmt.Errorf("Fail to create vector index. Missing/Invalid `%v` parameter in the with clause", keyword)
+		}
+
+		if dimension_int == 0 {
+			return 0, fmt.Errorf("Fail to create vector index. `%v` parameter should be greater than 0", keyword)
+		}
+		return dimension_int, nil
+	}
+	if int(dimension_float64) == 0 {
+		return 0, fmt.Errorf("Fail to create vector index. `%v` parameter should be greater than 0", keyword)
+	}
+	return int(dimension_float64), nil
 }
 
 func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool, legacy bool) ([]*watcher, error, bool) {

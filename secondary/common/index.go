@@ -919,3 +919,12 @@ const (
 )
 
 var ErrUnexpectedDataEncFmt = errors.New("Unexpected data encoding format")
+
+type VectorSimilarity string
+
+const (
+	EUCLIDEAN   VectorSimilarity = "EUCLIDEAN"
+	L2                           = "L2"
+	COSINE_SIM                   = "COSINE_SIM"
+	DOT_PRODUCT                  = "DOT_PRODUCT"
+)
