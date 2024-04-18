@@ -3,6 +3,7 @@ package vector
 import (
 	"math/rand"
 	"testing"
+	"time"
 
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
@@ -197,4 +198,118 @@ func checkResult(t *testing.T, result []int64, bench int64) bool {
 		}
 	}
 	return false
+}
+
+func TestIndexIVFPQ_Timing(t *testing.T) {
+
+	var err error
+
+	var indexPQ *faiss.IndexImpl
+
+	dim := 128
+	metric := faiss.MetricL2
+
+	nlist := 1024
+	nsub := 8
+	nbits := 8
+
+	indexPQ, err = NewIndexIVFPQ(dim, nlist, nsub, nbits, metric)
+	if err != nil || indexPQ == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+
+	total_vecs := 100000
+
+	//generate random vectors
+	vecs := genRandomVecs(dim, total_vecs)
+
+	//train the index
+	train_vecs := convertTo1D(vecs)
+
+	start := time.Now()
+	err = indexPQ.Train(train_vecs)
+	elapsed := time.Since(start)
+
+	if !indexPQ.IsTrained() {
+		t.Errorf("Unable to train index. Err %v", err)
+	}
+
+	t.Logf("Time taken for training %v vectors is %v", total_vecs, elapsed)
+
+	//search the index
+	query_vec := convertTo1D(vecs[:1])
+
+	nn := []int64{1, 3, 10}
+
+	quantizer, err := indexPQ.Quantizer()
+	if err != nil {
+		t.Errorf("Error getting quantizer for index. Err %v", err)
+	}
+
+	for _, n := range nn {
+		start = time.Now()
+		label, err := quantizer.Assign(query_vec, n)
+		elapsed = time.Since(start)
+
+		t.Logf("Assign results %v %v", label, err)
+		t.Logf("Time taken to assign %v %v", n, elapsed)
+	}
+
+}
+
+func TestIndexIVFPQ_HNSW_Timing(t *testing.T) {
+
+	var err error
+
+	var indexPQ *faiss.IndexImpl
+
+	dim := 128
+	metric := faiss.MetricL2
+
+	nlist := 1024
+	nsub := 8
+	nbits := 8
+
+	indexPQ, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric)
+	if err != nil || indexPQ == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+
+	total_vecs := 100000
+
+	//generate random vectors
+	vecs := genRandomVecs(dim, total_vecs)
+
+	//train the index
+	train_vecs := convertTo1D(vecs)
+
+	start := time.Now()
+	err = indexPQ.Train(train_vecs)
+	elapsed := time.Since(start)
+
+	if !indexPQ.IsTrained() {
+		t.Errorf("Unable to train index. Err %v", err)
+	}
+
+	t.Logf("Time taken for training %v vectors is %v", total_vecs, elapsed)
+
+	//search the index
+	query_vec := convertTo1D(vecs[:1])
+
+	nn := []int64{1, 3, 10}
+
+	quantizer, err := indexPQ.Quantizer()
+	if err != nil {
+		t.Errorf("Error getting quantizer for index. Err %v", err)
+	}
+
+	for _, n := range nn {
+		start = time.Now()
+		label, err := quantizer.Assign(query_vec, n)
+		elapsed = time.Since(start)
+
+		t.Logf("Assign results %v %v", label, err)
+		t.Logf("Time taken to assign %v %v", n, elapsed)
+	}
+
 }
