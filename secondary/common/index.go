@@ -224,6 +224,7 @@ type IndexDefn struct {
 	PartitionKey           string     `json:"partitionKey,omitempty"`
 	WhereExpr              string     `json:"where,omitempty"`
 	Desc                   []bool     `json:"desc,omitempty"`
+	HasVectorAttr          []bool     `json:"hasVectorAttr,omitempty"`
 	Deferred               bool       `json:"deferred,omitempty"`
 	Immutable              bool       `json:"immutable,omitempty"`
 	Nodes                  []string   `json:"nodes,omitempty"`
@@ -295,6 +296,15 @@ type IndexDefn struct {
 	// Pre-built expression statement which can be used in getIndexStatus
 	// to avoid processing every time
 	ExprStmt string `json:"exprStmt,omitempty"`
+
+	// Include expressions are tracked separately from vector metadata
+	// as a normal index can also be created with include columns. Such
+	// a support does not exist at the time of writing this patch but
+	// it can be added in future
+	Include []string `json:"include,omitempty"`
+
+	IsVectorIndex bool            `json:"isVectorIndex,omitempty"`
+	VectorMeta    *VectorMetadata `json:"vectorMeta,omitempty"`
 }
 
 // IndexInst is an instance of an Index(aka replica)
@@ -335,6 +345,7 @@ func (idx IndexDefn) String() string {
 	fmt.Fprintf(&str, "InstVersion: %v ", idx.InstVersion)
 	fmt.Fprintf(&str, "\n\t\tSecExprs: %v ", logging.TagUD(secExprs))
 	fmt.Fprintf(&str, "\n\t\tDesc: %v", idx.Desc)
+	fmt.Fprintf(&str, "\n\t\tHasVectorAttr: %v", idx.HasVectorAttr)
 	fmt.Fprintf(&str, "\n\t\tIndexMissingLeadingKey: %v", idx.IndexMissingLeadingKey)
 	fmt.Fprintf(&str, "\n\t\tIsPartnKeyDocId: %v", idx.IsPartnKeyDocId)
 	fmt.Fprintf(&str, "\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
@@ -344,6 +355,11 @@ func (idx IndexDefn) String() string {
 	fmt.Fprintf(&str, "WhereExpr: %v ", logging.TagUD(idx.WhereExpr))
 	fmt.Fprintf(&str, "RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)
 	fmt.Fprintf(&str, "\n\t\tAlternateShardIds: %v ", idx.AlternateShardIds)
+	fmt.Fprintf(&str, "Include: %v ", idx.Include)
+	fmt.Fprintf(&str, "IsVectorIndex: %v ", idx.IsVectorIndex)
+	if idx.IsVectorIndex {
+		fmt.Fprintf(&str, "\n\t\tVectorMeta: %v ", idx.VectorMeta)
+	}
 	return str.String()
 
 }
@@ -364,6 +380,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		IsPrimary:              idx.IsPrimary,
 		SecExprs:               idx.SecExprs,
 		Desc:                   idx.Desc,
+		HasVectorAttr:          idx.HasVectorAttr,
 		ExprType:               idx.ExprType,
 		PartitionScheme:        idx.PartitionScheme,
 		PartitionKeys:          idx.PartitionKeys,
@@ -386,6 +403,9 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		IsPartnKeyDocId:        idx.IsPartnKeyDocId,
 		UnexplodedSecExprs:     idx.UnexplodedSecExprs,
 		ExprStmt:               idx.ExprStmt,
+		Include:                idx.Include,
+		IsVectorIndex:          idx.IsVectorIndex,
+		VectorMeta:             idx.VectorMeta.Clone(),
 	}
 
 	clone.ShardIdsForDest = make(map[PartitionId][]ShardId)
@@ -928,3 +948,37 @@ const (
 	COSINE_SIM                   = "COSINE_SIM"
 	DOT_PRODUCT                  = "DOT_PRODUCT"
 )
+
+type VectorMetadata struct {
+	IsCompositeIndex bool             `json:"isCompositeIndex,omitempty"`
+	IsBhive          bool             `json:"isBhive,omitempty"`
+	Dimension        int              `json:"dimension,omitempty"`
+	Similarity       VectorSimilarity `json:"similarity,omitempty"`
+
+	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
+}
+
+func (v *VectorMetadata) Clone() *VectorMetadata {
+	if v == nil {
+		return nil
+	}
+
+	newMeta := &VectorMetadata{
+		IsCompositeIndex: v.IsCompositeIndex,
+		IsBhive:          v.IsBhive,
+		Dimension:        v.Dimension,
+		Similarity:       v.Similarity,
+		Quantizer:        v.Quantizer.Clone(),
+	}
+
+	return newMeta
+}
+
+func (v *VectorMetadata) String() string {
+	if v == nil {
+		return ""
+	}
+
+	return fmt.Sprintf("CompostieVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v",
+		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String())
+}

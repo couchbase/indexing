@@ -49,7 +49,25 @@ type VectorQuantizer struct {
 	SQRange ScalarQuantizerRange `json:"sqrange,omitempty"`
 }
 
+func (vq *VectorQuantizer) Clone() *VectorQuantizer {
+	if vq == nil {
+		return nil
+	}
+
+	return &VectorQuantizer{
+		Type:          vq.Type,
+		Nlist:         vq.Nlist,
+		SubQuantizers: vq.SubQuantizers,
+		Nbits:         vq.Nbits,
+		SQRange:       vq.SQRange,
+	}
+}
+
 func (vq *VectorQuantizer) String() string {
+	if vq == nil {
+		return ""
+	}
+
 	switch vq.Type {
 	case PQ:
 

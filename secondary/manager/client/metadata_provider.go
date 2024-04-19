@@ -2583,6 +2583,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		IsPrimary:              isPrimary,
 		SecExprs:               secExprs,
 		Desc:                   desc,
+		HasVectorAttr:          hasVectorAttr,
 		ExprType:               c.ExprType(exprType),
 		PartitionScheme:        partitionScheme,
 		PartitionKeys:          partitionKeys,
@@ -2605,6 +2606,18 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Collection:             collection,
 		HasArrItemsCount:       hasArrItemsCount,
 		IndexMissingLeadingKey: indexMissingLeadingKey,
+		Include:                includeExprs,
+		IsVectorIndex:          isBhive || isCompositeVectorIndex,
+	}
+
+	if idxDefn.IsVectorIndex {
+		idxDefn.VectorMeta = &c.VectorMetadata{
+			IsCompositeIndex: isCompositeVectorIndex,
+			IsBhive:          isBhive,
+			Dimension:        dimension,
+			Similarity:       similarity,
+			Quantizer:        quantizer,
+		}
 	}
 
 	idxDefn.NumReplica2.InitializeCounter(idxDefn.NumReplica)
