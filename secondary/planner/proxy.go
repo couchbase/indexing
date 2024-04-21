@@ -892,6 +892,13 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		// 2) If index resident ratio is 0, then use sizing equation to estimate key size.
 		// 3) For MOI, min memory is the same as actual memory usage
 
+		// If the cluster is in mixed mode, for older version the combinedMemSzIdx would not be populated. The value for
+		// combinedMemSzIdx will be zero and the calculation will default to previous formula
+		var combinedMemSzIdx uint64
+		if combinedMemSzIdxVal, ok := GetIndexStat(index, "combined_memory_size_index", statsMap, true, clusterVersion); ok {
+			combinedMemSzIdx = uint64(combinedMemSzIdxVal.(float64))
+		}
+
 		minRatio := config["indexer.planner.minResidentRatio"].Float64()
 		if (clusterVersion < common.INDEXER_71_VERSION) && (minRatio == 0.1) {
 			// Note: corner case of overriding customer value, where customer themselves set config to 10% and are
@@ -906,10 +913,13 @@ func SetStatsInIndexer(indexer *IndexerNode, statsMap map[string]interface{}, cl
 		// If index has resident memory, then compute minimum memory usage using current memory usage.
 		if !index.NoUsageInfo {
 			if index.ActualResidentPercent > 0 {
-				indexTotalMem := index.ActualMemUsage + index.ActualMemOverhead
 				ratio := float64(index.ActualResidentPercent) / 100
-				index.ActualMemMin = uint64(float64(indexTotalMem) / ratio * minRatio)
-
+				if index.ActualMemUsage < combinedMemSzIdx {
+					combinedMemSzIdx = 0
+				}
+				memSize := index.ActualMemUsage - combinedMemSzIdx
+				scaledMem := float64(memSize+index.ActualMemOverhead) / ratio
+				index.ActualMemMin = combinedMemSzIdx + uint64(scaledMem*minRatio)
 			} else if index.ActualNumDocs > 0 {
 				// If index has no resident memory but it has keys, then estimate using sizing equation.
 				dataSize := index.ActualDataSize
