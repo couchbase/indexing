@@ -605,6 +605,66 @@ func (s *Solution) PrintLayout() {
 	}
 }
 
+// This prints out compact layout for the solution. Omitting verbose info about the each sub-index
+func (s *Solution) PrintCompactLayout() {
+
+	for _, indexer := range s.Placement {
+
+		logging.Infof("")
+		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v shardCompatVersion: %v",
+			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
+			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
+			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
+			indexer.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemMin(s.UseLiveData()))),
+			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
+			indexer.GetCpuUsage(s.UseLiveData()),
+			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
+			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
+			len(indexer.Indexes), indexer.ShardCompatVersion)
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v usageRatio:%v allowDDLDuringScaleup:%v",
+			indexer.IsDeleted(), indexer.isNew, indexer.Exclude, indexer.meetConstraint, s.computeUsageRatio(indexer), s.AllowDDLDuringScaleUp())
+
+		for _, index := range indexer.Indexes {
+			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
+			if index.Instance != nil {
+				logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, shardIds: %v, shardIdsInDefn: %v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
+					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
+					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds, index.Instance.Defn.ShardIdsForDest)
+			} else {
+				logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v "+
+					"shardProxy: %v, numInstances: %v, alternateShardIds: %v, shardIds: %v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
+					index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId,
+					index.IsShardProxy, index.NumInstances, index.AlternateShardIds, index.ShardIds)
+			}
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
+				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
+				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
+				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
+				index.GetMemMin(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemMin(s.UseLiveData()))),
+				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
+				index.GetCpuUsage(s.UseLiveData()),
+				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
+				index.GetScanRate(s.UseLiveData()), index.GetDrainRate(s.UseLiveData()))
+			logging.Infof("\t\tIndex resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
+				uint64(index.GetResidentRatio(s.UseLiveData())),
+				index.GetBuildPercent(s.UseLiveData()),
+				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
+				!index.suppressEquivIdxCheck,
+				index.pendingCreate, index.PendingDelete)
+			for _, subIndex := range index.GroupedIndexes {
+				logging.Infof("\t\t\t* %v, %v, %v, %v, %v, %v, %v, "+
+					"initASIs:%v, defnShardIds:%v",
+					subIndex.GetDisplayName(), subIndex.Bucket, subIndex.Scope, subIndex.Collection, subIndex.DefnId, subIndex.InstId, subIndex.PartnId,
+					subIndex.initialAlternateShardIds, subIndex.Instance.Defn.ShardIdsForDest)
+			}
+		}
+	}
+}
+
 // Compute statistics on memory usage
 func (s *Solution) ComputeMemUsage() (float64, float64) {
 
