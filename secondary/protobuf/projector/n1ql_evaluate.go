@@ -45,7 +45,7 @@ func N1QLTransform(
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		start := time.Now()
-		scalar, vector, err := expr.EvaluateForIndex(docval, context)
+		scalar, array, err := expr.EvaluateForIndex(docval, context)
 		elapsed := time.Since(start)
 		if stats != nil {
 			stats.add(elapsed)
@@ -78,9 +78,9 @@ func N1QLTransform(
 			isLeadingKey = false
 			arrValue = append(arrValue, key)
 		} else {
-			if vector == nil { //nil is ERROR condition
+			if array == nil { //nil is ERROR condition
 				exprstr := qexpr.NewStringer().Visit(expr)
-				fmsg := "EvaluateForIndex(%q) vector=nil, skip document %v"
+				fmsg := "EvaluateForIndex(%q) array=nil, skip document %v"
 				arg1 := logging.TagUD(exprstr)
 				arg2 := logging.TagUD(string(docid))
 				logging.Errorf(fmsg, arg1, arg2)
@@ -88,38 +88,38 @@ func N1QLTransform(
 			}
 			if isLeadingKey {
 				//if array is leading key and empty, skip indexing the entry
-				if isArrayEmpty(vector) {
+				if isArrayEmpty(array) {
 					return nil, nil, nil
 				}
 				//if array is leading key and missing, skip indexing the entry
-				if isArrayMissing(vector) {
+				if isArrayMissing(array) {
 					return nil, nil, nil
 				}
 
 				if isFlattened {
-					vector = explodeVectorEntries(vector, numFlattenKeys, isLeadingKey)
-					if len(vector) == 0 {
+					array = explodeArrayEntries(array, numFlattenKeys, isLeadingKey)
+					if len(array) == 0 {
 						return nil, nil, nil
 					}
 				}
 			} else {
 				if isFlattened {
-					if isArrayEmpty(vector) { // Populate "missing" for all keys
-						vector = populateValueForFlattenKeys(numFlattenKeys, missing)
+					if isArrayEmpty(array) { // Populate "missing" for all keys
+						array = populateValueForFlattenKeys(numFlattenKeys, missing)
 					} else {
-						vector = explodeVectorEntries(vector, numFlattenKeys, isLeadingKey)
+						array = explodeArrayEntries(array, numFlattenKeys, isLeadingKey)
 					}
 				} else {
 					//if array is non-leading key and empty, treat it as missing
-					if isArrayEmpty(vector) {
-						vector = []qvalue.Value{missing}
+					if isArrayEmpty(array) {
+						array = []qvalue.Value{missing}
 					}
 				}
 			}
 
 			isLeadingKey = false
 
-			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(vector)))
+			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(array)))
 		}
 	}
 
@@ -160,29 +160,29 @@ func N1QLTransform(
 }
 
 // EvaluateForIndex will cache the evaluated values for a document. Therefore, it is
-// not advisable to populate vector directly. E.g., if vector[i] is [null] and if we
-// explode vector[i] for numFlattenKeys = 2, then vector[i] would become [[null, null]].
+// not advisable to populate array directly. E.g., if array[i] is [null] and if we
+// explode array[i] for numFlattenKeys = 2, then array[i] would become [[null, null]].
 // When an index with numFlattenKeys = 3 has to be evalated, query can use the cached
-// vector and it returns [[null, null]] instead of [null]. This would lead to incorrect
-// results as the check vector[i].Type() == qvalue.NULL would fail. Hence, do not directly
-// override vector
-func explodeVectorEntries(vector qvalue.Values, numFlattenKeys int, isLeadingKey bool) qvalue.Values {
+// array and it returns [[null, null]] instead of [null]. This would lead to incorrect
+// results as the check array[i].Type() == qvalue.NULL would fail. Hence, do not directly
+// override array
+func explodeArrayEntries(array qvalue.Values, numFlattenKeys int, isLeadingKey bool) qvalue.Values {
 	var newValues []qvalue.Value
 
-	for i := range vector {
-		if vector[i].Type() == qvalue.NULL {
+	for i := range array {
+		if array[i].Type() == qvalue.NULL {
 			newValues = append(newValues, populateValueForFlattenKeys(numFlattenKeys, qvalue.NULL_VALUE)[0])
-		} else if vector[i].Type() == qvalue.MISSING {
+		} else if array[i].Type() == qvalue.MISSING {
 			if isLeadingKey { // Skip indexing missing leading key
 				continue
 			}
 			newValues = append(newValues, populateValueForFlattenKeys(numFlattenKeys, qvalue.MISSING_VALUE)[0])
 		} else {
-			leadingVal, ok := vector[i].Index(0)
+			leadingVal, ok := array[i].Index(0)
 			if isLeadingKey && ok && leadingVal.Type() == qvalue.MISSING { // Skip indexing missing leading key
 				continue
 			}
-			newValues = append(newValues, vector[i])
+			newValues = append(newValues, array[i])
 		}
 	}
 
@@ -194,8 +194,8 @@ func populateValueForFlattenKeys(numFlattenKeys int, value qvalue.Value) []qvalu
 	for i := 0; i < numFlattenKeys; i++ {
 		flattenKeyVals[i] = value
 	}
-	vector := []qvalue.Value{qvalue.NewValue(flattenKeyVals)}
-	return vector
+	array := []qvalue.Value{qvalue.NewValue(flattenKeyVals)}
+	return array
 }
 
 // For flattened array index, if the array is the leading expression
@@ -205,23 +205,23 @@ func populateValueForFlattenKeys(numFlattenKeys int, value qvalue.Value) []qvalu
 // [[test 10 abcd@abcd.com] [MISSING 11 efgh@abcd.com]], the second
 // entry in the array i.e. [MISSING 11 efgh@abcd.com] will be filtered from
 // the result and only [test 10 abcd@abcd.com] is returned to the user
-func filterVectorForMissingEntries(vector qvalue.Values) qvalue.Values {
+func filterArrayForMissingEntries(array qvalue.Values) qvalue.Values {
 	index := 0 // Index is a monotonically increasing counter
-	end := len(vector)
+	end := len(array)
 	for index < end {
-		if vector[index] == nil {
+		if array[index] == nil {
 			break
 		}
-		leadingVal, ok := vector[index].Index(0)
+		leadingVal, ok := array[index].Index(0)
 		if ok && leadingVal.Type() == qvalue.MISSING {
-			vector[index] = vector[end-1] // Swap with last element of the slice and set last element to nil
-			vector[end-1] = nil
+			array[index] = array[end-1] // Swap with last element of the slice and set last element to nil
+			array[end-1] = nil
 			end--
 		} else {
 			index++
 		}
 	}
-	return vector[0:end]
+	return array[0:end]
 }
 
 func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, error) {
@@ -240,14 +240,14 @@ func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, erro
 	return append([]byte(nil), encoded...), nil, err
 }
 
-func isArrayEmpty(vector qvalue.Values) bool {
-	return (len(vector) == 0)
+func isArrayEmpty(array qvalue.Values) bool {
+	return (len(array) == 0)
 }
 
-func isArrayMissing(vector qvalue.Values) bool {
-	return (len(vector) == 1 && vector[0].Type() == qvalue.MISSING)
+func isArrayMissing(array qvalue.Values) bool {
+	return (len(array) == 1 && array[0].Type() == qvalue.MISSING)
 }
 
-func isArrayNull(vector qvalue.Values) bool {
-	return (len(vector) == 1 && vector[0].Type() == qvalue.NULL)
+func isArrayNull(array qvalue.Values) bool {
+	return (len(array) == 1 && array[0].Type() == qvalue.NULL)
 }
