@@ -655,7 +655,7 @@ func (sr *ShardRebalancer) processShardTokens(kve metakv.KVEntry) error {
 	} else if strings.Contains(kve.Path, ShardTokenTag) {
 		if kve.Value != nil {
 			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "ShardRebalancer",
-				ShardTokenTag)
+				ShardTokenTag, sr.nodeUUID)
 
 			if err != nil {
 				l.Errorf("ShardRebalancer::processShardTokens Unable to decode transfer token. Ignored.")
@@ -4699,4 +4699,14 @@ func (sr *ShardRebalancer) unlockShardsOnSourcePostTransfer(ttid string, tt *c.T
 func (sr *ShardRebalancer) getCurrentTotalProgress() float64 {
 	return (sr.shardProgress.GetFloat64() * sr.shardProgressRatio) +
 		(sr.dcpProgress.GetFloat64() * sr.dcpProgressRatio)
+}
+
+// Given a nodeUUID and tt, this function checks if the Node is relevant for the processing the tt
+func isRelevantNodeForTT(tt *common.TransferToken, nodeUUID string) bool {
+	switch nodeUUID {
+	case tt.MasterId, tt.SourceId, tt.DestId:
+		return true
+	default:
+		return false
+	}
 }
