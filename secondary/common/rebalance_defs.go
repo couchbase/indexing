@@ -480,7 +480,9 @@ func (tt *TransferToken) LessVerboseString() string {
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
 		fmt.Fprintf(sbp, "Shards: %v ", tt.ShardIds)
-		if tt.Destination != "" {
+		// tt.Destination contains same info as DestHost + TransferPort for on-prem file based.
+		// Omit printing if tt.DestHost is already printed
+		if tt.Destination != "" && (len(tt.DestHost) == 0 || GetDeploymentModel() == SERVERLESS_DEPLOYMENT) {
 			fmt.Fprintf(sbp, "Destination: %v\n", tt.Destination)
 		}
 		if tt.Region != "" {
@@ -488,14 +490,12 @@ func (tt *TransferToken) LessVerboseString() string {
 		}
 
 		for i := range tt.IndexInsts {
-			fmt.Fprintf(sbp, "\tInstId: %v ", tt.InstIds[i])
-			fmt.Fprintf(sbp, "RealInstId: %v ", tt.RealInstIds[i])
-			fmt.Fprintf(sbp, "Name: %v Bucket: %v ScopeId: %v/%v Collection/Id: %v/%v ",
+			fmt.Fprintf(sbp, "\t%v, %v, ", tt.InstIds[i], tt.RealInstIds[i])
+			fmt.Fprintf(sbp, "%v, %v, %v/%v, %v/%v, ",
 				tt.IndexInsts[i].Defn.Name, tt.IndexInsts[i].Defn.Bucket,
 				tt.IndexInsts[i].Defn.Scope, tt.IndexInsts[i].Defn.ScopeId,
 				tt.IndexInsts[i].Defn.Collection, tt.IndexInsts[i].Defn.CollectionId)
-			fmt.Fprintf(sbp, "Partitions: %v ", tt.IndexInsts[i].Defn.Partitions)
-			fmt.Fprintf(sbp, "Versions: %v\n", tt.IndexInsts[i].Defn.Versions)
+			fmt.Fprintf(sbp, "%v, %v\n", tt.IndexInsts[i].Defn.Partitions, tt.IndexInsts[i].Defn.Versions)
 		}
 		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
 		fmt.Fprintf(sbp, "IsPendingReady: %v", tt.IsPendingReady)
@@ -506,6 +506,63 @@ func (tt *TransferToken) LessVerboseString() string {
 		fmt.Fprintf(sbp, "Versions: %v ", tt.IndexInst.Defn.Versions)
 		fmt.Fprintf(sbp, "IsEmptyNodeBatch: %v ", tt.IsEmptyNodeBatch)
 		fmt.Fprintf(sbp, "IsPendingReady: %v ", tt.IsPendingReady)
+	}
+
+	return sb.String()
+}
+
+func (tt *TransferToken) CompactString() string {
+	var sb strings.Builder
+	sbp := &sb
+
+	fmt.Fprintf(sbp, " CompactStr:: ")
+	fmt.Fprintf(sbp, "[%v, ", tt.MasterId)
+	fmt.Fprintf(sbp, "%v", tt.SourceId)
+	if len(tt.SourceHost) != 0 {
+		fmt.Fprintf(sbp, "(%v), ", tt.SourceHost)
+	}
+	fmt.Fprintf(sbp, "%v", tt.DestId)
+	if len(tt.DestHost) != 0 {
+		fmt.Fprintf(sbp, "(%v), ", tt.DestHost)
+	}
+	fmt.Fprintf(sbp, "%v]", tt.RebalId)
+
+	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
+	} else {
+		fmt.Fprintf(sbp, "State: %v ", tt.State)
+	}
+
+	fmt.Fprintf(sbp, "%v ", tt.BuildSource)
+	fmt.Fprintf(sbp, "%v ", tt.TransferMode)
+	if tt.Error != "" {
+		fmt.Fprintf(sbp, "Error: %v ", tt.Error)
+	}
+
+	if tt.SourceTokenId != "" { // Used only for ShardTokenDropOnSource state
+		fmt.Fprintf(sbp, "SourceTokenId: %v ", tt.SourceTokenId)
+	}
+	// If more than one index instance exists, print all of them
+	if tt.IsShardTransferToken() {
+		fmt.Fprintf(sbp, "(%v, ", tt.SiblingTokenId)
+		fmt.Fprintf(sbp, "%v, ", tt.ShardIds)
+		// tt.Destination contains same info as DestHost + TransferPort for on-prem file based.
+		// Omit printing if tt.DestHost is already printed
+		if tt.Destination != "" && (len(tt.DestHost) == 0 || GetDeploymentModel() == SERVERLESS_DEPLOYMENT) {
+			fmt.Fprintf(sbp, "Dest: %v,", tt.Destination)
+		}
+		if tt.Region != "" {
+			fmt.Fprintf(sbp, "Region: %v,", tt.Region)
+		}
+		fmt.Fprintf(sbp, "%v, ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "%v)", tt.IsPendingReady)
+	} else {
+		fmt.Fprintf(sbp, "(%v, ", tt.InstId)
+		fmt.Fprintf(sbp, "%v, ", tt.RealInstId)
+		fmt.Fprintf(sbp, "%v, ", tt.IndexInst.Defn.Partitions)
+		fmt.Fprintf(sbp, "%v, ", tt.IndexInst.Defn.Versions)
+		fmt.Fprintf(sbp, "%v, ", tt.IsEmptyNodeBatch)
+		fmt.Fprintf(sbp, "%v) ", tt.IsPendingReady)
 	}
 
 	return sb.String()

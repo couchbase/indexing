@@ -1540,7 +1540,7 @@ func (r *Rebalancer) processTokens(kve metakv.KVEntry) error {
 		}
 	} else if strings.Contains(kve.Path, TransferTokenTag) {
 		if kve.Value != nil {
-			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer", TransferTokenTag)
+			ttid, tt, err := decodeTransferToken(kve.Path, kve.Value, "Rebalancer", TransferTokenTag, r.nodeUUID)
 			if err != nil {
 				l.Errorf("%v Unable to decode transfer token. Ignored.", _processTokens)
 				return nil
@@ -3018,7 +3018,7 @@ func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 }
 
 // decodeTransferToken unmarshals a transfer token received in a callback from metakv.
-func decodeTransferToken(path string, value []byte, prefix, tokenTag string) (
+func decodeTransferToken(path string, value []byte, prefix, tokenTag string, nodeUUID string) (
 	string, *c.TransferToken, error) {
 
 	ttidpos := strings.Index(path, tokenTag)
@@ -3034,7 +3034,11 @@ func decodeTransferToken(path string, value []byte, prefix, tokenTag string) (
 
 	// Skip logging entire index instance for every transfer token state change as it can flood logs
 	if tt.IsShardTransferToken() && tt.ShardTransferTokenState != c.ShardTokenCreated {
-		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
+		if isRelevantNodeForTT(tt, nodeUUID) {
+			l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
+		} else {
+			l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.CompactString())
+		}
 	} else {
 		l.Infof("%v::decodeTransferToken TransferToken %v %v", prefix, ttid, tt.LessVerboseString())
 	}
