@@ -2748,7 +2748,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 		solution := planner.GetResult()
 
 		logging.Infof("************ Index Layout After Rebalance Planning *************")
-		solution.PrintLayout()
+		solution.PrintCompactLayout()
 		logging.Infof("****************************************************************")
 
 		// The maximum number of times this recursion can happen is proportional to
