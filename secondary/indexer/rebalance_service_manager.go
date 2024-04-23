@@ -1276,7 +1276,12 @@ func (m *RebalanceServiceManager) cleanupTransferTokens(tts map[string]*c.Transf
 	for _, t := range ttList {
 
 		if t.tt.IsShardTransferToken() {
-			l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
+			switch string(m.nodeInfo.NodeID) {
+			case t.tt.MasterId, t.tt.SourceId, t.tt.DestId:
+				l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.LessVerboseString())
+			default:
+				l.Infof("RebalanceServiceManager::cleanupShardTransferTokens Cleaning Up %v %v", t.ttid, t.tt.CompactString())
+			}
 			if t.tt.MasterId == string(m.nodeInfo.NodeID) {
 				m.cleanupShardTokenForMaster(t.ttid, t.tt)
 			}
