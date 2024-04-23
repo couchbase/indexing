@@ -1616,10 +1616,19 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		Collection:             proto.String(indexDefn.Collection),
 		CollectionID:           proto.String(indexDefn.CollectionId),
 		IndexMissingLeadingKey: proto.Bool(indexDefn.IndexMissingLeadingKey),
+		HasVectorAttr:          indexDefn.HasVectorAttr,
+	}
+
+	if indexDefn.IsVectorIndex && indexDefn.VectorMeta != nil {
+		defn.Dimension = proto.Uint64(uint64(indexDefn.VectorMeta.Dimension))
+
+		if indexDefn.VectorMeta.IsBhive {
+			// [VECTOR_TODO]: Decouple include columns from vector index check
+			defn.Include = indexDefn.Include
+		}
 	}
 
 	return defn
-
 }
 
 func convertIndexInstToProtobuf(cfg c.Config, indexInst c.IndexInst,

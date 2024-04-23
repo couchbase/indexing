@@ -115,7 +115,47 @@ type IndexEvaluator struct {
 	// the number of keys in the flatten_keys expression
 	numFlattenKeys int
 
+	// Position of the array expression in the list of secondary expressions
+	arrayPos int
+
+	// Set to true if array is flattened
+	isArrayFlattened bool
+
 	indexMissingLeadingKey bool
+
+	// Vector meta related information
+
+	// A boolean shortcut which represents if any of `hasVectorAttr`
+	// is set to true. `hasVectorAttr` is read from index definition
+	isVectorIndex bool
+
+	// For a vector index, captures the position of the vector in
+	// the list of skExprs. This position is relative to "skExprs"
+
+	// E.g., for the index
+	// create index idx on default(name, FLATTEN_ARRAY(v.brand, v.cost) for v in brands END, color VECTOR)
+	// vectorPos will be "2" as it is at 2nd position in the list of secondary expressions (0-indexed)
+	// In this case, the hasVectorAttr will be [false false false true] as it is derived for exploded
+	// version of secondary keys
+	//
+	// If the vector attribute is inside FLATTEN_ARRAY, then vectorPos == flattenArrayPos
+	// and the entry at vectorPosInFlattenedArray will be considered for processing the
+	// vector
+	// create index idx on default(name, FLATTEN_ARRAY(v.brand, v.cost VECTOR) for v in brands END, color)
+	// vectorPos == arrayPos == 1 and isFlattenedArray == true and vectorPosInFlattenedArr = 1
+	vectorPos int
+
+	// If `isVectorInFlattenedArray` is set to true, then `vectorPosInFlattenedArray`
+	// captures the relative position of the VECTOR field inside the flattened
+	// array
+	vectorPosInFlattenedArray int
+
+	// `dimension` represents the vector dimension with which the index has been
+	// created
+	dimension int
+
+	// For BHIVE indexes, the expresses to be evaluated for include columns
+	include []interface{}
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -128,9 +168,14 @@ func NewIndexEvaluator(
 	var err error
 
 	ie := &IndexEvaluator{
-		keyspaceId: keyspaceId,
-		instance:   instance,
-		version:    version,
+		keyspaceId:                keyspaceId,
+		instance:                  instance,
+		version:                   version,
+		arrayPos:                  -1,
+		isArrayFlattened:          false,
+		isVectorIndex:             false,
+		vectorPos:                 -1,
+		vectorPosInFlattenedArray: -1,
 	}
 
 	// compile expressions once and reuse it many times.
@@ -150,11 +195,16 @@ func NewIndexEvaluator(
 			return nil, err
 		}
 
-		for _, skExpr := range ie.skExprs {
+		flattenedArrayPos := 0
+		for pos, skExpr := range ie.skExprs {
 			expr := skExpr.(qexpr.Expression)
 			isArray, _, isFlattened := expr.IsArrayIndexKey()
+			if isArray {
+				ie.arrayPos = pos
+			}
 			if isArray && isFlattened {
 				// Populate numFlattenKeys and break
+				ie.isArrayFlattened = isFlattened
 				ie.numFlattenKeys = expr.(*qexpr.All).FlattenSize()
 				break
 			}
@@ -184,6 +234,49 @@ func NewIndexEvaluator(
 		}
 		_, xattrNames, _ := qu.GetXATTRNames(xattrExprs)
 		ie.xattrs = xattrNames
+
+		// Vector index related information
+		hasVectorAttr := defn.GetHasVectorAttr()
+
+		// Check if any secondary field or expression has VECTOR attribute
+		for i := range hasVectorAttr {
+			if hasVectorAttr[i] {
+				ie.isVectorIndex = true
+
+				if ie.isArrayFlattened {
+					flattenedArrayPos = ie.arrayPos
+					if i < flattenedArrayPos {
+						ie.vectorPos = i
+					} else if i >= flattenedArrayPos && i < flattenedArrayPos+ie.numFlattenKeys {
+						ie.vectorPos = flattenedArrayPos
+						ie.vectorPosInFlattenedArray = i - flattenedArrayPos
+					} else {
+						ie.vectorPos = i - ie.numFlattenKeys + 1
+					}
+				} else {
+					ie.vectorPos = i
+				}
+				break
+			}
+		}
+
+		// Expected dimension of vectors in incoming document
+		ie.dimension = int(defn.GetDimension())
+
+		// Secondary fields or expressions for include columns
+		include := defn.GetInclude()
+		if len(include) > 0 {
+			includeExprs, err := CompileN1QLExpression(include)
+			if err != nil {
+				return nil, err
+			} else if len(includeExprs) > 0 {
+				ie.include = includeExprs
+			}
+		}
+
+		logging.Infof("NewIndexEvaluator: InstId: %v, isVectorIndex: %v, vectorPos: %v, arrayPos: %v, "+
+			"vectorPosInFlattenedArray: %v, dimension: %v, include: %v", ie.instance.InstId, ie.isVectorIndex,
+			ie.vectorPos, ie.arrayPos, ie.vectorPosInFlattenedArray, ie.dimension, ie.include)
 
 	default:
 		logging.Errorf("invalid expression type %v\n", exprtype)
