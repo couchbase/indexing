@@ -4147,6 +4147,34 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"projector.log_dir": ConfigValue{
+		"",
+		"Projector log directory",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.statsLogFname": ConfigValue{
+		"projector_stats.log",
+		"Name of the log file to log projector stats.",
+		"projector_stats.log",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.statsLogFcount": ConfigValue{
+		10,
+		"Number of log files (for log rotation) to log projector stats.",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.statsLogFsize": ConfigValue{
+		32 * 1024 * 1024,
+		"Size of one log file to log projector stats.",
+		32 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

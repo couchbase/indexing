@@ -207,3 +207,5 @@ const (
 	RebalanceTask TaskType = iota
 	PauseResumeTask
 )
+
+const STAT_LOG_TS_FORMAT = "2006-01-02T15:04:05.000-07:00"

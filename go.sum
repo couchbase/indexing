@@ -111,6 +111,8 @@ github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e h1:xRaK/0Xonv
 github.com/couchbase/goforestdb v0.0.0-20161215171854-0b501227de0e/go.mod h1:QrrCwm7zmrkx0PXqGue29VBMbBo3DAQ3oAGamrrUAkQ=
 github.com/couchbase/logstats v0.0.0-20220303011129-24ba9753289f h1:gPlMn2WJFDREm2cSOpkBzKn4SVAfqKeF2YSHckbFLc0=
 github.com/couchbase/logstats v0.0.0-20220303011129-24ba9753289f/go.mod h1:p/jovd/oa3G6iTHvebYyzTYR1D0j5O7RAj3fxJPWVOI=
+github.com/couchbase/logstats v1.0.0 h1:zhfu1kyBfvdBk5y+8VRPRnpdVivwXAI/DsBGqbeYiu0=
+github.com/couchbase/logstats v1.0.0/go.mod h1:S+drFV9YF6dSqFaj54vmsNqe3xvelFwz7EVw0vPSfR4=
 github.com/couchbase/tools-common/cloud v1.0.0 h1:SQZIccXoedbrThehc/r9BJbpi/JhwJ8X00PDjZ2gEBE=
 github.com/couchbase/tools-common/cloud v1.0.0/go.mod h1:6KVlRpbcnDWrvickUJ+xpqCWx1vgYYlEli/zL4xmZAg=
 github.com/couchbase/tools-common/core v1.0.0 h1:pHz0xN+qhAd/OchSDPQKsZvIulJzFoLK95RVPLbeEBY=

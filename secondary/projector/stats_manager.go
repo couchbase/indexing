@@ -2,6 +2,7 @@ package projector
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -13,12 +14,15 @@ import (
 	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/projector/memmanager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/couchbase/logstats/logstats"
 )
 
-const defaultEvalStatLoggingThreshold = 200
-const defaultStatsLogDumpInterval = 60
-const defaultEvalStatsLogInterval = 300
-const defaultVbseqnosLogInterval = 5 * defaultStatsLogDumpInterval
+const (
+	defaultEvalStatLoggingThreshold = 200
+	defaultStatsLogDumpInterval     = 60
+	defaultEvalStatsLogInterval     = 300
+	defaultVbseqnosLogInterval      = 5 * defaultStatsLogDumpInterval
+)
 
 const (
 	UPDATE_STATS_MAP byte = iota + 1
@@ -181,6 +185,7 @@ type statsManager struct {
 	evalStatLoggingThreshold int64
 	lastStatTime             time.Time
 	config                   common.ConfigHolder
+	statLogger               logstats.LogStats
 }
 
 func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.Config) *statsManager {
@@ -221,6 +226,17 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 	logging.Infof("StatsManager: eval stats logging threshold set to: %v microseconds", atomic.LoadInt64(&sm.evalStatLoggingThreshold))
 
 	sm.config.Store(config)
+
+	err := sm.setupLogStatsLogger()
+	if err != nil {
+		logging.Fatalf("StatsManager: failed to setup stats logger with err %v", err)
+		common.CrashOnError(err)
+	}
+
+	if sm.statLogger != nil {
+		logstats.SetGlobalStatLogger(sm.statLogger)
+	}
+
 	go sm.run()
 	go sm.logger()
 	return sm
@@ -253,7 +269,7 @@ func (sm *statsManager) run() {
 
 func (sm *statsManager) logger() {
 	for {
-		//Get the projector stats
+		// Get the projector stats
 		ps := sm.stats.Get()
 		if ps != nil {
 			now := time.Now().UnixNano()
@@ -444,4 +460,30 @@ func Accmulate(wrkr []interface{}) string {
 	}
 	return fmt.Sprintf(
 		"{\"datachLen\":%v,\"outgoingMut\":%v,\"updateSeqno\":%v,\"txnSystemMut\":%v}", dataChLen, outgoingMut, updateSeqno, txnSystemMut)
+}
+
+func (sm *statsManager) setupLogStatsLogger() error {
+	config := sm.config.Load()
+
+	logDir := config["projector.log_dir"].String()
+	if len(logDir) == 0 {
+		return nil
+	}
+
+	filename := config["projector.statsLogFname"].String()
+
+	filefullpath := filepath.Join(logDir, filename)
+
+	numfiles := config["projector.statsLogFcount"].Int()
+	sizelimit := config["projector.statsLogFsize"].Int()
+
+	var err error
+
+	sm.statLogger, err = logstats.NewDedupeLogStats(
+		filefullpath,              // fileName
+		sizelimit,                 // sizeLimit
+		numfiles,                  // numFiles
+		common.STAT_LOG_TS_FORMAT, // tsFormat
+	)
+	return err
 }
