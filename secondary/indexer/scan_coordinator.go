@@ -586,10 +586,9 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
-		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
-		})
+		logging.Errorf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s, instId: %v, partnIds: %v",
+			req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId, req.IndexInstId, req.PartitionIds)
+
 		s.updateErrStats(req, err)
 		if strings.Contains(err.Error(), "Collatejson decode error") {
 			errCount := atomic.AddUint32(&s.numDecodeErrors, 1)
