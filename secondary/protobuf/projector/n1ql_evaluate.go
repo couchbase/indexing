@@ -1,17 +1,25 @@
 package protoProjector
 
 import (
+	"errors"
+	math "math"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/logging"
 
 	qexpr "github.com/couchbase/query/expression"
+	"github.com/couchbase/query/value"
 
 	qparser "github.com/couchbase/query/expression/parser"
 
 	qvalue "github.com/couchbase/query/value"
 )
+
+var ErrInvalidVectorType = errors.New("The value of a VECTOR expression is expected to be an array of floats. Found non-array type")
+var ErrInvalidVectorDimension = errors.New("Length of VECTOR in incoming document is different from the expected dimension")
+var ErrHeterogenousVectorData = errors.New("All entries of a vector are expected to be floating point numbers. Found other data types")
+var ErrDataOutOfBounds = errors.New("Value of the vector exceeds float32 range")
 
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
 // and compile them for evaluation.
@@ -250,4 +258,34 @@ func isArrayMissing(array qvalue.Values) bool {
 
 func isArrayNull(array qvalue.Values) bool {
 	return (len(array) == 1 && array[0].Type() == qvalue.NULL)
+}
+
+func validateVector(vector qvalue.Value, dimension int) ([]float32, error) {
+	if vector.Type() != qvalue.ARRAY {
+		return nil, ErrInvalidVectorType
+	}
+
+	// [VECTOR_TODO]: Instead of allocating []float32 everytime, n1QL evalate can use a sync.Pool
+	// object or a local buffer of []float32 to prevent the re-allocation everytime
+	res := make([]float32, dimension)
+
+	for i := 0; ; i++ {
+		v, ok := vector.Index(i)
+		if !ok || i >= dimension {
+			if !ok && i == dimension {
+				return res, nil
+			} else {
+				return nil, ErrInvalidVectorDimension
+			}
+		} else {
+			if v.Type() != value.NUMBER {
+				return nil, ErrHeterogenousVectorData
+			}
+			vf := value.AsNumberValue(v).Float64()
+			if vf < -math.MaxFloat32 || vf > math.MaxFloat32 {
+				return nil, ErrDataOutOfBounds
+			}
+			res[i] = (float32)(vf)
+		}
+	}
 }
