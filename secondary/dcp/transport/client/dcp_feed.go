@@ -21,6 +21,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/logstats/logstats"
 )
 
 const dcpMutationExtraLen = 16
@@ -101,7 +102,8 @@ func NewDcpFeed(
 	mc *Client, name string, outch chan<- *DcpEvent,
 	opaque uint16,
 	supvch chan []interface{},
-	config map[string]interface{}) (*DcpFeed, error) {
+	config map[string]interface{},
+	streamNo int) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
@@ -115,7 +117,7 @@ func NewDcpFeed(
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
 		logPrefix:     fmt.Sprintf("DCPT[%s]", name),
-		stats:         &DcpStats{},
+		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", streamNo)},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
 		closeMutQueue: make(chan bool),
 		dequeueDoneCh: make(chan bool),
@@ -1563,6 +1565,9 @@ type DcpStats struct {
 	IncomingMsg stats.Uint64Val
 
 	mutationQueue *AtomicMutationQueue
+
+	// immutable
+	StreamNo string // stream no. 0/1/2...
 }
 
 func (dcpStats *DcpStats) Init() {
@@ -1645,6 +1650,53 @@ func (stats *DcpStats) String() (string, string) {
 	statsStr := fmt.Sprintf("{%v}", statjson)
 	latencyStr := stats.Dcplatency.MarshallJSON()
 	return statsStr, latencyStr
+}
+
+func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
+	var statMap = make(map[string]interface{}, 28)
+
+	statMap["bytes"] = stats.TotalBytes.Value()
+	statMap["bufferacks"] = stats.TotalBufferAckSent.Value()
+	statMap["toAckBytes"] = stats.ToAckBytes.Value()
+	statMap["streamreqs"] = stats.TotalStreamReq.Value()
+	statMap["snapshots"] = stats.TotalSnapShot.Value()
+	statMap["mutations"] = stats.TotalMutation.Value()
+
+	statMap["collectionCreate"] = stats.CollectionCreate.Value()
+	statMap["collectionDrop"] = stats.CollectionDrop.Value()
+	statMap["collectionFlush"] = stats.CollectionFlush.Value()
+	statMap["scopeCreate"] = stats.ScopeCreate.Value()
+	statMap["scopeDrop"] = stats.ScopeDrop.Value()
+	statMap["collectionChanged"] = stats.CollectionChanged.Value()
+	statMap["seqnoAdvanced"] = stats.SeqnoAdvanced.Value()
+	statMap["osoSnapshotStart"] = stats.OsoSnapshotStart.Value()
+	statMap["osoSnapshotEnd"] = stats.OsoSnapshotEnd.Value()
+
+	statMap["streamends"] = stats.TotalStreamEnd.Value()
+	statMap["closestreams"] = stats.TotalCloseStream.Value()
+	if stats.LastAckTime.Value() != 0 {
+		statMap["lastAckTime"] = logstats.NewTimestamp(time.Unix(0, stats.LastAckTime.Value()))
+	}
+	if stats.LastNoopSend.Value() != 0 {
+		statMap["lastNoopSend"] = logstats.NewTimestamp(time.Unix(0, stats.LastNoopSend.Value()))
+	}
+	if stats.LastNoopRecv.Value() != 0 {
+		statMap["lastNoopRecv"] = logstats.NewTimestamp(time.Unix(0, stats.LastNoopRecv.Value()))
+	}
+	if stats.LastMsgSend.Value() != 0 {
+		statMap["lastMsgSend"] = logstats.NewTimestamp(time.Unix(0, stats.LastMsgSend.Value()))
+	}
+	if stats.LastMsgRecv.Value() != 0 {
+		statMap["lastMsgRecv"] = logstats.NewTimestamp(time.Unix(0, stats.LastMsgRecv.Value()))
+	}
+	statMap["rcvchLen"] = (uint64)(len(stats.rcvch))
+	statMap["incomingMsg"] = stats.IncomingMsg.Value()
+	statMap["queuedItems"] = uint64(stats.mutationQueue.GetItems())
+	statMap["queueSize"] = uint64(stats.mutationQueue.GetSize())
+	statMap["totalEnq"] = uint64(stats.mutationQueue.GetTotalEnq())
+	statMap["totalDeq"] = uint64(stats.mutationQueue.GetTotalDeq())
+
+	return statMap, stats.Dcplatency.Json()
 }
 
 func (feed *DcpFeed) logStats() {

@@ -84,7 +84,7 @@ func (b *Bucket) GetFailoverLogs(
 		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, uuid))
 		flags := uint32(0x0)
 		singleFeed, err := serverConn.StartDcpFeed(
-			name, 0, flags, nil, opaque, nil, config)
+			name, 0, flags, nil, opaque, nil, config, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -126,6 +126,8 @@ type DcpFeed struct {
 	// config
 	numConnections int
 	activeVbOnly   bool
+
+	StreamUuid uint64 // stream UUID - used for logging
 }
 
 // StartDcpFeed creates and starts a new Dcp feed.
@@ -134,9 +136,10 @@ type DcpFeed struct {
 func (b *Bucket) StartDcpFeed(
 	name DcpFeedName, sequence, flags uint32,
 	opaque uint16,
-	config map[string]interface{}) (*DcpFeed, error) {
+	config map[string]interface{},
+	streamUuid uint64) (*DcpFeed, error) {
 
-	return b.StartDcpFeedOver(name, sequence, flags, nil, opaque, config)
+	return b.StartDcpFeedOver(name, sequence, flags, nil, opaque, config, streamUuid)
 }
 
 // StartDcpFeedOver creates and starts a new Dcp feed.
@@ -146,31 +149,34 @@ func (b *Bucket) StartDcpFeed(
 // pass `kvaddrs` as nil
 //
 // configuration parameters,
-//      "genChanSize", buffer channel size for control path.
-//      "dataChanSize", buffer channel size for data path.
-//      "numConnections", number of connections with DCP for local vbuckets.
+//
+//	"genChanSize", buffer channel size for control path.
+//	"dataChanSize", buffer channel size for data path.
+//	"numConnections", number of connections with DCP for local vbuckets.
 func (b *Bucket) StartDcpFeedOver(
 	name DcpFeedName,
 	sequence, flags uint32,
 	kvaddrs []string,
 	opaque uint16,
-	config map[string]interface{}) (*DcpFeed, error) {
+	config map[string]interface{},
+	streamUuid uint64) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
 	feed := &DcpFeed{
-		bucket:    b,
-		kvaddrs:   kvaddrs,
-		nodeFeeds: make(map[string][]*FeedInfo),
-		output:    make(chan *memcached.DcpEvent, dataChanSize),
-		name:      name,
-		sequence:  sequence,
-		opaque:    opaque,
-		flags:     flags,
-		reqch:     make(chan []interface{}, genChanSize),
-		finch:     make(chan bool),
-		config:    copyconfig(config),
-		logPrefix: fmt.Sprintf("DCP[%v]", name),
+		bucket:     b,
+		kvaddrs:    kvaddrs,
+		nodeFeeds:  make(map[string][]*FeedInfo),
+		output:     make(chan *memcached.DcpEvent, dataChanSize),
+		name:       name,
+		sequence:   sequence,
+		opaque:     opaque,
+		flags:      flags,
+		reqch:      make(chan []interface{}, genChanSize),
+		finch:      make(chan bool),
+		config:     copyconfig(config),
+		logPrefix:  fmt.Sprintf("DCP[%v]", name),
+		StreamUuid: streamUuid,
 	}
 	feed.numConnections = config["numConnections"].(int)
 	feed.activeVbOnly = config["activeVbOnly"].(bool)
@@ -381,7 +387,9 @@ func (feed *DcpFeed) connectToNodes(
 		for i := 0; i < feed.numConnections; i++ {
 			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
 			singleFeed, err := serverConn.StartDcpFeed(
-				feedname, feed.sequence, flags, feed.output, opaque, feed.reqch, config)
+				feedname, feed.sequence, flags, feed.output,
+				opaque, feed.reqch, config, i,
+			)
 			if err != nil {
 				for _, singleFeed := range nodeFeeds {
 					singleFeed.dcpFeed.Close()
@@ -425,7 +433,9 @@ func (feed *DcpFeed) reConnectToNodes(
 			}
 			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
 			singleFeed, err := serverConn.StartDcpFeed(
-				feedname, feed.sequence, flags, feed.output, opaque, feed.reqch, config)
+				feedname, feed.sequence, flags, feed.output,
+				opaque, feed.reqch, config, i,
+			)
 			if err != nil {
 				fmsg := "%v ##%x DcpFeed::reConnectToNodes StartDcpFeed failed for %v with err %v\n"
 				logging.Errorf(fmsg, feed.logPrefix, opaque, feedname, err)

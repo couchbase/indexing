@@ -1,8 +1,10 @@
 package projector
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -38,7 +40,8 @@ type KeyspaceIdStats struct {
 
 	// Key -> Log prefix of DCP Feed
 	// Value -> Pointer to stats object of DCP feed
-	dcpStats map[string]interface{}
+	dcpStats     map[string]interface{}
+	dcpLogPrefix string // logPrefix for dedupLogger
 
 	// Key -> Log prefix of KVData
 	// Value -> Pointer to stats object KVData
@@ -71,6 +74,7 @@ func (ks *KeyspaceIdStats) clone() *KeyspaceIdStats {
 			cks.dcpStats[key] = value
 		}
 	}
+	cks.dcpLogPrefix = ks.dcpLogPrefix
 
 	for key, value := range ks.kvstats {
 		if value != nil {
@@ -297,7 +301,7 @@ func (sm *statsManager) logger() {
 				for _, keyspaceIdStats := range feedStats.keyspaceIdStats {
 					kvdataClosed := false
 					if logStats {
-						sm.doLogDcpStats(keyspaceIdStats.dcpStats)
+						sm.doLogDcpStats(keyspaceIdStats.dcpStats, keyspaceIdStats.dcpLogPrefix)
 
 						kvdataClosed = sm.doLogKvStats(keyspaceIdStats.kvstats, logVbsenos)
 
@@ -328,14 +332,18 @@ func (sm *statsManager) logger() {
 	}
 }
 
-func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}) {
+func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}, logPrefix string) {
+	dcpStatsMap := make(map[string]interface{}, len(dcpStats))
+
 	for key, value := range dcpStats {
 		switch val := value.(type) {
 		case *memcached.DcpStats:
 			if !val.IsClosed() {
-				stats, latency := val.String()
-				logging.Infof("%v dcp latency stats %v", key, latency)
-				logging.Infof("%v stats: %v", key, stats)
+				stats, ltcStats := val.Map()
+				dcpStatsMap[val.StreamNo] = map[string]interface{}{
+					"stats": stats,
+					"ltc":   ltcStats,
+				}
 			} else {
 				logging.Tracef("%v closed", key)
 			}
@@ -344,10 +352,23 @@ func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}) {
 			continue
 		}
 	}
+
+	if len(dcpStatsMap) > 0 {
+		if sm.statLogger != nil {
+			sm.statLogger.Write(logPrefix, dcpStatsMap)
+		} else {
+			dcpStatsStr, err := json.Marshal(dcpStatsMap)
+			if err != nil {
+				logging.Errorf("%v marshal failure err - %v", logPrefix, err)
+				return
+			}
+			logging.Infof("%v stats: %v", logPrefix, string(dcpStatsStr))
+		}
+	}
 }
 
 func (sm *statsManager) doLogKvStats(kvstats map[string]interface{}, logVbSeqNos bool) bool {
-	var kvdataClosed = false
+	kvdataClosed := false
 	for key, value := range kvstats {
 		switch val := (value).(type) {
 		case *KvdataStats:
@@ -385,8 +406,8 @@ func (sm *statsManager) doLogWrkrStats(wrkrStats map[string][]interface{}) {
 }
 
 func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
-	keyspaceId, topic string, opaque uint16) {
-
+	keyspaceId, topic string, opaque uint16,
+) {
 	evalStatLoggingThreshold := atomic.LoadInt64(&sm.evalStatLoggingThreshold) * 1000
 
 	// As of this commit, only IndexEvaluatorStats are supported
@@ -457,14 +478,25 @@ func (sm *statsManager) doLogEndpStats(endpStats map[string]interface{}) {
 }
 
 func (sm *statsManager) doLogProjectorStats() {
-	logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,\"gc_percent\":%v, \"throttle_level\":%v}",
-		memmanager.GetCpuPercent(),
-		memmanager.GetRSS(),
-		memmanager.GetMemFree(),
-		memmanager.GetMemTotal(),
-		memmanager.GetGCPercent(),
-		memThrottler.GetThrottleLevel(),
-	)
+	if sm.statLogger != nil {
+		sm.statLogger.Write("projector", map[string]interface{}{
+			"cpu_util":       strconv.FormatFloat(memmanager.GetCpuPercent(), 'f', 5, 64),
+			"mem_rss":        memmanager.GetRSS(),
+			"mem_free":       memmanager.GetMemFree(),
+			"mem_total":      memmanager.GetMemTotal(),
+			"gc_percent":     memmanager.GetGCPercent(),
+			"throttle_level": uint64(memThrottler.GetThrottleLevel()),
+		})
+	} else {
+		logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,\"gc_percent\":%v, \"throttle_level\":%v}",
+			memmanager.GetCpuPercent(),
+			memmanager.GetRSS(),
+			memmanager.GetMemFree(),
+			memmanager.GetMemTotal(),
+			memmanager.GetGCPercent(),
+			memThrottler.GetThrottleLevel(),
+		)
+	}
 }
 
 func Accmulate(wrkr []interface{}) string {
@@ -504,4 +536,21 @@ func (sm *statsManager) setupLogStatsLogger() error {
 		common.STAT_LOG_TS_FORMAT, // tsFormat
 	)
 	return err
+}
+
+func AccumulateJson(wrkr []interface{}) map[string]interface{} {
+	var dataChLen, outgoingMut, updateSeqno, txnSystemMut uint64
+	for _, stats := range wrkr {
+		wrkrStat := stats.(*WorkerStats)
+		dataChLen += (uint64)(len(wrkrStat.datach))
+		outgoingMut += wrkrStat.outgoingMut.Value()
+		updateSeqno += wrkrStat.updateSeqno.Value()
+		txnSystemMut += wrkrStat.txnSystemMut.Value()
+	}
+	return map[string]interface{}{
+		"dataChLen":   dataChLen,
+		"outMut":      outgoingMut,
+		"updateSeqno": updateSeqno,
+		"txnSysMut":   txnSystemMut,
+	}
 }

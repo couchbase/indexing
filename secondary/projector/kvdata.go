@@ -209,6 +209,69 @@ func (stats *KvdataStats) String() (string, string) {
 	return statsStr, vbseqnos
 }
 
+func (stats *KvdataStats) Map() (map[string]interface{}, []uint64) {
+	var stmap = make(map[string]interface{})
+	var numDocsProcessed, numDocsPending uint64
+	var vbseqnos = make([]uint64, 0, 1024)
+
+	stmap["eventCount"] = strconv.FormatUint(stats.eventCount.Value(), 10)
+	stmap["reqCount"] = strconv.FormatUint(stats.reqCount.Value(), 10)
+	stmap["endCount"] = strconv.FormatUint(stats.endCount.Value(), 10)
+	stmap["snapStat.samples"] = strconv.FormatInt(stats.snapStat.Count(), 10)
+	stmap["snapStat.min"] = strconv.FormatInt(stats.snapStat.Min(), 10)
+	stmap["snapStat.max"] = strconv.FormatInt(stats.snapStat.Max(), 10)
+	stmap["snapStat.avg"] = strconv.FormatInt(stats.snapStat.Mean(), 10)
+	stmap["upsertCount"] = strconv.FormatUint(stats.upsertCount.Value(), 10)
+	stmap["deleteCount"] = strconv.FormatUint(stats.deleteCount.Value(), 10)
+	stmap["exprCount"] = strconv.FormatUint(stats.exprCount.Value(), 10)
+	stmap["ainstCount"] = strconv.FormatUint(stats.ainstCount.Value(), 10)
+	stmap["dinstCount"] = strconv.FormatUint(stats.dinstCount.Value(), 10)
+	stmap["tsCount"] = strconv.FormatUint(stats.tsCount.Value(), 10)
+	stmap["mutChLen"] = strconv.FormatUint((uint64)(len(stats.mutch)), 10)
+
+	stmap["collectionCreate"] = strconv.FormatUint(stats.collectionCreate.Value(), 10)
+	stmap["collectionDrop"] = strconv.FormatUint(stats.collectionDrop.Value(), 10)
+	stmap["collectionFlush"] = strconv.FormatUint(stats.collectionFlush.Value(), 10)
+	stmap["scopeCreate"] = strconv.FormatUint(stats.scopeCreate.Value(), 10)
+	stmap["scopeDrop"] = strconv.FormatUint(stats.scopeDrop.Value(), 10)
+	stmap["collectionChanged"] = strconv.FormatUint(stats.collectionChanged.Value(), 10)
+	stmap["seqnoAdvanced"] = strconv.FormatUint(stats.seqnoAdvanced.Value(), 10)
+	stmap["osoSnapshotStart"] = strconv.FormatUint(stats.osoSnapshotStart.Value(), 10)
+	stmap["osoSnapshotEnd"] = strconv.FormatUint(stats.osoSnapshotEnd.Value(), 10)
+
+	// A copy of vbseqnos is made so that numDocsProcessed can be consistent
+	// with the sum of logged vbseqnos. Also, it helps to compute the numDocsPending
+	// as stats.vbseqnos can move ahead of retrieved bucket seqnos (from getKVTs())
+	// at the time of computation of numDocsPending
+	for i, v := range stats.vbseqnos {
+		stats.vbseqnos_copy[i] = v.Value()
+		vbseqnos = append(vbseqnos, stats.vbseqnos_copy[i])
+		numDocsProcessed += stats.vbseqnos_copy[i]
+	}
+
+	stmap["numDocsProcessed"] = strconv.FormatUint(numDocsProcessed, 10)
+
+	cluster := stats.kvdata.config["clusterAddr"].String()
+	// Get seqnos only for the vbuckets owned by the KV on this node
+	seqnos, err := getKVTs(stats.kvdata.bucket, cluster, stats.kvdata.kvaddr, stats.kvdata.collectionId)
+
+	// numDocsPending is logged only when there is no error in retrieving the bucket seqnos
+	if err == nil {
+		for i, v := range stats.vbseqnos_copy {
+			if seqnos[i] > v { // During a KV rollback, 'seqnos[i]' can become less than 'v'
+				numDocsPending += seqnos[i] - v
+			}
+		}
+		stmap["numDocsPending"] = strconv.FormatUint(numDocsPending, 10)
+	} else {
+		fmsg := "KVDT[<-%v<-%v #%v] ##%x"
+		key := fmt.Sprintf(fmsg, stats.kvdata.bucket, stats.kvdata.feed.cluster, stats.kvdata.topic, stats.kvdata.opaque)
+		logging.Errorf("%v Unable to retrieve bucket sequence numbers, err: %v", key, err)
+	}
+
+	return stmap, vbseqnos
+}
+
 // NewKVData create a new data-path instance.
 func NewKVData(
 	feed *Feed,

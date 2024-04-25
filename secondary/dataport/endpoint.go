@@ -168,6 +168,37 @@ func (stats *EndpointStats) String() string {
 	return fmt.Sprintf("{%v}", statjson)
 }
 
+func (stats *EndpointStats) Map() map[string]interface{} {
+	var stmap = make(map[string]interface{})
+	stmap["mutCount"] = stats.mutCount.Value()
+	stmap["upsertCount"] = stats.upsertCount.Value()
+	stmap["deleteCount"] = stats.deleteCount.Value()
+	stmap["upsdelCount"] = stats.upsdelCount.Value()
+	stmap["syncCount"] = stats.syncCount.Value()
+	stmap["beginCount"] = stats.beginCount.Value()
+	stmap["endCount"] = stats.endCount.Value()
+	stmap["snapCount"] = stats.snapCount.Value()
+	stmap["flushCount"] = stats.flushCount.Value()
+
+	stmap["collectionCreate"] = stats.collectionCreate.Value()
+	stmap["collectionDrop"] = stats.collectionDrop.Value()
+	stmap["collectionFlush"] = stats.collectionFlush.Value()
+	stmap["scopeCreate"] = stats.scopeCreate.Value()
+	stmap["scopeDrop"] = stats.scopeDrop.Value()
+	stmap["collectionChanged"] = stats.collectionChanged.Value()
+	stmap["updateSeqno"] = stats.updateSeqno.Value()
+	stmap["seqnoAdvanced"] = stats.seqnoAdvanced.Value()
+	stmap["osoSnapshotStart"] = stats.osoSnapshotStart.Value()
+	stmap["osoSnapshotEnd"] = stats.osoSnapshotEnd.Value()
+
+	stmap["latency.min"] = stats.prjLatency.Min()
+	stmap["latency.max"] = stats.prjLatency.Max()
+	stmap["latency.avg"] = stats.prjLatency.Mean()
+	stmap["latency.movAvg"] = stats.prjLatency.MovingAvg()
+	stmap["endpChLen"] = uint64(len(stats.endpCh))
+	return stmap
+}
+
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(

@@ -111,3 +111,7 @@ func (s *FakeStream) run(mutch chan *mc.DcpEvent) {
 func (b *FakeBucket) GetStats() map[string]interface{} {
 	return nil
 }
+
+func (b *FakeBucket) GetStreamUuid() uint64 {
+	return 0
+}
