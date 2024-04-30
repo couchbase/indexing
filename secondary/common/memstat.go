@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/logstats/logstats"
 )
 
 var Memstatch = make(chan int64, 16)
@@ -36,6 +37,33 @@ func MemstatLogger(tick int64) {
 		case <-tickTm.C:
 			runtime.ReadMemStats(&ms)
 			PrintMemstats(&ms, PauseNs[:], oldNumGC)
+
+		case tick = <-Memstatch:
+			tickTm.Stop()
+			if tick > 0 {
+				tickTm = time.NewTicker(time.Duration(tick) * time.Millisecond)
+			}
+		}
+	}
+}
+
+func MemstatLogger2(slogger logstats.LogStats, tick int64) {
+	var ms runtime.MemStats
+	var tickTm *time.Ticker
+
+	if tick > 0 {
+		tickTm = time.NewTicker(time.Duration(tick) * time.Millisecond)
+	}
+	logging.Infof("MSAT2 starting with %v tick ...", tick)
+
+	var oldNumGC uint32
+	var PauseNs [256]uint64
+	for {
+		oldNumGC = ms.NumGC
+		select {
+		case <-tickTm.C:
+			runtime.ReadMemStats(&ms)
+			PrintMemstats2(slogger, &ms, PauseNs[:], oldNumGC)
 
 		case tick = <-Memstatch:
 			tickTm.Stop()
@@ -78,4 +106,30 @@ func PrintMemstats(ms *runtime.MemStats, PauseNs []uint64, oldNumGC uint32) {
 		reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
 		ms.NumGC)
 
+}
+
+func PrintMemstats2(slogger logstats.LogStats, ms *runtime.MemStats, PauseNs []uint64, oldNumGC uint32) {
+	var memstats = map[string]interface{}{
+		"Alloc":        ms.Alloc,
+		"TotalAlloc":   ms.TotalAlloc,
+		"Sys":          ms.Sys,
+		"Lookups":      ms.Lookups,
+		"Mallocs":      ms.Mallocs,
+		"Frees":        ms.Frees,
+		"HeapAlloc":    ms.HeapAlloc,
+		"HeapSys":      ms.HeapSys,
+		"HeapIdle":     ms.HeapIdle,
+		"HeapInuse":    ms.HeapInuse,
+		"HeapReleased": ms.HeapReleased,
+		"HeapObjects":  ms.HeapObjects,
+		"MSpanInuse":   ms.MSpanInuse,
+		"MSpanSys":     ms.MSpanSys,
+		"StackInuse":   ms.StackInuse,
+		"GCSys":        ms.GCSys,
+		"LastGC":       ms.LastGC,
+		"PauseTotalNs": ms.PauseTotalNs,
+		"PauseNs":      reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
+		"NumGC":        ms.NumGC,
+	}
+	slogger.Write("memstats", memstats)
 }

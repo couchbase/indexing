@@ -239,10 +239,14 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 
 	if sm.statLogger != nil {
 		logstats.SetGlobalStatLogger(sm.statLogger)
+		go common.MemstatLogger2(sm.statLogger, int64(config["projector.memstatTick"].Int()))
+	} else {
+		go common.MemstatLogger(int64(config["projector.memstatTick"].Int()))
 	}
 
 	go sm.run()
 	go sm.logger()
+
 	return sm
 }
 

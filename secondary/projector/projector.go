@@ -179,7 +179,6 @@ func NewProjector(config c.Config, certFile, keyFile, caFile string) *Projector 
 
 	watchInterval := config["projector.watchInterval"].Int()
 	staleTimeout := config["projector.staleTimeout"].Int()
-	go c.MemstatLogger(int64(config["projector.memstatTick"].Int()))
 	go p.watcherDameon(watchInterval, staleTimeout)
 
 	callb := func(newConfig c.Config) {
