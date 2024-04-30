@@ -373,10 +373,20 @@ func (sm *statsManager) doLogKvStats(kvstats map[string]interface{}, logVbSeqNos
 		switch val := (value).(type) {
 		case *KvdataStats:
 			if !val.IsClosed() {
-				stats, vbseqnos := val.String()
-				logging.Infof("%v stats: %v", key, stats)
+				stats, vbseqnos := val.Map()
 				if logVbSeqNos {
-					logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
+					stats["vbseqnos"] = vbseqnos
+				}
+
+				if sm.statLogger != nil {
+					sm.statLogger.Write(key, stats)
+				} else {
+					var kvStatsStr, err = json.Marshal(kvstats)
+					if err != nil {
+						logging.Errorf("%v marshal failure err - %v", key, err)
+						return false
+					}
+					logging.Infof("%v stats: %v", key, string(kvStatsStr))
 				}
 			} else {
 				kvdataClosed = true
@@ -396,7 +406,11 @@ func (sm *statsManager) doLogWrkrStats(wrkrStats map[string][]interface{}) {
 		switch val := (value[0]).(type) {
 		case *WorkerStats:
 			if !val.IsClosed() {
-				logging.Infof("%v stats: %v", key, Accmulate(value))
+				if sm.statLogger != nil {
+					sm.statLogger.Write(key, AccumulateJson(value))
+				} else {
+					logging.Infof("%v stats: %v", key, Accmulate(value))
+				}
 			}
 		default:
 			logging.Errorf("Unknown worker stats type for %v", key)

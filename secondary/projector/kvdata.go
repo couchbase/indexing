@@ -334,8 +334,8 @@ func NewKVData(
 	kvdata.stats.Init(numVbuckets, kvdata)
 	kvdata.stats.mutch = mutch
 
-	fmsg := "KVDT[<-%v<-%v #%v]"
-	kvdata.logPrefix = fmt.Sprintf(fmsg, keyspaceId, feed.cluster, feed.topic)
+	kvdata.logPrefix = getKvdtLogPrefix(feed.topic, keyspaceId, opaque)
+
 	for uuid, engine := range engines {
 		kvdata.engines[uuid] = engine
 	}
@@ -441,8 +441,7 @@ func (kvdata *KVData) GetKVStats() map[string]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
 	}
-	fmsg := "KVDT[<-%v<-%v #%v] ##%x"
-	key := fmt.Sprintf(fmsg, kvdata.keyspaceId, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	key := getKvdtLogPrefix(kvdata.topic, kvdata.keyspaceId, kvdata.opaque)
 	kvstat := make(map[string]interface{}, 0)
 	kvstat[key] = kvdata.stats
 	return kvstat
@@ -452,8 +451,7 @@ func (kvdata *KVData) GetWorkerStats() map[string][]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
 	}
-	fmsg := "WRKR[<-%v<-%v #%v] ##%x"
-	key := fmt.Sprintf(fmsg, kvdata.keyspaceId, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	key := getWorkerStatPrefix(kvdata.topic, kvdata.keyspaceId, kvdata.opaque)
 	wrkrstat := make(map[string][]interface{}, 0)
 	wrkrstat[key] = kvdata.wrkrStats
 	return wrkrstat
