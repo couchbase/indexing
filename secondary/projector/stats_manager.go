@@ -480,7 +480,11 @@ func (sm *statsManager) doLogEndpStats(endpStats map[string]interface{}) {
 		switch val := value.(type) {
 		case *dataport.EndpointStats:
 			if !val.IsClosed() {
-				logging.Infof("%v stats: %v", key, val.String())
+				if sm.statLogger != nil {
+					sm.statLogger.Write(key, val.Map())
+				} else {
+					logging.Infof("%v stats: %v", key, val.String())
+				}
 			} else {
 				logging.Tracef("%v closed", key)
 			}

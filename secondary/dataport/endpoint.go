@@ -233,9 +233,7 @@ func NewRouterEndpoint(
 	endpoint.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	endpoint.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
-	endpoint.logPrefix = fmt.Sprintf(
-		"ENDP[<-(%v,%4x)<-%v #%v]",
-		endpoint.raddr, uint16(endpoint.timestamp), cluster, topic)
+	endpoint.logPrefix = getEndpLogPrefix(raddr, topic, endpoint.timestamp)
 
 	// Ignore the error in initHostportForAuth, if any.
 	// It will be retried again in doAuth.
@@ -417,9 +415,7 @@ func (endpoint *RouterEndpoint) GetStatistics() map[string]interface{} {
 func (endpoint *RouterEndpoint) GetStats() map[string]interface{} {
 	if atomic.LoadUint32(&endpoint.done) == 0 && endpoint.stats != nil {
 		endpStat := make(map[string]interface{}, 0)
-		key := fmt.Sprintf(
-			"ENDP[<-(%v,%4x)<-%v #%v]",
-			endpoint.raddr, uint16(endpoint.timestamp), endpoint.cluster, endpoint.topic)
+		key := getEndpLogPrefix(endpoint.raddr, endpoint.topic, endpoint.timestamp)
 		endpStat[key] = endpoint.stats
 		return endpStat
 	}
@@ -649,4 +645,13 @@ func (endpoint *RouterEndpoint) newStats() c.Statistics {
 	m := map[string]interface{}{}
 	stats, _ := c.NewStatistics(m)
 	return stats
+}
+
+func getEndpLogPrefix(raddr, topic string, ts int64) string {
+	return strings.Join([]string{
+		"ENDP",
+		raddr,
+		topic,
+		fmt.Sprintf("#%4x", uint16(ts)),
+	}, ":")
 }
