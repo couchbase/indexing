@@ -3548,11 +3548,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.planner.honourNodesInDefn": ConfigValue{
-		false,
+		true,
 		"With index grouping (shard-index affinity) enabled, we may violate resource contraints " +
 			"to honour user provided nodes in index definition. To force enable this resource violation and " +
 			"honour nodes provided in index definition, set this flag to true. This may impact performance",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -4039,7 +4039,7 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.shardCopy.rpc.client.rateControl.adjustRatioMax": ConfigValue{
 		0.75,
-		"Client request rate maximum adjustment factor during rate control."+
+		"Client request rate maximum adjustment factor during rate control." +
 			"We can use this to limit congestion at server",
 		0.75,
 		false,

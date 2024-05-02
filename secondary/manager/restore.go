@@ -1090,7 +1090,7 @@ func (m *RestoreContext) placeIndex(enableShardAffinity bool, binSize uint64) (m
 				}
 			}
 
-			planner.PopulateAlternateShardIds(solution, needsAltIds, binSize)
+			planner.PopulateAlternateShardIds(solution, needsAltIds, binSize, false)
 		}
 	}
 

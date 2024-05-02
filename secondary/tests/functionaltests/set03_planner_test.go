@@ -3071,7 +3071,7 @@ func TestShardAssignmentFuncTestCases(t *testing.T) {
 		}
 		// Test the index-shard assigment function
 		solution := planner.SolutionFromPlan2(plan)
-		planner.PopulateAlternateShardIds(solution, newIndexes, 2560*1024*1024)
+		planner.PopulateAlternateShardIds(solution, newIndexes, 2560*1024*1024, false)
 		// Test validation
 		switch testcase.testId {
 		// For this test, the new index that got created should have non-empty shardIds
