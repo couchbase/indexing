@@ -23,13 +23,13 @@ const WORKER_RECV_QUEUE_LEN = 10000
 const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
 
 // Maintenance Topic Name
-const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
+const MAINT_TOPIC = "MAINT"
 
 // Catchup Topic Name
-const CATCHUP_TOPIC = "CATCHUP_STREAM_TOPIC"
+const CATCHUP_TOPIC = "CATCHUP"
 
 // Initial Stream Topic Name
-const INIT_TOPIC = "INIT_STREAM_TOPIC"
+const INIT_TOPIC = "INIT"
 
 // Default Pool Name
 const DEFAULT_POOL = "default"
