@@ -1,0 +1,207 @@
+{
+	"placement": [
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "af33bb1cf058349f6fafffa6a843a979",
+			"serverGroup": "grp",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 362144000,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"indexes": [
+				{
+					"defnId": 4311133052450780820,
+					"instId": 3660231233502846268,
+					"name": "idx1",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 3660231233502846268,
+						"Defn": {
+							"defnId": 4311133052450780820,
+							"name": "idx1",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`country`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 1
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 1
+					}
+				},
+				{
+					"defnId": 5311133052450780820,
+					"instId": 1660231233502846268,
+					"name": "idx2",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 1660231233502846268,
+						"Defn": {
+							"defnId": 5311133052450780820,
+							"name": "idx2",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`name`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 1
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 1
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "929bb73f8aaeb55422bdc071cf2dfbfc",
+			"serverGroup": "grp",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 262144000,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"indexes": [
+				{
+					"defnId": 1811133052450780820,
+					"instId": 1260231233502846268,
+					"name": "idx3",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 1260231233502846268,
+						"Defn": {
+							"defnId": 1811133052450780820,
+							"name": "idx3",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`id`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 1
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 1
+					}
+				},
+				{
+					"defnId": 7211133052450780820,
+					"instId": 4960231233502846268,
+					"name": "idx4",
+					"bucket": "default",
+					"isMOI": true,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 0,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 0,
+					"actualMemOverhead": 0,
+					"actualKeySize": 0,
+					"instance": {
+						"InstId": 4960231233502846268,
+						"Defn": {
+							"defnId": 7211133052450780820,
+							"name": "idx4",
+							"using": "plasma",
+							"bucket": "default",
+							"bucketUUID": "d5a05fdae23248b6f9cf2b23e02df5ea",
+							"secExprs": [
+								"`age`"
+							],
+							"exprType": "N1QL",
+							"partitionScheme": "SINGLE",
+							"numReplica": 1
+						},
+						"State": 4,
+						"RState": 0,
+						"Stream": 1,
+						"Pc": null,
+						"Error": "",
+						"BuildTs": null,
+						"Version": 0,
+						"ReplicaId": 1
+					}
+				}
+			]
+		}
+	],
+	"memQuota": 524288000,
+	"cpuQuota": 8,
+	"isLive": true
+}
