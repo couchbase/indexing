@@ -147,14 +147,15 @@ func InitSecurityContext(logger ConsoleLogger, localhost string, certFile, keyFi
 		emptyMap2 := make(map[string]bool, 0)
 		atomic.StorePointer(&pSecurityContext.encryptPorts, unsafe.Pointer(&emptyMap2))
 
-		cbauth.RegisterConfigRefreshCallback(pSecurityContext.refresh)
-
-		<-pSecurityContext.initializedCh
-
-		logging.Infof("security context:  encryptLocalHost %v Local IP's: %v", encryptLocalHost, ips)
 	})
 
 	return
+}
+
+func WaitForSecurityCtxInit() {
+	<-pSecurityContext.initializedCh
+	logging.Infof("tls_setting: security context - encryptLocalHost %v Local IP's: %v",
+		pSecurityContext.encryptLocalHost, pSecurityContext.localhosts)
 }
 
 func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) (err error) {
@@ -321,16 +322,19 @@ func (p *SecurityContext) initialized() bool {
 
 func (p *SecurityContext) setInitialized() {
 	atomic.StoreInt32(&pSecurityContext.isInitialized, 1)
-	logging.Infof("security context initialized")
+	logging.Infof("tls_setting: security context initialized")
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // Handle Security Change
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
+func SecurityConfigRefresh(code uint64) error {
+	return pSecurityContext.refresh(code)
+}
 
 func (p *SecurityContext) refresh(code uint64) error {
 
-	logging.Infof("Receive security change notification. code %v", code)
+	logging.Infof("tls_setting: receive security change notification. code %v", code)
 
 	newSetting := &SecuritySetting{}
 
@@ -371,7 +375,7 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) 
 	UpdateSecuritySetting(newSetting)
 
 	if !refreshEncrypt && !refreshCert {
-		logging.Infof("encryption is not enabled or no certificate refresh.   Do not notify security change")
+		logging.Infof("tls_setting: encryption is not enabled or no certificate refresh. Do not notify security change")
 		return nil
 	}
 
@@ -379,7 +383,7 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) 
 	defer p.mutex.RUnlock()
 
 	for key, notifier := range p.notifiers {
-		logging.Infof("Notify security setting change for %v", key)
+		logging.Infof("tls_setting: notify security setting change for %v", key)
 		if err := notifier(refreshCert, refreshEncrypt); err != nil {
 			err1 := fmt.Errorf("Fail to refresh security setting for %v: %v", key, err)
 			if p.logger != nil {
@@ -393,6 +397,8 @@ func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) 
 		close(p.initializedCh)
 	})
 
+	logging.Infof("tls_setting: updated notifiers on security change")
+
 	return nil
 }
 
@@ -400,7 +406,7 @@ func (p *SecurityContext) refreshConfig(setting *SecuritySetting) error {
 
 	newConfig, err := cbauth.GetTLSConfig()
 	if err != nil {
-		err1 := fmt.Errorf("Fail to refresh TLSConfig due to error: %v", err)
+		err1 := fmt.Errorf("tls_setting: Fail to refresh TLSConfig due to error: %v", err)
 		if p.logger != nil {
 			p.logger(err1)
 		}
@@ -410,7 +416,7 @@ func (p *SecurityContext) refreshConfig(setting *SecuritySetting) error {
 
 	setting.tlsPreference = &newConfig
 
-	logging.Infof("TLS config refreshed successfully")
+	logging.Infof("tls_setting: TLS config refreshed successfully")
 
 	return nil
 }
@@ -418,7 +424,7 @@ func (p *SecurityContext) refreshConfig(setting *SecuritySetting) error {
 func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting *SecuritySetting) error {
 
 	if len(certFile) == 0 || len(keyFile) == 0 {
-		logging.Warnf("certifcate location is missing.  Cannot refresh certifcate")
+		logging.Warnf("tls_setting: certifcate location is missing.  Cannot refresh certifcate")
 		return nil
 	}
 
@@ -466,7 +472,7 @@ func (p *SecurityContext) refreshCert(certFile, keyFile, caFile string, setting 
 		setting.certificate = &cert
 	}
 
-	logging.Infof("Certificate refreshed successfully with certFile %v, keyFile %v, caFile %v", certFile, keyFile, caFile)
+	logging.Infof("tls_setting: certificate refreshed successfully with certFile %v, keyFile %v, caFile %v", certFile, keyFile, caFile)
 
 	return nil
 }
@@ -486,7 +492,7 @@ func (p *SecurityContext) refreshEncryption(setting *SecuritySetting) error {
 	setting.encryptionEnabled = cfg.EncryptData
 	setting.disableNonSSLPort = cfg.DisableNonSSLPorts
 
-	logging.Infof("Encryption config refresh successfully.   Encryption enabled=%v", setting.encryptionEnabled)
+	logging.Infof("tls_setting: encryption config refresh successfully. encryption enabled=%v", setting.encryptionEnabled)
 
 	return nil
 }

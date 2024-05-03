@@ -23,6 +23,7 @@ import (
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/cbauthutil"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/logging/systemevent"
@@ -150,8 +151,31 @@ func NewProjector(config c.Config, certFile, keyFile, caFile string) *Projector 
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
 	encryptLocalHost := config["security.encryption.encryptLocalhost"].Bool()
-	if err := p.initSecurityContext(encryptLocalHost); err != nil {
-		c.CrashOnError(fmt.Errorf("Fail to initialize security context: %v", err))
+	err = func() error {
+		e := p.initSecurityContext(encryptLocalHost)
+		if e != nil {
+			return fmt.Errorf("Fail to initialize security context: %v", e)
+		}
+
+		e = cbauthutil.RegisterConfigRefreshCallback()
+		if e != nil {
+			return fmt.Errorf("Fail to register config refresh callback: %v", e)
+		}
+
+		e = p.registerSecurityCallback()
+		if e != nil {
+			return fmt.Errorf("Fail to register security callback: %v", e)
+		}
+
+		e = refreshSecurityContextOnTopology(p.clusterAddr)
+		if e != nil {
+			return fmt.Errorf("Fail to refresh security context: %v", e)
+		}
+
+		return nil
+	}()
+	if err != nil {
+		c.CrashOnError(err)
 	}
 
 	// Initialize auditing
@@ -1155,9 +1179,15 @@ func requestRead(r io.Reader, data []byte) (err error) {
 func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 
 	logger := func(err error) { c.Console(p.clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, p.clusterAddr, p.certFile, p.keyFile, p.caFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, p.clusterAddr, p.certFile, p.keyFile,
+		p.caFile, encryptLocalHost); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (p *Projector) registerSecurityCallback() error {
+	security.WaitForSecurityCtxInit()
 
 	fn := func(refreshCert bool, refreshEncrypt bool) error {
 		select {
@@ -1181,10 +1211,6 @@ func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 	}
 
 	security.RegisterCallback("projector", fn)
-
-	if err := refreshSecurityContextOnTopology(p.clusterAddr); err != nil {
-		return err
-	}
 
 	return nil
 }

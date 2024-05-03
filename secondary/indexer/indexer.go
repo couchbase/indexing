@@ -33,6 +33,7 @@ import (
 	"github.com/couchbase/indexing/secondary/audit"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/cbauthutil"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/iowrap"
@@ -416,7 +417,29 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//Initialize security context
 	encryptLocalHost := config["security.encryption.encryptLocalhost"].Bool()
-	err = idx.initSecurityContext(encryptLocalHost)
+	err = func() error {
+		e := idx.initSecurityContext(encryptLocalHost)
+		if e != nil {
+			return e
+		}
+
+		e = cbauthutil.RegisterConfigRefreshCallback()
+		if e != nil {
+			return e
+		}
+
+		e = idx.registerSecurityCallback()
+		if e != nil {
+			return e
+		}
+
+		e = idx.refreshSecurityContextOnTopology(clusterAddr)
+		if e != nil {
+			return e
+		}
+
+		return nil
+	}()
 	if err != nil {
 		idxErr := Error{
 			code:     ERROR_INDEXER_INTERNAL_ERROR,
@@ -620,9 +643,16 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 	caFile := idx.config["caFile"].String()
 	clusterAddr := idx.config["clusterAddr"].String()
 	logger := func(err error) { common.Console(clusterAddr, err.Error()) }
-	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, caFile, encryptLocalHost); err != nil {
+	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile,
+		caFile, encryptLocalHost); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (idx *indexer) registerSecurityCallback() error {
+
+	security.WaitForSecurityCtxInit()
 
 	fn := func(refreshCert bool, refreshEncrypt bool) error {
 		select {
@@ -642,10 +672,6 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 	}
 
 	security.RegisterCallback("indexer", fn)
-
-	if err := idx.refreshSecurityContextOnTopology(clusterAddr); err != nil {
-		return err
-	}
 
 	return nil
 }
