@@ -92,7 +92,7 @@ func main() {
 			os.Exit(1)
 		}
 		if *useTls {
-			querycmd.InitSecurityContext(*cluster, "", "", "", *caCert, true)
+			querycmd.InitToolsSecurityContext(*cluster, "", "", "", *caCert, true)
 		}
 	}
 
