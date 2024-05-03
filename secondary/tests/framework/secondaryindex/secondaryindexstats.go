@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/couchbase/cbauth/metakv"
 	c "github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	manager "github.com/couchbase/indexing/secondary/manager"
@@ -338,6 +339,60 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 	return nil
 }
 
+func doRetriedSettingChangeWithValidation(configs map[string]interface{}, req *http.Request) error {
+	var client = http.Client{}
+	var body []byte
+
+	return c.NewRetryHelper(8, 1*time.Millisecond, 2, func(attempt int, lastError error) error {
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		body, err = ioutil.ReadAll(resp.Body)
+		if resp.StatusCode != 200 && err == nil {
+			return fmt.Errorf("indexer returned error code %v with body %v", resp.Status, string(body))
+		} else if err != nil {
+			log.Printf("WARN failed to read resp body on %v with error %v", req.URL, err)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		time.Sleep(200 * time.Millisecond)
+
+		var metakvConfigBytes []byte
+		metakvConfigBytes, _, err = metakv.Get(c.IndexingSettingsMetaPath)
+
+		if err != nil {
+			log.Printf("WARN metakv get fail error %v", err)
+			return err
+		}
+
+		var metakvConfig = c.SystemConfig
+		if err = metakvConfig.Update(metakvConfigBytes); err != nil {
+			log.Printf("WARN update fail err - %v mkcb - %v", err, metakvConfigBytes)
+			return err
+		}
+
+		for k, v := range configs {
+			metaV, ok := metakvConfig[k]
+			if !ok {
+				return fmt.Errorf("config %v value does not match; expected %v actual N/A", k, v)
+			} else if metaV.Value != v {
+				return fmt.Errorf("config %v value does not match; expected %v (%T) actual %v (%T)", k, v, v, metaV.Value, metaV.Value)
+			}
+		}
+
+		if attempt != 0 {
+			log.Printf("all configs changed successfully")
+		}
+
+		return nil
+	}).Run()
+}
+
 func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserName, serverPassword, hostaddress string) error {
 
 	// Wait for some time to prevent the possibility of golang
@@ -346,8 +401,6 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 	if len(addr) == 0 {
 		return fmt.Errorf("failed to get indexer port for node %v", hostaddress)
 	}
-
-	client := http.Client{}
 
 	if len(configs) > 0 {
 		jbody := make(map[string]interface{})
@@ -374,37 +427,9 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 			preq, _ := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
 			preq.SetBasicAuth(serverUserName, serverPassword)
 
-			resp, err := client.Do(preq)
-			if err != nil {
+			if err = doRetriedSettingChangeWithValidation(jbody, preq); err != nil {
 				return err
 			}
-			defer resp.Body.Close()
-			ioutil.ReadAll(resp.Body)
-
-			err = c.NewRetryHelper(8, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
-				var metakvConfigBytes []byte
-				_, err = c.MetakvBigValueGet(c.IndexingSettingsMetaPath, metakvConfigBytes)
-
-				if err != nil {
-					return err
-				}
-
-				var metakvConfig c.Config
-				if err = metakvConfig.Update(metakvConfigBytes); err != nil {
-					return err
-				}
-
-				for k, v := range jbody {
-					metaV, ok := metakvConfig[k]
-					if !ok {
-						return fmt.Errorf("config %v value does not match; expected %v actual N/A", k, v)
-					} else if metaV.Value != v {
-						return fmt.Errorf("config %v value does not match; expected %v actual %v", k, v, metaV.Value)
-					}
-				}
-
-				return nil
-			}).Run()
 		}
 
 		if len(jThisNodeBody) > 0 {
@@ -415,17 +440,31 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 			pThisNodeReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(pThisNodeBody))
 			pThisNodeReq.SetBasicAuth(serverUserName, serverPassword)
 
-			respThisNodeOnly, err := client.Do(pThisNodeReq)
-			if err != nil {
-				return err
-			}
-			defer respThisNodeOnly.Body.Close()
-			ioutil.ReadAll(respThisNodeOnly.Body)
+			var client = http.Client{}
+			return c.NewRetryHelper(8, 1*time.Millisecond, 2, func(attempt int, lastError error) error {
+				resp, err := client.Do(pThisNodeReq)
+				if err != nil {
+					return err
+				}
+				defer resp.Body.Close()
+				var body []byte
+				body, err = ioutil.ReadAll(resp.Body)
+				if resp.StatusCode != 200 && err == nil {
+					return fmt.Errorf("indexer returned error code %v with body %v", resp.Status, string(body))
+				} else if err != nil {
+					log.Printf("WARN failed to read resp body on %v with error %v", url, err)
+				}
 
-			err = c.NewRetryHelper(8, 1*time.Millisecond, 2, func(attempt int, lastErr error) error {
+				if err != nil {
+					return err
+				}
+
+				time.Sleep(100 * time.Millisecond)
+
 				pThisNodeGet, _ := http.NewRequest("GET", url, nil)
 				pThisNodeGet.SetBasicAuth(serverUserName, serverPassword)
 
+				var respThisNodeOnly *http.Response
 				respThisNodeOnly, err = client.Do(pThisNodeGet)
 				if err != nil {
 					return err
@@ -438,10 +477,12 @@ func ChangeMultipleIndexerSettings(configs map[string]interface{}, serverUserNam
 				if !maps.Equal[map[string]interface{}](config, jThisNodeBody) {
 					return fmt.Errorf("failed to change node setting to %v. Current value is %v", jThisNodeBody, config)
 				}
+
+				if attempt != 0 {
+					log.Printf("all configs changed successfully")
+				}
 				return nil
 			}).Run()
-
-			return err
 		}
 
 	}

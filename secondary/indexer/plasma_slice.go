@@ -454,7 +454,9 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 		// note: server config is set in shard transfer manager during spawn
 		cfg.RPCHttpClientCfg.MaxRetries = int64(slice.sysconf["plasma.shardCopy.maxRetries"].Int())
 		cfg.RPCHttpClientCfg.MaxPartSize = int64(slice.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+		cfg.RPCHttpClientCfg.MaxParts = int64(slice.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
 		cfg.RPCHttpClientCfg.MemQuota = int64(slice.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
+		cfg.RPCHttpClientCfg.ReqTimeOut = time.Duration(slice.sysconf["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
 		cfg.RPCHttpClientCfg.RateAdjInterval = time.Duration(slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
 		cfg.RPCHttpClientCfg.RateAdjMaxRatio = slice.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
 		cfg.RPCHttpClientCfg.Debug = slice.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
@@ -3255,8 +3257,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 	mdb.mainstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-	mdb.mainstore.RPCHttpClientCfg.MaxPartSize = int64(mdb.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+	mdb.mainstore.RPCHttpClientCfg.MaxParts = int64(mdb.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
 	mdb.mainstore.RPCHttpClientCfg.MemQuota = int64(mdb.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
+	mdb.mainstore.RPCHttpClientCfg.ReqTimeOut = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
 	mdb.mainstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
 	mdb.mainstore.RPCHttpClientCfg.RateAdjMaxRatio = mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
 	mdb.mainstore.RPCHttpClientCfg.Debug = mdb.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
@@ -3377,8 +3380,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.AutoTuneFlushBufferDebug = mdb.sysconf["plasma.fbtuner.debug"].Bool()
 
 		mdb.backstore.RPCHttpClientCfg.MaxRetries = int64(mdb.sysconf["plasma.shardCopy.maxRetries"].Int())
-		mdb.backstore.RPCHttpClientCfg.MaxPartSize = int64(mdb.sysconf["plasma.shardCopy.rpc.maxPartSize"].Int())
+		mdb.backstore.RPCHttpClientCfg.MaxParts = int64(mdb.sysconf["plasma.shardCopy.rpc.client.maxParts"].Int())
 		mdb.backstore.RPCHttpClientCfg.MemQuota = int64(mdb.sysconf["plasma.shardCopy.rpc.client.memQuota"].Int())
+		mdb.backstore.RPCHttpClientCfg.ReqTimeOut = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.reqTimeout"].Int()) * time.Second
 		mdb.backstore.RPCHttpClientCfg.RateAdjInterval = time.Duration(mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustInterval"].Int()) * time.Second
 		mdb.backstore.RPCHttpClientCfg.RateAdjMaxRatio = mdb.sysconf["plasma.shardCopy.rpc.client.rateControl.adjustRatioMax"].Float64()
 		mdb.backstore.RPCHttpClientCfg.Debug = mdb.sysconf["plasma.shardCopy.rpc.client.dbg"].Int()
@@ -3422,6 +3426,7 @@ func loadRPCServerConfig(cfg common.Config) plasma.Config {
 		pCfg.RPCHttpServerCfg.MemQuota = int64(cfg["plasma.shardCopy.rpc.server.memQuota"].Int())
 		pCfg.RPCHttpServerCfg.ReadTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.readTimeout"].Int()) * time.Second
 		pCfg.RPCHttpServerCfg.WriteTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.writeTimeout"].Int()) * time.Second
+		pCfg.RPCHttpServerCfg.ChanTimeOut = time.Duration(cfg["plasma.shardCopy.rpc.server.channelTimeout"].Int()) * time.Second
 		pCfg.RPCHttpServerCfg.RateControl = cfg["plasma.shardCopy.rpc.server.rateControl"].Bool()
 		pCfg.RPCHttpServerCfg.LowMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.lowMemRatio"].Float64()
 		pCfg.RPCHttpServerCfg.HighMemRatio = cfg["plasma.shardCopy.rpc.server.rateControl.highMemRatio"].Float64()

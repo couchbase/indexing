@@ -54,9 +54,11 @@ func InitClusterFromREST() error {
 		if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, options.Nodes[1], "index", "Group 2"); err != nil {
 			return err
 		}
-		time.Sleep(100 * time.Millisecond)
-		if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, options.Nodes[2], "index", "Group 1"); err != nil {
-			return err
+		if options.numNodes > 2 {
+			time.Sleep(100 * time.Millisecond)
+			if err := cluster.AddNodeWithServerGroup(serverAddr, username, password, options.Nodes[2], "index", "Group 1"); err != nil {
+				return err
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 
@@ -68,11 +70,13 @@ func InitClusterFromREST() error {
 		time.Sleep(1 * time.Second)
 		status = getClusterStatus()
 		log.Printf("Cluster status: %v", status)
-		if cluster.IsNodeIndex(status, options.Nodes[1]) && cluster.IsNodeIndex(status, options.Nodes[2]) {
+		if cluster.IsNodeIndex(status, options.Nodes[1]) && (options.numNodes <= 2 || cluster.IsNodeIndex(status, options.Nodes[2])) {
 			// The IP address of Nodes[0] can get renamed. Until we figure out
 			// how to disable the re-naming (like --dont-rename in cluster_connect)
 			delete(status, options.Nodes[1])
-			delete(status, options.Nodes[2])
+			if options.numNodes > 2 {
+				delete(status, options.Nodes[2])
+			}
 			// ignore the hostname for Nodes[0] and only check for services
 			if len(status) == 1 {
 				kv := false

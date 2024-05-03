@@ -107,6 +107,9 @@ type StreamState struct {
 
 	//used to save numVBuckets
 	streamKeyspaceIdNumVBuckets map[common.StreamId]KeyspaceIdNumVBucketsMap
+
+	//track per stream/keyspaceId first snap flag
+	streamKeyspaceIdAllowMarkFirstSnap map[common.StreamId]KeyspaceIdAllowMarkFirstSnap
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -142,6 +145,7 @@ type KeyspaceIdSessionId map[string]uint64
 type KeyspaceIdEnableOSO map[string]bool
 type KeyspaceIdCollectionId map[string]string
 type KeyspaceIdPastMinMergeTs map[string]bool
+type KeyspaceIdAllowMarkFirstSnap map[string]bool
 
 type KeyspaceIdStreamAsyncMap map[string]bool
 type KeyspaceIdPendingMerge map[string]string //map[bucket][pending_merge_keyspaceId]
@@ -257,6 +261,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdThrottleDebugLogTime:   make(map[common.StreamId]KeyspaceIdThrottleDebugLogTime),
 		streamKeyspaceIdThrottleDuration:       make(map[common.StreamId]KeyspaceIdThrottleDuration),
 		streamKeyspaceIdNumVBuckets:            make(map[common.StreamId]KeyspaceIdNumVBucketsMap),
+		streamKeyspaceIdAllowMarkFirstSnap:     make(map[common.StreamId]KeyspaceIdAllowMarkFirstSnap),
 	}
 
 	return ss
@@ -413,6 +418,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdNumVBucketsMap := make(KeyspaceIdNumVBucketsMap)
 	ss.streamKeyspaceIdNumVBuckets[streamId] = keyspaceIdNumVBucketsMap
 
+	keyspaceIdAllowMarkFirstSnap := make(KeyspaceIdAllowMarkFirstSnap)
+	ss.streamKeyspaceIdAllowMarkFirstSnap[streamId] = keyspaceIdAllowMarkFirstSnap
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -469,6 +477,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdThrottleDebugLogTime[streamId][keyspaceId] = uint64(time.Now().UnixNano())
 	ss.streamKeyspaceIdThrottleDuration[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdNumVBuckets[streamId][keyspaceId] = numVBuckets
+	ss.streamKeyspaceIdAllowMarkFirstSnap[streamId][keyspaceId] = false
 
 	if streamId == common.INIT_STREAM {
 		ss.keyspaceIdPendBuildDebugLogTime[keyspaceId] = uint64(time.Now().UnixNano())
@@ -546,6 +555,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdThrottleDebugLogTime[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdThrottleDuration[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdNumVBuckets[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdAllowMarkFirstSnap[streamId], keyspaceId)
 
 	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {
 		bs[keyspaceId] = STREAM_INACTIVE
@@ -606,6 +616,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdThrottleDebugLogTime, streamId)
 	delete(ss.streamKeyspaceIdThrottleDuration, streamId)
 	delete(ss.streamKeyspaceIdNumVBuckets, streamId)
+	delete(ss.streamKeyspaceIdAllowMarkFirstSnap, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 

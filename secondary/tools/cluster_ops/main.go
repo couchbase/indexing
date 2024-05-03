@@ -96,6 +96,8 @@ func main() {
 	argParse()
 	fmt.Printf("%+v", options)
 
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	if err := InitClusterFromREST(); err != nil {
 		log.Fatalf("Error while initialising cluster, err: %v", err)
 		return

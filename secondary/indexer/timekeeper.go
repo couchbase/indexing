@@ -292,6 +292,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	collectionId := cmd.(*MsgStreamUpdate).GetCollectionId()
 	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
 	numVBuckets := cmd.(*MsgStreamUpdate).GetNumVBuckets()
+	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -323,6 +324,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		tk.ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = sessionId
 		tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId] = collectionId
 		tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = enableOSO
+		tk.ss.streamKeyspaceIdAllowMarkFirstSnap[streamId][keyspaceId] = allowMarkFirsSnap
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, keyspaceId)
 
@@ -2692,10 +2694,40 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 
 	var maintTsSeq, initTsSeq Timestamp
 
-	//if no flush has happened from MAINT_STREAM, it means it is not running.
-	//MAINT_STREAM needs to be started with lastFlushTs of INIT_STREAM
+	//If no flush has happened from MAINT_STREAM, it means it is not running.
+	//MAINT_STREAM needs to be started with lastFlushTs of INIT_STREAM.
+	//However, if MAINT_STREAM is already in ACTIVE state with nil flushTs i.e.
+	//yet to start mutation processing after a rollback to 0, skip merge.
+	//Such merge should only proceed after MAINT_STREAM is done processing first
+	//snap.
 	if maintFlushTs == nil {
-		return true, initFlushTs
+
+		mStatus, ok := tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket]
+		if ok && mStatus == STREAM_ACTIVE {
+			if forceLog || logging.IsEnabled(logging.Verbose) {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge: %v %v "+
+					"maintFlushTs is nil for ACTIVE stream. Skip merge.",
+					streamId, keyspaceId)
+			}
+			return false, nil
+		} else {
+			return true, initFlushTs
+		}
+	}
+
+	//if MAINT_STREAM is using first snap optimization and first snap is being
+	//processed for any vb, then do not allow merge from INIT_STREAM.
+	//During first snap optimization, back index lookups get skipped. This can
+	//lead to duplicate items in the index that merges from INIT_STREAM.
+	allowFirstSnap := tk.ss.streamKeyspaceIdAllowMarkFirstSnap[common.MAINT_STREAM][bucket]
+	if allowFirstSnap && !maintFlushTs.HasProcessedFirstSnap() {
+
+		if forceLog || logging.IsEnabled(logging.Verbose) {
+			logging.Infof("Timekeeper::checkFlushTsValidForMerge: %v %v "+
+				"maintFlushTs not processed first DCP snapshot. Skip merge.",
+				streamId, keyspaceId)
+		}
+		return false, nil
 	}
 
 	//if initFlushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
