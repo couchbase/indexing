@@ -8,7 +8,10 @@ package faiss
 #include <faiss/c_api/IndexIVF_c_ex.h>
 */
 import "C"
-import "fmt"
+import (
+	"fmt"
+	"runtime"
+)
 
 // pass nprobe to be set as index time option for IVF indexes only.
 // varying nprobe impacts recall but with an increase in latency.
@@ -32,30 +35,71 @@ func (idx *IndexImpl) Quantizer() (*IndexImpl, error) {
 	return &IndexImpl{&faissIndex{quantizer}}, nil
 }
 
-//returns the pointer to the quantizer for
-//IVF family indexes only.
-func (idx *IndexImpl) EncodeVectors(x []float32, nsub int, nbits int, nlist int) (
-	codes []uint8, err error) {
+//Compute the quantized code for a given list of vectors.
+//list_no is encoded as part of the code. The code returned
+//from the function can directly be decoded using Decode function.
+func (idx *IndexImpl) CodeSize() (size int, err error) {
 
 	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
 	if ivfPtr == nil {
-		return nil, fmt.Errorf("index is not of ivf type")
+		return 0, fmt.Errorf("index is not of ivf type")
 	}
 
-	//TODO check why this function always returns 0
-	/*
-		var coarse_size C.size_t
-		if c := C.faiss_Index_sa_code_size(
-			ivfPtr,
-			&coarse_size,
-		); c != 0 {
-			err = getLastError()
-		}
+	var code_size C.size_t
+	if c := C.faiss_Index_sa_code_size(
+		ivfPtr,
+		&code_size,
+	); c != 0 {
+		err = getLastError()
+		return 0, err
+	}
 
-		if err != nil {
-			return
-		}
-	*/
+	size = int(code_size)
+	return
+}
+
+//Compute the quantized code for a given list of vectors.
+//list_no is encoded as part of the code. The code returned
+//from the function can directly be decoded using Decode function.
+func (idx *IndexImpl) EncodeVectors(x []float32,
+	codes []byte, nsub int, nbits int, nlist int) (err error) {
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return fmt.Errorf("index is not of ivf type")
+	}
+
+	n := len(x) / idx.D()
+
+	if c := C.faiss_Index_sa_encode(
+		ivfPtr,
+		C.idx_t(n),
+		(*C.float)(&x[0]),
+		(*C.uint8_t)(&codes[0]),
+	); c != 0 {
+		err = getLastError()
+	}
+
+	return
+}
+
+//Compute the quantized code for a given list of vectors.
+//list_no is NOT encoded as part of the code. The code returned
+//from this function cannot be decoded via Decoded. It can be
+//used for direct distance calculations.
+func (idx *IndexImpl) EncodeVectors2(x []float32, codes []byte,
+	nsub int, nbits int, nlist int) (err error) {
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return fmt.Errorf("index is not of ivf type")
+	}
 
 	//compute coarse code size based on nlist
 	coarse_size := func(nlist int) int {
@@ -71,8 +115,6 @@ func (idx *IndexImpl) EncodeVectors(x []float32, nsub int, nbits int, nlist int)
 	n := len(x) / idx.D()
 	//code size is dependent on nbits and nsub
 	code_size := (nbits*nsub + 7) / 8
-	//final encoded code size includes coarse size
-	codes = make([]uint8, n*(code_size+coarse_size))
 	if c := C.faiss_Index_sa_encode(
 		ivfPtr,
 		C.idx_t(n),
@@ -90,7 +132,7 @@ func (idx *IndexImpl) EncodeVectors(x []float32, nsub int, nbits int, nlist int)
 
 //stripCoarseSize is a helper function to strip out the coarse code from
 //the quantized code. This function doesn't allocate a new slice.
-func stripCoarseSize(codes []uint8, code_size, coarse_size int) []uint8 {
+func stripCoarseSize(codes []byte, code_size, coarse_size int) []byte {
 
 	total_size := code_size + coarse_size
 

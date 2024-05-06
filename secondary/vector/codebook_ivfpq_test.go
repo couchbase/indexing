@@ -27,7 +27,8 @@ func TestCodebookIVFPQ(t *testing.T) {
 	vecs := genRandomVecs(dim, num_train_vecs)
 
 	//train the codebook using 10000 vecs
-	err = codebook.Train(vecs)
+	train_vecs := convertTo1D(vecs)
+	err = codebook.Train(train_vecs)
 
 	if err != nil || !codebook.IsTrained() {
 		t.Errorf("Unable to train index. Err %v", err)
@@ -53,33 +54,36 @@ func TestCodebookIVFPQ(t *testing.T) {
 		}
 	}
 
+	codeSize, err := codebook.CodeSize()
+	if err != nil {
+		t.Errorf("Error fetching code size %v", err)
+	}
+
+	validate_code_size := func(code []byte, codeSize int, n int) {
+		if len(code) != n*codeSize {
+			t.Errorf("Unexpected code size. Expected %v, Actual %v", n*codeSize, len(code))
+		}
+	}
+
 	//encode a single vector
-	code, err := codebook.EncodeVector(query_vec)
+	code := make([]byte, codeSize)
+	err = codebook.EncodeVector(query_vec, code)
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
-
-	validate_code := func(code []uint8, nvecs int, nsub int, nbits int) {
-
-		code_size := (nbits*nsub + 7) / 8
-		if len(code) != code_size*nvecs {
-			t.Errorf("Unexpected encoded vector size %v. Expected %v", len(code), code_size*nvecs)
-		}
-
-	}
-
-	validate_code(code, 1, nsub, nbits)
+	validate_code_size(code, codeSize, 1)
 	t.Logf("Encode results %v", code)
 
 	//encode multiple vectors
 	n := 3
 	query_vecs := convertTo1D(vecs[:n])
-	codes, err := codebook.EncodeVectors(query_vecs)
+	codes := make([]byte, n*codeSize)
+	err = codebook.EncodeVectors(query_vecs, codes)
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
 
-	validate_code(codes, n, nsub, nbits)
+	validate_code_size(codes, codeSize, n)
 	t.Logf("Encode results %v", codes)
 
 }

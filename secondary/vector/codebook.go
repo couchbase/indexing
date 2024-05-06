@@ -9,6 +9,8 @@
 package vector
 
 import (
+	"errors"
+
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
@@ -32,21 +34,28 @@ func (m MetricType) String() string {
 	return ""
 }
 
+var (
+	ErrCodebookNotTrained = errors.New("Codebook is not trained")
+)
+
 type Codebook interface {
 
 	//Train the codebook using input vectors.
-	Train(vecs [][]float32) error
+	Train(vecs []float32) error
 
 	//IsTrained returns true if codebook has been trained.
 	IsTrained() bool
 
+	//CodeSize returns the size of produced code in bytes.
+	CodeSize() int
+
 	//Compute the quantized code for a given input vector.
 	//Must be run on a trained codebook.
-	EncodeVector(vec []float32) ([]uint8, error)
+	EncodeVector(vec []float32, code []byte) error
 
 	//Compute the quantized codes for a given list of input vectors.
 	//Must be run on a trained codebook.
-	EncodeVectors(vecs [][]float32) ([][]uint8, error)
+	EncodeVectors(vecs []float32, codes []byte) error
 
 	//Find the nearest k centroidIDs for a given vector.
 	//Must be run on a trained codebook.
@@ -62,7 +71,7 @@ type Codebook interface {
 
 	//Compute the distance between a vector(using distance table) and
 	//quantized code of another vector.
-	ComputeDistance(code []uint8, dtable [][]float32) float32
+	ComputeDistance(code []byte, dtable [][]float32) float32
 }
 
 func SerializeCodebook(Codebook) ([]byte, error) {

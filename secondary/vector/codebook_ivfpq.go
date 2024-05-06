@@ -21,6 +21,10 @@ type codebookIVFPQ struct {
 	nbits int //number of bits per subvector index
 	nlist int //number of centroids
 
+	codeSize int //size of the code
+
+	isTrained bool
+
 	metric MetricType //metric
 
 	index *faiss.IndexImpl
@@ -53,36 +57,61 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (*codebook
 }
 
 //Train the codebook using input vectors.
-func (cb *codebookIVFPQ) Train(vecs [][]float32) error {
+func (cb *codebookIVFPQ) Train(vecs []float32) error {
 
-	train_vecs := convertTo1D(vecs)
-	return cb.index.Train(train_vecs)
+	err := cb.index.Train(vecs)
+	if err == nil {
+		cb.isTrained = true
+	}
+	return err
 }
 
 //IsTrained returns true if codebook has been trained.
 func (cb *codebookIVFPQ) IsTrained() bool {
 
-	return cb.index.IsTrained()
+	if !cb.isTrained {
+		return cb.index.IsTrained()
+	} else {
+		return cb.isTrained
+	}
+}
+
+//CodeSize returns the size of produced code in bytes.
+func (cb *codebookIVFPQ) CodeSize() (int, error) {
+
+	if !cb.IsTrained() {
+		return 0, ErrCodebookNotTrained
+	}
+	return cb.index.CodeSize()
 }
 
 //Compute the quantized code for a given input vector.
 //Must be run on a trained codebook.
-func (cb *codebookIVFPQ) EncodeVector(vec []float32) ([]uint8, error) {
+func (cb *codebookIVFPQ) EncodeVector(vec []float32, code []byte) error {
 
-	return cb.index.EncodeVectors(vec, cb.nsub, cb.nbits, cb.nlist)
+	if !cb.IsTrained() {
+		return ErrCodebookNotTrained
+	}
+	return cb.index.EncodeVectors(vec, code, cb.nsub, cb.nbits, cb.nlist)
 }
 
 //Compute the quantized code for a given input vector.
 //Must be run on a trained codebook.
-func (cb *codebookIVFPQ) EncodeVectors(vec []float32) ([]uint8, error) {
+func (cb *codebookIVFPQ) EncodeVectors(vecs []float32, codes []byte) error {
 
-	return cb.index.EncodeVectors(vec, cb.nsub, cb.nbits, cb.nlist)
+	if !cb.IsTrained() {
+		return ErrCodebookNotTrained
+	}
+	return cb.index.EncodeVectors(vecs, codes, cb.nsub, cb.nbits, cb.nlist)
 }
 
 //Find the nearest k centroidIDs for a given vector.
 //Must be run on a trained codebook.
 func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, error) {
 
+	if !cb.IsTrained() {
+		return nil, ErrCodebookNotTrained
+	}
 	quantizer, err := cb.index.Quantizer()
 	if err != nil {
 		return nil, nil
