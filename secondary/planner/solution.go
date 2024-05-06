@@ -147,11 +147,12 @@ func (s *Solution) addNewNode(nodeId string) {
 }
 
 // Move a single index from one node to another
-func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *IndexerNode, meetConstraint bool) {
+func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *IndexerNode, meetConstraint bool) error {
 
 	sourceIndex := s.findIndexOffset(source, idx)
 	if sourceIndex == -1 {
-		return
+		logging.Errorf("Solution::moveIndex idx:%v missing on node:%v", idx, source)
+		return common.ErrPlannerPlacementMove
 	}
 
 	// add to new node
@@ -159,6 +160,7 @@ func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *Index
 
 	// remove from old node
 	s.removeIndex(source, sourceIndex)
+	return nil
 }
 
 // Find an indexer offset from the placement list
@@ -2321,12 +2323,12 @@ func (s *Solution) getShardLimits() (int, int) {
 	return shardLimitPerTenant, len(shardMap)
 }
 
-func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
+func (s *Solution) PrePopulateAlternateShardIds(command CommandType) error {
 	logging.Verbosef("ShardRebalancer::PrePopulateAlternateShardIds: Processing command: %v", command)
 	// Pre-populate alternate shardIds only for rebalance cases
 	switch command {
 	case CommandPlan, CommandDrop, CommandRetrieve:
-		return
+		return nil
 	}
 
 	// For a new node coming into the cluster, indexer will not initiate movements by default.
@@ -2335,7 +2337,7 @@ func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
 	// consider pre-population only when there are indexes eligible for movement
 	if len(s.place.GetEligibleIndexes()) == 0 && s.place.HasOptionalIndexes() == false {
 		logging.Infof("ShardRebalancer::PrePopulateAlternateShardIds: Returning as no-elibigle indexes are found")
-		return
+		return nil
 	}
 
 	// Phase-1: Pre-populate alternate shardIds if atleast one replica of a partition
@@ -2381,7 +2383,7 @@ func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
 
 	// Phase-2: move indexes so that all indexes with same alterante shardId
 	// exist on same node
-	s.moveIndexesIfNecessary()
+	return s.moveIndexesIfNecessary()
 }
 
 // After populating the alternate shardId for all replicas, it is possible
@@ -2392,7 +2394,7 @@ func (s *Solution) PrePopulateAlternateShardIds(command CommandType) {
 // on n2 which is incorrect.
 //
 // To handle such cases, pre-move the indexes to appropriate destination nodes
-func (s *Solution) moveIndexesIfNecessary() {
+func (s *Solution) moveIndexesIfNecessary() error {
 
 	// Step-1: Build a mapping of alteranteShardId -> indexerNode -> Count of indexes with the alternate Id
 	alternateIdCountMap := make(map[string]map[*IndexerNode]int)
@@ -2465,7 +2467,11 @@ func (s *Solution) moveIndexesIfNecessary() {
 				if finalNode, ok := finalAltPlacementMap[altId]; ok && indexer.IndexerId != finalNode.IndexerId {
 					logging.Infof("Solution::moveIndexesIfNecessary Moving index: (%v, %v, %v, %v, %v, %v) from source: %v to target: %v",
 						index.Name, index.Bucket, index.Scope, index.Collection, index.Instance.ReplicaId, index.PartnId, indexer.IndexerId, finalNode.IndexerId)
-					s.moveIndex(indexer, index, finalNode, true)
+					err := s.moveIndex(indexer, index, finalNode, true)
+					if err != nil {
+						logging.Errorf("Solution::moveIndexesIfNecessary err:%v", err)
+						return err
+					}
 				}
 			}
 		}
@@ -2473,6 +2479,7 @@ func (s *Solution) moveIndexesIfNecessary() {
 
 	// Update slotmap after all index movements
 	s.updateSlotMap()
+	return nil
 }
 
 func (s *Solution) CanSkipShardAffinity(command CommandType) bool {
