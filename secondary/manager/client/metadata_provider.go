@@ -73,6 +73,7 @@ type Settings interface {
 	ServerlessIndexLimit() uint32
 	AllowDDLDuringScaleUp() bool
 	GetBinSize() uint64
+	DeferBuild() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -2222,7 +2223,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		deferred, err, retry = o.getDeferredParam(plan)
+		deferred, err, retry = o.getDeferredParam(plan, scope)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -2950,9 +2951,16 @@ func (o *MetadataProvider) getXATTRParam(plan map[string]interface{}) (bool, err
 	return xattr, nil, false
 }
 
-func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}) (bool, error, bool) {
+func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}, scope string) (bool, error, bool) {
 
 	deferred := false
+	if scope != c.SYSTEM_SCOPE &&
+		o.internalVersion.GreaterThanOrEqual(c.MIN_VER_DEFAULT_DEFER_BUILD) {
+		deferred = o.settings.DeferBuild()
+		if deferred {
+			logging.Infof("MetadataProvider::getDeferredParam indexer.settings.defer_build is set to true")
+		}
+	}
 
 	deferred2, ok := plan["defer_build"].(bool)
 	if !ok {

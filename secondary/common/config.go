@@ -3108,6 +3108,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.defer_build": ConfigValue{
+		false,
+		"Default defer_build setting. One in the command takes precedence over this",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.maxNumPartitions": ConfigValue{
 		64,
 		"Maximum number of partitions for creating an index.",
