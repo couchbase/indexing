@@ -251,28 +251,28 @@ func (p *RandomPlacement) hasEligibleIndex() bool {
 //   - For index with usage info, rebalance by minimizing usage variance.
 //   - For index with no usage info (e.g. deferred index), rebalance by
 //     round robin across nodes.
-func (p *RandomPlacement) Move(s *Solution) (bool, bool, bool) {
+func (p *RandomPlacement) Move(s *Solution) (bool, bool, bool, error) {
 
 	if !p.hasEligibleIndex() {
-		return false, true, true
+		return false, true, true, nil
 	}
 
 	if p.swapDeleteNode(s) {
 		s.removeEmptyDeletedNode()
-		return true, false, true
+		return true, false, true, nil
 	}
 
 	if p.swapDeletedOnly {
 		done := len(s.getDeleteNodes()) == 0
-		return done, done, done
+		return done, done, done, nil
 	}
 
-	success, final, force := p.randomMoveByLoad(s)
+	success, final, force, err := p.randomMoveByLoad(s)
 	if success {
 		s.removeEmptyDeletedNode()
 	}
 
-	return success, final, force
+	return success, final, force, err
 }
 
 // If there is delete node, try to see if there is an indexer
@@ -301,7 +301,11 @@ func (p *RandomPlacement) swapDeleteNode(s *Solution) bool {
 			for _, index := range outIndex {
 				logging.Tracef("Planner::move delete: source %v index %v target %v",
 					outNode.NodeId, index, indexer.NodeId)
-				s.moveIndex(outNode, index, indexer, false)
+				err := s.moveIndex(outNode, index, indexer, false)
+				if err != nil {
+					logging.Warnf("RandomPlacement.swapDeleteNode failed to move index.")
+					return false
+				}
 			}
 
 			result = true
@@ -436,23 +440,23 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 }
 
 // Try random swap
-func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, prob float64) bool {
+func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, prob float64) (bool, error) {
 
 	n := p.rs.Float64()
 	if n < prob && s.cost.ComputeResourceVariation() < 0.05 {
 		return p.randomSwap(s, sources, targets)
 	}
 
-	return false
+	return false, nil
 }
 
 // Randomly select a single index to move to a different node
-func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
+func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool, error) {
 
 	numOfIndexers := len(s.Placement)
 	if numOfIndexers == 1 {
 		// only one indexer
-		return false, false, false
+		return false, false, false, nil
 	}
 
 	// Find a set of candidates (indexer node) that has eligible index
@@ -471,7 +475,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 		s.numDeletedNode > 0 &&
 		s.numNewNode == s.numDeletedNode &&
 		len(constrained) == 0 {
-		return true, true, true
+		return true, true, true, nil
 	}
 
 	retryCount := numOfIndexers * 10
@@ -489,30 +493,44 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 
 				if s.hasNewNodes() && s.hasDeletedNodes() {
 					// Try moving to new nodes first
-					success, force := p.exhaustiveMove(s, constrained, s.Placement, true)
-					if success {
-						return true, false, force
+					success, force, err := p.exhaustiveMove(s, constrained, s.Placement, true)
+					if err != nil {
+						logging.Warnf("RandomPlacement.randomMoveByLoad failed exhaustiveMove for new nodes, retryCount:%v.", retryCount)
+						return false, false, force, err
+					} else if success {
+						return true, false, force, nil
 					}
 				}
 
-				success, force := p.exhaustiveMove(s, constrained, s.Placement, false)
-				if success {
-					return true, false, force
+				success, force, err := p.exhaustiveMove(s, constrained, s.Placement, false)
+				if err != nil {
+					logging.Warnf("RandomPlacement.randomMoveByLoad failed exhaustiveMove, retryCount:%v.", retryCount)
+					return false, false, force, err
+				} else if success {
+					return true, false, force, nil
 				}
 
-				if p.exhaustiveSwap(s, constrained, candidates) {
-					return true, false, false
+				exhaustiveSwap, err := p.exhaustiveSwap(s, constrained, candidates)
+				if err != nil {
+					logging.Warnf("RandomPlacement.randomMoveByLoad failed exhaustiveSwap, retryCount:%v.", retryCount)
+					return false, false, false, err
+				} else if exhaustiveSwap {
+					return true, false, false, nil
 				}
 
 				// if we cannot find a solution after exhaustively trying to swap or move
 				// index in the last constrained node, then we possibly cannot reach a
 				// solution.
-				return false, true, true
+				return false, true, true, nil
 			} else {
 				// If planner can grow the cluster, then just try to randomly swap.
 				// If cannot swap, then logic fall through to move index.
-				if p.randomSwap(s, constrained, candidates) {
-					return true, false, false
+				randomSwap, err := p.randomSwap(s, constrained, candidates)
+				if err != nil {
+					logging.Warnf("RandomPlacement.randomMoveByLoad failed randomSwap, retryCount:%v.", retryCount)
+					return false, false, false, err
+				} else if randomSwap {
+					return true, false, false, nil
 				}
 			}
 		}
@@ -529,14 +547,18 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 		if source == nil {
 
 			prob := float64(i) / float64(retryCount)
-			if p.tryRandomSwap(s, candidates, candidates, prob) {
-				return true, false, false
+			tryRandomSwap, err := p.tryRandomSwap(s, candidates, candidates, prob)
+			if err != nil {
+				logging.Warnf("RandomPlacement.randomMoveByLoad failed tryRandomSwap, retryCount:%v.", retryCount)
+				return false, false, false, err
+			} else if tryRandomSwap {
+				return true, false, false, nil
 			}
 
 			// If swap fails, then randomly select a candidate as source.
 			source = getRandomNode(p.rs, candidates)
 			if source == nil {
-				return false, false, false
+				return false, false, false, nil
 			}
 		}
 
@@ -565,7 +587,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 				logging.Tracef("Planner::final move: source %v index %v", source.NodeId, index)
 				p.randomMoveDur += time.Now().Sub(now).Nanoseconds()
 				p.randomMoveCnt++
-				return true, true, true
+				return true, true, true, nil
 			}
 
 			logging.Tracef("Planner::no target : index %v mem %v cpu %.4f source %v",
@@ -582,13 +604,17 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 		violation := s.constraint.CanAddIndex(s, target, index)
 		if violation == NoViolation {
 			force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, index, p.GetEligibleIndexes(), true)
-			s.moveIndex(source, index, target, true)
+			err := s.moveIndex(source, index, target, true)
+			if err != nil {
+				logging.Warnf("RandomPlacement.randomMoveByLoad failed moveIndex, retryCount:%v.", retryCount)
+				return false, false, false, err
+			}
 			p.randomMoveDur += time.Now().Sub(now).Nanoseconds()
 			p.randomMoveCnt++
 
 			logging.Tracef("Planner::randomMoveByLoad: source %v index '%v' (%v,%v,%v) target %v force %v",
 				source.NodeId, index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, target.NodeId, force)
-			return true, false, force
+			return true, false, force, nil
 
 		} else {
 			logging.Tracef("Planner::try move fail: violation %s", violation)
@@ -603,7 +629,9 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution) (bool, bool, bool) {
 	}
 
 	// Give it one more try to swap constrained node
-	return p.randomSwap(s, constrained, candidates), false, false
+	randomSwap, err := p.randomSwap(s, constrained, candidates)
+
+	return randomSwap, false, false, err
 }
 
 // Randomly select a single index to move to a different node
@@ -640,6 +668,7 @@ func (p *RandomPlacement) randomMoveNoConstraint(s *Solution, target int, allowE
 			continue
 		}
 
+		//No need to handle moveIndex error since getRandomIndex gets index from source.Indexes
 		s.moveIndex(source, index, target, false)
 		movedIndex++
 		movedData += index.GetMemUsage(s.UseLiveData())
@@ -872,10 +901,10 @@ func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) error
 }
 
 // Randomly select two index and swap them.
-func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode) bool {
+func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode) (bool, error) {
 
 	if !p.allowSwap {
-		return false
+		return false, nil
 	}
 
 	now := time.Now()
@@ -934,9 +963,17 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 			logging.Tracef("Planner::swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v)",
 				source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection,
 				target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection)
-			s.moveIndex(source, sourceIndex, target, true)
-			s.moveIndex(target, targetIndex, source, true)
-			return true
+			err := s.moveIndex(source, sourceIndex, target, true)
+			if err != nil {
+				logging.Warnf("RandomPlacement.randomSwap failed to move index from source to target.")
+				return false, err
+			}
+			err = s.moveIndex(target, targetIndex, source, true)
+			if err != nil {
+				logging.Warnf("RandomPlacement.randomSwap failed to move index from target to source.")
+				return false, err
+			}
+			return true, nil
 
 		} else {
 			logging.Tracef("Planner::try swap fail: source violation %s target violation %v", sourceViolation, targetViolation)
@@ -950,14 +987,14 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // From the list of source indexes, iterate through the list of indexer to find a smaller index that it can swap with.
-func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode) bool {
+func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode) (bool, error) {
 
 	if !p.allowSwap {
-		return false
+		return false, nil
 	}
 
 	now := time.Now()
@@ -1022,9 +1059,18 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 							logging.Tracef("Planner::exhaustive swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v)",
 								source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection,
 								target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection)
-							s.moveIndex(source, sourceIndex, target, true)
-							s.moveIndex(target, targetIndex, source, true)
-							return true
+
+							err := s.moveIndex(source, sourceIndex, target, true)
+							if err != nil {
+								logging.Warnf("RandomPlacement.exhaustiveSwap failed to move index from source to target.")
+								return false, err
+							}
+							err = s.moveIndex(target, targetIndex, source, true)
+							if err != nil {
+								logging.Warnf("RandomPlacement.exhaustiveSwap failed to move index from target to source.")
+								return false, err
+							}
+							return true, nil
 
 						} else {
 							logging.Tracef("Planner::try exhaustive swap fail: source violation %s target violation %v", sourceViolation, targetViolation)
@@ -1035,11 +1081,11 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // From the list of source indexes, iterate through the list of indexer that it can move to.
-func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, targets []*IndexerNode, newNodeOnly bool) (bool, bool) {
+func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, targets []*IndexerNode, newNodeOnly bool) (bool, bool, error) {
 
 	now := time.Now()
 	defer func() {
@@ -1062,11 +1108,14 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 			if !sourceIndex.HasSizing(s.UseLiveData()) {
 				if target := p.findLeastUsedAndPopulatedTargetNode(s, sourceIndex, source); target != nil {
 					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true)
-					s.moveIndex(source, sourceIndex, target, false)
+					err := s.moveIndex(source, sourceIndex, target, false)
+					if err != nil {
+						return false, false, err
+					}
 
 					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v,%v,%v) target %v force %v",
 						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, force)
-					return true, force
+					return true, force, nil
 				}
 				continue
 			}
@@ -1090,11 +1139,15 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 				violation := s.constraint.CanAddIndex(s, target, sourceIndex)
 				if violation == NoViolation {
 					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes(), true)
-					s.moveIndex(source, sourceIndex, target, true)
+					err := s.moveIndex(source, sourceIndex, target, true)
+					if err != nil {
+						logging.Warnf("RandomPlacement.exhaustiveMove failed to move index from source to target.")
+						return false, false, err
+					}
 
 					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v,%v,%v) target %v force %v",
 						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, force)
-					return true, force
+					return true, force, nil
 
 				} else {
 					logging.Tracef("Planner::try exhaustive move fail: violation %s", violation)
@@ -1103,7 +1156,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 		}
 	}
 
-	return false, false
+	return false, false, nil
 }
 
 // Find a set of indexers do not satisfy node constraint.

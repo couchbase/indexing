@@ -151,7 +151,7 @@ func (s *Solution) moveIndex(source *IndexerNode, idx *IndexUsage, target *Index
 
 	sourceIndex := s.findIndexOffset(source, idx)
 	if sourceIndex == -1 {
-		logging.Errorf("Solution::moveIndex idx:%v missing on node:%v", idx, source)
+		logging.Errorf("Solution::moveIndex idx:%v missing on node:%v, targetNode:%v", idx, source, target)
 		return common.ErrPlannerPlacementMove
 	}
 
