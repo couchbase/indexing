@@ -113,3 +113,12 @@ func getWorkerLogPrefix(topic, keyspace string, opaque uint16, workerId int) str
 		strconv.Itoa(workerId),
 	}, ":")
 }
+
+func getEvalStatsLogPRefix(topic, keyspace string, opaque uint16) string {
+	return strings.Join([]string{
+		"EVAL",
+		topic,
+		keyspace,
+		fmt.Sprintf("##%x", opaque),
+	}, ":")
+}

@@ -429,25 +429,29 @@ func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
 	evalStatLoggingThreshold := atomic.LoadInt64(&sm.evalStatLoggingThreshold) * 1000
 
 	// As of this commit, only IndexEvaluatorStats are supported
-	logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", keyspaceId, topic, opaque)
-	var evalStats string
+	logPrefix := getEvalStatsLogPRefix(topic, keyspaceId, opaque)
+	var evalStats = make(map[string]interface{}, len(evalStatsMap))
 	var skippedStr string
 
 	for key, value := range evalStatsMap {
 		switch val := (value).(type) {
 		case *protobuf.IndexEvaluatorStats:
-			keyStr := fmt.Sprintf("%v", key)
+			var evalStatsKeyMap = make(map[string]interface{}, 0)
+
 			avg := val.MovingAvg()
 
 			if avg > evalStatLoggingThreshold {
-				evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
+				evalStatsKeyMap["avgLatency"] = avg
 			}
 
 			errSkip := val.GetAndResetErrorSkip()
 			errSkipAll := val.GetErrorSkipAll()
 			if errSkipAll > 0 {
-				evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
+				evalStatsKeyMap["skipCount"] = errSkipAll
 			}
+
+			evalStats[key] = evalStatsKeyMap
+
 			if errSkip != 0 {
 				if len(skippedStr) == 0 {
 					skippedStr = fmt.Sprintf("In last %v, projector skipped "+
@@ -464,7 +468,16 @@ func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
 		}
 	}
 	if len(evalStats) > 0 {
-		logging.Infof("%v stats: {%v}", logPrefix, evalStats[0:len(evalStats)-1])
+		if sm.statLogger != nil {
+			sm.statLogger.Write(logPrefix, evalStats)
+		} else {
+			var evalStatsBytes, err = json.Marshal(evalStats)
+			if err != nil {
+				logging.Errorf("%v marshal failure err - %v", logPrefix, err)
+				return
+			}
+			logging.Infof("%v stats: %v", logPrefix, evalStatsBytes)
+		}
 	}
 	if len(skippedStr) != 0 {
 		// Some mutations were skipped by the index evaluator.
