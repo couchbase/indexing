@@ -151,7 +151,7 @@ func PopulateCreateIndexOptions(estmt IndexCreate, cmdOptions *Command) error {
 		if estmt.Partition().Strategy() == datastore.HASH_PARTITION {
 			cmdOptions.Scheme = c.KEY
 		}
-		for _, expr := range estmt.Partition().Exprs() {
+		for _, expr := range estmt.Partition().Expressions() {
 			cmdOptions.PartitionKeys = append(cmdOptions.PartitionKeys, expression.NewStringer().Visit(expr))
 		}
 	}
