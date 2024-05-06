@@ -58,13 +58,15 @@ import (
 // Constants
 //------------------------------------------------------------
 
-const localVersion = "7.6.0"
+const localVersion = "7.6.2"
 
 const MIN_VER_STD_GSI_EPHEMERAL = "7.0.2"
 
 const MIN_VER_SRV_AUTH = "7.0.4"
 
 const MIN_VER_MISSING_LEADING_KEY = "7.1.2"
+
+const MIN_VER_DEFAULT_DEFER_BUILD = "7.6.2"
 
 const ENABLE_INT_VER_TICKER = false
 
@@ -252,6 +254,11 @@ func (one InternalVersion) Equals(other InternalVersion) bool {
 func (one InternalVersion) GreaterThan(other InternalVersion) bool {
 
 	return one > other
+}
+
+func (one InternalVersion) GreaterThanOrEqual(other InternalVersion) bool {
+
+	return one >= other
 }
 
 //------------------------------------------------------------

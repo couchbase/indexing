@@ -62,6 +62,7 @@ type ClientSettings struct {
 	allowDDLDuringScaleUp uint32
 
 	allowNodesClause uint32
+	deferBuild       atomic.Bool
 }
 
 func NewClientSettings(needRefresh bool, toolsConfig common.Config) *ClientSettings {
@@ -151,6 +152,9 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 	} else {
 		logging.Errorf("ClientSettings: invalid setting value for num_replica=%v", numReplica)
 	}
+
+	deferBuild := bool(config["indexer.settings.defer_build"].Bool())
+	s.deferBuild.Store(deferBuild)
 
 	maxNumPartition := int32(config["indexer.settings.maxNumPartitions"].Int())
 	if maxNumPartition > 0 {
@@ -413,6 +417,10 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 
 func (s *ClientSettings) NumReplica() int32 {
 	return atomic.LoadInt32(&s.numReplica)
+}
+
+func (s *ClientSettings) DeferBuild() bool {
+	return s.deferBuild.Load()
 }
 
 func (s *ClientSettings) NumPartition() int32 {
