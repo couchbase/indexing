@@ -1742,6 +1742,11 @@ func GetVersion(version, minorVersion uint32) uint64 {
 			return INDEXER_76_VERSION
 		}
 	}
+
+	if version == 8 {
+		return INDEXER_80_VERSION
+	}
+
 	return INDEXER_CUR_VERSION
 }
 

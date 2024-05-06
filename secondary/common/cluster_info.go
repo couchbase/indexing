@@ -1389,6 +1389,10 @@ func getServerVersionFromVersionString(v string) (int, error) {
 		}
 		return INDEXER_70_VERSION, nil
 	}
+	if version == 8 {
+		return INDEXER_80_VERSION, nil
+	}
+
 	return INDEXER_55_VERSION, nil
 }
 
