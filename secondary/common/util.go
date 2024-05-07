@@ -746,7 +746,8 @@ func IsAuthValid(r *http.Request) (cbauth.Creds, bool, error) {
 
 	creds, err := cbauth.AuthWebCreds(r)
 	if err != nil {
-		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) {
+		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) ||
+		err.Error() == "no web credentials found in request" {
 			return nil, false, nil
 		}
 		return nil, false, err
