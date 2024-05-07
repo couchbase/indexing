@@ -15,7 +15,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
-//MutationMeta represents meta information for a KV Mutation
+// MutationMeta represents meta information for a KV Mutation
 type MutationMeta struct {
 	keyspaceId string  //keyspaceId for the mutation
 	vbucket    Vbucket //vbucket
@@ -92,7 +92,7 @@ func (m MutationMeta) String() string {
 
 }
 
-//MutationKeys holds the Secondary Keys from a single KV Mutation
+// MutationKeys holds the Secondary Keys from a single KV Mutation
 type MutationKeys struct {
 	meta  *MutationMeta
 	docid []byte      // primary document id

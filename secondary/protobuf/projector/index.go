@@ -501,10 +501,9 @@ func (ie *IndexEvaluator) TransformRoute(
 
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
-	nkey, okey []byte, where bool, opcode mcd.CommandCode, nVectros [][]float32,
+	nkey, okey []byte, where bool, opcode mcd.CommandCode, nVectors [][]float32,
 	opaque2 uint64, forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
 
-	// [VECTOR_TODO]: Populate nVectors in key versions
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			errStr := fmt.Sprintf("populateData: %v", r)
@@ -531,7 +530,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-				kv.AddUpsert(uuid, nkey, okey, npkey)
+				if len(nVectors) > 0 {
+					kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, nVectors)
+				} else {
+					kv.AddUpsert(uuid, nkey, okey, npkey)
+				}
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
@@ -547,7 +550,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-				kv.AddUpsertDeletion(uuid, okey, npkey)
+				if len(nVectors) > 0 {
+					kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, nVectors)
+				} else {
+					kv.AddUpsertDeletion(uuid, okey, npkey)
+				}
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
