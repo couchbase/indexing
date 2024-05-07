@@ -1715,10 +1715,26 @@ func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
 }
 
 func (feed *DcpFeed) logStats() {
-	stats, latency := feed.stats.String()
-	key := fmt.Sprintf("DCPT[%v] ##%x", feed.Name(), feed.Opaque())
-	logging.Infof("%v dcp latency stats %v", key, latency)
-	logging.Infof("%v stats: %v", key, stats)
+	var statLogger = logstats.GetGlobalStatLogger()
+	key := fmt.Sprintf("DCPT[%v]:##%x", feed.Name(), feed.Opaque())
+
+	var statsMap, latencyMap = feed.stats.Map()
+	var feedMap = map[string]interface{}{}
+	feedMap[feed.stats.StreamNo] = map[string]interface{}{
+		"stats": statsMap,
+		"ltc":   latencyMap,
+	}
+
+	if statLogger == nil {
+		var feedMapBytes, err = json.Marshal(feedMap)
+		if err != nil {
+			logging.Errorf("%v marshal failed with err - %v", key, err)
+		} else {
+			logging.Infof("%v stats: %v", key, string(feedMapBytes))
+		}
+	} else {
+		statLogger.Write(key, feedMap)
+	}
 }
 
 // FailoverLog containing vvuid and sequnce number

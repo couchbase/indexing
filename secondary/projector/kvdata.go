@@ -19,6 +19,7 @@
 package projector
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -30,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/logstats/logstats"
 
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 
@@ -873,11 +875,25 @@ func (kvdata *KVData) publishStreamEnd() {
 }
 
 func (kvdata *KVData) logStats() {
-	stats, vbseqnos := kvdata.stats.String()
-	fmsg := "KVDT[<-%v<-%v #%v] ##%x"
-	key := fmt.Sprintf(fmsg, kvdata.keyspaceId, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
-	logging.Infof("%v stats: %v", key, stats)
-	logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
+	var statLogger = logstats.GetGlobalStatLogger()
+
+	var stats, vbseqnos = kvdata.stats.Map()
+	var key = getKvdtLogPrefix(kvdata.topic, kvdata.keyspaceId, kvdata.opaque)
+
+	var kvMap = map[string]interface{}{
+		"stats": stats,
+		"vbnos": vbseqnos,
+	}
+	if statLogger == nil {
+		var kvStatsBytes, err = json.Marshal(kvMap)
+		if err != nil {
+			logging.Errorf("%v marshal failed with err - %v", key, err)
+		} else {
+			logging.Infof("%v stats: %v", key, string(kvStatsBytes))
+		}
+	} else {
+		statLogger.Write(key, kvMap)
+	}
 }
 
 func (kvdata *KVData) newStats() c.Statistics {

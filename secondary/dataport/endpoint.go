@@ -31,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/transport"
+	"github.com/couchbase/logstats/logstats"
 
 	"github.com/couchbase/cbauth"
 
@@ -423,11 +424,13 @@ func (endpoint *RouterEndpoint) GetStats() map[string]interface{} {
 }
 
 func (endpoint *RouterEndpoint) logStats() {
-	key := fmt.Sprintf(
-		"<-(%v,%4x)<-%v #%v",
-		endpoint.raddr, uint16(endpoint.timestamp), endpoint.cluster, endpoint.topic)
-	stats := endpoint.stats.String()
-	logging.Infof("ENDP[%v] stats: %v", key, stats)
+	var statLogger = logstats.GetGlobalStatLogger()
+	var key = getEndpLogPrefix(endpoint.raddr, endpoint.topic, endpoint.timestamp)
+	if statLogger == nil {
+		logging.Infof("%v stats: %v", key, endpoint.stats.String())
+	} else {
+		statLogger.Write(key, endpoint.stats.Map())
+	}
 }
 
 // Close this endpoint.

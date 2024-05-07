@@ -570,6 +570,7 @@ func (sm *statsManager) setupLogStatsLogger() error {
 		numfiles,                  // numFiles
 		common.STAT_LOG_TS_FORMAT, // tsFormat
 	)
+
 	return err
 }
 
