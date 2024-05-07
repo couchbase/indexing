@@ -145,7 +145,7 @@ type IndexEvaluator struct {
 	// vectorPos == arrayPos == 1 and isFlattenedArray == true and vectorPosInFlattenedArr = 1
 	vectorPos int
 
-	// If `isVectorInFlattenedArray` is set to true, then `vectorPosInFlattenedArray`
+	// If `vectorPos == arrayPos` and array is flattened, then `vectorPosInFlattenedArray`
 	// captures the relative position of the VECTOR field inside the flattened
 	// array
 	vectorPosInFlattenedArray int
@@ -397,7 +397,7 @@ func (ie *IndexEvaluator) StreamEndData(
 func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
 	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, newBuf []byte,
-	where bool, opcode mcd.CommandCode, err error) {
+	where bool, opcode mcd.CommandCode, nVectors [][]float32, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -431,18 +431,18 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 	ie.dcpEvent2Meta(m, docval)
 	where, err = ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
-		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+		return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 	}
 
 	npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
 	if err != nil {
-		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+		return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 	}
 
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		nkey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
+		nkey, newBuf, nVectors, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
@@ -451,15 +451,15 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 		oldval.ShareAnnotations(docval)
 		opkey, err = ie.partitionKey(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 		}
-		okey, newBuf, err = ie.evaluate(m, m.Key, oldval, context, encodeBuf)
+		okey, newBuf, _, err = ie.evaluate(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 		}
 	}
 
-	return npkey, opkey, nkey, okey, newBuf, where, opcode, nil
+	return npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, nil
 }
 
 // TransformRoute implement Evaluator{} interface.
@@ -473,16 +473,17 @@ func (ie *IndexEvaluator) TransformRoute(
 	var newBuf []byte
 	var where bool
 	var opcode mcd.CommandCode
+	var nVectors [][]float32
 
 	forceUpsertDeletion := false
-	npkey, opkey, nkey, okey, newBuf, where, opcode, err = ie.processEvent(m,
+	npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, err = ie.processEvent(m,
 		encodeBuf, docval, context, pl)
 	if err != nil {
 		forceUpsertDeletion = true
 	}
 
 	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey,
-		where, opcode, opaque2, forceUpsertDeletion, oso, pl)
+		where, opcode, nVectors, opaque2, forceUpsertDeletion, oso, pl)
 
 	if err == nil && err1 != nil {
 		err = err1
@@ -500,9 +501,10 @@ func (ie *IndexEvaluator) TransformRoute(
 
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
-	nkey, okey []byte, where bool, opcode mcd.CommandCode, opaque2 uint64,
-	forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
+	nkey, okey []byte, where bool, opcode mcd.CommandCode, nVectros [][]float32,
+	opaque2 uint64, forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
 
+	// [VECTOR_TODO]: Populate nVectors in key versions
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			errStr := fmt.Sprintf("populateData: %v", r)
@@ -611,21 +613,26 @@ func (ie *IndexEvaluator) Stats() interface{} {
 
 func (ie *IndexEvaluator) evaluate(
 	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
-	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, error) {
+	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, [][]float32, error) {
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
-		return []byte(`["` + string(docid) + `"]`), nil, nil
+		return []byte(`["` + string(docid) + `"]`), nil, nil, nil
 	}
 
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, context, ie.skExprs,
-			ie.numFlattenKeys, encodeBuf, ie.stats,
-			ie.indexMissingLeadingKey)
+		if ie.isVectorIndex {
+			return N1QLTransformForVectorIndex(docid, docval, context, encodeBuf, ie)
+		} else {
+			out, newBuf, err := N1QLTransform(docid, docval, context, ie.skExprs,
+				ie.numFlattenKeys, encodeBuf, ie.stats,
+				ie.indexMissingLeadingKey)
+			return out, newBuf, nil, err
+		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 func (ie *IndexEvaluator) partitionKey(
