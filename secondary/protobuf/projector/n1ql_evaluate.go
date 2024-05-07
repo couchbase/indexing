@@ -167,6 +167,128 @@ func N1QLTransform(
 	return nil, nil, nil
 }
 
+func logError(fmsg string, expr qexpr.Expression, docid []byte, err error) {
+	exprstr := qexpr.NewStringer().Visit(expr)
+	arg1 := logging.TagUD(exprstr)
+	arg2 := logging.TagUD(string(docid))
+	logging.Errorf(fmsg, arg1, arg2, err)
+}
+
+// N1QLTransformForVectorIndex is same as N1QLTransform except that
+// it does some additional checks for VECTOR indexes
+func N1QLTransformForVectorIndex(
+	docid []byte, docval qvalue.AnnotatedValue, context qexpr.Context,
+	cExprs []interface{}, numFlattenKeys int, encodeBuf []byte,
+	stats *IndexEvaluatorStats, indexMissingLeadingKey bool) ([]byte,
+	[]byte, error) {
+
+	arrValue := make([]interface{}, 0, len(cExprs))
+	isLeadingKey := !indexMissingLeadingKey
+	for _, cExpr := range cExprs {
+		expr := cExpr.(qexpr.Expression)
+		start := time.Now()
+		scalar, array, err := expr.EvaluateForIndex(docval, context)
+		elapsed := time.Since(start)
+		if stats != nil {
+			stats.add(elapsed)
+		}
+		if err != nil {
+			logError("EvaluateForIndex(%q) for docid %v, err: %v skip document", expr, docid, err)
+			return nil, nil, nil
+		}
+		isArray, _, isFlattened := expr.IsArrayIndexKey()
+		if isArray == false {
+			if scalar == nil { //nil is ERROR condition
+				logError("EvaluateForIndex(%q) scalar=nil, skip document %v", expr, docid, nil)
+				return nil, nil, nil
+			}
+			key := scalar
+			if key.Type() == qvalue.MISSING && isLeadingKey {
+				return nil, nil, nil
+			} else if key.Type() == qvalue.MISSING {
+				arrValue = append(arrValue, key)
+				continue
+			}
+			isLeadingKey = false
+			arrValue = append(arrValue, key)
+		} else {
+			if array == nil { //nil is ERROR condition
+				logError("EvaluateForIndex(%q) array=nil, skip document %v", expr, docid, nil)
+				return nil, nil, nil
+			}
+			if isLeadingKey {
+				//if array is leading key and empty, skip indexing the entry
+				if isArrayEmpty(array) {
+					return nil, nil, nil
+				}
+				//if array is leading key and missing, skip indexing the entry
+				if isArrayMissing(array) {
+					return nil, nil, nil
+				}
+
+				if isFlattened {
+					array = explodeArrayEntries(array, numFlattenKeys, isLeadingKey)
+					if len(array) == 0 {
+						return nil, nil, nil
+					}
+				}
+			} else {
+				if isFlattened {
+					if isArrayEmpty(array) { // Populate "missing" for all keys
+						array = populateValueForFlattenKeys(numFlattenKeys, missing)
+					} else {
+						array = explodeArrayEntries(array, numFlattenKeys, isLeadingKey)
+					}
+				} else {
+					//if array is non-leading key and empty, treat it as missing
+					if isArrayEmpty(array) {
+						array = []qvalue.Value{missing}
+					}
+				}
+			}
+
+			isLeadingKey = false
+
+			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(array)))
+		}
+	}
+
+	if len(cExprs) == 1 && len(arrValue) == 1 && docid == nil {
+		// used for partition-key evaluation and where predicate.
+		// Marshal partition-key and where as a basic JSON data-type.
+		out, err := qvalue.NewValue(arrValue[0]).MarshalJSON()
+		return out, nil, err
+
+	} else if len(arrValue) > 0 {
+		// The shape of the secondary key looks like,
+		//     [expr1] - for simple key
+		//     [expr1, expr2] - for composite key
+
+		// in case we need to append docid to skeys, it is applicable
+		// only when docid is not `nil`
+		//if docid != nil {
+		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
+		//}
+		if encodeBuf != nil {
+			out, newBuf, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
+			if err != nil {
+				fmsg := "N1QLTransformForVectorIndex[%v<-%v] CollateJSONEncode: index field for docid: %s (err: %v), instId: %v skip document"
+				arg := logging.TagUD(docid)
+				logging.Errorf(fmsg, stats.KeyspaceId, stats.Topic, arg, err, stats.InstId)
+				return nil, newBuf, nil
+			}
+			return out, newBuf, err // return as collated JSON array
+		}
+		secKey := qvalue.NewValue(make([]interface{}, len(arrValue)))
+		for i, key := range arrValue {
+			secKey.SetIndex(i, key)
+		}
+		out, err := secKey.MarshalJSON()
+		return out, nil, err // return as JSON array
+	}
+	return nil, nil, nil
+}
+
 // EvaluateForIndex will cache the evaluated values for a document. Therefore, it is
 // not advisable to populate array directly. E.g., if array[i] is [null] and if we
 // explode array[i] for numFlattenKeys = 2, then array[i] would become [[null, null]].
