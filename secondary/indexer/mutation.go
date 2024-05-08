@@ -145,6 +145,7 @@ type Mutation struct {
 	key      []byte        // key-version for index
 	oldkey   []byte        // previous key-version, if available
 	partnkey []byte        // partition key
+	vectors  [][]float32   // Array of vector embeddings for vector indexes
 }
 
 var mutPool = sync.Pool{New: newMutation}
@@ -168,6 +169,13 @@ func (m *Mutation) Size() int64 {
 	size += int64(len(m.partnkey))
 	size += 8 + 1        //instId + command
 	size += 16 + 16 + 16 //fixed cost of members
+
+	if m.vectors != nil {
+		size += 16 // For slice of vectors
+		if len(m.vectors) >= 0 {
+			size += int64((16 + (4 * len(m.vectors[0]))) * len(m.vectors))
+		}
+	}
 	return size
 
 }
@@ -177,6 +185,9 @@ func (m *Mutation) Free() {
 		m.key = m.key[:0]
 		m.oldkey = m.oldkey[:0]
 		m.partnkey = m.partnkey[:0]
+		if m.vectors != nil {
+			m.vectors = m.vectors[:0]
+		}
 		mutPool.Put(m)
 	}
 }
