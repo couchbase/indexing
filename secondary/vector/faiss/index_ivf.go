@@ -6,11 +6,13 @@ package faiss
 #include <faiss/c_api/Index_c.h>
 #include <faiss/c_api/IndexIVF_c.h>
 #include <faiss/c_api/IndexIVF_c_ex.h>
+#include <faiss/c_api/utils/distances_c.h>
 */
 import "C"
 import (
 	"fmt"
 	"runtime"
+	"unsafe"
 )
 
 // pass nprobe to be set as index time option for IVF indexes only.
@@ -148,4 +150,24 @@ func stripCoarseSize(codes []byte, code_size, coarse_size int) []byte {
 	}
 	codes = codes[:copy_to]
 	return codes
+}
+
+func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err error) {
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ivfPtr := C.faiss_IndexIVF_cast(idx.cPtr())
+	if ivfPtr == nil {
+		return fmt.Errorf("index is not of ivf type")
+	}
+
+	if C.faiss_Index_sa_decode(
+		ivfPtr,
+		C.faiss_idx_t(nx),
+		(*C.uint8_t)(&codes[0]),
+		(*C.float)(unsafe.Pointer(&x[0]))) != 0 {
+		err = getLastError()
+	}
+	return err
 }

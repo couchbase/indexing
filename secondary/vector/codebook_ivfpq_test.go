@@ -72,7 +72,12 @@ func TestCodebookIVFPQ(t *testing.T) {
 		t.Errorf("Error encoding vector %v", err)
 	}
 	validate_code_size(code, codeSize, 1)
+	t.Logf("Encode code%v", query_vec)
 	t.Logf("Encode results %v", code)
+
+	dvec := make([]float32, dim)
+	err = codebook.DecodeVector(code, dvec)
+	t.Logf("Decode results %v", dvec)
 
 	//encode multiple vectors
 	n := 3
@@ -85,5 +90,12 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	validate_code_size(codes, codeSize, n)
 	t.Logf("Encode results %v", codes)
+
+	dvecs := make([]float32, n*dim)
+	err = codebook.DecodeVectors(n, codes, dvecs)
+	if err != nil {
+		t.Errorf("Error encoding vector %v", err)
+	}
+	t.Logf("Decode results %v", dvecs)
 
 }

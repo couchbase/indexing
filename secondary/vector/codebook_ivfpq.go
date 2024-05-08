@@ -89,10 +89,7 @@ func (cb *codebookIVFPQ) CodeSize() (int, error) {
 //Must be run on a trained codebook.
 func (cb *codebookIVFPQ) EncodeVector(vec []float32, code []byte) error {
 
-	if !cb.IsTrained() {
-		return ErrCodebookNotTrained
-	}
-	return cb.index.EncodeVectors(vec, code, cb.nsub, cb.nbits, cb.nlist)
+	return cb.EncodeVectors(vec, code)
 }
 
 //Compute the quantized code for a given input vector.
@@ -122,4 +119,20 @@ func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 	}
 	return labels, nil
 
+}
+
+//Decode the quantized code and return float32 vector.
+//Must be run on a trained codebook.
+func (cb *codebookIVFPQ) DecodeVector(code []byte, vec []float32) error {
+	return cb.DecodeVectors(1, code, vec)
+}
+
+//Decode the quantized codes and return float32 vectors.
+//Must be run on a trained codebook.
+func (cb *codebookIVFPQ) DecodeVectors(n int, codes []byte, vecs []float32) error {
+
+	if !cb.IsTrained() {
+		return ErrCodebookNotTrained
+	}
+	return cb.index.DecodeVectors(n, codes, vecs)
 }

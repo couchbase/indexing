@@ -69,9 +69,17 @@ type Codebook interface {
 	//ksub = number of centroids for each subquantizer (2**nbits)
 	ComputeDistanceTable(vec []float32) ([][]float32, error)
 
-	//Compute the distance between a vector(using distance table) and
+	//Compute the distance between a vector using distance table and
 	//quantized code of another vector.
 	ComputeDistance(code []byte, dtable [][]float32) float32
+
+	//Decode the quantized code and return float32 vector.
+	//Must be run on a trained codebook.
+	DecodeVector(code []byte, vec []float32) error
+
+	//Decode the quantized codes and return float32 vectors.
+	//Must be run on a trained codebook.
+	DecodeVectors(n int, codes []byte, vecs []float32) error
 }
 
 func SerializeCodebook(Codebook) ([]byte, error) {
