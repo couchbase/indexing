@@ -958,20 +958,21 @@ func CloseGsiKeyspace(gsi datastore.Indexer) {
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
 type secondaryIndex struct {
-	gsi       *gsiKeyspace // back-reference to container.
-	bucketn   string
-	name      string // name of the index
-	defnID    uint64
-	isPrimary bool
-	using     c.IndexType
-	partnExpr expression.Expressions
-	secExprs  expression.Expressions
-	desc      []bool
-	whereExpr expression.Expression
-	state     datastore.IndexState
-	err       string
-	deferred  bool
-	indexInfo map[string]interface{}
+	gsi        *gsiKeyspace // back-reference to container.
+	bucketn    string
+	name       string // name of the index
+	defnID     uint64
+	isPrimary  bool
+	using      c.IndexType
+	partnExpr  expression.Expressions
+	secExprs   expression.Expressions
+	desc       []bool
+	vectorAttr []bool
+	whereExpr  expression.Expression
+	state      datastore.IndexState
+	err        string
+	deferred   bool
+	indexInfo  map[string]interface{}
 
 	scheduled bool
 	schedFail bool
@@ -1029,7 +1030,7 @@ func newSecondaryIndexFromMetaData(
 	}
 
 	if indexDefn.SecExprs != nil {
-		origSecExprs, origDesc, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc)
+		origSecExprs, origDesc, origHasVectorAttr, _ := common.GetUnexplodedExprs(indexDefn.SecExprs, indexDefn.Desc, indexDefn.HasVectorAttr)
 		exprs := make(expression.Expressions, 0, len(origSecExprs))
 		for _, secExpr := range origSecExprs {
 			expr, _ := parser.Parse(secExpr)
@@ -1037,6 +1038,7 @@ func newSecondaryIndexFromMetaData(
 		}
 		si.secExprs = exprs
 		si.desc = origDesc
+		si.vectorAttr = origHasVectorAttr
 	}
 
 	if len(indexDefn.PartitionKeys) != 0 {
