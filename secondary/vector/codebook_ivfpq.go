@@ -136,3 +136,11 @@ func (cb *codebookIVFPQ) DecodeVectors(n int, codes []byte, vecs []float32) erro
 	}
 	return cb.index.DecodeVectors(n, codes, vecs)
 }
+
+//Compute the distance between a vector with another given set of vectors.
+func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
+	if cb.metric == METRIC_L2 {
+		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
+	}
+	return nil
+}

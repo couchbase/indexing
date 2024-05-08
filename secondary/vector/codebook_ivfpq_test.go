@@ -98,4 +98,13 @@ func TestCodebookIVFPQ(t *testing.T) {
 	}
 	t.Logf("Decode results %v", dvecs)
 
+	//find the distance between qvec and multiple decoded vecs
+	qvec := vecs[n-1]
+	dist := make([]float32, n)
+	err = codebook.ComputeDistance(qvec, dvecs, dist)
+	if err != nil {
+		t.Errorf("Error computing distance %v", err)
+	}
+	t.Logf("Computed distance %v", dist)
+
 }

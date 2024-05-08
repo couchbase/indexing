@@ -71,7 +71,10 @@ type Codebook interface {
 
 	//Compute the distance between a vector using distance table and
 	//quantized code of another vector.
-	ComputeDistance(code []byte, dtable [][]float32) float32
+	ComputeDistanceWithDT(code []byte, dtable [][]float32) float32
+
+	//Compute the distance between a vector with another given set of vectors.
+	ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error
 
 	//Decode the quantized code and return float32 vector.
 	//Must be run on a trained codebook.

@@ -10,6 +10,7 @@ package faiss
 */
 import "C"
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"unsafe"
@@ -170,4 +171,18 @@ func (idx *IndexImpl) DecodeVectors(nx int, codes []byte, x []float32) (err erro
 		err = getLastError()
 	}
 	return err
+}
+
+// compute L2 square distance between x and batch of contiguous y vectors
+func L2sqrNy(dis, x, y []float32, d int) error {
+	ny := len(y) / int(d)
+	if len(dis) < ny {
+		return errors.New("invalid arg")
+	}
+	C.faiss_fvec_L2sqr_ny((*C.float)(&dis[0]),
+		(*C.float)(&x[0]),
+		(*C.float)(&y[0]),
+		C.size_t(d),
+		C.size_t(ny))
+	return nil
 }
