@@ -3108,6 +3108,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.defer_build": ConfigValue{
+		false,
+		"Default defer_build setting. One in the command takes precedence over this",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.maxNumPartitions": ConfigValue{
 		64,
 		"Maximum number of partitions for creating an index.",
@@ -3555,11 +3562,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.planner.honourNodesInDefn": ConfigValue{
-		false,
+		true,
 		"With index grouping (shard-index affinity) enabled, we may violate resource contraints " +
 			"to honour user provided nodes in index definition. To force enable this resource violation and " +
 			"honour nodes provided in index definition, set this flag to true. This may impact performance",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -3997,8 +4004,8 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.shardCopy.rpc.server.channelTimeout": ConfigValue{
 		60,
-		"rpc server file channel request submission timeout (in seconds);"+
-		"keep the setting lower than http server read/write timeout",
+		"rpc server file channel request submission timeout (in seconds);" +
+			"keep the setting lower than http server read/write timeout",
 		60,
 		false,
 		false,
@@ -4068,7 +4075,7 @@ var SystemConfig = Config{
 	},
 	"indexer.plasma.shardCopy.rpc.client.rateControl.adjustRatioMax": ConfigValue{
 		0.75,
-		"Client request rate maximum adjustment factor during rate control."+
+		"Client request rate maximum adjustment factor during rate control." +
 			"We can use this to limit congestion at server",
 		0.75,
 		false,

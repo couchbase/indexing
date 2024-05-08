@@ -89,6 +89,7 @@ type ddlSettings struct {
 	allowDDLDuringScaleUp uint32
 
 	allowNodesClause uint32
+	deferBuild       atomic.Bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -1998,6 +1999,10 @@ func (s *ddlSettings) NumReplica() int32 {
 	return atomic.LoadInt32(&s.numReplica)
 }
 
+func (s *ddlSettings) DeferBuild() bool {
+	return s.deferBuild.Load()
+}
+
 func (s *ddlSettings) NumPartition() int32 {
 	return atomic.LoadInt32(&s.numPartition)
 }
@@ -2073,6 +2078,9 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for num_replica=%v", numReplica)
 	}
+
+	deferBuild := bool(config["settings.defer_build"].Bool())
+	s.deferBuild.Store(deferBuild)
 
 	maxNumPartition := int32(config["settings.maxNumPartitions"].Int())
 	if maxNumPartition > 0 {

@@ -7,9 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/couchbase/query/algebra"
-	"github.com/couchbase/query/datastore"
-	"github.com/couchbase/query/value"
 	"io"
 	"io/ioutil"
 	"net"
@@ -19,6 +16,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/query/algebra"
+	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/value"
 
 	"github.com/couchbase/cbauth"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -150,7 +151,7 @@ func PopulateCreateIndexOptions(estmt IndexCreate, cmdOptions *Command) error {
 		if estmt.Partition().Strategy() == datastore.HASH_PARTITION {
 			cmdOptions.Scheme = c.KEY
 		}
-		for _, expr := range estmt.Partition().Exprs() {
+		for _, expr := range estmt.Partition().Expressions() {
 			cmdOptions.PartitionKeys = append(cmdOptions.PartitionKeys, expression.NewStringer().Visit(expr))
 		}
 	}
@@ -1185,7 +1186,7 @@ func mustNotHave(fset *flag.FlagSet, keys ...string) error {
 	return nil
 }
 
-func InitSecurityContext(clusterAddr, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) error {
+func InitToolsSecurityContext(clusterAddr, localhost string, certFile, keyFile, caFile string, encryptLocalHost bool) error {
 	logging.Infof("Initializing security context")
 
 	logger := func(err error) { logging.Errorf("[InitSecurityContext] Failed with error %v ", err) }

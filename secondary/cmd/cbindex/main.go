@@ -136,7 +136,7 @@ func main() {
 			return
 		}
 	} else if cmdOptions.UseTLS {
-		querycmd.InitSecurityContext(cmdOptions.Server, "", "", "", cmdOptions.CACert, true)
+		querycmd.InitToolsSecurityContext(cmdOptions.Server, "", "", "", cmdOptions.CACert, true)
 	}
 
 	if os.Getenv("CBAUTH_REVRPC_URL") == "" && cmdOptions.Auth != "" && !cmdOptions.UseTools {

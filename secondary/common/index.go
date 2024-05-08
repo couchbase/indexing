@@ -339,6 +339,7 @@ func (idx IndexDefn) String() string {
 	fmt.Fprintf(&str, "\n\t\tIsPartnKeyDocId: %v", idx.IsPartnKeyDocId)
 	fmt.Fprintf(&str, "\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	fmt.Fprintf(&str, "\n\t\tHashScheme: %v ", idx.HashScheme.String())
+	fmt.Fprintf(&str, "\n\t\tDeferred: %v ", idx.Deferred)
 	fmt.Fprintf(&str, "PartitionKeys: %v ", idx.PartitionKeys)
 	fmt.Fprintf(&str, "WhereExpr: %v ", logging.TagUD(idx.WhereExpr))
 	fmt.Fprintf(&str, "RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)

@@ -12185,6 +12185,12 @@ func (idx *indexer) monitorKVNodes() {
 
 func (idx *indexer) destroyEmptyShards() {
 
+	if common.GetStorageMode() == common.NOT_SET {
+		time.Sleep(5 * time.Minute)
+		go idx.destroyEmptyShards() // If storage mode is not set, then restart after 5min
+		return
+	}
+
 	if common.GetStorageMode() != common.PLASMA {
 		logging.Infof("Indexer::destroyEmptyShards Exiting as storage mode is not plasma")
 		return

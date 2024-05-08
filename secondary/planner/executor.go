@@ -74,6 +74,10 @@ type RunConfig struct {
 	// "true" if indexes are to be grouped based on alternate shardIds
 	EnableShardAffinity bool
 
+	// Allow user driven override of index placement (i.e. support
+	// for with "nodes" clause)
+	Override bool
+
 	binSize uint64
 }
 
@@ -1688,7 +1692,8 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 
 	detail := logging.IsEnabled(logging.Info)
 
-	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true, useGreedyPlanner, allowDDLDuringScaleUp, binSize, enableShardAffinity)
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true,
+		useGreedyPlanner, allowDDLDuringScaleUp, binSize, enableShardAffinity, override)
 }
 
 func GetNumIndexesPerScope(plan *Plan, Bucket string, Scope string) uint32 {
@@ -1966,7 +1971,8 @@ func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig, params map[string
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
 	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool,
-	useGreedyPlanner, allowDDLDuringScaleup bool, binSize uint64, enableShardAffinity bool) (*Solution, error) {
+	useGreedyPlanner, allowDDLDuringScaleup bool, binSize uint64, enableShardAffinity bool,
+	override bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -1986,6 +1992,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.UseGreedyPlanner = useGreedyPlanner
 	config.AllowDDLDuringScaleup = allowDDLDuringScaleup
 	config.EnableShardAffinity = enableShardAffinity
+	config.Override = override
 	config.binSize = binSize
 
 	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
@@ -2183,7 +2190,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunSt
 		planner.GetResult()
 		logging.Infof("****************************************")
 
-		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize)
+		PopulateAlternateShardIds(planner.GetResult(), indexes, config.binSize, config.Override)
 		UngroupIndexes(planner.GetResult())
 	}
 
@@ -2795,7 +2802,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan,
 				return nil, nil, nil, err
 			}
 
-			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize)
+			PopulateAlternateShardIds(solution, needsNewAlteranteShardIds, config.binSize, false)
 		}
 
 		// Re-group indexes
@@ -6107,7 +6114,7 @@ func getAllTargetDist(allTargets map[common.PartitionId]map[*IndexerNode]map[*In
 	return str
 }
 
-func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64) {
+func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSize uint64, override bool) {
 
 	// Group indexes for each partition
 	// partnId -> replicaId -> indexerNode to corresponding index usage
@@ -6182,10 +6189,19 @@ func PopulateAlternateShardIds(solution *Solution, indexes []*IndexUsage, binSiz
 					}
 				}
 
-				// If there are no fullCapNodes, then this code path is being executed because
-				// global shard limits are being hit. In such a case, consider all targetNodes
-				// as fullCapNodes and prune slots accordingly
-				if len(fullCapNodes) == 0 {
+				// If there are no fullCapNodes, then this code path is being executed
+				// either because
+				// (a) global shard limits are being hit (or)
+				// (b) User has choosen custom placement with "nodes" clause.
+				//
+				// In such a case, consider all targetNodes as fullCapNodes and prune
+				// slots accordingly. When user overrides with custom placement, then
+				// planner does not have complete information of the slot distribution.
+				// Therefore, it tries to find common slot among all the target nodes.
+				// If none has been found, then it will create new one. Since the same
+				// is achieved by fullCapNodes logic, its usage is overloaded for
+				// custom placement as well
+				if len(fullCapNodes) == 0 || override {
 					for indexer := range targetNodes {
 						fullCapNodes[indexer] = true
 					}

@@ -1090,33 +1090,34 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 	}
 
 	if definitions, ok := layout[indexerId]; ok && len(definitions) > 0 {
-
-		defn := definitions[0]
 		reqCtx := common.NewUserRequestContext()
+		for _, defn := range definitions {
+			// Create the index instance.   This is to ensure that definiton passes invariant validation (e.g bucket exists).
+			// If create index fails due to transient error (indexer in recovery), a token will be placed to retry the operation
+			// later.  The definiton is always deleted upon error.
+			if err := m.CreateIndexOrInstance(&defn, false, reqCtx, asyncCreate); err != nil {
+				// If there is error, the defintion will not be created.
+				// But if it is recoverable error, then we still want to create the commit token.
+				logging.Errorf("LifecycleMgr.processCommitToken() : create index fails.  Reason = %v", err)
 
-		// Create the index instance.   This is to ensure that definiton passes invariant validation (e.g bucket exists).
-		// If create index fails due to transient error (indexer in recovery), a token will be placed to retry the operation
-		// later.  The definiton is always deleted upon error.
-		if err := m.CreateIndexOrInstance(&defn, false, reqCtx, asyncCreate); err != nil {
-			// If there is error, the defintion will not be created.
-			// But if it is recoverable error, then we still want to create the commit token.
-			logging.Errorf("LifecycleMgr.processCommitToken() : create index fails.  Reason = %v", err)
+				// canRetryCreateError logic may not be future safe as it defaults to true.
+				// So, ensure that the token will be posted only when the valid keyspace ids
+				// are available.
+				commit := true
+				if defn.BucketUUID == common.BUCKET_UUID_NIL ||
+					defn.ScopeId == collections.SCOPE_ID_NIL ||
+					defn.CollectionId == collections.COLLECTION_ID_NIL {
 
-			// canRetryCreateError logic may not be future safe as it defaults to true.
-			// So, ensure that the token will be posted only when the valid keyspace ids
-			// are available.
-			commit := true
-			if defn.BucketUUID == common.BUCKET_UUID_NIL ||
-				defn.ScopeId == collections.SCOPE_ID_NIL ||
-				defn.CollectionId == collections.COLLECTION_ID_NIL {
+					commit = false
+				}
 
-				commit = false
+				return commit && m.canRetryCreateError(err), defn.BucketUUID, defn.ScopeId, defn.CollectionId, err
 			}
-
-			return commit && m.canRetryCreateError(err), defn.BucketUUID, defn.ScopeId, defn.CollectionId, err
 		}
 
-		if !definitions[0].Deferred && len(definitions) == 1 && !asyncCreate {
+		defn := definitions[0]
+
+		if !defn.Deferred && !asyncCreate {
 			// If there is only one definition, then try to do the build as well.
 			retryList, skipList, errList, _ := m.buildIndexesLifecycleMgr([]common.IndexDefnId{defnId}, reqCtx, false, false)
 

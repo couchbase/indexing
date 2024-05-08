@@ -137,9 +137,21 @@ const INDEXER_71_VERSION = 6
 const INDEXER_72_VERSION = 7
 const INDEXER_75_VERSION = 8
 const INDEXER_76_VERSION = 9
-const INDEXER_CUR_VERSION = INDEXER_76_VERSION
 
-const INDEXER_PRIORITY = ServerPriority("7.6.0")
+// Since there is a possibility of 7.7 version at the time of this patch,
+// linear numbering scheme will not work for 8.0 version i.e. we cannot
+// move indexer version from 9 to 10 as 7.7 should come before 8.0.
+// Hence, using a large number like 800 can solve the problem so that
+// 8.0 can be 800, 8.1 can be 801, 8.2 can be 802. This scheme
+// assumes that the minor versions do not exceed 8.99 (or) 899.
+// When 7.7 releases, we can assign indexer version as 707.
+//
+// Note: 801 would mean 8.1 version and not 8.0.1. ns_server does not
+// capture sub-versions of minor version.
+const INDEXER_80_VERSION = 800
+const INDEXER_CUR_VERSION = INDEXER_80_VERSION
+
+const INDEXER_PRIORITY = ServerPriority("8.0.0")
 
 // ##### IMPORTANT ##### When updating the above, also update util.go func GetVersion.
 

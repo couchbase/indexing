@@ -272,6 +272,7 @@ type IndexStats struct {
 	numRecsOnDisk             stats.Int64Val
 	bsNumRecsInMem            stats.Int64Val
 	bsNumRecsOnDisk           stats.Int64Val
+	combinedMemSzIndex        stats.Int64Val
 
 	numKeySize64     stats.Int64Val // 0 - 64
 	numKeySize256    stats.Int64Val // 65 - 256
@@ -542,6 +543,7 @@ func (s *IndexStats) Init() {
 	s.numRecsOnDisk.Init()
 	s.bsNumRecsInMem.Init()
 	s.bsNumRecsOnDisk.Init()
+	s.combinedMemSzIndex.Init()
 
 	s.numKeySize64.Init()
 	s.numKeySize256.Init()
@@ -627,6 +629,7 @@ func (s *IndexStats) SetPlannerFilters() {
 	s.numRecsOnDisk.AddFilter(stats.PlannerFilter)
 	s.bsNumRecsInMem.AddFilter(stats.PlannerFilter)
 	s.bsNumRecsOnDisk.AddFilter(stats.PlannerFilter)
+	s.combinedMemSzIndex.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexStats) SetIndexStatusFilters() {
@@ -2176,6 +2179,12 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return ss.combinedResidentPercent.Value()
 		},
 		&s.combinedResidentPercent, s.partnAvgInt64Stats)
+
+	statMap.AddAggrStatFiltered("combined_memory_size_index",
+		func(ss *IndexStats) int64 {
+			return ss.combinedMemSzIndex.Value()
+		},
+		&s.combinedMemSzIndex, s.partnAvgInt64Stats)
 
 	statMap.AddAggrStatFiltered("cache_hit_percent",
 		func(ss *IndexStats) int64 {

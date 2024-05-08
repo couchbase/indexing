@@ -2895,7 +2895,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	var internalData []string
 	internalDataMap := make(map[string]interface{})
 
-	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount int64
+	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount, combinedMemSzIndex int64
 	var msCompressionRatio, bsCompressionRatio float64
 	pStats := mdb.mainstore.GetPreparedStats()
 
@@ -2905,6 +2905,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	cacheHits += pStats.CacheHits
 	cacheMiss += pStats.CacheMisses
 	sts.MemUsed = pStats.MemSz + pStats.MemSzIndex
+	combinedMemSzIndex += pStats.MemSzIndex
 	sts.InsertBytes = pStats.BytesWritten
 	sts.GetBytes = pStats.LSSBlkReadBytes
 	checkpointFileSize := pStats.CheckpointSize
@@ -2937,6 +2938,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		bsNumRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 		bsNumRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees + pStats.NumRecordCompressed
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
+		combinedMemSzIndex += pStats.MemSzIndex
 		if pStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
 			backStoreStatsLoggingEnabled = true
 			if mainStoreStatsLoggingEnabled {
@@ -2998,6 +3000,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
 	mdb.idxStats.bsNumRecsInMem.Set(bsNumRecsMem)
 	mdb.idxStats.bsNumRecsOnDisk.Set(bsNumRecsDisk)
+	mdb.idxStats.combinedMemSzIndex.Set(combinedMemSzIndex)
 	return sts, nil
 }
 
