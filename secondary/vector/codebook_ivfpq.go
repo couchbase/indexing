@@ -9,8 +9,10 @@
 package vector
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
@@ -30,10 +32,25 @@ type codebookIVFPQ struct {
 	index *faiss.IndexImpl
 }
 
+type codebookIVFPQ_IO struct {
+	Dim   int `json:"dim,omitempty"`
+	Nsub  int `json:"nsub,omitempty"`
+	Nbits int `json:"nbits,omitempty"`
+	Nlist int `json:"nlist,omitempty"`
+
+	IsTrained bool       `json:"istrained,omitempty"`
+	Metric    MetricType `json:"metric,omitempty"`
+
+	Checksum    uint32      `json:"checksum,omitempty"`
+	CodebookVer CodebookVer `json:"codebookver,omitempty"`
+
+	Index []byte `json:"index,omitempty"`
+}
+
 type codebookIVFSQ struct {
 }
 
-func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (*codebookIVFPQ, error) {
+func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (Codebook, error) {
 
 	var err error
 
@@ -143,4 +160,74 @@ func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
 	}
 	return nil
+}
+
+func (cb *codebookIVFPQ) ComputeDistanceTable(vec []float32) ([][]float32, error) {
+	//Not yet implemented
+	return nil, nil
+}
+
+func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 {
+	//Not yet implemented
+	return 0
+}
+
+func (cb *codebookIVFPQ) marshal() ([]byte, error) {
+
+	cbio := new(codebookIVFPQ_IO)
+
+	cbio.Dim = cb.dim
+	cbio.Nsub = cb.nsub
+	cbio.Nbits = cb.nbits
+	cbio.Nlist = cb.nlist
+	cbio.IsTrained = cb.isTrained
+	cbio.Metric = cb.metric
+
+	data, err := faiss.WriteIndexIntoBuffer(cb.index)
+	if err != nil {
+		return nil, err
+	}
+
+	cbio.Index = data
+
+	cbio.CodebookVer = CodebookVer1
+	cbio.Checksum = crc32.ChecksumIEEE(data)
+
+	return json.Marshal(cbio)
+}
+
+func recoverCodebookIVFPQ(data []byte) (Codebook, error) {
+
+	cbio := new(codebookIVFPQ_IO)
+
+	if err := json.Unmarshal(data, cbio); err != nil {
+		return nil, err
+	}
+
+	if cbio.CodebookVer != CodebookVer1 {
+		return nil, ErrInvalidVersion
+	}
+
+	//validate checksum
+	checksum := crc32.ChecksumIEEE(cbio.Index)
+	if cbio.Checksum != checksum {
+		return nil, ErrChecksumMismatch
+	}
+
+	cb := new(codebookIVFPQ)
+	cb.dim = cbio.Dim
+	cb.nsub = cbio.Nsub
+	cb.nbits = cbio.Nbits
+	cb.nlist = cbio.Nlist
+	cb.isTrained = cbio.IsTrained
+	cb.metric = cbio.Metric
+
+	var err error
+	cb.index, err = faiss.ReadIndexFromBuffer(cbio.Index, faiss.IOFlagMmap)
+	if err != nil {
+		return nil, err
+	}
+
+	return cb, nil
+
 }

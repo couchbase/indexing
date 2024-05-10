@@ -34,8 +34,17 @@ func (m MetricType) String() string {
 	return ""
 }
 
+type CodebookVer int
+
+const (
+	CodebookVer1 = iota
+)
+
 var (
 	ErrCodebookNotTrained = errors.New("Codebook is not trained")
+	ErrInvalidVersion     = errors.New("Invalid codebook version")
+	ErrChecksumMismatch   = errors.New("Checksum mismatch")
+	ErrUnknownType        = errors.New("Unknown Codebook Type")
 )
 
 type Codebook interface {
@@ -47,7 +56,7 @@ type Codebook interface {
 	IsTrained() bool
 
 	//CodeSize returns the size of produced code in bytes.
-	CodeSize() int
+	CodeSize() (int, error)
 
 	//Compute the quantized code for a given input vector.
 	//Must be run on a trained codebook.
@@ -83,14 +92,27 @@ type Codebook interface {
 	//Decode the quantized codes and return float32 vectors.
 	//Must be run on a trained codebook.
 	DecodeVectors(n int, codes []byte, vecs []float32) error
+
+	//marshal the codebook to a slice of bytes
+	marshal() ([]byte, error)
 }
 
-func SerializeCodebook(Codebook) ([]byte, error) {
-	return nil, nil
+func SerializeCodebook(cb Codebook) ([]byte, error) {
+
+	switch t := cb.(type) {
+	case *codebookIVFPQ:
+		return t.marshal()
+	}
+	return nil, ErrUnknownType
 }
 
-func DeserializeCodebook([]byte) (Codebook, error) {
-	return nil, nil
+func DeserializeCodebook(data []byte, qType string) (Codebook, error) {
+
+	switch qType {
+	case "PQ":
+		return recoverCodebookIVFPQ(data)
+	}
+	return nil, ErrUnknownType
 }
 
 func convertToFaissMetric(metric MetricType) int {

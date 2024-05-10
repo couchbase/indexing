@@ -35,7 +35,8 @@ func TestCodebookIVFPQ(t *testing.T) {
 	}
 
 	//sanity check quantizer
-	quantizer, err := codebook.index.Quantizer()
+	cb := codebook.(*codebookIVFPQ)
+	quantizer, err := cb.index.Quantizer()
 	if err != nil {
 		t.Errorf("Unable to get index quantizer. Err %v", err)
 	}
@@ -106,5 +107,60 @@ func TestCodebookIVFPQ(t *testing.T) {
 		t.Errorf("Error computing distance %v", err)
 	}
 	t.Logf("Computed distance %v", dist)
+
+	data, err := SerializeCodebook(codebook)
+	if err != nil {
+		t.Errorf("Error marshalling codebook %v", err)
+	}
+
+	newcb, err := DeserializeCodebook(data, "PQ")
+	if err != nil {
+		t.Errorf("Error unmarshalling codebook %v", err)
+	}
+
+	if !newcb.IsTrained() {
+		t.Errorf("Found recovered codebook with IsTrained=false")
+	}
+
+	//sanity check quantizer
+	quantizer, err = newcb.(*codebookIVFPQ).index.Quantizer()
+	if err != nil {
+		t.Errorf("Unable to get index quantizer. Err %v", err)
+	}
+
+	if quantizer.Ntotal() != int64(nlist) {
+		t.Errorf("Unexpected number of quantizer items %v. Expected %v", quantizer.Ntotal(), nlist)
+	}
+
+	nCodeSize, err := newcb.CodeSize()
+	if err != nil {
+		t.Errorf("Error fetching code size %v", err)
+	}
+	if codeSize != nCodeSize {
+		t.Errorf("Mismatch in expected %v vs actual %v code size", codeSize, nCodeSize)
+	}
+
+	//find the nearest centroid
+	label, err = newcb.FindNearestCentroids(query_vec, 3)
+	t.Logf("Assign results %v %v", label, err)
+	for _, l := range label {
+		if l > int64(nlist) {
+			t.Errorf("Result label out of range. Total %v. Label %v", nlist, l)
+		}
+	}
+
+	//encode a single vector
+	ncode := make([]byte, nCodeSize)
+	err = newcb.EncodeVector(query_vec, ncode)
+	if err != nil {
+		t.Errorf("Error encoding vector %v", err)
+	}
+	validate_code_size(ncode, nCodeSize, 1)
+	t.Logf("Encode code%v", query_vec)
+	t.Logf("Encode results %v", code)
+
+	dvec = make([]float32, dim)
+	err = newcb.DecodeVector(ncode, dvec)
+	t.Logf("Decode results %v", dvec)
 
 }
