@@ -46,6 +46,7 @@ var (
 	ErrChecksumMismatch   = errors.New("Checksum mismatch")
 	ErrUnknownType        = errors.New("Unknown Codebook Type")
 	ErrCodebookClosed     = errors.New("Codebook closed")
+	ErrUnsupportedMetric  = errors.New("Unsupported Distance Metric")
 )
 
 type Codebook interface {

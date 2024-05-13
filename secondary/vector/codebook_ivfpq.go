@@ -54,6 +54,10 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (Codebook,
 
 	var err error
 
+	if metric != METRIC_L2 {
+		return nil, ErrUnsupportedMetric
+	}
+
 	codebook := &codebookIVFPQ{
 		dim:    dim,
 		nsub:   nsub,
