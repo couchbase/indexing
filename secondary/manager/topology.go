@@ -551,18 +551,22 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 	return false
 }
 
-func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId, instId common.IndexInstId, partitions []uint64) bool {
+func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId, realInstId common.IndexInstId, partitions []uint64) bool {
 
 	change := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
 
-				if t.Definitions[i].Instances[j].RealInstId == uint64(instId) &&
+				if t.Definitions[i].Instances[j].RealInstId == uint64(realInstId) &&
 					t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_DELETED) &&
 					t.Definitions[i].Instances[j].RState == uint32(common.REBAL_PENDING_DELETE) {
 
-					logging.Infof("IndexTopology::RemovePartitionsFromTombstone Considering DefnId %v InstId %v Partitions %v", defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Partitions)
+					logging.Infof("IndexTopology::RemovePartitionsFromTombstone Considering DefnId %v InstId %v RealInstId %v Partitions %v",
+						defnId,
+						t.Definitions[i].Instances[j].InstId,
+						t.Definitions[i].Instances[j].RealInstId,
+						t.Definitions[i].Instances[j].Partitions)
 
 					for _, partnId := range partitions {
 						for k, partition := range t.Definitions[i].Instances[j].Partitions {
@@ -588,6 +592,20 @@ func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId,
 
 				}
 			}
+
+			validInsts := make([]IndexInstDistribution, 0)
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].Partitions != nil {
+					validInsts = append(validInsts, t.Definitions[i].Instances[j])
+				} else {
+					// no-op since instances with nil partitions should be removed from topology
+					logging.Infof("IndexTopology::RemovePartitionsFromTombstone Removing DefnId %v InstId %v RealInstId %v from topology",
+						defnId,
+						t.Definitions[i].Instances[j].InstId,
+						t.Definitions[i].Instances[j].RealInstId)
+				}
+			}
+			t.Definitions[i].Instances = validInsts
 		}
 	}
 
