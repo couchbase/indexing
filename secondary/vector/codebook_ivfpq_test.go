@@ -59,6 +59,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error fetching code size %v", err)
 	}
+	t.Logf("CodeSize %v", codeSize)
 
 	validate_code_size := func(code []byte, codeSize int, n int) {
 		if len(code) != n*codeSize {
@@ -108,9 +109,27 @@ func TestCodebookIVFPQ(t *testing.T) {
 	}
 	t.Logf("Computed distance %v", dist)
 
+	//check the size
+	pSize := codebook.Size()
+	if pSize == 0 {
+		t.Errorf("Unexpected codebook memory size %v", pSize)
+	}
+	t.Logf("Codebook Memory Size %v", pSize)
+
 	data, err := SerializeCodebook(codebook)
 	if err != nil {
 		t.Errorf("Error marshalling codebook %v", err)
+	}
+
+	err = codebook.Close()
+	if err != nil {
+		t.Errorf("Error closing codebook %v", err)
+	}
+
+	//close again
+	err = codebook.Close()
+	if err != ErrCodebookClosed {
+		t.Errorf("Expected err while double closing codebook")
 	}
 
 	newcb, err := DeserializeCodebook(data, "PQ")
@@ -120,6 +139,11 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	if !newcb.IsTrained() {
 		t.Errorf("Found recovered codebook with IsTrained=false")
+	}
+
+	nSize := newcb.Size()
+	if pSize != nSize {
+		t.Errorf("Unexpected codebook memory size after recovery %v, expected %v", nSize, pSize)
 	}
 
 	//sanity check quantizer
@@ -163,4 +187,8 @@ func TestCodebookIVFPQ(t *testing.T) {
 	err = newcb.DecodeVector(ncode, dvec)
 	t.Logf("Decode results %v", dvec)
 
+	err = newcb.Close()
+	if err != nil {
+		t.Errorf("Error closing codebook %v", err)
+	}
 }

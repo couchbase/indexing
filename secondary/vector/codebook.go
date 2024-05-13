@@ -45,6 +45,7 @@ var (
 	ErrInvalidVersion     = errors.New("Invalid codebook version")
 	ErrChecksumMismatch   = errors.New("Checksum mismatch")
 	ErrUnknownType        = errors.New("Unknown Codebook Type")
+	ErrCodebookClosed     = errors.New("Codebook closed")
 )
 
 type Codebook interface {
@@ -92,6 +93,12 @@ type Codebook interface {
 	//Decode the quantized codes and return float32 vectors.
 	//Must be run on a trained codebook.
 	DecodeVectors(n int, codes []byte, vecs []float32) error
+
+	//Size returns the memory size in bytes.
+	Size() uint64
+
+	//Close frees the memory used by codebook.
+	Close() error
 
 	//marshal the codebook to a slice of bytes
 	marshal() ([]byte, error)

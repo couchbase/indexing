@@ -76,6 +76,10 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (Codebook,
 //Train the codebook using input vectors.
 func (cb *codebookIVFPQ) Train(vecs []float32) error {
 
+	if cb.index == nil {
+		return ErrCodebookClosed
+	}
+
 	err := cb.index.Train(vecs)
 	if err == nil {
 		cb.isTrained = true
@@ -85,6 +89,10 @@ func (cb *codebookIVFPQ) Train(vecs []float32) error {
 
 //IsTrained returns true if codebook has been trained.
 func (cb *codebookIVFPQ) IsTrained() bool {
+
+	if cb.index == nil {
+		return false
+	}
 
 	if !cb.isTrained {
 		return cb.index.IsTrained()
@@ -170,6 +178,30 @@ func (cb *codebookIVFPQ) ComputeDistanceTable(vec []float32) ([][]float32, error
 func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) float32 {
 	//Not yet implemented
 	return 0
+}
+
+//Size returns the memory size in bytes.
+func (cb *codebookIVFPQ) Size() uint64 {
+
+	var size uint64
+	if cb.index != nil {
+		//TODO the memory size is not correct
+		size = cb.index.Size()
+	}
+	return size
+}
+
+//Close frees the memory used by codebook.
+func (cb *codebookIVFPQ) Close() error {
+
+	if cb.index == nil {
+		return ErrCodebookClosed
+	} else {
+		cb.index.Close()
+		cb.index = nil
+		cb.isTrained = false
+		return nil
+	}
 }
 
 func (cb *codebookIVFPQ) marshal() ([]byte, error) {
