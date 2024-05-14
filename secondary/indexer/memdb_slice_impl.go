@@ -283,18 +283,21 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 var (
 	moiWriterSemaphoreCh chan bool
 	moiWritersAllowed    int
-	initLock             sync.Mutex
+	moiWriterSemaphoreLk sync.RWMutex // used to protect change in capacity of the semaphore
 )
 
 func updateMOIWriters(to int) {
+	moiWriterSemaphoreLk.Lock()
+	defer moiWriterSemaphoreLk.Unlock()
+
 	if to > cap(moiWriterSemaphoreCh) {
 		to = cap(moiWriterSemaphoreCh)
 	}
-	initLock.Lock()
-	defer initLock.Unlock()
+
 	if to == moiWritersAllowed {
 		return
 	}
+
 	if to < moiWritersAllowed {
 		for i := to; i < moiWritersAllowed; i++ {
 			moiWriterSemaphoreCh <- true
@@ -304,6 +307,7 @@ func updateMOIWriters(to int) {
 			<-moiWriterSemaphoreCh
 		}
 	}
+
 	moiWritersAllowed = to
 }
 
@@ -1084,17 +1088,6 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			manifest := filepath.Join(tmpdir, "manifest.json")
 			iowrap.Os_RemoveAll(tmpdir)
 
-			mdb.confLock.RLock()
-			maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
-			mdb.confLock.RUnlock()
-
-			total := atomic.LoadInt64(&totalMemDBItems)
-			indexCount := mdb.GetCommittedCount()
-			// Compute number of workers to be used for taking backup
-			if total > 0 {
-				concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
-			}
-
 			// Prepare for persistence.
 			if err := mdb.mainstore.PreparePersistence(tmpdir, s.info.MainSnap); err != nil {
 				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
@@ -1110,10 +1103,42 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			// and will wait for this group to complete.
 			// To ensure that CPU isn't overwhelmed, we limit how many such groups
 			// can run in parallel.
-			moiWriterSemaphoreCh <- true
+			// To make the persistence_threads a hard limit, use moiWriterSemaphoreCh
+			// to control how many goroutines are running at any given time
+
+		retry:
+			mdb.confLock.RLock()
+			maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
+			mdb.confLock.RUnlock()
+
+			// Compute number of workers to be used for taking backup
+			total := atomic.LoadInt64(&totalMemDBItems)
+			indexCount := mdb.GetCommittedCount()
+			if total > 0 {
+				concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
+			}
+
+			moiWriterSemaphoreLk.RLock()
+			if concurrency > moiWritersAllowed {
+				// semaphore capacity has changed, due to change in maxThreads. If it had increased and there was enough
+				// capacity, then just continue. If there is not enough capacity, it will result in deadlock for this
+				// persistence, so retry to compute concurrency again.
+				moiWriterSemaphoreLk.RUnlock()
+				concurrency = 1
+				goto retry
+			}
+
+			for i:=0;i<concurrency;i++ {
+				moiWriterSemaphoreCh <- true
+			}
+
 			defer func() {
-				<-moiWriterSemaphoreCh
+				for i:=0;i<concurrency;i++ {
+					<-moiWriterSemaphoreCh
+				}
+				moiWriterSemaphoreLk.RUnlock()
 			}()
+
 			err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 			if err == nil {
 				// Add details to snapshot info
