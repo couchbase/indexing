@@ -4002,6 +4002,11 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return common.ErrIndexInAsyncRecovery
 	}
 
+	oldPartitions := make([]uint64, 0, len(inst.Partitions))
+	for _, partition := range inst.Partitions {
+		oldPartitions = append(oldPartitions, partition.PartId)
+	}
+
 	newPartitions := make([]common.PartitionId, 0, len(partitions))
 	for _, partitionId := range partitions {
 		for _, partition := range inst.Partitions {
@@ -4035,7 +4040,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 	// accidently delete the instance.
 	//
 	if len(newPartitions) == 0 {
-		logging.Errorf("LifecycleMgr.PrunePartition() : There is no matching partition to prune for inst %v. Partitions=%v", instId, newPartitions)
+		logging.Errorf("LifecycleMgr.PrunePartition() : There is no matching partition to prune for inst %v. New partitions=%v", instId, newPartitions)
 		return nil
 	}
 
@@ -4045,11 +4050,12 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return err
 	}
 
-	logging.Infof("LifecycleMgr.PrunePartition() Generated tombstoneInstId: %v for pruning inst: %v, partitions: %v",
-		tombstoneInstId, instId, newPartitions)
+	logging.Infof("LifecycleMgr.PrunePartition() Generated tombstoneInstId: %v for pruning inst: %v, old partitions: %v, new partitions: %v",
+		tombstoneInstId, instId, oldPartitions, newPartitions)
 
 	if err := m.repo.splitPartitionFromTopology(defn.Bucket, defn.Scope, defn.Collection, id, instId, tombstoneInstId, newPartitions); err != nil {
-		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index.  Reason = %v", err)
+		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index inst: %v, old partitions: %v, new partitions: %v.  Reason = %v",
+			instId, oldPartitions, newPartitions, err)
 		return err
 	}
 
@@ -4062,13 +4068,13 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		if err := m.notifier.OnPartitionPrune(instId, newPartitions, reqCtx); err != nil {
 			indexerErr, ok := err.(*common.IndexerError)
 			if ok && indexerErr.Code != common.IndexNotExist {
-				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index: %v.",
-					indexerErr.Reason)
+				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index inst: %v, old partitions: %v, new partitions: %v. err: %v.",
+					instId, oldPartitions, newPartitions, indexerErr.Reason)
 				return err
 
 			} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index: %v.  Drop index will be retried in background",
-					err.Error())
+				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index inst: %v, old partitions: %v, new partitions: %v, err:%v. Drop index will be retried in background",
+					instId, oldPartitions, newPartitions, err.Error())
 				return err
 			}
 		}
