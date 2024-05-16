@@ -97,6 +97,20 @@ var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 	datastore.AT_PLUS:   c.QueryConsistency,
 }
 
+var gsi2N1QLSimilarity = map[c.VectorSimilarity]datastore.IndexDistanceType{
+	c.EUCLIDEAN:   datastore.IX_DIST_EUCLIDEAN,
+	c.L2:          datastore.IX_DIST_L2,
+	c.COSINE_SIM:  datastore.IX_DIST_COSINE_SIM,
+	c.DOT_PRODUCT: datastore.IX_DIST_DOT_PRODUCT,
+}
+
+var n1ql2GSISimilarity = map[datastore.IndexDistanceType]c.VectorSimilarity{
+	datastore.IX_DIST_EUCLIDEAN:   c.EUCLIDEAN,
+	datastore.IX_DIST_L2:          c.L2,
+	datastore.IX_DIST_COSINE_SIM:  c.COSINE_SIM,
+	datastore.IX_DIST_DOT_PRODUCT: c.DOT_PRODUCT,
+}
+
 //--------------------
 // datastore.Indexer{}
 //--------------------
@@ -752,9 +766,15 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) (retErr 
 		// the index objects of type secondaryIndex*. But datastore.Index
 		// interface doesn't provide CheckScheduled API. So, typecasting is
 		// required.
-		// Whenever a new type (liike secondaryIndex5) is introduced, this
+		// Whenever a new type (like secondaryIndex5) is introduced, this
 		// typecasting code needs to be fixed.
 		if idx, ok := index.(*secondaryIndex4); ok {
+			if err := idx.CheckScheduled(); err != nil {
+				return errors.NewError(fmt.Errorf("%v: %v", err.Error(), name), "BuildIndexes")
+			}
+		}
+
+		if idx, ok := index.(*secondaryIndex6); ok {
 			if err := idx.CheckScheduled(); err != nil {
 				return errors.NewError(fmt.Errorf("%v: %v", err.Error(), name), "BuildIndexes")
 			}
@@ -885,7 +905,13 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
-	if clusterVersion >= c.INDEXER_65_VERSION {
+	if clusterVersion >= c.INDEXER_VEC_VERSION {
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := &secondaryIndex3{secondaryIndex2: *si2}
+		si4 := &secondaryIndex4{secondaryIndex3: *si3}
+		si6 := datastore.Index(&secondaryIndex6{secondaryIndex4: *si4})
+		return si6
+	} else if clusterVersion >= c.INDEXER_65_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := datastore.Index(&secondaryIndex4{secondaryIndex3: *si3})
@@ -905,7 +931,13 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
-	if clusterVersion >= c.INDEXER_65_VERSION {
+	if clusterVersion >= c.INDEXER_VEC_VERSION {
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := &secondaryIndex3{secondaryIndex2: *si2}
+		si4 := &secondaryIndex4{secondaryIndex3: *si3}
+		si6 := datastore.PrimaryIndex(&secondaryIndex6{secondaryIndex4: *si4})
+		return si6
+	} else if clusterVersion >= c.INDEXER_65_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := datastore.PrimaryIndex(&secondaryIndex4{secondaryIndex3: *si3})
@@ -980,6 +1012,15 @@ type secondaryIndex struct {
 	indexMissingLeadingKey bool
 
 	indexStatsHolder *mclient.IndexStatsHolder
+
+	// Vector index related metadata
+	isCompositeVector  bool
+	vectorDistanceType datastore.IndexDistanceType
+	vectorDimension    int
+	nprobes            int
+
+	isBhive bool
+	include expression.Expressions
 }
 
 // for metadata-provider.
@@ -1059,6 +1100,34 @@ func newSecondaryIndexFromMetaData(
 		(imd.State == c.INDEX_STATE_CREATED ||
 			imd.State == c.INDEX_STATE_READY) {
 		si.state = datastore.DEFERRED
+	}
+
+	if indexDefn.IsVectorIndex {
+		if indexDefn.VectorMeta == nil {
+			return nil, errors.NewError(nil, fmt.Sprintf("vectorMeta is nil for vector index with defnId: %v", indexDefn.DefnId))
+		}
+
+		si.isCompositeVector = indexDefn.VectorMeta.IsCompositeIndex
+		if val, ok := gsi2N1QLSimilarity[indexDefn.VectorMeta.Similarity]; !ok {
+			return nil, errors.NewError(nil, fmt.Sprintf("Invalid vector similarity seen for index with defnId: %v, defn's similarity: %v", indexDefn.DefnId, indexDefn.VectorMeta.Similarity))
+		} else {
+			si.vectorDistanceType = val
+		}
+		si.vectorDimension = indexDefn.VectorMeta.Dimension
+
+		// By default "nprobes" is 1. If any value is specified in query,
+		// indexer will use it instead
+		si.nprobes = 1
+
+		si.isBhive = indexDefn.VectorMeta.IsBhive
+		if len(indexDefn.Include) > 0 {
+			exprs := make(expression.Expressions, 0, len(indexDefn.Include))
+			for _, includeExpr := range indexDefn.Include {
+				expr, _ := parser.Parse(includeExpr)
+				exprs = append(exprs, expr)
+			}
+			si.include = exprs
+		}
 	}
 
 	return si, nil
@@ -1446,6 +1515,11 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 			if i == 0 && si.indexMissingLeadingKey {
 				attr |= datastore.IK_MISSING
 			}
+
+			if si.vectorAttr != nil && si.vectorAttr[i] {
+				attr |= datastore.IK_VECTOR
+			}
+
 			idxkey.SetAttribute(attr, true)
 
 			idxkeys = append(idxkeys, idxkey)
@@ -1766,6 +1840,63 @@ func (si *secondaryIndex4) StorageStatistics(requestid string) ([]map[datastore.
 //-------------------------------------
 // datastore API4 implementation end
 //-------------------------------------
+
+// datastore API5 is an extension over secondaryIndex4 object
+// As no new API is added, it does not have an implementation
+
+//-------------------------------------
+// datastore API6 implementation
+//-------------------------------------
+
+type secondaryIndex6 struct {
+	secondaryIndex4
+}
+
+func (si *secondaryIndex6) IsBhive() bool {
+	return si.isBhive
+}
+
+func (si *secondaryIndex6) IsVector() bool {
+	return si.isBhive || si.isCompositeVector
+}
+
+func (si *secondaryIndex6) VectorDistanceType() datastore.IndexDistanceType {
+	return si.vectorDistanceType
+}
+
+func (si *secondaryIndex6) VectorDimension() int {
+	return si.vectorDimension
+}
+
+func (si *secondaryIndex6) VectorProbes() int {
+	return si.nprobes
+}
+
+func (si *secondaryIndex6) Include() (rvs expression.Expressions) {
+	return si.include
+}
+
+// Scan6 implements Index6 interface
+func (si *secondaryIndex6) Scan6(
+	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection bool,
+	projection *datastore.IndexProjection, offset, limit int64,
+	groupAggs *datastore.IndexGroupAggregates, indexOrders datastore.IndexKeyOrders,
+	indexKeyNames []string, inlineFilter string, indexVector *datastore.IndexVector,
+	indexPartitionSets datastore.IndexPartitionSets,
+	cons datastore.ScanConsistency, timestampVector timestamp.Vector,
+	conn *datastore.IndexConnection) {
+
+	if si.isBhive || len(indexKeyNames) > 0 {
+		conn.Error(n1qlError(si.gsi.gsiClient, errors.NewError(nil, "BHIVE indexes are currently not supported")))
+		conn.Sender().Close()
+		return
+	}
+
+	// [VECTOR_TODO]: Some validation and then initiate vector scan
+	// Till then, just use Scan3 API
+	si.Scan3(requestId, spans, reverse, distinctAfterProjection, projection, offset,
+		limit, groupAggs, indexOrders, cons, timestampVector, conn)
+}
 
 //-------------------------------------
 // private functions for secondaryIndex
