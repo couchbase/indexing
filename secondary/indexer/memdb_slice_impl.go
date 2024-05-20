@@ -1128,12 +1128,12 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 				goto retry
 			}
 
-			for i:=0;i<concurrency;i++ {
+			for i := 0; i < concurrency; i++ {
 				moiWriterSemaphoreCh <- true
 			}
 
 			defer func() {
-				for i:=0;i<concurrency;i++ {
+				for i := 0; i < concurrency; i++ {
 					<-moiWriterSemaphoreCh
 				}
 				moiWriterSemaphoreLk.RUnlock()
@@ -1840,6 +1840,22 @@ func (mdb *memdbSlice) ShardStatistics(partnId common.PartitionId) *common.Shard
 
 func (mdb *memdbSlice) GetAlternateShardId(partnId common.PartitionId) string {
 	return ""
+}
+
+func (mdb *memdbSlice) SetNlist(nlist int) {
+	// no-op
+}
+
+func (mdb *memdbSlice) InitCodebook() error {
+	return nil
+}
+
+func (mdb *memdbSlice) ResetCodebook() error {
+	return nil
+}
+
+func (mdb *memdbSlice) Train(vecs []float32) error {
+	return nil
 }
 
 func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
