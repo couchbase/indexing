@@ -115,7 +115,47 @@ type IndexEvaluator struct {
 	// the number of keys in the flatten_keys expression
 	numFlattenKeys int
 
+	// Position of the array expression in the list of secondary expressions
+	arrayPos int
+
+	// Set to true if array is flattened
+	isArrayFlattened bool
+
 	indexMissingLeadingKey bool
+
+	// Vector meta related information
+
+	// A boolean shortcut which represents if any of `hasVectorAttr`
+	// is set to true. `hasVectorAttr` is read from index definition
+	isVectorIndex bool
+
+	// For a vector index, captures the position of the vector in
+	// the list of skExprs. This position is relative to "skExprs"
+
+	// E.g., for the index
+	// create index idx on default(name, FLATTEN_ARRAY(v.brand, v.cost) for v in brands END, color VECTOR)
+	// vectorPos will be "2" as it is at 2nd position in the list of secondary expressions (0-indexed)
+	// In this case, the hasVectorAttr will be [false false false true] as it is derived for exploded
+	// version of secondary keys
+	//
+	// If the vector attribute is inside FLATTEN_ARRAY, then vectorPos == flattenArrayPos
+	// and the entry at vectorPosInFlattenedArray will be considered for processing the
+	// vector
+	// create index idx on default(name, FLATTEN_ARRAY(v.brand, v.cost VECTOR) for v in brands END, color)
+	// vectorPos == arrayPos == 1 and isFlattenedArray == true and vectorPosInFlattenedArr = 1
+	vectorPos int
+
+	// If `vectorPos == arrayPos` and array is flattened, then `vectorPosInFlattenedArray`
+	// captures the relative position of the VECTOR field inside the flattened
+	// array
+	vectorPosInFlattenedArray int
+
+	// `dimension` represents the vector dimension with which the index has been
+	// created
+	dimension int
+
+	// For BHIVE indexes, the expresses to be evaluated for include columns
+	include []interface{}
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -128,9 +168,14 @@ func NewIndexEvaluator(
 	var err error
 
 	ie := &IndexEvaluator{
-		keyspaceId: keyspaceId,
-		instance:   instance,
-		version:    version,
+		keyspaceId:                keyspaceId,
+		instance:                  instance,
+		version:                   version,
+		arrayPos:                  -1,
+		isArrayFlattened:          false,
+		isVectorIndex:             false,
+		vectorPos:                 -1,
+		vectorPosInFlattenedArray: -1,
 	}
 
 	// compile expressions once and reuse it many times.
@@ -150,11 +195,16 @@ func NewIndexEvaluator(
 			return nil, err
 		}
 
-		for _, skExpr := range ie.skExprs {
+		flattenedArrayPos := 0
+		for pos, skExpr := range ie.skExprs {
 			expr := skExpr.(qexpr.Expression)
 			isArray, _, isFlattened := expr.IsArrayIndexKey()
+			if isArray {
+				ie.arrayPos = pos
+			}
 			if isArray && isFlattened {
 				// Populate numFlattenKeys and break
+				ie.isArrayFlattened = isFlattened
 				ie.numFlattenKeys = expr.(*qexpr.All).FlattenSize()
 				break
 			}
@@ -184,6 +234,49 @@ func NewIndexEvaluator(
 		}
 		_, xattrNames, _ := qu.GetXATTRNames(xattrExprs)
 		ie.xattrs = xattrNames
+
+		// Vector index related information
+		hasVectorAttr := defn.GetHasVectorAttr()
+
+		// Check if any secondary field or expression has VECTOR attribute
+		for i := range hasVectorAttr {
+			if hasVectorAttr[i] {
+				ie.isVectorIndex = true
+
+				if ie.isArrayFlattened {
+					flattenedArrayPos = ie.arrayPos
+					if i < flattenedArrayPos {
+						ie.vectorPos = i
+					} else if i >= flattenedArrayPos && i < flattenedArrayPos+ie.numFlattenKeys {
+						ie.vectorPos = flattenedArrayPos
+						ie.vectorPosInFlattenedArray = i - flattenedArrayPos
+					} else {
+						ie.vectorPos = i - ie.numFlattenKeys + 1
+					}
+				} else {
+					ie.vectorPos = i
+				}
+				break
+			}
+		}
+
+		// Expected dimension of vectors in incoming document
+		ie.dimension = int(defn.GetDimension())
+
+		// Secondary fields or expressions for include columns
+		include := defn.GetInclude()
+		if len(include) > 0 {
+			includeExprs, err := CompileN1QLExpression(include)
+			if err != nil {
+				return nil, err
+			} else if len(includeExprs) > 0 {
+				ie.include = includeExprs
+			}
+		}
+
+		logging.Infof("NewIndexEvaluator: InstId: %v, isVectorIndex: %v, vectorPos: %v, arrayPos: %v, "+
+			"vectorPosInFlattenedArray: %v, dimension: %v, include: %v", ie.instance.InstId, ie.isVectorIndex,
+			ie.vectorPos, ie.arrayPos, ie.vectorPosInFlattenedArray, ie.dimension, ie.include)
 
 	default:
 		logging.Errorf("invalid expression type %v\n", exprtype)
@@ -304,7 +397,7 @@ func (ie *IndexEvaluator) StreamEndData(
 func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
 	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, newBuf []byte,
-	where bool, opcode mcd.CommandCode, err error) {
+	where bool, opcode mcd.CommandCode, nVectors [][]float32, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -338,18 +431,18 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 	ie.dcpEvent2Meta(m, docval)
 	where, err = ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
-		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+		return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 	}
 
 	npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
 	if err != nil {
-		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+		return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 	}
 
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		nkey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
+		nkey, newBuf, nVectors, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
@@ -358,15 +451,15 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 		oldval.ShareAnnotations(docval)
 		opkey, err = ie.partitionKey(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 		}
-		okey, newBuf, err = ie.evaluate(m, m.Key, oldval, context, encodeBuf)
+		okey, newBuf, _, err = ie.evaluate(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, nil, err
 		}
 	}
 
-	return npkey, opkey, nkey, okey, newBuf, where, opcode, nil
+	return npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, nil
 }
 
 // TransformRoute implement Evaluator{} interface.
@@ -380,16 +473,17 @@ func (ie *IndexEvaluator) TransformRoute(
 	var newBuf []byte
 	var where bool
 	var opcode mcd.CommandCode
+	var nVectors [][]float32
 
 	forceUpsertDeletion := false
-	npkey, opkey, nkey, okey, newBuf, where, opcode, err = ie.processEvent(m,
+	npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, err = ie.processEvent(m,
 		encodeBuf, docval, context, pl)
 	if err != nil {
 		forceUpsertDeletion = true
 	}
 
 	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey,
-		where, opcode, opaque2, forceUpsertDeletion, oso, pl)
+		where, opcode, nVectors, opaque2, forceUpsertDeletion, oso, pl)
 
 	if err == nil && err1 != nil {
 		err = err1
@@ -407,8 +501,8 @@ func (ie *IndexEvaluator) TransformRoute(
 
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
-	nkey, okey []byte, where bool, opcode mcd.CommandCode, opaque2 uint64,
-	forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
+	nkey, okey []byte, where bool, opcode mcd.CommandCode, nVectors [][]float32,
+	opaque2 uint64, forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -436,7 +530,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-				kv.AddUpsert(uuid, nkey, okey, npkey)
+				if len(nVectors) > 0 {
+					kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, nVectors)
+				} else {
+					kv.AddUpsert(uuid, nkey, okey, npkey)
+				}
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
@@ -452,7 +550,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-				kv.AddUpsertDeletion(uuid, okey, npkey)
+				if len(nVectors) > 0 {
+					kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, nVectors)
+				} else {
+					kv.AddUpsertDeletion(uuid, okey, npkey)
+				}
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
@@ -518,21 +620,26 @@ func (ie *IndexEvaluator) Stats() interface{} {
 
 func (ie *IndexEvaluator) evaluate(
 	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
-	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, error) {
+	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, [][]float32, error) {
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
-		return []byte(`["` + string(docid) + `"]`), nil, nil
+		return []byte(`["` + string(docid) + `"]`), nil, nil, nil
 	}
 
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, context, ie.skExprs,
-			ie.numFlattenKeys, encodeBuf, ie.stats,
-			ie.indexMissingLeadingKey)
+		if ie.isVectorIndex {
+			return N1QLTransformForVectorIndex(docid, docval, context, encodeBuf, ie)
+		} else {
+			out, newBuf, err := N1QLTransform(docid, docval, context, ie.skExprs,
+				ie.numFlattenKeys, encodeBuf, ie.stats,
+				ie.indexMissingLeadingKey)
+			return out, newBuf, nil, err
+		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 func (ie *IndexEvaluator) partitionKey(

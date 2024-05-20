@@ -138,6 +138,9 @@ const INDEXER_72_VERSION = 7
 const INDEXER_75_VERSION = 8
 const INDEXER_76_VERSION = 9
 
+// [VECTOR_TODO] Replace this with a suitable release version
+const INDEXER_VEC_VERSION = 10
+
 // Since there is a possibility of 7.7 version at the time of this patch,
 // linear numbering scheme will not work for 8.0 version i.e. we cannot
 // move indexer version from 9 to 10 as 7.7 should come before 8.0.

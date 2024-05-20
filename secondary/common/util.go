@@ -746,7 +746,8 @@ func IsAuthValid(r *http.Request) (cbauth.Creds, bool, error) {
 
 	creds, err := cbauth.AuthWebCreds(r)
 	if err != nil {
-		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) {
+		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) ||
+		err.Error() == "no web credentials found in request" {
 			return nil, false, nil
 		}
 		return nil, false, err
@@ -766,7 +767,7 @@ func SetNumCPUs(percent int) int {
 
 func ConstructIndexExprs(defn *IndexDefn) ([]string, string) {
 	exprStmt := ""
-	secExprs, desc, _ := GetUnexplodedExprs(defn.SecExprs, defn.Desc)
+	secExprs, desc, vectorAttr, _ := GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
 	for i, exp := range secExprs {
 		if exprStmt != "" {
 			exprStmt += ","
@@ -774,6 +775,10 @@ func ConstructIndexExprs(defn *IndexDefn) ([]string, string) {
 		exprStmt += exp
 		if desc != nil && desc[i] {
 			exprStmt += " DESC"
+		}
+
+		if vectorAttr != nil && vectorAttr[i] {
+			exprStmt += " VECTOR"
 		}
 
 		if i == 0 && defn.IndexMissingLeadingKey { // Missing is implicit for non leading keys
@@ -909,16 +914,24 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 
 // For flattened array, returns the list of secExprs and
 // the desc array before explosion
-func GetUnexplodedExprs(secExprs []string, desc []bool) ([]string, []bool, bool) {
+func GetUnexplodedExprs(secExprs []string, desc []bool, hasVectorAttr []bool) ([]string, []bool, []bool, bool) {
 
 	var isArray, isFlatten bool
 	skipFlattenExprsTillPos := 0
 	origSecExprs := make([]string, 0)
 	origDesc := make([]bool, 0)
+	origHasVectorAttr := make([]bool, 0)
 	if desc == nil {
 		desc = make([]bool, len(secExprs))
 		for i, _ := range secExprs {
 			desc[i] = false
+		}
+	}
+
+	if hasVectorAttr == nil {
+		hasVectorAttr = make([]bool, len(secExprs))
+		for i, _ := range secExprs {
+			hasVectorAttr[i] = false
 		}
 	}
 
@@ -939,15 +952,17 @@ func GetUnexplodedExprs(secExprs []string, desc []bool) ([]string, []bool, bool)
 			// A valid statement would be
 			// DISTINCT ARRAY FLATTEN_KEYS(v.name, v.age DESC)
 			origDesc = append(origDesc, false)
+			origHasVectorAttr = append(origHasVectorAttr, false)
 		} else {
 			origDesc = append(origDesc, desc[i])
+			origHasVectorAttr = append(origHasVectorAttr, hasVectorAttr[i])
 		}
 
 		origSecExprs = append(origSecExprs, exp)
 
 	}
 
-	return origSecExprs, origDesc, isFlatten
+	return origSecExprs, origDesc, origHasVectorAttr, isFlatten
 }
 
 func PopulateUnExplodedExprs(defn *IndexDefn) {

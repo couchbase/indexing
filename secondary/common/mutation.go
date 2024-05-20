@@ -230,7 +230,10 @@ type KeyVersions struct {
 	Keys      [][]byte // list of key-versions for each index
 	Oldkeys   [][]byte // previous key-versions, if available
 	Partnkeys [][]byte // partition key for each key-version
-	Ctime     int64
+
+	// List of vectors for each index instance
+	Vectors [][][]float32
+	Ctime   int64
 }
 
 // NewKeyVersions return a reference KeyVersions for a single mutation.
@@ -246,6 +249,8 @@ func NewKeyVersions(seqno uint64, docid []byte, maxCount int, ctime int64) *KeyV
 	kv.Keys = make([][]byte, 0, maxCount)
 	kv.Oldkeys = make([][]byte, 0, maxCount)
 	kv.Partnkeys = make([][]byte, 0, maxCount)
+	kv.Vectors = make([][][]float32, 0, maxCount)
+
 	kv.Ctime = ctime
 	return kv
 }
@@ -257,6 +262,17 @@ func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey, pkey []byt
 	kv.Keys = append(kv.Keys, key)
 	kv.Oldkeys = append(kv.Oldkeys, oldkey)
 	kv.Partnkeys = append(kv.Partnkeys, pkey)
+	kv.Vectors = append(kv.Vectors, nil) // Append nil to preserve ordering
+}
+
+// addKey will add key-version for a single index.
+func (kv *KeyVersions) addKeyWithVectors(uuid uint64, command byte, key, oldkey, pkey []byte, nVectors [][]float32) {
+	kv.Uuids = append(kv.Uuids, uuid)
+	kv.Commands = append(kv.Commands, command)
+	kv.Keys = append(kv.Keys, key)
+	kv.Oldkeys = append(kv.Oldkeys, oldkey)
+	kv.Partnkeys = append(kv.Partnkeys, pkey)
+	kv.Vectors = append(kv.Vectors, nVectors)
 }
 
 // Equal compares for equality of two KeyVersions object.
@@ -294,6 +310,11 @@ func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey, pkey []byte) {
 	kv.addKey(uuid, Upsert, key, oldkey, pkey)
 }
 
+// AddUpsert add a new keyversion for same OpMutation.
+func (kv *KeyVersions) AddUpsertWithVectors(uuid uint64, key, oldkey, pkey []byte, vectors [][]float32) {
+	kv.addKeyWithVectors(uuid, Upsert, key, oldkey, pkey, vectors)
+}
+
 // AddDeletion add a new keyversion for same OpDeletion.
 func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey, pkey []byte) {
 	kv.addKey(uuid, Deletion, nil, oldkey, pkey)
@@ -302,6 +323,11 @@ func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey, pkey []byte) {
 // AddUpsertDeletion add a keyversion command to delete old entry.
 func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey, pkey []byte) {
 	kv.addKey(uuid, UpsertDeletion, nil, oldkey, pkey)
+}
+
+// AddUpsertDeletion add a keyversion command to delete old entry.
+func (kv *KeyVersions) AddUpsertDeletionWithVectors(uuid uint64, oldkey, pkey []byte, vectors [][]float32) {
+	kv.addKeyWithVectors(uuid, UpsertDeletion, nil, oldkey, pkey, vectors)
 }
 
 // AddSync add Sync command for vbucket heartbeat.

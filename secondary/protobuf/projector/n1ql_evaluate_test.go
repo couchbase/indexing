@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,7 +24,7 @@ var testdata = "../../tests/testdata"
 var usersBzip2 = filepath.Join(testdata, "users.json.bz2")
 var projectsBzip2 = filepath.Join(testdata, "projects.json.bz2")
 var buf = make([]byte, 0, 10000)
-var stats IndexEvaluatorStats
+var ieStats IndexEvaluatorStats
 
 var doc150 = []byte(`{ "type": "user", "first-name": "Daniel", "last-name": "Fred", "age": 32, "emailid": "Daniel@gmail.com", "city": "Kathmandu", "gender": "female" }`)
 var doc2000 = []byte(
@@ -80,7 +82,7 @@ func TestN1QLTransform150(t *testing.T) {
 	}
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
 	context := qexpr.NewIndexContext()
-	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats, nil)
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &ieStats, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,13 +99,13 @@ func TestN1QLTransform2000(t *testing.T) {
 	}
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
 	context := qexpr.NewIndexContext()
-	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats, nil)
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &ieStats, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if !bytes.Equal(secKey, encodeJSON(`["Kathmandu",63]`)) {
-		t.Fatalf("evaluation failed %v %v", decodeCollateJSON(secKey))
+		t.Fatalf("evaluation failed %v", decodeCollateJSON(secKey))
 	}
 }
 
@@ -125,6 +127,47 @@ func TestInvalidDocs(t *testing.T) {
 	}
 }
 
+func TestValidAndInvalidVectors(t *testing.T) {
+
+	dimension := 8
+	validVectors := []qvalue.Value{
+		qvalue.NewValue([]interface{}{1, 2, 3, 4, 5, 6, 7, 8}),
+		qvalue.NewValue([]interface{}{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 0.0}),
+		qvalue.NewValue([]interface{}{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}),
+		qvalue.NewValue([]interface{}{math.MaxFloat32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0 - math.MaxFloat32}),
+		qvalue.NewValue([]interface{}{math.MaxFloat32, 2, 3, 4, 5, 6, 7, 0 - math.MaxFloat32}),
+	}
+
+	for _, vector := range validVectors {
+		fmt.Printf("Validating vector: %v, dimension: %v\n", vector, dimension)
+		_, err := validateVector(vector, dimension)
+
+		if err != nil {
+			t.Fatalf("Error observed while validating vector: %v, err: %v", vector, err)
+		}
+	}
+
+	invalidVectors := []qvalue.Value{
+		qvalue.NewValue([]interface{}{1.0, 2.0}),                                           // Dimensionality validation - less dimensions
+		qvalue.NewValue([]interface{}{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0}),        // Dimensionality validation - more dimensions
+		qvalue.NewValue([]interface{}{math.MaxFloat64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}), // Range of values
+		qvalue.NewValue([]interface{}{0 - math.MaxFloat64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}),
+		qvalue.NewValue([]interface{}{"a", 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}),                                    // heterogenous data - string values
+		qvalue.NewValue([]interface{}{map[string]interface{}{"name": "test"}, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}), // Sub-document
+		qvalue.NewValue('a'), // non-array data
+	}
+
+	for _, vector := range invalidVectors {
+		fmt.Printf("Validating vector: %v, dimension: %v\n", vector, dimension)
+		_, err := validateVector(vector, dimension)
+
+		if err == nil {
+			t.Fatalf("Error was not observed while validating vector: %v. Expected non-nil error", vector)
+		}
+	}
+
+}
+
 func BenchmarkCompileN1QLExpression(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CompileN1QLExpression([]string{`age`})
@@ -136,7 +179,7 @@ func BenchmarkN1QLTransform150(b *testing.B) {
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
 	context := qexpr.NewIndexContext()
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats, nil)
+		N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &ieStats, false)
 	}
 }
 
@@ -145,7 +188,7 @@ func BenchmarkN1QLTransform2000(b *testing.B) {
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
 	context := qexpr.NewIndexContext()
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &stats, nil)
+		N1QLTransform([]byte("docid"), docval, context, cExprs, 0, buf, &ieStats, false)
 	}
 }
 

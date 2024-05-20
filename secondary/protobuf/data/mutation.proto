@@ -60,6 +60,14 @@ message VbKeyVersions {
     optional uint64      opaque2      = 7; //client opaque
 }
 
+message Vector {
+    repeated float vector = 1; // Array of floats
+}
+
+message Vectors {
+    repeated Vector vectors = 1; // Array of array of floats
+}
+
 // mutations are broadly divided into data and control messages. The division
 // is based on the commands.
 //
@@ -85,14 +93,15 @@ message VbKeyVersions {
 // fields `docid`, `uuids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
 message KeyVersions {
-    required uint64 seqno     = 1; // sequence number corresponding to this mutation
-    optional bytes  docid     = 2; // primary document id
-    repeated uint64 uuids     = 3; // uuids, hosting key-version
-    repeated uint32 commands  = 4; // list of command for each uuid
-    repeated bytes  keys      = 5; // key-versions for each uuids listed above
-    repeated bytes  oldkeys   = 6; // key-versions from old copy of the document
-    repeated bytes  partnkeys = 7; // partition key for each key-version
-    optional int64  prjMovingAvg = 8; // Moving avg. latency of mutation processing in projector
+    required uint64  seqno     = 1; // sequence number corresponding to this mutation
+    optional bytes   docid        = 2; // primary document id
+    repeated uint64  uuids        = 3; // uuids, hosting key-version
+    repeated uint32  commands     = 4; // list of command for each uuid
+    repeated bytes   keys         = 5; // key-versions for each uuids listed above
+    repeated bytes   oldkeys      = 6; // key-versions from old copy of the document
+    repeated bytes   partnkeys    = 7; // partition key for each key-version
+    optional int64   prjMovingAvg = 8; // Moving avg. latency of mutation processing in projector
+    repeated Vectors vectors      = 9; // List of vectors in input document - Used only for vector indexes
 }
 
 // Dataport server authentication

@@ -403,17 +403,21 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 
 		case cp.createsem <- true:
 			path = "create"
+			atomic.AddInt32(&cp.curActConns, 1)
+
 			// Build a connection if we can't get a real one.
 			// This can potentially be an overflow connection, or
 			// a pooled connection.
 			connectn, err := cp.mkConn(cp.host)
 			if err != nil {
 				// On error, release our create hold
+				atomic.AddInt32(&cp.curActConns, -1)
 				<-cp.createsem
-			} else {
-				atomic.AddInt32(&cp.curActConns, 1)
 			}
-			logging.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
+			if logging.IsEnabled(logging.Debug) {
+				logging.Debugf("%v new connection (create) from pool, active conns: %v, freeconns: %v, createsem: %v,\n",
+					cp.logPrefix, atomic.LoadInt32(&cp.curActConns), atomic.LoadInt32(&cp.freeConns), len(cp.createsem))
+			}
 			return connectn, err
 
 		case <-t.C:
@@ -530,6 +534,10 @@ func (cp *connectionPool) releaseConns(numRetConns int32) {
 				}
 				atomic.AddInt32(&cp.freeConns, -1)
 				conn.conn.Close()
+				select {
+				case <-cp.createsem: // Also drain from createsem channel
+				default:
+				}
 			default:
 				break
 			}
@@ -600,7 +608,7 @@ func (cp *connectionPool) releaseConnsRoutine() {
 			// Log active and free connection count history every minute.
 			fc := atomic.LoadInt32(&cp.freeConns)
 			if j == CONN_COUNT_LOG_INTERVAL-1 {
-				logging.Infof("%v active conns %v, free conns %v", cp.logPrefix, act, fc)
+				logging.Infof("%v active conns %v, free conns %v createsem: %v", cp.logPrefix, act, fc, len(cp.createsem))
 			}
 
 			i = (i + 1) % CONN_RELEASE_INTERVAL

@@ -140,9 +140,20 @@ test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" |
 SHA=`git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}'`
 git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
 
+num_cores=0
+core_read_commands=("nproc --all" "sysctl -n hw.ncpu" "echo 32")
+for cmd in $core_read_commands
+do
+  val=$(eval $cmd)
+  if [ $? -eq 0 ]; then
+    num_cores=$val
+    break
+  fi
+done
+
 echo "Updating mirror"
 cd ~/.reference
-repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+repo sync -j $num_cores 1>>$WORKSPACE/make.log 2>&1
 
 echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
 find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
@@ -153,7 +164,7 @@ test $? -eq 0 || error_exit "Repo Init at $SHA"
 
 echo "Updating tree for run $TS"
 cd $WORKSPACE
-repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+repo sync --no-clone-bundle --no-tags -j $num_cores 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Updating tree"
 test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
 

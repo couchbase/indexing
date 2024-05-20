@@ -1091,7 +1091,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, constraints *
 						if len(defn.UnexplodedSecExprs) > 0 {
 							secExprs = defn.UnexplodedSecExprs
 						} else {
-							secExprs, _, _ = common.GetUnexplodedExprs(defn.SecExprs, defn.Desc)
+							secExprs, _, _, _ = common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
 						}
 
 						status := IndexStatus{
@@ -3726,7 +3726,7 @@ func (s *rhSchedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *In
 
 	// TODO: Scheduled: Should we rename it to ScheduledBuild ?
 
-	secExprs, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc)
+	secExprs, _, _, _ := common.GetUnexplodedExprs(defn.SecExprs, defn.Desc, defn.HasVectorAttr)
 	// Use DefnId for InstId as a placeholder value because InstId cannot zero.
 	return &IndexStatus{
 		DefnId:       defn.DefnId,

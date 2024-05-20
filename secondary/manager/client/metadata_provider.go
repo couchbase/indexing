@@ -27,7 +27,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/query/expression"
-	"github.com/couchbase/query/expression/parser"
+	qparser "github.com/couchbase/query/expression/parser"
 
 	"github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
@@ -217,7 +217,8 @@ type watcherCallback func(string, c.IndexerId, c.IndexerId)
 var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
-	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio"}
+	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
+	"dimension", "similarity", "description"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -431,9 +432,10 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 // scope, collection params are ignored for now
 func (o *MetadataProvider) CreateIndexWithPlan(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
+	secExprs []string, desc []bool, hasVectorAttr []bool,
+	indexMissingLeadingKey, isPrimary bool,
 	scheme c.PartitionScheme, partitionKeys []string,
-	plan map[string]interface{}) (c.IndexDefnId, error, bool) {
+	plan map[string]interface{}, include []string, isBhive bool) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.findIndexByName(name, bucket, scope, collection) != nil {
@@ -442,8 +444,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	// Create index definition
 	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, scope, collection,
-		using, exprType, whereExpr, secExprs, desc, indexMissingLeadingKey,
-		isPrimary, scheme, partitionKeys, plan)
+		using, exprType, whereExpr, secExprs, desc, hasVectorAttr,
+		indexMissingLeadingKey, isPrimary, scheme, partitionKeys, plan,
+		include, isBhive)
 	if err != nil {
 		return c.IndexDefnId(0), err, retry
 	}
@@ -2181,9 +2184,10 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 // Create Index Defnition from DDL
 func (o *MetadataProvider) PrepareIndexDefn(
 	name, bucket, scope, collection, using, exprType, whereExpr string,
-	secExprs []string, desc []bool, indexMissingLeadingKey, isPrimary bool,
+	secExprs []string, desc []bool, hasVectorAttr []bool,
+	indexMissingLeadingKey, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
-	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
+	plan map[string]interface{}, includeExprs []string, isBhive bool) (*c.IndexDefn, error, bool) {
 
 	//
 	// Validation
@@ -2343,6 +2347,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		if err != nil {
 			return nil, err, retry
 		}
+
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v nodes %v", deferred, nodes)
@@ -2351,10 +2356,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	// Array index related information
 	//
 	isArrayIndex := false
+	isArrayDistinct := false
 	isArrayFlattened := false
 	arrayExprCount := 0
+	arrayExprPos := 0
 	skipFlattenExprsTillPos := 0
-	isArrayDistinct := false
+
 	for pos, exp := range secExprs {
 		// As `secExprs` in flattened array index are exploded,
 		// skip some `secExprs`
@@ -2371,6 +2378,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			isArrayFlattened = isFlatten
 			isArrayDistinct = isDistinct
 			arrayExprCount++
+			arrayExprPos = pos
 		}
 		if isArray && isFlatten {
 			numFlattenKeys, err := queryutil.NumFlattenKeys(exp)
@@ -2447,6 +2455,116 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	//
+	// Vector index
+	//
+
+	if hasVectorAttr != nil && len(secExprs) != len(hasVectorAttr) {
+		return nil,
+			errors.New("Fail to create vector index.  Vector attribute information is required for all expressions in the index."),
+			false
+	}
+
+	isCompositeVectorIndex := false
+	for _, val := range hasVectorAttr {
+		if val && isCompositeVectorIndex == false {
+			isCompositeVectorIndex = true
+		} else if val && isCompositeVectorIndex {
+			return nil,
+				errors.New("Fails to create index.  Multiple VECTOR attibutes are found. Only one expression with VECTOR attribute is supported per index."),
+				false
+		}
+	}
+
+	if (isBhive || isCompositeVectorIndex) && (version < c.INDEXER_VEC_VERSION || clusterVersion < c.INDEXER_VEC_VERSION) {
+		return nil,
+			errors.New("Fail to create vector index. This option is enabled after cluster is fully upgraded and there is no failed node."),
+			false
+	}
+
+	if isBhive == false && len(includeExprs) > 0 {
+		return nil,
+			errors.New("Fail to create vector index. Include expressions are only supported with BHIVE vector indexes"),
+			false
+	}
+
+	if isBhive {
+		return nil,
+			errors.New("Fail to create BHIVE index. BHIVE indexes are currently not supported"),
+			false
+	}
+
+	// Distinct arrays expressions with VECTOR attributes are not supported
+	if isArrayIndex && isArrayDistinct && hasVectorAttr != nil {
+		if isArrayFlattened == false && hasVectorAttr[arrayExprPos] {
+			return nil,
+				errors.New("Fail to create vector index. DISTINCT is not supported on array expression with VECTOR attributes"),
+				false
+		} else if isArrayFlattened {
+			for i := arrayExprPos; i < skipFlattenExprsTillPos; i++ {
+				if hasVectorAttr[i] {
+					return nil,
+						errors.New("Fail to create vector index. DISTINCT is not supported on array expression with VECTOR attributes"),
+						false
+				}
+			}
+		}
+	}
+
+	if isCompositeVectorIndex || isBhive {
+		storageMode := o.settings.StorageMode()
+
+		if storageMode != c.PlasmaDB {
+			return nil,
+				errors.New("Fail to create vector index. Vector indexes are supported only with Standard Global Secondary storage mode in Enterprise edition"),
+				false
+		}
+	}
+
+	// Validate include for array expression
+	for _, includeExpr := range includeExprs {
+		isIncludeExprArray, _, _, err := queryutil.IsArrayExpression(includeExpr)
+		if err != nil {
+			return nil,
+				errors.New(fmt.Sprintf("Fails to create vector index.  Error in parsing include expression %v : %v", includeExpr, err)),
+				false
+		}
+
+		if isIncludeExprArray {
+			return nil,
+				errors.New(fmt.Sprintf("Fails to create vector index.  Include fields can not be array expressions")),
+				false
+		}
+	}
+
+	var err error
+	// For a vector index, extract the fields from with nodes clause
+	var similarity c.VectorSimilarity
+	var dimension int
+	var quantizer *c.VectorQuantizer
+	if isBhive || isCompositeVectorIndex {
+		similarity, err = o.getVectorSimilarity(plan)
+		if err != nil || similarity == "" {
+			return nil, err, false
+		}
+
+		dimension, err = o.getVectorDimension(plan)
+		if err != nil || dimension == 0 {
+			return nil, err, false
+		}
+
+		quantizer, err = o.getVectorDescription(plan)
+		if err != nil || quantizer == nil {
+			return nil, err, false
+		}
+
+		if err := quantizer.IsValid(dimension); err != nil {
+			return nil,
+				fmt.Errorf("Failure to create vector index. Invalid product quantization scheme. Err: %v", err),
+				false
+		}
+	}
+
+	//
 	// Create Index Definition
 	//
 
@@ -2465,6 +2583,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		IsPrimary:              isPrimary,
 		SecExprs:               secExprs,
 		Desc:                   desc,
+		HasVectorAttr:          hasVectorAttr,
 		ExprType:               c.ExprType(exprType),
 		PartitionScheme:        partitionScheme,
 		PartitionKeys:          partitionKeys,
@@ -2487,6 +2606,18 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Collection:             collection,
 		HasArrItemsCount:       hasArrItemsCount,
 		IndexMissingLeadingKey: indexMissingLeadingKey,
+		Include:                includeExprs,
+		IsVectorIndex:          isBhive || isCompositeVectorIndex,
+	}
+
+	if idxDefn.IsVectorIndex {
+		idxDefn.VectorMeta = &c.VectorMetadata{
+			IsCompositeIndex: isCompositeVectorIndex,
+			IsBhive:          isBhive,
+			Dimension:        dimension,
+			Similarity:       similarity,
+			Quantizer:        quantizer,
+		}
 	}
 
 	idxDefn.NumReplica2.InitializeCounter(idxDefn.NumReplica)
@@ -3003,7 +3134,7 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 
 	secExprs := make(expression.Expressions, 0, len(secKeys))
 	for _, key := range secKeys {
-		expr, err := parser.Parse(key)
+		expr, err := qparser.Parse(key)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Fails to create index.  Invalid index key %v.", key))
 		}
@@ -3013,7 +3144,7 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 	partnExprs := make(expression.Expressions, 0, len(partitionKeys))
 	for _, key := range partitionKeys {
 
-		expr, err := parser.Parse(key)
+		expr, err := qparser.Parse(key)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Fails to create index.  Invalid partition key %v.", key))
 		}
@@ -3376,6 +3507,41 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	return residentRatio, nil, false
 }
 
+func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}) (c.VectorSimilarity, error) {
+	keyword := "similarity"
+	similarity, ok := plan[keyword].(string)
+	if !ok {
+		return "", fmt.Errorf("Fail to create vector index. `%v` parameter not specified. It should be one of the following strings: `EUCLIDEAN`, `DOT_PRODUCT`, `COSINE_SIM`, `L2`", keyword)
+	}
+
+	switch strings.ToUpper(similarity) {
+	case string(c.EUCLIDEAN), string(c.L2), string(c.COSINE_SIM), string(c.DOT_PRODUCT):
+		return c.VectorSimilarity(similarity), nil
+	default:
+		return "", fmt.Errorf("Fail to create vector index. Invalid `%v` parameter. It should be one of the following strings: `EUCLIDEAN`, `DOT_PRODUCT`, `COSINE_SIM`, `L2`", keyword)
+	}
+}
+
+func (o *MetadataProvider) getVectorDimension(plan map[string]interface{}) (int, error) {
+	keyword := "dimension"
+	dimension_float64, ok1 := plan[keyword].(float64)
+	if !ok1 {
+		dimension_int, ok2 := plan[keyword].(int)
+		if !ok2 {
+			return 0, fmt.Errorf("Fail to create vector index. Missing/Invalid `%v` parameter in the with clause", keyword)
+		}
+
+		if dimension_int == 0 {
+			return 0, fmt.Errorf("Fail to create vector index. `%v` parameter should be greater than 0", keyword)
+		}
+		return dimension_int, nil
+	}
+	if int(dimension_float64) == 0 {
+		return 0, fmt.Errorf("Fail to create vector index. `%v` parameter should be greater than 0", keyword)
+	}
+	return int(dimension_float64), nil
+}
+
 func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool, legacy bool) ([]*watcher, error, bool) {
 
 	var watchers []*watcher
@@ -3456,6 +3622,15 @@ RETRY1:
 	}
 
 	return watchers, nil, false
+}
+
+func (o *MetadataProvider) getVectorDescription(plan map[string]interface{}) (*c.VectorQuantizer, error) {
+	keyword := "description"
+	if val, ok := plan[keyword].(string); !ok {
+		return nil, errors.New("Description is mandatory to create vector index")
+	} else {
+		return c.ParseVectorDesciption(val)
+	}
 }
 
 func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, bool, error) {
