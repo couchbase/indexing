@@ -995,13 +995,14 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 	return countResp.GetCount(), ru, nil
 }
 
-func (c *GsiScanClient) Scan3(
+func (c *GsiScanClient) Scan(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
+	indexVector *IndexVector) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1135,16 +1136,17 @@ func (c *GsiScanClient) Scan3(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
-	return c.doStreamingWithRetry(requestId, req, callb, "Scan3", retry)
+	return c.doStreamingWithRetry(requestId, req, callb, "Scan", retry)
 }
 
-func (c *GsiScanClient) Scan3Primary(
+func (c *GsiScanClient) ScanPrimary(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, tsvector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{}) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool, scanParams map[string]interface{},
+	indexVector *IndexVector) (error, bool) {
 
 	var what string
 	// serialize scans
