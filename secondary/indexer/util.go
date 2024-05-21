@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,16 @@ func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Slice
 		instId = inst.RealInstId
 	}
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
+}
+
+func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
+	indexPath := IndexPath(inst, partnId, sliceId)
+	instId := inst.InstId
+	if inst.IsProxy() {
+		instId = inst.RealInstId
+	}
+	codebookName := fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
+	return filepath.Join(indexPath, "codebook", codebookName)
 }
 
 // This has to follow the pattern in IndexPath function defined above.
