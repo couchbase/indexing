@@ -1,0 +1,61 @@
+name: standalone_runner
+
+services:
+  ci:
+    build:
+      dockerfile: ci_machine.dockerfile
+      args:
+        PEGGED: $PEGGED
+        # RELEASE: 8.0.0
+        # MANIFEST: couchbase-server/morpheus/8.0.0.xml
+        CIBOT: false
+        MODE: "unit,functional"
+        USERNAME: $GITHUB_USERNAME # gerrit username
+      tags:
+        - ci_machine:latest
+        - ci_machine:$PEGGED
+      secrets:
+        - github_key
+        - gerrit_key
+      ulimits:
+        nofile:
+          soft: 200000
+          hard: 400000
+    secrets:
+      - github_key
+      - gerrit_key
+    ports:
+      - "8091-8095/tcp"
+      - "11200-11220/tcp"
+      - "9000-9120/tcp"
+      - 2222:22
+    volumes:
+      - build:/home/bot/build:rw
+      - var-www:/var/www:rw
+      - depscache:/home/bot/.cbdepscache:rw
+      - depscache:/home/bot/.cbdepcache:rw
+      - $HOME/testdata:/home/bot/testdata
+  apache:
+    build:
+      dockerfile: apache_server.dockerfile
+    volumes:
+      - var-www:/var/www/:ro
+    ports:
+      - 8080:80
+secrets:
+  github_key:
+    # if you are using password based private key file, use the following command to generate
+    # a new file (same private key) without a password -
+    # cd $HOME/.ssh && cp <github_private_key> github_password_less
+    # ssh-keygen -p -f github_password_less
+    file: $HOME/.ssh/github_password_less
+  gerrit_key:
+    # if you are using password based private key file, use the following command to generate
+    # a new file (same private key) without a password -
+    # cd $HOME/.ssh && cp <gerrit_private_key> gerrit_password_less
+    # ssh-keygen -p -f gerrit_password_less
+    file: $HOME/.ssh/gerrit_password_less
+volumes:
+  var-www:
+  build:
+  depscache:
