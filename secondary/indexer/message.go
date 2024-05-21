@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -2575,6 +2576,8 @@ type MsgStartShardTransfer struct {
 	isPeerTransfer bool
 
 	newAlternateShardIds []string
+
+	codebookPaths []string
 }
 
 func (m *MsgStartShardTransfer) GetMsgType() MsgType {
@@ -2583,6 +2586,18 @@ func (m *MsgStartShardTransfer) GetMsgType() MsgType {
 
 func (m *MsgStartShardTransfer) GetShardIds() []common.ShardId {
 	return m.shardIds
+}
+
+func (m *MsgStartShardTransfer) GetCodebookPaths() []string {
+	return m.codebookPaths
+}
+
+func (m *MsgStartShardTransfer) GetCodebookNames() []string {
+	var codebookNames []string
+	for _, codebookPath := range m.codebookPaths {
+		codebookNames = append(codebookNames, filepath.Base(codebookPath))
+	}
+	return codebookNames
 }
 
 // GetRebalanceId returns the rebalance task ID.
@@ -2698,6 +2713,9 @@ func (m *MsgStartShardTransfer) String() string {
 		fmt.Fprintf(sbp, " Task Type: Rebalance ")
 		fmt.Fprintf(sbp, " IsPeerTransfer: %v", m.isPeerTransfer)
 		fmt.Fprintf(sbp, " NewAlternateShardIds: %v", m.newAlternateShardIds)
+		if len(m.codebookPaths) != 0 {
+			fmt.Fprintf(sbp, " CodebookNames: %v", m.GetCodebookNames())
+		}
 	}
 	fmt.Fprintf(sbp, " Destination: %v ", m.destination)
 	fmt.Fprintf(sbp, " Region: %v ", m.region)

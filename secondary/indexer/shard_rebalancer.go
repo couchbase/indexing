@@ -1213,6 +1213,8 @@ loop:
 		progressCh: progressCh,
 
 		newAlternateShardIds: tt.NewAlternateShardIds,
+
+		codebookPaths: getCodebookPaths(tt),
 	}
 
 	if sr.canMaintainShardAffinity {
@@ -4517,6 +4519,23 @@ func asyncCollectProgress(progHolder *float64Holder, collector func() float64, d
 			return
 		}
 	}
+}
+
+func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
+
+	for _, idxInst := range tt.IndexInsts {
+		if idxInst.Defn.IsVectorIndex {
+			for _, partnId := range idxInst.Defn.Partitions {
+				if idxInst.CodebookPath == nil {
+					continue
+				}
+				if codebookPath, ok := idxInst.CodebookPath[partnId]; ok {
+					codebookPaths = append(codebookPaths, codebookPath)
+				}
+			}
+		}
+	}
+	return codebookPaths
 }
 
 func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId string) {
