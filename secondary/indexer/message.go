@@ -226,6 +226,8 @@ const (
 
 	START_PEER_SERVER
 	STOP_PEER_SERVER
+
+	CODEBOOK_TRANSFER_RESPONSE
 )
 
 type Message interface {
@@ -2747,6 +2749,33 @@ func (m *MsgShardTransferResp) GetShardIds() []common.ShardId {
 }
 
 func (m *MsgShardTransferResp) GetRespCh() chan Message {
+	return m.respCh
+}
+
+type MsgCodebookTransferResp struct {
+	errMap        map[string]error
+	codebookPaths []string
+	shardIds      []common.ShardId
+	respCh        chan Message
+}
+
+func (m *MsgCodebookTransferResp) GetMsgType() MsgType {
+	return CODEBOOK_TRANSFER_RESPONSE
+}
+
+func (m *MsgCodebookTransferResp) GetErrorMap() map[string]error {
+	return m.errMap
+}
+
+func (m *MsgCodebookTransferResp) GetShardIds() []common.ShardId {
+	return m.shardIds
+}
+
+func (m *MsgCodebookTransferResp) GetCodebookPaths() []string {
+	return m.codebookPaths
+}
+
+func (m *MsgCodebookTransferResp) GetRespCh() chan Message {
 	return m.respCh
 }
 

@@ -1247,69 +1247,73 @@ loop:
 			l.Infof("ShardRebalancer::startShardTransfer Received response for transfer of "+
 				"shards: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
 
-			msg := respMsg.(*MsgShardTransferResp)
-			errMap := msg.GetErrorMap()
-			shardPaths := msg.GetShardPaths()
+			switch respMsg.GetMsgType() {
 
-			hasErr := false
-			for shardId, err := range errMap {
-				if err != nil {
-					hasErr = true
+			case SHARD_TRANSFER_RESPONSE:
+				msg := respMsg.(*MsgShardTransferResp)
+				errMap := msg.GetErrorMap()
+				shardPaths := msg.GetShardPaths()
 
-					l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
-						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-						tt.Destination, tt.Region, shardId, shardPaths, err)
+				hasErr := false
+				for shardId, err := range errMap {
+					if err != nil {
+						hasErr = true
 
-					unlockShards(tt.ShardIds, sr.supvMsgch)
+						l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
+							" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+							tt.Destination, tt.Region, shardId, shardPaths, err)
 
-					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					if err == ErrIndexRollback {
-						if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
+						unlockShards(tt.ShardIds, sr.supvMsgch)
+
+						// Invoke clean-up for all shards even if error is observed for one shard transfer
+						if err == ErrIndexRollback {
+							if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
+								sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+								sr.setTransferTokenError(ttid, tt, err.Error())
+								return
+							} else {
+								retryCount++
+								// Clean up the transferred data with nil error and retry transfer
+								// If transfer could not be completed after configured attempts, then set
+								// error in transfer token
+								sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil, true)
+								goto loop
+							}
+						} else if strings.Contains(err.Error(), "context canceled") {
+							continue // Do not set this error in transfer token. Look for other errors
+						} else {
 							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
 							sr.setTransferTokenError(ttid, tt, err.Error())
 							return
-						} else {
-							retryCount++
-							// Clean up the transferred data with nil error and retry transfer
-							// If transfer could not be completed after configured attempts, then set
-							// error in transfer token
-							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil, true)
-							goto loop
 						}
-					} else if strings.Contains(err.Error(), "context canceled") {
-						continue // Do not set this error in transfer token. Look for other errors
-					} else {
-						sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
-						sr.setTransferTokenError(ttid, tt, err.Error())
-						return
 					}
 				}
-			}
 
-			// All errors are "context canceled" errors. Use the same to update transfer token
-			if hasErr {
-				for _, err := range errMap {
-					if err != nil {
-						sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
-						sr.setTransferTokenError(ttid, tt, err.Error())
-						return
+				// All errors are "context canceled" errors. Use the same to update transfer token
+				if hasErr {
+					for _, err := range errMap {
+						if err != nil {
+							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+							sr.setTransferTokenError(ttid, tt, err.Error())
+							return
+						}
 					}
 				}
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER)
+				///////////////////////////////////////////////////////////////////
+
+				// No errors are observed during shard transfer. Change the state of
+				// the transfer token and update metaKV
+				sr.mu.Lock()
+				defer sr.mu.Unlock()
+
+				tt.ShardTransferTokenState = c.ShardTokenRestoreShard
+				tt.ShardPaths = shardPaths
+				setTransferTokenInMetakv(ttid, tt)
+				return
 			}
-
-			////////////// Testing code - Not used in production //////////////
-			testcode.TestActionAtTag(sr.config.Load(), testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER)
-			///////////////////////////////////////////////////////////////////
-
-			// No errors are observed during shard transfer. Change the state of
-			// the transfer token and update metaKV
-			sr.mu.Lock()
-			defer sr.mu.Unlock()
-
-			tt.ShardTransferTokenState = c.ShardTokenRestoreShard
-			tt.ShardPaths = shardPaths
-			setTransferTokenInMetakv(ttid, tt)
-			return
 
 		case stats := <-progressCh:
 			sr.updateTransferStatistics(ttid, stats)
