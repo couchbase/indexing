@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -311,4 +312,29 @@ func clusterVersion(clusterAddr string) uint64 {
 	}
 
 	return cinfo.GetClusterVersion()
+}
+
+// *******************************************
+// Direct copy of util function from plasma
+// *******************************************
+func isNetPath(location string) bool {
+	const urlSchemePattern = "^[a-zA-Z][a-zA-Z0-9+-.]*://"
+	rex, _ := regexp.Compile(urlSchemePattern)
+	return rex.MatchString(location)
+}
+
+// supports both file system paths and urls
+// for net, parent url must contain a valid host/bucket
+// do not use this function without a valid parent path
+func joinURIPath(parent string, elem ...string) string {
+	if isNetPath(parent) {
+		urlPath := parent
+		for _, e := range elem {
+			urlPath = fmt.Sprintf("%s/%s", urlPath, filepath.ToSlash(e))
+		}
+		return urlPath
+	} else {
+		elem = append([]string{parent}, elem...)
+		return filepath.Join(elem...)
+	}
 }
