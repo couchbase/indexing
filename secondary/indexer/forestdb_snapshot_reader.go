@@ -22,7 +22,7 @@ var (
 )
 
 type CmpEntry func(IndexKey, IndexEntry) int
-type EntryCallback func([]byte) error
+type EntryCallback func(key, value []byte) error
 
 // Approximate items count
 func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
@@ -38,7 +38,7 @@ func (s *fdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inc
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -68,7 +68,7 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 
 	previousRow := ctx.GetCursorKey()
 
-	callb := func(entry []byte) error {
+	callb := func(entry, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -132,7 +132,7 @@ func (s *fdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopc
 	var err error
 	var count uint64
 
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -154,7 +154,7 @@ func (s *fdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopc
 
 func (s *fdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -231,7 +231,7 @@ loop:
 			break loop
 		}
 
-		err = callback(it.Key())
+		err = callback(it.Key(), it.Value())
 		if err != nil {
 			return err
 		}
@@ -271,7 +271,7 @@ func (s *fdbSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
-	cmpFn CmpEntry, callback func([]byte) error) error {
+	cmpFn CmpEntry, callback EntryCallback) error {
 	var err error
 
 	var entry IndexEntry
@@ -279,7 +279,7 @@ func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
 		s.newIndexEntry(it.Key(), &entry)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
-				err = callback(it.Key())
+				err = callback(it.Key(), it.Value())
 				if err != nil {
 					return err
 				}

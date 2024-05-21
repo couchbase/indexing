@@ -8,8 +8,9 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
 	"sync/atomic"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 //-----------------------------
@@ -30,9 +31,10 @@ type allocator struct {
 }
 
 type Row struct {
-	key  []byte
-	len  int
-	last bool
+	key   []byte
+	value []byte
+	len   int
+	last  bool
 
 	mem *allocator
 }
@@ -58,9 +60,7 @@ type Queue struct {
 	mem *allocator
 }
 
-//
 // Constructor
-//
 func NewQueue(size int64, limit int64, notifych chan bool, mem *allocator) *Queue {
 
 	rbuf := &Queue{}
@@ -80,9 +80,7 @@ func NewQueue(size int64, limit int64, notifych chan bool, mem *allocator) *Queu
 	return rbuf
 }
 
-//
 // This funciton notifies a new row added to buffer.
-//
 func (b *Queue) notifyEnq() {
 
 	select {
@@ -98,9 +96,7 @@ func (b *Queue) notifyEnq() {
 	}
 }
 
-//
 // This funciton notifies a new row removed from buffer
-//
 func (b *Queue) notifyDeq() {
 
 	select {
@@ -109,10 +105,8 @@ func (b *Queue) notifyDeq() {
 	}
 }
 
-//
 // Add a new row to the rotating buffer.  If the buffer is full,
 // this function will be blocked.
-//
 func (b *Queue) Enqueue(key *Row) {
 
 	for {
@@ -143,10 +137,8 @@ func (b *Queue) Enqueue(key *Row) {
 	}
 }
 
-//
 // Remove the first row from the rotating buffer.  If the buffer is empty,
 // this function will be blocked.
-//
 func (b *Queue) Dequeue(row *Row) bool {
 
 	for {
@@ -181,10 +173,8 @@ func (b *Queue) Dequeue(row *Row) bool {
 	return false
 }
 
-//
 // Get a copy of the first row in the rotating buffer.  This
 // function is not blocked and will not return a copy.
-//
 func (b *Queue) Peek(row *Row) bool {
 
 	count := atomic.LoadInt64(&b.count)
@@ -323,10 +313,12 @@ func (r *allocator) Free() bool {
 //-----------------------------
 
 func (r *Row) copy(source *Row) {
-
 	r.len = source.len
 	r.last = source.last
 	r.copyKey(source.key)
+	if source.value != nil {
+		r.copyValue(source.value)
+	}
 }
 
 func (r *Row) copyKey(key []byte) {
@@ -351,15 +343,48 @@ func (r *Row) copyKey(key []byte) {
 	return
 }
 
+func (r *Row) copyValue(val []byte) {
+	if len(val) == 0 {
+		if r.value != nil {
+			r.value = r.value[:0]
+		}
+		return
+	}
+
+	if r.value == nil {
+		r.initValBuf()
+	}
+
+	if len(val) > cap(r.value) {
+		r.value = make([]byte, 0, len(val))
+	}
+
+	r.value = r.value[:0]
+	r.value = append(r.value, val...)
+
+	return
+}
+
 func (r *Row) initKeyBuf() {
 	bufPtr := r.mem.get()
 	r.key = bufPtr[:0]
 }
 
+func (r *Row) initValBuf() {
+	bufPtr := r.mem.get()
+	r.value = bufPtr[:0]
+}
+
+// freeKeyBuf clears key and value buffers
 func (r *Row) freeKeyBuf() {
 	if r.key != nil {
 		r.mem.put(r.key)
 		r.key = nil
+	}
+
+	if r.value != nil {
+		r.mem.put(r.value)
+		r.value = nil
 	}
 }
 

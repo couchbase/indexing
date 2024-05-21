@@ -3952,7 +3952,7 @@ func (s *plasmaSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, 
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -3985,7 +3985,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 	revbuf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(revbuf)
 
-	callb := func(entry []byte) error {
+	callb := func(entry, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -4056,7 +4056,7 @@ func (s *plasmaSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, st
 	var err error
 	var count uint64
 
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -4078,7 +4078,7 @@ func (s *plasmaSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, st
 
 func (s *plasmaSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -4201,6 +4201,11 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 loop:
 	for it.Valid() {
 		itm := it.Key()
+		val := ([]byte)(nil)
+		if it.HasValue() {
+			val = it.Value()
+		}
+
 		s.newIndexEntry(itm, &entry)
 
 		// Iterator has reached past the high key, no need to scan further
@@ -4208,7 +4213,7 @@ loop:
 			break loop
 		}
 
-		err = callback(entry.Bytes())
+		err = callback(entry.Bytes(), val)
 		if err != nil {
 			return err
 		}
@@ -4269,17 +4274,21 @@ func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
-	cmpFn CmpEntry, callback func([]byte) error, mt *AggregateRecorderWithCtx,
+	cmpFn CmpEntry, callback EntryCallback, mt *AggregateRecorderWithCtx,
 	user string, loopCount, numBytes uint64) error {
 	var err error
 
 	var entry IndexEntry
 	for ; it.Valid(); it.Next() {
 		itm := it.Key()
+		val := ([]byte)(nil)
+		if it.HasValue() {
+			val = it.Value()
+		}
 		s.newIndexEntry(itm, &entry)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
-				err = callback(itm)
+				err = callback(itm, val)
 				if err != nil {
 					return err
 				}

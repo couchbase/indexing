@@ -188,7 +188,7 @@ func (s *IndexScanSource) Routine() error {
 	}
 
 	iterCount := 0
-	fn := func(entry []byte) error {
+	fn := func(entry, val []byte) error {
 		if iterCount%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && r.hasRollback != nil && r.hasRollback.Load() == true {
 			return ErrIndexRollback
 		} else if iterCount%SCAN_SHUTDOWN_ERROR_BATCHSIZE == 0 {
