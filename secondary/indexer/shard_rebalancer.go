@@ -1247,7 +1247,27 @@ loop:
 			l.Infof("ShardRebalancer::startShardTransfer Received response for transfer of "+
 				"shards: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
 
+			// ShardRebalancer can only receive SHARD_TRANSFER_RESPONSE after successful transfer of Codebooks
+			// Receiving CODEBOOK_TRANSFER_RESPONSE then SHARD_TRANSFER_RESPONSE are sequential
 			switch respMsg.GetMsgType() {
+			case CODEBOOK_TRANSFER_RESPONSE:
+				msg := respMsg.(*MsgCodebookTransferResp)
+				errMap := msg.GetErrorMap()
+				codebookPaths := msg.GetCodebookPaths()
+
+				// for any error received for codebook transfer, consider it a rebalance failure and initiate cleanup
+				for codebookName, err := range errMap {
+					if err != nil {
+						l.Errorf("ShardRebalancer::startShardTransfer Observed error during codebook transfer"+
+							" for destination: %v, region: %v, codebookName:%v, codebooksPaths: %v, err: %v. Initiating transfer clean-up",
+							tt.Destination, tt.Region, codebookName, codebookPaths, err)
+
+						// Invoke clean-up for all shards even if error is observed for one shard transfer
+						// TODO initiate codebook cleanup sr.initiateCodebookTransferCleanup()
+						sr.setTransferTokenError(ttid, tt, err.Error())
+						return
+					}
+				}
 
 			case SHARD_TRANSFER_RESPONSE:
 				msg := respMsg.(*MsgShardTransferResp)
@@ -1315,6 +1335,7 @@ loop:
 				return
 			}
 
+		// TODO add codebook transfer stats in the progressCh
 		case stats := <-progressCh:
 			sr.updateTransferStatistics(ttid, stats)
 			l.Infof("ShardRebalancer::startShardTranfser ShardId: %v bytesWritten: %v, totalBytes: %v, transferRate: %v",
