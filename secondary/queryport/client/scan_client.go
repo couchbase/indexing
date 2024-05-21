@@ -218,7 +218,7 @@ func (c *GsiScanClient) Lookup(
 		User:             proto.String(scanParams["user"].(string)),
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -348,7 +348,7 @@ func (c *GsiScanClient) Range(
 		User:             proto.String(scanParams["user"].(string)),
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -387,7 +387,7 @@ func (c *GsiScanClient) RangePrimary(
 		User:             proto.String(scanParams["user"].(string)),
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -418,7 +418,7 @@ func (c *GsiScanClient) ScanAll(
 		User:             proto.String(scanParams["user"].(string)),
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -520,7 +520,7 @@ func (c *GsiScanClient) MultiScan(
 		User:             proto.String(scanParams["user"].(string)),
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -627,7 +627,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 		User:             proto.String(scanParams["user"].(string)),
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -663,7 +663,7 @@ func (c *GsiScanClient) CountLookup(
 		PartitionIds: partnIds,
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 	resp, _, err := c.doRequestResponse(req, requestId, retry)
@@ -697,7 +697,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 		PartitionIds: partnIds,
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 	resp, _, err := c.doRequestResponse(req, requestId, retry)
@@ -745,7 +745,7 @@ func (c *GsiScanClient) CountRange(
 		PartitionIds: partnIds,
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -784,7 +784,7 @@ func (c *GsiScanClient) CountRangePrimary(
 		PartitionIds: partnIds,
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -878,7 +878,7 @@ func (c *GsiScanClient) MultiScanCount(
 	}
 
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -979,7 +979,7 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 	}
 
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -1110,6 +1110,18 @@ func (c *GsiScanClient) Scan(
 		partnIds[i] = uint64(partnId)
 	}
 
+	// IndexVector
+	var protoIndexVector *protobuf.IndexVector
+	if indexVector != nil {
+		protoIndexVector = &protobuf.IndexVector{
+			QueryVector:  make([]float32, len(indexVector.QueryVector)),
+			IndexKeyPos:  proto.Int32(int32(indexVector.IndexKeyPos)),
+			Probes:       proto.Int32(int32(indexVector.Probes)),
+			ActualVector: proto.Bool(indexVector.ActualVector),
+		}
+		copy(protoIndexVector.QueryVector, indexVector.QueryVector)
+	}
+
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
@@ -1130,9 +1142,10 @@ func (c *GsiScanClient) Scan(
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
 		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
 		User:             proto.String(scanParams["user"].(string)),
+		IndexVector:      protoIndexVector,
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
@@ -1258,6 +1271,18 @@ func (c *GsiScanClient) ScanPrimary(
 		partnIds[i] = uint64(partnId)
 	}
 
+	// IndexVector
+	var protoIndexVector *protobuf.IndexVector
+	if indexVector != nil {
+		protoIndexVector = &protobuf.IndexVector{
+			QueryVector:  make([]float32, len(indexVector.QueryVector)),
+			IndexKeyPos:  proto.Int32(int32(indexVector.IndexKeyPos)),
+			Probes:       proto.Int32(int32(indexVector.Probes)),
+			ActualVector: proto.Bool(indexVector.ActualVector),
+		}
+		copy(protoIndexVector.QueryVector, indexVector.QueryVector)
+	}
+
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
@@ -1278,9 +1303,10 @@ func (c *GsiScanClient) ScanPrimary(
 		DataEncFmt:       proto.Uint32(uint32(dataEncFmt)),
 		SkipReadMetering: proto.Bool(scanParams["skipReadMetering"].(bool)),
 		User:             proto.String(scanParams["user"].(string)),
+		IndexVector:      protoIndexVector,
 	}
 	if tsvector != nil {
-		req.Vector = protobuf.NewTsConsistency(
+		req.TsVector = protobuf.NewTsConsistency(
 			tsvector.Vbnos, tsvector.Seqnos, tsvector.Vbuuids, tsvector.Crc64)
 	}
 
