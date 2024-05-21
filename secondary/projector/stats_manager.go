@@ -291,162 +291,180 @@ func (sm *statsManager) logger() {
 				ps.evalStatsLogTime = now
 			}
 
-			evalStatLoggingThreshold := atomic.LoadInt64(&sm.evalStatLoggingThreshold) * 1000
-
 			// For each topic
 			for _, feedStats := range ps.feedStats {
 				// For each bucket
 				for _, keyspaceIdStats := range feedStats.keyspaceIdStats {
 					kvdataClosed := false
 					if logStats {
-						for key, value := range keyspaceIdStats.dcpStats {
-							switch value.(type) {
-							case *memcached.DcpStats:
-								val := value.(*memcached.DcpStats)
-								if !val.IsClosed() {
-									stats, latency := val.String()
-									logging.Infof("%v dcp latency stats %v", key, latency)
-									logging.Infof("%v stats: %v", key, stats)
-								} else {
-									logging.Tracef("%v closed", key)
-								}
-							default:
-								logging.Errorf("Unknown Dcp stats type for %v", key)
-								continue
-							}
-						}
+						sm.doLogDcpStats(keyspaceIdStats.dcpStats)
 
-						for key, value := range keyspaceIdStats.kvstats {
-							switch (value).(type) {
-							case *KvdataStats:
-								val := (value).(*KvdataStats)
-								if !val.IsClosed() {
-									stats, _ := val.String()
-									logging.Infof("%v stats: %v", key, stats)
-								} else {
-									kvdataClosed = true
-									logging.Tracef("%v closed", key)
-								}
-							default:
-								logging.Errorf("Unknown Kvdata stats type for %v", key)
-								continue
-							}
-						}
+						kvdataClosed = sm.doLogKvStats(keyspaceIdStats.kvstats, logVbsenos)
 
-						for key, value := range keyspaceIdStats.wrkrStats {
-							// Get the type of any worker
-							switch (value[0]).(type) {
-							case *WorkerStats:
-								val := (value[0]).(*WorkerStats)
-								if !val.IsClosed() {
-									logging.Infof("%v stats: %v", key, Accmulate(value))
-								}
-							default:
-								logging.Errorf("Unknown worker stats type for %v", key)
-								continue
-							}
-						}
-					}
-
-					// Log vbseqno's for every "vbseqnosLogInterval" seconds
-					if logVbsenos {
-						for key, value := range keyspaceIdStats.kvstats {
-							switch (value).(type) {
-							case *KvdataStats:
-								val := (value).(*KvdataStats)
-								if !val.IsClosed() {
-									_, vbseqnos := val.String()
-									logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
-								} else {
-									logging.Tracef("%v closed", key)
-								}
-							default:
-								logging.Errorf("Unknown Kvdata stats type for %v", key)
-								continue
-							}
-						}
+						sm.doLogWrkrStats(keyspaceIdStats.wrkrStats)
 					}
 
 					// Log eval stats for every evalStatsLogInterval
 					if logEvalStats && !kvdataClosed {
-						// As of this commit, only IndexEvaluatorStats are supported
-						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", keyspaceIdStats.keyspaceId, keyspaceIdStats.topic, keyspaceIdStats.opaque)
-						var evalStats string
-						var skippedStr string
-
-						for key, value := range keyspaceIdStats.evaluatorStats {
-							switch (value).(type) {
-							case *protobuf.IndexEvaluatorStats:
-								keyStr := fmt.Sprintf("%v", key)
-								avg := value.(*protobuf.IndexEvaluatorStats).MovingAvg()
-
-								if avg > evalStatLoggingThreshold {
-									evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
-								}
-
-								errSkip := value.(*protobuf.IndexEvaluatorStats).GetAndResetErrorSkip()
-								errSkipAll := value.(*protobuf.IndexEvaluatorStats).GetErrorSkipAll()
-								if errSkipAll > 0 {
-									evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
-								}
-								if errSkip != 0 {
-									if len(skippedStr) == 0 {
-										skippedStr = fmt.Sprintf("In last %v, projector skipped "+
-											"evaluating some documents due to errors. Please see the "+
-											"projector.log for details. Skipped document counts for "+
-											"following indexes are:\n",
-											time.Duration(atomic.LoadInt64(&sm.evalStatsLogInterval)*1e9))
-									}
-									skippedStr += fmt.Sprintf("\"%v\":%v,", key, errSkip)
-								}
-							default:
-								logging.Errorf("%v Unknown type for evaluator stats", logPrefix)
-								continue
-							}
-						}
-						if len(evalStats) > 0 {
-							logging.Infof("%v stats: {%v}", logPrefix, evalStats[0:len(evalStats)-1])
-						}
-						if len(skippedStr) != 0 {
-							// Some mutations were skipped by the index evaluator.
-							// Report it in the console logs.
-							skippedStr = skippedStr[0 : len(skippedStr)-1]
-							cfg := sm.config.Load()
-							clusterAddr, ok := cfg["projector.clusterAddr"]
-							if ok {
-								common.Console(clusterAddr.String(), skippedStr)
-							}
-						}
+						sm.doLogEvaluatorStats(
+							keyspaceIdStats.evaluatorStats, // evalStatsMap
+							keyspaceIdStats.keyspaceId,     // keyspaceId
+							keyspaceIdStats.topic,          // topic
+							keyspaceIdStats.opaque,         // opaque
+						)
 					}
 				}
 
 				if logStats {
-					// Log the endpoint stats for this feed
-					for key, value := range feedStats.endpStats {
-						switch value.(type) {
-						case *dataport.EndpointStats:
-							val := value.(*dataport.EndpointStats)
-							if !val.IsClosed() {
-								logging.Infof("%v stats: %v", key, val.String())
-							} else {
-								logging.Tracef("%v closed", key)
-							}
-						default:
-							logging.Errorf("Unknown Endpoint stats type for %v", key)
-							continue
-						}
-					}
+					sm.doLogEndpStats(feedStats.endpStats)
 				}
 			}
-			logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,"+
-				"\"gc_percent\":%v, \"throttle_level\":%v}", memmanager.GetCpuPercent(), memmanager.GetRSS(), memmanager.GetMemFree(),
-				memmanager.GetMemTotal(), memmanager.GetGCPercent(), memThrottler.GetThrottleLevel())
+			sm.doLogProjectorStats()
 		}
 		if atomic.LoadInt32(&sm.stopLogger) == 1 {
 			return
 		}
 		time.Sleep(time.Second * time.Duration(atomic.LoadInt64(&sm.statsLogDumpInterval)))
 	}
+}
+
+func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}) {
+	for key, value := range dcpStats {
+		switch val := value.(type) {
+		case *memcached.DcpStats:
+			if !val.IsClosed() {
+				stats, latency := val.String()
+				logging.Infof("%v dcp latency stats %v", key, latency)
+				logging.Infof("%v stats: %v", key, stats)
+			} else {
+				logging.Tracef("%v closed", key)
+			}
+		default:
+			logging.Errorf("Unknown Dcp stats type for %v", key)
+			continue
+		}
+	}
+}
+
+func (sm *statsManager) doLogKvStats(kvstats map[string]interface{}, logVbSeqNos bool) bool {
+	var kvdataClosed = false
+	for key, value := range kvstats {
+		switch val := (value).(type) {
+		case *KvdataStats:
+			if !val.IsClosed() {
+				stats, vbseqnos := val.String()
+				logging.Infof("%v stats: %v", key, stats)
+				if logVbSeqNos {
+					logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
+				}
+			} else {
+				kvdataClosed = true
+				logging.Tracef("%v closed", key)
+			}
+		default:
+			logging.Errorf("Unknown Kvdata stats type for %v", key)
+			continue
+		}
+	}
+	return kvdataClosed
+}
+
+func (sm *statsManager) doLogWrkrStats(wrkrStats map[string][]interface{}) {
+	for key, value := range wrkrStats {
+		// Get the type of any worker
+		switch val := (value[0]).(type) {
+		case *WorkerStats:
+			if !val.IsClosed() {
+				logging.Infof("%v stats: %v", key, Accmulate(value))
+			}
+		default:
+			logging.Errorf("Unknown worker stats type for %v", key)
+			continue
+		}
+	}
+}
+
+func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
+	keyspaceId, topic string, opaque uint16) {
+
+	evalStatLoggingThreshold := atomic.LoadInt64(&sm.evalStatLoggingThreshold) * 1000
+
+	// As of this commit, only IndexEvaluatorStats are supported
+	logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", keyspaceId, topic, opaque)
+	var evalStats string
+	var skippedStr string
+
+	for key, value := range evalStatsMap {
+		switch val := (value).(type) {
+		case *protobuf.IndexEvaluatorStats:
+			keyStr := fmt.Sprintf("%v", key)
+			avg := val.MovingAvg()
+
+			if avg > evalStatLoggingThreshold {
+				evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
+			}
+
+			errSkip := val.GetAndResetErrorSkip()
+			errSkipAll := val.GetErrorSkipAll()
+			if errSkipAll > 0 {
+				evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
+			}
+			if errSkip != 0 {
+				if len(skippedStr) == 0 {
+					skippedStr = fmt.Sprintf("In last %v, projector skipped "+
+						"evaluating some documents due to errors. Please see the "+
+						"projector.log for details. Skipped document counts for "+
+						"following indexes are:\n",
+						time.Duration(atomic.LoadInt64(&sm.evalStatsLogInterval)*1e9))
+				}
+				skippedStr += fmt.Sprintf("\"%v\":%v,", key, errSkip)
+			}
+		default:
+			logging.Errorf("%v Unknown type for evaluator stats", logPrefix)
+			continue
+		}
+	}
+	if len(evalStats) > 0 {
+		logging.Infof("%v stats: {%v}", logPrefix, evalStats[0:len(evalStats)-1])
+	}
+	if len(skippedStr) != 0 {
+		// Some mutations were skipped by the index evaluator.
+		// Report it in the console logs.
+		skippedStr = skippedStr[0 : len(skippedStr)-1]
+		cfg := sm.config.Load()
+		clusterAddr, ok := cfg["projector.clusterAddr"]
+		if ok {
+			common.Console(clusterAddr.String(), skippedStr)
+		}
+	}
+}
+
+func (sm *statsManager) doLogEndpStats(endpStats map[string]interface{}) {
+	// Log the endpoint stats for this feed
+	for key, value := range endpStats {
+		switch val := value.(type) {
+		case *dataport.EndpointStats:
+			if !val.IsClosed() {
+				logging.Infof("%v stats: %v", key, val.String())
+			} else {
+				logging.Tracef("%v closed", key)
+			}
+		default:
+			logging.Errorf("Unknown Endpoint stats type for %v", key)
+			continue
+		}
+	}
+}
+
+func (sm *statsManager) doLogProjectorStats() {
+	logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,\"gc_percent\":%v, \"throttle_level\":%v}",
+		memmanager.GetCpuPercent(),
+		memmanager.GetRSS(),
+		memmanager.GetMemFree(),
+		memmanager.GetMemTotal(),
+		memmanager.GetGCPercent(),
+		memThrottler.GetThrottleLevel(),
+	)
 }
 
 func Accmulate(wrkr []interface{}) string {
