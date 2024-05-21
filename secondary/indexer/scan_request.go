@@ -38,6 +38,7 @@ const (
 	HeloReq                       = "helo"
 	MultiScanCountReq             = "multiscancount"
 	FastCountReq                  = "fastcountreq" //generated internally
+	VectorScanReq                 = "vectorscanreq"
 )
 
 type ScanRequest struct {
@@ -117,6 +118,8 @@ type ScanRequest struct {
 
 	User             string // For read metering
 	SkipReadMetering bool
+
+	queryVector []float32
 }
 
 type Projection struct {
@@ -438,6 +441,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 		r.setExplodePositions()
 
+		ivec := req.GetIndexVector()
+		if ivec != nil {
+			r.setVectorIndexParams(ivec)
+		}
+
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -461,11 +469,25 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		if err = r.setConsistency(cons, tsvector); err != nil {
 			return
 		}
+
+		ivec := req.GetIndexVector()
+		if ivec != nil {
+			r.setVectorIndexParams(ivec)
+		}
 	default:
 		err = ErrUnsupportedRequest
 	}
 
 	return
+}
+
+func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
+	// Populate query vector in req
+	qvec := ivec.GetQueryVector()
+	r.queryVector = append(r.queryVector, qvec...)
+
+	// Set Scan type to VectorScanReq so that we can process vector req differently
+	r.ScanType = VectorScanReq
 }
 
 func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
@@ -780,7 +802,7 @@ func (r *ScanRequest) fillFilterEquals(protoScan *protobuf.Scan, filter *Filter)
 	return nil
 }
 
-///// Compose Scans for Secondary Index
+// /// Compose Scans for Secondary Index
 // Create scans from sorted Index Points
 // Iterate over sorted points and keep track of applicable filters
 // between overlapped regions
@@ -845,7 +867,7 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 	return scans
 }
 
-///// Compose Scans for Primary Index
+// /// Compose Scans for Primary Index
 func lowInclude(lowInclusions []Inclusion) int {
 	for _, incl := range lowInclusions {
 		if incl == Low || incl == Both {
@@ -1755,14 +1777,20 @@ func (r *ScanRequest) hasAllEqualFiltersUpto(keyPos int) bool {
 // and atleast one equal filter exists.
 //
 // (1) "nil" value for high or low means the filter is unbounded on one end
-//     or the both ends. So, it cannot be an equality filter.
+//
+//	or the both ends. So, it cannot be an equality filter.
+//
 // (2) If Low == High AND
-//     (2.1) If Inclusion is Low or High, then the filter is contradictory.
-//     (2.2) If Inclusion is Neither, then everything will be filtered out,
-//           which is an unexpected behavior.
+//
+//	(2.1) If Inclusion is Low or High, then the filter is contradictory.
+//	(2.2) If Inclusion is Neither, then everything will be filtered out,
+//	      which is an unexpected behavior.
+//
 // (3) If there are multiple filters, and at least one filter has less number
-//     of composite filters as compared to the input keyPos, then for that
-//     filter the equality is unknown and hence return false.
+//
+//	of composite filters as compared to the input keyPos, then for that
+//	filter the equality is unknown and hence return false.
+//
 // So, for these cases, hasAllEqualFilters returns false.
 func (r *ScanRequest) hasAllEqualFilters(keyPos int) bool {
 
