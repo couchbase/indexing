@@ -32,6 +32,9 @@ import (
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
 var ErrRebalanceDone = errors.New("Shard rebalance done received")
 
+// TODO add the Prefix in Indexer settings
+const CODEBOOK_COPY_PREFIX = "codebook_v1"
+
 // ShardRebalancer embeds Rebalancer struct to reduce code
 // duplication across common functions
 type ShardRebalancer struct {

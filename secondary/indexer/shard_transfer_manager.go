@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1171,4 +1173,57 @@ func authMiddlewareForShardTransfer(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) (err error) {
+	var srcDir, srcFile string
+	var sz int64
+	srcDir = stm.config["storage_dir"].String()
+
+	srcFile = filepath.Join(srcDir, codebookSrcPath)
+	if info, err := os.Stat(srcFile); info != nil {
+		sz = info.Size()
+	} else {
+		return fmt.Errorf("ShardTransferManager::TransferCodebook Codebook: %v does not exist, err:%v",
+			filepath.Base(codebookSrcPath), err)
+	}
+
+	dstPath := codebookCopier.GetCopyRoot()
+	dstFile := joinURIPath(dstPath, genCodebookFileStagingName(codebookSrcPath))
+	xferBytes, err := codebookCopier.CopyFile(codebookCopier.Context(), srcFile, dstFile, 0, sz)
+
+	logging.Infof("ShardTransferManager::TransferCodebook transferred bytes:%v, err:%v", xferBytes, err)
+	return err
+}
+
+func makeFileCopierForCodebook(msg *MsgStartShardTransfer) (plasma.Copier, error) {
+	cfg := generatePlasmaCopierConfigForCodebook(msg)
+	copyRoot := getCodebookRootDir(msg)
+	return plasma.MakeFileCopier(copyRoot, "", plasma.Env, &plasma.DefaultRateLimiter{}, cfg.CopyConfig)
+}
+
+func generatePlasmaCopierConfigForCodebook(msg *MsgStartShardTransfer) *plasma.Config {
+	cfg := plasma.DefaultConfig()
+	rebalanceID := msg.GetRebalanceId()
+	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithTLS(msg.GetTLSConfig())
+	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithAuth((plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback()))
+	cfg.CopyConfig.RPCHttpClientCfg.SessionKey = rebalanceID
+	return &cfg
+}
+
+func genCodebookFileStagingName(codebookSrcPath string) string {
+	return fmt.Sprintf("codebook_%v", filepath.Base(codebookSrcPath))
+}
+
+func getCodebookRootDir(msg *MsgStartShardTransfer) string {
+	rebalanceId := msg.GetRebalanceId()
+	ttid := msg.GetTransferTokenId()
+
+	// Delimiter ':' isn't a valid character for dir name in all platforms.
+	formatUUID := func(str string) string {
+		return strings.Replace(str, ":", "_", -1)
+	}
+
+	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
+	return joinURIPath(msg.GetDestination(), CODEBOOK_COPY_PREFIX, prefix)
 }
