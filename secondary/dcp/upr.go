@@ -36,7 +36,7 @@ const DCP_ADD_STREAM_ACTIVE_VB_ONLY = uint32(0x10) // 16
 // FailoverLog for list of vbuckets.
 type FailoverLog map[uint16]memcached.FailoverLog
 
-// Make a valid DCP feed name. These always begin with secidx:
+// Deprecated: Make a valid DCP feed name. These always begin with secidx:
 type DcpFeedName string
 
 func NewDcpFeedName(name string) DcpFeedName {
@@ -81,10 +81,10 @@ func (b *Bucket) GetFailoverLogs(
 			continue
 		}
 
-		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, uuid))
+		name := memcached.NewDcpFeedName2("getfailoverlog", b.Name, opaque, uuid, 0)
 		flags := uint32(0x0)
 		singleFeed, err := serverConn.StartDcpFeed(
-			name, 0, flags, nil, opaque, nil, config, 0)
+			name, 0, flags, nil, opaque, nil, config)
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +114,7 @@ type DcpFeed struct {
 	nodeFeeds map[string][]*FeedInfo // The DCP feeds of the individual nodes
 	vbfeedm   map[uint16]*FeedInfo
 	output    chan *memcached.DcpEvent // Same as C but writeably-typed
-	name      DcpFeedName              // name of this DCP feed
+	name      *memcached.DcpFeedname2  // name of this DCP feed
 	sequence  uint32                   // sequence number for this feed
 	opaque    uint16
 	flags     uint32
@@ -134,12 +134,11 @@ type DcpFeed struct {
 // No data will be sent on the channel unless vbuckets streams
 // are requested.
 func (b *Bucket) StartDcpFeed(
-	name DcpFeedName, sequence, flags uint32,
+	name *memcached.DcpFeedname2, sequence, flags uint32,
 	opaque uint16,
-	config map[string]interface{},
-	streamUuid uint64) (*DcpFeed, error) {
+	config map[string]interface{}) (*DcpFeed, error) {
 
-	return b.StartDcpFeedOver(name, sequence, flags, nil, opaque, config, streamUuid)
+	return b.StartDcpFeedOver(name, sequence, flags, nil, opaque, config)
 }
 
 // StartDcpFeedOver creates and starts a new Dcp feed.
@@ -154,12 +153,11 @@ func (b *Bucket) StartDcpFeed(
 //	"dataChanSize", buffer channel size for data path.
 //	"numConnections", number of connections with DCP for local vbuckets.
 func (b *Bucket) StartDcpFeedOver(
-	name DcpFeedName,
+	name *memcached.DcpFeedname2,
 	sequence, flags uint32,
 	kvaddrs []string,
 	opaque uint16,
-	config map[string]interface{},
-	streamUuid uint64) (*DcpFeed, error) {
+	config map[string]interface{}) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
@@ -175,8 +173,8 @@ func (b *Bucket) StartDcpFeedOver(
 		reqch:      make(chan []interface{}, genChanSize),
 		finch:      make(chan bool),
 		config:     copyconfig(config),
-		logPrefix:  fmt.Sprintf("DCP[%v]", name),
-		StreamUuid: streamUuid,
+		logPrefix:  name.StreamLogPrefix(),
+		StreamUuid: name.StreamUuid,
 	}
 	feed.numConnections = config["numConnections"].(int)
 	feed.activeVbOnly = config["activeVbOnly"].(bool)
@@ -235,7 +233,7 @@ func (feed *DcpFeed) DcpCloseStream(vb, opaqueMSB uint16) error {
 
 // DcpFeedName returns feed name
 func (feed *DcpFeed) DcpFeedName() string {
-	return string(feed.name)
+	return feed.name.StreamLogPrefix()
 }
 
 // DcpGetSeqnos return the list of seqno for vbuckets,
@@ -378,24 +376,25 @@ func (feed *DcpFeed) connectToNodes(
 		nodeFeeds = make([]*FeedInfo, 0)
 		// and continue to spawn a new one ...
 
-		var name DcpFeedName
-		if feed.name == "" {
-			name = NewDcpFeedName("DefaultDcpClient")
+		var name *memcached.DcpFeedname2
+		if feed.name.Topic == "" {
+			name = memcached.NewDcpFeedName2("DefaultDcpClient", "", 0, 0, 0)
 		} else {
 			name = feed.name
 		}
 		for i := 0; i < feed.numConnections; i++ {
-			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
+			feedname := name.Clone()
+			feedname.StreamId = i
 			singleFeed, err := serverConn.StartDcpFeed(
 				feedname, feed.sequence, flags, feed.output,
-				opaque, feed.reqch, config, i,
+				opaque, feed.reqch, config,
 			)
 			if err != nil {
 				for _, singleFeed := range nodeFeeds {
 					singleFeed.dcpFeed.Close()
 				}
 				fmsg := "%v ##%x DcpFeed::connectToNodes StartDcpFeed failed for %v with err %v\n"
-				logging.Errorf(fmsg, prefix, opaque, feedname, err)
+				logging.Errorf(fmsg, prefix, opaque, feedname.StreamLogPrefix(), err)
 				return memcached.ErrorInvalidFeed
 			}
 			// add the node to the connection map
@@ -425,20 +424,22 @@ func (feed *DcpFeed) reConnectToNodes(
 				continue
 			}
 
-			var name DcpFeedName
-			if feed.name == "" {
-				name = NewDcpFeedName("DefaultDcpClient")
+			var name *memcached.DcpFeedname2
+			if feed.name.Topic == "" {
+				name = memcached.NewDcpFeedName2("DefaultDcpClient", "", 0, 0, 0)
 			} else {
 				name = feed.name
 			}
-			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
+			feedname := name.Clone()
+			feedname.StreamId = i
+
 			singleFeed, err := serverConn.StartDcpFeed(
 				feedname, feed.sequence, flags, feed.output,
-				opaque, feed.reqch, config, i,
+				opaque, feed.reqch, config,
 			)
 			if err != nil {
 				fmsg := "%v ##%x DcpFeed::reConnectToNodes StartDcpFeed failed for %v with err %v\n"
-				logging.Errorf(fmsg, feed.logPrefix, opaque, feedname, err)
+				logging.Errorf(fmsg, feed.logPrefix, opaque, feedname.StreamLogPrefix(), err)
 				continue
 			}
 			// add the node to the connection map

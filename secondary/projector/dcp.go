@@ -10,6 +10,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
 
@@ -64,19 +65,18 @@ type bucketDcp struct {
 
 // OpenBucketFeed opens feed for bucket.
 func OpenBucketFeed(
-	feedname couchbase.DcpFeedName,
+	feedname *memcached.DcpFeedname2,
 	b *couchbase.Bucket,
 	opaque uint16,
 	kvaddrs []string,
-	config map[string]interface{},
-	streamUuid uint64) (feeder BucketFeeder, err error) {
+	config map[string]interface{}) (feeder BucketFeeder, err error) {
 
 	bdcp := &bucketDcp{bucket: b}
 	flags := uint32(0x0)
 	bdcp.dcpFeed, err =
 		b.StartDcpFeedOver(
 			feedname, uint32(0), flags,
-			kvaddrs, opaque, config, streamUuid,
+			kvaddrs, opaque, config,
 		)
 	if err != nil {
 		return nil, err

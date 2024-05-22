@@ -1724,7 +1724,7 @@ func (feed *Feed) openFeeder(
 		logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 		return nil, err
 	}
-	name := newDCPConnectionName(keyspaceId, feed.topic, uuid.Uint64())
+	name := newDCPConnectionName2(keyspaceId, feed.topic, opaque, uuid.Uint64())
 
 	//override with the client specified numDcpConnections if requested
 	var numConnections int
@@ -1763,7 +1763,7 @@ func (feed *Feed) openFeeder(
 	kvaddrs := []string{kvaddr}
 	feeder, err = OpenBucketFeed(
 		name, bucket, opaque,
-		kvaddrs, dcpConfig, uuid.Uint64(),
+		kvaddrs, dcpConfig,
 	)
 	if err != nil {
 		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
@@ -2346,6 +2346,12 @@ func getTssAsStr(ts map[string]*protobuf.TsVbuuid) string {
 // parts of the system. ref: https://issues.couchbase.com/browse/MB-14300
 func newDCPConnectionName(keyspaceId, topic string, uuid uint64) couchbase.DcpFeedName {
 	return couchbase.NewDcpFeedName(fmt.Sprintf("%v%v-%s-%v", mc.DcpFeedNameCompPrefix, keyspaceId, topic, uuid))
+}
+
+func newDCPConnectionName2(keyspaceId, topic string,
+	opaque uint16, uuid uint64) *mc.DcpFeedname2 {
+
+	return mc.NewDcpFeedName2(topic, keyspaceId, opaque, uuid, 0)
 }
 
 //---- endpoint watcher

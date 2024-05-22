@@ -119,15 +119,16 @@ func startBucket(cluster, bucketn string, kvaddrs []string) int {
 		"numConnections": 4,
 		"activeVbOnly":   true,
 	}
+
+	vbnos := listOfVbnos(options.maxVbno)
+	uuid := common.GetUUID(fmt.Sprintf("BucketFailoverLog-%v", bucketn), 0)
+
 	dcpFeed, err := b.StartDcpFeedOver(
-		couchbase.NewDcpFeedName("rawupr"), uint32(0), uint32(0x0),
-		options.kvaddrs, 0xABCD, dcpConfig, 1,
+		mc.NewDcpFeedName2("rawupr", bucketn, 0, uuid, 0), uint32(0), uint32(0x0),
+		options.kvaddrs, 0xABCD, dcpConfig,
 	)
 	mf(err, "- upr")
 
-	vbnos := listOfVbnos(options.maxVbno)
-
-	uuid := common.GetUUID(fmt.Sprintf("BucketFailoverLog-%v", bucketn), 0)
 	flogs, err := b.GetFailoverLogs(0xABCD, vbnos, uuid, dcpConfig)
 	mf(err, "- dcp failoverlogs")
 

@@ -66,7 +66,7 @@ var blockdThresholdDur = time.Duration(projBlockedDur[len(projBlockedDur)-1]) * 
 // host and multiple vBuckets
 type DcpFeed struct {
 	conn      *Client // connection to DCP producer
-	name      string
+	name      *DcpFeedname2
 	opaque    uint16
 	outch     chan<- *DcpEvent      // Exported channel for receiving DCP events
 	vbstreams map[uint16]*DcpStream // vb->stream mapping
@@ -103,11 +103,10 @@ type DcpFeed struct {
 
 // NewDcpFeed creates a new DCP Feed.
 func NewDcpFeed(
-	mc *Client, name string, outch chan<- *DcpEvent,
+	mc *Client, name *DcpFeedname2, outch chan<- *DcpEvent,
 	opaque uint16,
 	supvch chan []interface{},
-	config map[string]interface{},
-	streamNo int) (*DcpFeed, error) {
+	config map[string]interface{}) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
@@ -120,26 +119,28 @@ func NewDcpFeed(
 		supvch:    supvch,
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
-		logPrefix:     fmt.Sprintf("DCPT[%s]", name),
-		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", streamNo)},
+		logPrefix:     name.StreamLogPrefix(),
+		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", name.StreamId)},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
 		closeMutQueue: make(chan bool),
 		dequeueDoneCh: make(chan bool),
 	}
 
 	feed.mutationQueue = NewAtomicMutationQueue()
-	feed.truncName = name
+	feed.truncName = name.StreamLogPrefix()
 	if val, ok := config["useMutationQueue"]; ok {
 		feed.useAtomicMutationQueue = val.(bool)
 	}
 	newFeedName, err := truncFeedName(name)
 	if err != nil {
-		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v", feed.logPrefix, opaque, name)
+		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v",
+			feed.logPrefix, opaque, name.String())
 		return nil, err
 	}
 
-	if newFeedName != name {
-		logging.Infof("%v ##%x NewDcpFeed using new feed name %v for feed %v", feed.logPrefix, opaque, newFeedName, name)
+	if newFeedName != name.StreamLogPrefix() {
+		logging.Infof("%v ##%x NewDcpFeed using new feed name %v for feed %v",
+			feed.logPrefix, opaque, newFeedName, name.StreamLogPrefix())
 		feed.truncName = newFeedName
 	}
 
@@ -171,7 +172,7 @@ func NewDcpFeed(
 }
 
 func (feed *DcpFeed) Name() string {
-	return feed.name
+	return feed.name.StreamLogPrefix()
 }
 
 func (feed *DcpFeed) Opaque() uint16 {
@@ -1716,7 +1717,6 @@ func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
 
 func (feed *DcpFeed) logStats() {
 	var statLogger = logstats.GetGlobalStatLogger()
-	key := fmt.Sprintf("DCPT[%v]:##%x", feed.Name(), feed.Opaque())
 
 	var statsMap, latencyMap = feed.stats.Map()
 	var feedMap = map[string]interface{}{}
@@ -1728,12 +1728,12 @@ func (feed *DcpFeed) logStats() {
 	if statLogger == nil {
 		var feedMapBytes, err = json.Marshal(feedMap)
 		if err != nil {
-			logging.Errorf("%v marshal failed with err - %v", key, err)
+			logging.Errorf("%v marshal failed with err - %v", feed.Name(), err)
 		} else {
-			logging.Infof("%v stats: %v", key, string(feedMapBytes))
+			logging.Infof("%v stats: %v", feed.Name(), string(feedMapBytes))
 		}
 	} else {
-		statLogger.Write(key, feedMap)
+		statLogger.Write(feed.name.String(), feedMap)
 	}
 }
 
@@ -1980,19 +1980,69 @@ loop:
 //	DcpFeedPrefix<keyspaceId>-<topic>-<uuid>/<connectionNumber>
 //
 // truncFeedName removes the keyspaceId from the feed name.
-func truncFeedName(name string) (string, error) {
-	if !strings.HasPrefix(name, DcpFeedPrefix) {
-		return name, nil
+func truncFeedName(name *DcpFeedname2) (string, error) {
+	if !strings.HasPrefix(name.StreamLogPrefix(), DcpFeedPrefix) {
+		return name.StreamLogPrefix(), nil
 	}
 
-	pfxLen := len(DcpFeedPrefix)
-	n1 := name[pfxLen:]
-	comps := strings.Split(n1, "-")
-	if len(comps) < 3 {
-		return "", fmt.Errorf("Malformed Dcp Feed Name %v", name)
+	return strings.Join([]string{
+		DcpFeedPrefix, name.Topic,
+		strconv.FormatUint(name.StreamUuid, 10),
+	}, "-"), nil
+}
+
+type DcpFeedname2 struct {
+	Topic      string
+	Keyspace   string
+	Opaque     uint16
+	StreamUuid uint64
+	StreamId   int
+}
+
+func NewDcpFeedName2(topic, keyspace string,
+	opaque uint16, streamUuid uint64, streamId int) *DcpFeedname2 {
+
+	return &DcpFeedname2{
+		topic,
+		keyspace,
+		opaque,
+		streamUuid,
+		streamId,
 	}
 
-	ncomp := len(comps)
-	n3 := comps[ncomp-2] + "-" + comps[ncomp-1]
-	return DcpFeedPrefix + n3, nil
+}
+
+func (dfn *DcpFeedname2) String() string {
+	var elements = make([]string, 0, 5)
+	elements = append(elements, "DCPT")
+	if len(dfn.Topic) != 0 {
+		elements = append(elements, dfn.Topic)
+	}
+	if len(dfn.Keyspace) != 0 {
+		elements = append(elements, dfn.Keyspace)
+	}
+	if dfn.StreamUuid != 0 {
+		elements = append(elements, strconv.FormatUint(dfn.StreamUuid, 10))
+	}
+	if dfn.Opaque != 0 {
+		elements = append(elements, fmt.Sprintf("##%x", dfn.Opaque))
+	}
+	return strings.Join(elements, ":")
+}
+
+func (dfn *DcpFeedname2) StreamLogPrefix() string {
+	return strings.Join([]string{
+		dfn.String(),
+		strconv.Itoa(dfn.StreamId),
+	}, ":")
+}
+
+func (dfn *DcpFeedname2) Clone() *DcpFeedname2 {
+	return &DcpFeedname2{
+		dfn.Topic,
+		dfn.Keyspace,
+		dfn.Opaque,
+		dfn.StreamUuid,
+		dfn.StreamId,
+	}
 }
