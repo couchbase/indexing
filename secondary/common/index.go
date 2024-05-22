@@ -323,6 +323,18 @@ type IndexInst struct {
 	StorageMode    string
 	OldStorageMode string
 	RealInstId     IndexInstId
+
+	// Number of centroids that are required for training.
+	// If Nlist is specified as a part of index definition,
+	// it will be used directly. Otherwise, indexer will compute
+	// it based on the number of items in the collection at the
+	// time of index build. As each index instance can see different
+	// items count depending on when the replica is being built, the
+	// "Nlist" variable is tracked per index instance and not per
+	// definition
+	Nlist int
+
+	IsTrained bool // Set to true once training is completed
 }
 
 // IndexInstMap is a map from IndexInstanceId to IndexInstance

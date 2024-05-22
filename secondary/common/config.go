@@ -4175,6 +4175,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.vector.centroids.sqrtThreshold": ConfigValue{
+		1000000, // 1M
+		"Number of items after which centoids required are computed based on " +
+			"sqrt(itemsCount)",
+		1000000, // 1M
+		false,
+		false,
+	},
 }
 
 // NewConfig from another

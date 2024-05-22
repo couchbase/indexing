@@ -3824,27 +3824,10 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		reqcid := idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, collectionId, clusterVer)
 
-		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
-		if err != nil {
-			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
-				idx.config["clusterAddr"].String(), err)
-			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
-			if idx.enableManager {
-				idx.bulkUpdateError(instIdList, errStr)
-				for _, instId := range instIdList {
-					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
-				}
-				delete(keyspaceIdIndexList, keyspaceId)
-				continue
-			} else if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
-				return
-			}
-		}
+		// In the batch of indexes that are getting built, check if there
+		// is any vector index that requires training. If so, compute centroids
+		// and initiate training for all those indexes
+		instIdList = idx.checkAndInitiateTraining(instIdList, cluster, keyspaceId, reqcid, errMap)
 
 		if len(instIdList) != 0 {
 			keyspaceIdIndexList[keyspaceId] = instIdList
@@ -3878,6 +3861,28 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						category: INDEXER}}
 			}
 			common.CrashOnError(err)
+		}
+
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVBuckets)
+		if err != nil {
+			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
+				idx.config["clusterAddr"].String(), err)
+			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+			if idx.enableManager {
+				idx.bulkUpdateError(instIdList, errStr)
+				for _, instId := range instIdList {
+					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
+				}
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+				return
+			}
 		}
 
 		//send Stream Update to workers
@@ -12926,4 +12931,117 @@ func (idx *indexer) getPartnStats(indexInst *common.IndexInst) map[common.Partit
 		res[partnId] = idx.stats.GetPartitionStats(indexInst.InstId, partnId)
 	}
 	return res
+}
+
+func (idx *indexer) computeCentroidsFromItemsCount(keyspaceId string, itemsCount uint64) int {
+
+	var centroids uint64
+	sqrtThreshold := idx.config["vector.centroids.sqrtThreshold"].Int()
+	if itemsCount < uint64(sqrtThreshold) {
+		// There will be atleast one centroid incase the number of items are less than 1000
+		centroids = uint64(math.Ceil(float64(itemsCount) / 1000))
+	} else {
+		centroids = uint64(math.Sqrt(float64(itemsCount)))
+	}
+
+	logging.Infof("Indexer::computeCentroidsFromItemsCount Number of centroids for keyspaceId: %v "+
+		"with items_count: %v are: %v", keyspaceId, itemsCount, int(centroids))
+	return int(centroids)
+}
+
+func (idx *indexer) getItemsCount(cluster, keyspaceId, reqcid string) (uint64, error) {
+	var itemsCount uint64
+	var err error
+	fn := func(r int, e error) error {
+		itemsCount, err = common.CollectionItemCount(cluster, DEFAULT_POOL, keyspaceId, reqcid)
+		return err
+	}
+	rh := common.NewRetryHelper(10, time.Second, 1, fn)
+	if err := rh.Run(); err != nil {
+		return 0, err
+	}
+	return itemsCount, nil
+}
+
+func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap map[c.IndexInstId]error) ([]common.IndexInstId, []common.IndexInstId) {
+
+	others := make([]common.IndexInstId, 0)
+	vecInsts := make([]common.IndexInstId, 0)
+	for _, instId := range instIdList {
+		inst, ok := idx.indexInstMap[instId]
+		if !ok {
+			errMap[instId] = fmt.Errorf("Instance: %v is not present in index instance map", instId)
+			continue
+		}
+
+		if inst.Defn.IsVectorIndex && (inst.IsTrained == false) {
+			vecInsts = append(vecInsts, instId)
+		} else {
+			others = append(others, instId)
+		}
+	}
+
+	return others, vecInsts
+
+}
+
+func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
+	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) []common.IndexInstId {
+
+	itemsCount, err := idx.getItemsCount(cluster, keyspaceId, reqcid)
+	if err != nil {
+		logging.Errorf("Indexer::computeCentroids error observed while computing items_count "+
+			"for keyspaceId: %v, reqcid: %v, err: %v",
+			keyspaceId, reqcid, err)
+		for _, instId := range vecInstIdList {
+			errMap[instId] = err
+		}
+		return nil
+	}
+
+	for _, instId := range vecInstIdList {
+		inst := idx.indexInstMap[instId]
+
+		if (inst.Defn.IsVectorIndex == false) || (inst.IsTrained == true) {
+			continue
+		}
+
+		centroids := inst.Defn.VectorMeta.Quantizer.Nlist
+		if centroids == 0 {
+			centroids = idx.computeCentroidsFromItemsCount(keyspaceId, itemsCount)
+		}
+		inst.Nlist = centroids
+		idx.indexInstMap[instId] = inst
+		logging.Infof("Indexer::computeCentroids Centroids for training inst: %v are: %v", instId, centroids)
+	}
+	return vecInstIdList
+}
+
+func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
+	cluster, keyspaceId, reqcid string, errMap map[common.IndexInstId]error) []common.IndexInstId {
+
+	// Check if there are any vector indexes that need training
+	var vecInstIdList []common.IndexInstId
+	instIdList, vecInstIdList = idx.filterNeedsTrainingInsts(instIdList, errMap)
+
+	if len(vecInstIdList) > 0 {
+
+		// Compute centoids for the index instances that require training
+		// Discard those indexes if centoids can not be computed and continue
+		// with build for other indexes
+		vecInstIdList = idx.computeCentroids(cluster, keyspaceId, reqcid, vecInstIdList, errMap)
+		if len(vecInstIdList) > 0 {
+			// Build all vector and non-vector instances in same batch
+			instIdList = append(instIdList, vecInstIdList...)
+			logging.Infof("Indexer::checkAndInitiateTraining Initiating training for vector indexes: %v, "+
+				"all indexes in batch: %v", vecInstIdList, instIdList)
+
+			// [VECTOR_TODO]: Initiate training
+
+			return nil // Return nil so that handleBuildIndex does not take the build further
+		}
+	}
+	logging.Infof("Indexer::checkAndInitiateTraining Indexes are either non-vector or already trained. "+
+		"Starting build for indexes: %v", instIdList)
+	return instIdList
 }
