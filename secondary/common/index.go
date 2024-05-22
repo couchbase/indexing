@@ -954,6 +954,7 @@ type VectorMetadata struct {
 	IsBhive          bool             `json:"isBhive,omitempty"`
 	Dimension        int              `json:"dimension,omitempty"`
 	Similarity       VectorSimilarity `json:"similarity,omitempty"`
+	Nprobes          int              `json:"nprobes,omitempty"`
 
 	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
 }
@@ -968,6 +969,7 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 		IsBhive:          v.IsBhive,
 		Dimension:        v.Dimension,
 		Similarity:       v.Similarity,
+		Nprobes:          v.Nprobes,
 		Quantizer:        v.Quantizer.Clone(),
 	}
 
@@ -979,6 +981,6 @@ func (v *VectorMetadata) String() string {
 		return ""
 	}
 
-	return fmt.Sprintf("CompostieVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v",
-		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String())
+	return fmt.Sprintf("CompostieVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v, nprobes: %v",
+		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String(), v.Nprobes)
 }
