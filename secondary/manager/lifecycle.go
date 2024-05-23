@@ -2369,6 +2369,13 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 				retryList = append(retryList, defn)
 				retryErrList = append(retryErrList, build_err)
+			} else if common.IsVectorTrainingError(build_err) {
+				// For FAISS errors, update error in instance meta and return
+				// the error to caller. "builder" will use this error information
+				// to skip retry of index build
+
+				m.setScheduleFlagAndUpdateErr(defn, *inst, !inst.Scheduled, true, build_err.Error())
+				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 			} else {
 				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 			}
@@ -4100,6 +4107,10 @@ func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
 func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, isRebalOrResume bool) bool {
 
 	if inst == nil || isRebalOrResume || inst.RState != uint32(common.REBAL_ACTIVE) {
+		return false
+	}
+
+	if common.IsVectorTrainingError(err) {
 		return false
 	}
 

@@ -12985,6 +12985,29 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 
 }
 
+func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string) error {
+
+	if vm.Quantizer.Type == c.PQ {
+
+		// For product quantization, atleast 1 << nbits vectors are required
+		// For IVF indexes, atleast nlist number of vectors are required
+		// Hence, the minCentroidsRequired is derived based on max(1 << nbits, nlist)
+		// This value ensures that there is atleast one vector for every centroid
+		// in the keyspace at the time of build
+		minCentroidsRequired := max(1<<vm.Quantizer.Nbits, nlist)
+		if trainlistSize < uint64(minCentroidsRequired) {
+			logging.Errorf("Indexer::validateTrainListSize The number of documents: %v in keyspace: %v are less than the "+
+				"minimum number of documents: %v required for training", trainlistSize, keyspaceId, minCentroidsRequired)
+			return c.ErrInsufficientItemsForTraining
+		}
+		return nil
+	} else {
+		// SQ is currently not supported
+		// [VECTOR_TODO]: Add support for SQ
+		return c.ErrUnsupportedQuantisationScheme
+	}
+}
+
 func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) []common.IndexInstId {
 
@@ -12999,6 +13022,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		return nil
 	}
 
+	validVecInsts := make([]common.IndexInstId, 0)
 	for _, instId := range vecInstIdList {
 		inst := idx.indexInstMap[instId]
 
@@ -13011,10 +13035,19 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			centroids = idx.computeCentroidsFromItemsCount(keyspaceId, itemsCount)
 		}
 		inst.Nlist = centroids
+
+		// In the worst case, all items in the keyspace will be considered for training
+		trainListSize := itemsCount
+		if err := idx.validateTrainListSize(trainListSize, inst.Nlist, inst.Defn.VectorMeta, keyspaceId); err != nil {
+			errMap[instId] = err
+			continue
+		}
+
 		idx.indexInstMap[instId] = inst
+		validVecInsts = append(validVecInsts, instId)
 		logging.Infof("Indexer::computeCentroids Centroids for training inst: %v are: %v", instId, centroids)
 	}
-	return vecInstIdList
+	return validVecInsts
 }
 
 func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
