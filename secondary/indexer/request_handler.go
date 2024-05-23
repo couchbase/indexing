@@ -1357,7 +1357,6 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 				stateStr = "Created (Downgrading)"
 			}
 		}
-
 		if instance.TrainingPhase == common.TRAINING_IN_PROGRESS {
 			if vectorIndex {
 				stateStr = "Training"
@@ -1366,6 +1365,7 @@ func getStateStr(instance *manager.IndexInstDistribution, state common.IndexStat
 			}
 		}
 	}
+
 	if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
 		if indexerState == "Paused" {
 			stateStr = "Paused"

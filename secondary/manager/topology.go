@@ -56,7 +56,6 @@ type IndexInstDistribution struct {
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 	RealInstId     uint64                  `json:"realInstId,omitempty"`
 
-	IsVectorIndex bool                 `json:"realInstId,omitempty"`
 	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
 }
 
@@ -317,8 +316,8 @@ func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, i
 
 					if t.Definitions[i].Instances[j].TrainingPhase != trainingPhase {
 						t.Definitions[i].Instances[j].TrainingPhase = trainingPhase
-						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  Error = '%v'",
-							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  TrainingPhase = '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].TrainingPhase)
 						return true
 					}
 				}

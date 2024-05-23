@@ -2446,7 +2446,7 @@ func (m *LifecycleMgr) setScheduleFlagAndUpdateErr(defn *common.IndexDefn, inst 
 
 	if updateErr {
 		err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, common.TRAININIG_NOT_STARTED)
+			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase)
 		if err != nil {
 			logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist error in index instance (%v, %v, %v, %v, %v).",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)

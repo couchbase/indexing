@@ -215,7 +215,6 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedInstVersion := -1
 		updatedShardIds := make(common.PartnShardIdMap)
 		partnShardMap := updatedFields.partnShardIdMap
-		updatedTrainingPhase := common.TRAININIG_NOT_STARTED
 
 		if updatedFields.state {
 			updatedState = index.State
@@ -244,10 +243,7 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		}
 
 		updatedBuildTs := index.BuildTs
-
-		if updatedFields.trainingPhase {
-			updatedTrainingPhase = index.TrainingPhase
-		}
+		updatedTrainingPhase := index.TrainingPhase
 
 		var err error
 		if syncUpdate {

@@ -1740,6 +1740,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case PAUSE_UPDATE_BUCKET_STATE:
 		idx.handleUpdateBucketPauseState(msg)
 
+	case INDEX_TRAINING_DONE:
+		idx.handleIndexTrainingDone(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -3764,6 +3767,13 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
+		if len(instIdList) != 0 {
+			keyspaceIdIndexList[keyspaceId] = instIdList
+		} else {
+			delete(keyspaceIdIndexList, keyspaceId)
+			continue
+		}
+
 		// Check if Initial Build is already running for this index's keyspace. Indexer does not support multiple
 		// builds on the same keyspace because the keyspaceId is used as a key to stream maps.
 		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
@@ -3837,6 +3847,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		idx.bulkUpdateStream(instIdList, buildStream)
+		idx.resetTrainingPhaseForNonVectorInsts(instIdList)
 
 		//always set state to Initial, once stream request/build is done,
 		//this will get changed to active
@@ -3906,6 +3917,10 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			idx.keyspaceIdCreateClientChMap[keyspaceId] = clientCh
 			return
 		}
+	}
+
+	if clientCh == nil {
+		return
 	}
 
 	if idx.enableManager {
@@ -10595,8 +10610,11 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexInvalidState}
 			}
 		} else {
-
-			if index.State == common.INDEX_STATE_CREATED ||
+			if index.TrainingPhase == common.TRAINING_IN_PROGRESS &&
+				index.Defn.IsVectorIndex {
+				logging.Infof("Index training is already in progress for vector inst %v. TrainingPhase: %v.", instId, index.TrainingPhase)
+				skipCount++
+			} else if index.State == common.INDEX_STATE_CREATED ||
 				index.State == common.INDEX_STATE_READY ||
 				index.State == common.INDEX_STATE_ERROR {
 				newList = append(newList, instId)
@@ -12976,7 +12994,8 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 			continue
 		}
 
-		if inst.Defn.IsVectorIndex && (inst.IsTrained() == false) {
+		if inst.Defn.IsVectorIndex &&
+			(inst.IsTrained() == false) {
 			vecInsts = append(vecInsts, instId)
 		} else {
 			others = append(others, instId)
@@ -13028,7 +13047,9 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 	for _, instId := range vecInstIdList {
 		inst := idx.indexInstMap[instId]
 
-		if (inst.Defn.IsVectorIndex == false) || (inst.IsTrained() == true) {
+		if (inst.Defn.IsVectorIndex == false) ||
+			(inst.TrainingPhase == common.TRAINING_IN_PROGRESS) ||
+			(inst.TrainingPhase == common.TRAINING_COMPLETED) {
 			continue
 		}
 
@@ -13075,7 +13096,7 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil)
 			common.CrashOnError(err)
 
-			// [VECTOR_TODO]: Initiate training
+			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap), keyspaceId)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13093,4 +13114,143 @@ func (idx *indexer) updateTrainingPhase(instIdList []common.IndexInstId, trainin
 		inst.TrainingPhase = trainingPhase
 		idx.indexInstMap[instId] = inst
 	}
+}
+
+// If non-vector indexes are built in a separate build command while
+// those indexes are waiting for training to complete from earlier
+// command, then indexer will proceed with build for non-vector indexes
+// In such a case, reset the training phase
+func (idx *indexer) resetTrainingPhaseForNonVectorInsts(instIdList []common.IndexInstId) {
+	for _, instId := range instIdList {
+		inst := idx.indexInstMap[instId]
+		if inst.Defn.IsVectorIndex {
+			continue
+		}
+		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		idx.indexInstMap[instId] = inst
+	}
+}
+
+// Note: This is a temporary method. Needs to be removed after
+// initiateTraining() is integrated with training infra
+func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
+	rand.Seed(1234) // Use a fixed seed for now for predictably
+
+	dims := vectorMeta.Dimension
+	nlist = max(nlist, 1<<vectorMeta.Quantizer.Nbits)
+
+	vecs := make([]float32, dims*nlist)
+	for i := 0; i < dims*nlist; i++ {
+		vecs[i] = rand.Float32()
+	}
+	return vecs
+}
+
+// [VECTOR_TODO]: Add a worker pool to take care of training
+// It is not a good idea to spawn a go-routine for each build statement
+func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
+	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
+	keyspaceId string) {
+
+	errMap := make(map[common.IndexInstId]error)
+	successMap := make(map[common.IndexInstId]bool)
+
+	for _, instId := range allInsts {
+		idxInst := indexInstMap[instId]
+		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
+			successMap[instId] = true
+			continue
+		}
+
+		partnInstMap := indexPartnMap[instId]
+
+		for partnId, partnInst := range partnInstMap {
+			slices := partnInst.Sc.GetAllSlices()
+
+			for _, slice := range slices {
+				logging.Infof("Indexer::initateTraining Starting training for vector index with instId: %v, partnId: %v", instId, partnId)
+				start := time.Now()
+				slice.SetNlist(idxInst.Nlist)
+
+				if err := slice.InitCodebook(); err != nil {
+					slice.ResetCodebook()
+					logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					errMap[instId] = errors.New(common.ERR_TRAINING + err.Error())
+					continue
+				}
+
+				// [VECTOR_TODO]: Integrate this with training infra
+				vecs := getVectors(idxInst.Defn.VectorMeta, idxInst.Nlist)
+				if err := slice.Train(vecs); err != nil {
+					slice.ResetCodebook()
+					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					errMap[instId] = errors.New(common.ERR_TRAINING + err.Error())
+					continue
+				}
+				logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
+					"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+			}
+		}
+
+		// All partitions of this instance have finished training
+		// Add inst to success map if no error has been observed
+		if _, ok := errMap[instId]; !ok {
+			successMap[instId] = true
+		}
+	}
+
+	idx.internalRecvCh <- &MsgIndexTrainingDone{
+		keyspaceId: keyspaceId,
+		successMap: successMap,
+		errMap:     errMap,
+	}
+}
+
+func (idx *indexer) handleIndexTrainingDone(cmd Message) {
+	msg := cmd.(*MsgIndexTrainingDone)
+	successMap := msg.GetSuccessMap()
+	errMap := msg.GetErrMap()
+	keyspaceId := msg.GetKeyspaceId()
+
+	toBuildInstIds := make([]common.IndexInstId, 0)
+	allInsts := make([]common.IndexInstId, 0)
+	// Set isTrained to true for all successful instances
+	// For failed instances, set isTrained to false
+	for instId := range successMap {
+		inst := idx.indexInstMap[instId]
+		if inst.Defn.IsVectorIndex {
+			inst.TrainingPhase = c.TRAINING_COMPLETED
+		} else {
+			inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		}
+		idx.indexInstMap[instId] = inst
+		inst.Error = "" // Reset any error observed from earlier iterations
+		toBuildInstIds = append(toBuildInstIds, instId)
+		allInsts = append(allInsts, instId)
+	}
+
+	for instId, err := range errMap {
+		inst := idx.indexInstMap[instId]
+		inst.TrainingPhase = c.TRAININIG_NOT_STARTED // Reset training phase
+		inst.Error = err.Error()
+		idx.indexInstMap[instId] = inst
+		allInsts = append(allInsts, instId)
+	}
+
+	// [VECTOR_TODO]: Persist codebook to disk for vector indexes for which
+	// build is successful and then update the training phase
+
+	err := idx.updateMetaInfoForIndexList(allInsts, false, false, true, false, false, false, true, false, nil, true, nil)
+	common.CrashOnError(err)
+
+	logging.Infof("Indexer: handleIndexTrainingDone Starting build for instances: %v, keyspaceId: %v", toBuildInstIds, keyspaceId)
+
+	// Initiate build
+	idx.handleBuildIndex(&MsgBuildIndex{
+		mType:            CLUST_MGR_BUILD_INDEX_DDL,
+		indexInstList:    toBuildInstIds,
+		bucketList:       []string{keyspaceId},
+		reqCtx:           common.NewUserRequestContext(),
+		isEmptyNodeBatch: false,
+	})
 }
