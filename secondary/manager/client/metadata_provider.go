@@ -218,7 +218,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity", "description", "nprobes"}
+	"dimension", "similarity", "description", "nprobes", "train_list"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -2539,7 +2539,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var err error
 	// For a vector index, extract the fields from with nodes clause
 	var similarity c.VectorSimilarity
-	var dimension, nprobes int
+	var dimension, nprobes, trainlist int
 	var quantizer *c.VectorQuantizer
 	if isBhive || isCompositeVectorIndex {
 		similarity, err = o.getVectorSimilarity(plan)
@@ -2564,6 +2564,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		nprobes, err = o.getNprobesParam(plan)
+		if err != nil {
+			return nil, err, false
+		}
+
+		trainlist, err = o.getTrainlistParam(plan)
 		if err != nil {
 			return nil, err, false
 		}
@@ -2623,6 +2628,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			Similarity:       similarity,
 			Quantizer:        quantizer,
 			Nprobes:          nprobes,
+			TrainList:        trainlist,
 		}
 	}
 
@@ -3400,6 +3406,40 @@ func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}) (int, er
 	}
 
 	return nprobes, nil
+}
+
+func (o *MetadataProvider) getTrainlistParam(plan map[string]interface{}) (int, error) {
+
+	trainlist := int(0)
+
+	trainlist2, ok := plan["train_list"].(int64)
+	if !ok {
+		trainlist2, ok := plan["train_list"].(float64)
+		if !ok {
+			trainlist2_str, ok := plan["train_list"].(string)
+			if ok {
+				var err error
+				trainlist2, err := strconv.ParseInt(trainlist2_str, 10, 64)
+				if err != nil {
+					return 0, errors.New("Parameter train_list must be a positive value.")
+				}
+				trainlist = int(trainlist2)
+
+			} else if v, ok := plan["train_list"]; ok {
+				return 0, fmt.Errorf("Parameter train_list must be a positive value (%v).", reflect.TypeOf(v))
+			}
+		} else {
+			trainlist = int(trainlist2)
+		}
+	} else {
+		trainlist = int(trainlist2)
+	}
+
+	if trainlist < 0 {
+		return 0, errors.New("Parameter train_list must be a positive value.")
+	}
+
+	return trainlist, nil
 }
 
 func (o *MetadataProvider) getDocKeySizeParam(plan map[string]interface{}) (uint64, error, bool) {

@@ -955,6 +955,7 @@ type VectorMetadata struct {
 	Dimension        int              `json:"dimension,omitempty"`
 	Similarity       VectorSimilarity `json:"similarity,omitempty"`
 	Nprobes          int              `json:"nprobes,omitempty"`
+	TrainList        int              `json:"trainlist,omitempty"`
 
 	Quantizer *VectorQuantizer `json:"quantizer,omitempty"`
 }
@@ -970,6 +971,7 @@ func (v *VectorMetadata) Clone() *VectorMetadata {
 		Dimension:        v.Dimension,
 		Similarity:       v.Similarity,
 		Nprobes:          v.Nprobes,
+		TrainList:        v.TrainList,
 		Quantizer:        v.Quantizer.Clone(),
 	}
 
