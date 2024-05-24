@@ -55,6 +55,9 @@ type IndexInstDistribution struct {
 	StorageMode    string                  `json:"storageMode,omitempty"`
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 	RealInstId     uint64                  `json:"realInstId,omitempty"`
+
+	IsVectorIndex bool                 `json:"realInstId,omitempty"`
+	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -302,6 +305,27 @@ func (t *IndexTopology) UpdateShardIdsForIndexPartn(defnId common.IndexDefnId, i
 		}
 	}
 	return changed
+}
+
+// Update training phase on instance
+func (t *IndexTopology) UpdateTrainingPhaseForIndex(defnId common.IndexDefnId, instId common.IndexInstId, trainingPhase common.TrainingPhase) bool {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+
+					if t.Definitions[i].Instances[j].TrainingPhase != trainingPhase {
+						t.Definitions[i].Instances[j].TrainingPhase = trainingPhase
+						logging.Debugf("IndexTopology.UpdateTrainingPhaseForIndex(): Set trainingPhase for index '%v' inst '%v.  Error = '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Update shardIds on instance
@@ -891,6 +915,7 @@ func transformInsts(instances *IndexInstDistribution) *mc.IndexInstDistribution 
 	inst.StorageMode = instances.StorageMode
 	inst.OldStorageMode = instances.OldStorageMode
 	inst.RealInstId = instances.RealInstId
+	inst.TrainingPhase = instances.TrainingPhase
 
 	inst.Partitions = make([]mc.IndexPartDistribution, 0)
 	for _, partn := range instances.Partitions {
