@@ -2369,12 +2369,12 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 				retryList = append(retryList, defn)
 				retryErrList = append(retryErrList, build_err)
-			} else if common.IsVectorTrainingError(build_err) {
-				// For FAISS errors, update error in instance meta and return
-				// the error to caller. "builder" will use this error information
-				// to skip retry of index build
+			} else if common.IsVectorTrainingError(build_err.Error()) {
+				// For training related errors, update error in instance meta and
+				// return the error to caller. "builder" will use this error
+				// information to skip retry of index build
 
-				m.setScheduleFlagAndUpdateErr(defn, *inst, !inst.Scheduled, true, build_err.Error())
+				m.setScheduleFlagAndUpdateErr(defn, *inst, false, true, build_err.Error())
 				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 			} else {
 				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
@@ -4110,7 +4110,7 @@ func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error
 		return false
 	}
 
-	if common.IsVectorTrainingError(err) {
+	if common.IsVectorTrainingError(err.Error()) {
 		return false
 	}
 
@@ -5329,6 +5329,13 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 						break
 					}
 
+					// Do not retry index build if there are any errors observed during
+					// vector index training as user intervention might be required
+					if common.IsVectorTrainingError(inst.Error) {
+						logging.Verbosef("builder: Disabling background build for inst: %v due to err: %v", inst.InstId, inst.Error)
+						continue
+					}
+
 					if inst.State == uint32(common.INDEX_STATE_READY) {
 						foundReady = true
 						// build index if
@@ -5523,6 +5530,13 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 				if logMsg {
 					logging.Infof("builder: Queuing to retry list %v as %v != INDEX_STATE_READY", entry, common.IndexState(inst.State))
 				}
+				continue
+			}
+
+			// Do not retry index build if there are any errors observed during
+			// vector index training as user intervention might be required
+			if common.IsVectorTrainingError(inst.Error) {
+				logging.Verbosef("builder: Skipping build token from further processing for inst: %v due to err: %v", inst.InstId, inst.Error)
 				continue
 			}
 

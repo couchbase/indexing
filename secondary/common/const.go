@@ -214,7 +214,6 @@ const (
 
 const STAT_LOG_TS_FORMAT = "2006-01-02T15:04:05.000-07:00"
 
-func IsVectorTrainingError(err error) bool {
-	errStr := err.Error()
+func IsVectorTrainingError(errStr string) bool {
 	return len(errStr) > len(ERR_TRAINING) && errStr[0:len(ERR_TRAINING)] == ERR_TRAINING
 }

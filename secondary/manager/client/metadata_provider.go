@@ -3821,8 +3821,9 @@ func (o *MetadataProvider) BuildIndexes(defns map[c.IndexDefnId]*c.IndexDefn) er
 	watcherNodeMap := make(map[c.IndexerId]string)
 	defnList := ([]c.IndexDefnId)(nil)
 	buckets := make(map[string]bool)
+	skipPostingBuildTokens := make(map[c.IndexDefnId]bool)
 
-	for id, _ := range defns {
+	for id, defn := range defns {
 
 		if !security.IsToolsConfigUsed() {
 			// Has the index been deleted?
@@ -3835,14 +3836,26 @@ func (o *MetadataProvider) BuildIndexes(defns map[c.IndexDefnId]*c.IndexDefn) er
 				continue
 			}
 
+			// Only check the presence of build command token for non-vector indexes
+			// For vector indexes, there can be runtime errors because of which
+			// build token can exist in metaKV but index build statement should still
+			// be processed
+
 			// Has the index been built?
 			found, err = mc.BuildCommandTokenExist(id)
 			if err != nil {
 				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
 			}
 			if found {
-				logging.Warnf("Index %v has already built. Skip build index.", id)
-				continue
+				if defn.IsVectorIndex {
+					// For vector indexes, continue with the build but skip posting build token
+					// as vector indexes can encounter runtime errors during index build which
+					// require user intervention
+					skipPostingBuildTokens[id] = true
+				} else {
+					logging.Warnf("Index %v has already built. Skip build index.", id)
+					continue
+				}
 			}
 		}
 
@@ -3921,6 +3934,10 @@ func (o *MetadataProvider) BuildIndexes(defns map[c.IndexDefnId]*c.IndexDefn) er
 	if !security.IsToolsConfigUsed() {
 		// place token for recovery.
 		for _, id := range defnList {
+			if _, ok := skipPostingBuildTokens[id]; ok {
+				continue
+			}
+
 			if err := mc.PostBuildCommandToken(id, defns[id].Bucket, mc.INDEX_BUILD, time.Now()); err != nil {
 				return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
 			}
