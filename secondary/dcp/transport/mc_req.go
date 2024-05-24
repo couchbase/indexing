@@ -49,7 +49,9 @@ func (req *MCRequest) fillHeaderBytes(data []byte) int {
 	// 4
 	data[pos] = byte(len(req.Extras))
 	pos++
-	// data[pos] = 0
+	if req.Datatype != 0 {
+		data[pos] = byte(req.Datatype)
+	}
 	pos++
 	binary.BigEndian.PutUint16(data[pos:pos+2], req.VBucket)
 	pos += 2
