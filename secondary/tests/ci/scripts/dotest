@@ -36,7 +36,9 @@ start_cluster() {
     echo "Starting server: attempt $a"
     stop_cluster
     cd $WORKSPACE/ns_server
-    ./cluster_run -n4 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
+    cluster_run_path="./cluster_run"
+    if [ -f build/cluster_run ]; then cluster_run_path="build/cluster_run"; fi
+    $cluster_run_path -n4 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
@@ -67,8 +69,9 @@ start_cluster_serverless() {
   for a in {1..3}; do
     echo "Starting server: attempt $a"
     stop_cluster
-    cd $WORKSPACE/ns_server
-    ./cluster_run -n5 --serverless 1>$WORKSPACE/run.log 2>&1 &
+    cluster_run_path="./cluster_run"
+    if [ -f build/cluster_run ]; then cluster_run_path="build/cluster_run"; fi
+    $cluster_run_path -n5 --serverless 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
