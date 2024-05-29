@@ -66,7 +66,6 @@ func getShardGroupingFromLiveCluster() (tc.AlternateShardMap, error) {
 	}).RunWithConditionalError(func(err error) bool {
 		return !(strings.Contains(err.Error(), syscall.ECONNREFUSED.Error()))
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +178,7 @@ func performClusterStateValidation(t *testing.T, negTests bool, validations ...t
 			if len(unfaildValidations) > 0 || len(errMap) > 0 {
 				failedValidations := func() []string {
 					res := make([]string, 0)
-					for err, _ := range errMap {
+					for err := range errMap {
 						res = append(res, err.String())
 					}
 					return res
@@ -201,7 +200,6 @@ func skipShardAffinityTests(t *testing.T) {
 const SHARD_AFFINITY_INDEXER_QUOTA = "384"
 
 func TestWithShardAffinity(t *testing.T) {
-
 	skipShardAffinityTests(t)
 
 	scope, coll := "s1", "c1"
@@ -341,8 +339,10 @@ func TestWithShardAffinity(t *testing.T) {
 
 		log.Printf("********Test for corrupt data backups**********")
 		// verify corrupt index dir exists on n3 and n1
-		storageDirs := []string{getIndexerStorageDirForNode(clusterconfig.Nodes[1], t),
-			getIndexerStorageDirForNode(clusterconfig.Nodes[3], t)}
+		storageDirs := []string{
+			getIndexerStorageDirForNode(clusterconfig.Nodes[1], t),
+			getIndexerStorageDirForNode(clusterconfig.Nodes[3], t),
+		}
 		corruptDirs := make([]string, 0, len(storageDirs))
 
 		paths := strings.Builder{}
@@ -717,7 +717,6 @@ func TestSwapRebalanceMixedMode(t *testing.T) {
 	// indexer.thisNodeOnly.ignoreAlternateShardIds no longer valid for node[1]
 	swapRebalance(t, 1, 3) // config - [0: kv n1ql] [1: index] [2: index] - swap rebalance via Shard
 	performClusterStateValidation(t, false)
-
 }
 
 // expected cluster state in entry
@@ -791,7 +790,6 @@ func TestFailoverAndRebalanceMixedMode(t *testing.T) {
 
 	swapRebalance(t, 2, 3) // config - [0: kv n1ql] [1: index] [2: index] - shard + DCP rebalance
 	performClusterStateValidation(t, false)
-
 }
 
 // expected cluster state in entry
@@ -909,6 +907,8 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 	if len(indicesInCluster) != len(indices) {
 		t.Fatalf("Expected %v indices to be in cluster but found %v", indices, indicesInCluster)
 	}
+
+	printClusterConfig(t.Name(), "exit")
 }
 
 // cluster in mixed mode; node 1 - new node, node 3 - old node
@@ -920,8 +920,14 @@ func TestRebalanceOutNewerNodeInMixedMode(t *testing.T) {
 // exit cluster config -
 // [0: kv n1ql] [1: index] [2: index]
 func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
-	t.Skipf("Disabled until MB-60242 is fixed")
+	// t.Skipf("Disabled until MB-60242 is fixed")
 	skipShardAffinityTests(t)
+
+	var err error
+	// resetCluster(t)
+	// addNodeAndRebalance(clusterconfig.Nodes[3], "index", t)
+	// err = clusterutility.SetDataAndIndexQuota(clusterconfig.Nodes[0], clusterconfig.Username, clusterconfig.Password, "1500", SHARD_AFFINITY_INDEXER_QUOTA)
+	// tc.HandleError(err, "Failed to set memory quota in cluster")
 
 	status := getClusterStatus()
 	if len(status) != 3 || !isNodeIndex(status, clusterconfig.Nodes[1]) ||
@@ -933,7 +939,7 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 	printClusterConfig(t.Name(), "entry")
 
 	log.Println("*********Setup cluster*********")
-	err := secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
+	err = secondaryindex.DropAllNonSystemIndexes(clusterconfig.Nodes[1])
 	tc.HandleError(err, "Failed to drop all non-system indices")
 
 	log.Printf("********Updating `indexer.settings.enable_shard_affinity`=true with node 3 in simulated mixed mode**********")
@@ -983,6 +989,9 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 			break
 		}
 		if _, exists := dropIndicesMap[defn.Name]; !exists {
+			if strings.Contains(defn.Name, "#primary") {
+				continue
+			}
 			// pick the replica ID of the first instance
 			dropIndicesMap[defn.Name] = int(defn.Instances[0].ReplicaId)
 		}
@@ -991,17 +1000,20 @@ func TestReplicaRepairInMixedModeRebalance(t *testing.T) {
 	node3meta, err := getLocalMetaWithRetry(clusterconfig.Nodes[3])
 	tc.HandleError(err, "Failed to getLocalMetadata from node 3")
 
-	log.Printf("********Drop replicas on node 1 and 3**********")
-
 	for _, defn := range node3meta.IndexTopologies[0].Definitions {
 		if len(dropIndicesMap) == 6 {
 			break
 		}
 		if _, exists := dropIndicesMap[defn.Name]; !exists {
+			if strings.Contains(defn.Name, "#primary") {
+				continue
+			}
 			// pick the replica ID of the first instance
 			dropIndicesMap[defn.Name] = int(defn.Instances[0].ReplicaId)
 		}
 	}
+
+	log.Printf("********Drop replicas on node 1 and 3**********")
 
 	for idxName, replicaId := range dropIndicesMap {
 		stmt := fmt.Sprintf("alter index %v on %v with {\"action\": \"drop_replica\", \"replicaId\": %v}",
@@ -1056,7 +1068,7 @@ func getLocalMetaWithRetry(nodeAddress string) (*manager.LocalIndexMetadata, err
 
 func getLastRebalanceReport(kvaddress, username, password string) (map[string]interface{}, error) {
 	var res map[string]interface{}
-	var err = c.NewRetryHelper(5, 1*time.Millisecond, 5, func(attemp int, lastErr error) error {
+	err := c.NewRetryHelper(5, 1*time.Millisecond, 5, func(attemp int, lastErr error) error {
 		resp, err := http.Get(fmt.Sprintf("http://%v:%v@%v/logs/rebalanceReport", username, password, kvaddress))
 		if resp.Body != nil {
 			defer resp.Body.Close()
