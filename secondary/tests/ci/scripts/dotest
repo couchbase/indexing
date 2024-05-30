@@ -180,7 +180,7 @@ if [ $ulimitVal -gt 0 ]; then
 fi
 
 stop_cluster
-rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
+rm -f $WORKSPACE/logs.tar* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
 
 export phase=sanity
 if [[ "$MODE" == *"$phase"* ]]; then
@@ -243,7 +243,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
   GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
