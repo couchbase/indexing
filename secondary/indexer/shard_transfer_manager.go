@@ -5,8 +5,10 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -656,12 +658,36 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 func (stm *ShardTransferManager) waitForSliceClose(shardId common.ShardId, notifyCh MsgChannel, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	getPendingSlicesInfo := func(shardId common.ShardId, slices []Slice) string {
+		var slicesInfo strings.Builder
+		for _, slice := range slices {
+			if slicesInfo.Len() != 0 {
+				fmt.Fprintf(&slicesInfo, ", ")
+			}
+			fmt.Fprintf(&slicesInfo, "(%v,%v,%v,%v)",
+				slice.IndexDefnId(), slice.IndexInstId(), slice.IndexPartnId(), slice.IsCleanupDone())
+		}
+		return slicesInfo.String()
+	}
+
 	ticker := time.NewTicker(time.Duration(30 * time.Second))
+	pendingSlicesInfoTicker := time.NewTicker(time.Duration(5 * time.Minute))
+
 	for {
 		select {
-		case <-notifyCh:
-			logging.Infof("ShardTranferManager::waitForSliceClose - Exiting wait as all slices are closed for shard: %v", shardId)
-			return
+		case msg, ok := <-notifyCh:
+			if !ok {
+				logging.Infof("ShardTranferManager::waitForSliceClose - Exiting wait as all slices are closed for shard: %v", shardId)
+				return
+			}
+			select {
+			case <-pendingSlicesInfoTicker.C:
+				pendingSlices := msg.(*MsgMonitorSliceStatus).GetSliceList()
+				logging.Infof("ShardTransferManager::waitForSliceClose - Waiting for closure of shardId: %v, indexes: [%s]",
+					shardId, getPendingSlicesInfo(shardId, pendingSlices))
+			default:
+			}
 		case <-ticker.C:
 			logging.Infof("ShardTranferManager::waitForSliceClose - Waiting for all slices to be closed on shard: %v to be closed", shardId)
 		}
@@ -720,7 +746,7 @@ func (stm *ShardTransferManager) handleMonitorSliceStatusCommand(cmd Message) {
 
 func (stm *ShardTransferManager) updateSliceStatus() {
 	newSliceList := make([]Slice, 0)
-	pendingSliceCloseMap := make(map[common.ShardId]bool)
+	pendingSliceCloseMap := make(map[common.ShardId][]Slice)
 
 	for i, slice := range stm.sliceList {
 		if slice != nil && slice.IsCleanupDone() {
@@ -729,7 +755,7 @@ func (stm *ShardTransferManager) updateSliceStatus() {
 			newSliceList = append(newSliceList, slice)
 			shardIds := slice.GetShardIds()
 			for _, shardId := range shardIds {
-				pendingSliceCloseMap[shardId] = true
+				pendingSliceCloseMap[shardId] = append(pendingSliceCloseMap[shardId], slice)
 			}
 		}
 	}
@@ -739,13 +765,21 @@ func (stm *ShardTransferManager) updateSliceStatus() {
 	// be found in pendingSliceCloseMap list. In that case, close any pending
 	// notifier and update the book-keeping
 	for shardId, notifyCh := range stm.sliceCloseNotifier {
-		if _, ok := pendingSliceCloseMap[shardId]; !ok {
+		if pendingSlices, ok := pendingSliceCloseMap[shardId]; !ok {
 
 			if notifyCh != nil {
 				close(notifyCh)
 			}
 			logging.Infof("ShardTransferManager::updateSliceStatus Closing the notifyCh for shardId: %v", shardId)
 			delete(stm.sliceCloseNotifier, shardId)
+		} else if len(pendingSlices) != 0 {
+
+			if notifyCh != nil {
+				msg := &MsgMonitorSliceStatus{
+					sliceList: pendingSlices,
+				}
+				notifyCh <- msg
+			}
 		}
 	}
 
