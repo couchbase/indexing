@@ -1,6 +1,7 @@
 package common
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"expvar"
@@ -747,7 +748,7 @@ func IsAuthValid(r *http.Request) (cbauth.Creds, bool, error) {
 	creds, err := cbauth.AuthWebCreds(r)
 	if err != nil {
 		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) ||
-		err.Error() == "no web credentials found in request" {
+			err.Error() == "no web credentials found in request" {
 			return nil, false, nil
 		}
 		return nil, false, err
@@ -1831,4 +1832,14 @@ func GetBinSize(config Config) uint64 {
 		return binSize.Uint64()
 	}
 	return DEFAULT_BIN_SIZE
+}
+
+func ComputeSHA256ForFloat32Array(vecs []float32) []byte {
+	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&vecs[0])), len(vecs)*4)
+	sum := sha256.Sum256(bytes)
+	// The Sum256 method returns a slice of fixed size (32 bytes).
+	// It is much better to have variable length slices instead of using
+	// fixed length slices so that future changes can be accommodated.
+	// sum[:] does the conversion for us
+	return sum[:]
 }
