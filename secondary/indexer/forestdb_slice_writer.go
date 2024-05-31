@@ -1576,6 +1576,22 @@ func (fdb *fdbSlice) GetAlternateShardId(partnId common.PartitionId) string {
 	return ""
 }
 
+func (fdb *fdbSlice) SetNlist(nlist int) {
+	// no-op
+}
+
+func (fdb *fdbSlice) InitCodebook() error {
+	return nil
+}
+
+func (fdb *fdbSlice) ResetCodebook() error {
+	return nil
+}
+
+func (fdb *fdbSlice) Train(vecs []float32) error {
+	return nil
+}
+
 func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 	fdb.confLock.Lock()
 	defer fdb.confLock.Unlock()

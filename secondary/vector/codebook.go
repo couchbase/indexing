@@ -11,6 +11,8 @@ package vector
 import (
 	"errors"
 
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
@@ -134,4 +136,34 @@ func convertToFaissMetric(metric MetricType) int {
 	}
 	//default to L2
 	return faiss.MetricL2
+}
+
+func convertSimilarityToMetric(similarity common.VectorSimilarity) MetricType {
+	switch similarity {
+	case common.EUCLIDEAN, common.L2:
+		return METRIC_L2 // Default to L2
+	case common.DOT_PRODUCT, common.COSINE_SIM:
+		return METRIC_INNER_PRODUCT
+	}
+	return METRIC_L2 // Always default to L2
+}
+
+func NewCodebook(vectorMeta *common.VectorMetadata, nlist int) (Codebook, error) {
+	metric := convertSimilarityToMetric(vectorMeta.Similarity)
+	switch vectorMeta.Quantizer.Type {
+	case common.PQ:
+
+		codebook, err := NewCodebookIVFPQ(vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
+			vectorMeta.Quantizer.Nbits, nlist, metric)
+		if err != nil {
+			return nil, err
+		}
+		logging.Infof("NewCodebookIVFPQ: Initialized codebook with dimension: %v, subquantizers: %v, "+
+			"nbits: %v, nlist: %v, metric: %v", vectorMeta.Dimension, vectorMeta.Quantizer.SubQuantizers,
+			vectorMeta.Quantizer.Nbits, nlist, metric)
+		return codebook, nil
+	case common.SQ:
+		return nil, errors.New("SQ interface is not yet supported")
+	}
+	return nil, errors.New("Unsupported quantisation type")
 }

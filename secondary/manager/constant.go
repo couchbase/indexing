@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-/////////////////////////////////////////////
+// ///////////////////////////////////////////
 // Constant for Testing
-/////////////////////////////////////////////
+// ///////////////////////////////////////////
 const TESTING = true
 
 /////////////////////////////////////////////
@@ -58,9 +58,9 @@ const DEFAULT_EVT_QUEUE_SIZE = 20
 const DEFAULT_NOTIFIER_QUEUE_SIZE = 5
 
 // Stream Manager
-const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
-const CATCHUP_TOPIC = "CATCHUP_STREAM_TOPIC"
-const INIT_TOPIC = "INIT_STREAM_TOPIC"
+const MAINT_TOPIC = "MAINT"
+const CATCHUP_TOPIC = "CATCHUP"
+const INIT_TOPIC = "INIT"
 
 const MAX_PROJECTOR_RETRY_ELAPSED_TIME = int64(time.Minute) * 5
 

@@ -31,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/indexing/secondary/vector"
 	"github.com/couchbase/plasma"
 )
 
@@ -204,6 +205,11 @@ type plasmaSlice struct {
 	meteringMgr   *MeteringThrottlingMgr
 	meteringStats *meteringStats
 	stopWUBilling uint32
+
+	// vector index related metadata
+	nlist int // number of centroids to use for training
+
+	codebook vector.Codebook
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
@@ -4960,6 +4966,64 @@ func (slice *plasmaSlice) ClearRebalRunning() {
 		logging.Infof("PlasmaSlice::ClearRebalRunning Clearing rebalance running for instId: %v, partnId: %v", slice.idxInstId, slice.idxPartnId)
 	}
 	atomic.StoreUint32(&slice.rebalRunning, 0)
+}
+
+// //////////////////////////////////////////////////////////
+// Vector index related
+// //////////////////////////////////////////////////////////
+
+func (mdb *plasmaSlice) SetNlist(nlist int) {
+	mdb.nlist = nlist
+}
+
+func (mdb *plasmaSlice) InitCodebook() error {
+	if mdb.idxDefn.IsVectorIndex == false {
+		mdb.codebook = nil // Codebook is relevant only for vector indexes
+		return nil
+	}
+
+	if mdb.idxDefn.VectorMeta == nil {
+		return fmt.Errorf("empty vector metadata for vector index with defnId: %v, instId: %v", mdb.idxDefnId, mdb.idxInstId)
+	}
+
+	if mdb.nlist <= 0 {
+		return fmt.Errorf("number of centroids required to train the index are not set for defnId: %v, instId: %v", mdb.idxDefnId, mdb.idxInstId)
+	}
+
+	codebook, err := vector.NewCodebook(mdb.idxDefn.VectorMeta, mdb.nlist)
+	if err != nil {
+		return err
+	}
+
+	mdb.codebook = codebook
+	return nil
+}
+
+// This function is to only handle the cases where training
+// phase fails due to some error. Indexer will call this method
+// to reset the codebook so that the next build command will
+// create a new instance. Once the index moved to ACTIVE state,
+// this method should not be called
+func (mdb *plasmaSlice) ResetCodebook() error {
+
+	if mdb.codebook != nil {
+		err := mdb.codebook.Close()
+		mdb.codebook = nil
+		if err != nil {
+			logging.Errorf("plasmaSlice::ResetCodebook Error observed while closing codebook for instId: %v, partnId: %v",
+				mdb.IndexInstId(), mdb.IndexPartnId())
+			return err
+		}
+	}
+	return nil
+}
+
+func (mdb *plasmaSlice) Train(vecs []float32) error {
+	if mdb.codebook == nil {
+		return errors.New("Codebook is not initialized")
+	}
+
+	return mdb.codebook.Train(vecs)
 }
 
 ////////////////////////////////////////////////////////////

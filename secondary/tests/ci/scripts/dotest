@@ -36,7 +36,9 @@ start_cluster() {
     echo "Starting server: attempt $a"
     stop_cluster
     cd $WORKSPACE/ns_server
-    ./cluster_run -n4 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
+    cluster_run_path="./cluster_run"
+    if [ -f build/cluster_run ]; then cluster_run_path="build/cluster_run"; fi
+    $cluster_run_path -n4 $SVR_LESS_OPT 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
@@ -67,8 +69,9 @@ start_cluster_serverless() {
   for a in {1..3}; do
     echo "Starting server: attempt $a"
     stop_cluster
-    cd $WORKSPACE/ns_server
-    ./cluster_run -n5 --serverless 1>$WORKSPACE/run.log 2>&1 &
+    cluster_run_path="./cluster_run"
+    if [ -f build/cluster_run ]; then cluster_run_path="build/cluster_run"; fi
+    $cluster_run_path -n5 --serverless 1>$WORKSPACE/run.log 2>&1 &
     disown
     for i in {1..120}; do
       grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
@@ -177,7 +180,7 @@ if [ $ulimitVal -gt 0 ]; then
 fi
 
 stop_cluster
-rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
+rm -f $WORKSPACE/logs.tar* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
 
 export phase=sanity
 if [[ "$MODE" == *"$phase"* ]]; then
@@ -203,9 +206,9 @@ mkdir -p "$WORKSPACE/go"
 export GOROOT=$HOME/.cbdepscache/exploded/$arch/$golatest/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
 export PATH=$GOROOT/bin:$PATH
-export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include
-export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
-export LD_LIBRARY_PATH=$WORKSPACE/install/lib
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include:$WORKSPACE/build/tlm/deps/zstd-cpp.exploded/include:$WORKSPACE/build/tlm/deps/faiss.exploded/include
+export CGO_LDFLAGS="-L $WORKSPACE/install/lib -Wl,-rpath $WORKSPACE/install/lib"
+# export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 #Note: enabling auto tells go get to download modules under godeps/pkg/mod
 #This breaks unit tests which depend on fixed file paths under monster module
 export GO111MODULE=auto
@@ -240,7 +243,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
   GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOTRACEBACK=crash GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOTRACEBACK=crash GOMAXPROCS=16 go test -exec "env LD_LIBRARY_PATH=$WORKSPACE/install/lib" -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOTRACEBACK=crash GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log

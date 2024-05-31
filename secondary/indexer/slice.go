@@ -55,6 +55,11 @@ type Slice interface {
 
 	GetWriteUnits() uint64
 	SetStopWriteUnitBilling(disableBilling bool)
+
+	SetNlist(int)
+	InitCodebook() error
+	ResetCodebook() error
+	Train([]float32) error
 }
 
 // cursorCtx implements IndexReaderContext and is used

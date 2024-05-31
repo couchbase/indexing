@@ -4036,8 +4036,7 @@ func (s *statsManager) tryEnableStatsLog() (bool, logstats.LogStats) {
 
 	if ok1 && ok2 && ok3 {
 		fpath := filepath.Join(logdir, fname.String())
-		format := "2006-01-02T15:04:05.000-07:00"
-		sLogger, err := logstats.NewDedupeLogStats(fpath, fsize.Int(), fcount.Int(), format)
+		sLogger, err := logstats.NewDedupeLogStats(fpath, fsize.Int(), fcount.Int(), common.STAT_LOG_TS_FORMAT)
 		if err != nil {
 			logging.Infof("Error in NewDedupeLogStats %v. Disabling stats logging.", err)
 			return false, nil

@@ -36,6 +36,8 @@ var options struct {
 	httpsPort       string
 	caFile          string
 	deploymentModel string
+
+	logDir string
 }
 
 func argParse() string {
@@ -64,6 +66,7 @@ func argParse() string {
 	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
 	fset.StringVar(&options.caFile, "caFile", "", "Multiple Root/Client CAs")
 	fset.StringVar(&options.deploymentModel, "deploymentModel", "default", "Specify the deployment model [provisioned|serverless|default]")
+	fset.StringVar(&options.logDir, "logDir", "", "Dir to log projector stats into")
 
 	ipv4 := fset.String("ipv4", "", "Specify if ipv4 is required|optional|off")
 	ipv6 := fset.String("ipv6", "", "Specify if ipv6 is required|optional|off")
@@ -135,6 +138,10 @@ func main() {
 	config.SetValue("projector.clusterAddr", cluster)
 	config.SetValue("projector.adminport.listenAddr", options.adminport)
 	config.SetValue("projector.diagnostics_dir", options.diagDir)
+
+	if len(options.logDir) != 0 {
+		config.SetValue("projector.log_dir", options.logDir)
+	}
 
 	if err := os.MkdirAll(options.diagDir, 0755); err != nil {
 		c.CrashOnError(err)
