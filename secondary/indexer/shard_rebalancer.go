@@ -4072,6 +4072,10 @@ func (sr *ShardRebalancer) checkAllTokensDone() bool {
 func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (string, *c.TransferToken) {
 	ustr, _ := common.NewUUID()
 	dropOnSourceTokenId := fmt.Sprintf("ShardToken%s", ustr.Str())
+	buildSrc := c.TokenBuildSourcePeer
+	if c.GetDeploymentModel() == c.SERVERLESS_DEPLOYMENT {
+		buildSrc = c.TokenBuildSourceS3
+	}
 
 	dropOnSourceToken := &c.TransferToken{
 		ShardTransferTokenState: c.ShardTokenDropOnSource,
@@ -4079,7 +4083,7 @@ func genShardTokenDropOnSource(rebalId, sourceTokenId, siblingTokenId string) (s
 		RebalId:                 rebalId,
 		SourceTokenId:           sourceTokenId,
 		SiblingTokenId:          siblingTokenId,
-		BuildSource:             c.TokenBuildSourceS3,
+		BuildSource:             buildSrc,
 	}
 
 	return dropOnSourceTokenId, dropOnSourceToken
