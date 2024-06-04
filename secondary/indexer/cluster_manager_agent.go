@@ -243,19 +243,22 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		}
 
 		updatedBuildTs := index.BuildTs
+		updatedTrainingPhase := index.TrainingPhase
 
 		var err error
 		if syncUpdate {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
-					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds)
+					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
+					updatedTrainingPhase)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
 				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
-				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds)
+				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion, updatedShardIds,
+				updatedTrainingPhase)
 		}
 		common.CrashOnError(err)
 	}

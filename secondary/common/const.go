@@ -6,6 +6,8 @@ import (
 	"errors"
 )
 
+const ERR_TRAINING string = "ErrTraining: "
+
 // error codes
 
 // ErrorEmptyN1QLExpression
@@ -91,6 +93,8 @@ var ErrIndexDeletedDuringRebal = errors.New("Fail to create index as index is al
 var ErrRebalanceOrCleanupPending = errors.New("Rebalance in progress or cleanup pending from previous rebalance.")
 var ErrTransientError = errors.New("Encountered transient error")
 var ErrPartitionsLimitReached = errors.New("Number of partitions for index can not be greater than 'indexer.settings.maxNumPartitions'. Please reduce num_partition or increase maxNumPartitions.")
+var ErrInsufficientItemsForTraining = errors.New(ERR_TRAINING + "Number of items in the keyspace are less than the number of centroids required for training")
+var ErrUnsupportedQuantisationScheme = errors.New(ERR_TRAINING + "Quantisation scheme is currently not supported")
 
 var ErrSliceClosed = errors.New("Encountered slice operation after its closed")
 
@@ -209,3 +213,7 @@ const (
 )
 
 const STAT_LOG_TS_FORMAT = "2006-01-02T15:04:05.000-07:00"
+
+func IsVectorTrainingError(errStr string) bool {
+	return len(errStr) > len(ERR_TRAINING) && errStr[0:len(ERR_TRAINING)] == ERR_TRAINING
+}

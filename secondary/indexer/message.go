@@ -221,6 +221,8 @@ const (
 	PAUSE_UPDATE_BUCKET_STATE
 	PERSISTANCE_STATUS
 
+	INDEX_TRAINING_DONE
+
 	START_PEER_SERVER
 	STOP_PEER_SERVER
 )
@@ -3230,6 +3232,29 @@ func (m *MsgPersistanceStatus) GetRespCh() chan bool {
 	return m.respCh
 }
 
+type MsgIndexTrainingDone struct {
+	keyspaceId string
+	errMap     map[common.IndexInstId]error
+	successMap map[common.IndexInstId]bool
+	respCh     MsgChannel
+}
+
+func (m *MsgIndexTrainingDone) GetMsgType() MsgType {
+	return INDEX_TRAINING_DONE
+}
+
+func (m *MsgIndexTrainingDone) GetKeyspaceId() string {
+	return m.keyspaceId
+}
+
+func (m *MsgIndexTrainingDone) GetErrMap() map[common.IndexInstId]error {
+	return m.errMap
+}
+
+func (m *MsgIndexTrainingDone) GetSuccessMap() map[common.IndexInstId]bool {
+	return m.successMap
+}
+
 // MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
@@ -3568,6 +3593,8 @@ func (m MsgType) String() string {
 		return "STOP_PEER_SERVER"
 	case PERSISTANCE_STATUS:
 		return "PERSISTANCE_STATUS"
+	case INDEX_TRAINING_DONE:
+		return "INDEX_TRAINING_DONE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

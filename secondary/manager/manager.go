@@ -667,23 +667,26 @@ func (m *IndexManager) HandleBuildIndexRebalDDLEmptyNode(indexIds client.IndexId
 
 func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
-	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap) error {
+	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap,
+	trainingPhase common.TrainingPhase) error {
 
 	inst := &topologyChange{
-		Bucket:      bucket,
-		Scope:       scope,
-		Collection:  collection,
-		DefnId:      uint64(defnId),
-		InstId:      uint64(instId),
-		State:       uint32(state),
-		StreamId:    uint32(streamId),
-		Error:       err,
-		BuildTime:   buildTime,
-		RState:      uint32(rState),
-		Partitions:  partitions,
-		Versions:    versions,
-		InstVersion: instVersion,
-		ShardIdMap:  partnShardIdMap}
+		Bucket:        bucket,
+		Scope:         scope,
+		Collection:    collection,
+		DefnId:        uint64(defnId),
+		InstId:        uint64(instId),
+		State:         uint32(state),
+		StreamId:      uint32(streamId),
+		Error:         err,
+		BuildTime:     buildTime,
+		RState:        uint32(rState),
+		Partitions:    partitions,
+		Versions:      versions,
+		InstVersion:   instVersion,
+		ShardIdMap:    partnShardIdMap,
+		TrainingPhase: trainingPhase,
+	}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -698,23 +701,26 @@ func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, def
 
 func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
-	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap) error {
+	partitions []uint64, versions []int, instVersion int, partnShardIdMap common.PartnShardIdMap,
+	trainingPhase common.TrainingPhase) error {
 
 	inst := &topologyChange{
-		Bucket:      bucket,
-		Scope:       scope,
-		Collection:  collection,
-		DefnId:      uint64(defnId),
-		InstId:      uint64(instId),
-		State:       uint32(state),
-		StreamId:    uint32(streamId),
-		Error:       err,
-		BuildTime:   buildTime,
-		RState:      uint32(rState),
-		Partitions:  partitions,
-		Versions:    versions,
-		InstVersion: instVersion,
-		ShardIdMap:  partnShardIdMap}
+		Bucket:        bucket,
+		Scope:         scope,
+		Collection:    collection,
+		DefnId:        uint64(defnId),
+		InstId:        uint64(instId),
+		State:         uint32(state),
+		StreamId:      uint32(streamId),
+		Error:         err,
+		BuildTime:     buildTime,
+		RState:        uint32(rState),
+		Partitions:    partitions,
+		Versions:      versions,
+		InstVersion:   instVersion,
+		ShardIdMap:    partnShardIdMap,
+		TrainingPhase: trainingPhase,
+	}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {

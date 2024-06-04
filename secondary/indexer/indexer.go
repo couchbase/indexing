@@ -1740,6 +1740,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case PAUSE_UPDATE_BUCKET_STATE:
 		idx.handleUpdateBucketPauseState(msg)
 
+	case INDEX_TRAINING_DONE:
+		idx.handleIndexTrainingDone(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -2592,7 +2595,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 		// will be cleaned up as a part of token cleanup by shard rebalancer
 		indexInst.Error = recoveryErr.Error()
 		idx.indexInstMap[indexInst.InstId] = indexInst
-		if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, true, false, false, false, false, false, nil, nil); err != nil {
+		if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, true, false, false, false, false, false, nil, false, nil); err != nil {
 			// Crash indexer so that rebalancer will not wait for ever
 			common.CrashOnError(err)
 		}
@@ -2623,7 +2626,7 @@ func (idx *indexer) handleInstRecoveryResponse(msg Message) {
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
 	// Send a message to cluster manager to update index instance state to topology
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, true, false, false, false, false, false, true, false, partnShardIdMap, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -2731,7 +2734,7 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			idx.indexInstMap[tgtInstId] = inst
 
 			instIds := []common.IndexInstId{tgtInstId}
-			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, respch)
+			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, respch)
 
 			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
@@ -3540,7 +3543,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 			idx.indexInstMap[instId] = inst
 
 			if updateRState {
-				if err := idx.updateMetaInfoForIndexList([]c.IndexInstId{instId}, false, false, false, false, true, false, false, false, nil, nil); err != nil {
+				if err := idx.updateMetaInfoForIndexList([]c.IndexInstId{instId}, false, false, false, false, true, false, false, false, nil, false, nil); err != nil {
 					logging.Errorf("PrunePartition: Error observed while updating RState for inst: %v", instId)
 					common.CrashOnError(err)
 				}
@@ -3764,6 +3767,13 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
+		if len(instIdList) != 0 {
+			keyspaceIdIndexList[keyspaceId] = instIdList
+		} else {
+			delete(keyspaceIdIndexList, keyspaceId)
+			continue
+		}
+
 		// Check if Initial Build is already running for this index's keyspace. Indexer does not support multiple
 		// builds on the same keyspace because the keyspaceId is used as a key to stream maps.
 		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
@@ -3837,6 +3847,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		idx.bulkUpdateStream(instIdList, buildStream)
+		idx.resetTrainingPhaseForNonVectorInsts(instIdList)
 
 		//always set state to Initial, once stream request/build is done,
 		//this will get changed to active
@@ -3899,13 +3910,17 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil, nil); err != nil {
+				true, false, true, true, false, false, false, nil, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
 			idx.keyspaceIdCreateClientChMap[keyspaceId] = clientCh
 			return
 		}
+	}
+
+	if clientCh == nil {
+		return
 	}
 
 	if idx.enableManager {
@@ -4099,7 +4114,7 @@ func (idx *indexer) handleBuildRecoveredIndexes(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil, nil); err != nil {
+				true, false, true, true, false, false, false, nil, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -4220,7 +4235,7 @@ func (idx *indexer) handleResumeRecoveredIndexes(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, false, false, nil, nil); err != nil {
+				true, false, true, true, false, false, false, nil, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -6971,7 +6986,7 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	idx.indexInstMap[instId] = inst
 
 	instIds := []common.IndexInstId{instId}
-	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, respCh); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil, false, respCh); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -7129,7 +7144,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId,
 	}
 
 	//update index state in metadata
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -7337,7 +7352,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	}
 
 	//update index state in metadata
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -7618,7 +7633,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		}
 
 		if err := idx.updateMetaInfoForIndexList(instIdList, true, true,
-			false, false, true, false, false, false, nil, nil); err != nil {
+			false, false, true, false, false, false, nil, false, nil); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -9502,7 +9517,7 @@ func (idx *indexer) updateTopologyOnShardIdChange(indexInst *common.IndexInst, p
 			persistedShardIdMap, partnShardIdMap, indexInst.InstId)
 
 		respCh := make(chan error)
-		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, respCh)
+		idx.updateMetaInfoForIndexList([]common.IndexInstId{indexInst.InstId}, false, false, false, false, false, true, true, false, partnShardIdMap, false, respCh)
 	}
 }
 
@@ -9726,7 +9741,7 @@ func (idx *indexer) validateIndexInstMap() {
 					idx.indexInstMap[instId] = index
 
 					instIds := []common.IndexInstId{index.InstId}
-					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil, nil); err != nil {
+					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil, false, nil); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -9951,7 +9966,7 @@ func (idx *indexer) checkMaintStreamIndexBuild() {
 
 	if idx.enableManager {
 		if err := idx.updateMetaInfoForIndexList(updatedList,
-			true, true, false, false, true, false, false, false, nil, nil); err != nil {
+			true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -10000,7 +10015,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false, true, false, false, false, nil, nil); err != nil {
+				true, true, false, false, true, false, false, false, nil, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -10193,7 +10208,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil, nil)
+			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil, false, nil)
 	} else {
 		return nil
 	}
@@ -10204,7 +10219,8 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	updateState bool, updateStream bool, updateError bool,
 	updateBuildTs bool, updateRState bool, syncUpdate bool,
 	updatePartitions bool, updateVersion bool,
-	partnShardIdMap common.PartnShardIdMap, respCh chan error) error {
+	partnShardIdMap common.PartnShardIdMap,
+	updateTrainingPhase bool, respCh chan error) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -10220,6 +10236,7 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 		partitions:      updatePartitions,
 		version:         updateVersion,
 		partnShardIdMap: partnShardIdMap,
+		trainingPhase:   updateTrainingPhase,
 	}
 
 	msg := &MsgClustMgrUpdate{
@@ -10593,8 +10610,11 @@ func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.I
 				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexInvalidState}
 			}
 		} else {
-
-			if index.State == common.INDEX_STATE_CREATED ||
+			if index.TrainingPhase == common.TRAINING_IN_PROGRESS &&
+				index.Defn.IsVectorIndex {
+				logging.Infof("Index training is already in progress for vector inst %v. TrainingPhase: %v.", instId, index.TrainingPhase)
+				skipCount++
+			} else if index.State == common.INDEX_STATE_CREATED ||
 				index.State == common.INDEX_STATE_READY ||
 				index.State == common.INDEX_STATE_ERROR {
 				newList = append(newList, instId)
@@ -12974,7 +12994,8 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 			continue
 		}
 
-		if inst.Defn.IsVectorIndex && (inst.IsTrained == false) {
+		if inst.Defn.IsVectorIndex &&
+			(inst.IsTrained() == false) {
 			vecInsts = append(vecInsts, instId)
 		} else {
 			others = append(others, instId)
@@ -12983,6 +13004,29 @@ func (idx *indexer) filterNeedsTrainingInsts(instIdList []c.IndexInstId, errMap 
 
 	return others, vecInsts
 
+}
+
+func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c.VectorMetadata, keyspaceId string) error {
+
+	if vm.Quantizer.Type == c.PQ {
+
+		// For product quantization, atleast 1 << nbits vectors are required
+		// For IVF indexes, atleast nlist number of vectors are required
+		// Hence, the minCentroidsRequired is derived based on max(1 << nbits, nlist)
+		// This value ensures that there is atleast one vector for every centroid
+		// in the keyspace at the time of build
+		minCentroidsRequired := max(1<<vm.Quantizer.Nbits, nlist)
+		if trainlistSize < uint64(minCentroidsRequired) {
+			logging.Errorf("Indexer::validateTrainListSize The number of documents: %v in keyspace: %v are less than the "+
+				"minimum number of documents: %v required for training", trainlistSize, keyspaceId, minCentroidsRequired)
+			return c.ErrInsufficientItemsForTraining
+		}
+		return nil
+	} else {
+		// SQ is currently not supported
+		// [VECTOR_TODO]: Add support for SQ
+		return c.ErrUnsupportedQuantisationScheme
+	}
 }
 
 func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
@@ -12999,10 +13043,13 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		return nil
 	}
 
+	validVecInsts := make([]common.IndexInstId, 0)
 	for _, instId := range vecInstIdList {
 		inst := idx.indexInstMap[instId]
 
-		if (inst.Defn.IsVectorIndex == false) || (inst.IsTrained == true) {
+		if (inst.Defn.IsVectorIndex == false) ||
+			(inst.TrainingPhase == common.TRAINING_IN_PROGRESS) ||
+			(inst.TrainingPhase == common.TRAINING_COMPLETED) {
 			continue
 		}
 
@@ -13011,10 +13058,19 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			centroids = idx.computeCentroidsFromItemsCount(keyspaceId, itemsCount)
 		}
 		inst.Nlist = centroids
+
+		// In the worst case, all items in the keyspace will be considered for training
+		trainListSize := itemsCount
+		if err := idx.validateTrainListSize(trainListSize, inst.Nlist, inst.Defn.VectorMeta, keyspaceId); err != nil {
+			errMap[instId] = err
+			continue
+		}
+
 		idx.indexInstMap[instId] = inst
+		validVecInsts = append(validVecInsts, instId)
 		logging.Infof("Indexer::computeCentroids Centroids for training inst: %v are: %v", instId, centroids)
 	}
-	return vecInstIdList
+	return validVecInsts
 }
 
 func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
@@ -13036,7 +13092,11 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			logging.Infof("Indexer::checkAndInitiateTraining Initiating training for vector indexes: %v, "+
 				"all indexes in batch: %v", vecInstIdList, instIdList)
 
-			// [VECTOR_TODO]: Initiate training
+			idx.updateTrainingPhase(instIdList, common.TRAINING_IN_PROGRESS)
+			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil)
+			common.CrashOnError(err)
+
+			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap), keyspaceId)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13044,4 +13104,153 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 	logging.Infof("Indexer::checkAndInitiateTraining Indexes are either non-vector or already trained. "+
 		"Starting build for indexes: %v", instIdList)
 	return instIdList
+}
+
+// All indexes in the build batch will have training phase updated
+// After training is completed, training phase is updated again
+func (idx *indexer) updateTrainingPhase(instIdList []common.IndexInstId, trainingPhase common.TrainingPhase) {
+	for _, instId := range instIdList {
+		inst := idx.indexInstMap[instId]
+		inst.TrainingPhase = trainingPhase
+		idx.indexInstMap[instId] = inst
+	}
+}
+
+// If non-vector indexes are built in a separate build command while
+// those indexes are waiting for training to complete from earlier
+// command, then indexer will proceed with build for non-vector indexes
+// In such a case, reset the training phase
+func (idx *indexer) resetTrainingPhaseForNonVectorInsts(instIdList []common.IndexInstId) {
+	for _, instId := range instIdList {
+		inst := idx.indexInstMap[instId]
+		if inst.Defn.IsVectorIndex {
+			continue
+		}
+		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		idx.indexInstMap[instId] = inst
+	}
+}
+
+// Note: This is a temporary method. Needs to be removed after
+// initiateTraining() is integrated with training infra
+func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
+	rand.Seed(1234) // Use a fixed seed for now for predictably
+
+	dims := vectorMeta.Dimension
+	nlist = max(nlist, 1<<vectorMeta.Quantizer.Nbits)
+
+	vecs := make([]float32, dims*nlist)
+	for i := 0; i < dims*nlist; i++ {
+		vecs[i] = rand.Float32()
+	}
+	return vecs
+}
+
+// [VECTOR_TODO]: Add a worker pool to take care of training
+// It is not a good idea to spawn a go-routine for each build statement
+func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
+	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
+	keyspaceId string) {
+
+	errMap := make(map[common.IndexInstId]error)
+	successMap := make(map[common.IndexInstId]bool)
+
+	for _, instId := range allInsts {
+		idxInst := indexInstMap[instId]
+		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
+			successMap[instId] = true
+			continue
+		}
+
+		partnInstMap := indexPartnMap[instId]
+
+		for partnId, partnInst := range partnInstMap {
+			slices := partnInst.Sc.GetAllSlices()
+
+			for _, slice := range slices {
+				logging.Infof("Indexer::initateTraining Starting training for vector index with instId: %v, partnId: %v", instId, partnId)
+				start := time.Now()
+				slice.SetNlist(idxInst.Nlist)
+
+				if err := slice.InitCodebook(); err != nil {
+					slice.ResetCodebook()
+					logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					errMap[instId] = errors.New(common.ERR_TRAINING + err.Error())
+					continue
+				}
+
+				// [VECTOR_TODO]: Integrate this with training infra
+				vecs := getVectors(idxInst.Defn.VectorMeta, idxInst.Nlist)
+				if err := slice.Train(vecs); err != nil {
+					slice.ResetCodebook()
+					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					errMap[instId] = errors.New(common.ERR_TRAINING + err.Error())
+					continue
+				}
+				logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
+					"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+			}
+		}
+
+		// All partitions of this instance have finished training
+		// Add inst to success map if no error has been observed
+		if _, ok := errMap[instId]; !ok {
+			successMap[instId] = true
+		}
+	}
+
+	idx.internalRecvCh <- &MsgIndexTrainingDone{
+		keyspaceId: keyspaceId,
+		successMap: successMap,
+		errMap:     errMap,
+	}
+}
+
+func (idx *indexer) handleIndexTrainingDone(cmd Message) {
+	msg := cmd.(*MsgIndexTrainingDone)
+	successMap := msg.GetSuccessMap()
+	errMap := msg.GetErrMap()
+	keyspaceId := msg.GetKeyspaceId()
+
+	toBuildInstIds := make([]common.IndexInstId, 0)
+	allInsts := make([]common.IndexInstId, 0)
+	// Set isTrained to true for all successful instances
+	// For failed instances, set isTrained to false
+	for instId := range successMap {
+		inst := idx.indexInstMap[instId]
+		if inst.Defn.IsVectorIndex {
+			inst.TrainingPhase = c.TRAINING_COMPLETED
+		} else {
+			inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		}
+		idx.indexInstMap[instId] = inst
+		inst.Error = "" // Reset any error observed from earlier iterations
+		toBuildInstIds = append(toBuildInstIds, instId)
+		allInsts = append(allInsts, instId)
+	}
+
+	for instId, err := range errMap {
+		inst := idx.indexInstMap[instId]
+		inst.TrainingPhase = c.TRAININIG_NOT_STARTED // Reset training phase
+		inst.Error = err.Error()
+		idx.indexInstMap[instId] = inst
+		allInsts = append(allInsts, instId)
+	}
+
+	// [VECTOR_TODO]: Persist codebook to disk for vector indexes for which
+	// build is successful and then update the training phase
+
+	err := idx.updateMetaInfoForIndexList(allInsts, false, false, true, false, false, false, true, false, nil, true, nil)
+	common.CrashOnError(err)
+
+	logging.Infof("Indexer: handleIndexTrainingDone Starting build for instances: %v, keyspaceId: %v", toBuildInstIds, keyspaceId)
+
+	// Initiate build
+	idx.handleBuildIndex(&MsgBuildIndex{
+		mType:            CLUST_MGR_BUILD_INDEX_DDL,
+		indexInstList:    toBuildInstIds,
+		bucketList:       []string{keyspaceId},
+		reqCtx:           common.NewUserRequestContext(),
+		isEmptyNodeBatch: false,
+	})
 }

@@ -146,6 +146,8 @@ type topologyChange struct {
 	InstVersion int      `json:"instVersion,omitempty"`
 
 	ShardIdMap common.PartnShardIdMap `json:"partnShardIdMap,omitempty"`
+
+	TrainingPhase common.TrainingPhase `json:"trainingPhase,omitempty"`
 }
 
 type dropInstance struct {
@@ -2369,6 +2371,13 @@ func (m *LifecycleMgr) buildIndexesLifecycleMgr(defnIds []common.IndexDefnId,
 
 				retryList = append(retryList, defn)
 				retryErrList = append(retryErrList, build_err)
+			} else if common.IsVectorTrainingError(build_err.Error()) {
+				// For training related errors, update error in instance meta and
+				// return the error to caller. "builder" will use this error
+				// information to skip retry of index build
+
+				m.setScheduleFlagAndUpdateErr(defn, *inst, false, true, build_err.Error())
+				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 			} else {
 				errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 			}
@@ -2437,7 +2446,7 @@ func (m *LifecycleMgr) setScheduleFlagAndUpdateErr(defn *common.IndexDefn, inst 
 
 	if updateErr {
 		err := m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil)
+			common.NIL_STREAM, errStr, nil, inst.RState, nil, nil, -1, nil, inst.TrainingPhase)
 		if err != nil {
 			logging.Infof("LifecycleMgr::handleBuildIndexes: Failed to persist error in index instance (%v, %v, %v, %v, %v).",
 				defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
@@ -2647,7 +2656,7 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
 		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
 		change.BuildTime, change.RState, change.Partitions, change.Versions,
-		change.InstVersion, change.ShardIdMap); err != nil {
+		change.InstVersion, change.ShardIdMap, change.TrainingPhase); err != nil {
 		return err
 	}
 
@@ -3993,6 +4002,11 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return common.ErrIndexInAsyncRecovery
 	}
 
+	oldPartitions := make([]uint64, 0, len(inst.Partitions))
+	for _, partition := range inst.Partitions {
+		oldPartitions = append(oldPartitions, partition.PartId)
+	}
+
 	newPartitions := make([]common.PartitionId, 0, len(partitions))
 	for _, partitionId := range partitions {
 		for _, partition := range inst.Partitions {
@@ -4026,7 +4040,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 	// accidently delete the instance.
 	//
 	if len(newPartitions) == 0 {
-		logging.Errorf("LifecycleMgr.PrunePartition() : There is no matching partition to prune for inst %v. Partitions=%v", instId, newPartitions)
+		logging.Errorf("LifecycleMgr.PrunePartition() : There is no matching partition to prune for inst %v. New partitions=%v", instId, newPartitions)
 		return nil
 	}
 
@@ -4036,11 +4050,12 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return err
 	}
 
-	logging.Infof("LifecycleMgr.PrunePartition() Generated tombstoneInstId: %v for pruning inst: %v, partitions: %v",
-		tombstoneInstId, instId, newPartitions)
+	logging.Infof("LifecycleMgr.PrunePartition() Generated tombstoneInstId: %v for pruning inst: %v, old partitions: %v, new partitions: %v",
+		tombstoneInstId, instId, oldPartitions, newPartitions)
 
 	if err := m.repo.splitPartitionFromTopology(defn.Bucket, defn.Scope, defn.Collection, id, instId, tombstoneInstId, newPartitions); err != nil {
-		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index.  Reason = %v", err)
+		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index inst: %v, old partitions: %v, new partitions: %v.  Reason = %v",
+			instId, oldPartitions, newPartitions, err)
 		return err
 	}
 
@@ -4053,13 +4068,13 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		if err := m.notifier.OnPartitionPrune(instId, newPartitions, reqCtx); err != nil {
 			indexerErr, ok := err.(*common.IndexerError)
 			if ok && indexerErr.Code != common.IndexNotExist {
-				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index: %v.",
-					indexerErr.Reason)
+				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index inst: %v, old partitions: %v, new partitions: %v. err: %v.",
+					instId, oldPartitions, newPartitions, indexerErr.Reason)
 				return err
 
 			} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index: %v.  Drop index will be retried in background",
-					err.Error())
+				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index inst: %v, old partitions: %v, new partitions: %v, err:%v. Drop index will be retried in background",
+					instId, oldPartitions, newPartitions, err.Error())
 				return err
 			}
 		}
@@ -4103,6 +4118,10 @@ func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error
 		return false
 	}
 
+	if common.IsVectorTrainingError(err.Error()) {
+		return false
+	}
+
 	indexerErr, ok := err.(*common.IndexerError)
 	if !ok {
 		return true
@@ -4142,7 +4161,8 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 
 func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
-	partitions []uint64, versions []int, version int, partnShardIdMap common.PartnShardIdMap) error {
+	partitions []uint64, versions []int, version int, partnShardIdMap common.PartnShardIdMap,
+	trainingPhase common.TrainingPhase) error {
 
 	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
@@ -4207,6 +4227,8 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, def
 	if len(partnShardIdMap) > 0 {
 		changed = topology.UpdateShardIdsForIndexPartn(defnId, instId, partnShardIdMap) || changed
 	}
+
+	changed = topology.UpdateTrainingPhaseForIndex(defnId, instId, trainingPhase) || changed
 
 	if changed {
 		if err := m.repo.SetTopologyByCollection(bucket, defn.Scope, defn.Collection, topology); err != nil {
@@ -5318,6 +5340,13 @@ func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 						break
 					}
 
+					// Do not retry index build if there are any errors observed during
+					// vector index training as user intervention might be required
+					if common.IsVectorTrainingError(inst.Error) {
+						logging.Verbosef("builder: Disabling background build for inst: %v due to err: %v", inst.InstId, inst.Error)
+						continue
+					}
+
 					if inst.State == uint32(common.INDEX_STATE_READY) {
 						foundReady = true
 						// build index if
@@ -5512,6 +5541,13 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 				if logMsg {
 					logging.Infof("builder: Queuing to retry list %v as %v != INDEX_STATE_READY", entry, common.IndexState(inst.State))
 				}
+				continue
+			}
+
+			// Do not retry index build if there are any errors observed during
+			// vector index training as user intervention might be required
+			if common.IsVectorTrainingError(inst.Error) {
+				logging.Verbosef("builder: Skipping build token from further processing for inst: %v due to err: %v", inst.InstId, inst.Error)
 				continue
 			}
 

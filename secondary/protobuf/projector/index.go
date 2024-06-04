@@ -705,15 +705,14 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, docval qvalue.AnnotatedV
 		}
 	}
 
-	meta := docval.NewMeta()
-	meta["byseqno"] = m.Seqno
-	meta["revseqno"] = m.RevSeqno
-	meta["flags"] = m.Flags
-	meta["expiration"] = m.Expiry
-	meta["locktime"] = m.LockTime
-	meta["nru"] = m.Nru
-	meta["cas"] = m.Cas
-	meta["xattrs"] = m.ParsedXATTR
+	docval.SetMetaField(qvalue.META_BYSEQNO, m.Seqno)
+	docval.SetMetaField(qvalue.META_REVSEQNO, m.RevSeqno)
+	docval.SetMetaField(qvalue.META_FLAGS, m.Flags)
+	docval.SetMetaField(qvalue.META_EXPIRATION, m.Expiry)
+	docval.SetMetaField(qvalue.META_LOCKTIME, m.LockTime)
+	docval.SetMetaField(qvalue.META_NRU, m.Nru)
+	docval.SetMetaField(qvalue.META_CAS, m.Cas)
+	docval.SetMetaField(qvalue.META_XATTRS, m.ParsedXATTR)
 	docval.SetId(string(m.Key))
 }
 

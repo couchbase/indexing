@@ -207,6 +207,27 @@ func (cons Consistency) String() string {
 	}
 }
 
+type TrainingPhase byte
+
+const (
+	TRAININIG_NOT_STARTED TrainingPhase = iota
+	TRAINING_IN_PROGRESS
+	TRAINING_COMPLETED
+)
+
+func (tp TrainingPhase) String() string {
+	switch tp {
+	case TRAININIG_NOT_STARTED:
+		return "TRAININIG_NOT_STARTED"
+	case TRAINING_IN_PROGRESS:
+		return "TRAINING_IN_PROGRESS"
+	case TRAINING_COMPLETED:
+		return "TRAINING_COMPLETED"
+	default:
+		return "UNKNOWN_TRAINING_PHASE"
+	}
+}
+
 // IndexDefn represents the index definition as specified
 // during CREATE INDEX
 type IndexDefn struct {
@@ -334,7 +355,7 @@ type IndexInst struct {
 	// definition
 	Nlist int
 
-	IsTrained bool // Set to true once training is completed
+	TrainingPhase TrainingPhase // Set to true once training is completed
 }
 
 // IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -690,6 +711,10 @@ func CopyIndexInstMap2(inMap IndexInstMap) IndexInstMap {
 		outMap[k] = vv
 	}
 	return outMap
+}
+
+func (inst IndexInst) IsTrained() bool {
+	return inst.TrainingPhase == TRAINING_COMPLETED
 }
 
 func GetImmutableFlag(defn IndexDefn) bool {

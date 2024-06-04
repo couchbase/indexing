@@ -205,6 +205,7 @@ type MetaUpdateFields struct {
 	partitions      bool
 	version         bool
 	partnShardIdMap common.PartnShardIdMap
+	trainingPhase   bool
 }
 
 type EncodeCompatMode int
