@@ -49,6 +49,7 @@ type indexMutation struct {
 	op    int
 	key   []byte
 	docid []byte
+	vecs  [][]float32
 	meta  *MutationMeta
 }
 
@@ -397,7 +398,7 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+func (mdb *memdbSlice) Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
 	mut := &indexMutation{
 		op:    opUpdate,
 		key:   key,

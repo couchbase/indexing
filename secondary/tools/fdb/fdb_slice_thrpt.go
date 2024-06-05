@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/indexer"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"runtime/pprof"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/indexer"
 )
 
 func main() {
@@ -58,7 +59,7 @@ func do_test1() {
 	log.Println("***** LOADING*****")
 	start := time.Now()
 	for i := 0; i < numItems; i++ {
-		slice.Insert(keys[i], vals[i])
+		slice.Insert(keys[i], vals[i], nil, nil)
 	}
 	//	dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 	slice.NewSnapshot(nil, false)
