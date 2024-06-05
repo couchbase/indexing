@@ -1,17 +1,18 @@
 package randdocs
 
 import (
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	rnd "math/rand"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
-import "crypto/md5"
-import "fmt"
-import "sync"
-import "runtime"
-import "github.com/couchbase/indexing/secondary/common"
 
 type Config struct {
 	ClusterAddr   string
@@ -59,6 +60,7 @@ func Run(cfg Config) error {
 
 	b, err := common.ConnectBucket(cfg.ClusterAddr, "default", cfg.Bucket)
 	if err != nil {
+		fmt.Printf("Error observed when connecting to bucket: %v, err: %v\n", cfg.Bucket, err)
 		return err
 	}
 	defer b.Close()
