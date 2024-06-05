@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
-	qvalue "github.com/couchbase/query/value"
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 // [VECTOR_TODO]: Since indexer does not know the position of vector, array has to be
@@ -21,8 +21,7 @@ import (
 func replaceDummyCentroidId(key []byte, vectorPos int, centroidId int64, buf []byte) ([]byte, error) {
 
 	// Step-1: Encode the centroidId
-	codec := collatejson.NewCodec(16)
-	encodedCentroidIdBuf, err := codec.EncodeN1QLValue(qvalue.NewValue(centroidId), buf)
+	encodedCentroidIdBuf, err := common.EncodedCentroidId(centroidId, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -31,6 +30,7 @@ func replaceDummyCentroidId(key []byte, vectorPos int, centroidId int64, buf []b
 
 	// Step-2: Decode the incoming key using "ExplodeArray4"
 	buf = buf[:0] // reset buffer
+	codec := collatejson.NewCodec(16)
 	decodedValues, err := codec.ExplodeArray4(key, buf[:0])
 	if err != nil {
 		return nil, err

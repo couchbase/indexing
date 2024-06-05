@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 
 	qexpr "github.com/couchbase/query/expression"
@@ -38,7 +39,7 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 }
 
 var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
-var dummy_centroid = qvalue.NewValue(int(-1))
+var dummy_centroid = common.GenDummyCentroidId()
 
 // N1QLTransform will use compiled list of expression from N1QL's DDL
 // statement and evaluate a document using them to return a secondary
