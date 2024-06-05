@@ -27,6 +27,14 @@ type Config struct {
 	DocNumOffset  int
 	OpsPerSec     int
 
+	// Vectors
+	GenVectors   bool
+	VecDimension int
+
+	// Seed that should be used to generate random vectors
+	// Default is 1234
+	VecSeed int
+
 	// Use 16 byte random docid
 	UseRandDocID bool
 }
@@ -90,8 +98,12 @@ func Run(cfg Config) error {
 					prefix := docid[cfg.DocIdLen-PREFIX_LEN : cfg.DocIdLen]
 					suffix := randFromAlphabet(cfg.FieldSize, docid)
 
-					value := make(map[string]interface{})
+					value := generateJson()
 					value["body"] = fmt.Sprintf("%s-%s", prefix, suffix)
+
+					if cfg.GenVectors {
+						value["description"] = generateVectors(cfg.VecDimension, cfg.VecSeed)
+					}
 
 					if cfg.JunkFieldSize != 0 {
 						value["field"] = randString(cfg.FieldSize)

@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/tools/randdocs"
 	"io/ioutil"
 	"os"
+
+	"github.com/couchbase/indexing/secondary/tools/randdocs"
 )
 
 func main() {
@@ -20,6 +21,9 @@ func main() {
 	FieldSize := flag.Int("FieldSize", -1, "Field size will be at least this much")
 	OpsPerSec := flag.Int("OpsPerSec", -1, "How many ops per sec")
 	Iterations := flag.Int("Iterations", -1, "How many times to repeat")
+	GenVectors := flag.Bool("genVectors", false, "Set to true to generate vector data")
+	VecDim := flag.Int("dimension", 128, "Size of the vector array. Default is 128")
+	VecSeed := flag.Int("vecSeed", 1234, "Seed to be used for random number generator")
 
 	flag.Parse()
 	if *help {
@@ -71,6 +75,18 @@ func main() {
 
 	if *Iterations != -1 {
 		cfg.Iterations = *Iterations
+	}
+
+	if *GenVectors == true {
+		cfg.GenVectors = true
+
+		if *VecDim > 0 {
+			cfg.VecDimension = *VecDim
+		} else {
+			panic("Invalid vector dimension")
+		}
+
+		cfg.VecSeed = *VecSeed
 	}
 
 	randdocs.Run(cfg)
