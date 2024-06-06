@@ -76,6 +76,8 @@ const SCAN_SHUTDOWN_ERROR_BATCHSIZE = 1000
 
 const MAX_PROJ_RETRY = 20
 
+const MIN_SHA_ENCODE_LEN = 36 // 32 bytes for SHA256 encode and 4 bytes for number of such entries
+
 // Constants for stats persistence in snapshot meta
 const SNAPSHOT_META_VERSION_MOI_1 = 1
 const SNAPSHOT_META_VERSION_PLASMA_1 = 1
