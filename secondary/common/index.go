@@ -356,6 +356,9 @@ type IndexInst struct {
 	Nlist int
 
 	TrainingPhase TrainingPhase // Set to true once training is completed
+
+	// Absolute path to the Codebook file on disk (per partition)
+	CodebookPath map[PartitionId]string
 }
 
 // IndexInstMap is a map from IndexInstanceId to IndexInstance

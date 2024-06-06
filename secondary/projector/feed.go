@@ -365,6 +365,13 @@ func (feed *Feed) getFeedStats() *FeedStats {
 
 		if feeder := feed.feeders[bucket]; feeder != nil {
 			keyspaceIdStats.dcpStats = feeder.GetStats()
+			keyspaceIdStats.dcpLogPrefix = strings.Join([]string{
+				"DCPT",
+				keyspaceIdStats.topic,
+				keyspaceIdStats.keyspaceId,
+				strconv.FormatUint(feeder.GetStreamUuid(), 10),
+				fmt.Sprintf("##%x", keyspaceIdStats.opaque),
+			}, ":")
 		}
 
 		// For this bucket, get kvstats
@@ -1754,7 +1761,10 @@ func (feed *Feed) openFeeder(
 	}
 
 	kvaddrs := []string{kvaddr}
-	feeder, err = OpenBucketFeed(name, bucket, opaque, kvaddrs, dcpConfig)
+	feeder, err = OpenBucketFeed(
+		name, bucket, opaque,
+		kvaddrs, dcpConfig, uuid.Uint64(),
+	)
 	if err != nil {
 		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId, err)

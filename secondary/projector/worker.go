@@ -139,8 +139,7 @@ func NewVbucketWorker(
 	worker.stats.Init()
 	worker.stats.datach = worker.datach
 	worker.osoSnapshot = feed.osoSnapshot[keyspaceId]
-	fmsg := "WRKR[%v<-%v<-%v #%v]"
-	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
+	worker.logPrefix = getWorkerLogPrefix(feed.topic, keyspaceId, opaque, id)
 	worker.mutChanSize = mutChanSize
 	worker.panicLgr = logging.NewTimedNStackTraces(5, 1*time.Hour)
 

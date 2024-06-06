@@ -210,6 +210,9 @@ type plasmaSlice struct {
 	nlist int // number of centroids to use for training
 
 	codebook vector.Codebook
+
+	// Size of the quantized codes after training
+	codeSize int
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
@@ -5006,6 +5009,9 @@ func (mdb *plasmaSlice) InitCodebook() error {
 // this method should not be called
 func (mdb *plasmaSlice) ResetCodebook() error {
 
+	// reset codebookSize
+	mdb.codeSize = 0
+
 	if mdb.codebook != nil {
 		err := mdb.codebook.Close()
 		mdb.codebook = nil
@@ -5023,7 +5029,17 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		return errors.New("Codebook is not initialized")
 	}
 
-	return mdb.codebook.Train(vecs)
+	err := mdb.codebook.Train(vecs)
+	if err != nil {
+		return err
+	}
+
+	mdb.codeSize, err = mdb.codebook.CodeSize()
+	if err != nil {
+		mdb.codeSize = 0
+		return err
+	}
+	return nil
 }
 
 ////////////////////////////////////////////////////////////

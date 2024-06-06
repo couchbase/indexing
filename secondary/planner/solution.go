@@ -1452,7 +1452,29 @@ func (s *Solution) FindNodesForReplicaRepair(source *IndexUsage, numNewReplica i
 
 	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	nodes := shuffleNode(rs, s.Placement)
+	sortNodesForReplicaRepair := func(nodes []*IndexerNode) []*IndexerNode {
+		var oldNodes, newNodes, deletedNodes, result []*IndexerNode
+
+		for _, node := range nodes {
+			if node.IsDeleted() {
+				deletedNodes = append(deletedNodes, node)
+			} else if node.isNew {
+				// beware: we should use isNew only as len(node.Indexes) could
+				// change when we place the repaired replicas on the new node
+				newNodes = append(newNodes, node)
+			} else {
+				oldNodes = append(oldNodes, node)
+			}
+		}
+
+		result = append(result, shuffleNode(rs, oldNodes)...)
+		result = append(result, shuffleNode(rs, newNodes)...)
+		result = append(result, shuffleNode(rs, deletedNodes)...)
+
+		return result
+	}
+
+	nodes := sortNodesForReplicaRepair(s.Placement)
 
 	// TODO: Need to evaluate the cost of calculating replica and SG maps
 	// before replica repair.

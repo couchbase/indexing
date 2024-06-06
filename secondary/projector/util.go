@@ -1,6 +1,9 @@
 package projector
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 
@@ -84,4 +87,38 @@ func CloneVbucketMap(vbmap map[uint16]*Vbucket) map[uint16]*Vbucket {
 		clone[k] = v
 	}
 	return clone
+}
+
+func getKvdtLogPrefix(topic, keyspace string, opaque uint16) string {
+	return strings.Join([]string{
+		"KVDT",
+		topic,
+		keyspace,
+		fmt.Sprintf("##%x", opaque),
+	}, ":")
+}
+
+func getWorkerStatPrefix(topic, keyspace string, opaque uint16) string {
+	return strings.Join([]string{
+		"WRKR",
+		topic,
+		keyspace,
+		fmt.Sprintf("##%x", opaque),
+	}, ":")
+}
+
+func getWorkerLogPrefix(topic, keyspace string, opaque uint16, workerId int) string {
+	return strings.Join([]string{
+		getWorkerStatPrefix(topic, keyspace, opaque),
+		strconv.Itoa(workerId),
+	}, ":")
+}
+
+func getEvalStatsLogPRefix(topic, keyspace string, opaque uint16) string {
+	return strings.Join([]string{
+		"EVAL",
+		topic,
+		keyspace,
+		fmt.Sprintf("##%x", opaque),
+	}, ":")
 }

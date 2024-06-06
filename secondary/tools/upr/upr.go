@@ -120,8 +120,9 @@ func startBucket(cluster, bucketn string, kvaddrs []string) int {
 		"activeVbOnly":   true,
 	}
 	dcpFeed, err := b.StartDcpFeedOver(
-		couchbase.NewDcpFeedName("rawupr"),
-		uint32(0), uint32(0x0), options.kvaddrs, 0xABCD, dcpConfig)
+		couchbase.NewDcpFeedName("rawupr"), uint32(0), uint32(0x0),
+		options.kvaddrs, 0xABCD, dcpConfig, 1,
+	)
 	mf(err, "- upr")
 
 	vbnos := listOfVbnos(options.maxVbno)

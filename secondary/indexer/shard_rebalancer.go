@@ -32,6 +32,9 @@ import (
 var ErrRebalanceCancel = errors.New("Shard rebalance cancel received")
 var ErrRebalanceDone = errors.New("Shard rebalance done received")
 
+// TODO add the Prefix in Indexer settings
+const CODEBOOK_COPY_PREFIX = "codebook_v1"
+
 // ShardRebalancer embeds Rebalancer struct to reduce code
 // duplication across common functions
 type ShardRebalancer struct {
@@ -1210,6 +1213,8 @@ loop:
 		progressCh: progressCh,
 
 		newAlternateShardIds: tt.NewAlternateShardIds,
+
+		codebookPaths: getCodebookPaths(tt),
 	}
 
 	if sr.canMaintainShardAffinity {
@@ -1242,70 +1247,95 @@ loop:
 			l.Infof("ShardRebalancer::startShardTransfer Received response for transfer of "+
 				"shards: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
 
-			msg := respMsg.(*MsgShardTransferResp)
-			errMap := msg.GetErrorMap()
-			shardPaths := msg.GetShardPaths()
+			// ShardRebalancer can only receive SHARD_TRANSFER_RESPONSE after successful transfer of Codebooks
+			// Receiving CODEBOOK_TRANSFER_RESPONSE then SHARD_TRANSFER_RESPONSE are sequential
+			switch respMsg.GetMsgType() {
+			case CODEBOOK_TRANSFER_RESPONSE:
+				msg := respMsg.(*MsgCodebookTransferResp)
+				errMap := msg.GetErrorMap()
+				codebookPaths := msg.GetCodebookPaths()
 
-			hasErr := false
-			for shardId, err := range errMap {
-				if err != nil {
-					hasErr = true
+				// for any error received for codebook transfer, consider it a rebalance failure and initiate cleanup
+				for codebookName, err := range errMap {
+					if err != nil {
+						l.Errorf("ShardRebalancer::startShardTransfer Observed error during codebook transfer"+
+							" for destination: %v, region: %v, codebookName:%v, codebooksPaths: %v, err: %v. Initiating transfer clean-up",
+							tt.Destination, tt.Region, codebookName, codebookPaths, err)
 
-					l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
-						" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
-						tt.Destination, tt.Region, shardId, shardPaths, err)
+						// Invoke clean-up for all shards even if error is observed for one shard transfer
+						// TODO initiate codebook cleanup sr.initiateCodebookTransferCleanup()
+						sr.setTransferTokenError(ttid, tt, err.Error())
+						return
+					}
+				}
 
-					unlockShards(tt.ShardIds, sr.supvMsgch)
+			case SHARD_TRANSFER_RESPONSE:
+				msg := respMsg.(*MsgShardTransferResp)
+				errMap := msg.GetErrorMap()
+				shardPaths := msg.GetShardPaths()
 
-					// Invoke clean-up for all shards even if error is observed for one shard transfer
-					if err == ErrIndexRollback {
-						if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
+				hasErr := false
+				for shardId, err := range errMap {
+					if err != nil {
+						hasErr = true
+
+						l.Errorf("ShardRebalancer::startShardTransfer Observed error during trasfer"+
+							" for destination: %v, region: %v, shardId: %v, shardPaths: %v, err: %v. Initiating transfer clean-up",
+							tt.Destination, tt.Region, shardId, shardPaths, err)
+
+						unlockShards(tt.ShardIds, sr.supvMsgch)
+
+						// Invoke clean-up for all shards even if error is observed for one shard transfer
+						if err == ErrIndexRollback {
+							if retryCount > maxRetries { // all retries exhausted and still transfer could not be completed
+								sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+								sr.setTransferTokenError(ttid, tt, err.Error())
+								return
+							} else {
+								retryCount++
+								// Clean up the transferred data with nil error and retry transfer
+								// If transfer could not be completed after configured attempts, then set
+								// error in transfer token
+								sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil, true)
+								goto loop
+							}
+						} else if strings.Contains(err.Error(), "context canceled") {
+							continue // Do not set this error in transfer token. Look for other errors
+						} else {
 							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
 							sr.setTransferTokenError(ttid, tt, err.Error())
 							return
-						} else {
-							retryCount++
-							// Clean up the transferred data with nil error and retry transfer
-							// If transfer could not be completed after configured attempts, then set
-							// error in transfer token
-							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, nil, true)
-							goto loop
 						}
-					} else if strings.Contains(err.Error(), "context canceled") {
-						continue // Do not set this error in transfer token. Look for other errors
-					} else {
-						sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
-						sr.setTransferTokenError(ttid, tt, err.Error())
-						return
 					}
 				}
-			}
 
-			// All errors are "context canceled" errors. Use the same to update transfer token
-			if hasErr {
-				for _, err := range errMap {
-					if err != nil {
-						sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
-						sr.setTransferTokenError(ttid, tt, err.Error())
-						return
+				// All errors are "context canceled" errors. Use the same to update transfer token
+				if hasErr {
+					for _, err := range errMap {
+						if err != nil {
+							sr.initiateShardTransferCleanup(shardPaths, tt.Destination, tt.Region, ttid, tt, err, false)
+							sr.setTransferTokenError(ttid, tt, err.Error())
+							return
+						}
 					}
 				}
+
+				////////////// Testing code - Not used in production //////////////
+				testcode.TestActionAtTag(sr.config.Load(), testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER)
+				///////////////////////////////////////////////////////////////////
+
+				// No errors are observed during shard transfer. Change the state of
+				// the transfer token and update metaKV
+				sr.mu.Lock()
+				defer sr.mu.Unlock()
+
+				tt.ShardTransferTokenState = c.ShardTokenRestoreShard
+				tt.ShardPaths = shardPaths
+				setTransferTokenInMetakv(ttid, tt)
+				return
 			}
 
-			////////////// Testing code - Not used in production //////////////
-			testcode.TestActionAtTag(sr.config.Load(), testcode.SOURCE_SHARDTOKEN_AFTER_TRANSFER)
-			///////////////////////////////////////////////////////////////////
-
-			// No errors are observed during shard transfer. Change the state of
-			// the transfer token and update metaKV
-			sr.mu.Lock()
-			defer sr.mu.Unlock()
-
-			tt.ShardTransferTokenState = c.ShardTokenRestoreShard
-			tt.ShardPaths = shardPaths
-			setTransferTokenInMetakv(ttid, tt)
-			return
-
+		// TODO add codebook transfer stats in the progressCh
 		case stats := <-progressCh:
 			sr.updateTransferStatistics(ttid, stats)
 			l.Infof("ShardRebalancer::startShardTranfser ShardId: %v bytesWritten: %v, totalBytes: %v, transferRate: %v",
@@ -4514,6 +4544,23 @@ func asyncCollectProgress(progHolder *float64Holder, collector func() float64, d
 			return
 		}
 	}
+}
+
+func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
+
+	for _, idxInst := range tt.IndexInsts {
+		if idxInst.Defn.IsVectorIndex {
+			for _, partnId := range idxInst.Defn.Partitions {
+				if idxInst.CodebookPath == nil {
+					continue
+				}
+				if codebookPath, ok := idxInst.CodebookPath[partnId]; ok {
+					codebookPaths = append(codebookPaths, codebookPath)
+				}
+			}
+		}
+	}
+	return codebookPaths
 }
 
 func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId string) {

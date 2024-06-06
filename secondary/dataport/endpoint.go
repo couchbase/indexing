@@ -31,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/transport"
+	"github.com/couchbase/logstats/logstats"
 
 	"github.com/couchbase/cbauth"
 
@@ -168,6 +169,37 @@ func (stats *EndpointStats) String() string {
 	return fmt.Sprintf("{%v}", statjson)
 }
 
+func (stats *EndpointStats) Map() map[string]interface{} {
+	var stmap = make(map[string]interface{})
+	stmap["mutCount"] = stats.mutCount.Value()
+	stmap["upsertCount"] = stats.upsertCount.Value()
+	stmap["deleteCount"] = stats.deleteCount.Value()
+	stmap["upsdelCount"] = stats.upsdelCount.Value()
+	stmap["syncCount"] = stats.syncCount.Value()
+	stmap["beginCount"] = stats.beginCount.Value()
+	stmap["endCount"] = stats.endCount.Value()
+	stmap["snapCount"] = stats.snapCount.Value()
+	stmap["flushCount"] = stats.flushCount.Value()
+
+	stmap["collectionCreate"] = stats.collectionCreate.Value()
+	stmap["collectionDrop"] = stats.collectionDrop.Value()
+	stmap["collectionFlush"] = stats.collectionFlush.Value()
+	stmap["scopeCreate"] = stats.scopeCreate.Value()
+	stmap["scopeDrop"] = stats.scopeDrop.Value()
+	stmap["collectionChanged"] = stats.collectionChanged.Value()
+	stmap["updateSeqno"] = stats.updateSeqno.Value()
+	stmap["seqnoAdvanced"] = stats.seqnoAdvanced.Value()
+	stmap["osoSnapshotStart"] = stats.osoSnapshotStart.Value()
+	stmap["osoSnapshotEnd"] = stats.osoSnapshotEnd.Value()
+
+	stmap["latency.min"] = stats.prjLatency.Min()
+	stmap["latency.max"] = stats.prjLatency.Max()
+	stmap["latency.avg"] = stats.prjLatency.Mean()
+	stmap["latency.movAvg"] = stats.prjLatency.MovingAvg()
+	stmap["endpChLen"] = uint64(len(stats.endpCh))
+	return stmap
+}
+
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(
@@ -202,9 +234,7 @@ func NewRouterEndpoint(
 	endpoint.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	endpoint.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
-	endpoint.logPrefix = fmt.Sprintf(
-		"ENDP[<-(%v,%4x)<-%v #%v]",
-		endpoint.raddr, uint16(endpoint.timestamp), cluster, topic)
+	endpoint.logPrefix = getEndpLogPrefix(raddr, topic, endpoint.timestamp)
 
 	// Ignore the error in initHostportForAuth, if any.
 	// It will be retried again in doAuth.
@@ -386,9 +416,7 @@ func (endpoint *RouterEndpoint) GetStatistics() map[string]interface{} {
 func (endpoint *RouterEndpoint) GetStats() map[string]interface{} {
 	if atomic.LoadUint32(&endpoint.done) == 0 && endpoint.stats != nil {
 		endpStat := make(map[string]interface{}, 0)
-		key := fmt.Sprintf(
-			"ENDP[<-(%v,%4x)<-%v #%v]",
-			endpoint.raddr, uint16(endpoint.timestamp), endpoint.cluster, endpoint.topic)
+		key := getEndpLogPrefix(endpoint.raddr, endpoint.topic, endpoint.timestamp)
 		endpStat[key] = endpoint.stats
 		return endpStat
 	}
@@ -396,11 +424,13 @@ func (endpoint *RouterEndpoint) GetStats() map[string]interface{} {
 }
 
 func (endpoint *RouterEndpoint) logStats() {
-	key := fmt.Sprintf(
-		"<-(%v,%4x)<-%v #%v",
-		endpoint.raddr, uint16(endpoint.timestamp), endpoint.cluster, endpoint.topic)
-	stats := endpoint.stats.String()
-	logging.Infof("ENDP[%v] stats: %v", key, stats)
+	var statLogger = logstats.GetGlobalStatLogger()
+	var key = getEndpLogPrefix(endpoint.raddr, endpoint.topic, endpoint.timestamp)
+	if statLogger == nil {
+		logging.Infof("%v stats: %v", key, endpoint.stats.String())
+	} else {
+		statLogger.Write(key, endpoint.stats.Map())
+	}
 }
 
 // Close this endpoint.
@@ -618,4 +648,13 @@ func (endpoint *RouterEndpoint) newStats() c.Statistics {
 	m := map[string]interface{}{}
 	stats, _ := c.NewStatistics(m)
 	return stats
+}
+
+func getEndpLogPrefix(raddr, topic string, ts int64) string {
+	return strings.Join([]string{
+		"ENDP",
+		raddr,
+		topic,
+		fmt.Sprintf("#%4x", uint16(ts)),
+	}, ":")
 }

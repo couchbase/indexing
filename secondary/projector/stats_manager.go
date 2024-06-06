@@ -1,8 +1,10 @@
 package projector
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -38,7 +40,8 @@ type KeyspaceIdStats struct {
 
 	// Key -> Log prefix of DCP Feed
 	// Value -> Pointer to stats object of DCP feed
-	dcpStats map[string]interface{}
+	dcpStats     map[string]interface{}
+	dcpLogPrefix string // logPrefix for dedupLogger
 
 	// Key -> Log prefix of KVData
 	// Value -> Pointer to stats object KVData
@@ -71,6 +74,7 @@ func (ks *KeyspaceIdStats) clone() *KeyspaceIdStats {
 			cks.dcpStats[key] = value
 		}
 	}
+	cks.dcpLogPrefix = ks.dcpLogPrefix
 
 	for key, value := range ks.kvstats {
 		if value != nil {
@@ -235,10 +239,14 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 
 	if sm.statLogger != nil {
 		logstats.SetGlobalStatLogger(sm.statLogger)
+		go common.MemstatLogger2(sm.statLogger, int64(config["projector.memstatTick"].Int()))
+	} else {
+		go common.MemstatLogger(int64(config["projector.memstatTick"].Int()))
 	}
 
 	go sm.run()
 	go sm.logger()
+
 	return sm
 }
 
@@ -297,7 +305,7 @@ func (sm *statsManager) logger() {
 				for _, keyspaceIdStats := range feedStats.keyspaceIdStats {
 					kvdataClosed := false
 					if logStats {
-						sm.doLogDcpStats(keyspaceIdStats.dcpStats)
+						sm.doLogDcpStats(keyspaceIdStats.dcpStats, keyspaceIdStats.dcpLogPrefix)
 
 						kvdataClosed = sm.doLogKvStats(keyspaceIdStats.kvstats, logVbsenos)
 
@@ -328,14 +336,18 @@ func (sm *statsManager) logger() {
 	}
 }
 
-func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}) {
+func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}, logPrefix string) {
+	dcpStatsMap := make(map[string]interface{}, len(dcpStats))
+
 	for key, value := range dcpStats {
 		switch val := value.(type) {
 		case *memcached.DcpStats:
 			if !val.IsClosed() {
-				stats, latency := val.String()
-				logging.Infof("%v dcp latency stats %v", key, latency)
-				logging.Infof("%v stats: %v", key, stats)
+				stats, ltcStats := val.Map()
+				dcpStatsMap[val.StreamNo] = map[string]interface{}{
+					"stats": stats,
+					"ltc":   ltcStats,
+				}
 			} else {
 				logging.Tracef("%v closed", key)
 			}
@@ -344,18 +356,41 @@ func (sm *statsManager) doLogDcpStats(dcpStats map[string]interface{}) {
 			continue
 		}
 	}
+
+	if len(dcpStatsMap) > 0 {
+		if sm.statLogger != nil {
+			sm.statLogger.Write(logPrefix, dcpStatsMap)
+		} else {
+			dcpStatsStr, err := json.Marshal(dcpStatsMap)
+			if err != nil {
+				logging.Errorf("%v marshal failure err - %v", logPrefix, err)
+				return
+			}
+			logging.Infof("%v stats: %v", logPrefix, string(dcpStatsStr))
+		}
+	}
 }
 
 func (sm *statsManager) doLogKvStats(kvstats map[string]interface{}, logVbSeqNos bool) bool {
-	var kvdataClosed = false
+	kvdataClosed := false
 	for key, value := range kvstats {
 		switch val := (value).(type) {
 		case *KvdataStats:
 			if !val.IsClosed() {
-				stats, vbseqnos := val.String()
-				logging.Infof("%v stats: %v", key, stats)
+				stats, vbseqnos := val.Map()
 				if logVbSeqNos {
-					logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
+					stats["vbseqnos"] = vbseqnos
+				}
+
+				if sm.statLogger != nil {
+					sm.statLogger.Write(key, stats)
+				} else {
+					var kvStatsStr, err = json.Marshal(kvstats)
+					if err != nil {
+						logging.Errorf("%v marshal failure err - %v", key, err)
+						return false
+					}
+					logging.Infof("%v stats: %v", key, string(kvStatsStr))
 				}
 			} else {
 				kvdataClosed = true
@@ -375,7 +410,11 @@ func (sm *statsManager) doLogWrkrStats(wrkrStats map[string][]interface{}) {
 		switch val := (value[0]).(type) {
 		case *WorkerStats:
 			if !val.IsClosed() {
-				logging.Infof("%v stats: %v", key, Accmulate(value))
+				if sm.statLogger != nil {
+					sm.statLogger.Write(key, AccumulateJson(value))
+				} else {
+					logging.Infof("%v stats: %v", key, Accmulate(value))
+				}
 			}
 		default:
 			logging.Errorf("Unknown worker stats type for %v", key)
@@ -385,30 +424,34 @@ func (sm *statsManager) doLogWrkrStats(wrkrStats map[string][]interface{}) {
 }
 
 func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
-	keyspaceId, topic string, opaque uint16) {
-
+	keyspaceId, topic string, opaque uint16,
+) {
 	evalStatLoggingThreshold := atomic.LoadInt64(&sm.evalStatLoggingThreshold) * 1000
 
 	// As of this commit, only IndexEvaluatorStats are supported
-	logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", keyspaceId, topic, opaque)
-	var evalStats string
+	logPrefix := getEvalStatsLogPRefix(topic, keyspaceId, opaque)
+	var evalStats = make(map[string]interface{}, len(evalStatsMap))
 	var skippedStr string
 
 	for key, value := range evalStatsMap {
 		switch val := (value).(type) {
 		case *protobuf.IndexEvaluatorStats:
-			keyStr := fmt.Sprintf("%v", key)
+			var evalStatsKeyMap = make(map[string]interface{}, 0)
+
 			avg := val.MovingAvg()
 
 			if avg > evalStatLoggingThreshold {
-				evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
+				evalStatsKeyMap["avgLatency"] = avg
 			}
 
 			errSkip := val.GetAndResetErrorSkip()
 			errSkipAll := val.GetErrorSkipAll()
 			if errSkipAll > 0 {
-				evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
+				evalStatsKeyMap["skipCount"] = errSkipAll
 			}
+
+			evalStats[key] = evalStatsKeyMap
+
 			if errSkip != 0 {
 				if len(skippedStr) == 0 {
 					skippedStr = fmt.Sprintf("In last %v, projector skipped "+
@@ -425,7 +468,16 @@ func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
 		}
 	}
 	if len(evalStats) > 0 {
-		logging.Infof("%v stats: {%v}", logPrefix, evalStats[0:len(evalStats)-1])
+		if sm.statLogger != nil {
+			sm.statLogger.Write(logPrefix, evalStats)
+		} else {
+			var evalStatsBytes, err = json.Marshal(evalStats)
+			if err != nil {
+				logging.Errorf("%v marshal failure err - %v", logPrefix, err)
+				return
+			}
+			logging.Infof("%v stats: %v", logPrefix, evalStatsBytes)
+		}
 	}
 	if len(skippedStr) != 0 {
 		// Some mutations were skipped by the index evaluator.
@@ -445,7 +497,11 @@ func (sm *statsManager) doLogEndpStats(endpStats map[string]interface{}) {
 		switch val := value.(type) {
 		case *dataport.EndpointStats:
 			if !val.IsClosed() {
-				logging.Infof("%v stats: %v", key, val.String())
+				if sm.statLogger != nil {
+					sm.statLogger.Write(key, val.Map())
+				} else {
+					logging.Infof("%v stats: %v", key, val.String())
+				}
 			} else {
 				logging.Tracef("%v closed", key)
 			}
@@ -457,14 +513,25 @@ func (sm *statsManager) doLogEndpStats(endpStats map[string]interface{}) {
 }
 
 func (sm *statsManager) doLogProjectorStats() {
-	logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,\"gc_percent\":%v, \"throttle_level\":%v}",
-		memmanager.GetCpuPercent(),
-		memmanager.GetRSS(),
-		memmanager.GetMemFree(),
-		memmanager.GetMemTotal(),
-		memmanager.GetGCPercent(),
-		memThrottler.GetThrottleLevel(),
-	)
+	if sm.statLogger != nil {
+		sm.statLogger.Write("projector", map[string]interface{}{
+			"cpu_util":       strconv.FormatFloat(memmanager.GetCpuPercent(), 'f', 5, 64),
+			"mem_rss":        memmanager.GetRSS(),
+			"mem_free":       memmanager.GetMemFree(),
+			"mem_total":      memmanager.GetMemTotal(),
+			"gc_percent":     memmanager.GetGCPercent(),
+			"throttle_level": uint64(memThrottler.GetThrottleLevel()),
+		})
+	} else {
+		logging.Infof("Projector stats: {\"cpu_utilisation_rate\":%v, \"memory_rss\":%v, \"memory_free\":%v,\"memory_total\":%v,\"gc_percent\":%v, \"throttle_level\":%v}",
+			memmanager.GetCpuPercent(),
+			memmanager.GetRSS(),
+			memmanager.GetMemFree(),
+			memmanager.GetMemTotal(),
+			memmanager.GetGCPercent(),
+			memThrottler.GetThrottleLevel(),
+		)
+	}
 }
 
 func Accmulate(wrkr []interface{}) string {
@@ -503,5 +570,23 @@ func (sm *statsManager) setupLogStatsLogger() error {
 		numfiles,                  // numFiles
 		common.STAT_LOG_TS_FORMAT, // tsFormat
 	)
+
 	return err
+}
+
+func AccumulateJson(wrkr []interface{}) map[string]interface{} {
+	var dataChLen, outgoingMut, updateSeqno, txnSystemMut uint64
+	for _, stats := range wrkr {
+		wrkrStat := stats.(*WorkerStats)
+		dataChLen += (uint64)(len(wrkrStat.datach))
+		outgoingMut += wrkrStat.outgoingMut.Value()
+		updateSeqno += wrkrStat.updateSeqno.Value()
+		txnSystemMut += wrkrStat.txnSystemMut.Value()
+	}
+	return map[string]interface{}{
+		"dataChLen":   dataChLen,
+		"outMut":      outgoingMut,
+		"updateSeqno": updateSeqno,
+		"txnSysMut":   txnSystemMut,
+	}
 }

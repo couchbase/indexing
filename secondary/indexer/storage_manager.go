@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -338,6 +339,20 @@ func (s *storageMgr) handleWorkerCommands(cmd Message) {
 			delete(s.shardsInTransfer, shardId)
 		}
 		logging.Infof("StorageMgr::ShardTransferResponse Clearing book-keeping for shardIds: %v", shardIds)
+		respCh <- cmd
+
+	case CODEBOOK_TRANSFER_RESPONSE:
+
+		respCh := cmd.(*MsgCodebookTransferResp).GetRespCh()
+		shardIds := cmd.(*MsgCodebookTransferResp).GetShardIds()
+		codebookPaths := cmd.(*MsgCodebookTransferResp).GetCodebookPaths()
+
+		var codebookNames []string
+		for _, codebookPath := range codebookPaths {
+			codebookNames = append(codebookNames, filepath.Base(codebookPath))
+		}
+		logging.Infof("StorageMgr::ShardTransferResponse Received Response for shardIds: %v, codebookNames: %v",
+			shardIds, codebookNames)
 		respCh <- cmd
 	}
 }

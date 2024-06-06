@@ -1,7 +1,9 @@
 package stats
 
-import "math"
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Average maintains the average and variance of a stream
 // of numbers in a space-efficient manner.
@@ -137,4 +139,15 @@ func (av *Average) MarshallJSON() string {
 	movingAvg := av.MovingAvg()
 	return fmt.Sprintf("{\"samples\": %v, \"min\": %v, \"max\": %v, \"mean\": %v, \"variance\": %v,\"movingAvg\":%v}",
 		samples, min, max, mean, variance, movingAvg)
+}
+
+func (av *Average) Json() map[string]interface{} {
+	var ltMap = make(map[string]interface{})
+	ltMap["samples"] = av.count.Value()
+	ltMap["min"] = av.Min()
+	ltMap["max"] = av.Max()
+	ltMap["mean"] = av.Mean()
+	ltMap["var"] = av.Variance()
+	ltMap["movAvg"] = av.MovingAvg()
+	return ltMap
 }

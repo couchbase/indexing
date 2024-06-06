@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +79,16 @@ func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Slice
 		instId = inst.RealInstId
 	}
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
+}
+
+func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
+	indexPath := IndexPath(inst, partnId, sliceId)
+	instId := inst.InstId
+	if inst.IsProxy() {
+		instId = inst.RealInstId
+	}
+	codebookName := fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
+	return filepath.Join(indexPath, "codebook", codebookName)
 }
 
 // This has to follow the pattern in IndexPath function defined above.
@@ -300,4 +312,29 @@ func clusterVersion(clusterAddr string) uint64 {
 	}
 
 	return cinfo.GetClusterVersion()
+}
+
+// *******************************************
+// Direct copy of util function from plasma
+// *******************************************
+func isNetPath(location string) bool {
+	const urlSchemePattern = "^[a-zA-Z][a-zA-Z0-9+-.]*://"
+	rex, _ := regexp.Compile(urlSchemePattern)
+	return rex.MatchString(location)
+}
+
+// supports both file system paths and urls
+// for net, parent url must contain a valid host/bucket
+// do not use this function without a valid parent path
+func joinURIPath(parent string, elem ...string) string {
+	if isNetPath(parent) {
+		urlPath := parent
+		for _, e := range elem {
+			urlPath = fmt.Sprintf("%s/%s", urlPath, filepath.ToSlash(e))
+		}
+		return urlPath
+	} else {
+		elem = append([]string{parent}, elem...)
+		return filepath.Join(elem...)
+	}
 }

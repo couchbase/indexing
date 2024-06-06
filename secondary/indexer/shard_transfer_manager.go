@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -174,11 +176,124 @@ func copyMeta(meta map[string]interface{}) map[string]interface{} {
 	return metaCpy
 }
 
+func (stm *ShardTransferManager) processCodebookTransfer(msg *MsgStartShardTransfer) (err error) {
+
+	logging.Infof("ShardTransferManager::processCodebookTransfer Initiating Codebook Transfer for ttid: %v, codebooks: %v",
+		msg.GetTransferTokenId(), msg.GetCodebookNames())
+
+	start := time.Now()
+	peerTransfer := msg.IsPeerTransfer()
+	codebookPaths := msg.GetCodebookPaths()
+	shardIds := msg.GetShardIds()
+	taskCancelCh := msg.GetCancelCh()
+	taskDoneCh := msg.GetDoneCh()
+	destination := msg.GetDestination()
+	respCh := msg.GetRespCh()
+	// TODO progress calculation for codebook
+	storageMgrCancelCh := msg.GetStorageMgrCancelCh()
+	storageMgrRespCh := msg.GetStorageMgrRespCh()
+
+	// Closed when all codebooks are done processing
+	codebookTransferDoneCh := make(chan bool)
+
+	var isStorageMgrCancel bool
+	var errMap map[string]error
+
+	sendCodebookResponse := func() {
+		elapsed := time.Since(start).Seconds()
+		logging.Infof("ShardTransferManager::processCodebookTransfer All codebooks processing done. Sending response "+
+			"errMap: %v, codebookNames: %v, destination: %v, elapsed(sec): %v", errMap, msg.GetCodebookNames(), destination, elapsed)
+
+		if isStorageMgrCancel {
+			logging.Infof("ShardTransferManager::processCodebookTransfer  All codebooks processing done. "+
+				"Updating errMap as IndexRollback due to transfer cancellation invoked by storage manager. ShardIds: %v", shardIds)
+			for codebookName := range errMap {
+				errMap[codebookName] = ErrIndexRollback
+			}
+			// For Codebook Resp, close the storageMgrRespCh only when the StorageMgrCancels
+			close(storageMgrRespCh)
+			err = ErrIndexRollback
+		}
+
+		respMsg := &MsgCodebookTransferResp{
+			errMap:        errMap,
+			codebookPaths: codebookPaths,
+			shardIds:      shardIds,
+			respCh:        respCh,
+		}
+
+		stm.supvWrkrCh <- respMsg
+	}
+
+	// TODO: Handle case for s3 file transfer
+	if !peerTransfer {
+		logging.Infof("ShardTransferManager::processCodebookTransfer no file to transfer for non-peer transfer")
+		sendCodebookResponse()
+	}
+
+	codebookCopier, err := makeFileCopierForCodebook(msg)
+	if err != nil {
+		logging.Errorf("ShardTransferManager::processCodebookTransfer unable to make file copier. err: %v", err)
+		return err
+	}
+
+	cancelCopy := func() {
+		// TODO use copier context for cancellation instead of CancelCopy function
+		codebookCopier.CancelCopy()
+	}
+
+	go func() {
+		for _, codebookPath := range codebookPaths {
+			if err = stm.TransferCodebook(codebookCopier, codebookPath); err != nil {
+				errMap[filepath.Base(codebookPath)] = err
+				logging.Errorf("ShardTransferManager::processCodebookTransfer Error when starting to transfer codebook: %v, err %v", filepath.Base(codebookPath), err)
+				// TODO Trigger Codebook Cleanup
+				break
+			}
+		}
+		close(codebookTransferDoneCh)
+	}()
+
+	select {
+	case <-taskCancelCh: // This cancel channel is sent by orchestrator task
+		cancelCopy()
+
+	case <-taskDoneCh:
+		cancelCopy()
+
+	case <-codebookTransferDoneCh: // All codebooks are done processing
+		sendCodebookResponse()
+		return err
+
+	case <-storageMgrCancelCh:
+		cancelCopy()
+		isStorageMgrCancel = true
+	}
+	// Incase taskCancelCh or taskDoneCh is closed first, then
+	// wait for plasma to finish processing and then send response
+	// to caller
+	select {
+	case <-codebookTransferDoneCh:
+		sendCodebookResponse()
+		return err
+	}
+}
+
 func (stm *ShardTransferManager) processShardTransferMessage(cmd Message) {
 
 	msg := cmd.(*MsgStartShardTransfer)
 	logging.Infof("ShardTransferManager::processShardTransferMessage Initiating command: %v", msg)
+	// initiate the codebookTransfer in the beginning
+	if len(msg.GetCodebookPaths()) != 0 {
+		// dont proceed with shard transfer if any errors in CodebookTransfer.
+		// CodeTransfer would have already responded back to ShardRebalancer with ErrMap
+		if err := stm.processCodebookTransfer(msg); err != nil {
+			return
+		}
+	}
 
+	logging.Infof("ShardTransferManager::processShardTransferMessage Initiating Shard Transfer for ttid: %v, shards: %v",
+		msg.GetTransferTokenId(), msg.GetShardIds())
 	start := time.Now()
 
 	shardIds := msg.GetShardIds()
@@ -1171,4 +1286,57 @@ func authMiddlewareForShardTransfer(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) (err error) {
+	var srcDir, srcFile string
+	var sz int64
+	srcDir = stm.config["storage_dir"].String()
+
+	srcFile = filepath.Join(srcDir, codebookSrcPath)
+	if info, err := os.Stat(srcFile); info != nil {
+		sz = info.Size()
+	} else {
+		return fmt.Errorf("ShardTransferManager::TransferCodebook Codebook: %v does not exist, err:%v",
+			filepath.Base(codebookSrcPath), err)
+	}
+
+	dstPath := codebookCopier.GetCopyRoot()
+	dstFile := joinURIPath(dstPath, genCodebookFileStagingName(codebookSrcPath))
+	xferBytes, err := codebookCopier.CopyFile(codebookCopier.Context(), srcFile, dstFile, 0, sz)
+
+	logging.Infof("ShardTransferManager::TransferCodebook transferred bytes:%v, err:%v", xferBytes, err)
+	return err
+}
+
+func makeFileCopierForCodebook(msg *MsgStartShardTransfer) (plasma.Copier, error) {
+	cfg := generatePlasmaCopierConfigForCodebook(msg)
+	copyRoot := getCodebookRootDir(msg)
+	return plasma.MakeFileCopier(copyRoot, "", plasma.Env, &plasma.DefaultRateLimiter{}, cfg.CopyConfig)
+}
+
+func generatePlasmaCopierConfigForCodebook(msg *MsgStartShardTransfer) *plasma.Config {
+	cfg := plasma.DefaultConfig()
+	rebalanceID := msg.GetRebalanceId()
+	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithTLS(msg.GetTLSConfig())
+	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithAuth((plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback()))
+	cfg.CopyConfig.RPCHttpClientCfg.SessionKey = rebalanceID
+	return &cfg
+}
+
+func genCodebookFileStagingName(codebookSrcPath string) string {
+	return fmt.Sprintf("codebook_%v", filepath.Base(codebookSrcPath))
+}
+
+func getCodebookRootDir(msg *MsgStartShardTransfer) string {
+	rebalanceId := msg.GetRebalanceId()
+	ttid := msg.GetTransferTokenId()
+
+	// Delimiter ':' isn't a valid character for dir name in all platforms.
+	formatUUID := func(str string) string {
+		return strings.Replace(str, ":", "_", -1)
+	}
+
+	prefix := fmt.Sprintf("%s_%s", formatUUID(rebalanceId), formatUUID(ttid))
+	return joinURIPath(msg.GetDestination(), CODEBOOK_COPY_PREFIX, prefix)
 }

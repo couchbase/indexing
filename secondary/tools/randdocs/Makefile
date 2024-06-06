@@ -6,13 +6,10 @@ export CGO_CFLAGS=-I$(PWD)/../../../../../../../../sigar/include -I$(PWD)/../../
 export CGO_LDFLAGS=-L $(PWD)/../../../../../../../../install/lib -Wl,-rpath $(PWD)/../../../../../../../../install/lib
 
 clean:
-	rm -rf ./cluster_ops
+	rm -rf ./randdocs
 
 comp:
-	go build -o cluster_ops main.go init_cluster.go
+	go build -o randdocs cmd/main.go
 
 run:
-# Performs a rebalance on the cluster without adding or removing
-# nodes from the cluster. See Readme.md for other options to compile
-# and run
-	./cluster_ops
+	./randdocs -config ./cmd/config.json

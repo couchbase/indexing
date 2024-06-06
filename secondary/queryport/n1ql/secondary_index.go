@@ -1657,7 +1657,7 @@ func (si *secondaryIndex3) Scan3(
 	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection bool,
 	projection *datastore.IndexProjection, offset, limit int64,
 	groupAggs *datastore.IndexGroupAggregates, indexOrders datastore.IndexKeyOrders,
-	cons datastore.ScanConsistency, vector timestamp.Vector,
+	cons datastore.ScanConsistency, tsvector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
 	sender := conn.Sender()
@@ -1700,7 +1700,7 @@ func (si *secondaryIndex3) Scan3(
 	err := client.Scan3Internal(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
-		n1ql2GsiConsistency[cons], vector2ts(vector),
+		n1ql2GsiConsistency[cons], vector2ts(tsvector),
 		broker, scanParams)
 	if err != nil {
 		conn.Error(n1qlError(client, err))

@@ -215,7 +215,8 @@ func (cp *connectionPool) StartDcpFeed(
 	outch chan *memcached.DcpEvent,
 	opaque uint16,
 	supvch chan []interface{},
-	config map[string]interface{}) (*memcached.DcpFeed, error) {
+	config map[string]interface{},
+	streamNo int) (*memcached.DcpFeed, error) {
 
 	if cp == nil {
 		return nil, errNoPool
@@ -238,7 +239,10 @@ func (cp *connectionPool) StartDcpFeed(
 		defaultConnBufferSize = uint32(val.(int))
 	}
 
-	dcpf, err := memcached.NewDcpFeed(mc, string(name), outch, opaque, supvch, config)
+	dcpf, err := memcached.NewDcpFeed(
+		mc, string(name), outch,
+		opaque, supvch, config, streamNo,
+	)
 	if err == nil {
 		err = dcpf.DcpOpen(
 			string(name), sequence, flags, defaultConnBufferSize, opaque,
@@ -324,7 +328,7 @@ func GetSeqs(mc *memcached.Client, seqnos []uint64, buf []byte) error {
 	return nil
 }
 
-//Get seqnos of vbuckets in active/replica/pending state
+// Get seqnos of vbuckets in active/replica/pending state
 func GetSeqsAllVbStates(mc *memcached.Client, seqnos []uint64, buf []byte) error {
 	res := &transport.MCResponse{}
 	rq := &transport.MCRequest{

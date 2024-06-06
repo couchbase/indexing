@@ -479,7 +479,7 @@ func (tt *TransferToken) LessVerboseString() string {
 	// If more than one index instance exists, print all of them
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "SiblingTokenId: %v ", tt.SiblingTokenId)
-		fmt.Fprintf(sbp, "Shards: %v ", tt.ShardIds)
+		fmt.Fprintf(sbp, "Shards: %v\n", tt.ShardIds)
 		// tt.Destination contains same info as DestHost + TransferPort for on-prem file based.
 		// Omit printing if tt.DestHost is already printed
 		if tt.Destination != "" && (len(tt.DestHost) == 0 || GetDeploymentModel() == SERVERLESS_DEPLOYMENT) {
@@ -516,16 +516,16 @@ func (tt *TransferToken) CompactString() string {
 	sbp := &sb
 
 	fmt.Fprintf(sbp, " CompactStr:: ")
-	fmt.Fprintf(sbp, "[%v, ", tt.MasterId)
-	fmt.Fprintf(sbp, "%v", tt.SourceId)
+	fmt.Fprintf(sbp, "[%v", tt.MasterId)
+	fmt.Fprintf(sbp, ", %v", tt.SourceId)
 	if len(tt.SourceHost) != 0 {
-		fmt.Fprintf(sbp, "(%v), ", tt.SourceHost)
+		fmt.Fprintf(sbp, " (%v)", tt.SourceHost)
 	}
-	fmt.Fprintf(sbp, "%v", tt.DestId)
+	fmt.Fprintf(sbp, ", %v", tt.DestId)
 	if len(tt.DestHost) != 0 {
-		fmt.Fprintf(sbp, "(%v), ", tt.DestHost)
+		fmt.Fprintf(sbp, " (%v)", tt.DestHost)
 	}
-	fmt.Fprintf(sbp, "%v]", tt.RebalId)
+	fmt.Fprintf(sbp, ", %v] ", tt.RebalId)
 
 	if tt.IsShardTransferToken() {
 		fmt.Fprintf(sbp, "ShardTokenState: %v ", tt.ShardTransferTokenState)
@@ -549,10 +549,10 @@ func (tt *TransferToken) CompactString() string {
 		// tt.Destination contains same info as DestHost + TransferPort for on-prem file based.
 		// Omit printing if tt.DestHost is already printed
 		if tt.Destination != "" && (len(tt.DestHost) == 0 || GetDeploymentModel() == SERVERLESS_DEPLOYMENT) {
-			fmt.Fprintf(sbp, "Dest: %v,", tt.Destination)
+			fmt.Fprintf(sbp, "Dest: %v, ", tt.Destination)
 		}
 		if tt.Region != "" {
-			fmt.Fprintf(sbp, "Region: %v,", tt.Region)
+			fmt.Fprintf(sbp, "Region: %v, ", tt.Region)
 		}
 		fmt.Fprintf(sbp, "%v, ", tt.IsEmptyNodeBatch)
 		fmt.Fprintf(sbp, "%v)", tt.IsPendingReady)
@@ -562,7 +562,7 @@ func (tt *TransferToken) CompactString() string {
 		fmt.Fprintf(sbp, "%v, ", tt.IndexInst.Defn.Partitions)
 		fmt.Fprintf(sbp, "%v, ", tt.IndexInst.Defn.Versions)
 		fmt.Fprintf(sbp, "%v, ", tt.IsEmptyNodeBatch)
-		fmt.Fprintf(sbp, "%v) ", tt.IsPendingReady)
+		fmt.Fprintf(sbp, "%v)", tt.IsPendingReady)
 	}
 
 	return sb.String()

@@ -21,6 +21,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/projector/memThrottler"
 	"github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/logstats/logstats"
 )
 
 const dcpMutationExtraLen = 16
@@ -56,6 +57,10 @@ var ErrorCollectionsNotEnabled = errors.New("dcp.ErrorCollectionsNotEnabled")
 var DcpFeedNamePrefix = "secidx:"
 var DcpFeedNameCompPrefix = "proj-"
 var DcpFeedPrefix = DcpFeedNamePrefix + DcpFeedNameCompPrefix
+
+// 0-2ms, 2-10ms, 10-100ms, 100-500ms, 500ms-1s, 1-10s, 10-30s, 30s-Inf
+var projBlockedDur = []int64{0, 2, 10, 100, 500, 1000, 10000, 30000}
+var blockdThresholdDur = time.Duration(projBlockedDur[len(projBlockedDur)-1]) * time.Millisecond
 
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
@@ -101,7 +106,8 @@ func NewDcpFeed(
 	mc *Client, name string, outch chan<- *DcpEvent,
 	opaque uint16,
 	supvch chan []interface{},
-	config map[string]interface{}) (*DcpFeed, error) {
+	config map[string]interface{},
+	streamNo int) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
@@ -115,7 +121,7 @@ func NewDcpFeed(
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
 		logPrefix:     fmt.Sprintf("DCPT[%s]", name),
-		stats:         &DcpStats{},
+		stats:         &DcpStats{StreamNo: fmt.Sprintf("%v", streamNo)},
 		seqOrders:     make(map[uint16]transport.SeqOrderState),
 		closeMutQueue: make(chan bool),
 		dequeueDoneCh: make(chan bool),
@@ -1557,12 +1563,18 @@ type DcpStats struct {
 	OsoSnapshotStart  stats.Uint64Val
 	OsoSnapshotEnd    stats.Uint64Val
 
+	TotalBlockedDur stats.Uint64Val
+	BlockedDurHist  stats.Histogram
+
 	rcvch      chan []interface{}
 	Dcplatency stats.Average
 	// This stat help to determine the drain rate of dcp feed
 	IncomingMsg stats.Uint64Val
 
 	mutationQueue *AtomicMutationQueue
+
+	// immutable
+	StreamNo string // stream no. 0/1/2...
 }
 
 func (dcpStats *DcpStats) Init() {
@@ -1594,6 +1606,9 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.SeqnoAdvanced.Init()
 	dcpStats.OsoSnapshotStart.Init()
 	dcpStats.OsoSnapshotEnd.Init()
+
+	dcpStats.TotalBlockedDur.Init()
+	dcpStats.BlockedDurHist.InitLatency(projBlockedDur, func(v int64) string { return fmt.Sprintf("%vms", v/int64(time.Millisecond)) })
 }
 
 func (stats *DcpStats) IsClosed() bool {
@@ -1609,7 +1624,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [28]string
+	var stitems [30]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1640,6 +1655,8 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[25] = `"queueSize":` + strconv.FormatUint(uint64(stats.mutationQueue.GetSize()), 10)
 	stitems[26] = `"totalEnq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalEnq()), 10)
 	stitems[27] = `"totalDeq":` + strconv.FormatUint(uint64(stats.mutationQueue.GetTotalDeq()), 10)
+	stitems[28] = `"totalBlockedDur":` + strconv.FormatUint(stats.TotalBlockedDur.Value(), 10)
+	stitems[29] = `"projBlockedHist":` + stats.BlockedDurHist.String()
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)
@@ -1647,11 +1664,77 @@ func (stats *DcpStats) String() (string, string) {
 	return statsStr, latencyStr
 }
 
+func (stats *DcpStats) Map() (map[string]interface{}, map[string]interface{}) {
+	var statMap = make(map[string]interface{}, 30)
+
+	statMap["bytes"] = stats.TotalBytes.Value()
+	statMap["bufferacks"] = stats.TotalBufferAckSent.Value()
+	statMap["toAckBytes"] = stats.ToAckBytes.Value()
+	statMap["streamreqs"] = stats.TotalStreamReq.Value()
+	statMap["snapshots"] = stats.TotalSnapShot.Value()
+	statMap["mutations"] = stats.TotalMutation.Value()
+
+	statMap["collectionCreate"] = stats.CollectionCreate.Value()
+	statMap["collectionDrop"] = stats.CollectionDrop.Value()
+	statMap["collectionFlush"] = stats.CollectionFlush.Value()
+	statMap["scopeCreate"] = stats.ScopeCreate.Value()
+	statMap["scopeDrop"] = stats.ScopeDrop.Value()
+	statMap["collectionChanged"] = stats.CollectionChanged.Value()
+	statMap["seqnoAdvanced"] = stats.SeqnoAdvanced.Value()
+	statMap["osoSnapshotStart"] = stats.OsoSnapshotStart.Value()
+	statMap["osoSnapshotEnd"] = stats.OsoSnapshotEnd.Value()
+
+	statMap["streamends"] = stats.TotalStreamEnd.Value()
+	statMap["closestreams"] = stats.TotalCloseStream.Value()
+	if stats.LastAckTime.Value() != 0 {
+		statMap["lastAckTime"] = logstats.NewTimestamp(time.Unix(0, stats.LastAckTime.Value()))
+	}
+	if stats.LastNoopSend.Value() != 0 {
+		statMap["lastNoopSend"] = logstats.NewTimestamp(time.Unix(0, stats.LastNoopSend.Value()))
+	}
+	if stats.LastNoopRecv.Value() != 0 {
+		statMap["lastNoopRecv"] = logstats.NewTimestamp(time.Unix(0, stats.LastNoopRecv.Value()))
+	}
+	if stats.LastMsgSend.Value() != 0 {
+		statMap["lastMsgSend"] = logstats.NewTimestamp(time.Unix(0, stats.LastMsgSend.Value()))
+	}
+	if stats.LastMsgRecv.Value() != 0 {
+		statMap["lastMsgRecv"] = logstats.NewTimestamp(time.Unix(0, stats.LastMsgRecv.Value()))
+	}
+	statMap["rcvchLen"] = (uint64)(len(stats.rcvch))
+	statMap["incomingMsg"] = stats.IncomingMsg.Value()
+	statMap["queuedItems"] = uint64(stats.mutationQueue.GetItems())
+	statMap["queueSize"] = uint64(stats.mutationQueue.GetSize())
+	statMap["totalEnq"] = uint64(stats.mutationQueue.GetTotalEnq())
+	statMap["totalDeq"] = uint64(stats.mutationQueue.GetTotalDeq())
+
+	statMap["totBlckd"] = stats.TotalBlockedDur.Value()
+	statMap["projBlckdHist"] = stats.BlockedDurHist.GetValue()
+
+	return statMap, stats.Dcplatency.Json()
+}
+
 func (feed *DcpFeed) logStats() {
-	stats, latency := feed.stats.String()
-	key := fmt.Sprintf("DCPT[%v] ##%x", feed.Name(), feed.Opaque())
-	logging.Infof("%v dcp latency stats %v", key, latency)
-	logging.Infof("%v stats: %v", key, stats)
+	var statLogger = logstats.GetGlobalStatLogger()
+	key := fmt.Sprintf("DCPT[%v]:##%x", feed.Name(), feed.Opaque())
+
+	var statsMap, latencyMap = feed.stats.Map()
+	var feedMap = map[string]interface{}{}
+	feedMap[feed.stats.StreamNo] = map[string]interface{}{
+		"stats": statsMap,
+		"ltc":   latencyMap,
+	}
+
+	if statLogger == nil {
+		var feedMapBytes, err = json.Marshal(feedMap)
+		if err != nil {
+			logging.Errorf("%v marshal failed with err - %v", key, err)
+		} else {
+			logging.Infof("%v stats: %v", key, string(feedMapBytes))
+		}
+	} else {
+		statLogger.Write(key, feedMap)
+	}
 }
 
 // FailoverLog containing vvuid and sequnce number
@@ -1760,10 +1843,6 @@ func (feed *DcpFeed) doReceive(
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.NewTicker(time.Second * 5) // log every 5 second, if blocked.
-	defer func() {
-		tick.Stop()
-	}()
 
 	var bytes int
 	var err error
@@ -1882,12 +1961,14 @@ loop:
 			blockedTs := time.Since(start)
 			duration += blockedTs
 			blocked = false
-			select {
-			case <-tick.C:
+
+			feed.stats.TotalBlockedDur.Add(uint64(blockedTs))
+			feed.stats.BlockedDurHist.Add(int64(blockedTs))
+
+			if blockedTs > blockdThresholdDur {
 				percent := float64(duration) / float64(time.Since(epoc))
 				fmsg := "%v DCP-socket -> projector blocked %v (%f%%)"
 				logging.Infof(fmsg, feed.logPrefix, blockedTs, percent)
-			default:
 			}
 		}
 	}

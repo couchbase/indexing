@@ -52,6 +52,8 @@ type BucketFeeder interface {
 	// GetStats retrieves the pointer to stats objects from all DCP feeds
 	// along with the bucket to which the DCP feeds belong to
 	GetStats() map[string]interface{}
+
+	GetStreamUuid() uint64
 }
 
 // concrete type implementing BucketFeeder
@@ -66,12 +68,16 @@ func OpenBucketFeed(
 	b *couchbase.Bucket,
 	opaque uint16,
 	kvaddrs []string,
-	config map[string]interface{}) (feeder BucketFeeder, err error) {
+	config map[string]interface{},
+	streamUuid uint64) (feeder BucketFeeder, err error) {
 
 	bdcp := &bucketDcp{bucket: b}
 	flags := uint32(0x0)
 	bdcp.dcpFeed, err =
-		b.StartDcpFeedOver(feedname, uint32(0), flags, kvaddrs, opaque, config)
+		b.StartDcpFeedOver(
+			feedname, uint32(0), flags,
+			kvaddrs, opaque, config, streamUuid,
+		)
 	if err != nil {
 		return nil, err
 	}
@@ -158,4 +164,8 @@ func (bdcp *bucketDcp) CloseFeed() error {
 // GetStats() implements Feeder{} interface.
 func (bdcp *bucketDcp) GetStats() map[string]interface{} {
 	return bdcp.dcpFeed.GetStats()
+}
+
+func (bdcp *bucketDcp) GetStreamUuid() uint64 {
+	return bdcp.dcpFeed.StreamUuid
 }
