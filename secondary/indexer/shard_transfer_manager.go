@@ -4,6 +4,7 @@
 package indexer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -232,14 +233,25 @@ func (stm *ShardTransferManager) processCodebookTransfer(msg *MsgStartShardTrans
 	}
 
 	codebookCopier, err := makeFileCopierForCodebook(msg)
-	if err != nil {
+	if err != nil || codebookCopier == nil {
 		logging.Errorf("ShardTransferManager::processCodebookTransfer unable to make file copier. err: %v", err)
 		return err
 	}
 
+	ctx, ctxCancel := context.WithTimeout(context.Background(),
+		codebookCopier.Config().CPTimeOut)
+	codebookCopier.SetContext(ctx)
+
+	defer func() {
+		if ctxCancel != nil {
+			ctxCancel()
+		}
+		codebookCopier.Done()
+	}()
+
 	cancelCopy := func() {
-		// TODO use copier context for cancellation instead of CancelCopy function
 		codebookCopier.CancelCopy()
+		ctxCancel()
 	}
 
 	go func() {
