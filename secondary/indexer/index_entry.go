@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -562,4 +563,21 @@ func GetIndexEntryBytes(key []byte, docid []byte, isPrimary bool, isArray bool,
 
 func isJSONEncoded(key []byte) bool {
 	return key[0] == '['
+}
+
+func getNumShaEncodings(buf []byte) uint32 {
+	return binary.LittleEndian.Uint32(buf)
+}
+
+func vectorBackEntry2MainEntry(docid []byte, bentry []byte, buf []byte, sz keySizeConfig) []byte {
+
+	// Strip the SHA values from bentry
+	l := uint32(len(bentry))
+	numShaEncodings := getNumShaEncodings(bentry[l-4:])
+	shaEncodingLen := numShaEncodings*sha256.Size + 4
+
+	entry, _ := NewSecondaryIndexEntry2(bentry[:l-shaEncodingLen], docid, false, 1,
+		nil, buf, false, nil, sz)
+
+	return entry
 }

@@ -2016,11 +2016,61 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 	return len(indexEntriesToBeDeleted)
 }
 
-func (mdb *plasmaSlice) deleteVectorIndex(docid []byte, compareKey []byte, compareSHA []byte,
-	workerId int) (nmut int, changed bool) {
-	// [VECTOR_TODO]: Add codepath to delete vector index. For now, assume
-	// everything changed
-	return 0, true
+func (mdb *plasmaSlice) deleteVectorIndex(docid []byte, compareKey, compareSHA []byte, workerId int) (nmut int, changed bool) {
+
+	mdb.back[workerId].TryThrottle()
+	mdb.main[workerId].TryThrottle()
+
+	// Delete entry from back and main index if present
+	mdb.back[workerId].BeginNoThrottle()
+	defer mdb.back[workerId].End()
+
+	itemFound := false
+	backEntry, err := mdb.back[workerId].LookupKV(docid)
+
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
+	buf := mdb.encodeBuf[workerId]
+	if err == nil {
+
+		itemFound = true
+
+		backEntryKey, encodedSHA := splitVectorBackEntry(backEntry)
+		// Delete the entries only if both key and
+		if hasEqualBackEntry(compareKey, backEntryKey) && hasEqualEncodedSHA(compareSHA, encodedSHA) {
+			return 0, false
+		}
+
+		t0 := time.Now()
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+
+		mdb.main[workerId].BeginNoThrottle()
+		defer mdb.main[workerId].End()
+
+		err = mdb.back[workerId].DeleteKV(docid)
+		if err == nil {
+			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+		}
+
+		entry := backEntry2entry(docid, backEntryKey, buf, mdb.keySzConf[workerId])
+		entrySz := len(entry)
+		err = mdb.main[workerId].DeleteKV(entry)
+		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+		if err == nil {
+			mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
+			subtractKeySizeStat(mdb.idxStats, entrySz)
+		}
+	}
+
+	mdb.isDirty = true
+
+	if itemFound {
+		return 1, true
+	} else {
+		//nothing deleted
+		return 0, true
+	}
 }
 
 // checkFatalDbError checks if the error returned from DB
@@ -4525,6 +4575,33 @@ func hasEqualBackEntry(key []byte, bentry []byte) bool {
 
 	// Ignore 2 byte count for comparison
 	return bytes.Equal(key, bentry[:len(bentry)-2])
+}
+
+func splitVectorBackEntry(backEntry []byte) ([]byte, []byte) {
+	l := uint32(len(backEntry))
+	numShaEncodings := binary.LittleEndian.Uint32(backEntry[l-4:]) // last 4 bytes capture the number of SHA encoded values
+	shaEncodingSize := numShaEncodings*sha256.Size + 4
+	return backEntry[:l-shaEncodingSize], backEntry[l-shaEncodingSize:]
+}
+
+func hasEqualEncodedSHA(compareSHA []byte, encodedSHA []byte) bool {
+	if compareSHA == nil && encodedSHA == nil {
+		return true
+	}
+
+	if (compareSHA == nil && encodedSHA != nil) || (compareSHA != nil && encodedSHA == nil) {
+		return false
+	}
+
+	cl, el := len(compareSHA), len(encodedSHA)
+	compareSHANumEntries := compareSHA[cl-4:] // last 4 bytes capture the number of SHA encoded values
+	encodedSHANumEntries := encodedSHA[el-4:]
+
+	if bytes.Equal(compareSHANumEntries, encodedSHANumEntries) == false {
+		return false // Number of entries are different
+	}
+
+	return bytes.Equal(compareSHA, encodedSHA)
 }
 
 ////////////////////////////////////////////////////////////
