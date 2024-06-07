@@ -527,6 +527,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		if s.tryRespondWithError(w, req, err) {
 			return
 		}
+
+		err = req.getNearestCentroids()
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
 	}
 
 	// Do the scan

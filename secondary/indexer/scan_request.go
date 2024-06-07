@@ -120,10 +120,12 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
+	nprobes               int
 	isVectorScan          bool
 	queryVector           []float32
 	codebookMap           map[common.PartitionId]codebook.Codebook
 	parallelCentroidScans int
+	centroidMap           map[common.PartitionId][]int64
 }
 
 type Projection struct {
@@ -496,6 +498,20 @@ func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
 
 	// Set Scan type to VectorScanReq so that we can process vector req differently
 	r.ScanType = VectorScanReq
+	r.nprobes = int(ivec.GetProbes())
+}
+
+func (r *ScanRequest) getNearestCentroids() error {
+	r.centroidMap = make(map[common.PartitionId][]int64)
+
+	for pid, cb := range r.codebookMap {
+		centroids, err := cb.FindNearestCentroids(r.queryVector, int64(r.nprobes))
+		if err != nil {
+			return err
+		}
+		r.centroidMap[pid] = centroids
+	}
+	return nil
 }
 
 func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
