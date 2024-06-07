@@ -35,6 +35,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 const (
@@ -1979,6 +1980,10 @@ func (mdb *memdbSlice) GetWriteUnits() uint64 {
 }
 
 func (mdb *memdbSlice) SetStopWriteUnitBilling(disableBilling bool) {
+}
+
+func (mdb *memdbSlice) GetCodebook() (codebook.Codebook, error) {
+	return nil, ErrorNotImplemented
 }
 
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {

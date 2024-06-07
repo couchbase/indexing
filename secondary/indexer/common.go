@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,6 +17,9 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
+
+var ErrorNotImplemented = errors.New("Functionality not implemented")
+var ErrorCodebookNotInitialized = errors.New("Codebook is not initialized")
 
 type StreamAddressMap map[common.StreamId]common.Endpoint
 

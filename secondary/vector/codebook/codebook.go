@@ -1,0 +1,67 @@
+package codebook
+
+import "errors"
+
+var (
+	ErrCodebookNotTrained = errors.New("Codebook is not trained")
+	ErrInvalidVersion     = errors.New("Invalid codebook version")
+	ErrChecksumMismatch   = errors.New("Checksum mismatch")
+	ErrUnknownType        = errors.New("Unknown Codebook Type")
+	ErrCodebookClosed     = errors.New("Codebook closed")
+	ErrUnsupportedMetric  = errors.New("Unsupported Distance Metric")
+)
+
+type Codebook interface {
+	//Train the codebook using input vectors.
+	Train(vecs []float32) error
+
+	//IsTrained returns true if codebook has been trained.
+	IsTrained() bool
+
+	//CodeSize returns the size of produced code in bytes.
+	CodeSize() (int, error)
+
+	//Compute the quantized code for a given input vector.
+	//Must be run on a trained codebook.
+	EncodeVector(vec []float32, code []byte) error
+
+	//Compute the quantized codes for a given list of input vectors.
+	//Must be run on a trained codebook.
+	EncodeVectors(vecs []float32, codes []byte) error
+
+	//Size returns the memory size in bytes.
+	Size() uint64
+
+	//Find the nearest k centroidIDs for a given vector.
+	//Must be run on a trained codebook.
+	FindNearestCentroids(vec []float32, k int64) ([]int64, error)
+
+	//Computes the distance table for given vector.
+	//Distance table contains the precomputed distance of the given
+	//vector from each subvector m(determined by the number of subquantizers).
+	//Distance table is a matrix of dimension M * ksub where
+	//M = number of subquantizers
+	//ksub = number of centroids for each subquantizer (2**nbits)
+	ComputeDistanceTable(vec []float32) ([][]float32, error)
+
+	//Compute the distance between a vector using distance table and
+	//quantized code of another vector.
+	ComputeDistanceWithDT(code []byte, dtable [][]float32) float32
+
+	//Compute the distance between a vector with another given set of vectors.
+	ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error
+
+	//Decode the quantized code and return float32 vector.
+	//Must be run on a trained codebook.
+	DecodeVector(code []byte, vec []float32) error
+
+	//Decode the quantized codes and return float32 vectors.
+	//Must be run on a trained codebook.
+	DecodeVectors(n int, codes []byte, vecs []float32) error
+
+	//Close frees the memory used by codebook.
+	Close() error
+
+	//Marshal the codebook to a slice of bytes
+	Marshal() ([]byte, error)
+}

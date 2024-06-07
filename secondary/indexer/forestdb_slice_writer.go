@@ -26,6 +26,7 @@ import (
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/natsort"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 var (
@@ -1921,4 +1922,8 @@ func (fdb *fdbSlice) GetWriteUnits() uint64 {
 }
 
 func (fdb *fdbSlice) SetStopWriteUnitBilling(isRebalance bool) {
+}
+
+func (fdb *fdbSlice) GetCodebook() (codebook.Codebook, error) {
+	return nil, ErrorNotImplemented
 }

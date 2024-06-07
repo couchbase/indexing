@@ -32,6 +32,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/vector"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
 )
 
@@ -209,7 +210,7 @@ type plasmaSlice struct {
 	// vector index related metadata
 	nlist int // number of centroids to use for training
 
-	codebook vector.Codebook
+	codebook codebook.Codebook
 
 	// Size of the quantized codes after training
 	codeSize int
@@ -5079,7 +5080,7 @@ func (mdb *plasmaSlice) ResetCodebook() error {
 
 func (mdb *plasmaSlice) Train(vecs []float32) error {
 	if mdb.codebook == nil {
-		return errors.New("Codebook is not initialized")
+		return ErrorCodebookNotInitialized
 	}
 
 	err := mdb.codebook.Train(vecs)
@@ -5093,6 +5094,18 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		return err
 	}
 	return nil
+}
+
+func (mdb *plasmaSlice) GetCodebook() (codebook.Codebook, error) {
+	if mdb.codebook == nil {
+		return nil, ErrorCodebookNotInitialized
+	}
+
+	if !mdb.codebook.IsTrained() {
+		return nil, codebook.ErrCodebookNotTrained
+	}
+
+	return mdb.codebook, nil
 }
 
 ////////////////////////////////////////////////////////////
