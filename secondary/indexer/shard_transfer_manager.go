@@ -1332,7 +1332,11 @@ func generatePlasmaCopierConfigForCodebook(msg *MsgStartShardTransfer) *plasma.C
 	rebalanceID := msg.GetRebalanceId()
 	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithTLS(msg.GetTLSConfig())
 	cfg.CopyConfig.RPCHttpClientCfg = cfg.CopyConfig.RPCHttpClientCfg.WithAuth((plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback()))
+	// Session key will be used to reuse any RPC Client for the same destination
 	cfg.CopyConfig.RPCHttpClientCfg.SessionKey = rebalanceID
+	// KeyPrefix will be used to ensure that the cleanup is issued only for relevant path and not accidentally for
+	// any other path
+	cfg.CopyConfig.KeyPrefix = CODEBOOK_COPY_PREFIX
 	return &cfg
 }
 
