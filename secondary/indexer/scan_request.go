@@ -345,7 +345,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.rollbackTime = req.GetRollbackTime()
 		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
-		vector := req.GetVector()
+		tsvector := req.GetTsVector()
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Sorted = true
@@ -355,7 +355,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			return
 		}
 
-		if err = r.setConsistency(cons, vector); err != nil {
+		if err = r.setConsistency(cons, tsvector); err != nil {
 			return
 		}
 
@@ -384,7 +384,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.rollbackTime = req.GetRollbackTime()
 		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
-		vector := req.GetVector()
+		tsvector := req.GetTsVector()
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
@@ -402,7 +402,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			return
 		}
 
-		if err = r.setConsistency(cons, vector); err != nil {
+		if err = r.setConsistency(cons, tsvector); err != nil {
 			return
 		}
 
@@ -445,7 +445,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.rollbackTime = req.GetRollbackTime()
 		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
-		vector := req.GetVector()
+		tsvector := req.GetTsVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
 		r.Scans = make([]Scan, 1)
@@ -458,7 +458,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			return
 		}
 
-		if err = r.setConsistency(cons, vector); err != nil {
+		if err = r.setConsistency(cons, tsvector); err != nil {
 			return
 		}
 	default:

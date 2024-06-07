@@ -1697,11 +1697,11 @@ func (si *secondaryIndex3) Scan3(
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
 	indexorder := n1qlindexordertogsi(indexOrders)
 	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
-	err := client.Scan3Internal(
+	err := client.ScanInternal("scan3",
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
 		n1ql2GsiConsistency[cons], vector2ts(tsvector),
-		broker, scanParams)
+		broker, scanParams, nil)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -1878,12 +1878,21 @@ func (si *secondaryIndex6) Include() (rvs expression.Expressions) {
 
 // Scan6 implements Index6 interface
 func (si *secondaryIndex6) Scan6(
-	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection bool,
-	projection *datastore.IndexProjection, offset, limit int64,
-	groupAggs *datastore.IndexGroupAggregates, indexOrders datastore.IndexKeyOrders,
-	indexKeyNames []string, inlineFilter string, indexVector *datastore.IndexVector,
-	indexPartitionSets datastore.IndexPartitionSets,
-	cons datastore.ScanConsistency, timestampVector timestamp.Vector,
+	requestId string,
+	spans datastore.Spans2,
+	reverse bool,
+	distinctAfterProjection bool,
+	projection *datastore.IndexProjection,
+	offset int64,
+	limit int64,
+	groupAggs *datastore.IndexGroupAggregates,
+	indexOrders datastore.IndexKeyOrders,
+	indexKeyNames []string, // VECTOR_TODO: Use in BHIVE index for expression on include fields
+	inlineFilter string, // VECTOR_TODO: Use in BHIVE index
+	indexVector *datastore.IndexVector, // Used for passing vector field details
+	indexPartionSets datastore.IndexPartitionSets, // Used for paritition elimination on include fields
+	cons datastore.ScanConsistency,
+	tsvector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
 	if si.isBhive || len(indexKeyNames) > 0 {
@@ -1892,10 +1901,60 @@ func (si *secondaryIndex6) Scan6(
 		return
 	}
 
-	// [VECTOR_TODO]: Some validation and then initiate vector scan
-	// Till then, just use Scan3 API
-	si.Scan3(requestId, spans, reverse, distinctAfterProjection, projection, offset,
-		limit, groupAggs, indexOrders, cons, timestampVector, conn)
+	sender := conn.Sender()
+	skipReadMetering := conn.SkipMetering()
+	user := conn.User()
+	var scanParams = map[string]interface{}{"skipReadMetering": skipReadMetering, "user": user}
+	var backfillSync int64
+	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
+
+	defer sender.Close()
+	defer func() {
+		if broker != nil {
+			l.Debugf("scan6: scan request %v closing sender.  Receive Count %v Sent Count %v",
+				requestId, broker.ReceiveCount(), broker.SendCount())
+		}
+	}()
+	defer func() { // cleanup tmpfile
+		waitGroup.Wait()
+		si.cleanupBackfillFile(requestId, broker)
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	if err := si.CheckScheduled(); err != nil {
+		conn.Error(n1qlError(client, err))
+		return
+	}
+
+	gsiscans := n1qlspanstogsi(spans)
+	gsiprojection := n1qlprojectiontogsi(projection)
+	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
+	indexorder := n1qlindexordertogsi(indexOrders)
+	gsiIndexVector := n1qlindexvectortogsi(indexVector)
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup,
+		&backfillSync, sender.Capacity())
+	err := client.ScanInternal("scan6",
+		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
+		gsiprojection, offset, limit, gsigroupaggr, indexorder,
+		n1ql2GsiConsistency[cons], vector2ts(tsvector),
+		broker, scanParams, gsiIndexVector)
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
+
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+
+	l.Debugf("scan6 scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
+
 }
 
 //-------------------------------------
@@ -2616,6 +2675,25 @@ func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
 	default:
 		return c.AGG_INVALID
 	}
+}
+
+func n1qlindexvectortogsi(indexVector *datastore.IndexVector) *qclient.IndexVector {
+	if indexVector == nil {
+		return nil
+	}
+
+	vec := &qclient.IndexVector{
+		QueryVector:  make([]float32, len(indexVector.QueryVector)),
+		IndexKeyPos:  indexVector.IndexKeyPos,
+		Probes:       indexVector.Probes,
+		ActualVector: indexVector.ActualVector,
+	}
+
+	for i, o := range indexVector.QueryVector {
+		vec.QueryVector[i] = o
+	}
+
+	return vec
 }
 
 func gsistatston1ql(stats []map[string]interface{}) []map[datastore.IndexStatType]value.Value {

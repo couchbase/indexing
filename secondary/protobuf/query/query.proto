@@ -19,6 +19,13 @@ message TsConsistency {
     optional uint64 crc64   = 4; // if present, crc64 hash value of all vbuuids
 }
 
+message IndexVector {
+    repeated float queryVector   = 1;
+    required int32 indexKeyPos   = 2;
+    required int32 probes        = 3;
+    required bool  actualVector  = 4;
+}
+
 // Request can be one of the optional field.
 message QueryPayload {
     required uint32             version           = 1;
@@ -65,7 +72,7 @@ message ScanRequest {
     required bool          	    distinct  		= 3;
     required int64         	    limit     		= 4;
     required uint32        	    cons      		= 5;
-    optional TsConsistency 	    vector    		= 6;
+    optional TsConsistency 	    tsVector    	= 6;
     optional string        	    requestId 		= 7;
     repeated Scan        	    scans 		    = 8;
     optional IndexProjection    indexprojection	= 9;
@@ -78,6 +85,7 @@ message ScanRequest {
     optional uint32             dataEncFmt      = 16;
     optional string             user            = 17;
     optional bool               skipReadMetering    = 18;
+    optional IndexVector        indexVector     = 19;
 }
 
 // Full table scan request from indexer.
@@ -85,13 +93,14 @@ message ScanAllRequest {
     required uint64        defnID        = 1;
     required int64         limit         = 2;
     required uint32        cons          = 3;
-    optional TsConsistency vector        = 4;
+    optional TsConsistency tsVector      = 4;
     optional string        requestId     = 5;
 	optional int64		   rollbackTime  = 6;
 	repeated uint64		   partitionIds  = 7;
 	optional uint32        dataEncFmt    = 8;
     optional string        user          = 9;
     optional bool          skipReadMetering  = 10;
+    optional IndexVector   indexVector   = 11;
 }
 
 // Request by client to stop streaming the query results.
@@ -114,7 +123,7 @@ message CountRequest {
     required uint64        defnID           = 1;
     required Span          span             = 2;
     required uint32        cons             = 3;
-    optional TsConsistency vector           = 4;
+    optional TsConsistency TsVector         = 4;
     optional string        requestId        = 5;
     optional bool          distinct         = 6;
     repeated Scan          scans            = 7;

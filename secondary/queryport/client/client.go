@@ -137,6 +137,13 @@ type IndexKeyOrder struct {
 	Desc   []bool
 }
 
+type IndexVector struct {
+	QueryVector  []float32 // query vector
+	IndexKeyPos  int       // vector key pos in index
+	Probes       int       // nprobes
+	ActualVector bool      // Use actual vector
+}
+
 const (
 	// Neither does not include low-key and high-key
 	Neither Inclusion = iota
@@ -1142,16 +1149,33 @@ func (c *GsiClient) Scan3(
 
 	dataEncFmt := c.GetDataEncodingFormat()
 	broker := makeDefaultRequestBroker(callb, dataEncFmt)
-	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
-		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams)
+	return c.ScanInternal("scan3", defnID, requestId, scans, reverse, distinct,
+		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams,
+		nil)
 }
 
-func (c *GsiClient) Scan3Internal(
+func (c *GsiClient) Scan6(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, tsvector *TsConsistency,
-	broker *RequestBroker, scanParams map[string]interface{}) (err error) {
+	callb ResponseHandler, scanParams map[string]interface{},
+	indexVector *IndexVector) (err error) {
+
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
+	return c.ScanInternal("scan6", defnID, requestId, scans, reverse, distinct,
+		projection, offset, limit, groupAggr, indexOrder, cons, tsvector, broker, scanParams,
+		indexVector)
+}
+
+func (c *GsiClient) ScanInternal(logPrefix string,
+	defnID uint64, requestId string, scans Scans, reverse,
+	distinct bool, projection *IndexProjection, offset, limit int64,
+	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
+	cons common.Consistency, tsvector *TsConsistency,
+	broker *RequestBroker, scanParams map[string]interface{},
+	indexVector *IndexVector) (err error) {
 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
@@ -1176,18 +1200,18 @@ func (c *GsiClient) Scan3Internal(
 		}
 
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
-			return qc.Scan3Primary(
+			return qc.ScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, tsvector, handler, rollbackTime,
-				partitions, dataEncFmt, broker.DoRetry(), scanParams)
+				partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector)
 		}
 
-		return qc.Scan3(
+		return qc.Scan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, tsvector, handler, rollbackTime,
-			partitions, dataEncFmt, broker.DoRetry(), scanParams)
+			partitions, dataEncFmt, broker.DoRetry(), scanParams, indexVector)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1205,8 +1229,8 @@ func (c *GsiClient) Scan3Internal(
 		return err
 	}
 
-	fmsg := "Scan3 {%v,%v} - elapsed(%v) err(%v)"
-	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
+	fmsg := "%v {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, logPrefix, defnID, requestId, time.Since(begin), err)
 	return
 }
 

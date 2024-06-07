@@ -23,7 +23,7 @@ func (idx *IndexImpl) SetNProbe(nprobe int32) {
 	if ivfPtr == nil {
 		return
 	}
-	C.faiss_IndexIVF_set_nprobe(ivfPtr, C.ulong(nprobe))
+	C.faiss_IndexIVF_set_nprobe(ivfPtr, C.size_t(nprobe))
 }
 
 //Quantizer returns the pointer to the quantizer for
