@@ -35,6 +35,7 @@ type Row struct {
 	value []byte
 	len   int
 	last  bool
+	dist  float32
 
 	mem *allocator
 }
@@ -315,6 +316,7 @@ func (r *allocator) Free() bool {
 func (r *Row) copy(source *Row) {
 	r.len = source.len
 	r.last = source.last
+	r.dist = source.dist
 	r.copyKey(source.key)
 	if source.value != nil {
 		r.copyValue(source.value)
