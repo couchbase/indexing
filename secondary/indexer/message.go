@@ -2791,6 +2791,8 @@ type MsgShardTransferCleanup struct {
 	authCallback   func(*http.Request) error
 	tlsConfig      *tls.Config
 	isPeerTransfer bool
+
+	codebookPaths []string
 }
 
 func (m *MsgShardTransferCleanup) GetMsgType() MsgType {
@@ -2819,6 +2821,14 @@ func (m *MsgShardTransferCleanup) GetRespCh() chan bool {
 
 func (m *MsgShardTransferCleanup) IsSyncCleanup() bool {
 	return m.syncCleanup
+}
+
+func (m *MsgShardTransferCleanup) GetCodebookNames() []string {
+	var codebookNames []string
+	for _, codebookPath := range m.codebookPaths {
+		codebookNames = append(codebookNames, filepath.Base(codebookPath))
+	}
+	return codebookNames
 }
 
 func (m *MsgShardTransferCleanup) String() string {
