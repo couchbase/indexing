@@ -559,6 +559,8 @@ func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 		s.handleStatsRequest(req, w, is)
 	case FastCountReq:
 		s.handleFastCountRequest(req, w, is, t0)
+	case VectorScanReq: // VECTOR_TODO: Check the need of VectorScanAllReq
+		s.handleVectorScanRequest(req, w, is, t0)
 	}
 }
 
@@ -610,6 +612,70 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		logging.Errorf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s, instId: %v, partnIds: %v",
 			req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId, req.IndexInstId, req.PartitionIds)
 
+		s.updateErrStats(req, err)
+		if strings.Contains(err.Error(), "Collatejson decode error") {
+			errCount := atomic.AddUint32(&s.numDecodeErrors, 1)
+			if errCount > DECODE_ERR_THRESHOLD {
+				// Not sure if this is in-memory data corruption.
+				// It is safe to start afresh.
+				logging.Fatalf("Too many unexpected errors in scan decode. "+
+					"Error count = %v. Indexer exiting ...", errCount)
+				os.Exit(1)
+			}
+		}
+	} else {
+		status := "ok"
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
+				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status)
+		})
+	}
+}
+
+func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+	waitTime := time.Now().Sub(t0)
+
+	scanPipeline := NewScanPipeline2(req, w, is, s.config.Load())
+	cancelCb := NewCancelCallback(req, func(e error) {
+		scanPipeline.Cancel(e)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	err := scanPipeline.Execute()
+	scanTime := time.Now().Sub(t0)
+
+	stats := s.stats.Get()
+
+	if req.Stats != nil {
+		stats.TotalRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		stats.TotalRowsScanned.Add(int64(scanPipeline.RowsScanned()))
+
+		req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
+		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
+		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
+		req.Stats.scanReqWaitLatDist.Add(waitTime.Nanoseconds())
+
+		if req.GroupAggr != nil {
+			req.Stats.numRowsReturnedAggr.Add(int64(scanPipeline.RowsReturned()))
+			req.Stats.numRowsScannedAggr.Add(int64(scanPipeline.RowsScanned()))
+			req.Stats.scanCacheHitAggr.Add(int64(scanPipeline.CacheHitRatio()))
+			req.Stats.Timings.n1qlExpr.Put(scanPipeline.AvgExprEvalDur())
+		} else {
+			req.Stats.numRowsReturnedRange.Add(int64(scanPipeline.RowsReturned()))
+			req.Stats.numRowsScannedRange.Add(int64(scanPipeline.RowsScanned()))
+			req.Stats.scanCacheHitRange.Add(int64(scanPipeline.CacheHitRatio()))
+		}
+	}
+
+	if err != nil {
+		status := fmt.Sprintf("(error = %s)", err)
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
+		})
 		s.updateErrStats(req, err)
 		if strings.Contains(err.Error(), "Collatejson decode error") {
 			errCount := atomic.AddUint32(&s.numDecodeErrors, 1)
