@@ -2090,6 +2090,25 @@ func (r *ScanRequest) getSharedBuffer(length int) []byte {
 	return (*r.sharedBuffer)[r.sharedBufferLen:r.sharedBufferLen]
 }
 
+func (r *ScanRequest) hasDesc() bool {
+	hasDesc := r.IndexInst.Defn.HasDescending()
+	return hasDesc
+}
+
+func (r *ScanRequest) getFromSecKeyBufPool() *[]byte {
+	buf := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, buf)
+	return buf
+}
+
+func (r *ScanRequest) getVectorDim() int {
+	return r.IndexInst.Defn.VectorMeta.Dimension
+}
+
+func (r *ScanRequest) getVectorKeyPos() int {
+	return r.vectorPos
+}
+
 /////////////////////////////////////////////////////////////////////////
 //
 // IndexPoints Implementation
