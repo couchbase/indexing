@@ -5,6 +5,7 @@ package indexer
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -1319,6 +1320,39 @@ func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, 
 
 	logging.Infof("ShardTransferManager::TransferCodebook transferred bytes:%v, err:%v", xferBytes, err)
 	return err
+}
+
+type plasmaCopyConfigMeta struct {
+	rebalanceId string
+	ttid        string
+	destination string
+	keyPrefix   string
+	authCb      plasma.HTTPSetReqAuthCb
+	tlsConfig   *tls.Config
+}
+
+func (c *plasmaCopyConfigMeta) GetRebalanceId() string {
+	return c.rebalanceId
+}
+
+func (c *plasmaCopyConfigMeta) GetTLSConfig() *tls.Config {
+	return c.tlsConfig
+}
+
+func (c *plasmaCopyConfigMeta) GetAuthCallback() plasma.HTTPSetReqAuthCb {
+	return c.authCb
+}
+
+func (c *plasmaCopyConfigMeta) GetKeyPrefix() string {
+	return c.keyPrefix
+}
+
+func (c *plasmaCopyConfigMeta) GetTransferTokenId() string {
+	return c.ttid
+}
+
+func (c *plasmaCopyConfigMeta) GetDestination() string {
+	return c.destination
 }
 
 func makeFileCopierForCodebook(msg *MsgStartShardTransfer) (plasma.Copier, error) {
