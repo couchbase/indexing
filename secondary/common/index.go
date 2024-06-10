@@ -530,6 +530,15 @@ func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
 
 }
 
+func (defn *IndexDefn) GetVectorKeyPosExploded() (vectorPos int) {
+	for posn, isVectorKey := range defn.HasVectorAttr {
+		if isVectorKey {
+			return posn
+		}
+	}
+	return -1
+}
+
 func (idx IndexInst) IsProxy() bool {
 	return idx.RealInstId != 0
 }

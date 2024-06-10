@@ -37,6 +37,7 @@ var (
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
 	ErrNotMyPartition     = errors.New("Not my partition")
+	ErrNotVectorIndex     = errors.New("Not vector index")
 )
 
 const DECODE_ERR_THRESHOLD = 100
@@ -530,6 +531,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 
 		err = req.getNearestCentroids()
 		if s.tryRespondWithError(w, req, err) {
+			return
+		}
+
+		err = req.fillVectorScans()
+		if err != nil && s.tryRespondWithError(w, req, err) {
 			return
 		}
 	}
