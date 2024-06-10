@@ -1263,7 +1263,7 @@ loop:
 							tt.Destination, tt.Region, codebookName, codebookPaths, err)
 
 						// Invoke clean-up for all shards even if error is observed for one shard transfer
-						// TODO initiate codebook cleanup sr.initiateCodebookTransferCleanup()
+						sr.initiateShardTransferCleanup(nil, tt.Destination, tt.Region, ttid, tt, err, false)
 						sr.setTransferTokenError(ttid, tt, err.Error())
 						return
 					}
@@ -1369,6 +1369,7 @@ func (sr *ShardRebalancer) initiateShardTransferCleanup(shardPaths map[common.Sh
 		transferTokenId: ttid,
 		respCh:          respCh,
 		syncCleanup:     syncCleanup,
+		codebookPaths:   getCodebookPaths(tt),
 	}
 
 	if sr.canMaintainShardAffinity {

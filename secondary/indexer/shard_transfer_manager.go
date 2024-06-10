@@ -512,6 +512,7 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	ttid := msg.GetTransferTokenId()
 	respCh := msg.GetRespCh()
 	isSyncCleanup := msg.IsSyncCleanup()
+	hasCodebooks := len(msg.GetCodebookNames()) != 0
 
 	meta := make(map[string]interface{})
 	meta[plasma.GSIRebalanceId] = rebalanceId
@@ -522,6 +523,16 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	if msg.IsPeerTransfer() {
 		meta[plasma.RPCClientTLSConfig] = msg.GetTLSConfig()
 		meta[plasma.RPCHTTPSetReqAuthCb] = (plasma.HTTPSetReqAuthCb)(msg.GetAuthCallback())
+	}
+
+	if hasCodebooks {
+		// invoke codebook cleanup
+		err := stm.doCodebookCleanup(msg)
+		if err != nil {
+			logging.Errorf("ShardTransferManager::processTransferCleanupMessage Error initiating "+
+				"codebook cleanup for destination: %v, meta: %v, codebooks: %v, err: %v",
+				destination, meta, msg.GetCodebookNames(), err)
+		}
 	}
 
 	if !isSyncCleanup { // Invoke asynchronous cleanup
@@ -556,6 +567,98 @@ func (stm *ShardTransferManager) processTransferCleanupMessage(cmd Message) {
 	// Notify the caller that cleanup has been initiated for all shards
 	respCh <- true
 	return
+}
+
+func (stm *ShardTransferManager) doCodebookCleanup(msg *MsgShardTransferCleanup) (err error) {
+	isSyncCleanup := msg.IsSyncCleanup()
+
+	if !isSyncCleanup {
+		err = stm.cleanupCodebooks(msg, nil)
+	} else if isSyncCleanup {
+		var wg sync.WaitGroup
+
+		doneCb := func(err error) {
+			logging.Infof("ShardTransferManager::DoCodebookCleanup doneCb invoked for "+
+				"ttid: %v, rebalanceId: %v, codebooks: %v", msg.GetTransferTokenId(), msg.GetRebalanceId(), msg.GetCodebookNames())
+			if err != nil {
+				logging.Errorf("ShardTransferManager::DoCodebookCleanup error observed during "+
+					"transfer cleanup, ttid: %v, rebalanceId: %v, codebooks:%v, err: %v",
+					msg.GetTransferTokenId(), msg.GetRebalanceId(), msg.GetCodebookNames(), err)
+			}
+			wg.Done()
+		}
+
+		wg.Add(1)
+		err = stm.cleanupCodebooks(msg, doneCb)
+		wg.Wait()
+	}
+
+	return err
+}
+
+func (stm *ShardTransferManager) cleanupCodebooks(msg *MsgShardTransferCleanup, doneCb func(err error)) error {
+	destination := msg.GetDestination()
+
+	initCleanup := func(copier plasma.Copier) {
+		location := copier.GetCopyRoot()
+		codebookNames := msg.GetCodebookNames()
+
+		logging.Infof("ShardTransferManager::cleanupCodebooks Cleaning up codebooks from path :%v, codebooks:%v",
+			location, codebookNames)
+
+		var err error
+		ctx, ctxCancel := context.WithTimeout(context.Background(),
+			copier.Config().CPTimeOut)
+		copier.SetContext(ctx)
+
+		defer func() {
+			if ctxCancel != nil {
+				ctxCancel()
+			}
+
+			if ctx != nil {
+				if doneCb != nil {
+					doneCb(err)
+				}
+			}
+
+			copier.Done()
+		}()
+
+		// TODO handle S3 transfers
+
+		if err := copier.CleanupFiles(location); err != nil && !os.IsNotExist(err) {
+			err = fmt.Errorf("failed codebook cleanups, path: %v, codebooks: %v, error: %v",
+				location, codebookNames, err)
+		}
+
+		if err == nil {
+			logging.Infof("ShardTransferManager::cleanupCodebooks Cleaned up codebooks from path :%v, Codebooks :%v",
+				location, codebookNames)
+		}
+	}
+
+	meta := &plasmaCopyConfigMeta{
+		rebalanceId: msg.GetRebalanceId(),
+		ttid:        msg.GetTransferTokenId(),
+		destination: msg.GetDestination(),
+		keyPrefix:   CODEBOOK_COPY_PREFIX,
+		authCb:      msg.GetAuthCallback(),
+		tlsConfig:   msg.GetTLSConfig(),
+	}
+
+	codebookCopier, err := makeFileCopierForCodebook(meta)
+	if err != nil || codebookCopier == nil {
+		return fmt.Errorf("unable to make file copier. err: %v", err)
+	}
+
+	if codebookCopier != nil {
+		go initCleanup(codebookCopier)
+		return nil
+	}
+
+	return fmt.Errorf("error initiating cleaning up having location :%v "+
+		"meta :%v error :%v", destination, meta, err)
 }
 
 func (stm *ShardTransferManager) processShardTransferStagingCleanupMessage(cmd Message) {
