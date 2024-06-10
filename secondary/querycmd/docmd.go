@@ -300,9 +300,9 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 					}
 				} else {
 					cmdOptions.SecStrs = append(cmdOptions.SecStrs, s)
-					cmdOptions.Desc = append(cmdOptions.Desc, key.HasAttribute(datastore.IK_DESC))
+					cmdOptions.Desc = append(cmdOptions.Desc, key.HasDesc())
 					if keyPos == 0 {
-						cmdOptions.IndexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
+						cmdOptions.IndexMissingLeadingKey = key.HasMissing()
 					}
 				}
 			}
@@ -549,7 +549,7 @@ func HandleCommand(
 				cmd.PartitionKeys, cmd.WithJson)
 			if err == nil {
 				fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
-					iname, defnID, cmd.With)
+					iname, defnID, cmd.WithJson)
 			}
 		}
 		//TODO: Handle Drop and Alter
