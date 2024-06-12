@@ -337,6 +337,104 @@ func (w *ScanWorker) skipRow(entry []byte) (skipRow bool, err error) {
 	return false, nil
 }
 
+// -----------
+// Worker Pool
+// -----------
+
+// Pool of ScanWokers
+type WorkerPool struct {
+	jobs       chan *ScanJob  // Channel to send jobs to workers
+	jobsWg     sync.WaitGroup // Wait group to wait for submitted jobs to finish
+	errCh      chan error     // Channel to receive errros from workers
+	numWorkers int            // Number of workers
+	stopCh     chan struct{}  // Channel to halt workerpool and its workers
+	stopOnce   sync.Once      // To execute stop only once upon external trigger or internal error
+	workers    []*ScanWorker  // Array of workers
+	sendCh     chan *Row      // Channel to send data out for downstream processing
+}
+
+// NewWorkerPool creates a new WorkerPool
+func NewWorkerPool(numWorkers int) *WorkerPool {
+	wp := &WorkerPool{
+		jobs:       make(chan *ScanJob, numWorkers),
+		jobsWg:     sync.WaitGroup{},
+		errCh:      make(chan error),
+		numWorkers: numWorkers,
+		stopCh:     make(chan struct{}),
+		workers:    make([]*ScanWorker, numWorkers),
+	}
+	return wp
+}
+
+// Init starts the worker pool
+func (wp *WorkerPool) Init(r *ScanRequest) {
+	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
+
+	for i := 0; i < wp.numWorkers; i++ {
+		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
+			wp.stopCh, wp.errCh, &wp.jobsWg)
+	}
+}
+
+// Submit adds a job to the pool
+func (wp *WorkerPool) Submit(job *ScanJob) {
+	wp.jobsWg.Add(1)
+	select {
+	case <-wp.stopCh:
+		wp.jobsWg.Add(-1)
+	case wp.jobs <- job:
+	}
+}
+
+// Wait waits for submitted jobs to finish or an error to occur
+func (wp *WorkerPool) Wait() error {
+	doneCh := make(chan struct{})
+	go func() {
+		wp.jobsWg.Wait()
+		close(doneCh)
+	}()
+	select {
+	case err := <-wp.errCh: // If any worker errors out
+		if err != nil {
+			wp.stopOnce.Do(func() {
+				close(wp.stopCh)
+			})
+			<-doneCh         // Wait for running jobs to stop
+			wp.sendLastRow() // Indicate downstream of early closure
+			close(wp.sendCh) // Close downstream
+			return err
+		}
+	case <-doneCh: // If current submitted jobs are done
+		return nil
+	case <-wp.stopCh: // If User stopped the worker pool
+		<-doneCh
+		return nil
+	}
+	return nil
+}
+
+// sendLastRow to indicate early closure to downstream i.e. to
+// differentiate between closure on error and end
+func (wp *WorkerPool) sendLastRow() {
+	row := &Row{last: true}
+	wp.sendCh <- row
+}
+
+// Stop signals all workers to stop and waits for workers to halt and closes
+// downstream. Use Wait to wait till submitted jobs are done. Stop will halt
+// the workers
+func (wp *WorkerPool) Stop() {
+	wp.stopOnce.Do(func() {
+		close(wp.stopCh)
+		wp.jobsWg.Wait()
+		close(wp.sendCh)
+	})
+}
+
+func (wp *WorkerPool) GetOutCh() <-chan *Row {
+	return wp.sendCh
+}
+
 // ----------------
 // IndexScanSource2
 // ----------------
