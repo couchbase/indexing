@@ -8,6 +8,7 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1qlval "github.com/couchbase/query/value"
@@ -433,6 +434,143 @@ func (wp *WorkerPool) Stop() {
 
 func (wp *WorkerPool) GetOutCh() <-chan *Row {
 	return wp.sendCh
+}
+
+// -------------
+// MergeOperator
+// -------------
+
+// Function to write data downstream from MergeOperator
+type WriteItem func(...[]byte) error
+
+// MergeOperator will read from recvQ, based on distances and either stores
+// in heap or forwards row to down stream
+type MergeOperator struct {
+	req *ScanRequest
+
+	recvCh <-chan *Row
+	heap   *TopKRowHeap
+
+	errCh    chan error
+	mergerWg sync.WaitGroup
+
+	writeItem WriteItem
+
+	buf   *[]byte
+	cktmp [][]byte
+
+	// VECTOR_TODO: handle stats
+	bytesRead    uint64
+	rowsScanned  uint64
+	rowsReturned uint64
+}
+
+func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
+	fio *MergeOperator, err error) {
+
+	fio = &MergeOperator{
+		recvCh:    recvCh,
+		writeItem: writeItem,
+		req:       r,
+	}
+
+	if r.Limit != 0 {
+		fio.heap, err = NewTopKRowHeap(int(r.Limit), false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	fio.buf = r.getFromSecKeyBufPool()
+	fio.cktmp = make([][]byte, len(r.IndexInst.Defn.SecExprs))
+
+	fio.mergerWg.Add(1)
+	go fio.Collector()
+
+	return fio, nil
+}
+
+func (fio *MergeOperator) Collector() {
+	defer fio.mergerWg.Done()
+
+	var row *Row
+	var ok bool
+	var err error
+
+	for {
+		row, ok = <-fio.recvCh
+		if !ok {
+			break
+		}
+
+		// last row is send to indicate early closure
+		if row.last {
+			return
+		}
+
+		// VECTOR_TODO: Add OFFSET too to the LIMIT, Check if LIMIT is adjusted at client side considering OFFSET
+		// If Limit is pushed down push it to heap
+		if fio.req.Limit != 0 {
+			fio.heap.Push(row)
+			continue
+		}
+
+		// If not get projected fields and send it down stream
+		entry := row.key
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				fio.errCh <- err
+				return
+			}
+		}
+
+		err = fio.writeItem(entry)
+		if err != nil {
+			fio.errCh <- err
+			return
+		}
+
+	}
+
+	if logging.IsEnabled(logging.Verbose) {
+		fio.heap.PrintHeap()
+	}
+
+	// Read from Heap and get projected fields and send it down stream
+	for row = fio.heap.Pop(); row != nil; row = fio.heap.Pop() {
+		entry := row.key
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+
+		err = fio.writeItem(entry)
+		if err != nil {
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
+		}
+	}
+}
+
+func (fio *MergeOperator) Wait() error {
+	doneCh := make(chan struct{})
+	go func() {
+		fio.mergerWg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case err := <-fio.errCh:
+		return err
+	case <-doneCh:
+		return nil
+	}
 }
 
 // ----------------
