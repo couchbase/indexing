@@ -12,6 +12,7 @@ import (
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1ql "github.com/couchbase/query/value"
 	"github.com/golang/protobuf/proto"
@@ -480,6 +481,157 @@ func TestVectorPipelineWorkerPool(t *testing.T) {
 		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
 			false, 90, 9*time.Second, false))
 		testFunc(nil, false, false, true, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+}
+
+func projToProtoProj(projection *client.IndexProjection) *protobuf.IndexProjection {
+	return &protobuf.IndexProjection{
+		EntryKeys:  projection.EntryKeys,
+		PrimaryKey: proto.Bool(projection.PrimaryKey),
+	}
+}
+
+func TestVectorPipelineMergeOperator(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	var ssnap1 SliceSnapshot
+	var ssnap2 SliceSnapshot
+
+	getWriteItem := func() WriteItem {
+		return func(data ...[]byte) error {
+			logging.Infof("Data: %s", data)
+			return nil
+		}
+	}
+
+	testFunc := func(testErr error, stopPostWait, stopPreWait, restart bool) {
+
+		var err error
+		vectorDim := 3
+		r := getScanRequest1(vectorDim, 2, []float32{0.8, 0.6, 0.3})
+		r.IndexInst.Defn.SecExprs = append(r.IndexInst.Defn.SecExprs, "hex")
+		r.Limit = 10
+		cklen := len(r.IndexInst.Defn.SecExprs)
+		proj := &client.IndexProjection{
+			EntryKeys:  []int64{0, 2},
+			PrimaryKey: true,
+		}
+		r.Indexprojection, err = validateIndexProjection(projToProtoProj(proj), cklen)
+		r.setExplodePositions()
+
+		mcb := codebook.NewMockCodebook(r.IndexInst.Defn.VectorMeta)
+
+		protoScans := getProtoScans("1")
+		scans1, err := r.makeScans(protoScans)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		protoScans = getProtoScans("2")
+		scans2, err := r.makeScans(protoScans)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wp := NewWorkerPool(2)
+		wp.Init(r)
+		recvCh := wp.GetOutCh()
+
+		var j1 = ScanJob{
+			pid:      c.PartitionId(0),
+			cid:      0,
+			scan:     scans1[0],
+			snap:     ssnap1,
+			codebook: mcb,
+			ctx:      nil,
+		}
+		logging.Infof("J1 Scan: %+v", j1.scan)
+
+		var j2 = ScanJob{
+			pid:      c.PartitionId(0),
+			cid:      0,
+			scan:     scans2[0],
+			snap:     ssnap2,
+			codebook: mcb,
+			ctx:      nil,
+		}
+		logging.Infof("J2 Scan: %+v", j1.scan)
+
+		fioDone := make(chan struct{})
+		fio, err := NewMergeOperator(recvCh, r, getWriteItem())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		go func() {
+			defer close(fioDone)
+			err = fio.Wait()
+			if err != nil {
+				wp.Stop()
+			}
+		}()
+
+		wp.Submit(&j1)
+		wp.Submit(&j2)
+
+		wpErr := wp.Wait()
+		if wpErr != testErr {
+			t.Fatal(wpErr)
+		}
+		if wpErr != nil {
+			<-fioDone
+			return
+		}
+
+		wp.Submit(&j1)
+		wp.Submit(&j2)
+
+		wpErr = wp.Wait()
+		if wpErr != testErr {
+			t.Fatal(wpErr)
+		}
+		if wpErr != nil {
+			<-fioDone
+			return
+		}
+
+		wp.Stop()
+		logging.Infof("WorkerPool Stopped")
+		<-fioDone
+		logging.Infof("FIO Stopped")
+
+	}
+
+	t.Run("general", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, true))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, true))
+		testFunc(nil, false, false, false)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("wperror", func(t *testing.T) {
+		gCount = 0
+		testErr := fmt.Errorf("test injected error")
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(true, 700, testErr,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, true))
+		testFunc(testErr, false, false, false)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("wpdualerror", func(t *testing.T) {
+		gCount = 0
+		testErr := fmt.Errorf("test injected error")
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(true, 700, testErr,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(true, 700, testErr,
+			false, 0, 0, true))
+		testFunc(testErr, false, false, false)
 		logging.Infof("gCount: %v", gCount)
 	})
 }
