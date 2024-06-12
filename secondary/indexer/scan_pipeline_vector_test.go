@@ -278,3 +278,208 @@ func TestVectorPipelineScanWorker(t *testing.T) {
 		logging.Infof("gCount: %v", gCount)
 	})
 }
+
+func TestVectorPipelineWorkerPool(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+
+	var ssnap1, ssnap2 SliceSnapshot
+
+	testFunc := func(testErr error, stopPostWait, stopPreWait, restart bool,
+		injectCompDistErr error, injectCompDistErrOnCout int, injectMCB2Error error,
+		injectMCB2CDErrCount int) {
+		vectorDim := 3
+
+		r := getScanRequest1(vectorDim, 2, []float32{0.8, 0.0, 0.0})
+		mcb1 := codebook.NewMockCodebook(r.IndexInst.Defn.VectorMeta)
+		if injectCompDistErr != nil {
+			mcbImpl := mcb1.(*codebook.MockCodebook)
+			mcbImpl.InjectedErr = injectCompDistErr
+			mcbImpl.CompDistErrOnCount = injectCompDistErrOnCout
+		}
+
+		mcb2 := codebook.NewMockCodebook(r.IndexInst.Defn.VectorMeta)
+		if injectMCB2Error != nil {
+			mcbImpl := mcb1.(*codebook.MockCodebook)
+			mcbImpl.InjectedErr = injectMCB2Error
+			mcbImpl.CompDistErrOnCount = injectMCB2CDErrCount
+		}
+
+		protoScans := getProtoScans("1")
+		scans1, err := r.makeScans(protoScans)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		protoScans = getProtoScans("2")
+		scans2, err := r.makeScans(protoScans)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wp := NewWorkerPool(2)
+		wp.Init(r)
+		recvCh := wp.GetOutCh()
+
+		var j1 = ScanJob{
+			pid:      c.PartitionId(0),
+			cid:      0,
+			scan:     scans1[0],
+			snap:     ssnap1,
+			codebook: mcb1,
+			ctx:      nil,
+		}
+		logging.Infof("J1 Scan: %+v", j1.scan)
+
+		var j2 = ScanJob{
+			pid:      c.PartitionId(0),
+			cid:      0,
+			scan:     scans2[0],
+			snap:     ssnap2,
+			codebook: mcb2,
+			ctx:      nil,
+		}
+		logging.Infof("J2 Scan: %+v", j1.scan)
+
+		wp.Submit(&j1)
+		wp.Submit(&j2)
+
+		lastCh := make(chan struct{})
+		go func() {
+			defer close(lastCh)
+			for row := range recvCh {
+				logging.Infof("Row: key:%s value:%s dist: %v len:%v",
+					row.key, row.value, row.dist, row.len)
+			}
+			logging.Infof("Receive channel closed..")
+		}()
+
+		if stopPreWait {
+			wp.Stop()
+		}
+
+		wpErr := wp.Wait()
+		if wpErr != testErr {
+			t.Fatal(wpErr)
+		}
+
+		if stopPostWait {
+			wp.Stop()
+		}
+
+		if stopPostWait || testErr != nil {
+			logging.Infof("Waiting for recv channel to get closed")
+			<-lastCh
+		}
+
+		if restart {
+			logging.Infof("Submitting jobs again")
+
+			wp.Submit(&j1)
+			wp.Submit(&j2)
+
+			wpErr := wp.Wait()
+			if wpErr != testErr {
+				t.Fatal(wpErr)
+			}
+
+			wp.Stop()
+
+			logging.Infof("Waiting for recv channel to get closed")
+			<-lastCh
+		}
+	}
+
+	t.Run("general", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		testFunc(nil, false, false, false, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("sorageerror", func(t *testing.T) {
+		gCount = 0
+		testErr := fmt.Errorf("test injected storage error")
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(true, 70, testErr,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		testFunc(testErr, false, false, false, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("dualstorageerror", func(t *testing.T) {
+		gCount = 0
+		testErr := fmt.Errorf("test injected storage error")
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(true, 70, testErr,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(true, 70, testErr,
+			false, 0, 0, false))
+		testFunc(testErr, false, false, false, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("codebookerror", func(t *testing.T) {
+		gCount = 0
+		testErr := fmt.Errorf("test injected codebook error")
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		testFunc(testErr, false, false, false, testErr, 70, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("dualcodebookerror", func(t *testing.T) {
+		gCount = 0
+		testErr := fmt.Errorf("test injected codebook error")
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 0, 0, false))
+		testFunc(testErr, false, false, false, testErr, 70, testErr, 70)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("stoppostwait", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			true, 70, 2*time.Second, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			true, 90, 3*time.Second, false))
+		testFunc(nil, true, false, false, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("stoprewait", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			true, 70, 2*time.Second, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			true, 90, 3*time.Second, false))
+		testFunc(nil, false, true, false, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("stop", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			true, 70, 2*time.Second, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			true, 90, 5*time.Second, false))
+		testFunc(nil, true, true, false, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+
+	t.Run("restart", func(t *testing.T) {
+		gCount = 0
+		ssnap1 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 70, 2*time.Second, false))
+		ssnap2 = getSliceSnapshot1(getVectorDataFeeder(false, 0, nil,
+			false, 90, 9*time.Second, false))
+		testFunc(nil, false, false, true, nil, 0, nil, 0)
+		logging.Infof("gCount: %v", gCount)
+	})
+}
