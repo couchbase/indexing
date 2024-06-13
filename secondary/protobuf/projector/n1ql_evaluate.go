@@ -180,7 +180,7 @@ func logError(fmsg string, expr qexpr.Expression, docid []byte, err error) {
 // it does some additional checks for VECTOR indexes
 func N1QLTransformForVectorIndex(
 	docid []byte, docval qvalue.AnnotatedValue, context qexpr.Context,
-	encodeBuf []byte, ie *IndexEvaluator) ([]byte, []byte, [][]float32, error) {
+	encodeBuf []byte, ie *IndexEvaluator) ([]byte, []byte, [][]float32, []int, error) {
 
 	cExprs, stats, numFlattenKeys := ie.skExprs, ie.stats, ie.numFlattenKeys
 
@@ -200,23 +200,23 @@ func N1QLTransformForVectorIndex(
 		}
 		if err != nil {
 			logError("EvaluateForIndex(%q) for docid %v, err: %v skip document", expr, docid, err)
-			return nil, nil, nil, nil
+			return nil, nil, nil, nil, nil
 		}
 		isArray, _, isFlattened := expr.IsArrayIndexKey()
 		if isArray == false {
 			if scalar == nil { //nil is ERROR condition
 				logError("EvaluateForIndex(%q) scalar=nil, skip document %v", expr, docid, nil)
-				return nil, nil, nil, nil
+				return nil, nil, nil, nil, nil
 			}
 			key := scalar
 			var vector []float32
 
 			if key.Type() == qvalue.MISSING && isLeadingKey {
-				return nil, nil, nil, nil
+				return nil, nil, nil, nil, nil
 			} else if key.Type() == qvalue.MISSING {
 				if keyPos == ie.vectorPos {
 					// If vector is missing/null, then skip indexing the document
-					return nil, nil, nil, nil
+					return nil, nil, nil, nil, nil
 				}
 				arrValue = append(arrValue, key)
 			} else {
@@ -242,7 +242,7 @@ func N1QLTransformForVectorIndex(
 						// If vector is missing/null, then skip indexing the document
 						// irrespective of expression with VECTOR attribute being leading
 						// key or not
-						return nil, nil, nil, nil
+						return nil, nil, nil, nil, nil
 					} else {
 						vectors = append(vectors, vector)
 						arrValue = append(arrValue, dummy_centroid)
@@ -256,23 +256,23 @@ func N1QLTransformForVectorIndex(
 			// [VECTOR_TODO]: Add support for array expressions with VECTOR attribute
 			if array == nil { //nil is ERROR condition
 				logError("EvaluateForIndex(%q) array=nil, skip document %v", expr, docid, nil)
-				return nil, nil, nil, nil
+				return nil, nil, nil, nil, nil
 			}
 
 			if isLeadingKey {
 				//if array is leading key and empty, skip indexing the entry
 				if isArrayEmpty(array) {
-					return nil, nil, nil, nil
+					return nil, nil, nil, nil, nil
 				}
 				//if array is leading key and missing, skip indexing the entry
 				if isArrayMissing(array) {
-					return nil, nil, nil, nil
+					return nil, nil, nil, nil, nil
 				}
 
 				if isFlattened {
 					array = explodeArrayEntries(array, numFlattenKeys, isLeadingKey)
 					if len(array) == 0 {
-						return nil, nil, nil, nil
+						return nil, nil, nil, nil, nil
 					}
 				}
 			} else {
@@ -306,7 +306,7 @@ func N1QLTransformForVectorIndex(
 		// used for partition-key evaluation and where predicate.
 		// Marshal partition-key and where as a basic JSON data-type.
 		out, err := qvalue.NewValue(arrValue[0]).MarshalJSON()
-		return out, nil, nil, err
+		return out, nil, nil, nil, err
 
 	} else if len(arrValue) > 0 {
 		// The shape of the secondary key looks like,
@@ -319,23 +319,23 @@ func N1QLTransformForVectorIndex(
 		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
 		//}
 		if encodeBuf != nil {
-			out, newBuf, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
+			out, newBuf, centroidPos, err := CollateJSONEncode2(qvalue.NewValue(arrValue), encodeBuf, ie.vectorPos)
 			if err != nil {
-				fmsg := "N1QLTransformForVectorIndex[%v<-%v] CollateJSONEncode: index field for docid: %s (err: %v), instId: %v skip document"
+				fmsg := "N1QLTransformForVectorIndex[%v<-%v] CollateJSONEncode2: index field for docid: %s (err: %v), instId: %v skip document"
 				arg := logging.TagUD(docid)
 				logging.Errorf(fmsg, stats.KeyspaceId, stats.Topic, arg, err, stats.InstId)
-				return nil, newBuf, nil, nil
+				return nil, newBuf, nil, centroidPos, nil
 			}
-			return out, newBuf, vectors, err // return as collated JSON array
+			return out, newBuf, vectors, centroidPos, err // return as collated JSON array
 		}
 		secKey := qvalue.NewValue(make([]interface{}, len(arrValue)))
 		for i, key := range arrValue {
 			secKey.SetIndex(i, key)
 		}
 		out, err := secKey.MarshalJSON()
-		return out, nil, vectors, err // return as JSON array
+		return out, nil, vectors, nil, err // return as JSON array
 	}
-	return nil, nil, nil, nil
+	return nil, nil, nil, nil, nil
 }
 
 // EvaluateForIndex will cache the evaluated values for a document. Therefore, it is
@@ -417,6 +417,23 @@ func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, erro
 		return append([]byte(nil), enc...), newBuf, e2
 	}
 	return append([]byte(nil), encoded...), nil, err
+}
+
+func CollateJSONEncode2(val qvalue.Value, encodeBuf []byte, fieldPos int) ([]byte, []byte, []int, error) {
+	codec := collatejson.NewCodec(16)
+	codec.SetFieldPos(fieldPos)
+	encoded, err := codec.EncodeN1QLValue(val, encodeBuf[:0])
+
+	if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+		valBytes, e1 := val.MarshalJSON()
+		if e1 != nil {
+			return append([]byte(nil), encoded...), nil, codec.GetEncodedPos(), err
+		}
+		newBuf := make([]byte, 0, len(valBytes)*3)
+		enc, e2 := codec.EncodeN1QLValue(val, newBuf)
+		return append([]byte(nil), enc...), newBuf, codec.GetEncodedPos(), e2
+	}
+	return append([]byte(nil), encoded...), nil, codec.GetEncodedPos(), err
 }
 
 func isArrayEmpty(array qvalue.Values) bool {
