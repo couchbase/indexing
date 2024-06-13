@@ -180,7 +180,7 @@ func logError(fmsg string, expr qexpr.Expression, docid []byte, err error) {
 // it does some additional checks for VECTOR indexes
 func N1QLTransformForVectorIndex(
 	docid []byte, docval qvalue.AnnotatedValue, context qexpr.Context,
-	encodeBuf []byte, ie *IndexEvaluator) ([]byte, []byte, [][]float32, []int, error) {
+	encodeBuf []byte, ie *IndexEvaluator) ([]byte, []byte, [][]float32, []int32, error) {
 
 	cExprs, stats, numFlattenKeys := ie.skExprs, ie.stats, ie.numFlattenKeys
 
@@ -419,7 +419,7 @@ func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, erro
 	return append([]byte(nil), encoded...), nil, err
 }
 
-func CollateJSONEncode2(val qvalue.Value, encodeBuf []byte, fieldPos int) ([]byte, []byte, []int, error) {
+func CollateJSONEncode2(val qvalue.Value, encodeBuf []byte, fieldPos int) ([]byte, []byte, []int32, error) {
 	codec := collatejson.NewCodec(16)
 	codec.SetFieldPos(fieldPos)
 	encoded, err := codec.EncodeN1QLValue(val, encodeBuf[:0])

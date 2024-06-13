@@ -397,7 +397,7 @@ func (ie *IndexEvaluator) StreamEndData(
 func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
 	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, newBuf []byte,
-	where bool, opcode mcd.CommandCode, nVectors [][]float32, centroidPos []int, err error) {
+	where bool, opcode mcd.CommandCode, nVectors [][]float32, centroidPos []int32, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -474,7 +474,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	var where bool
 	var opcode mcd.CommandCode
 	var nVectors [][]float32
-	var centroidPos []int
+	var centroidPos []int32
 
 	forceUpsertDeletion := false
 	npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, centroidPos, err = ie.ProcessEvent(m,
@@ -503,7 +503,7 @@ func (ie *IndexEvaluator) TransformRoute(
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
 	nkey, okey []byte, where bool, opcode mcd.CommandCode, nVectors [][]float32,
-	centroidPos []int, opaque2 uint64, forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
+	centroidPos []int32, opaque2 uint64, forceUpsertDeletion bool, oso bool, pl *logging.TimedNStackTraces) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -621,7 +621,7 @@ func (ie *IndexEvaluator) Stats() interface{} {
 
 func (ie *IndexEvaluator) evaluate(
 	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
-	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, [][]float32, []int, error) {
+	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, [][]float32, []int32, error) {
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!

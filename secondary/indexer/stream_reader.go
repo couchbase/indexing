@@ -810,6 +810,13 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 				mut.vectors = nil
 			}
 
+			if kv.GetCentroidPos()[i] != nil {
+				protoPos := kv.GetCentroidPos()[i]
+				mut.centroidPos = protoPos.GetFieldPos()
+			} else {
+				mut.centroidPos = nil
+			}
+
 			// For backward compatibilty, projector may not send partnkey pre-5.1.
 			if len(kv.GetPartnkeys()) != 0 && len(kv.GetPartnkeys()[i]) != 0 {
 				mut.partnkey = append(mut.partnkey, kv.GetPartnkeys()[i]...)

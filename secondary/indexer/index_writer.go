@@ -50,7 +50,7 @@ type StorageStatistics struct {
 type IndexWriter interface {
 
 	//Persist a key/value pair
-	Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error
+	Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error
 
 	//Delete a key/value pair by docId
 	Delete(docid []byte, meta *MutationMeta) error

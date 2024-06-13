@@ -233,7 +233,7 @@ type KeyVersions struct {
 
 	// List of vectors for each index instance
 	Vectors     [][][]float32
-	CentroidPos [][]int // Position of the vector field inside the encoded key
+	CentroidPos [][]int32 // Position of the vector field inside the encoded key
 	Ctime       int64
 }
 
@@ -268,7 +268,7 @@ func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey, pkey []byt
 }
 
 // addKey will add key-version for a single index.
-func (kv *KeyVersions) addKeyWithVectors(uuid uint64, command byte, key, oldkey, pkey []byte, nVectors [][]float32, centroidPos []int) {
+func (kv *KeyVersions) addKeyWithVectors(uuid uint64, command byte, key, oldkey, pkey []byte, nVectors [][]float32, centroidPos []int32) {
 	kv.Uuids = append(kv.Uuids, uuid)
 	kv.Commands = append(kv.Commands, command)
 	kv.Keys = append(kv.Keys, key)
@@ -314,7 +314,7 @@ func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey, pkey []byte) {
 }
 
 // AddUpsert add a new keyversion for same OpMutation.
-func (kv *KeyVersions) AddUpsertWithVectors(uuid uint64, key, oldkey, pkey []byte, vectors [][]float32, centroidPos []int) {
+func (kv *KeyVersions) AddUpsertWithVectors(uuid uint64, key, oldkey, pkey []byte, vectors [][]float32, centroidPos []int32) {
 	kv.addKeyWithVectors(uuid, Upsert, key, oldkey, pkey, vectors, centroidPos)
 }
 
@@ -329,7 +329,7 @@ func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey, pkey []byte) {
 }
 
 // AddUpsertDeletion add a keyversion command to delete old entry.
-func (kv *KeyVersions) AddUpsertDeletionWithVectors(uuid uint64, oldkey, pkey []byte, vectors [][]float32, centroidPos []int) {
+func (kv *KeyVersions) AddUpsertDeletionWithVectors(uuid uint64, oldkey, pkey []byte, vectors [][]float32, centroidPos []int32) {
 	kv.addKeyWithVectors(uuid, UpsertDeletion, nil, oldkey, pkey, vectors, centroidPos)
 }
 

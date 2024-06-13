@@ -6,6 +6,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // [VECTOR_TODO]: Since indexer does not know the position of vector, array has to be
@@ -18,13 +19,26 @@ import (
 // Possible approaches to investigate would be to send the vectorPos from projector to
 // indexer at the time of encoding. Indexer can use this information to directly replace
 // the centroidId in the incoming key. This requires fixed length encoding of centroidIds
-func replaceDummyCentroidId(key []byte, vectorPos int, centroidId int64, buf []byte) ([]byte, error) {
+func replaceDummyCentroidId(key []byte, vectorPos int, centroidId int64, centroidPosInKey int, buf []byte) ([]byte, error) {
 
 	// Step-1: Encode the centroidId
 	encodedCentroidIdBuf, err := common.EncodedCentroidId(centroidId, buf)
 	if err != nil {
 		return nil, err
 	}
+
+	// If the position of centroidId is known in the incoming key, then replace
+	// the encoded version within the key without allocating any new memory
+	if centroidPosInKey >= 0 && len(key) > centroidPosInKey {
+		if key[centroidPosInKey] != collatejson.TypeString {
+			logging.Fatalf("replaceDummyCentroid: Incorrect computation of centroidId position. key: %v, centroidIdPosInKey: %v", key, centroidPosInKey)
+			// Explode the key and replace the centroidId
+		} else {
+			copy(key[centroidPosInKey:centroidPosInKey+len(encodedCentroidIdBuf)], encodedCentroidIdBuf)
+			return key, nil
+		}
+	}
+
 	encodedCentroidId := make([]byte, len(encodedCentroidIdBuf))
 	copy(encodedCentroidId, encodedCentroidIdBuf)
 

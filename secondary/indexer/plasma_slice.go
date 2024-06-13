@@ -936,7 +936,7 @@ func (mdb *plasmaSlice) DecrRef() {
 	}
 }
 
-func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
+func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	if mdb.CheckCmdChStopped() {
 		return mdb.fatalDbErr
 	}
@@ -947,11 +947,12 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, me
 	}
 
 	mut := &indexMutation{
-		op:    op,
-		key:   key,
-		docid: docid,
-		vecs:  vectors,
-		meta:  meta,
+		op:          op,
+		key:         key,
+		docid:       docid,
+		vecs:        vectors,
+		centroidPos: centroidPos,
+		meta:        meta,
 	}
 
 	atomic.AddInt64(&mdb.qCount, 1)
@@ -1018,7 +1019,7 @@ loop:
 			switch icmd.op {
 			case opUpdate, opInsert:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.vecs, icmd.meta)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.vecs, icmd.centroidPos, icmd.meta)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -1131,7 +1132,7 @@ func (mdb *plasmaSlice) logErrorsToConsole() {
 }
 
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
-	init bool, vecs [][]float32, meta *MutationMeta) int {
+	init bool, vecs [][]float32, centroidPos []int32, meta *MutationMeta) int {
 
 	defer func() {
 		atomic.AddInt64(&mdb.qCount, -1)
@@ -1149,7 +1150,7 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
 			if mdb.idxDefn.IsArrayIndex {
 				// [VECTOR_TODO]: Add support for array indexes with VECTOR attribute
 			} else {
-				nmut = mdb.insertVectorIndex(key, docid, workerId, init, vecs, meta)
+				nmut = mdb.insertVectorIndex(key, docid, workerId, init, vecs, centroidPos, meta)
 			}
 		} else {
 			if mdb.idxDefn.IsArrayIndex {
@@ -1632,7 +1633,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 }
 
 func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
-	init bool, vecs [][]float32, meta *MutationMeta) (nmut int) {
+	init bool, vecs [][]float32, centroidPos []int32, meta *MutationMeta) (nmut int) {
 
 	start := time.Now()
 	defer func() {
@@ -1676,7 +1677,12 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
 		}
 
-		key, err = replaceDummyCentroidId(key, mdb.vectorPos, centroidId, mdb.encodeBuf[workerId])
+		centroidPosInKey := -1
+		if centroidPos != nil {
+			centroidPosInKey = int(centroidPos[0])
+		}
+
+		key, err = replaceDummyCentroidId(key, mdb.vectorPos, centroidId, centroidPosInKey, mdb.encodeBuf[workerId])
 		if err != nil {
 			logging.Fatalf("Error observed while replacing dummy centroidId, err: %v", err)
 			atomic.AddInt32(&mdb.numKeysSkipped, 1)

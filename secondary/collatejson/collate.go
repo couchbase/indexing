@@ -101,7 +101,7 @@ type Codec struct {
 
 	// If >= 0, Codec will return the position of the field in encoded key
 	fieldPos   int
-	encodedPos []int // List of positions where the field is encoded
+	encodedPos []int32 // List of positions where the field is encoded
 
 	nestLevel int
 	//-- unicode
@@ -594,7 +594,7 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 				if err == nil {
 
 					if codec.nestLevel == 1 && i == codec.fieldPos {
-						codec.encodedPos = append(codec.encodedPos, l)
+						codec.encodedPos = append(codec.encodedPos, int32(l))
 					}
 					code = code[:l+len(cs)]
 					continue
@@ -1247,6 +1247,6 @@ func (codec *Codec) SetFieldPos(pos int) {
 	codec.fieldPos = pos
 }
 
-func (codec *Codec) GetEncodedPos() []int {
+func (codec *Codec) GetEncodedPos() []int32 {
 	return codec.encodedPos
 }
