@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -89,6 +91,29 @@ func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Sl
 	}
 	codebookName := fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 	return filepath.Join(indexPath, "codebook", codebookName)
+}
+
+func InitCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {
+
+	// Construct codebookDirPath path
+	codebookDirPath := filepath.Join(storageDir, IndexPath(idxInst, partnId, sliceId), CODEBOOK_DIR)
+
+	//  Check the presence of codebook dir. Create one if it does not exist
+	if _, err := iowrap.Os_Stat(codebookDirPath); err != nil {
+		if os.IsNotExist(err) {
+			return iowrap.Os_Mkdir(codebookDirPath, 0755)
+		} else {
+			logging.Errorf("InitCodebookDir: Error observed while checking the presence of "+
+				"codebookDir: %v, err: %v", codebookDirPath, err)
+			return err
+		}
+	}
+	return nil
+}
+
+func RemoveCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {
+	codebookDirPath := filepath.Join(storageDir, IndexPath(idxInst, partnId, sliceId), CODEBOOK_DIR)
+	return iowrap.Os_RemoveAll(codebookDirPath)
 }
 
 // This has to follow the pattern in IndexPath function defined above.

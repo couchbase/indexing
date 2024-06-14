@@ -92,6 +92,8 @@ const SNAP_STATS_MAX_READ_UNITS_USAGE = "max_read_units_usage"
 const SNAP_STATS_AVG_UNITS_USAGE = "avg_units_usage"
 const SNAP_STATS_WRITE_UNITS_COUNT = "write_units_count"
 
+const CODEBOOK_DIR = "codebook"
+
 // redefine regulator constants
 // so that we dont need to import regulator module elsewhere
 type CheckResult uint
