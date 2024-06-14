@@ -3422,6 +3422,8 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 
 	flushTs := tsElem.ts
 
+	updated := false
+
 	// Seqno should be monotonically increasing when it comes to mutation queue.
 	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
 	// we should make it align with lastFlushTS to make sure indexer does not hang
@@ -3483,6 +3485,7 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 				flushTs.Vbuuids[i] = lts.Vbuuids[i]
 				flushTs.Snapshots[i][0] = lts.Snapshots[i][0]
 				flushTs.Snapshots[i][1] = lts.Snapshots[i][1]
+				updated = true
 			}
 
 			sumDcpSnapSize += flushTs.Snapshots[i][1] - flushTs.Snapshots[i][0]
@@ -3494,6 +3497,16 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 		if keyspaceStats != nil {
 			numVb := uint64(len(flushTs.Seqnos))
 			keyspaceStats.avgDcpSnapSize.Set(sumDcpSnapSize / numVb)
+		}
+
+		//if TS has been updated, evaluate aligned flag again. It is possible that
+		//update to seqno/snap information changes the alignement.
+		if updated {
+			if flushTs.CheckSnapAligned() {
+				flushTs.SetSnapAligned(true)
+			} else {
+				flushTs.SetSnapAligned(false)
+			}
 		}
 	}
 
