@@ -3291,7 +3291,7 @@ func (m *MsgPersistanceStatus) GetRespCh() chan bool {
 
 type MsgIndexTrainingDone struct {
 	keyspaceId string
-	errMap     map[common.IndexInstId]error
+	errMap     map[common.IndexInstId]map[common.PartitionId]error
 	successMap map[common.IndexInstId]bool
 	respCh     MsgChannel
 }
@@ -3304,7 +3304,7 @@ func (m *MsgIndexTrainingDone) GetKeyspaceId() string {
 	return m.keyspaceId
 }
 
-func (m *MsgIndexTrainingDone) GetErrMap() map[common.IndexInstId]error {
+func (m *MsgIndexTrainingDone) GetErrMap() map[common.IndexInstId]map[common.PartitionId]error {
 	return m.errMap
 }
 

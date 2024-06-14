@@ -13131,7 +13131,8 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil)
 			common.CrashOnError(err)
 
-			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap), keyspaceId)
+			storageDir := idx.config["storage_dir"].String()
+			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap), keyspaceId, storageDir)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13185,10 +13186,17 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
-	keyspaceId string) {
+	keyspaceId string, storageDir string) {
 
-	errMap := make(map[common.IndexInstId]error)
+	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	successMap := make(map[common.IndexInstId]bool)
+
+	updateErrMap := func(instId common.IndexInstId, partnId common.PartitionId, err error) {
+		if _, ok := errMap[instId]; !ok {
+			errMap[instId] = make(map[c.PartitionId]error)
+		}
+		errMap[instId][partnId] = err
+	}
 
 	for _, instId := range allInsts {
 		idxInst := indexInstMap[instId]
@@ -13203,6 +13211,12 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			slices := partnInst.Sc.GetAllSlices()
 
 			for _, slice := range slices {
+
+				if slice.IsTrained() {
+					logging.Infof("Indexer::initateTraining Skipping training for slice as it is already trained instId: %v, partnId: %v", instId, partnId)
+					continue
+				}
+
 				logging.Infof("Indexer::initateTraining Starting training for vector index with instId: %v, partnId: %v", instId, partnId)
 				start := time.Now()
 				slice.SetNlist(idxInst.Nlist[partnId])
@@ -13210,7 +13224,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				if err := slice.InitCodebook(); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed while initialising codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
-					errMap[instId] = errors.New(common.ERR_TRAINING + err.Error())
+					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 					continue
 				}
 
@@ -13219,11 +13233,29 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				if err := slice.Train(vecs); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
-					errMap[instId] = errors.New(common.ERR_TRAINING + err.Error())
+					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
 					continue
 				}
 				logging.Infof("Indexer::initiateTraining Training completed for vector index instance: %v, "+
 					"partnId: %v, elapsed: %v", instId, partnId, time.Since(start))
+
+				// Serialize codebook for persistance
+				codebook, err := slice.SerializeCodebook()
+				if err != nil {
+					logging.Errorf("Indexer::initiateTraining error observed while serializing codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+					slice.ResetCodebook() // Reset codebook as build retry will initiate training again
+					continue
+				}
+
+				// Persist codebook to disk
+				err = idx.persistCodebookToDisk(storageDir, &idxInst, partnId, slice.Id(), codebook)
+				if err != nil {
+					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
+					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
+					slice.ResetCodebook() // Reset codebook as build retry will initiate training again
+					continue
+				}
 			}
 		}
 
@@ -13231,6 +13263,16 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		// Add inst to success map if no error has been observed
 		if _, ok := errMap[instId]; !ok {
 			successMap[instId] = true
+		} else {
+			// Remove the codebook dir (if any exists) for erroneous instances
+			for instId, partnErrMap := range errMap {
+				idxInst := indexInstMap[instId]
+				partnInstMap := indexPartnMap[instId]
+
+				for partnId := range partnErrMap {
+					idx.removeCodebookDir(storageDir, idxInst, partnId, partnInstMap)
+				}
+			}
 		}
 	}
 
@@ -13264,16 +13306,22 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		allInsts = append(allInsts, instId)
 	}
 
-	for instId, err := range errMap {
+	for instId, partnErrMap := range errMap {
 		inst := idx.indexInstMap[instId]
-		inst.TrainingPhase = c.TRAININIG_NOT_STARTED // Reset training phase
-		inst.Error = err.Error()
+		// Even if one partition of an instance encounters error, reset training
+		// phase. Index build retry skip those partitions that are already trained
+		// and only train those partitions that are not trained
+		inst.TrainingPhase = c.TRAININIG_NOT_STARTED
+		errStr := ""
+		for partnId, err := range partnErrMap {
+			errStr += fmt.Sprintf("%v:%v ", partnId, err)
+			inst.Nlist[partnId] = 0 // Reset nlist per partition Id
+		}
+		inst.Error = errStr
+
 		idx.indexInstMap[instId] = inst
 		allInsts = append(allInsts, instId)
 	}
-
-	// [VECTOR_TODO]: Persist codebook to disk for vector indexes for which
-	// build is successful and then update the training phase
 
 	err := idx.updateMetaInfoForIndexList(allInsts, false, false, true, false, false, false, true, false, nil, true, nil)
 	common.CrashOnError(err)
@@ -13288,4 +13336,62 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		reqCtx:           common.NewUserRequestContext(),
 		isEmptyNodeBatch: false,
 	})
+}
+
+func (idx *indexer) persistCodebookToDisk(storageDir string,
+	idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
+	codebook []byte) error {
+
+	// Initialize codebook if it does not exist
+	if err := InitCodebookDir(storageDir, idxInst, partnId, sliceId); err != nil {
+		logging.Errorf("Indexer::persistCodebookToDisk Error observed while initializing codebook dir for "+
+			"instId: %v, partnId: %v, sliceId: %v", idxInst.InstId, partnId, sliceId)
+		return err
+	}
+
+	// Construct the codebook path
+	codebookPath := filepath.Join(storageDir, CodebookPath(idxInst, partnId, sliceId))
+	if err := idx.removeResidualFile(codebookPath); err != nil {
+		logging.Errorf("Indexer::persistCodebookToDisk Error observed while removing residual files at path: %v, err: %v", codebookPath, err)
+		return err
+	}
+
+	err := common.WriteFileWithSync(codebookPath, codebook, 0755)
+	if err != nil {
+		logging.Errorf("Indexer::persistCodebookToDisk Error observed when writing file to path: %v, err: %v", codebookPath, err)
+		return err
+	} else {
+		// persistance is successful
+		logging.Infof("Indexer::persistCodebookToDisk: Persistance to disk is successful for path: %v", codebookPath)
+		return nil
+	}
+
+}
+
+func (idx *indexer) removeCodebookDir(storageDir string, idxInst common.IndexInst, partnId common.PartitionId, partnInstMap PartitionInstMap) {
+
+	partnInst := partnInstMap[partnId]
+	slices := partnInst.Sc.GetAllSlices()
+
+	for _, slice := range slices {
+		err := RemoveCodebookDir(storageDir, &idxInst, partnId, slice.Id())
+		if err != nil {
+			logging.Warnf("Indexer::removeCodebookDir, error observed while removing codebook dir for "+
+				"instId: %v, partnId: %v, err: %v", idxInst.InstId, partnId, err)
+			// Ignore reporting the error as build retry will attempt removal again
+		} else {
+			logging.Infof("Indexer::removeCodebookDir removal successful for instId: %v, partnId: %v, sliceId: %v",
+				idxInst.InstId, partnId, slice.Id())
+		}
+
+	}
+
+}
+
+func (idx *indexer) removeResidualFile(path string) error {
+	_, err := iowrap.Os_Stat(path)
+	if os.IsNotExist(err) {
+		return nil // File does not exist
+	}
+	return iowrap.Os_RemoveAll(path) // Remove file if any
 }
