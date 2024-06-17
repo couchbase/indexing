@@ -6499,6 +6499,43 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 	return ephemeral, numVBuckets, nil
 }
 
+func (idx *indexer) handleCodebookRecoveryError(indexInst common.IndexInst, partnId common.PartitionId, bootstrapPhase bool, recoveryErr error) error {
+	// [VECTOR_TODO]: Handle shard rebalance cases
+	if !bootstrapPhase || recoveryErr == nil {
+		return nil
+	}
+
+	if recoveryErr == errCodebookPathNotFound {
+		if indexInst.TrainingPhase == common.TRAININIG_NOT_STARTED || indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			logging.Infof("Indexer::initPartnInstance: Ignoring err: %v as training phase is not started for instId: %v, partnId: %v",
+				recoveryErr, indexInst.InstId, partnId)
+			return nil
+		} else if indexInst.TrainingPhase == common.TRAINING_COMPLETED ||
+			indexInst.State == common.INDEX_STATE_INITIAL ||
+			indexInst.State == common.INDEX_STATE_CATCHUP ||
+			indexInst.State == common.INDEX_STATE_ACTIVE ||
+			indexInst.State == common.INDEX_STATE_RECOVERED {
+
+			logging.Errorf("Indexer::initPartnInstance codebook path not found for indexInst: %v, partnId: %v, "+
+				"trainingPhase: %v, indexState: %v", indexInst.InstId, partnId, indexInst.TrainingPhase, indexInst.State)
+			return recoveryErr
+		}
+	}
+
+	if recoveryErr == errCodebookCorrupted {
+		logging.Errorf("Indexer::initPartnInstance codebook appears to be corrupted for indexInst: %v, partnId: %v, "+
+			"trainingPhase: %v, indexState: %v", indexInst.InstId, partnId, indexInst.TrainingPhase, indexInst.State)
+		if indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			logging.Infof("Indexer::initPartnInstance Ignoring recovery error as training is still in progress for "+
+				"indexInst: %v, partnId: %v, trainingPhase: %v", indexInst.InstId, partnId, indexInst.TrainingPhase)
+			return nil
+		}
+		return recoveryErr // All other cases, return error as is
+	}
+
+	return recoveryErr // Return the err as-is for further processing
+}
+
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
@@ -6539,6 +6576,15 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, partnStats, memQuota,
 			ephemeral, !bootstrapPhase, idx.meteringMgr, numVBuckets, shardIds, cancelCh)
+
+		if indexInst.Defn.IsVectorIndex {
+			err = idx.handleCodebookRecoveryError(indexInst, partnId, bootstrapPhase, err)
+			if err != nil {
+				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+				continue
+			}
+		}
+
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if bootstrapPhase && err == errStorageCorrupted {
@@ -9220,6 +9266,13 @@ func (idx *indexer) initFromPersistedState() error {
 			continue
 		}
 
+		// Reset training phase. If slice is already trained, then build retry
+		// will skip training and update the metadata state to TRAINING_COMPLETED.
+		// Otherwise, slice will be trained and then the stat is updated
+		if inst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			inst.TrainingPhase = common.TRAININIG_NOT_STARTED
+		}
+
 		idx.updateTopologyOnShardIdChange(&inst, partnShardIdMap)
 
 		idx.indexInstMap[inst.InstId] = inst
@@ -10789,7 +10842,8 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			partnStats[partitionId])
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh)
+			partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
+			CodebookPath(indInst, partitionId, id))
 	}
 
 	return

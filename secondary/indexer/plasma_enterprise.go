@@ -19,9 +19,11 @@ import (
 )
 
 var (
-	errStorageCorrupted    = fmt.Errorf("Storage corrupted and unrecoverable")
-	errStoragePathNotFound = fmt.Errorf("Storage path not found for recovery")
-	errRecoveryCancelled   = fmt.Errorf("storage recovery is cancelled")
+	errStorageCorrupted     = fmt.Errorf("Storage corrupted and unrecoverable")
+	errStoragePathNotFound  = fmt.Errorf("Storage path not found for recovery")
+	errRecoveryCancelled    = fmt.Errorf("storage recovery is cancelled")
+	errCodebookPathNotFound = fmt.Errorf("Codebook path not found for recovery")
+	errCodebookCorrupted    = fmt.Errorf("Codebook corrupted and unrecoverable")
 )
 
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -29,12 +31,12 @@ func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	isPrimary bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
 	memQuota int64, isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
 	numVBuckets, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool) (*plasmaSlice, error) {
+	cancelCh chan bool, codebookPath string) (*plasmaSlice, error) {
 
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
 		sysconf, idxStats, memQuota, isNew, isInitialBuild, meteringMgr,
-		numVBuckets, replicaId, shardIds, cancelCh)
+		numVBuckets, replicaId, shardIds, cancelCh, codebookPath)
 }
 
 func DestroyPlasmaSlice(storageDir string, path string) error {
