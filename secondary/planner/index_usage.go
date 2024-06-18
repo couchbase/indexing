@@ -516,6 +516,11 @@ func (o *IndexUsage) GetReplicaName() string {
 	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, 0, false)
 }
 
+func (o *IndexUsage) GetKeyspaceIndexPartitionName() string {
+
+	return fmt.Sprintf("%v:%v:%v:%v:%v", o.Bucket, o.Scope, o.Collection, o.Name, o.PartnId)
+}
+
 func (o *IndexUsage) IsReplica(other *IndexUsage) bool {
 
 	return o.DefnId == other.DefnId && o.PartnId == other.PartnId

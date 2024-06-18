@@ -16,9 +16,9 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
-//Flusher is the only component which does read/dequeue from a MutationQueue.
-//As MutationQueue has a restriction of only single reader and writer per vbucket,
-//flusher should not be invoked concurrently for a single MutationQueue.
+// Flusher is the only component which does read/dequeue from a MutationQueue.
+// As MutationQueue has a restriction of only single reader and writer per vbucket,
+// flusher should not be invoked concurrently for a single MutationQueue.
 type Flusher interface {
 
 	//PersistUptoTS will flush the mutation queue upto Timestamp provided.
@@ -80,7 +80,7 @@ type flusher struct {
 	stats  *IndexerStats
 }
 
-//NewFlusher returns new instance of flusher
+// NewFlusher returns new instance of flusher
 func NewFlusher(config common.Config, stats *IndexerStats) *flusher {
 	return &flusher{config: config, stats: stats}
 }
@@ -122,11 +122,11 @@ func (f *flusher) UpdateMaps(indexInstMap common.IndexInstMap, indexPartnMap Ind
 // 2. Flushing Maintenance Catchup Queue
 // 3. Flushing Backfill Queue
 //
-//Can be stopped anytime by closing StopChannel.
-//Sends SUCCESS on the MsgChannel when its done flushing till timestamp.
-//Any error condition is reported back on the MsgChannel.
-//Caller can wait on MsgChannel after closing StopChannel to get notified
-//about shutdown completion.
+// Can be stopped anytime by closing StopChannel.
+// Sends SUCCESS on the MsgChannel when its done flushing till timestamp.
+// Any error condition is reported back on the MsgChannel.
+// Caller can wait on MsgChannel after closing StopChannel to get notified
+// about shutdown completion.
 func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, changeVec []bool, countVec []uint64, stopch StopChannel) MsgChannel {
@@ -142,13 +142,13 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	return msgch
 }
 
-//DrainUptoTS will flush the mutation queue upto the Timestamp
-//provided without actually persisting it.
-//Can be stopped anytime by closing the StopChannel.
-//Sends SUCCESS on the MsgChannel when its done flushing till timestamp.
-//Any error condition is reported back on the MsgChannel.
-//Caller can wait on MsgChannel after closing StopChannel to get notified
-//about shutdown completion.
+// DrainUptoTS will flush the mutation queue upto the Timestamp
+// provided without actually persisting it.
+// Can be stopped anytime by closing the StopChannel.
+// Sends SUCCESS on the MsgChannel when its done flushing till timestamp.
+// Any error condition is reported back on the MsgChannel.
+// Caller can wait on MsgChannel after closing StopChannel to get notified
+// about shutdown completion.
 func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
@@ -160,14 +160,14 @@ func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 	return msgch
 }
 
-//Persist will keep flushing the mutation queue till caller closes
-//the stop channel.  This function will be used when:
-//1. Flushing Backfill Catchup Queue
+// Persist will keep flushing the mutation queue till caller closes
+// the stop channel.  This function will be used when:
+// 1. Flushing Backfill Catchup Queue
 //
-//Can be stopped anytime by closing the StopChannel.
-//Any error condition is reported back on the MsgChannel.
-//Caller can wait on MsgChannel after closing StopChannel to get notified
-//about shutdown completion.
+// Can be stopped anytime by closing the StopChannel.
+// Any error condition is reported back on the MsgChannel.
+// Caller can wait on MsgChannel after closing StopChannel to get notified
+// about shutdown completion.
 func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	stopch StopChannel) MsgChannel {
@@ -182,12 +182,12 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	return msgch
 }
 
-//Drain will keep flushing the mutation queue till caller closes
-//the stop channel without actually persisting the mutations
-//Can be stopped anytime by closing the StopChannel.
-//Any error condition is reported back on the MsgChannel.
-//Caller can wait on MsgChannel after closing StopChannel to get notified
-//about shutdown completion.
+// Drain will keep flushing the mutation queue till caller closes
+// the stop channel without actually persisting the mutations
+// Can be stopped anytime by closing the StopChannel.
+// Any error condition is reported back on the MsgChannel.
+// Caller can wait on MsgChannel after closing StopChannel to get notified
+// about shutdown completion.
 func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, stopch StopChannel) MsgChannel {
 
@@ -198,9 +198,9 @@ func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	return msgch
 }
 
-//flushQueue starts and waits for actual workers to flush the mutation queue.
-//This function will close the done channel once all workers have finished.
-//It also listens on the stop channel and will stop all workers if stop signal is received.
+// flushQueue starts and waits for actual workers to flush the mutation queue.
+// This function will close the done channel once all workers have finished.
+// It also listens on the stop channel and will stop all workers if stop signal is received.
 func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, keyspaceId string,
 	ts Timestamp, changeVec []bool, countVec []uint64, persist bool, stopch StopChannel, msgch MsgChannel) {
 
@@ -279,9 +279,9 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, keyspace
 	}
 }
 
-//flushSingleVbucket is the actual implementation which flushes the given queue
-//for a single vbucket till stop signal.
-//(Currently not used.)
+// flushSingleVbucket is the actual implementation which flushes the given queue
+// for a single vbucket till stop signal.
+// (Currently not used.)
 func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, vbucket Vbucket, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
@@ -327,8 +327,8 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 	}
 }
 
-//flushSingleVbucketUptoSeqno is the actual implementation which flushes the given queue
-//for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
+// flushSingleVbucketUptoSeqno is the actual implementation which flushes the given queue
+// for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
 func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, vbucket Vbucket, seqno uint64, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
@@ -378,8 +378,8 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 	}
 }
 
-//flushSingleVbucketN is the actual implementation which flushes the given queue
-//for a single vbucket for the specified count or till the stop signal(whichever is earlier)
+// flushSingleVbucketN is the actual implementation which flushes the given queue
+// for a single vbucket for the specified count or till the stop signal(whichever is earlier)
 func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, vbucket Vbucket, count uint64, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
@@ -429,8 +429,8 @@ func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 	}
 }
 
-//flushSingleMutation talks to persistence layer to store the mutations
-//Any error from persistence layer is sent back on workerMsgCh
+// flushSingleMutation talks to persistence layer to store the mutations
+// Any error from persistence layer is sent back on workerMsgCh
 func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamId) {
 
 	switch streamId {
@@ -544,7 +544,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 
 	if partnInst, ok := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
-		if err := slice.Insert(mut.key, docid, meta); err != nil {
+		if err := slice.Insert(mut.key, docid, mut.vectors, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
 				logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), err)
@@ -637,9 +637,9 @@ func (f *flusher) processUpsertDelete(mut *Mutation, docid []byte, meta *Mutatio
 	}
 }
 
-//IsTimestampGreaterThanQueueLWT checks if each Vbucket in the Queue has
-//mutation with Seqno lower than the corresponding Seqno present in the
-//specified timestamp.
+// IsTimestampGreaterThanQueueLWT checks if each Vbucket in the Queue has
+// mutation with Seqno lower than the corresponding Seqno present in the
+// specified timestamp.
 func (f *flusher) IsQueueLWTLowerThanTimestamp(q MutationQueue, ts Timestamp) bool {
 
 	//each individual vbucket seqno should be lower than or equal to timestamp seqno
@@ -653,7 +653,7 @@ func (f *flusher) IsQueueLWTLowerThanTimestamp(q MutationQueue, ts Timestamp) bo
 
 }
 
-//GetQueueLWT returns the lowest seqno for each vbucket in the queue
+// GetQueueLWT returns the lowest seqno for each vbucket in the queue
 func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
 
 	ts := NewTimestamp(int(q.GetNumVbuckets()))
@@ -668,7 +668,7 @@ func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
 	return ts
 }
 
-//GetQueueHWT returns the highest seqno for each vbucket in the queue
+// GetQueueHWT returns the highest seqno for each vbucket in the queue
 func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 
 	ts := NewTimestamp(int(q.GetNumVbuckets()))

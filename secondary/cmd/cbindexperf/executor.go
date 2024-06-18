@@ -112,6 +112,11 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRang
 		requestID := os.Args[0] + uuid
 		err = client.Scan3(spec.DefnId, requestID, scanRange.GetScans(spec), false, false, spec.IndexProjection,
 			0, spec.Limit, spec.GroupAggr, nil, cons, nil, callb, scanParams)
+	case "Scan6":
+		// VECTOR_TODO: Add IndexVector paramter here..
+		requestID := os.Args[0] + uuid
+		err = client.Scan6(spec.DefnId, requestID, scanRange.GetScans(spec), false, false, spec.IndexProjection,
+			0, spec.Limit, spec.GroupAggr, nil, cons, nil, callb, scanParams, nil)
 	}
 
 	if err != nil {

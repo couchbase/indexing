@@ -63,6 +63,7 @@ type Command struct {
 	WhereStr               string
 	SecStrs                []string
 	Desc                   []bool
+	VectorAttr             []bool
 	IndexMissingLeadingKey bool
 	IsPrimary              bool
 	With                   string
@@ -293,6 +294,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 						for pos, _ := range fk.Operands() {
 							cmdOptions.SecStrs = append(cmdOptions.SecStrs, s)
 							cmdOptions.Desc = append(cmdOptions.Desc, fk.HasDesc(pos))
+							cmdOptions.VectorAttr = append(cmdOptions.VectorAttr, fk.HasVector(pos))
 							if keyPos == 0 && pos == 0 {
 								cmdOptions.IndexMissingLeadingKey = fk.HasMissing(pos)
 							}
@@ -300,9 +302,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 					}
 				} else {
 					cmdOptions.SecStrs = append(cmdOptions.SecStrs, s)
-					cmdOptions.Desc = append(cmdOptions.Desc, key.HasAttribute(datastore.IK_DESC))
+					cmdOptions.Desc = append(cmdOptions.Desc, key.HasDesc())
+					cmdOptions.VectorAttr = append(cmdOptions.VectorAttr, key.HasVector())
 					if keyPos == 0 {
-						cmdOptions.IndexMissingLeadingKey = key.HasAttribute(datastore.IK_MISSING)
+						cmdOptions.IndexMissingLeadingKey = key.HasMissing()
 					}
 				}
 			}
@@ -543,13 +546,12 @@ func HandleCommand(
 	case "n1ql":
 		if cmd.IndexOperationType == CREATE {
 			var defnID uint64
-			defnID, err = client.CreateIndex4(
-				iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
-				cmd.WhereStr, cmd.SecStrs, cmd.Desc, cmd.IndexMissingLeadingKey, cmd.IsPrimary, cmd.Scheme,
-				cmd.PartitionKeys, cmd.WithJson)
+			defnID, err = client.CreateIndex6(iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
+				cmd.WhereStr, cmd.SecStrs, cmd.Desc, cmd.VectorAttr, cmd.IndexMissingLeadingKey, cmd.IsPrimary, cmd.Scheme,
+				cmd.PartitionKeys, cmd.WithJson, nil, false)
 			if err == nil {
 				fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
-					iname, defnID, cmd.With)
+					iname, defnID, cmd.WithJson)
 			}
 		}
 		//TODO: Handle Drop and Alter

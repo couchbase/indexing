@@ -133,6 +133,8 @@ func ValidateGroupAggrResult(expectedResponse1 tc.GroupAggrScanResponse, actualR
 	expectedResponse := convertExpectedGroupAggrResponse(expectedResponse1)
 	if len(expectedResponse) != len(actualResponse) {
 		errorStr := fmt.Sprintf("Expected scan count %d does not match actual scan count %d", len(expectedResponse), len(actualResponse))
+		tc.PrintGroupAggrResultsActual(expectedResponse, "expectedResponse")
+		tc.PrintGroupAggrResultsActual(actualResponse, "actualResponse")
 		log.Printf("%v", errorStr)
 		e := errors.New(errorStr)
 		return e

@@ -84,6 +84,11 @@ type excludeInTestCase struct {
 	checkMovement  bool
 }
 
+type replicaRepairTestCase struct {
+	testcase rebalanceTestCase
+	retry    int
+}
+
 type iterationTestCase struct {
 	comment   string
 	topoSpec  string
@@ -188,6 +193,13 @@ var excludeInTestCases = []excludeInTestCase{
 	{"scaling with excludeIn - 8 identical index, add 1, 1x", 1, 1, "../testdata/planner/plan/scale-identical-8-0.json", 0, 1, 0, true},
 	{"swap with excludeIn - 8 identical index, add 1, 1x", 1, 1, "../testdata/planner/plan/scale-identical-8-0.json", 0, 1, 1, true},
 	{"replica repair with excludeIn - 3 replica, 4 zone, delete 1, 1x", 1, 1, "../testdata/planner/plan/scale-replica-3-zone.json", 0, 0, 1, false},
+}
+
+var replicaRepairTestCases = []replicaRepairTestCase{
+	{
+		rebalanceTestCase{"rebalance - rebuild replica with Swap - 2 replica, swap 1, 1x", 1, 1, "../testdata/planner/plan/replica-repair-1-zone.json", 0, 1, 1, 0, 0},
+		5,
+	},
 }
 
 var iterationTestCases = []iterationTestCase{
@@ -587,6 +599,7 @@ func TestPlanner(t *testing.T) {
 	minMemoryTest(t)
 	iterationTest(t)
 	excludeInTest(t)
+	replicaRepairTest(t)
 	heterogenousRebalanceTest(t)
 	equivIndexRebalanceTest(t)
 }
@@ -824,6 +837,36 @@ func excludeInTest(t *testing.T) {
 
 		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func replicaRepairTest(t *testing.T) {
+
+	for _, elem := range replicaRepairTestCases {
+		for i := 1; i <= elem.retry; i++ {
+
+			log.Printf("-------------------------------------------")
+			log.Printf(elem.testcase.comment)
+			log.Printf("-----------------try=%v--------------------", i)
+
+			config := planner.DefaultRunConfig()
+			config.MemQuotaFactor = elem.testcase.memQuotaFactor
+			config.CpuQuotaFactor = elem.testcase.cpuQuotaFactor
+			config.Shuffle = elem.testcase.shuffle
+			config.AddNode = elem.testcase.addNode
+			config.DeleteNode = elem.testcase.deleteNode
+			config.Resize = false
+
+			s := planner.NewSimulator()
+
+			plan, err := planner.ReadPlan(elem.testcase.plan)
+			FailTestIfError(err, "Fail to read plan", t)
+
+			p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil, nil, "")
+			FailTestIfError(err, "Error in planner test", t)
+
+			validateReplicaRepair(t, p)
 		}
 	}
 }
@@ -1820,6 +1863,40 @@ func validateAlterIndexFunc(t *testing.T, p planner.Planner,
 		p.Print()
 		t.Fatalf("The expected num replica did not match the resultant num replica. Expected: %v Got: %v",
 			expectedNumReplica, idxReplicaMap[defnId])
+	}
+}
+
+func validateReplicaRepair(t *testing.T, p planner.Planner) {
+
+	sol := p.GetResult()
+	var finalCount, expectedCount int
+	found := make(map[common.IndexDefnId]bool)
+
+	for _, indexer := range sol.Placement {
+		for _, index := range indexer.Indexes {
+			if _, ok := found[index.Instance.Defn.DefnId]; !ok {
+				found[index.Instance.Defn.DefnId] = true
+			} else {
+				continue
+			}
+			if index.Instance != nil {
+				expectedCount += int(index.Instance.Defn.NumReplica + 1)
+			} else {
+				t.Fatalf("The index Instance object in the original plan is empty. Bad input for index: (%v %v %v)",
+					index.Name, index.DefnId, index.InstId)
+			}
+		}
+	}
+
+	idxReplicaMap := planner.GenerateReplicaMap(sol.Placement)
+	for defnId := range idxReplicaMap {
+		finalCount += len(idxReplicaMap[defnId])
+	}
+
+	if expectedCount != finalCount {
+		p.Print()
+		t.Fatalf("The expected num replica did not match the resultant num replica. Expected: %v Got: %v",
+			expectedCount, finalCount)
 	}
 }
 

@@ -394,14 +394,14 @@ func (ie *IndexEvaluator) StreamEndData(
 	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
-func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
+func (ie *IndexEvaluator) ProcessEvent(m *mc.DcpEvent, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
 	pl *logging.TimedNStackTraces) (npkey, opkey, nkey, okey, newBuf []byte,
 	where bool, opcode mcd.CommandCode, nVectors [][]float32, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			errStr := fmt.Sprintf("processEvent: %v", r)
+			errStr := fmt.Sprintf("ProcessEvent: %v", r)
 			err = fmt.Errorf(errStr)
 			if pl != nil {
 				pl.TryLogStackTrace(logging.Error, errStr)
@@ -476,7 +476,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	var nVectors [][]float32
 
 	forceUpsertDeletion := false
-	npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, err = ie.processEvent(m,
+	npkey, opkey, nkey, okey, newBuf, where, opcode, nVectors, err = ie.ProcessEvent(m,
 		encodeBuf, docval, context, pl)
 	if err != nil {
 		forceUpsertDeletion = true

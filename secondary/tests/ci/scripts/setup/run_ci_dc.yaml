@@ -1,0 +1,57 @@
+name: ci_runner
+
+services:
+  ci:
+    build:
+      dockerfile: ci_machine.dockerfile
+      args:
+        PEGGED: $PEGGED
+        # RELEASE: 8.0.0
+        # MANIFEST: couchbase-server/morpheus/8.0.0.xml
+        CIBOT: true
+        MODE: "unit,functional"
+        USERNAME: cbci # gerrit username
+      tags:
+        - ci_machine:latest
+        - ci_machine:$PEGGED
+      secrets:
+        - github_key
+        - gerrit_key
+      ulimits:
+        nofile:
+          soft: 200000
+          hard: 400000
+    secrets:
+      - github_key
+      - gerrit_key
+    ports:
+      - "8091-8095:8091-8095"
+      - "11200-11220:11200-11220"
+      - "9000-9120:9000-9120"
+      - 2222:22
+    volumes:
+      - build:/home/bot/build:rw
+      - var-www:/var/www:rw
+      - depscache:/home/bot/.cbdepscache:rw
+      - depscache:/home/bot/.cbdepcache:rw
+      - $HOME/testdata:/home/bot/testdata
+    init: true
+    # comment both of the below to run standalone tests
+    restart: unless-stopped
+    entrypoint: /home/bot/.ciscripts/secondary/tests/ci/scripts/build
+  apache:
+    build:
+      dockerfile: apache_server.dockerfile
+    volumes:
+      - var-www:/var/www:ro
+    ports:
+      - 80:80
+secrets:
+  github_key:
+    file: $HOME/.ssh/id_rsa_server_buildnode_to_github
+  gerrit_key:
+    file: $HOME/.ssh/cbci
+volumes:
+  var-www:
+  build:
+  depscache:

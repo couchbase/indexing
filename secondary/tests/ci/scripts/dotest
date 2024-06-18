@@ -334,12 +334,12 @@ fi
 # Verify results
 > /tmp/fail.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
-grep 'make:\s\*\*\*\s\[test-gsi-integrations-tests\]\s' $WORKSPACE/test.log >> /tmp/fail.log
-grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
-grep 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
-grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
-grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
-grep '^panic: ' $WORKSPACE/test.log >> /tmp/fail.log
+grep -a 'make:\s\*\*\*\s\[test-gsi-integrations-tests\]\s' $WORKSPACE/test.log >> /tmp/fail.log
+grep -a '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
+grep -a 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
+grep -a -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
+grep -a '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
+grep -a '^panic: ' $WORKSPACE/test.log >> /tmp/fail.log
 skiplist="`cat skip.txt`"
 for tst in $skiplist; do
   echo "$tst" | grep -qs '^\s*#' && continue

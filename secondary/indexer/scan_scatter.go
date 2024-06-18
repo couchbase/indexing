@@ -173,7 +173,7 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 		})
 	}()
 
-	handler := func(entry []byte) error {
+	handler := func(entry, value []byte) error {
 		// Do not call enqueue when there is error.
 		if len(errch) != 0 {
 			return ErrFinishCallback
@@ -189,11 +189,12 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 				r.len = entry1.lenKey()
 			}
 			r.key = entry
+			r.value = value
 
 			queue.Enqueue(&r)
 			return nil
 		} else {
-			return cb(entry)
+			return cb(entry, value)
 		}
 	}
 
@@ -498,11 +499,9 @@ func scan_sort(request *ScanRequest, queues []*Queue, rows []Row, sorted []int) 
 	return true
 }
 
-//
 // Gather results from multiple connections
 // rows - buffer of rows from each scatter gorountine
 // sorted - sorted order of the rows
-//
 func scan_pick(request *ScanRequest, queues []*Queue, rows []Row, sorted []int) int {
 
 	size := len(queues)
@@ -600,7 +599,7 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 		}
 
 		if queues[id].Dequeue(&rows[id]) {
-			if err := cb(rows[id].key); err != nil {
+			if err := cb(rows[id].key, rows[id].value); err != nil {
 				errch <- err
 
 				// unblock all producers
@@ -648,7 +647,7 @@ func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych c
 				found = true
 
 				if queues[i].Dequeue(&rows[i]) {
-					if err := cb(rows[i].key); err != nil {
+					if err := cb(rows[i].key, rows[i].value); err != nil {
 						errch <- err
 
 						// unblock all producers

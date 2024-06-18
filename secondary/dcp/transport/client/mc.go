@@ -3,9 +3,12 @@ package memcached
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -31,6 +34,11 @@ type Client struct {
 }
 
 var dialFun = net.Dial
+
+var ErrorEnableJSON = errors.New("dcp.EnableJSON")
+var ErrorJSONNotEnabled = errors.New("dcp.ErrorJSONNotEnabled")
+
+const opaqueRandomScan = 0xBEAF0002
 
 // Timeout for memcached communication where indexer/projector
 // is actively waiting. In Seconds.
@@ -708,5 +716,88 @@ func (c *Client) sendHeloCollections(name string) (resp *transport.MCResponse, e
 		Body:   []byte{0x00, transport.FEATURE_COLLECTIONS},
 	}
 
+	return c.Send(req)
+}
+
+func (c *Client) EnableJSON(clientName string) error {
+	if resp, err := c.sendEnableJSON(clientName); err != nil {
+		return err
+	} else {
+		opcode := resp.Opcode
+		body := resp.Body
+		if opcode != transport.HELO {
+			logging.Errorf("Memcached HELO for %v (feature_json) opcode = %v. Expecting opcode = 0x1f", clientName, opcode)
+			return ErrorEnableJSON
+		} else if (len(body) != 2) || (body[0] != 0x00 && body[1] != transport.FEATURE_JSON) {
+			logging.Errorf("Memcached HELO for %v (feature_json) body = %v. Expecting body = 0x0b", clientName, body)
+			return ErrorJSONNotEnabled
+		}
+	}
+	return nil
+}
+
+func (c *Client) sendEnableJSON(name string) (resp *transport.MCResponse, err error) {
+	req := &transport.MCRequest{
+		Opcode: transport.HELO,
+		Key:    ([]byte)(name),
+		Body:   []byte{0x00, transport.FEATURE_JSON},
+	}
+
+	return c.Send(req)
+}
+
+func (c *Client) CreateRandomScan(vb uint16, collId string, sampleSize int64) (
+	*transport.MCResponse, error) {
+
+	req := &transport.MCRequest{
+		Opcode:   transport.CREATE_RANGE_SCAN,
+		VBucket:  vb,
+		Datatype: dcpJSON,
+		Opaque:   opaqueRandomScan,
+	}
+
+	s := make(map[string]interface{})
+	seed := uint32(rand.Int())
+
+	s["seed"] = seed
+	s["samples"] = sampleSize
+	m := make(map[string]interface{})
+	m["collection"] = collId
+	m["sampling"] = s
+	m["key_only"] = false
+	req.Body, _ = json.Marshal(m)
+
+	return c.Send(req)
+}
+
+func (c *Client) ContinueRangeScan(vb uint16, uuid []byte, items uint32, timeout uint32, maxSize uint32) error {
+
+	req := &transport.MCRequest{
+		Opcode:  transport.CONTINUE_RANGE_SCAN,
+		VBucket: vb,
+		Extras:  make([]byte, 28),
+		Opaque:  opaqueRandomScan,
+	}
+	copy(req.Extras, uuid)
+	binary.BigEndian.PutUint32(req.Extras[16:], items)
+	binary.BigEndian.PutUint32(req.Extras[20:], timeout)
+	binary.BigEndian.PutUint32(req.Extras[24:], maxSize)
+
+	c.SetMcdConnectionDeadline()
+	defer c.ResetMcdConnectionDeadline()
+
+	return c.Transmit(req)
+}
+
+func (c *Client) CancelRangeScan(vb uint16, uuid []byte) (
+	*transport.MCResponse, error) {
+
+	req := &transport.MCRequest{
+		Opcode:  transport.CANCEL_RANGE_SCAN,
+		VBucket: vb,
+		Extras:  make([]byte, 16),
+		Opaque:  opaqueRandomScan,
+	}
+	copy(req.Extras, uuid)
 	return c.Send(req)
 }

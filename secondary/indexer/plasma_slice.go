@@ -213,6 +213,10 @@ type plasmaSlice struct {
 
 	// Size of the quantized codes after training
 	codeSize int
+
+	// Position of the vector field in the encoded key
+	// Derived from index defn
+	vectorPos int
 }
 
 // newPlasmaSlice is the constructor for plasmaSlice.
@@ -321,6 +325,14 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	_, slice.isArrayDistinct, slice.isArrayFlattened, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
+	}
+
+	// Compute vector position
+	for i, val := range idxDefn.HasVectorAttr {
+		if val {
+			slice.vectorPos = i
+			break
+		}
 	}
 
 	// intiialize and start the writers
@@ -920,7 +932,7 @@ func (mdb *plasmaSlice) DecrRef() {
 	}
 }
 
-func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
 	if mdb.CheckCmdChStopped() {
 		return mdb.fatalDbErr
 	}
@@ -934,6 +946,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 		op:    op,
 		key:   key,
 		docid: docid,
+		vecs:  vectors,
 		meta:  meta,
 	}
 
@@ -1001,7 +1014,7 @@ loop:
 			switch icmd.op {
 			case opUpdate, opInsert:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.meta)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.vecs, icmd.meta)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -1112,7 +1125,7 @@ func (mdb *plasmaSlice) logErrorsToConsole() {
 }
 
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
-	init bool, meta *MutationMeta) int {
+	init bool, vecs [][]float32, meta *MutationMeta) int {
 
 	defer func() {
 		atomic.AddInt64(&mdb.qCount, -1)
@@ -1125,10 +1138,19 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
 	} else if len(key) == 0 {
 		nmut = mdb.delete2(docid, workerId, true)
 	} else {
-		if mdb.idxDefn.IsArrayIndex {
-			nmut = mdb.insertSecArrayIndex(key, docid, workerId, init, meta)
+		// Primary vector indexes do not exist
+		if mdb.idxDefn.IsVectorIndex {
+			if mdb.idxDefn.IsArrayIndex {
+				// [VECTOR_TODO]: Add support for array indexes with VECTOR attribute
+			} else {
+				nmut = mdb.insertVectorIndex(key, docid, workerId, init, vecs, meta)
+			}
 		} else {
-			nmut = mdb.insertSecIndex(key, docid, workerId, init, meta)
+			if mdb.idxDefn.IsArrayIndex {
+				nmut = mdb.insertSecArrayIndex(key, docid, workerId, init, meta)
+			} else {
+				nmut = mdb.insertSecIndex(key, docid, workerId, init, meta)
+			}
 		}
 	}
 
@@ -1603,6 +1625,13 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	return nmut
 }
 
+func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
+	init bool, vecs [][]float32, meta *MutationMeta) (nmut int) {
+	// [VECTOR_TODO] - Update insert codepath
+
+	return 0
+}
+
 func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
 	defer func() {
 		atomic.AddInt64(&mdb.qCount, -1)
@@ -1618,10 +1647,20 @@ func (mdb *plasmaSlice) delete2(docid []byte, workerId int, meterDelete bool) in
 
 	if mdb.isPrimary {
 		nmut = mdb.deletePrimaryIndex(docid, workerId)
-	} else if !mdb.idxDefn.IsArrayIndex {
-		nmut, _ = mdb.deleteSecIndex(docid, nil, workerId, meterDelete)
 	} else {
-		nmut = mdb.deleteSecArrayIndex(docid, workerId, meterDelete)
+		if mdb.idxDefn.IsVectorIndex {
+			if !mdb.idxDefn.IsArrayIndex {
+				nmut, _ = mdb.deleteVectorIndex(docid, nil, workerId, meterDelete)
+			} else {
+				// [VECTOR_TODO]: Add support for array vector index
+			}
+		} else {
+			if !mdb.idxDefn.IsArrayIndex {
+				nmut, _ = mdb.deleteSecIndex(docid, nil, workerId, meterDelete)
+			} else {
+				nmut = mdb.deleteSecArrayIndex(docid, workerId, meterDelete)
+			}
+		}
 	}
 
 	mdb.logWriterStat()
@@ -1863,6 +1902,11 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 
 	mdb.isDirty = true
 	return len(indexEntriesToBeDeleted)
+}
+
+func (mdb *plasmaSlice) deleteVectorIndex(docid []byte, compareKey []byte, workerId int,
+	meterDelete bool) (nmut int, changed bool) {
+	return 0, true
 }
 
 // checkFatalDbError checks if the error returned from DB
@@ -3952,7 +3996,7 @@ func (s *plasmaSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, 
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -3985,7 +4029,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 	revbuf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(revbuf)
 
-	callb := func(entry []byte) error {
+	callb := func(entry, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -4056,7 +4100,7 @@ func (s *plasmaSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, st
 	var err error
 	var count uint64
 
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -4078,7 +4122,7 @@ func (s *plasmaSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, st
 
 func (s *plasmaSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -4201,6 +4245,11 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 loop:
 	for it.Valid() {
 		itm := it.Key()
+		val := ([]byte)(nil)
+		if it.HasValue() {
+			val = it.Value()
+		}
+
 		s.newIndexEntry(itm, &entry)
 
 		// Iterator has reached past the high key, no need to scan further
@@ -4208,7 +4257,7 @@ loop:
 			break loop
 		}
 
-		err = callback(entry.Bytes())
+		err = callback(entry.Bytes(), val)
 		if err != nil {
 			return err
 		}
@@ -4269,17 +4318,21 @@ func (s *plasmaSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
-	cmpFn CmpEntry, callback func([]byte) error, mt *AggregateRecorderWithCtx,
+	cmpFn CmpEntry, callback EntryCallback, mt *AggregateRecorderWithCtx,
 	user string, loopCount, numBytes uint64) error {
 	var err error
 
 	var entry IndexEntry
 	for ; it.Valid(); it.Next() {
 		itm := it.Key()
+		val := ([]byte)(nil)
+		if it.HasValue() {
+			val = it.Value()
+		}
 		s.newIndexEntry(itm, &entry)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
-				err = callback(itm)
+				err = callback(itm, val)
 				if err != nil {
 					return err
 				}

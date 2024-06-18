@@ -88,12 +88,17 @@ const (
 	DCP_SEQNO_ADVANCED = CommandCode(0x64) // DCP event which indicates the change in seqno for a vbucket
 	DCP_OSO_SNAPSHOT   = CommandCode(0x65) // DCP event which indicates the start/stop of OSO snapshot
 
+	CREATE_RANGE_SCAN   = CommandCode(0xda) // Range scans
+	CONTINUE_RANGE_SCAN = CommandCode(0xdb) // Range scans
+	CANCEL_RANGE_SCAN   = CommandCode(0xdc) // Range scans
+
 	SELECT_BUCKET = CommandCode(0x89) // Select bucket
 
 	OBSERVE = CommandCode(0x92)
 )
 
 const FEATURE_COLLECTIONS byte = 0x12
+const FEATURE_JSON byte = 0x0b
 
 type CollectionEvent uint32
 
@@ -129,6 +134,9 @@ const (
 	UNKNOWN_COLLECTION = Status(0x88)
 	MANIFEST_AHEAD     = Status(0x8b)
 	UNKNOWN_SCOPE      = Status(0x8c)
+
+	RANGE_SCAN_MORE     = Status(0xa6)
+	RANGE_SCAN_COMPLETE = Status(0xa7)
 )
 
 // MCItem is an internal representation of an item.

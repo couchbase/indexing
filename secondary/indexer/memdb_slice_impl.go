@@ -49,6 +49,7 @@ type indexMutation struct {
 	op    int
 	key   []byte
 	docid []byte
+	vecs  [][]float32
 	meta  *MutationMeta
 }
 
@@ -397,7 +398,7 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+func (mdb *memdbSlice) Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
 	mut := &indexMutation{
 		op:    opUpdate,
 		key:   key,
@@ -2098,7 +2099,7 @@ func (s *memdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, i
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -2131,7 +2132,7 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 	revbuf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(revbuf)
 
-	callb := func(entry []byte) error {
+	callb := func(entry, values []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -2202,7 +2203,7 @@ func (s *memdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, sto
 	var err error
 	var count uint64
 
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -2224,7 +2225,7 @@ func (s *memdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, sto
 
 func (s *memdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
-	callb := func([]byte) error {
+	callb := func(key, value []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
@@ -2293,7 +2294,7 @@ loop:
 			break loop
 		}
 
-		err = callback(entry.Bytes())
+		err = callback(entry.Bytes(), nil)
 		if err != nil {
 			return err
 		}
@@ -2328,7 +2329,7 @@ func (s *memdbSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 }
 
 func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
-	cmpFn CmpEntry, callback func([]byte) error) error {
+	cmpFn CmpEntry, callback EntryCallback) error {
 	var err error
 
 	var entry IndexEntry
@@ -2337,7 +2338,7 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 		s.newIndexEntry(itm, &entry)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
-				err = callback(itm)
+				err = callback(itm, nil)
 				if err != nil {
 					return err
 				}

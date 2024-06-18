@@ -213,38 +213,42 @@ func N1QLTransformForVectorIndex(
 			if key.Type() == qvalue.MISSING && isLeadingKey {
 				return nil, nil, nil, nil
 			} else if key.Type() == qvalue.MISSING {
+				if keyPos == ie.vectorPos {
+					// If vector is missing/null, then skip indexing the document
+					return nil, nil, nil, nil
+				}
 				arrValue = append(arrValue, key)
-				continue
-			}
+			} else {
 
-			// Process vector entries. vectorPos will be >= 0 only when
-			// a vector attribute has been defined for an expression. For
-			// an expression with VECTOR attribute, we follow the below rules:
-			//
-			// a. If VECTOR entry is MISSING/NULL and it is leading key, the
-			//    document will not be indexed
-			// b. If VECTOR entry is MISSING/NULL and it is non-leading key,
-			//    we index MISSING/NULL for the VECTOR entry
-			// c. If the VECTOR entry is an invalid and it is leading key,
-			//    the document will not be indexed
-			// d. If the VECTOR entry is invalid and it is non-leading key,
-			//    the VECTOR entry will be indexed as NULL
-			if keyPos == ie.vectorPos {
-				vector, err = validateVector(key, ie.dimension)
+				// Process vector entries. vectorPos will be >= 0 only when
+				// a vector attribute has been defined for an expression. For
+				// an expression with VECTOR attribute, we follow the below rules:
+				//
+				// a. If VECTOR entry is MISSING/NULL and it is leading key, the
+				//    document will not be indexed
+				// b. If VECTOR entry is MISSING/NULL and it is non-leading key,
+				//    we index MISSING/NULL for the VECTOR entry
+				// c. If the VECTOR entry is an invalid and it is leading key,
+				//    the document will not be indexed
+				// d. If the VECTOR entry is invalid and it is non-leading key,
+				//    the VECTOR entry will be indexed as NULL
+				if keyPos == ie.vectorPos {
+					vector, err = validateVector(key, ie.dimension)
 
-				if err != nil { // invalid vector entry
-					// [VECTOR_TODO] - Add stats when rejecting incoming documents
-					if isLeadingKey {
+					if err != nil { // invalid vector entry
+						// [VECTOR_TODO] - Add stats when rejecting incoming documents
+
+						// If vector is missing/null, then skip indexing the document
+						// irrespective of expression with VECTOR attribute being leading
+						// key or not
 						return nil, nil, nil, nil
 					} else {
-						arrValue = append(arrValue, qvalue.NULL_VALUE) // Index null value for non-leading key
+						vectors = append(vectors, vector)
+						arrValue = append(arrValue, dummy_centroid)
 					}
 				} else {
-					vectors = append(vectors, vector)
-					arrValue = append(arrValue, dummy_centroid)
+					arrValue = append(arrValue, key)
 				}
-			} else {
-				arrValue = append(arrValue, key)
 			}
 			isLeadingKey = false
 		} else {
