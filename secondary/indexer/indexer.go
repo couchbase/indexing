@@ -12995,11 +12995,11 @@ func (idx *indexer) computeCentroidsFromItemsCount(keyspaceId string, itemsCount
 	return int(centroids)
 }
 
-func (idx *indexer) getItemsCount(cluster, keyspaceId, reqcid string) (uint64, error) {
+func (idx *indexer) getItemsCount(cluster, bucket, reqcid string) (uint64, error) {
 	var itemsCount uint64
 	var err error
 	fn := func(r int, e error) error {
-		itemsCount, err = common.CollectionItemCount(cluster, DEFAULT_POOL, keyspaceId, reqcid)
+		itemsCount, err = common.CollectionItemCount(cluster, DEFAULT_POOL, bucket, reqcid)
 		return err
 	}
 	rh := common.NewRetryHelper(10, time.Second, 1, fn)
@@ -13058,7 +13058,9 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 	vecInstIdList []c.IndexInstId, errMap map[c.IndexInstId]error) []common.IndexInstId {
 
-	itemsCount, err := idx.getItemsCount(cluster, keyspaceId, reqcid)
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+
+	itemsCount, err := idx.getItemsCount(cluster, bucket, reqcid)
 	if err != nil {
 		logging.Errorf("Indexer::computeCentroids error observed while computing items_count "+
 			"for keyspaceId: %v, reqcid: %v, err: %v",
