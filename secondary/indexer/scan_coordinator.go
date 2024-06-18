@@ -25,6 +25,7 @@ import (
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -513,15 +514,24 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		}
 	}
 
+	defer func() {
+		if len(req.Ctxs) != 0 {
+			for _, ctx := range req.Ctxs {
+				ctx.Done()
+			}
+		}
+	}()
+
+	if req.isVectorScan {
+		err = s.fillCodebookMap(req)
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
+	}
+
 	// Do the scan
 	s.processRequest(req, w, is, t0)
 	readUnits = req.GetReadUnits()
-
-	if len(req.Ctxs) != 0 {
-		for _, ctx := range req.Ctxs {
-			ctx.Done()
-		}
-	}
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
@@ -1522,6 +1532,36 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 	}
 
 	return cb
+}
+
+// fillCodebookMap fill the codebookmao in the ScanRequest
+// Note:
+// 1. This function should be called after Scan acquires storage reader instance
+// Rollback cannot happend when readers are running and on rollback codebook can
+// change. So to get lastest codebook call this function after acquring a storage
+// reader
+// 2. Call this function after populating index instance in Scan Request
+func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
+	r.codebookMap = make(map[common.PartitionId]codebook.Codebook)
+
+	pmap, ok := s.indexPartnMap[r.IndexInst.InstId]
+	if !ok {
+		return ErrNotMyIndex
+	}
+
+	for _, partnId := range r.PartitionIds {
+		if partition, ok := pmap[partnId]; ok {
+			slice := partition.Sc.GetSliceById(0)
+			r.codebookMap[partnId], cbErr = slice.GetCodebook()
+			if cbErr != nil {
+				return fmt.Errorf("partitionid: %v err: %v", partnId, cbErr)
+			}
+		} else {
+			return ErrNotMyPartition
+		}
+	}
+
+	return nil
 }
 
 // Find and return data structures for the specified index

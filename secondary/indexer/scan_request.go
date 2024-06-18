@@ -21,6 +21,7 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/expression"
@@ -119,7 +120,9 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	queryVector []float32
+	isVectorScan bool
+	queryVector  []float32
+	codebookMap  map[common.PartitionId]codebook.Codebook
 }
 
 type Projection struct {
@@ -381,6 +384,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.ScanRequest:
+		r.isVectorScan = (req.GetIndexVector() != nil)
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -447,6 +451,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.ScanAllRequest:
+		r.isVectorScan = (req.GetIndexVector() != nil)
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
