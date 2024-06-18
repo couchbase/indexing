@@ -351,9 +351,9 @@ type IndexInst struct {
 	// it based on the number of items in the collection at the
 	// time of index build. As each index instance can see different
 	// items count depending on when the replica is being built, the
-	// "Nlist" variable is tracked per index instance and not per
-	// definition
-	Nlist int
+	// "Nlist" variable is tracked per index instance, for each partition
+	// and not per definition
+	Nlist map[PartitionId]int
 
 	TrainingPhase TrainingPhase // Set to true once training is completed
 
@@ -709,6 +709,12 @@ func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
 	for k, v := range inMap {
 		vv := v
 		vv.Pc = v.Pc.Clone()
+
+		vv.Nlist = make(map[PartitionId]int)
+		for partnId, nlist := range v.Nlist {
+			vv.Nlist[partnId] = nlist
+		}
+
 		outMap[k] = vv
 	}
 	return outMap
@@ -723,6 +729,12 @@ func CopyIndexInstMap2(inMap IndexInstMap) IndexInstMap {
 		vv := v
 		vv.Pc = v.Pc.Clone()
 		vv.Defn.Immutable = GetImmutableFlag(v.Defn)
+
+		vv.Nlist = make(map[PartitionId]int)
+		for partnId, nlist := range v.Nlist {
+			vv.Nlist[partnId] = nlist
+		}
+
 		outMap[k] = vv
 	}
 	return outMap

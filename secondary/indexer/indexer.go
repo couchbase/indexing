@@ -13085,11 +13085,18 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 		if centroids == 0 {
 			centroids = idx.computeCentroidsFromItemsCount(keyspaceId, itemsCount)
 		}
-		inst.Nlist = centroids
+
+		partnInstMap := idx.indexPartnMap[instId]
+		for partnId := range partnInstMap {
+			if inst.Nlist == nil {
+				inst.Nlist = make(map[c.PartitionId]int)
+			}
+			inst.Nlist[partnId] = centroids
+		}
 
 		// In the worst case, all items in the keyspace will be considered for training
 		trainListSize := itemsCount
-		if err := idx.validateTrainListSize(trainListSize, inst.Nlist, inst.Defn.VectorMeta, keyspaceId); err != nil {
+		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId); err != nil {
 			errMap[instId] = err
 			continue
 		}
@@ -13198,7 +13205,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			for _, slice := range slices {
 				logging.Infof("Indexer::initateTraining Starting training for vector index with instId: %v, partnId: %v", instId, partnId)
 				start := time.Now()
-				slice.SetNlist(idxInst.Nlist)
+				slice.SetNlist(idxInst.Nlist[partnId])
 
 				if err := slice.InitCodebook(); err != nil {
 					slice.ResetCodebook()
@@ -13208,7 +13215,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				}
 
 				// [VECTOR_TODO]: Integrate this with training infra
-				vecs := getVectors(idxInst.Defn.VectorMeta, idxInst.Nlist)
+				vecs := getVectors(idxInst.Defn.VectorMeta, idxInst.Nlist[partnId])
 				if err := slice.Train(vecs); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
