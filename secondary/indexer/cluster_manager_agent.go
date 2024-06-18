@@ -524,6 +524,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 				OldStorageMode: inst.OldStorageMode,
 				Pc:             pc,
 				RealInstId:     common.IndexInstId(inst.RealInstId),
+				TrainingPhase:  inst.TrainingPhase,
 			}
 
 			if idxInst.State != common.INDEX_STATE_DELETED {
