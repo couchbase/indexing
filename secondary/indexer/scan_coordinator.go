@@ -1546,7 +1546,7 @@ func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 
 	pmap, ok := s.indexPartnMap[r.IndexInst.InstId]
 	if !ok {
-		return ErrNotMyIndex
+		return fmt.Errorf("instanceid: %v err: %v", r.IndexInst.InstId, ErrNotMyIndex)
 	}
 
 	for _, partnId := range r.PartitionIds {
@@ -1557,7 +1557,7 @@ func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 				return fmt.Errorf("partitionid: %v err: %v", partnId, cbErr)
 			}
 		} else {
-			return ErrNotMyPartition
+			return fmt.Errorf("partitionid: %v err: %v", partnId, ErrNotMyPartition)
 		}
 	}
 
@@ -1567,14 +1567,14 @@ func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
 // Find and return data structures for the specified index
 // This will also return the IndexReaderContext for each partition.  IndexReaderContext must
 // be returned in the same order as partitionIds.
-func (s *scanCoordinator) findIndexInstance(defnID uint64,
-	partitionIds []common.PartitionId, user string, skipReadMetering bool) (
+func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common.PartitionId,
+	user string, skipReadMetering bool, ctxsPerPartition int) (
 	*common.IndexInst, []IndexReaderContext, error) {
 
 	hasIndex := false
 	isPartition := false
 
-	ctx := make([]IndexReaderContext, len(partitionIds))
+	ctx := make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
 	missing := make(map[common.IndexInstId][]common.PartitionId)
 
 	indexInstMap := s.indexInstMap
@@ -1597,7 +1597,9 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64,
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
-						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
+						for j := 0; j < ctxsPerPartition; j++ {
+							ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
+						}
 					} else {
 						found = false
 						missing[inst.InstId] = append(missing[inst.InstId], partnId)

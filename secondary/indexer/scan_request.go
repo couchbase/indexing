@@ -120,9 +120,10 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	isVectorScan bool
-	queryVector  []float32
-	codebookMap  map[common.PartitionId]codebook.Codebook
+	isVectorScan          bool
+	queryVector           []float32
+	codebookMap           map[common.PartitionId]codebook.Codebook
+	parallelCentroidScans int
 }
 
 type Projection struct {
@@ -322,6 +323,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	}
 
 	r.keySzCfg = getKeySizeConfig(cfg)
+
+	r.parallelCentroidScans = cfg["scan.parallel_centroid_scans"].Int()
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -1234,9 +1237,14 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 
 	var indexInst *common.IndexInst
 
+	ctxsPerPartition := 1
+	if r.isVectorScan {
+		ctxsPerPartition = r.parallelCentroidScans
+	}
+
 	stats := r.sco.stats.Get()
-	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID,
-		r.PartitionIds, r.User, r.SkipReadMetering)
+	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
+		r.User, r.SkipReadMetering, ctxsPerPartition)
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
