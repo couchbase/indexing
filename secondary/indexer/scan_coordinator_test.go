@@ -1,6 +1,13 @@
-// +build ignore
-
 package indexer
+
+import (
+	"testing"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/vector"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
+)
 
 /*
 TODO: Fix tests
@@ -364,3 +371,229 @@ func TestStatisticsError(t *testing.T) {
 }
 
 */
+
+type MockSliceContainer struct {
+	CB      codebook.Codebook
+	PartnId common.PartitionId
+}
+
+func (m *MockSliceContainer) AddSlice(SliceId, Slice)                      {}
+func (m *MockSliceContainer) UpdateSlice(SliceId, Slice)                   {}
+func (m *MockSliceContainer) RemoveSlice(SliceId)                          {}
+func (m *MockSliceContainer) GetSliceByIndexKey(common.IndexKey) Slice     { return nil }
+func (m *MockSliceContainer) GetSliceIdByIndexKey(common.IndexKey) SliceId { return 0 }
+func (m *MockSliceContainer) GetAllSlices() []Slice                        { return nil }
+func (m *MockSliceContainer) GetSliceById(SliceId) Slice {
+	return &plasmaSlice{
+		codebook:   m.CB,
+		idxPartnId: m.PartnId,
+	}
+}
+
+func Test_scanCoordinator_fillCodebookMap(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+	msNil := &MockSliceContainer{
+		CB: nil,
+	}
+
+	cb, err := vector.NewCodebookIVFPQ(128, 8, 8, 128, vector.METRIC_L2)
+	if err != nil || cb == nil {
+		t.Errorf("Unable to create index. Err %v", err)
+	}
+	msVec := &MockSliceContainer{
+		CB: cb,
+	}
+
+	cb1, err := vector.NewCodebookIVFPQ(128, 8, 8, 128, vector.METRIC_L2)
+	train_vecs := make([]float32, 0)
+	for i := 0; i < 10000*128; i++ {
+		train_vecs = append(train_vecs, float32(i))
+	}
+	err = cb1.Train(train_vecs)
+	msVec1 := &MockSliceContainer{
+		CB: cb1,
+	}
+
+	tests := []struct {
+		name          string
+		instId        common.IndexInstId
+		partnIds      []common.PartitionId
+		indexPartnMap IndexPartnMap
+		wantErr       bool
+	}{
+		{
+			name:     "trained",
+			partnIds: []common.PartitionId{1, 2, 3},
+			instId:   common.IndexInstId(1),
+			indexPartnMap: IndexPartnMap{
+				common.IndexInstId(1): PartitionInstMap{
+					common.PartitionId(1): PartitionInst{Sc: msVec1},
+					common.PartitionId(2): PartitionInst{Sc: msVec1},
+					common.PartitionId(3): PartitionInst{Sc: msVec1},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "nottrained",
+			partnIds: []common.PartitionId{1, 2, 3},
+			instId:   common.IndexInstId(1),
+			indexPartnMap: IndexPartnMap{
+				common.IndexInstId(1): PartitionInstMap{
+					common.PartitionId(1): PartitionInst{Sc: msVec},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "nilcodebook",
+			partnIds: []common.PartitionId{1, 2, 3},
+			instId:   common.IndexInstId(1),
+			indexPartnMap: IndexPartnMap{
+				common.IndexInstId(1): PartitionInstMap{
+					common.PartitionId(1): PartitionInst{Sc: msNil},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "notmyindex",
+			partnIds: []common.PartitionId{1, 2, 3},
+			instId:   common.IndexInstId(2),
+			indexPartnMap: IndexPartnMap{
+				common.IndexInstId(1): PartitionInstMap{
+					common.PartitionId(1): PartitionInst{Sc: msNil},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "notmypartn",
+			partnIds: []common.PartitionId{2, 3},
+			instId:   common.IndexInstId(1),
+			indexPartnMap: IndexPartnMap{
+				common.IndexInstId(1): PartitionInstMap{
+					common.PartitionId(1): PartitionInst{Sc: msNil},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &scanCoordinator{
+				indexPartnMap: tt.indexPartnMap,
+			}
+			r := &ScanRequest{
+				IndexInst: common.IndexInst{
+					InstId: tt.instId,
+				},
+				PartitionIds: tt.partnIds,
+			}
+
+			if err := s.fillCodebookMap(r); (err != nil) != tt.wantErr {
+				t.Errorf("scanCoordinator.fillCodebookMap() error = %v, wantErr %v", err, tt.wantErr)
+			} else if err != nil {
+				logging.Infof("Error Received: %v", err)
+			}
+
+			logging.Infof("codebookmap: %+v", r.codebookMap)
+		})
+	}
+}
+
+func Test_scanCoordinator_findIndexInstance(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+	getMs := func(id common.PartitionId) SliceContainer {
+		return &MockSliceContainer{
+			CB:      nil,
+			PartnId: id,
+		}
+	}
+
+	tests := []struct {
+		name             string
+		defnID           uint64
+		partnIds         []common.PartitionId
+		user             string
+		skipReadMetering bool
+		ctxsPerPartition int
+		indexPartnMap    IndexPartnMap
+		indexInstMap     common.IndexInstMap
+		indexDefnMap     map[common.IndexDefnId][]common.IndexInstId
+		indexerState     common.IndexerState
+		instIdWanted     common.IndexInstId
+		wantErr          bool
+	}{
+		{
+			name:             "basic",
+			user:             "pushpa",
+			ctxsPerPartition: 1,
+			defnID:           111,
+			partnIds:         []common.PartitionId{1},
+			indexPartnMap: IndexPartnMap{
+				common.IndexInstId(11): PartitionInstMap{
+					common.PartitionId(1): PartitionInst{Sc: getMs(common.PartitionId(1))},
+					common.PartitionId(3): PartitionInst{Sc: getMs(common.PartitionId(3))},
+					common.PartitionId(5): PartitionInst{Sc: getMs(common.PartitionId(5))},
+				},
+				common.IndexInstId(22): PartitionInstMap{
+					common.PartitionId(2): PartitionInst{Sc: getMs(common.PartitionId(2))},
+					common.PartitionId(4): PartitionInst{Sc: getMs(common.PartitionId(4))},
+					common.PartitionId(6): PartitionInst{Sc: getMs(common.PartitionId(6))},
+				},
+			},
+			indexInstMap: common.IndexInstMap{
+				common.IndexInstId(11): common.IndexInst{
+					InstId: common.IndexInstId(11),
+					State:  common.INDEX_STATE_ACTIVE,
+					RState: common.REBAL_ACTIVE,
+					Defn: common.IndexDefn{
+						DefnId:          111,
+						PartitionScheme: common.HASH,
+					},
+				},
+				common.IndexInstId(22): common.IndexInst{
+					InstId: common.IndexInstId(22),
+					State:  common.INDEX_STATE_ACTIVE,
+					RState: common.REBAL_ACTIVE,
+					Defn: common.IndexDefn{
+						DefnId:          111,
+						PartitionScheme: common.HASH,
+					},
+				},
+			},
+			indexDefnMap: map[common.IndexDefnId][]common.IndexInstId{
+				common.IndexDefnId(111): []common.IndexInstId{11, 22},
+			},
+			indexerState: common.INDEXER_ACTIVE,
+			instIdWanted: 11,
+			wantErr:      false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &scanCoordinator{
+				indexInstMap:  tt.indexInstMap,
+				indexPartnMap: tt.indexPartnMap,
+				indexDefnMap:  tt.indexDefnMap,
+			}
+			s.setIndexerState(tt.indexerState)
+			got, got1, err := s.findIndexInstance(tt.defnID, tt.partnIds, tt.user, tt.skipReadMetering, tt.ctxsPerPartition)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("scanCoordinator.findIndexInstance() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			want := tt.indexInstMap[tt.instIdWanted]
+			if want.InstId != got.InstId {
+				t.Fatalf("scanCoordinator.findIndexInstance() \n\ngot = %v, \n\n want = %v", got, want)
+			}
+
+			for _, ctx := range got1 {
+				reader := ctx.(*plasmaReaderCtx)
+				logging.Infof("Contexts Got: %+v", reader)
+			}
+		})
+	}
+}
