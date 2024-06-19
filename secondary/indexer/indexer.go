@@ -3863,7 +3863,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		// In the batch of indexes that are getting built, check if there
 		// is any vector index that requires training. If so, compute centroids
 		// and initiate training for all those indexes
-		instIdList = idx.checkAndInitiateTraining(instIdList, cluster, keyspaceId, reqcid, errMap)
+		instIdList = idx.checkAndInitiateTraining(instIdList, cluster, keyspaceId, reqcid, errMap, reqCtx)
 
 		if len(instIdList) != 0 {
 			keyspaceIdIndexList[keyspaceId] = instIdList
@@ -13163,7 +13163,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 }
 
 func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
-	cluster, keyspaceId, reqcid string, errMap map[common.IndexInstId]error) []common.IndexInstId {
+	cluster, keyspaceId, reqcid string, errMap map[common.IndexInstId]error, reqCtx *c.MetadataRequestContext) []common.IndexInstId {
 
 	// Check if there are any vector indexes that need training
 	var vecInstIdList []common.IndexInstId
@@ -13186,7 +13186,8 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			common.CrashOnError(err)
 
 			storageDir := idx.config["storage_dir"].String()
-			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap), keyspaceId, storageDir)
+			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
+				keyspaceId, storageDir, reqCtx)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13240,7 +13241,7 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
-	keyspaceId string, storageDir string) {
+	keyspaceId string, storageDir string, reqCtx *c.MetadataRequestContext) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	successMap := make(map[common.IndexInstId]bool)
@@ -13333,6 +13334,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	idx.internalRecvCh <- &MsgIndexTrainingDone{
 		keyspaceId: keyspaceId,
 		successMap: successMap,
+		reqCtx:     reqCtx,
 		errMap:     errMap,
 	}
 }
@@ -13342,6 +13344,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	successMap := msg.GetSuccessMap()
 	errMap := msg.GetErrMap()
 	keyspaceId := msg.GetKeyspaceId()
+	reqCtx := msg.GetReqCtx()
 
 	toBuildInstIds := make([]common.IndexInstId, 0)
 	allInsts := make([]common.IndexInstId, 0)
@@ -13387,7 +13390,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		mType:            CLUST_MGR_BUILD_INDEX_DDL,
 		indexInstList:    toBuildInstIds,
 		bucketList:       []string{keyspaceId},
-		reqCtx:           common.NewUserRequestContext(),
+		reqCtx:           reqCtx,
 		isEmptyNodeBatch: false,
 	})
 }

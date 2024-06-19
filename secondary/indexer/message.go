@@ -3293,6 +3293,7 @@ type MsgIndexTrainingDone struct {
 	keyspaceId string
 	errMap     map[common.IndexInstId]map[common.PartitionId]error
 	successMap map[common.IndexInstId]bool
+	reqCtx     *c.MetadataRequestContext
 	respCh     MsgChannel
 }
 
@@ -3310,6 +3311,10 @@ func (m *MsgIndexTrainingDone) GetErrMap() map[common.IndexInstId]map[common.Par
 
 func (m *MsgIndexTrainingDone) GetSuccessMap() map[common.IndexInstId]bool {
 	return m.successMap
+}
+
+func (m *MsgIndexTrainingDone) GetReqCtx() *c.MetadataRequestContext {
+	return m.reqCtx
 }
 
 // MsgType.String is a helper function to return string for message type.
