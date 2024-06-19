@@ -1661,7 +1661,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 	// For back-index, the SHA of vectors will be appeneded to encoded key and then inserted into storage.
 	// When appending SHA, we can avoid buffer reallocation for encodebuf by accounting for the
 	// SHA overhead as the size of SHA encoding is fixed
-	minEncodeBufSize := len(key) + sha256.Size*len(vecs) + 4
+	minEncodeBufSize := len(key) + sha256.Size
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], minEncodeBufSize, szConf.allowLargeKeys)
 
 	vec := vecs[0]
@@ -1690,7 +1690,7 @@ func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int
 		}
 	}
 
-	encodedSHA := shaEncodedVectors(vecs, mdb.shaBuf[workerId])
+	encodedSHA := shaEncodedVector(vec, mdb.shaBuf[workerId])
 
 	if !init {
 		if _, changed := mdb.deleteVectorIndex(docid, key, encodedSHA, workerId); !changed {
@@ -2040,9 +2040,8 @@ func (mdb *plasmaSlice) deleteVectorIndex(docid []byte, compareKey, compareSHA [
 
 		itemFound = true
 
-		backEntryKey, encodedSHA := splitVectorBackEntry(backEntry)
-		// Delete the entries only if both key and
-		if hasEqualBackEntry(compareKey, backEntryKey) && hasEqualEncodedSHA(compareSHA, encodedSHA) {
+		backEntryKey, encodedSHA := splitVectorBackEntry(backEntry, false)
+		if hasEqualBackEntry(compareKey, backEntryKey) && hasEqualEncodedSHA(compareSHA, encodedSHA, false) {
 			return 0, false
 		}
 
@@ -4583,14 +4582,19 @@ func hasEqualBackEntry(key []byte, bentry []byte) bool {
 	return bytes.Equal(key, bentry[:len(bentry)-2])
 }
 
-func splitVectorBackEntry(backEntry []byte) ([]byte, []byte) {
+func splitVectorBackEntry(backEntry []byte, isVectorOnArrayExpr bool) ([]byte, []byte) {
 	l := uint32(len(backEntry))
-	numShaEncodings := binary.LittleEndian.Uint32(backEntry[l-4:]) // last 4 bytes capture the number of SHA encoded values
-	shaEncodingSize := numShaEncodings*sha256.Size + 4
-	return backEntry[:l-shaEncodingSize], backEntry[l-shaEncodingSize:]
+	if isVectorOnArrayExpr {
+		numShaEncodings := binary.LittleEndian.Uint32(backEntry[l-4:]) // last 4 bytes capture the number of SHA encoded values
+		shaEncodingSize := numShaEncodings*sha256.Size + 4
+		return backEntry[:l-shaEncodingSize], backEntry[l-shaEncodingSize:]
+	} else {
+		shaEncodingSize := uint32(sha256.Size)
+		return backEntry[:l-shaEncodingSize], backEntry[l-shaEncodingSize:]
+	}
 }
 
-func hasEqualEncodedSHA(compareSHA []byte, encodedSHA []byte) bool {
+func hasEqualEncodedSHA(compareSHA []byte, encodedSHA []byte, isVectorOnArrayExpr bool) bool {
 	if compareSHA == nil && encodedSHA == nil {
 		return true
 	}
@@ -4600,11 +4604,13 @@ func hasEqualEncodedSHA(compareSHA []byte, encodedSHA []byte) bool {
 	}
 
 	cl, el := len(compareSHA), len(encodedSHA)
-	compareSHANumEntries := compareSHA[cl-4:] // last 4 bytes capture the number of SHA encoded values
-	encodedSHANumEntries := encodedSHA[el-4:]
+	if isVectorOnArrayExpr {
+		compareSHANumEntries := compareSHA[cl-4:] // last 4 bytes capture the number of SHA encoded values
+		encodedSHANumEntries := encodedSHA[el-4:]
 
-	if bytes.Equal(compareSHANumEntries, encodedSHANumEntries) == false {
-		return false // Number of entries are different
+		if bytes.Equal(compareSHANumEntries, encodedSHANumEntries) == false {
+			return false // Number of entries are different
+		}
 	}
 
 	return bytes.Equal(compareSHA, encodedSHA)
@@ -5344,7 +5350,20 @@ func (mdb *plasmaSlice) getNearestCentroidId(vec []float32) (int64, error) {
 	return oneNearIds[0], nil
 }
 
-// Storage encoding for back-index entry for vector index
+// Storage encoding for back-index entry for vector index with vector attribute
+// on non-array expression
+// Format:
+// [collate_json_encoded_sec_key][sha256_encoding_vector]
+//
+// For vector on non-array field, indexer expects only one vector array
+// Only the SHA encoding is suffixed to back-index entry
+func shaEncodedVector(vec []float32, buf []byte) []byte {
+	sha := common.ComputeSHA256ForFloat32Array(vec)
+	buf = append(buf, sha...)
+	return buf
+}
+
+// Storage encoding for back-index entry for vector index with vector attribute on array expression
 // Format:
 // [collate_json_encoded_sec_key][[sha256_encoding_vector]...][num_of_sha256_encoded_values_4_bytes]
 // For vector array index, there can be multiple sha256 encodings - one for each vector
@@ -5368,20 +5387,15 @@ func shaEncodedVectors(vecs [][]float32, buf []byte) []byte {
 	return buf
 }
 
-// Quantized codes are arranged as a slice of bytes and the number of such vectors
-// is encoded in the last 4 bytes of the value.
+// Quantized codes are arranged as a slice of bytes
 func (mdb *plasmaSlice) getQuantizedCodeForVector(vec []float32, codeSize int, buf []byte) ([]byte, error) {
-	offset := 0
-	validVecs := 1
-	buf = buf[:codeSize+4]
 
+	buf = buf[:codeSize]
 	err := mdb.codebook.EncodeVector(vec, buf)
 	if err != nil {
 		return nil, err
 	}
-	offset += mdb.codeSize
 
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(validVecs))
 	return buf, nil
 }
 
