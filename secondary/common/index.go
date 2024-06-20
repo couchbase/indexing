@@ -656,6 +656,9 @@ func (idx IndexInstMap) String() string {
 		str += fmt.Sprintf("Keyspace: %v:%v:%v ", index.Defn.Bucket,
 			index.Defn.Scope, index.Defn.Collection)
 		str += fmt.Sprintf("State: %v ", index.State)
+		if index.Defn.IsVectorIndex {
+			str += fmt.Sprintf("TrainingPhase: %v ", index.TrainingPhase)
+		}
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
 		str += fmt.Sprintf("RState: %v ", index.RState)
 		str += fmt.Sprintf("Version: %v ", index.Version)

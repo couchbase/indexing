@@ -1834,12 +1834,15 @@ func GetBinSize(config Config) uint64 {
 	return DEFAULT_BIN_SIZE
 }
 
+// Use fixed length byte array so that indexer can compute the position
+// of the SHA value in the stored entry without any special encoding
 func ComputeSHA256ForFloat32Array(vecs []float32) []byte {
-	bytes := unsafe.Slice((*byte)(unsafe.Pointer(&vecs[0])), len(vecs)*4)
-	sum := sha256.Sum256(bytes)
-	// The Sum256 method returns a slice of fixed size (32 bytes).
-	// It is much better to have variable length slices instead of using
-	// fixed length slices so that future changes can be accommodated.
-	// sum[:] does the conversion for us
-	return sum[:]
+	if vecs == nil {
+		sum := sha256.Sum256(nil)
+		return sum[:]
+	} else {
+		bytes := unsafe.Slice((*byte)(unsafe.Pointer(&vecs[0])), len(vecs)*4)
+		sum := sha256.Sum256(bytes)
+		return sum[:]
+	}
 }

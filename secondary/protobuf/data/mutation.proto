@@ -68,6 +68,9 @@ message Vectors {
     repeated Vector vectors = 1; // Array of array of floats
 }
 
+message FieldPos {
+    repeated int32 fieldPos = 1; // Array of integers
+}
 // mutations are broadly divided into data and control messages. The division
 // is based on the commands.
 //
@@ -102,6 +105,8 @@ message KeyVersions {
     repeated bytes   partnkeys    = 7; // partition key for each key-version
     optional int64   prjMovingAvg = 8; // Moving avg. latency of mutation processing in projector
     repeated Vectors vectors      = 9; // List of vectors in input document - Used only for vector indexes
+
+    repeated FieldPos     centroidPos       = 10; // Postition of centroidIds for each instance in the encoded key
 }
 
 // Dataport server authentication

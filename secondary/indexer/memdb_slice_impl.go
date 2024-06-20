@@ -35,6 +35,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 const (
@@ -46,11 +47,12 @@ const (
 const tmpDirName = ".tmp"
 
 type indexMutation struct {
-	op    int
-	key   []byte
-	docid []byte
-	vecs  [][]float32
-	meta  *MutationMeta
+	op          int
+	key         []byte
+	docid       []byte
+	vecs        [][]float32
+	centroidPos []int32
+	meta        *MutationMeta
 }
 
 func docIdFromEntryBytes(e []byte) []byte {
@@ -398,7 +400,7 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
+func (mdb *memdbSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	mut := &indexMutation{
 		op:    opUpdate,
 		key:   key,
@@ -1979,6 +1981,10 @@ func (mdb *memdbSlice) GetWriteUnits() uint64 {
 }
 
 func (mdb *memdbSlice) SetStopWriteUnitBilling(disableBilling bool) {
+}
+
+func (mdb *memdbSlice) GetCodebook() (codebook.Codebook, error) {
+	return nil, ErrorNotImplemented
 }
 
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {

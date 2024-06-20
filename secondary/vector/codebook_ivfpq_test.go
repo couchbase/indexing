@@ -2,9 +2,11 @@ package vector
 
 import (
 	"testing"
+
+	codebookpkg "github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
-//Tests for CodebookIVFPQ
+// Tests for CodebookIVFPQ
 func TestCodebookIVFPQ(t *testing.T) {
 
 	var err error
@@ -116,7 +118,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 	}
 	t.Logf("Codebook Memory Size %v", pSize)
 
-	data, err := SerializeCodebook(codebook)
+	data, err := codebook.Marshal()
 	if err != nil {
 		t.Errorf("Error marshalling codebook %v", err)
 	}
@@ -128,11 +130,11 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	//close again
 	err = codebook.Close()
-	if err != ErrCodebookClosed {
+	if err != codebookpkg.ErrCodebookClosed {
 		t.Errorf("Expected err while double closing codebook")
 	}
 
-	newcb, err := DeserializeCodebook(data, "PQ")
+	newcb, err := RecoverCodebook(data, "PQ")
 	if err != nil {
 		t.Errorf("Error unmarshalling codebook %v", err)
 	}

@@ -79,7 +79,7 @@ func flushWorker(wg *sync.WaitGroup, stream chan *ientry, n int, slice Slice) {
 
 	for i := 0; i < n; i++ {
 		entry := <-stream
-		slice.Insert(entry.e, entry.docid, nil, entry.m)
+		slice.Insert(entry.e, entry.docid, nil, nil, entry.m)
 		entry.m.Free()
 	}
 }

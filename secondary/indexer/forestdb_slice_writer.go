@@ -26,6 +26,7 @@ import (
 	"github.com/couchbase/indexing/secondary/iowrap"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/natsort"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 var (
@@ -307,7 +308,7 @@ func (fdb *fdbSlice) DecrRef() {
 // Internally the request is buffered and executed async.
 // If forestdb has encountered any fatal error condition,
 // it will be returned as error.
-func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
+func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	szConf := fdb.updateSliceBuffers()
 	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex,
 		1, fdb.idxDefn.Desc, meta, szConf)
@@ -1921,4 +1922,8 @@ func (fdb *fdbSlice) GetWriteUnits() uint64 {
 }
 
 func (fdb *fdbSlice) SetStopWriteUnitBilling(isRebalance bool) {
+}
+
+func (fdb *fdbSlice) GetCodebook() (codebook.Codebook, error) {
+	return nil, ErrorNotImplemented
 }

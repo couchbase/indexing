@@ -13,6 +13,7 @@ package indexer
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/vector"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/couchbase/plasma"
 )
 
@@ -147,6 +149,8 @@ type plasmaSlice struct {
 	encodeBuf        [][]byte
 	arrayBuf1        [][]byte
 	arrayBuf2        [][]byte
+	shaBuf           [][]byte // For vector index, used for SHA256 encoding of vectors
+	quantizedCodeBuf [][]byte // For vector index, used for quantized code computation of vectors
 	keySzConf        []keySizeConfig
 	keySzConfChanged []int32 // Per worker, 0: key size not changed, >=1: key size changed
 
@@ -209,7 +213,7 @@ type plasmaSlice struct {
 	// vector index related metadata
 	nlist int // number of centroids to use for training
 
-	codebook vector.Codebook
+	codebook codebook.Codebook
 
 	// Size of the quantized codes after training
 	codeSize int
@@ -932,7 +936,7 @@ func (mdb *plasmaSlice) DecrRef() {
 	}
 }
 
-func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, meta *MutationMeta) error {
+func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, centroidPos []int32, meta *MutationMeta) error {
 	if mdb.CheckCmdChStopped() {
 		return mdb.fatalDbErr
 	}
@@ -943,11 +947,12 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, vectors [][]float32, me
 	}
 
 	mut := &indexMutation{
-		op:    op,
-		key:   key,
-		docid: docid,
-		vecs:  vectors,
-		meta:  meta,
+		op:          op,
+		key:         key,
+		docid:       docid,
+		vecs:        vectors,
+		centroidPos: centroidPos,
+		meta:        meta,
 	}
 
 	atomic.AddInt64(&mdb.qCount, 1)
@@ -1014,7 +1019,7 @@ loop:
 			switch icmd.op {
 			case opUpdate, opInsert:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.vecs, icmd.meta)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.vecs, icmd.centroidPos, icmd.meta)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -1102,6 +1107,8 @@ func (mdb *plasmaSlice) periodicSliceBuffersReset() {
 					mdb.arrayBuf2[i] = make([]byte, 0, maxArrSz)
 				}
 			}
+
+			// [VECTOR_TODO]: Periodically RESET SHA buffer size
 		}
 
 		mdb.lastBufferSizeCheckTime = time.Now()
@@ -1125,7 +1132,7 @@ func (mdb *plasmaSlice) logErrorsToConsole() {
 }
 
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
-	init bool, vecs [][]float32, meta *MutationMeta) int {
+	init bool, vecs [][]float32, centroidPos []int32, meta *MutationMeta) int {
 
 	defer func() {
 		atomic.AddInt64(&mdb.qCount, -1)
@@ -1143,7 +1150,7 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
 			if mdb.idxDefn.IsArrayIndex {
 				// [VECTOR_TODO]: Add support for array indexes with VECTOR attribute
 			} else {
-				nmut = mdb.insertVectorIndex(key, docid, workerId, init, vecs, meta)
+				nmut = mdb.insertVectorIndex(key, docid, workerId, init, vecs, centroidPos, meta)
 			}
 		} else {
 			if mdb.idxDefn.IsArrayIndex {
@@ -1626,10 +1633,121 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 }
 
 func (mdb *plasmaSlice) insertVectorIndex(key []byte, docid []byte, workerId int,
-	init bool, vecs [][]float32, meta *MutationMeta) (nmut int) {
-	// [VECTOR_TODO] - Update insert codepath
+	init bool, vecs [][]float32, centroidPos []int32, meta *MutationMeta) (nmut int) {
 
-	return 0
+	start := time.Now()
+	defer func() {
+		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(start))
+	}()
+
+	if len(vecs) != 1 {
+		err := fmt.Errorf("Fatal - Expected only one vector for docId: %s, instance: %v. "+
+			"Found: %v vectors in the documents", logging.TagUD(docid), mdb.idxInstId, len(vecs))
+		logging.Fatalf("plasmaSlice::insertIntoVectorIndex %v", err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
+		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+	}
+
+	if mdb.codebook.IsTrained() == false || mdb.codeSize <= 0 {
+		err := fmt.Errorf("Fatal - Mutation processing should not happen on an untrained codebook. "+
+			"docId: %s, Index instId: %v", logging.TagUD(docid), mdb.IndexInstId())
+		logging.Fatalf("plasmaSlice::insertIntoVectorIndex %v", err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
+		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+	}
+
+	szConf := mdb.updateSliceBuffers(workerId)
+
+	// For back-index, the SHA of vectors will be appeneded to encoded key and then inserted into storage.
+	// When appending SHA, we can avoid buffer reallocation for encodebuf by accounting for the
+	// SHA overhead as the size of SHA encoding is fixed
+	minEncodeBufSize := len(key) + sha256.Size
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], minEncodeBufSize, szConf.allowLargeKeys)
+
+	vec := vecs[0]
+	if vec != nil {
+
+		// Compute centroidId for the vector
+		centroidId, err := mdb.getNearestCentroidId(vec)
+		if err != nil {
+			err := fmt.Errorf("Fatal - Error observed while retrieving centroidId for vector. "+
+				"docId: %s, Index instId: %v, err: %v", logging.TagUD(docid), mdb.IndexInstId(), err)
+			logging.Fatalf("plasmaSlice::insertIntoVectorIndex %v", err)
+			atomic.AddInt32(&mdb.numKeysSkipped, 1)
+			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+		}
+
+		centroidPosInKey := -1
+		if centroidPos != nil {
+			centroidPosInKey = int(centroidPos[0])
+		}
+
+		key, err = replaceDummyCentroidId(key, mdb.vectorPos, centroidId, centroidPosInKey, mdb.encodeBuf[workerId])
+		if err != nil {
+			logging.Fatalf("Error observed while replacing dummy centroidId, err: %v", err)
+			atomic.AddInt32(&mdb.numKeysSkipped, 1)
+			panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+		}
+	}
+
+	encodedSHA := shaEncodedVector(vec, mdb.shaBuf[workerId])
+
+	if !init {
+		if _, changed := mdb.deleteVectorIndex(docid, key, encodedSHA, workerId); !changed {
+			return 0
+		}
+	}
+
+	// Construct main-index entry. Main-index entry is similar to normal secondary index entry
+	mainIndexEntry, err := NewSecondaryIndexEntry(key, docid, false, 1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta, szConf)
+	if err != nil {
+		logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
+		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+	}
+
+	quantizedCode, err := mdb.getQuantizedCodeForVector(vec, mdb.codeSize, mdb.quantizedCodeBuf[workerId])
+	if err != nil {
+		logging.Errorf("plasmaSlice::insertVectorIndex Slice Id %v IndexInstId %v PartitionId %v "+
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
+		panic(err) // [VECTOR_TODO]: Having panics will help catch bugs. Remove panics after code stabilizes
+	}
+
+	if len(key) > 0 {
+		mdb.main[workerId].TryThrottle()
+		mdb.back[workerId].TryThrottle()
+
+		mdb.main[workerId].BeginNoThrottle()
+		defer mdb.main[workerId].End()
+		mdb.back[workerId].BeginNoThrottle()
+		defer mdb.back[workerId].End()
+
+		err = mdb.main[workerId].InsertKV(mainIndexEntry, quantizedCode)
+		if err == nil {
+			mdb.idxStats.rawDataSize.Add(int64(len(mainIndexEntry)))
+			addKeySizeStat(mdb.idxStats, len(mainIndexEntry))
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(mainIndexEntry)))
+		}
+
+		backIndexEntry := entry2VectorBackIndexEntry(mainIndexEntry, encodedSHA)
+
+		err = mdb.back[workerId].InsertKV(docid, backIndexEntry)
+
+		if err == nil {
+			// rawDataSize is the sum of all data inserted into main store and back store
+			mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(backIndexEntry)))
+			mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(backIndexEntry)))
+		}
+
+		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
+			atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
+		}
+	}
+
+	mdb.isDirty = true
+	return 1
 }
 
 func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
@@ -1650,7 +1768,7 @@ func (mdb *plasmaSlice) delete2(docid []byte, workerId int, meterDelete bool) in
 	} else {
 		if mdb.idxDefn.IsVectorIndex {
 			if !mdb.idxDefn.IsArrayIndex {
-				nmut, _ = mdb.deleteVectorIndex(docid, nil, workerId, meterDelete)
+				nmut, _ = mdb.deleteVectorIndex(docid, nil, nil, workerId)
 			} else {
 				// [VECTOR_TODO]: Add support for array vector index
 			}
@@ -1904,9 +2022,60 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int, mete
 	return len(indexEntriesToBeDeleted)
 }
 
-func (mdb *plasmaSlice) deleteVectorIndex(docid []byte, compareKey []byte, workerId int,
-	meterDelete bool) (nmut int, changed bool) {
-	return 0, true
+func (mdb *plasmaSlice) deleteVectorIndex(docid []byte, compareKey, compareSHA []byte, workerId int) (nmut int, changed bool) {
+
+	mdb.back[workerId].TryThrottle()
+	mdb.main[workerId].TryThrottle()
+
+	// Delete entry from back and main index if present
+	mdb.back[workerId].BeginNoThrottle()
+	defer mdb.back[workerId].End()
+
+	itemFound := false
+	backEntry, err := mdb.back[workerId].LookupKV(docid)
+
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
+	buf := mdb.encodeBuf[workerId]
+	if err == nil {
+
+		itemFound = true
+
+		backEntryKey, encodedSHA := splitVectorBackEntry(backEntry, false)
+		if hasEqualBackEntry(compareKey, backEntryKey) && hasEqualEncodedSHA(compareSHA, encodedSHA, false) {
+			return 0, false
+		}
+
+		t0 := time.Now()
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+
+		mdb.main[workerId].BeginNoThrottle()
+		defer mdb.main[workerId].End()
+
+		err = mdb.back[workerId].DeleteKV(docid)
+		if err == nil {
+			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+		}
+
+		entry := backEntry2entry(docid, backEntryKey, buf, mdb.keySzConf[workerId])
+		entrySz := len(entry)
+		err = mdb.main[workerId].DeleteKV(entry)
+		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+		if err == nil {
+			mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
+			subtractKeySizeStat(mdb.idxStats, entrySz)
+		}
+	}
+
+	mdb.isDirty = true
+
+	if itemFound {
+		return 1, true
+	} else {
+		//nothing deleted
+		return 0, true
+	}
 }
 
 // checkFatalDbError checks if the error returned from DB
@@ -4385,6 +4554,12 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 	return buf[:kl+2]
 }
 
+func entry2VectorBackIndexEntry(entry secondaryIndexEntry, shaBuf []byte) []byte {
+	buf := entry2BackEntry(entry)
+	buf = append(buf, shaBuf...)
+	return buf
+}
+
 func getKeyLenFromEntry(entryBytes []byte) int {
 	se, _ := BytesToSecondaryIndexEntry(entryBytes)
 	return se.lenKey()
@@ -4405,6 +4580,40 @@ func hasEqualBackEntry(key []byte, bentry []byte) bool {
 
 	// Ignore 2 byte count for comparison
 	return bytes.Equal(key, bentry[:len(bentry)-2])
+}
+
+func splitVectorBackEntry(backEntry []byte, isVectorOnArrayExpr bool) ([]byte, []byte) {
+	l := uint32(len(backEntry))
+	if isVectorOnArrayExpr {
+		numShaEncodings := binary.LittleEndian.Uint32(backEntry[l-4:]) // last 4 bytes capture the number of SHA encoded values
+		shaEncodingSize := numShaEncodings*sha256.Size + 4
+		return backEntry[:l-shaEncodingSize], backEntry[l-shaEncodingSize:]
+	} else {
+		shaEncodingSize := uint32(sha256.Size)
+		return backEntry[:l-shaEncodingSize], backEntry[l-shaEncodingSize:]
+	}
+}
+
+func hasEqualEncodedSHA(compareSHA []byte, encodedSHA []byte, isVectorOnArrayExpr bool) bool {
+	if compareSHA == nil && encodedSHA == nil {
+		return true
+	}
+
+	if (compareSHA == nil && encodedSHA != nil) || (compareSHA != nil && encodedSHA == nil) {
+		return false
+	}
+
+	cl, el := len(compareSHA), len(encodedSHA)
+	if isVectorOnArrayExpr {
+		compareSHANumEntries := compareSHA[cl-4:] // last 4 bytes capture the number of SHA encoded values
+		encodedSHANumEntries := encodedSHA[el-4:]
+
+		if bytes.Equal(compareSHANumEntries, encodedSHANumEntries) == false {
+			return false // Number of entries are different
+		}
+	}
+
+	return bytes.Equal(compareSHA, encodedSHA)
 }
 
 ////////////////////////////////////////////////////////////
@@ -4453,6 +4662,8 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.encodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	slice.arrayBuf1 = make([][]byte, 0, slice.maxNumWriters)
 	slice.arrayBuf2 = make([][]byte, 0, slice.maxNumWriters)
+	slice.shaBuf = make([][]byte, 0, slice.maxNumWriters)
+	slice.quantizedCodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	slice.keySzConfChanged = make([]int32, 0, slice.maxNumWriters)
 	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
 
@@ -4487,6 +4698,11 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		slice.arrayBuf1 = slice.arrayBuf1[:numWriters]
 		slice.arrayBuf2 = slice.arrayBuf2[:numWriters]
 	}
+
+	if slice.idxDefn.IsVectorIndex {
+		slice.shaBuf = slice.shaBuf[:numWriters]
+		slice.quantizedCodeBuf = slice.quantizedCodeBuf[:numWriters]
+	}
 	slice.keySzConfChanged = slice.keySzConfChanged[:numWriters]
 	slice.keySzConf = slice.keySzConf[:numWriters]
 
@@ -4499,6 +4715,11 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		if slice.idxDefn.IsArrayIndex {
 			slice.arrayBuf1[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize)
 			slice.arrayBuf2[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize)
+		}
+
+		if slice.idxDefn.IsVectorIndex {
+			slice.shaBuf[i] = make([]byte, 0, MIN_SHA_ENCODE_LEN)
+			slice.quantizedCodeBuf[i] = make([]byte, 0) // After training is completed, the codebuf will be resized
 		}
 		slice.keySzConf[i] = keyCfg
 	}
@@ -5079,7 +5300,7 @@ func (mdb *plasmaSlice) ResetCodebook() error {
 
 func (mdb *plasmaSlice) Train(vecs []float32) error {
 	if mdb.codebook == nil {
-		return errors.New("Codebook is not initialized")
+		return ErrorCodebookNotInitialized
 	}
 
 	err := mdb.codebook.Train(vecs)
@@ -5092,7 +5313,124 @@ func (mdb *plasmaSlice) Train(vecs []float32) error {
 		mdb.codeSize = 0
 		return err
 	}
+
+	mdb.initQuantizedCodeBuf()
 	return nil
+}
+
+func (mdb *plasmaSlice) GetCodebook() (codebook.Codebook, error) {
+	if mdb.codebook == nil {
+		return nil, ErrorCodebookNotInitialized
+	}
+
+	if !mdb.codebook.IsTrained() {
+		return nil, codebook.ErrCodebookNotTrained
+	}
+
+	return mdb.codebook, nil
+}
+
+func (mdb *plasmaSlice) initQuantizedCodeBuf() {
+	numWriters := mdb.numWritersPerPartition()
+	for i := 0; i < numWriters; i++ {
+		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
+	}
+}
+
+func (mdb *plasmaSlice) getNearestCentroidId(vec []float32) (int64, error) {
+
+	// For mutation path, only one centroidId is required
+	// Scan paths can try to compute more than "1" closest
+	// centroid depending on "nprobes" value
+	oneNearIds, err := mdb.codebook.FindNearestCentroids(vec, 1)
+	if err != nil {
+		err := fmt.Errorf("Error observed while computing %v centroidIds for vector: %v, instId: %v")
+		return -1, err
+	}
+	return oneNearIds[0], nil
+}
+
+// Storage encoding for back-index entry for vector index with vector attribute
+// on non-array expression
+// Format:
+// [collate_json_encoded_sec_key][sha256_encoding_vector]
+//
+// For vector on non-array field, indexer expects only one vector array
+// Only the SHA encoding is suffixed to back-index entry
+func shaEncodedVector(vec []float32, buf []byte) []byte {
+	sha := common.ComputeSHA256ForFloat32Array(vec)
+	buf = append(buf, sha...)
+	return buf
+}
+
+// Storage encoding for back-index entry for vector index with vector attribute on array expression
+// Format:
+// [collate_json_encoded_sec_key][[sha256_encoding_vector]...][num_of_sha256_encoded_values_4_bytes]
+// For vector array index, there can be multiple sha256 encodings - one for each vector
+// Therefore, back-index will store the array of sha256 encoding vector and the number of such
+// encoded values.
+//
+// Since the size of SHA256 encoding is fixed i.e. 32 bytes (sha256.Size), the start position
+// of SHA values can be decided by len(backIndexEntry) - num_of_sha256_encoded_values * 32
+func shaEncodedVectors(vecs [][]float32, buf []byte) []byte {
+	numVectorArrs := len(vecs)
+	offset := 0
+	for i := range vecs {
+		vec := vecs[i]
+		sha := common.ComputeSHA256ForFloat32Array(vec)
+		buf = append(buf, sha...)
+		offset += len(sha)
+	}
+
+	buf = buf[:offset+4]
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(numVectorArrs))
+	return buf
+}
+
+// Quantized codes are arranged as a slice of bytes
+func (mdb *plasmaSlice) getQuantizedCodeForVector(vec []float32, codeSize int, buf []byte) ([]byte, error) {
+
+	buf = buf[:codeSize]
+	err := mdb.codebook.EncodeVector(vec, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+// Similar to getQuantizedCodeForVector() but processes array of vectors
+func (mdb *plasmaSlice) getQuantizedCodeForVectors(vecs [][]float32, codeSize int, buf []byte) ([]byte, error) {
+	offset := 0
+	buf = buf[:len(vecs)*codeSize+4]
+
+	for _, vec := range vecs {
+
+		err := mdb.codebook.EncodeVector(vec, buf[offset:])
+		if err != nil {
+			return nil, err
+		}
+		offset += mdb.codeSize
+	}
+
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(vecs)))
+	return buf, nil
+}
+
+func resizeShaBuf(shaBuf []byte, vecLen int, doResize bool) []byte {
+	if doResize && ((vecLen*sha256.Size)+4) > cap(shaBuf) {
+		newSize := ((vecLen * sha256.Size) + 4)
+		shaBuf = make([]byte, 0, newSize)
+	}
+	return shaBuf
+}
+
+func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doResize bool) []byte {
+	if doResize && ((numVecs*codeSize)+4) > cap(quantizedCodeBuf) {
+		newSize := ((numVecs * codeSize) + 4)
+		quantizedCodeBuf = make([]byte, 0, newSize)
+	}
+	return quantizedCodeBuf
 }
 
 ////////////////////////////////////////////////////////////

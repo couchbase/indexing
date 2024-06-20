@@ -140,12 +140,13 @@ func (mk *MutationKeys) Free() {
 }
 
 type Mutation struct {
-	uuid     c.IndexInstId // index-id
-	command  byte          // command the index
-	key      []byte        // key-version for index
-	oldkey   []byte        // previous key-version, if available
-	partnkey []byte        // partition key
-	vectors  [][]float32   // Array of vector embeddings for vector indexes
+	uuid        c.IndexInstId // index-id
+	command     byte          // command the index
+	key         []byte        // key-version for index
+	oldkey      []byte        // previous key-version, if available
+	partnkey    []byte        // partition key
+	vectors     [][]float32   // Array of vector embeddings for vector indexes
+	centroidPos []int32       // Position of the centroidId in the encoded key
 }
 
 var mutPool = sync.Pool{New: newMutation}

@@ -9,27 +9,31 @@
 // Package collatejson supplies Encoding and Decoding function to transform
 // JSON text into binary representation without loosing information. That is,
 //
-// * binary representation should preserve the sort order such that, sorting
-//   binary encoded json documents much match sorting by functions that parse
-//   and compare JSON documents.
-// * it must be possible to get back the original document, in semantically
-//   correct form, from its binary representation.
+//   - binary representation should preserve the sort order such that, sorting
+//     binary encoded json documents much match sorting by functions that parse
+//     and compare JSON documents.
+//   - it must be possible to get back the original document, in semantically
+//     correct form, from its binary representation.
 //
 // Notes:
 //
-// * items in a property object are sorted by its property name before they
-//   are compared with property's value.
+//   - items in a property object are sorted by its property name before they
+//     are compared with property's value.
 package collatejson
 
-import "bytes"
-import json "github.com/couchbase/indexing/secondary/common/json"
-import "errors"
-import "strings"
-import "sort"
-import "fmt"
-import "strconv"
-import "sync"
-import n1ql "github.com/couchbase/query/value"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+
+	json "github.com/couchbase/indexing/secondary/common/json"
+
+	n1ql "github.com/couchbase/query/value"
+)
 
 var bufPool *sync.Pool
 
@@ -94,6 +98,12 @@ type Codec struct {
 	propertyLenPrefix bool        // if true, first sort properties based on length
 	doMissing         bool        // if true, handle missing values (for N1QL)
 	numberType        interface{} // "float64" | "int64" | "decimal"
+
+	// If >= 0, Codec will return the position of the field in encoded key
+	fieldPos   int
+	encodedPos []int32 // List of positions where the field is encoded
+
+	nestLevel int
 	//-- unicode
 	//backwards        bool
 	//hiraganaQ        bool
@@ -113,6 +123,7 @@ func NewCodec(propSize int) *Codec {
 		propertyLenPrefix: true,
 		doMissing:         true,
 		numberType:        float64(0.0),
+		fieldPos:          -1,
 	}
 }
 
@@ -568,6 +579,8 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 	case n1ql.ARRAY:
 		act := val.ActualForIndex().([]interface{})
 		code = append(code, TypeArray)
+		codec.nestLevel++
+
 		if codec.arrayLenPrefix {
 			arrlen := Length(len(act))
 			if cs, err = codec.json2code(arrlen, code[1:]); err == nil {
@@ -575,15 +588,21 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 			}
 		}
 		if err == nil {
-			for _, val := range act {
+			for i, val := range act {
 				l := len(code)
 				cs, err = codec.n1ql2code(n1ql.NewValue(val), code[l:])
 				if err == nil {
+
+					if codec.nestLevel == 1 && i == codec.fieldPos {
+						codec.encodedPos = append(codec.encodedPos, int32(l))
+					}
 					code = code[:l+len(cs)]
 					continue
 				}
 				break
 			}
+
+			codec.nestLevel--
 			code = append(code, Terminator)
 		}
 	case n1ql.OBJECT:
@@ -1222,4 +1241,12 @@ func getStringDatum(code []byte) ([]byte, []byte, error) {
 		}
 	}
 	return nil, nil, ErrorSuffixDecoding
+}
+
+func (codec *Codec) SetFieldPos(pos int) {
+	codec.fieldPos = pos
+}
+
+func (codec *Codec) GetEncodedPos() []int32 {
+	return codec.encodedPos
 }

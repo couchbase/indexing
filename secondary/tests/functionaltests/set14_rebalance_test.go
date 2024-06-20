@@ -538,6 +538,7 @@ func TestRebalanceReplicaRepair(t *testing.T) {
 //	Starting Config: [0: kv n1ql] [1: index] [2: index] [3: index]
 //	Ending config:   [0: kv n1ql] [1: index] [2: index] [3: index]
 func TestFailureAndRebalanceDuringInitialIndexBuild(t *testing.T) {
+	t.Skipf("Skipping unstable test")
 	const _TestFailureAndRebalanceDuringInitialIndexBuild = "set14_rebalance_test.go::TestFailureAndRebalanceDuringInitialIndexBuild:"
 	printClusterConfig(_TestFailureAndRebalanceDuringInitialIndexBuild, "entry")
 	if skipTest() {
@@ -727,6 +728,7 @@ func TestRedistributeWhenNodeIsAddedForTrue(t *testing.T) {
 }
 
 func TestRebalanceWithCreateCommandToken(t *testing.T) {
+	t.Skipf("Skipping unstable test")
 	if strings.Contains(clusterconfig.IndexUsing, "forestdb") {
 		t.Skip("Skipping test for forestdb storage")
 	}

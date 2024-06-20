@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 )
 
 type SliceId uint64
@@ -60,6 +61,8 @@ type Slice interface {
 	InitCodebook() error
 	ResetCodebook() error
 	Train([]float32) error
+
+	GetCodebook() (codebook.Codebook, error)
 }
 
 // cursorCtx implements IndexReaderContext and is used

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"hash/crc32"
 
+	c "github.com/couchbase/indexing/secondary/vector/codebook"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
@@ -50,12 +51,12 @@ type codebookIVFPQ_IO struct {
 type codebookIVFSQ struct {
 }
 
-func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (Codebook, error) {
+func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codebook, error) {
 
 	var err error
 
 	if metric != METRIC_L2 {
-		return nil, ErrUnsupportedMetric
+		return nil, c.ErrUnsupportedMetric
 	}
 
 	codebook := &codebookIVFPQ{
@@ -77,11 +78,11 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (Codebook,
 
 }
 
-//Train the codebook using input vectors.
+// Train the codebook using input vectors.
 func (cb *codebookIVFPQ) Train(vecs []float32) error {
 
 	if cb.index == nil {
-		return ErrCodebookClosed
+		return c.ErrCodebookClosed
 	}
 
 	err := cb.index.Train(vecs)
@@ -91,7 +92,7 @@ func (cb *codebookIVFPQ) Train(vecs []float32) error {
 	return err
 }
 
-//IsTrained returns true if codebook has been trained.
+// IsTrained returns true if codebook has been trained.
 func (cb *codebookIVFPQ) IsTrained() bool {
 
 	if cb.index == nil {
@@ -105,38 +106,38 @@ func (cb *codebookIVFPQ) IsTrained() bool {
 	}
 }
 
-//CodeSize returns the size of produced code in bytes.
+// CodeSize returns the size of produced code in bytes.
 func (cb *codebookIVFPQ) CodeSize() (int, error) {
 
 	if !cb.IsTrained() {
-		return 0, ErrCodebookNotTrained
+		return 0, c.ErrCodebookNotTrained
 	}
 	return cb.index.CodeSize()
 }
 
-//Compute the quantized code for a given input vector.
-//Must be run on a trained codebook.
+// Compute the quantized code for a given input vector.
+// Must be run on a trained codebook.
 func (cb *codebookIVFPQ) EncodeVector(vec []float32, code []byte) error {
 
 	return cb.EncodeVectors(vec, code)
 }
 
-//Compute the quantized code for a given input vector.
-//Must be run on a trained codebook.
+// Compute the quantized code for a given input vector.
+// Must be run on a trained codebook.
 func (cb *codebookIVFPQ) EncodeVectors(vecs []float32, codes []byte) error {
 
 	if !cb.IsTrained() {
-		return ErrCodebookNotTrained
+		return c.ErrCodebookNotTrained
 	}
 	return cb.index.EncodeVectors(vecs, codes, cb.nsub, cb.nbits, cb.nlist)
 }
 
-//Find the nearest k centroidIDs for a given vector.
-//Must be run on a trained codebook.
+// Find the nearest k centroidIDs for a given vector.
+// Must be run on a trained codebook.
 func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, error) {
 
 	if !cb.IsTrained() {
-		return nil, ErrCodebookNotTrained
+		return nil, c.ErrCodebookNotTrained
 	}
 	quantizer, err := cb.index.Quantizer()
 	if err != nil {
@@ -150,23 +151,23 @@ func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 
 }
 
-//Decode the quantized code and return float32 vector.
-//Must be run on a trained codebook.
+// Decode the quantized code and return float32 vector.
+// Must be run on a trained codebook.
 func (cb *codebookIVFPQ) DecodeVector(code []byte, vec []float32) error {
 	return cb.DecodeVectors(1, code, vec)
 }
 
-//Decode the quantized codes and return float32 vectors.
-//Must be run on a trained codebook.
+// Decode the quantized codes and return float32 vectors.
+// Must be run on a trained codebook.
 func (cb *codebookIVFPQ) DecodeVectors(n int, codes []byte, vecs []float32) error {
 
 	if !cb.IsTrained() {
-		return ErrCodebookNotTrained
+		return c.ErrCodebookNotTrained
 	}
 	return cb.index.DecodeVectors(n, codes, vecs)
 }
 
-//Compute the distance between a vector with another given set of vectors.
+// Compute the distance between a vector with another given set of vectors.
 func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
 	if cb.metric == METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
@@ -184,7 +185,7 @@ func (cb *codebookIVFPQ) ComputeDistanceWithDT(code []byte, dtable [][]float32) 
 	return 0
 }
 
-//Size returns the memory size in bytes.
+// Size returns the memory size in bytes.
 func (cb *codebookIVFPQ) Size() uint64 {
 
 	var size uint64
@@ -195,11 +196,11 @@ func (cb *codebookIVFPQ) Size() uint64 {
 	return size
 }
 
-//Close frees the memory used by codebook.
+// Close frees the memory used by codebook.
 func (cb *codebookIVFPQ) Close() error {
 
 	if cb.index == nil {
-		return ErrCodebookClosed
+		return c.ErrCodebookClosed
 	} else {
 		cb.index.Close()
 		cb.index = nil
@@ -208,7 +209,7 @@ func (cb *codebookIVFPQ) Close() error {
 	}
 }
 
-func (cb *codebookIVFPQ) marshal() ([]byte, error) {
+func (cb *codebookIVFPQ) Marshal() ([]byte, error) {
 
 	cbio := new(codebookIVFPQ_IO)
 
@@ -232,7 +233,7 @@ func (cb *codebookIVFPQ) marshal() ([]byte, error) {
 	return json.Marshal(cbio)
 }
 
-func recoverCodebookIVFPQ(data []byte) (Codebook, error) {
+func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
 
 	cbio := new(codebookIVFPQ_IO)
 
@@ -241,13 +242,13 @@ func recoverCodebookIVFPQ(data []byte) (Codebook, error) {
 	}
 
 	if cbio.CodebookVer != CodebookVer1 {
-		return nil, ErrInvalidVersion
+		return nil, c.ErrInvalidVersion
 	}
 
 	//validate checksum
 	checksum := crc32.ChecksumIEEE(cbio.Index)
 	if cbio.Checksum != checksum {
-		return nil, ErrChecksumMismatch
+		return nil, c.ErrChecksumMismatch
 	}
 
 	cb := new(codebookIVFPQ)

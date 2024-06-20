@@ -1876,6 +1876,10 @@ func (si *secondaryIndex6) Include() (rvs expression.Expressions) {
 	return si.include
 }
 
+func (si *secondaryIndex6) VectorDescription() string {
+	return ""
+}
+
 // Scan6 implements Index6 interface
 func (si *secondaryIndex6) Scan6(
 	requestId string,
