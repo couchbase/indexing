@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -21,6 +22,8 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
+	"github.com/golang/protobuf/proto"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/expression"
@@ -39,6 +42,9 @@ const (
 	MultiScanCountReq             = "multiscancount"
 	FastCountReq                  = "fastcountreq" //generated internally
 	VectorScanReq                 = "vectorscanreq"
+
+	// VECTOR_TODO: Check if this is needed. ScanAllReq with distances substituted
+	VectorScanAllReq = "vectorscanallreq"
 )
 
 type ScanRequest struct {
@@ -119,7 +125,15 @@ type ScanRequest struct {
 	User             string // For read metering
 	SkipReadMetering bool
 
-	queryVector []float32
+	nprobes               int
+	vectorPos             int
+	isVectorScan          bool
+	queryVector           []float32
+	codebookMap           map[common.PartitionId]codebook.Codebook
+	centroidMap           map[common.PartitionId][]int64
+	protoScans            []*protobuf.Scan
+	vectorScans           map[common.PartitionId]map[int64][]Scan
+	parallelCentroidScans int
 }
 
 type Projection struct {
@@ -171,6 +185,10 @@ type CompositeElementFilter struct {
 	Low       IndexKey
 	High      IndexKey
 	Inclusion Inclusion
+}
+
+func (c CompositeElementFilter) String() string {
+	return fmt.Sprintf("(Low: %s High: %s Inclusion: %v)", c.Low.Bytes(), c.High.Bytes(), c.Inclusion)
 }
 
 // A point in index and the corresponding filter
@@ -320,6 +338,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	r.keySzCfg = getKeySizeConfig(cfg)
 
+	r.parallelCentroidScans = cfg["scan.parallel_centroid_scans"].Int()
+
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
 		r.ScanType = HeloReq
@@ -372,7 +392,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 		sc := req.GetScans()
 		if len(sc) != 0 {
-			err = r.fillScans(sc)
+			r.Scans, err = r.makeScans(sc)
 			r.ScanType = MultiScanCountReq
 			r.Distinct = req.GetDistinct()
 		}
@@ -381,6 +401,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 	case *protobuf.ScanRequest:
+		r.isVectorScan = (req.GetIndexVector() != nil)
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -432,8 +453,18 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		if err != nil {
 			return
 		}
-		if err = r.fillScans(req.GetScans()); err != nil {
-			return
+
+		ivec := req.GetIndexVector()
+		if ivec != nil {
+			r.ScanType = VectorScanReq
+			r.protoScans = req.GetScans() // Save ref to protoScans to generate vector scans later
+			if err = r.setVectorIndexParams(ivec); err != nil {
+				return
+			}
+		} else {
+			if r.Scans, err = r.makeScans(req.GetScans()); err != nil {
+				return
+			}
 		}
 
 		if err = r.fillGroupAggr(req.GetGroupAggr(), req.GetScans()); err != nil {
@@ -441,12 +472,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 		r.setExplodePositions()
 
-		ivec := req.GetIndexVector()
-		if ivec != nil {
-			r.setVectorIndexParams(ivec)
-		}
-
 	case *protobuf.ScanAllRequest:
+		r.isVectorScan = (req.GetIndexVector() != nil)
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -470,9 +497,13 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			return
 		}
 
+		// VECTOR_TODO: Check if this is needed
 		ivec := req.GetIndexVector()
 		if ivec != nil {
-			r.setVectorIndexParams(ivec)
+			r.ScanType = VectorScanAllReq
+			if err = r.setVectorIndexParams(ivec); err != nil {
+				return
+			}
 		}
 	default:
 		err = ErrUnsupportedRequest
@@ -481,13 +512,77 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	return
 }
 
-func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
+func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) (err error) {
 	// Populate query vector in req
 	qvec := ivec.GetQueryVector()
 	r.queryVector = append(r.queryVector, qvec...)
 
 	// Set Scan type to VectorScanReq so that we can process vector req differently
-	r.ScanType = VectorScanReq
+	r.nprobes = int(ivec.GetProbes())
+
+	// Set vector position
+	r.vectorPos = r.IndexInst.Defn.GetVectorKeyPosExploded()
+	if r.vectorPos < 0 {
+		return ErrNotVectorIndex
+	}
+
+	return nil
+}
+
+func (r *ScanRequest) getNearestCentroids() error {
+	r.centroidMap = make(map[common.PartitionId][]int64)
+
+	for pid, cb := range r.codebookMap {
+		centroids, err := cb.FindNearestCentroids(r.queryVector, int64(r.nprobes))
+		if err != nil {
+			return err
+		}
+		r.centroidMap[pid] = centroids
+	}
+	return nil
+}
+
+// fillVectorScans must be called after getNearestCentroids as this function uses centroidIDs
+func (r *ScanRequest) fillVectorScans() (localErr error) {
+
+	substituteCentroidID := func(centroidId int64) error {
+		for _, scan := range r.protoScans {
+			for filterPos, compFilter := range scan.Filters {
+				if filterPos == r.vectorPos {
+					// VECTOR_TODO: check and replace this encoding
+					bs, err := json.Marshal(centroidId)
+					if err != nil {
+						return err
+					}
+					centroidIdBytes := bs
+
+					compFilter.Low = centroidIdBytes
+					compFilter.High = centroidIdBytes
+					compFilter.Inclusion = proto.Uint32(uint32(Both))
+				}
+			}
+		}
+		return nil
+	}
+
+	scansForPartns := make(map[common.PartitionId]map[int64][]Scan)
+	for partnId, centroidIdList := range r.centroidMap {
+		scansForCentroids := make(map[int64][]Scan)
+		for _, cid := range centroidIdList {
+			localErr = substituteCentroidID(cid)
+			if localErr != nil {
+				return localErr
+			}
+			logging.Verbosef("Susbstituted ProtoScans: %v", r.protoScans)
+			scansForCentroids[cid], localErr = r.makeScans(r.protoScans)
+			if localErr != nil {
+				return localErr
+			}
+		}
+		scansForPartns[partnId] = scansForCentroids
+	}
+	r.vectorScans = scansForPartns
+	return nil
 }
 
 func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
@@ -947,22 +1042,22 @@ func MergeFiltersForPrimary(scans []Scan, f2 Filter) []Scan {
 
 ///// END - Compose Scans for Primary Index
 
-func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
+func (r *ScanRequest) makeScans(protoScans []*protobuf.Scan) (s []Scan, localErr error) {
 	var l, h IndexKey
 
 	// For Upgrade
 	if len(protoScans) == 0 {
-		r.Scans = make([]Scan, 1)
+		scans := make([]Scan, 1)
 		if len(r.Keys) > 0 {
-			r.Scans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
-			r.Scans[0].ScanType = LookupReq
+			scans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
+			scans[0].ScanType = LookupReq
 		} else {
-			r.Scans[0].Low = r.Low
-			r.Scans[0].High = r.High
-			r.Scans[0].Incl = r.Incl
-			r.Scans[0].ScanType = RangeReq
+			scans[0].Low = r.Low
+			scans[0].High = r.High
+			scans[0].Incl = r.Incl
+			scans[0].ScanType = RangeReq
 		}
-		return
+		return scans, nil
 	}
 
 	// Array of Filters
@@ -977,7 +1072,7 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 				var key IndexKey
 				if key, localErr = r.newKey(protoScan.Equals[0]); localErr != nil {
 					localErr = fmt.Errorf("Invalid equal key %s (%s)", string(protoScan.Equals[0]), localErr)
-					return
+					return nil, localErr
 				}
 				filter.Low = key
 				filter.High = key
@@ -992,27 +1087,27 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 
 			// If there are no filters in scan, it is ScanAll
 			if len(protoScan.Filters) == 0 {
-				r.Scans = make([]Scan, 1)
-				r.Scans[0] = getScanAll()
-				return
+				scans := make([]Scan, 1)
+				scans[0] = getScanAll()
+				return scans, nil
 			}
 
 			// if all scan filters are (nil, nil), it is ScanAll
 			if r.areFiltersNil(protoScan) {
-				r.Scans = make([]Scan, 1)
-				r.Scans[0] = getScanAll()
-				return
+				scans := make([]Scan, 1)
+				scans[0] = getScanAll()
+				return scans, nil
 			}
 
 			fl := protoScan.Filters[0]
 			if l, localErr = r.newLowKey(fl.Low); localErr != nil {
 				localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
-				return
+				return nil, localErr
 			}
 
 			if h, localErr = r.newHighKey(fl.High); localErr != nil {
 				localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
-				return
+				return nil, localErr
 			}
 
 			if IndexKeyLessThan(h, l) {
@@ -1045,8 +1140,8 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 		for _, filter := range filters {
 			scans = MergeFiltersForPrimary(scans, filter)
 		}
-		r.Scans = scans
-		return
+
+		return scans, nil
 	} else {
 		for _, protoScan := range protoScans {
 			skipScan := false
@@ -1054,7 +1149,7 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 				//Encode the equals keys
 				var filter Filter
 				if localErr = r.fillFilterEquals(protoScan, &filter); localErr != nil {
-					return
+					return nil, localErr
 				}
 				filters = append(filters, filter)
 
@@ -1066,16 +1161,16 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 
 			// If there are no filters in scan, it is ScanAll
 			if len(protoScan.Filters) == 0 {
-				r.Scans = make([]Scan, 1)
-				r.Scans[0] = getScanAll()
-				return
+				scans := make([]Scan, 1)
+				scans[0] = getScanAll()
+				return scans, nil
 			}
 
 			// if all scan filters are (nil, nil), it is ScanAll
 			if r.areFiltersNil(protoScan) {
-				r.Scans = make([]Scan, 1)
-				r.Scans[0] = getScanAll()
-				return
+				scans := make([]Scan, 1)
+				scans[0] = getScanAll()
+				return scans, nil
 			}
 
 			var compFilters []CompositeElementFilter
@@ -1083,12 +1178,12 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 			for _, fl := range protoScan.Filters {
 				if l, localErr = r.newLowKey(fl.Low); localErr != nil {
 					localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
-					return
+					return nil, localErr
 				}
 
 				if h, localErr = r.newHighKey(fl.High); localErr != nil {
 					localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
-					return
+					return nil, localErr
 				}
 
 				if IndexKeyLessThan(h, l) {
@@ -1114,7 +1209,7 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 			}
 
 			if localErr = r.fillFilterLowHigh(compFilters, &filter); localErr != nil {
-				return
+				return nil, localErr
 			}
 
 			filters = append(filters, filter)
@@ -1130,10 +1225,10 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 
 	// Sort Index Points
 	sort.Sort(IndexPoints(points))
-	r.Scans = r.composeScans(points, filters)
+	scans := r.composeScans(points, filters)
 
 	r.maxCompositeFilters = 0
-	for _, sc := range r.Scans {
+	for _, sc := range scans {
 		if sc.ScanType != FilterRangeReq {
 			continue
 		}
@@ -1155,10 +1250,10 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 		}
 		logging.Errorf(fmsg, r.LogPrefix, r.RequestId, r.DefnID, r.IndexInst.Defn.SecExprs,
 			logging.TagUD(r.Scans), r.maxCompositeFilters, sb.String())
-		return fmt.Errorf("invalid length of composite element filters in scan request")
+		return nil, fmt.Errorf("invalid length of composite element filters in scan request")
 	}
 
-	return
+	return scans, nil
 }
 
 // Populate list of positions of keys which need to be
@@ -1229,9 +1324,14 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 
 	var indexInst *common.IndexInst
 
+	ctxsPerPartition := 1
+	if r.isVectorScan {
+		ctxsPerPartition = r.parallelCentroidScans
+	}
+
 	stats := r.sco.stats.Get()
-	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID,
-		r.PartitionIds, r.User, r.SkipReadMetering)
+	indexInst, r.Ctxs, localErr = r.sco.findIndexInstance(r.DefnID, r.PartitionIds,
+		r.User, r.SkipReadMetering, ctxsPerPartition)
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket

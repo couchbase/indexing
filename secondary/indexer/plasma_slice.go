@@ -5330,11 +5330,32 @@ func (mdb *plasmaSlice) GetCodebook() (codebook.Codebook, error) {
 	return mdb.codebook, nil
 }
 
+func (mdb *plasmaSlice) IsTrained() bool {
+	if mdb.codebook == nil {
+		return false
+	}
+
+	return mdb.codebook.IsTrained()
+}
+
 func (mdb *plasmaSlice) initQuantizedCodeBuf() {
 	numWriters := mdb.numWritersPerPartition()
 	for i := 0; i < numWriters; i++ {
 		mdb.quantizedCodeBuf[i] = resizeQuantizedCodeBuf(mdb.quantizedCodeBuf[i], 1, mdb.codeSize, true)
 	}
+}
+
+func (mdb *plasmaSlice) SerializeCodebook() ([]byte, error) {
+
+	if mdb.codebook == nil {
+		return nil, errors.New("Codebook is not initialized")
+	}
+
+	if mdb.codebook.IsTrained() == false {
+		return nil, errors.New("Codebook is not trained")
+	}
+
+	return mdb.codebook.Marshal()
 }
 
 func (mdb *plasmaSlice) getNearestCentroidId(vec []float32) (int64, error) {

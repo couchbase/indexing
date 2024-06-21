@@ -3486,6 +3486,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.parallel_centroid_scans": ConfigValue{
+		3,
+		"number of centroids to scan in parallel",
+		3,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.timeout": ConfigValue{
 		300,
 		"timeout (sec) on planner",

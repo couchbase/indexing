@@ -1593,6 +1593,14 @@ func (fdb *fdbSlice) Train(vecs []float32) error {
 	return nil
 }
 
+func (mdb *fdbSlice) IsTrained() bool {
+	return false
+}
+
+func (mdb *fdbSlice) SerializeCodebook() ([]byte, error) {
+	return nil, nil
+}
+
 func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 	fdb.confLock.Lock()
 	defer fdb.confLock.Unlock()

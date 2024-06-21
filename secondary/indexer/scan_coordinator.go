@@ -25,6 +25,7 @@ import (
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
+	"github.com/couchbase/indexing/secondary/vector/codebook"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -36,6 +37,7 @@ var (
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
 	ErrNotMyPartition     = errors.New("Not my partition")
+	ErrNotVectorIndex     = errors.New("Not vector index")
 )
 
 const DECODE_ERR_THRESHOLD = 100
@@ -513,15 +515,34 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{},
 		}
 	}
 
+	defer func() {
+		if len(req.Ctxs) != 0 {
+			for _, ctx := range req.Ctxs {
+				ctx.Done()
+			}
+		}
+	}()
+
+	if req.isVectorScan {
+		err = s.fillCodebookMap(req)
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
+
+		err = req.getNearestCentroids()
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
+
+		err = req.fillVectorScans()
+		if err != nil && s.tryRespondWithError(w, req, err) {
+			return
+		}
+	}
+
 	// Do the scan
 	s.processRequest(req, w, is, t0)
 	readUnits = req.GetReadUnits()
-
-	if len(req.Ctxs) != 0 {
-		for _, ctx := range req.Ctxs {
-			ctx.Done()
-		}
-	}
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
@@ -1524,17 +1545,47 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 	return cb
 }
 
+// fillCodebookMap fill the codebookmao in the ScanRequest
+// Note:
+// 1. This function should be called after Scan acquires storage reader instance
+// Rollback cannot happend when readers are running and on rollback codebook can
+// change. So to get lastest codebook call this function after acquring a storage
+// reader
+// 2. Call this function after populating index instance in Scan Request
+func (s *scanCoordinator) fillCodebookMap(r *ScanRequest) (cbErr error) {
+	r.codebookMap = make(map[common.PartitionId]codebook.Codebook)
+
+	pmap, ok := s.indexPartnMap[r.IndexInst.InstId]
+	if !ok {
+		return fmt.Errorf("instanceid: %v err: %v", r.IndexInst.InstId, ErrNotMyIndex)
+	}
+
+	for _, partnId := range r.PartitionIds {
+		if partition, ok := pmap[partnId]; ok {
+			slice := partition.Sc.GetSliceById(0)
+			r.codebookMap[partnId], cbErr = slice.GetCodebook()
+			if cbErr != nil {
+				return fmt.Errorf("partitionid: %v err: %v", partnId, cbErr)
+			}
+		} else {
+			return fmt.Errorf("partitionid: %v err: %v", partnId, ErrNotMyPartition)
+		}
+	}
+
+	return nil
+}
+
 // Find and return data structures for the specified index
 // This will also return the IndexReaderContext for each partition.  IndexReaderContext must
 // be returned in the same order as partitionIds.
-func (s *scanCoordinator) findIndexInstance(defnID uint64,
-	partitionIds []common.PartitionId, user string, skipReadMetering bool) (
+func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common.PartitionId,
+	user string, skipReadMetering bool, ctxsPerPartition int) (
 	*common.IndexInst, []IndexReaderContext, error) {
 
 	hasIndex := false
 	isPartition := false
 
-	ctx := make([]IndexReaderContext, len(partitionIds))
+	ctx := make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
 	missing := make(map[common.IndexInstId][]common.PartitionId)
 
 	indexInstMap := s.indexInstMap
@@ -1557,7 +1608,9 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64,
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
-						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
+						for j := 0; j < ctxsPerPartition; j++ {
+							ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
+						}
 					} else {
 						found = false
 						missing[inst.InstId] = append(missing[inst.InstId], partnId)

@@ -61,8 +61,9 @@ type Slice interface {
 	InitCodebook() error
 	ResetCodebook() error
 	Train([]float32) error
-
 	GetCodebook() (codebook.Codebook, error)
+	IsTrained() bool
+	SerializeCodebook() ([]byte, error)
 }
 
 // cursorCtx implements IndexReaderContext and is used

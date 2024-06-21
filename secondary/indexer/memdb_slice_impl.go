@@ -1861,6 +1861,14 @@ func (mdb *memdbSlice) Train(vecs []float32) error {
 	return nil
 }
 
+func (mdb *memdbSlice) IsTrained() bool {
+	return false
+}
+
+func (mdb *memdbSlice) SerializeCodebook() ([]byte, error) {
+	return nil, nil
+}
+
 func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 	internalData := fmt.Sprintf("{\n"+
