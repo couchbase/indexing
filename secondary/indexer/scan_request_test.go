@@ -296,3 +296,147 @@ func TestScanRequest_fillVectorScans(t *testing.T) {
 		})
 	}
 }
+
+func TestScanRequest_setIndexParams(t *testing.T) {
+	logging.SetLogLevel(logging.Info)
+	getMs := func(id common.PartitionId) SliceContainer {
+		return &MockSliceContainer{
+			CB:      nil,
+			PartnId: id,
+		}
+	}
+
+	defnId := c.IndexDefnId(111)
+	sco := &scanCoordinator{
+		indexPartnMap: IndexPartnMap{
+			common.IndexInstId(11): PartitionInstMap{
+				common.PartitionId(1): PartitionInst{Sc: getMs(common.PartitionId(1))},
+				common.PartitionId(3): PartitionInst{Sc: getMs(common.PartitionId(3))},
+				common.PartitionId(5): PartitionInst{Sc: getMs(common.PartitionId(5))},
+			},
+			common.IndexInstId(22): PartitionInstMap{
+				common.PartitionId(2): PartitionInst{Sc: getMs(common.PartitionId(2))},
+				common.PartitionId(4): PartitionInst{Sc: getMs(common.PartitionId(4))},
+				common.PartitionId(6): PartitionInst{Sc: getMs(common.PartitionId(6))},
+			},
+		},
+		indexInstMap: common.IndexInstMap{
+			common.IndexInstId(11): common.IndexInst{
+				InstId: common.IndexInstId(11),
+				State:  common.INDEX_STATE_ACTIVE,
+				RState: common.REBAL_ACTIVE,
+				Defn: common.IndexDefn{
+					DefnId:          defnId,
+					PartitionScheme: common.HASH,
+				},
+				ReplicaId: 0,
+			},
+			common.IndexInstId(22): common.IndexInst{
+				InstId: common.IndexInstId(22),
+				State:  common.INDEX_STATE_ACTIVE,
+				RState: common.REBAL_ACTIVE,
+				Defn: common.IndexDefn{
+					DefnId:          defnId,
+					PartitionScheme: common.HASH,
+				},
+				ReplicaId: 1,
+			},
+		},
+		indexDefnMap: map[common.IndexDefnId][]common.IndexInstId{
+			defnId: []common.IndexInstId{11, 22},
+		},
+	}
+	sco.initRollbackInProgress()
+	sco.stats.Set(NewIndexerStats())
+
+	tests := []struct {
+		name                  string
+		PartitionIds          []common.PartitionId
+		nprobes               int
+		isVectorScan          bool
+		parallelCentroidScans int
+		instId                common.IndexInstId
+		instIdState           common.IndexState
+		indexerState          common.IndexerState
+		ctxsLen               int
+		wantErr               error
+	}{
+		{
+			name:                  "nprobeGtParallelScans",
+			PartitionIds:          []common.PartitionId{1, 3},
+			nprobes:               6,
+			isVectorScan:          true,
+			parallelCentroidScans: 3,
+			ctxsLen:               6,
+			wantErr:               nil,
+		},
+		{
+			name:                  "nprobesLtParallelScans",
+			PartitionIds:          []common.PartitionId{1, 3},
+			nprobes:               2,
+			isVectorScan:          true,
+			parallelCentroidScans: 6,
+			ctxsLen:               4,
+			wantErr:               nil,
+		},
+		{
+			name:                  "nprobesEqParallelScans",
+			PartitionIds:          []common.PartitionId{1, 3},
+			nprobes:               4,
+			isVectorScan:          true,
+			parallelCentroidScans: 4,
+			ctxsLen:               8,
+			wantErr:               nil,
+		},
+		{
+			name:                  "nonVectorScan",
+			PartitionIds:          []common.PartitionId{1, 3},
+			nprobes:               4,
+			isVectorScan:          false,
+			parallelCentroidScans: 4,
+			ctxsLen:               2,
+			wantErr:               nil,
+		},
+		{
+			name:                  "error",
+			PartitionIds:          []common.PartitionId{1, 3},
+			nprobes:               4,
+			isVectorScan:          true,
+			parallelCentroidScans: 4,
+			ctxsLen:               2,
+			instId:                common.IndexInstId(11),
+			instIdState:           common.INDEX_STATE_INITIAL,
+			wantErr:               ErrNotMyPartition, // As other instance is active
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &ScanRequest{
+				DefnID:                uint64(defnId),
+				PartitionIds:          tt.PartitionIds,
+				User:                  "random",
+				SkipReadMetering:      false,
+				nprobes:               tt.nprobes,
+				isVectorScan:          tt.isVectorScan,
+				parallelCentroidScans: tt.parallelCentroidScans,
+			}
+			r.sco = sco
+			if tt.instId != 0 {
+				inst := sco.indexInstMap[tt.instId]
+				inst.State = tt.instIdState
+				sco.indexInstMap[tt.instId] = inst
+			}
+			r.sco.setIndexerState(tt.indexerState)
+			if err := r.setIndexParams(); err != tt.wantErr {
+				if strings.Contains(err.Error(), tt.wantErr.Error()) {
+					return
+				}
+				t.Fatalf("ScanRequest.setIndexParams() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if len(r.Ctxs) != tt.ctxsLen {
+				t.Fatalf("Not getting sufficient readers as needed: %v got %v", tt.ctxsLen, len(r.Ctxs))
+			}
+		})
+	}
+}
