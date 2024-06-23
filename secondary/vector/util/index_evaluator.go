@@ -14,11 +14,11 @@ import (
 
 const ENCODE_BUF_SIZE = 2 * 1024 //2KB
 
-//FetchSampleVectorsForIndexes fetches a given sampleSize number of
-//documents from KV via random sampling. Then it evaluates each document
-//for the input list of index instances and extracts any vectors which
-//qualify for the index definition. The list of extracted vectors per
-//index is returned.
+// FetchSampleVectorsForIndexes fetches a given sampleSize number of
+// documents from KV via random sampling. Then it evaluates each document
+// for the input list of index instances and extracts any vectors which
+// qualify for the index definition. The list of extracted vectors per
+// index is returned.
 func FetchSampleVectorsForIndexes(cluster string,
 	pooln string,
 	bucketn string,
@@ -104,7 +104,7 @@ func evaluateEvent(evaluators []*protoProj.IndexEvaluator,
 	var vectors [][]float32
 
 	for i, evaluator := range evaluators {
-		_, _, _, _, newBuf, _, _, vectors, err = evaluator.ProcessEvent(m,
+		_, _, _, _, newBuf, _, _, vectors, _, err = evaluator.ProcessEvent(m,
 			encodeBuf, docval, context, nil)
 
 		if err != nil {

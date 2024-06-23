@@ -47,6 +47,7 @@ import (
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
+	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
 )
 
 type Indexer interface {
@@ -13185,9 +13186,8 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil)
 			common.CrashOnError(err)
 
-			storageDir := idx.config["storage_dir"].String()
 			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
-				keyspaceId, storageDir, reqCtx)
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13237,11 +13237,31 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 	return vecs
 }
 
+func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap) (int64, []*c.IndexInst) {
+	var vectorInsts []*c.IndexInst
+	maxCentroids := 0
+	for _, instId := range instIds {
+		idxInst := indexInstMap[instId]
+		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
+			continue
+		}
+
+		vectorInsts = append(vectorInsts, &idxInst)
+		partnInstMap := indexPartnMap[instId]
+		for partnId := range partnInstMap {
+			maxCentroids = max(maxCentroids, idxInst.Nlist[partnId])
+		}
+	}
+
+	// [VECTOR_TODO]: Make this "50" configurable
+	return int64(maxCentroids * 50), vectorInsts
+}
+
 // [VECTOR_TODO]: Add a worker pool to take care of training
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
-	keyspaceId string, storageDir string, reqCtx *c.MetadataRequestContext) {
+	keyspaceId string, config common.Config, cid string, reqCtx *c.MetadataRequestContext) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	successMap := make(map[common.IndexInstId]bool)
@@ -13253,13 +13273,48 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		errMap[instId][partnId] = err
 	}
 
-	for _, instId := range allInsts {
-		idxInst := indexInstMap[instId]
-		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
-			successMap[instId] = true
-			continue
+	getBucketScopeAndCollFromKeyspaceId := func(keyspaceId string) (string, string, string) {
+		bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+		if scope == "" {
+			scope = common.DEFAULT_SCOPE
 		}
 
+		if collection == "" {
+			collection = common.DEFAULT_COLLECTION
+		}
+		return bucket, scope, collection
+	}
+
+	storageDir := config["storage_dir"].String()
+	clusterAddr := idx.config["clusterAddr"].String()
+
+	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
+	maxSampleSize, vectorInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap)
+
+	// Retrieve vectors from data service for training
+	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
+	if err != nil {
+		logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
+			bucket, scope, collection, cid, err)
+		for _, idxInst := range vectorInsts {
+			instId := idxInst.InstId
+			partnInstMap := indexPartnMap[instId]
+			for partnId := range partnInstMap {
+				updateErrMap(idxInst.InstId, partnId, err)
+			}
+		}
+
+		idx.internalRecvCh <- &MsgIndexTrainingDone{
+			keyspaceId: keyspaceId,
+			successMap: successMap,
+			reqCtx:     reqCtx,
+			errMap:     errMap,
+		}
+		return
+	}
+
+	for i, idxInst := range vectorInsts {
+		instId := idxInst.InstId
 		partnInstMap := indexPartnMap[instId]
 
 		for partnId, partnInst := range partnInstMap {
@@ -13283,9 +13338,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					continue
 				}
 
-				// [VECTOR_TODO]: Integrate this with training infra
-				vecs := getVectors(idxInst.Defn.VectorMeta, idxInst.Nlist[partnId])
-				if err := slice.Train(vecs); err != nil {
+				if err := slice.Train(convertTo1D(vectors[i])); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
@@ -13304,7 +13357,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				}
 
 				// Persist codebook to disk
-				err = idx.persistCodebookToDisk(storageDir, &idxInst, partnId, slice.Id(), codebook)
+				err = idx.persistCodebookToDisk(storageDir, idxInst, partnId, slice.Id(), codebook)
 				if err != nil {
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
@@ -13451,4 +13504,12 @@ func (idx *indexer) removeResidualFile(path string) error {
 		return nil // File does not exist
 	}
 	return iowrap.Os_RemoveAll(path) // Remove file if any
+}
+
+func convertTo1D(vecs [][]float32) []float32 {
+	var vecs1D []float32
+	for _, vec := range vecs {
+		vecs1D = append(vecs1D, vec...)
+	}
+	return vecs1D
 }
