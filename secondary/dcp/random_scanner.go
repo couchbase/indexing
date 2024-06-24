@@ -53,9 +53,9 @@ type randomScan struct {
 	appErr chan error //error channel for the caller
 }
 
-//NewRandomScanner create a new random scanner for the given collection Id for this bucket
-//and the requested sample size(i.e. number of documents to scan). Bucket object cannot
-//be used concurrently when using random scanner.
+// NewRandomScanner create a new random scanner for the given collection Id for this bucket
+// and the requested sample size(i.e. number of documents to scan). Bucket object cannot
+// be used concurrently when using random scanner.
 func (b *Bucket) NewRandomScanner(collId string, sampleSize int64) (RandomScanner, error) {
 
 	rs := &randomScan{
@@ -121,7 +121,7 @@ func (rs *randomScan) StartRandomScan() (chan *memcached.DcpEvent, chan error, e
 	return rs.datach, rs.appErr, nil
 }
 
-//StopScan cancels the in-flight random scans for all vbs
+// StopScan cancels the in-flight random scans for all vbs
 func (rs *randomScan) StopScan() error {
 
 	if rs.stopch != nil {
@@ -137,7 +137,7 @@ func (rs *randomScan) StopScan() error {
 	return nil
 }
 
-//compute the list of vbs per server
+// compute the list of vbs per server
 func (rs *randomScan) computeVbsByServer() error {
 
 	var errStr string
@@ -344,6 +344,9 @@ func (rs *randomScan) doScanPerServer(addr string, vblist []int, wg *sync.WaitGr
 
 func (rs *randomScan) doSingleVbScan(addr string, vb int, wg *sync.WaitGroup) {
 
+	var conn *memcached.Client
+	var err error
+
 	defer func() {
 		//panic safe
 		if r := recover(); r != nil {
@@ -351,13 +354,14 @@ func (rs *randomScan) doSingleVbScan(addr string, vb int, wg *sync.WaitGroup) {
 			logging.Errorf("%s", logging.StackTrace())
 		}
 
+		rs.b.Return(conn, addr)
 		wg.Done()
 		logging.Tracef("RandomScanner::doSingleVbScan finished vb:%v KV:%v", vb, addr)
 	}()
 
 	logging.Tracef("RandomScanner::doSingleVbScan started vb:%v KV:%v", vb, addr)
 
-	conn, err := rs.b.GetMcConn(addr)
+	conn, err = rs.b.GetMcConn(addr)
 	if err != nil {
 		logging.Errorf("RandomScanner::doSingleVbScan Error during connecting to %v. Err %v", addr, err)
 		rs.errch <- err
@@ -460,7 +464,7 @@ func (rs *randomScan) doSingleVbScan(addr string, vb int, wg *sync.WaitGroup) {
 
 }
 
-//create a DcpEvent from the response body and send on the data channel
+// create a DcpEvent from the response body and send on the data channel
 func (rs *randomScan) createAndSendDcpEvent(respBody []byte) {
 
 	/*
