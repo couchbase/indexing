@@ -13237,7 +13237,8 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 	return vecs
 }
 
-func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap) (int64, []*c.IndexInst) {
+func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
+	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst) {
 	var vectorInsts []*c.IndexInst
 	maxCentroids := 0
 	for _, instId := range instIds {
@@ -13253,8 +13254,12 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 		}
 	}
 
-	// [VECTOR_TODO]: Make this "50" configurable
-	return int64(maxCentroids * 50), vectorInsts
+	vecs_per_centroid := config["vector.vecs_per_centroid"].Int()
+	if vecs_per_centroid <= 1 {
+		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
+	}
+
+	return int64(maxCentroids * vecs_per_centroid), vectorInsts
 }
 
 // [VECTOR_TODO]: Add a worker pool to take care of training
@@ -13289,7 +13294,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	clusterAddr := idx.config["clusterAddr"].String()
 
 	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
-	maxSampleSize, vectorInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap)
+	maxSampleSize, vectorInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
 
 	// Retrieve vectors from data service for training
 	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
