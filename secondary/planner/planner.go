@@ -1367,8 +1367,8 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 				// do not move this index if this node is going away.
 				numReplica := s.findNumReplica(index)
 				if (numReplica > numLiveNode) && indexer.isDelete {
-					deleteCandidates[index.GetPartitionName()] = append(deleteCandidates[index.GetPartitionName()], index)
-					numReplicas[index.GetPartitionName()] = numReplica
+					deleteCandidates[index.GetKeyspaceIndexPartitionName()] = append(deleteCandidates[index.GetKeyspaceIndexPartitionName()], index)
+					numReplicas[index.GetKeyspaceIndexPartitionName()] = numReplica
 				}
 			}
 		}
@@ -1400,7 +1400,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 
 		for _, index := range indexer.Indexes {
 			found := false
-			for _, candidate := range deleteCandidates[index.GetPartitionName()] {
+			for _, candidate := range deleteCandidates[index.GetKeyspaceIndexPartitionName()] {
 				if candidate == index {
 					found = true
 					break
@@ -5089,6 +5089,11 @@ func (o *IndexUsage) GetPartitionName() string {
 	}
 
 	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, 0, int(o.PartnId), true)
+}
+
+func (o *IndexUsage) GetKeyspaceIndexPartitionName() string {
+
+	return fmt.Sprintf("%v:%v:%v:%v:%v", o.Bucket, o.Scope, o.Collection, o.Name, o.PartnId)
 }
 
 func (o *IndexUsage) GetReplicaName() string {
