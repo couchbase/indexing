@@ -1165,3 +1165,13 @@ func (b *Bucket) GetMcConn(host string) (*memcached.Client, error) {
 
 	return nil, fmt.Errorf("no pool found")
 }
+
+func (b *Bucket) Return(conn *memcached.Client, host string) {
+	for _, sconn := range b.getConnPools() {
+		if sconn.host == host {
+			// Return connection to the pool
+			sconn.Return(conn)
+			return
+		}
+	}
+}

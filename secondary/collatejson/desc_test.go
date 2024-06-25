@@ -10,8 +10,10 @@ package collatejson
 
 import (
 	"bytes"
-	n1ql "github.com/couchbase/query/value"
+	"math"
 	"testing"
+
+	n1ql "github.com/couchbase/query/value"
 )
 
 var testcasesdesc = []struct {
@@ -378,7 +380,7 @@ var testcasesdescspl = []struct {
 	{[]interface{}{"hel\tlo", nil, "ab\x00"},
 		[]bool{true, true, true},
 	},
-	{[]interface{}{"hel\t\rlo", "ab\x00",true},
+	{[]interface{}{"hel\t\rlo", "ab\x00", true},
 		[]bool{true, true, true},
 	},
 
@@ -388,17 +390,16 @@ var testcasesdescspl = []struct {
 	{[]interface{}{"hel\t\rlo", nil, "ab\xff"},
 		[]bool{true, true, true},
 	},
-	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c"},
+	{[]interface{}{"hel\t\rlo", "ab\xff", "b\x00c"},
 		[]bool{true, true, true},
 	},
-	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c"},
+	{[]interface{}{"hel\t\rlo", "ab\xff", "b\x00c"},
 		[]bool{true, true, false},
 	},
-	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c"},
+	{[]interface{}{"hel\t\rlo", "ab\xff", "b\x00c"},
 		[]bool{true, false, true},
 	},
 
-
 	{[]interface{}{"a\x00b", "a\xffb"},
 		[]bool{true, true},
 	},
@@ -444,13 +445,13 @@ var testcasesdescspl = []struct {
 		[]bool{false, true},
 	},
 
-	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c", "abc", "ac\x00", "\xffab"},
+	{[]interface{}{"hel\t\rlo", "ab\xff", "b\x00c", "abc", "ac\x00", "\xffab"},
 		[]bool{true, true, true, true, true, true},
 	},
-	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c", "abc", "ac\x00", "\xffab"},
+	{[]interface{}{"hel\t\rlo", "ab\xff", "b\x00c", "abc", "ac\x00", "\xffab"},
 		[]bool{false, false, false, false, false, true},
 	},
-	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c", "abc", "ac\x00", "\xffab"},
+	{[]interface{}{"hel\t\rlo", "ab\xff", "b\x00c", "abc", "ac\x00", "\xffab"},
 		[]bool{false, true, false, true, false, true},
 	},
 
@@ -491,4 +492,87 @@ func TestCodecDescSplChar(t *testing.T) {
 		}
 	}
 
+}
+
+func TestSubstituteEncodedField(t *testing.T) {
+
+	codec := NewCodec(16)
+
+	data := make([]interface{}, 0)
+	data = append(data, "name")
+	data = append(data, int64(2))
+	data = append(data, 30)
+	data = append(data, "random")
+
+	// Encode current Array
+	origVal := n1ql.NewValue(data)
+	encVal, err := codec.EncodeN1QLValue(origVal, make([]byte, 0, 10000))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// decVal, err1 := codec.DecodeN1QLValue(encVal, make([]byte, 0, 10000))
+	// if err1 != nil {
+	// 	t.Fatal(err1)
+	// }
+	// t.Logf("Expected original and decoded n1ql values to be the same. Orig: %v DecVal: %v", origVal, decVal)
+
+	// Encode new Data
+	newData := math.Pi
+	newDataVal := n1ql.NewValue(newData)
+	newDataCode, err := codec.EncodeN1QLValue(newDataVal, make([]byte, 0, 1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace data at position 2
+	newBuf := make([]byte, 0, len(encVal)+len(newDataCode))
+	newEncVal, err := codec.ReplaceEncodedFieldInArray(encVal, 1, newDataCode, newBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Decode the code in which we replaced the data
+	decVal1, err1 := codec.DecodeN1QLValue(newEncVal, make([]byte, 0, 10000))
+	if err1 != nil {
+		t.Fatal(err1)
+	}
+
+	// Replace the original data and compare with previously decoded data
+	data[1] = newData
+	n1qlVal := n1ql.NewValue(data)
+	if !decVal1.EquivalentTo(n1qlVal) {
+		t.Errorf("Error: Expected original and decoded n1ql values to be the same. Orig %v Decoded %v", n1qlVal, decVal1)
+	} else {
+		t.Logf("Expected original and decoded n1ql values to be the same. Orig %v Decoded %v", n1qlVal, decVal1)
+	}
+
+	// Again Replace data at position 4
+	newBuf = make([]byte, 0, len(newEncVal)+len(newDataCode))
+	newEncVal, err = codec.ReplaceEncodedFieldInArray(newEncVal, 3, newDataCode, newBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Decode the code in which we replaced the data
+	decVal2, err2 := codec.DecodeN1QLValue(newEncVal, make([]byte, 0, 10000))
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+
+	// Replace the original data and compare with previously decoded data
+	data[3] = newData
+	n1qlVal2 := n1ql.NewValue(data)
+	if !decVal2.EquivalentTo(n1qlVal2) {
+		t.Errorf("Error: Expected original and decoded n1ql values to be the same. Orig %v Decoded %v", n1qlVal2, decVal2)
+	} else {
+		t.Logf("Expected original and decoded n1ql values to be the same. Orig %v Decoded %v", n1qlVal2, decVal2)
+	}
+
+	// Again Replace data at position 5
+	newBuf = make([]byte, 0, len(newEncVal)+len(newDataCode))
+	_, err = codec.ReplaceEncodedFieldInArray(newEncVal, 5, newDataCode, newBuf)
+	if err != ErrInvalidInput {
+		t.Fatal(err)
+	}
 }

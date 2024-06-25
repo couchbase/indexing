@@ -1,13 +1,15 @@
 package collatejson
 
-import "fmt"
-import "strconv"
+import (
+	"fmt"
+	"strconv"
 
-import "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
-//ReverseCollate reverses the bits in an encoded byte stream based
+// ReverseCollate reverses the bits in an encoded byte stream based
 // on the fields specified as desc. Calling reverse on an already
-//reversed stream gives back the original stream.
+// reversed stream gives back the original stream.
 func (codec *Codec) ReverseCollate(code []byte, desc []bool) (rev []byte, e error) {
 
 	defer func() {
@@ -26,7 +28,7 @@ func (codec *Codec) ReverseCollate(code []byte, desc []bool) (rev []byte, e erro
 	return code, nil
 }
 
-//flips the bits of the given byte slice
+// flips the bits of the given byte slice
 func flipBits(code []byte) {
 
 	for i, b := range code {
@@ -86,7 +88,7 @@ func getEncodedString(code []byte) ([]byte, []byte, error) {
 	return nil, nil, ErrorSuffixDecoding
 }
 
-//extracts a given field from the encoded byte stream
+// extracts a given field from the encoded byte stream
 func (codec *Codec) extractEncodedField(code []byte, fieldPos int) ([]byte, []byte, error) {
 	if len(code) == 0 {
 		return code, code, nil
@@ -228,4 +230,51 @@ func (codec *Codec) extractEncodedField(code []byte, fieldPos int) ([]byte, []by
 		datum = orig[0 : len(datum)+1+1] //1 for Terminator and 1 for Type
 	}
 	return datum, remaining, err
+}
+
+// ReplaceEncodedFieldInArray takes replaceFieldPos i.e. 0 based index into given collatejson encoded code of array
+// and replaces that field with dataToReplace (which is expected to be code of new field). It uses newCodeBuf to
+// place the results and return the same if newCodeBuf is of lesser capacity than result it will return error.
+func (codec *Codec) ReplaceEncodedFieldInArray(code []byte, replaceFieldPos int, dataToReplace, newCodeBuf []byte) ([]byte, error) {
+	if len(code) == 0 {
+		return code, nil
+	}
+
+	var ts, orig []byte
+	var err error
+
+	orig = code
+
+	switch code[0] {
+	case TypeArray, ^TypeArray:
+		var currField, currFieldStart int
+		if codec.arrayLenPrefix {
+			return nil, ErrNotImplemented
+		} else {
+			code = code[1:]
+			currField = 0
+			currFieldStart = 1
+			for code[0] != Terminator && code[0] != ^Terminator {
+				ts, code, err = codec.extractEncodedField(code, 0)
+				if err != nil {
+					break
+				}
+				if currField == replaceFieldPos {
+					newCodeLen := len(orig[:currFieldStart]) + len(dataToReplace) + len(orig[currFieldStart+len(ts):])
+					if cap(newCodeBuf) < newCodeLen {
+						return nil, ErrorOutputLen
+					}
+					newCodeBuf = append(newCodeBuf, orig[:currFieldStart]...)
+					newCodeBuf = append(newCodeBuf, dataToReplace...)
+					newCodeBuf = append(newCodeBuf, orig[currFieldStart+len(ts):]...)
+					return newCodeBuf, nil
+				}
+				currField++
+				currFieldStart = currFieldStart + len(ts)
+			}
+		}
+	default:
+		return nil, ErrInvalidInput
+	}
+	return nil, ErrInvalidInput
 }

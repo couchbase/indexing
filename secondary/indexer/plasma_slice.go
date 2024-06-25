@@ -74,10 +74,11 @@ type plasmaSlice struct {
 	committedCount                        uint64
 	qCount                                int64
 
-	path       string
-	storageDir string
-	logDir     string
-	id         SliceId
+	path         string
+	storageDir   string
+	logDir       string
+	codebookPath string
+	id           SliceId
 
 	refCount int
 	lock     sync.RWMutex
@@ -229,8 +230,8 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, memQuota int64,
 	isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
-	numVBuckets int, replicaId int, shardIds []common.ShardId, cancelCh chan bool) (
-	*plasmaSlice, error) {
+	numVBuckets int, replicaId int, shardIds []common.ShardId,
+	cancelCh chan bool, codebookPath string) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -254,6 +255,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.path = path
 	slice.storageDir = storage_dir
 	slice.logDir = log_dir
+	slice.codebookPath = codebookPath
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefn.DefnId
 	slice.idxPartnId = partitionId
@@ -346,6 +348,20 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
 
 	slice.setCommittedCount()
+
+	if !isNew && slice.idxDefn.IsVectorIndex {
+		codebookRecoveryStartTm := time.Now()
+		err = slice.recoverCodebook(slice.codebookPath)
+		if err != nil {
+			logging.Errorf("plasmaSlice::recoverCodebook SliceId: %v IndexInstId: %v PartitionId %v Codebook "+
+				"recovery finished with err %v", slice.id, slice.idxInstId, slice.idxPartnId, err)
+			return slice, err
+		} else {
+			logging.Infof("plasmaSlice::recoverCodebook SliceId: %v IndexInstId: %v PartitionId %v Codebook "+
+				"recovery finished successfully. Elapsed: %v", slice.id, slice.idxInstId, slice.idxPartnId,
+				time.Since(codebookRecoveryStartTm))
+		}
+	}
 	return slice, nil
 }
 
@@ -733,6 +749,7 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 	}
 
 	if !slice.newBorn {
+
 		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
 			slice.id, slice.idxInstId, slice.idxPartnId)
 		err = slice.doRecovery(isInitialBuild)
@@ -741,6 +758,8 @@ func (slice *plasmaSlice) initStores(isInitialBuild bool, cancelCh chan bool) er
 			slice.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
 			logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Warmup took %v",
 				slice.id, slice.idxInstId, slice.idxPartnId, dur)
+		} else {
+			return err
 		}
 	}
 
@@ -5452,6 +5471,41 @@ func resizeQuantizedCodeBuf(quantizedCodeBuf []byte, numVecs, codeSize int, doRe
 		quantizedCodeBuf = make([]byte, 0, newSize)
 	}
 	return quantizedCodeBuf
+}
+
+func (mdb *plasmaSlice) recoverCodebook(codebookPath string) error {
+	// Construct codebook path
+	newFilePath := filepath.Join(mdb.storageDir, codebookPath)
+	_, err := iowrap.Os_Stat(newFilePath)
+	if os.IsNotExist(err) {
+		logging.Warnf("plasmaSlice::recoverCodebook error observed while recovering from codebookPath: %v, err: %v", newFilePath, err)
+		return errCodebookPathNotFound
+	}
+
+	// Codebook path exists. Recover codebook from disk
+	content, err := iowrap.Ioutil_ReadFile(newFilePath)
+	if err != nil {
+		logging.Errorf("plasmaSlice::recoverCodebook: Error observed while reading from disk for path: %v, err: %v", newFilePath, err)
+		return errCodebookCorrupted
+	}
+
+	logging.Infof("plasmaSlice::recoverCodebook: reading from disk is successful for path: %v", newFilePath)
+
+	codebook, err := vector.RecoverCodebook(content, string(mdb.idxDefn.VectorMeta.Quantizer.Type))
+	if err != nil {
+		logging.Errorf("plasmaSlice::recoverCodebook: Error observed while deserializing codebook at path: %v, err: %v", newFilePath, err)
+		return errCodebookCorrupted
+	}
+
+	mdb.codebook = codebook
+	mdb.codeSize, err = mdb.codebook.CodeSize()
+	if err != nil {
+		mdb.ResetCodebook() // Ignore error for now
+		return err
+	}
+
+	mdb.initQuantizedCodeBuf()
+	return nil
 }
 
 ////////////////////////////////////////////////////////////

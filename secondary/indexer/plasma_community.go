@@ -19,13 +19,16 @@ import (
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
 var errStoragePathNotFound = fmt.Errorf("Storage path not found for recovery")
+var errRecoveryCancelled = fmt.Errorf("storage recovery is cancelled")
+var errCodebookPathNotFound = fmt.Errorf("Codebook path not found for recovery")
+var errCodebookCorrupted = fmt.Errorf("Codebook corrupted and unrecoverable")
 
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int, sysconf common.Config, idxStats *IndexStats,
 	memQuota int64, isNew bool, isInitialBuild bool, meteringMgr *MeteringThrottlingMgr,
 	numVBuckets, replicaId int, shardIds []common.ShardId,
-	cancelCh chan bool) (Slice, error) {
+	cancelCh chan bool, codebookPath string) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")
 }
 

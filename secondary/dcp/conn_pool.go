@@ -24,7 +24,7 @@ type GenericMcdAuthHandler interface {
 }
 
 // Default timeout for retrieving a connection from the pool.
-var ConnPoolTimeout = time.Hour * 24 * 30
+var ConnPoolTimeout = time.Second * 120
 
 // ConnPoolAvailWaitTime is the amount of time to wait for an existing
 // connection from the pool before considering the creation of a new

@@ -15,6 +15,10 @@ type MockCodebook struct {
 	Trained   bool
 	Centroids [][]float32
 	VecMeta   *common.VectorMetadata
+
+	InjectedErr        error
+	CompDistErrOnCount int
+	compDistCurrCount  int
 }
 
 func NewMockCodebook(vm *common.VectorMetadata) Codebook {
@@ -72,6 +76,10 @@ func (mc *MockCodebook) ComputeDistance(qvec []float32, fvecs []float32, dist []
 	for i := 0; i < len(fvecs); i = i + mc.VecMeta.Dimension {
 		dist[vecCount] = calculateDistance(qvec, fvecs[i:i+mc.VecMeta.Dimension], mc.VecMeta.Similarity)
 		vecCount++
+	}
+	mc.compDistCurrCount++
+	if mc.compDistCurrCount == mc.CompDistErrOnCount {
+		return mc.InjectedErr
 	}
 	return nil
 }

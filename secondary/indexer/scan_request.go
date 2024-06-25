@@ -402,6 +402,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	case *protobuf.ScanRequest:
 		r.isVectorScan = (req.GetIndexVector() != nil)
+		if r.isVectorScan {
+			ivec := req.GetIndexVector()
+			r.setVectorIndexParams(ivec)
+		}
+
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -454,11 +459,10 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			return
 		}
 
-		ivec := req.GetIndexVector()
-		if ivec != nil {
+		if r.isVectorScan {
 			r.ScanType = VectorScanReq
 			r.protoScans = req.GetScans() // Save ref to protoScans to generate vector scans later
-			if err = r.setVectorIndexParams(ivec); err != nil {
+			if err = r.setVectorKeyPos(); err != nil {
 				return
 			}
 		} else {
@@ -474,6 +478,11 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	case *protobuf.ScanAllRequest:
 		r.isVectorScan = (req.GetIndexVector() != nil)
+		if r.isVectorScan {
+			ivec := req.GetIndexVector()
+			r.setVectorIndexParams(ivec)
+		}
+
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.User = req.GetUser()
@@ -498,10 +507,9 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		}
 
 		// VECTOR_TODO: Check if this is needed
-		ivec := req.GetIndexVector()
-		if ivec != nil {
+		if r.isVectorScan {
 			r.ScanType = VectorScanAllReq
-			if err = r.setVectorIndexParams(ivec); err != nil {
+			if err = r.setVectorKeyPos(); err != nil {
 				return
 			}
 		}
@@ -512,14 +520,21 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	return
 }
 
-func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) (err error) {
+// setVectorIndexParams sets the params in ScanRequest that are derived from protobuf.IndexVector
+// these values are passed from query client and this function must be called before findIndexInstance
+// and nprobes is used to fetch index reader contexts
+func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
 	// Populate query vector in req
 	qvec := ivec.GetQueryVector()
 	r.queryVector = append(r.queryVector, qvec...)
 
 	// Set Scan type to VectorScanReq so that we can process vector req differently
 	r.nprobes = int(ivec.GetProbes())
+}
 
+// setVectorKeyPos will set vectorPos in ScanRequest and should be called after getting indexn instance
+// as this uses IndexInst in ScanRequest. Call this function after findIndexInstance
+func (r *ScanRequest) setVectorKeyPos() (err error) {
 	// Set vector position
 	r.vectorPos = r.IndexInst.Defn.GetVectorKeyPosExploded()
 	if r.vectorPos < 0 {
@@ -1327,6 +1342,9 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	ctxsPerPartition := 1
 	if r.isVectorScan {
 		ctxsPerPartition = r.parallelCentroidScans
+		if ctxsPerPartition > r.nprobes {
+			ctxsPerPartition = r.nprobes
+		}
 	}
 
 	stats := r.sco.stats.Get()
@@ -2070,6 +2088,25 @@ func (r *ScanRequest) getSharedBuffer(length int) []byte {
 		return (*r.sharedBuffer)[:0]
 	}
 	return (*r.sharedBuffer)[r.sharedBufferLen:r.sharedBufferLen]
+}
+
+func (r *ScanRequest) hasDesc() bool {
+	hasDesc := r.IndexInst.Defn.HasDescending()
+	return hasDesc
+}
+
+func (r *ScanRequest) getFromSecKeyBufPool() *[]byte {
+	buf := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, buf)
+	return buf
+}
+
+func (r *ScanRequest) getVectorDim() int {
+	return r.IndexInst.Defn.VectorMeta.Dimension
+}
+
+func (r *ScanRequest) getVectorKeyPos() int {
+	return r.vectorPos
 }
 
 /////////////////////////////////////////////////////////////////////////

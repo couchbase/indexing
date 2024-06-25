@@ -1018,6 +1018,7 @@ type secondaryIndex struct {
 	vectorDistanceType datastore.IndexDistanceType
 	vectorDimension    int
 	nprobes            int
+	vectorDescription  string
 
 	isBhive bool
 	include expression.Expressions
@@ -1114,6 +1115,7 @@ func newSecondaryIndexFromMetaData(
 			si.vectorDistanceType = val
 		}
 		si.vectorDimension = indexDefn.VectorMeta.Dimension
+		si.vectorDescription = indexDefn.VectorMeta.Quantizer.String()
 
 		// By default "nprobes" is 1. If any value is specified in query,
 		// indexer will use it instead
@@ -1877,7 +1879,7 @@ func (si *secondaryIndex6) Include() (rvs expression.Expressions) {
 }
 
 func (si *secondaryIndex6) VectorDescription() string {
-	return ""
+	return si.vectorDescription
 }
 
 // Scan6 implements Index6 interface

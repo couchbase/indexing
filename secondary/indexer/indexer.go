@@ -47,6 +47,7 @@ import (
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 	"github.com/couchbase/indexing/secondary/testcode"
+	vectorutil "github.com/couchbase/indexing/secondary/vector/util"
 )
 
 type Indexer interface {
@@ -3863,7 +3864,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		// In the batch of indexes that are getting built, check if there
 		// is any vector index that requires training. If so, compute centroids
 		// and initiate training for all those indexes
-		instIdList = idx.checkAndInitiateTraining(instIdList, cluster, keyspaceId, reqcid, errMap)
+		instIdList = idx.checkAndInitiateTraining(instIdList, cluster, keyspaceId, reqcid, errMap, reqCtx)
 
 		if len(instIdList) != 0 {
 			keyspaceIdIndexList[keyspaceId] = instIdList
@@ -6499,6 +6500,43 @@ func (idx *indexer) getBucketInfoForIndexInst(indexInst common.IndexInst, respCh
 	return ephemeral, numVBuckets, nil
 }
 
+func (idx *indexer) handleCodebookRecoveryError(indexInst common.IndexInst, partnId common.PartitionId, bootstrapPhase bool, recoveryErr error) error {
+	// [VECTOR_TODO]: Handle shard rebalance cases
+	if !bootstrapPhase || recoveryErr == nil {
+		return nil
+	}
+
+	if recoveryErr == errCodebookPathNotFound {
+		if indexInst.TrainingPhase == common.TRAININIG_NOT_STARTED || indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			logging.Infof("Indexer::initPartnInstance: Ignoring err: %v as training phase is not started for instId: %v, partnId: %v",
+				recoveryErr, indexInst.InstId, partnId)
+			return nil
+		} else if indexInst.TrainingPhase == common.TRAINING_COMPLETED ||
+			indexInst.State == common.INDEX_STATE_INITIAL ||
+			indexInst.State == common.INDEX_STATE_CATCHUP ||
+			indexInst.State == common.INDEX_STATE_ACTIVE ||
+			indexInst.State == common.INDEX_STATE_RECOVERED {
+
+			logging.Errorf("Indexer::initPartnInstance codebook path not found for indexInst: %v, partnId: %v, "+
+				"trainingPhase: %v, indexState: %v", indexInst.InstId, partnId, indexInst.TrainingPhase, indexInst.State)
+			return recoveryErr
+		}
+	}
+
+	if recoveryErr == errCodebookCorrupted {
+		logging.Errorf("Indexer::initPartnInstance codebook appears to be corrupted for indexInst: %v, partnId: %v, "+
+			"trainingPhase: %v, indexState: %v", indexInst.InstId, partnId, indexInst.TrainingPhase, indexInst.State)
+		if indexInst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			logging.Infof("Indexer::initPartnInstance Ignoring recovery error as training is still in progress for "+
+				"indexInst: %v, partnId: %v, trainingPhase: %v", indexInst.InstId, partnId, indexInst.TrainingPhase)
+			return nil
+		}
+		return recoveryErr // All other cases, return error as is
+	}
+
+	return recoveryErr // Return the err as-is for further processing
+}
+
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	respCh MsgChannel, bootstrapPhase bool, shardRebalance bool,
 	ephemeral bool, numVBuckets int, partnStats map[common.PartitionId]*IndexStats,
@@ -6539,6 +6577,15 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 		slice, err = NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, partnStats, memQuota,
 			ephemeral, !bootstrapPhase, idx.meteringMgr, numVBuckets, shardIds, cancelCh)
+
+		if indexInst.Defn.IsVectorIndex {
+			err = idx.handleCodebookRecoveryError(indexInst, partnId, bootstrapPhase, err)
+			if err != nil {
+				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
+				continue
+			}
+		}
+
 		if err != nil {
 			// Propagate the error back to caller for shard rebalance
 			if bootstrapPhase && err == errStorageCorrupted {
@@ -9220,6 +9267,13 @@ func (idx *indexer) initFromPersistedState() error {
 			continue
 		}
 
+		// Reset training phase. If slice is already trained, then build retry
+		// will skip training and update the metadata state to TRAINING_COMPLETED.
+		// Otherwise, slice will be trained and then the stat is updated
+		if inst.TrainingPhase == common.TRAINING_IN_PROGRESS {
+			inst.TrainingPhase = common.TRAININIG_NOT_STARTED
+		}
+
 		idx.updateTopologyOnShardIdChange(&inst, partnShardIdMap)
 
 		idx.indexInstMap[inst.InstId] = inst
@@ -10789,7 +10843,8 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			partnStats[partitionId])
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh)
+			partnStats[partitionId], memQuota, isNew, isInitialBuild(), meteringMgr, numVBuckets, indInst.ReplicaId, shardIds, cancelCh,
+			CodebookPath(indInst, partitionId, id))
 	}
 
 	return
@@ -13109,7 +13164,7 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 }
 
 func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
-	cluster, keyspaceId, reqcid string, errMap map[common.IndexInstId]error) []common.IndexInstId {
+	cluster, keyspaceId, reqcid string, errMap map[common.IndexInstId]error, reqCtx *c.MetadataRequestContext) []common.IndexInstId {
 
 	// Check if there are any vector indexes that need training
 	var vecInstIdList []common.IndexInstId
@@ -13131,8 +13186,8 @@ func (idx *indexer) checkAndInitiateTraining(instIdList []common.IndexInstId,
 			err := idx.updateMetaInfoForIndexList(instIdList, false, false, false, false, false, false, false, false, nil, true, nil)
 			common.CrashOnError(err)
 
-			storageDir := idx.config["storage_dir"].String()
-			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap), keyspaceId, storageDir)
+			go idx.initiateTraining(instIdList, c.CopyIndexInstMap(idx.indexInstMap), CopyIndexPartnMap(idx.indexPartnMap),
+				keyspaceId, idx.config.Clone(), reqcid, reqCtx)
 
 			return nil // Return nil so that handleBuildIndex does not take the build further
 		}
@@ -13182,11 +13237,36 @@ func getVectors(vectorMeta *c.VectorMetadata, nlist int) []float32 {
 	return vecs
 }
 
+func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
+	indexPartnMap IndexPartnMap, config c.Config) (int64, []*c.IndexInst) {
+	var vectorInsts []*c.IndexInst
+	maxCentroids := 0
+	for _, instId := range instIds {
+		idxInst := indexInstMap[instId]
+		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
+			continue
+		}
+
+		vectorInsts = append(vectorInsts, &idxInst)
+		partnInstMap := indexPartnMap[instId]
+		for partnId := range partnInstMap {
+			maxCentroids = max(maxCentroids, idxInst.Nlist[partnId])
+		}
+	}
+
+	vecs_per_centroid := config["vector.vecs_per_centroid"].Int()
+	if vecs_per_centroid <= 1 {
+		vecs_per_centroid = 1 // Minimum of one sample per centroid is required for training
+	}
+
+	return int64(maxCentroids * vecs_per_centroid), vectorInsts
+}
+
 // [VECTOR_TODO]: Add a worker pool to take care of training
 // It is not a good idea to spawn a go-routine for each build statement
 func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	indexInstMap c.IndexInstMap, indexPartnMap IndexPartnMap,
-	keyspaceId string, storageDir string) {
+	keyspaceId string, config common.Config, cid string, reqCtx *c.MetadataRequestContext) {
 
 	errMap := make(map[common.IndexInstId]map[common.PartitionId]error)
 	successMap := make(map[common.IndexInstId]bool)
@@ -13198,13 +13278,48 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 		errMap[instId][partnId] = err
 	}
 
-	for _, instId := range allInsts {
-		idxInst := indexInstMap[instId]
-		if idxInst.Defn.IsVectorIndex == false || idxInst.IsTrained() {
-			successMap[instId] = true
-			continue
+	getBucketScopeAndCollFromKeyspaceId := func(keyspaceId string) (string, string, string) {
+		bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+		if scope == "" {
+			scope = common.DEFAULT_SCOPE
 		}
 
+		if collection == "" {
+			collection = common.DEFAULT_COLLECTION
+		}
+		return bucket, scope, collection
+	}
+
+	storageDir := config["storage_dir"].String()
+	clusterAddr := idx.config["clusterAddr"].String()
+
+	bucket, scope, collection := getBucketScopeAndCollFromKeyspaceId(keyspaceId)
+	maxSampleSize, vectorInsts := getMaxSampleSize(allInsts, indexInstMap, indexPartnMap, config)
+
+	// Retrieve vectors from data service for training
+	vectors, err := vectorutil.FetchSampleVectorsForIndexes(clusterAddr, DEFAULT_POOL, bucket, scope, collection, cid, vectorInsts, maxSampleSize)
+	if err != nil {
+		logging.Errorf("Indexer::initiateTraining error observed while fetching training data for bucket: %v, scope: %v, coll: %v, cid: %v, err: %v",
+			bucket, scope, collection, cid, err)
+		for _, idxInst := range vectorInsts {
+			instId := idxInst.InstId
+			partnInstMap := indexPartnMap[instId]
+			for partnId := range partnInstMap {
+				updateErrMap(idxInst.InstId, partnId, err)
+			}
+		}
+
+		idx.internalRecvCh <- &MsgIndexTrainingDone{
+			keyspaceId: keyspaceId,
+			successMap: successMap,
+			reqCtx:     reqCtx,
+			errMap:     errMap,
+		}
+		return
+	}
+
+	for i, idxInst := range vectorInsts {
+		instId := idxInst.InstId
 		partnInstMap := indexPartnMap[instId]
 
 		for partnId, partnInst := range partnInstMap {
@@ -13228,9 +13343,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 					continue
 				}
 
-				// [VECTOR_TODO]: Integrate this with training infra
-				vecs := getVectors(idxInst.Defn.VectorMeta, idxInst.Nlist[partnId])
-				if err := slice.Train(vecs); err != nil {
+				if err := slice.Train(convertTo1D(vectors[i])); err != nil {
 					slice.ResetCodebook()
 					logging.Errorf("Indexer::initiateTraining error observed during training phase of codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
@@ -13249,7 +13362,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 				}
 
 				// Persist codebook to disk
-				err = idx.persistCodebookToDisk(storageDir, &idxInst, partnId, slice.Id(), codebook)
+				err = idx.persistCodebookToDisk(storageDir, idxInst, partnId, slice.Id(), codebook)
 				if err != nil {
 					logging.Errorf("Indexer::initiateTraining error observed while persisting codebook for instId: %v, partnId: %v, err: %v", instId, partnId, err)
 					updateErrMap(instId, partnId, errors.New(common.ERR_TRAINING+err.Error()))
@@ -13279,6 +13392,7 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 	idx.internalRecvCh <- &MsgIndexTrainingDone{
 		keyspaceId: keyspaceId,
 		successMap: successMap,
+		reqCtx:     reqCtx,
 		errMap:     errMap,
 	}
 }
@@ -13288,6 +13402,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 	successMap := msg.GetSuccessMap()
 	errMap := msg.GetErrMap()
 	keyspaceId := msg.GetKeyspaceId()
+	reqCtx := msg.GetReqCtx()
 
 	toBuildInstIds := make([]common.IndexInstId, 0)
 	allInsts := make([]common.IndexInstId, 0)
@@ -13333,7 +13448,7 @@ func (idx *indexer) handleIndexTrainingDone(cmd Message) {
 		mType:            CLUST_MGR_BUILD_INDEX_DDL,
 		indexInstList:    toBuildInstIds,
 		bucketList:       []string{keyspaceId},
-		reqCtx:           common.NewUserRequestContext(),
+		reqCtx:           reqCtx,
 		isEmptyNodeBatch: false,
 	})
 }
@@ -13394,4 +13509,12 @@ func (idx *indexer) removeResidualFile(path string) error {
 		return nil // File does not exist
 	}
 	return iowrap.Os_RemoveAll(path) // Remove file if any
+}
+
+func convertTo1D(vecs [][]float32) []float32 {
+	var vecs1D []float32
+	for _, vec := range vecs {
+		vecs1D = append(vecs1D, vec...)
+	}
+	return vecs1D
 }

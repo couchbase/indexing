@@ -4190,6 +4190,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.vector.vecs_per_centroid": ConfigValue{
+		50,
+		"For training the index, number of vectors to use per centroid",
+		50,
+		false,
+		false,
+	},
 }
 
 // NewConfig from another

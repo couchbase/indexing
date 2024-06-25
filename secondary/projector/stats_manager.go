@@ -385,7 +385,7 @@ func (sm *statsManager) doLogKvStats(kvstats map[string]interface{}, logVbSeqNos
 				if sm.statLogger != nil {
 					sm.statLogger.Write(key, stats)
 				} else {
-					var kvStatsStr, err = json.Marshal(kvstats)
+					var kvStatsStr, err = json.Marshal(stats)
 					if err != nil {
 						logging.Errorf("%v marshal failure err - %v", key, err)
 						return false
@@ -476,7 +476,7 @@ func (sm *statsManager) doLogEvaluatorStats(evalStatsMap map[string]interface{},
 				logging.Errorf("%v marshal failure err - %v", logPrefix, err)
 				return
 			}
-			logging.Infof("%v stats: %v", logPrefix, evalStatsBytes)
+			logging.Infof("%v stats: %v", logPrefix, string(evalStatsBytes))
 		}
 	}
 	if len(skippedStr) != 0 {

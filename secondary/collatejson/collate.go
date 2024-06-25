@@ -59,6 +59,12 @@ var ErrorOutputLen = errors.New("collatejson.outputLen")
 // ErrInvalidKeyTypeInObject means key of the object is not string
 var ErrInvalidKeyTypeInObject = errors.New("collatejson.invalidKeyTypeInObject")
 
+// ErrNotImplemented
+var ErrNotImplemented = errors.New("collatejson.notImplemented")
+
+// ErrInvalidInput
+var ErrInvalidInput = errors.New("collatejson.invalidInput")
+
 // Length is an internal type used for prefixing length
 // of arrays and properties.
 type Length int64
