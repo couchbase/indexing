@@ -5382,11 +5382,16 @@ func (mdb *plasmaSlice) getNearestCentroidId(vec []float32) (int64, error) {
 	// For mutation path, only one centroidId is required
 	// Scan paths can try to compute more than "1" closest
 	// centroid depending on "nprobes" value
+
+	t0 := time.Now()
+
 	oneNearIds, err := mdb.codebook.FindNearestCentroids(vec, 1)
 	if err != nil {
 		err := fmt.Errorf("Error observed while computing %v centroidIds for vector: %v, instId: %v")
 		return -1, err
 	}
+
+	mdb.idxStats.Timings.vtAssign.Put(time.Now().Sub(t0))
 	return oneNearIds[0], nil
 }
 
@@ -5431,10 +5436,15 @@ func shaEncodedVectors(vecs [][]float32, buf []byte) []byte {
 func (mdb *plasmaSlice) getQuantizedCodeForVector(vec []float32, codeSize int, buf []byte) ([]byte, error) {
 
 	buf = buf[:codeSize]
+
+	t0 := time.Now()
+
 	err := mdb.codebook.EncodeVector(vec, buf)
 	if err != nil {
 		return nil, err
 	}
+
+	mdb.idxStats.Timings.vtEncode.Put(time.Now().Sub(t0))
 
 	return buf, nil
 }

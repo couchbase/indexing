@@ -152,6 +152,10 @@ type IndexTimingStats struct {
 	stKVMetaSet             stats.TimingStat
 	dcpSeqs                 stats.TimingStat
 	n1qlExpr                stats.TimingStat
+
+	//vector index specific stats
+	vtAssign stats.TimingStat
+	vtEncode stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -171,6 +175,8 @@ func (it *IndexTimingStats) Init() {
 	it.stKVMetaSet.Init()
 	it.dcpSeqs.Init()
 	it.n1qlExpr.Init()
+	it.vtAssign.Init()
+	it.vtEncode.Init()
 }
 
 // IndexStats holds statistics for a single index instance. If it is non-partitioned,
@@ -184,6 +190,7 @@ type IndexStats struct {
 	replicaId        int
 	isArrayIndex     bool
 	useArrItemsCount bool
+	isVectorIndex    bool
 
 	partitions map[common.PartitionId]*IndexStats
 
@@ -659,7 +666,10 @@ func (s *IndexStats) getPartitions() []common.PartitionId {
 func (s *IndexStats) addPartition(id common.PartitionId) {
 
 	if _, ok := s.partitions[id]; !ok {
-		partnStats := &IndexStats{isArrayIndex: s.isArrayIndex, useArrItemsCount: s.useArrItemsCount}
+		partnStats := &IndexStats{isArrayIndex: s.isArrayIndex,
+			useArrItemsCount: s.useArrItemsCount,
+			isVectorIndex:    s.isVectorIndex,
+		}
 		partnStats.Init()
 		s.partitions[id] = partnStats
 	}
@@ -1009,7 +1019,7 @@ func (s *IndexerStats) Reset() {
 	// Recreate per-index objects
 	for instId, iStats := range old.indexes {
 		indexStats := s.addIndexStats(instId, iStats.bucket, iStats.scope, iStats.collection, iStats.name,
-			iStats.replicaId, iStats.isArrayIndex, iStats.useArrItemsCount)
+			iStats.replicaId, iStats.isArrayIndex, iStats.useArrItemsCount, iStats.isVectorIndex)
 
 		// Recreate per-partition subobjects
 		for partnId := range iStats.partitions {
@@ -1108,7 +1118,7 @@ func (s *IndexerStats) RemoveKeyspaceStats(streamId common.StreamId, keyspaceId 
 // stats map with populated metadata but empty stats values.
 func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
 	bucket string, scope string, collection string, name string,
-	replicaId int, isArrIndex bool, useArrItemsCount bool) *IndexStats {
+	replicaId int, isArrIndex bool, useArrItemsCount bool, isVectorIndex bool) *IndexStats {
 
 	idxStats, ok := s.indexes[instId]
 	if !ok {
@@ -1120,6 +1130,7 @@ func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
 			replicaId:        replicaId,
 			isArrayIndex:     isArrIndex,
 			useArrItemsCount: useArrItemsCount,
+			isVectorIndex:    isVectorIndex,
 		}
 		idxStats.Init()
 		s.indexes[instId] = idxStats
@@ -1142,7 +1153,7 @@ func (s *IndexerStats) AddPartitionStats(indexInst common.IndexInst, partitionId
 
 	if _, ok := s.indexes[instId]; !ok {
 		s.addIndexStats(instId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-			indexInst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount)
+			indexInst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount, defn.IsVectorIndex)
 	}
 	s.indexes[instId].addPartition(partitionId)
 
@@ -2197,6 +2208,26 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			return &ss.Timings.dcpSeqs
 		},
 		&s.Timings.dcpSeqs, s.partnTimingStats)
+
+	if s.isVectorIndex {
+		statMap.AddAggrTimingStatFiltered("timings/vector_assign",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.vtAssign
+			},
+			&s.Timings.vtAssign, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/vector_encode",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.vtEncode
+			},
+			&s.Timings.vtEncode, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_set",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVSet
+			},
+			&s.Timings.stKVSet, s.partnTimingStats)
+	}
 
 	// TODO:
 	// Right now, there aren't any consumer specific stats that are essential.
