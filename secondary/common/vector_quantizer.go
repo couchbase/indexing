@@ -194,14 +194,14 @@ func (vq *VectorQuantizer) IsValid(dimension int) error {
 			if vq.BlockSize == 0 {
 				return errors.New("BlockSize should be greater than zero for product quantization with fast scan")
 			} else if dimension%vq.BlockSize != 0 {
-				return errors.New("Dimension should be divisible by BlockSize for for product quantization with fast scan")
+				return errors.New("Dimension should be divisible by BlockSize for product quantization with fast scan")
 			}
 			return nil
 		} else {
 			if vq.SubQuantizers == 0 {
 				return errors.New("SubQuantizers should be greater than zero for product quantization")
 			} else if dimension%vq.SubQuantizers != 0 {
-				return errors.New("Dimension should be divisible by SubQuantizers for for product quantization")
+				return errors.New("Dimension should be divisible by SubQuantizers for product quantization")
 			}
 			return nil
 		}
