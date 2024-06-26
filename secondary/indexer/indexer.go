@@ -13250,7 +13250,12 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 		vectorInsts = append(vectorInsts, &idxInst)
 		partnInstMap := indexPartnMap[instId]
 		for partnId := range partnInstMap {
-			maxCentroids = max(maxCentroids, idxInst.Nlist[partnId])
+			vm := idxInst.Defn.VectorMeta
+			minCentroidsRequired := idxInst.Nlist[partnId]
+			if vm.Quantizer.Type == c.PQ {
+				minCentroidsRequired = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
+			}
+			maxCentroids = max(maxCentroids, minCentroidsRequired)
 		}
 	}
 
