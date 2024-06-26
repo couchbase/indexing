@@ -539,7 +539,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
-				dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
+				if len(nVectors) > 0 {
+					dkv.Kv.AddUpsertWithVectors(uuid, nkey, okey, npkey, nVectors, centroidPos)
+				} else {
+					dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
+				}
 			}
 			data[raddr] = dkv
 		}
@@ -559,7 +563,11 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
 					kv, opaque2, oso}
 			} else {
-				dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
+				if len(nVectors) > 0 {
+					dkv.Kv.AddUpsertDeletionWithVectors(uuid, okey, npkey, nVectors, centroidPos)
+				} else {
+					dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
+				}
 			}
 			data[raddr] = dkv
 		}
