@@ -765,6 +765,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	var shardRestoreHasErr bool
 
 	errMap := make(map[common.ShardId]error)
 
@@ -842,6 +843,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 					defer mu.Unlock()
 
 					errMap[shardId] = err
+					shardRestoreHasErr = true
 				}()
 
 				wg.Done()
@@ -877,6 +879,19 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 		respCh <- respMsg
 	}
 
+	doCodebookRestore := func() {
+		// TODO?: Handle Pause Resume for Codebook Restore
+		// currently this is a no-op for pause-resume
+		if taskType == common.PauseResumeTask {
+			return
+		}
+
+		// If shard restore has any errors, dont proceed with any codebook restore as startShardRestore will exit early
+		if !shardRestoreHasErr {
+			stm.processCodebookRestore(cmd)
+		}
+	}
+
 	select {
 	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
 		closeCancelCh()
@@ -886,6 +901,7 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 	case <-restoreDoneCh: // All shards are done processing
 		sendResponse()
+		doCodebookRestore()
 		return
 	}
 
@@ -894,6 +910,129 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 	// to caller
 	select {
 	case <-restoreDoneCh:
+		sendResponse()
+		doCodebookRestore()
+		return
+	}
+
+}
+
+func (stm *ShardTransferManager) processCodebookRestore(cmd Message) {
+
+	// When codebook restore is called, the shards associated with the TT have been restored successfully,
+	// the index folder for dedicated instance have been created by plasma, while for shared instances
+	// the index folder need to be initialised
+	msg := cmd.(*MsgStartShardRestore)
+	logging.Infof("ShardTransferManager::processCodebookRestore for ttid: %v", msg.GetTransferTokenId())
+
+	start := time.Now()
+	taskType := msg.GetTaskType()
+	destination := msg.GetDestination()
+	rebalCancelCh := msg.GetCancelCh()
+	rebalDoneCh := msg.GetDoneCh()
+	respCh := msg.GetRespCh()
+	// if there are no relevant vectorIndex for the TT, sendResponse() will send a msg with empty errMap and codebookPaths
+	vectorIndexInsts := msg.GetVectorIndexInsts()
+	// TODO: Progress for Codebook Restore
+
+	var srcRoot string
+
+	switch taskType {
+	case common.RebalanceTask:
+		// pass destination as an empty string as the relative path on this node is required.
+		meta := &plasmaCopyConfigMeta{
+			rebalanceId: msg.GetRebalanceId(),
+			ttid:        msg.GetTransferTokenId(),
+			destination: "",
+			keyPrefix:   CODEBOOK_COPY_PREFIX,
+		}
+		srcRoot = filepath.Join(REBALANCE_STAGING_DIR, getCodebookRootDir(meta))
+	default:
+		// the function should never come here
+		logging.Errorf("ShardTransferManager::processCodebookRestore received an unsupported taskType for codebook restore", taskType)
+		return
+	}
+
+	errMap := make(map[string]error)
+	codebookMap := make(map[c.IndexInstId]map[c.PartitionId]string)
+	var codebookPaths []string
+
+	for _, inst := range vectorIndexInsts {
+		if _, ok := codebookMap[inst.InstId]; !ok {
+			codebookMap[inst.InstId] = make(map[c.PartitionId]string)
+		}
+		for _, partnId := range inst.Defn.Partitions {
+			destPath := filepath.Join(stm.config["storage_dir"].String(), CodebookPath(&inst, partnId, SliceId(0)))
+			codebookMap[inst.InstId][partnId] = destPath
+			codebookPaths = append(codebookPaths, destPath)
+		}
+	}
+
+	// Closed when all codebooks are done processing or an early cancel is triggered
+	codebookRestoreDoneCh := make(chan bool)
+
+	cancelCh := make(chan bool)
+	isClosed := false
+
+	closeCancelCh := func() {
+		if !isClosed {
+			isClosed = true
+			close(cancelCh)
+		}
+	}
+
+	sendResponse := func() {
+
+		// TODO: Perform cleanup for the codebooks in staging.
+		// stm.cleanupStagingDirOnRestore(cmd)
+
+		elapsed := time.Since(start).Seconds()
+		logging.Infof("ShardTransferManager::processCodebookRestore All codebooks are restored. Sending response "+
+			"errMap: %v, codebookPaths: %v, destination: %v, elapsed(sec): %v", errMap, codebookPaths, destination, elapsed)
+
+		respMsg := &MsgCodebookTransferResp{
+			errMap:        errMap,
+			codebookPaths: codebookPaths,
+		}
+
+		respCh <- respMsg
+	}
+
+	// [TODO v2]: process each codebook restore in parallel
+	go func() {
+		defer close(codebookRestoreDoneCh)
+
+		for _, vectorIdxInst := range vectorIndexInsts {
+			for _, partnId := range vectorIdxInst.Defn.Partitions {
+				select {
+				case <-cancelCh:
+					return
+				default:
+					destCodebookFilePath := codebookMap[vectorIdxInst.InstId][partnId]
+					if err := stm.RestoreCodebook(vectorIdxInst, partnId, srcRoot, destCodebookFilePath); err != nil {
+						errMap[destCodebookFilePath] = err
+						logging.Errorf("ShardTransferManager::processCodebookRestore Error when restoring codebook, %v", err)
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	select {
+	case <-rebalCancelCh: // This cancel channel is sent by rebalancer
+		closeCancelCh()
+
+	case <-rebalDoneCh:
+		closeCancelCh()
+
+	case <-codebookRestoreDoneCh:
+		sendResponse()
+		return
+	}
+
+	select {
+	case <-codebookRestoreDoneCh:
 		sendResponse()
 		return
 	}
