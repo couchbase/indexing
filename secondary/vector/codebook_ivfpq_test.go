@@ -2,6 +2,7 @@ package vector
 
 import (
 	"testing"
+	"time"
 
 	codebookpkg "github.com/couchbase/indexing/secondary/vector/codebook"
 )
@@ -14,7 +15,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 	dim := 128
 	metric := METRIC_L2
 
-	nlist := 128
+	nlist := 1000
 	nsub := 8
 	nbits := 8
 
@@ -49,8 +50,11 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	//find the nearest centroid
 	query_vec := convertTo1D(vecs[:1])
+	t0 := time.Now()
 	label, err := codebook.FindNearestCentroids(query_vec, 3)
+	delta := time.Now().Sub(t0)
 	t.Logf("Assign results %v %v", label, err)
+	t.Logf("Assign timing %v", delta)
 	for _, l := range label {
 		if l > int64(nlist) {
 			t.Errorf("Result label out of range. Total %v. Label %v", nlist, l)
@@ -71,29 +75,35 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	//encode a single vector
 	code := make([]byte, codeSize)
+	t0 = time.Now()
 	err = codebook.EncodeVector(query_vec, code)
+	delta = time.Now().Sub(t0)
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
 	validate_code_size(code, codeSize, 1)
 	t.Logf("Encode code%v", query_vec)
 	t.Logf("Encode results %v", code)
+	t.Logf("Encode timing %v", delta)
 
 	dvec := make([]float32, dim)
 	err = codebook.DecodeVector(code, dvec)
 	t.Logf("Decode results %v", dvec)
 
 	//encode multiple vectors
-	n := 3
+	n := 10
 	query_vecs := convertTo1D(vecs[:n])
 	codes := make([]byte, n*codeSize)
+	t0 = time.Now()
 	err = codebook.EncodeVectors(query_vecs, codes)
+	delta = time.Now().Sub(t0)
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
 
 	validate_code_size(codes, codeSize, n)
 	t.Logf("Encode results %v", codes)
+	t.Logf("Encode timing %v", delta)
 
 	dvecs := make([]float32, n*dim)
 	err = codebook.DecodeVectors(n, codes, dvecs)
