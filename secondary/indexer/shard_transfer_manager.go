@@ -900,6 +900,57 @@ func (stm *ShardTransferManager) processShardRestoreMessage(cmd Message) {
 
 }
 
+func (stm *ShardTransferManager) RestoreCodebook(vectorInst c.IndexInst, partnId c.PartitionId, srcRoot, destFilePath string) error {
+
+	storageDir := stm.config["storage_dir"].String()
+	relIdxPath := IndexPath(&vectorInst, partnId, SliceId(0))
+
+	// For shared instances create the index directory. For dedicated instances Shard Restore will have already created
+	// the index folder
+	if err := createSliceDir(storageDir, filepath.Join(storageDir, relIdxPath), false); err != nil {
+		err = fmt.Errorf("error encountered for Index path: %v, err: %v", relIdxPath, err)
+		logging.Errorf("ShardTransferManager::RestoreCodebook %v", err)
+		return err
+	}
+
+	// TODO: check for the sliceId information
+	srcFilePath := filepath.Join(storageDir, srcRoot, genCodebookFileStagingName(destFilePath))
+	if _, err := iowrap.Os_Stat(srcFilePath); err != nil {
+		err = fmt.Errorf("error encountered for codebook in staging directory. path: %v for"+
+			"instId: %v, realInstId:%v, partnId: %v, err: %v",
+			filepath.Join(srcRoot, genCodebookFileStagingName(destFilePath)),
+			vectorInst.InstId, vectorInst.RealInstId, partnId, err)
+		return err
+	}
+
+	if err := InitCodebookDir(storageDir, &vectorInst, partnId, SliceId(0)); err != nil {
+		err = fmt.Errorf("error observed while initializing codebook dir for "+
+			"instId: %v, realInstId:%v, partnId: %v, sliceId: %v. err:%v",
+			vectorInst.InstId, vectorInst.RealInstId, partnId, SliceId(0), err)
+		return err
+	}
+
+	srcParentDir, _ := filepath.Split(srcFilePath)
+	dstParentDir, _ := filepath.Split(destFilePath)
+
+	// check if the srcPath and destPath are on the same mount, and if os.Rename can be used. Log the error only
+	canUseRename, renameErr := c.CanRenameFile(srcParentDir, dstParentDir, "temp_codebook")
+	if renameErr != nil {
+		logging.Infof("ShardTransferManager::RestoreCodebook cant use rename, reason:%v", renameErr)
+	}
+
+	if err := c.MoveDir(srcFilePath, destFilePath, canUseRename); err != nil {
+		err = fmt.Errorf("error observed while moving codebook for"+
+			"instId: %v, realInstId:%v, partnId: %v, sliceId: %v, srcPath:%v, destPath:%v. err:%v ",
+			vectorInst.InstId, vectorInst.RealInstId, partnId, SliceId(0),
+			filepath.Join(srcRoot, genCodebookFileStagingName(destFilePath)),
+			CodebookPath(&vectorInst, partnId, SliceId(0)), err)
+		return err
+	}
+
+	return nil
+}
+
 func (stm *ShardTransferManager) waitForSliceClose(shardId common.ShardId, notifyCh MsgChannel, wg *sync.WaitGroup) {
 	defer wg.Done()
 
