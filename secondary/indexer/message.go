@@ -2579,6 +2579,7 @@ type MsgStartShardTransfer struct {
 
 	newAlternateShardIds []string
 
+	// These are the relative codebook paths
 	codebookPaths []string
 }
 

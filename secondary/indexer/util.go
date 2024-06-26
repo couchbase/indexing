@@ -90,7 +90,7 @@ func CodebookPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Sl
 		instId = inst.RealInstId
 	}
 	codebookName := fmt.Sprintf("%s_%s_%d_%d.codebook", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
-	return filepath.Join(indexPath, "codebook", codebookName)
+	return filepath.Join(indexPath, CODEBOOK_DIR, codebookName)
 }
 
 func InitCodebookDir(storageDir string, idxInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) error {

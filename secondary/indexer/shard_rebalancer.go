@@ -4552,12 +4552,7 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 	for _, idxInst := range tt.IndexInsts {
 		if idxInst.Defn.IsVectorIndex {
 			for _, partnId := range idxInst.Defn.Partitions {
-				if idxInst.CodebookPath == nil {
-					continue
-				}
-				if codebookPath, ok := idxInst.CodebookPath[partnId]; ok {
-					codebookPaths = append(codebookPaths, codebookPath)
-				}
+				codebookPaths = append(codebookPaths, CodebookPath(&idxInst, partnId, SliceId(0)))
 			}
 		}
 	}

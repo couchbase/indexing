@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/iowrap"
 	"net"
 	"net/http"
 	"os"
@@ -1416,16 +1417,16 @@ func authMiddlewareForShardTransfer(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) (err error) {
+func (stm *ShardTransferManager) TransferCodebook(codebookCopier plasma.Copier, codebookSrcPath string) error {
 	var srcDir, srcFile string
 	var sz int64
 	srcDir = stm.config["storage_dir"].String()
 
 	srcFile = filepath.Join(srcDir, codebookSrcPath)
-	if info, err := os.Stat(srcFile); info != nil {
+	if info, err := iowrap.Os_Stat(srcFile); info != nil {
 		sz = info.Size()
 	} else {
-		return fmt.Errorf("ShardTransferManager::TransferCodebook Codebook: %v does not exist, err:%v",
+		return fmt.Errorf("Codebook: %v does not exist, err:%v",
 			filepath.Base(codebookSrcPath), err)
 	}
 
