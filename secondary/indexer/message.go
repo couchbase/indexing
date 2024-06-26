@@ -2968,6 +2968,8 @@ type MsgStartShardRestore struct {
 	authCallback   func(*http.Request) error
 	tlsConfig      *tls.Config
 	isPeerTransfer bool
+
+	vectorInsts []c.IndexInst
 }
 
 func (m *MsgStartShardRestore) GetMsgType() MsgType {
@@ -3076,6 +3078,10 @@ func (m *MsgStartShardRestore) GetTLSConfig() *tls.Config {
 
 func (m *MsgStartShardRestore) GetAuthCallback() func(*http.Request) error {
 	return m.authCallback
+}
+
+func (m *MsgStartShardRestore) GetVectorIndexInsts() []c.IndexInst {
+	return m.vectorInsts
 }
 
 type MsgDestroyLocalShardData struct {
