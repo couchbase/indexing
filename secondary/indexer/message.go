@@ -3664,6 +3664,8 @@ func (m MsgType) String() string {
 		return "PERSISTANCE_STATUS"
 	case INDEX_TRAINING_DONE:
 		return "INDEX_TRAINING_DONE"
+	case CODEBOOK_TRANSFER_RESPONSE:
+		return "CODEBOOK_TRANSFER_RESPONSE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

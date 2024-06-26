@@ -1248,8 +1248,8 @@ loop:
 		case respMsg := <-respCh:
 
 			elapsed := time.Since(start).Seconds()
-			l.Infof("ShardRebalancer::startShardTransfer Received response for transfer of "+
-				"shards: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
+			l.Infof("ShardRebalancer::startShardTransfer Received response %s for transfer of "+
+				"shards: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
 
 			// ShardRebalancer can only receive SHARD_TRANSFER_RESPONSE after successful transfer of Codebooks
 			// Receiving CODEBOOK_TRANSFER_RESPONSE then SHARD_TRANSFER_RESPONSE are sequential
@@ -1694,8 +1694,8 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		case respMsg := <-respCh:
 
 			elapsed := time.Since(start).Seconds()
-			l.Infof("ShardRebalancer::startRestoreShard Received response for restore of "+
-				"shardIds: %v, ttid: %v, elapsed(sec): %v", tt.ShardIds, ttid, elapsed)
+			l.Infof("ShardRebalancer::startRestoreShard Received response %s for restore of "+
+				"shardIds: %v, ttid: %v, elapsed(sec): %v", respMsg.GetMsgType().String(), tt.ShardIds, ttid, elapsed)
 
 			// For Rebalance, the Shard Restore and Codebook Restore happen sequentially. Hence, the respCh will receive
 			// the SHARD_TRANSFER_RESPONSE first, then CODEBOOK_TRANSFER_RESPONSE
