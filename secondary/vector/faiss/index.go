@@ -184,3 +184,7 @@ func IndexFactory(d int, description string, metric int) (*IndexImpl, error) {
 	}
 	return &IndexImpl{&idx}, nil
 }
+
+func SetOMPThreads(n uint) {
+	C.faiss_set_omp_threads(C.uint(n))
+}
