@@ -5387,7 +5387,7 @@ func (mdb *plasmaSlice) getNearestCentroidId(vec []float32) (int64, error) {
 
 	oneNearIds, err := mdb.codebook.FindNearestCentroids(vec, 1)
 	if err != nil {
-		err := fmt.Errorf("Error observed while computing %v centroidIds for vector: %v, instId: %v")
+		err := fmt.Errorf("Error observed while computing centroidIds for vector: %v, instId: %v", vec, mdb.IndexInstId())
 		return -1, err
 	}
 
