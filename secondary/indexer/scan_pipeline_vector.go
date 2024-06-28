@@ -8,6 +8,7 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1qlval "github.com/couchbase/query/value"
@@ -335,6 +336,241 @@ func (w *ScanWorker) skipRow(entry []byte) (skipRow bool, err error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// -----------
+// Worker Pool
+// -----------
+
+// Pool of ScanWokers
+type WorkerPool struct {
+	jobs       chan *ScanJob  // Channel to send jobs to workers
+	jobsWg     sync.WaitGroup // Wait group to wait for submitted jobs to finish
+	errCh      chan error     // Channel to receive errros from workers
+	numWorkers int            // Number of workers
+	stopCh     chan struct{}  // Channel to halt workerpool and its workers
+	stopOnce   sync.Once      // To execute stop only once upon external trigger or internal error
+	workers    []*ScanWorker  // Array of workers
+	sendCh     chan *Row      // Channel to send data out for downstream processing
+}
+
+// NewWorkerPool creates a new WorkerPool
+func NewWorkerPool(numWorkers int) *WorkerPool {
+	wp := &WorkerPool{
+		jobs:       make(chan *ScanJob, numWorkers),
+		jobsWg:     sync.WaitGroup{},
+		errCh:      make(chan error),
+		numWorkers: numWorkers,
+		stopCh:     make(chan struct{}),
+		workers:    make([]*ScanWorker, numWorkers),
+	}
+	return wp
+}
+
+// Init starts the worker pool
+func (wp *WorkerPool) Init(r *ScanRequest) {
+	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
+
+	for i := 0; i < wp.numWorkers; i++ {
+		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
+			wp.stopCh, wp.errCh, &wp.jobsWg)
+	}
+}
+
+// Submit adds a job to the pool
+func (wp *WorkerPool) Submit(job *ScanJob) {
+	wp.jobsWg.Add(1)
+	select {
+	case <-wp.stopCh:
+		wp.jobsWg.Add(-1)
+	case wp.jobs <- job:
+	}
+}
+
+// Wait waits for submitted jobs to finish or an error to occur
+func (wp *WorkerPool) Wait() error {
+	doneCh := make(chan struct{})
+	go func() {
+		wp.jobsWg.Wait()
+		close(doneCh)
+	}()
+	select {
+	case err := <-wp.errCh: // If any worker errors out
+		if err != nil {
+			wp.stopOnce.Do(func() {
+				close(wp.stopCh)
+			})
+			<-doneCh         // Wait for running jobs to stop
+			wp.sendLastRow() // Indicate downstream of early closure
+			close(wp.sendCh) // Close downstream
+			return err
+		}
+	case <-doneCh: // If current submitted jobs are done
+		return nil
+	case <-wp.stopCh: // If User stopped the worker pool
+		<-doneCh
+		return nil
+	}
+	return nil
+}
+
+// sendLastRow to indicate early closure to downstream i.e. to
+// differentiate between closure on error and end
+func (wp *WorkerPool) sendLastRow() {
+	row := &Row{last: true}
+	wp.sendCh <- row
+}
+
+// Stop signals all workers to stop and waits for workers to halt and closes
+// downstream. Use Wait to wait till submitted jobs are done. Stop will halt
+// the workers
+func (wp *WorkerPool) Stop() {
+	wp.stopOnce.Do(func() {
+		close(wp.stopCh)
+		wp.jobsWg.Wait()
+		close(wp.sendCh)
+	})
+}
+
+func (wp *WorkerPool) GetOutCh() <-chan *Row {
+	return wp.sendCh
+}
+
+// -------------
+// MergeOperator
+// -------------
+
+// Function to write data downstream from MergeOperator
+type WriteItem func(...[]byte) error
+
+// MergeOperator will read from recvQ, based on distances and either stores
+// in heap or forwards row to down stream
+type MergeOperator struct {
+	req *ScanRequest
+
+	recvCh <-chan *Row
+	heap   *TopKRowHeap
+
+	errCh    chan error
+	mergerWg sync.WaitGroup
+
+	writeItem WriteItem
+
+	buf   *[]byte
+	cktmp [][]byte
+
+	// VECTOR_TODO: handle stats
+	bytesRead    uint64
+	rowsScanned  uint64
+	rowsReturned uint64
+}
+
+func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
+	fio *MergeOperator, err error) {
+
+	fio = &MergeOperator{
+		recvCh:    recvCh,
+		writeItem: writeItem,
+		req:       r,
+	}
+
+	if r.Limit != 0 {
+		fio.heap, err = NewTopKRowHeap(int(r.Limit), false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	fio.buf = r.getFromSecKeyBufPool()
+	fio.cktmp = make([][]byte, len(r.IndexInst.Defn.SecExprs))
+
+	fio.mergerWg.Add(1)
+	go fio.Collector()
+
+	return fio, nil
+}
+
+func (fio *MergeOperator) Collector() {
+	defer fio.mergerWg.Done()
+
+	var row *Row
+	var ok bool
+	var err error
+
+	for {
+		row, ok = <-fio.recvCh
+		if !ok {
+			break
+		}
+
+		// last row is send to indicate early closure
+		if row.last {
+			return
+		}
+
+		// VECTOR_TODO: Add OFFSET too to the LIMIT, Check if LIMIT is adjusted at client side considering OFFSET
+		// If Limit is pushed down push it to heap
+		if fio.req.Limit != 0 {
+			fio.heap.Push(row)
+			continue
+		}
+
+		// If not get projected fields and send it down stream
+		entry := row.key
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				fio.errCh <- err
+				return
+			}
+		}
+
+		err = fio.writeItem(entry)
+		if err != nil {
+			fio.errCh <- err
+			return
+		}
+
+	}
+
+	if logging.IsEnabled(logging.Verbose) {
+		fio.heap.PrintHeap()
+	}
+
+	// Read from Heap and get projected fields and send it down stream
+	for row = fio.heap.Pop(); row != nil; row = fio.heap.Pop() {
+		entry := row.key
+		if fio.req.Indexprojection != nil && fio.req.Indexprojection.projectSecKeys {
+			entry, err = projectKeys(nil, row.key, (*fio.buf)[:0], fio.req, fio.cktmp)
+			if err != nil {
+				fio.heap.Destroy()
+				fio.errCh <- err
+				return
+			}
+		}
+
+		err = fio.writeItem(entry)
+		if err != nil {
+			fio.heap.Destroy()
+			fio.errCh <- err
+			return
+		}
+	}
+}
+
+func (fio *MergeOperator) Wait() error {
+	doneCh := make(chan struct{})
+	go func() {
+		fio.mergerWg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case err := <-fio.errCh:
+		return err
+	case <-doneCh:
+		return nil
+	}
 }
 
 // ----------------

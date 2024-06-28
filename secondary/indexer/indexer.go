@@ -9186,7 +9186,7 @@ func (idx *indexer) initFromPersistedState() error {
 			if len(inst.Pc.GetAllPartitions()) == 0 {
 				defn := inst.Defn
 				idx.stats.addIndexStats(inst.InstId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
-					inst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount)
+					inst.ReplicaId, defn.IsArrayIndex, defn.HasArrItemsCount, defn.IsVectorIndex)
 
 				idx.stats.addBucketStats(defn.Bucket)
 			} else {
@@ -13250,7 +13250,12 @@ func getMaxSampleSize(instIds []common.IndexInstId, indexInstMap c.IndexInstMap,
 		vectorInsts = append(vectorInsts, &idxInst)
 		partnInstMap := indexPartnMap[instId]
 		for partnId := range partnInstMap {
-			maxCentroids = max(maxCentroids, idxInst.Nlist[partnId])
+			vm := idxInst.Defn.VectorMeta
+			minCentroidsRequired := idxInst.Nlist[partnId]
+			if vm.Quantizer.Type == c.PQ {
+				minCentroidsRequired = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
+			}
+			maxCentroids = max(maxCentroids, minCentroidsRequired)
 		}
 	}
 

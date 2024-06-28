@@ -274,7 +274,13 @@ func N1QLTransformForVectorIndex(
 					if len(array) == 0 {
 						return nil, nil, nil, nil, nil
 					}
+				} else if keyPos == ie.vectorPos { // array of vectors
+					vectors, array = getValidVectorsFromArray(array, ie.dimension)
+					if len(array) == 0 {
+						return nil, nil, nil, nil, nil
+					}
 				}
+
 			} else {
 				if isFlattened {
 					if isArrayEmpty(array) { // Populate "missing" for all keys
@@ -285,7 +291,19 @@ func N1QLTransformForVectorIndex(
 				} else {
 					//if array is non-leading key and empty, treat it as missing
 					if isArrayEmpty(array) {
+						if keyPos == ie.vectorPos {
+							return nil, nil, nil, nil, nil
+						}
 						array = []qvalue.Value{missing}
+					} else if keyPos == ie.vectorPos {
+						if isArrayMissing(array) {
+							return nil, nil, nil, nil, nil
+						}
+
+						vectors, array = getValidVectorsFromArray(array, ie.dimension)
+						if len(array) == 0 {
+							return nil, nil, nil, nil, nil
+						}
 					}
 				}
 			}
@@ -476,4 +494,20 @@ func validateVector(vector qvalue.Value, dimension int) ([]float32, error) {
 			res[i] = (float32)(vf)
 		}
 	}
+}
+
+func getValidVectorsFromArray(vectors qvalue.Values, dimension int) ([][]float32, []qvalue.Value) {
+	var outVec [][]float32
+	var outVal []qvalue.Value
+	for i := range vectors {
+		vec, err := validateVector(vectors[i], dimension)
+		if err != nil {
+			// If vector is missing/null, then skip indexing the document
+			continue
+		} else {
+			outVec = append(outVec, vec)
+			outVal = append(outVal, qvalue.NewValue(dummy_centroid))
+		}
+	}
+	return outVec, outVal
 }
