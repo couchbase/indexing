@@ -32,6 +32,7 @@ type ScanConfig struct {
 	Consistency     bool   // Use session consistency
 	Scans           client.Scans
 	IndexProjection *client.IndexProjection
+	IndexVector     *client.IndexVector
 	GroupAggr       *client.GroupAggr
 	TestSpec        *TestConfig
 

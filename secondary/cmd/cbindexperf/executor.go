@@ -10,6 +10,7 @@ import (
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 )
 
@@ -65,10 +66,24 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRang
 		} else {
 			var pkeys [][]byte
 			var err error
-			_, pkeys, err = res.GetEntries(dataEncFmt)
+			var skeys *c.ScanResultEntries
+			skeys, pkeys, err = res.GetEntries(dataEncFmt)
 			// The purpose of cbindexperf is to measure indexer's
 			// performance. so, we don't need to decode n1ql values
 			// in case of cjson
+			if logging.IsEnabled(logging.Verbose) {
+				for i := 0; i < skeys.GetLength(); i++ {
+					srk, e := skeys.GetkthKey(i)
+					if e != nil {
+						return false
+					}
+					k, e := srk.GetRaw()
+					if e != nil {
+						return false
+					}
+					logging.Verbosef("skeys: %s pkeys: %s", k, pkeys)
+				}
+			}
 
 			if err != nil {
 				errFn(err.Error())
@@ -115,8 +130,9 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRang
 	case "Scan6":
 		// VECTOR_TODO: Add IndexVector paramter here..
 		requestID := os.Args[0] + uuid
-		err = client.Scan6(spec.DefnId, requestID, scanRange.GetScans(spec), false, false, spec.IndexProjection,
-			0, spec.Limit, spec.GroupAggr, nil, cons, nil, callb, scanParams, nil)
+		err = client.Scan6(spec.DefnId, requestID, scanRange.GetScans(spec), false,
+			false, spec.IndexProjection, 0, spec.Limit, spec.GroupAggr,
+			nil, cons, nil, callb, scanParams, spec.IndexVector)
 	}
 
 	if err != nil {
