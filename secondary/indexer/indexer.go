@@ -13332,6 +13332,21 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 
 			for _, slice := range slices {
 
+				vm := idxInst.Defn.VectorMeta
+				minCentroids := idxInst.Nlist[partnId]
+				if vm.Quantizer.Type == c.PQ {
+					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
+				}
+				if len(vectors[i]) < minCentroids {
+					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying/valid vectors %v are less than the number "+
+						"of vectors %v required for training %v centroids", len(vectors[i]), minCentroids,
+						minCentroids)
+
+					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
+					updateErrMap(instId, partnId, errors.New(errStr))
+					continue
+				}
+
 				if slice.IsTrained() {
 					logging.Infof("Indexer::initateTraining Skipping training for slice as it is already trained instId: %v, partnId: %v", instId, partnId)
 					continue
