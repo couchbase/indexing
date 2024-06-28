@@ -112,9 +112,7 @@ func CloneIndexSnapshot(is IndexSnapshot) IndexSnapshot {
 	return is
 }
 
-//
 // Get slice snaspshot.  The snapshot must be returned in the same order as partitionIds.
-//
 func GetSliceSnapshots(is IndexSnapshot, partitionIds []common.PartitionId) (s []SliceSnapshot, err error) {
 	if is == nil {
 		return
@@ -131,6 +129,34 @@ func GetSliceSnapshots(is IndexSnapshot, partitionIds []common.PartitionId) (s [
 		for _, partnId := range partitionIds {
 			if partition := is.Partitions()[partnId]; partition != nil {
 				s = append(s, partition.Slices()[0])
+			} else {
+				return nil, ErrNotMyPartition
+			}
+		}
+	}
+
+	return
+}
+
+func GetSliceSnapshotsMap(is IndexSnapshot, partitionIds []common.PartitionId) (m map[common.PartitionId]SliceSnapshot, err error) {
+	if is == nil {
+		return
+	}
+
+	m = make(map[common.PartitionId]SliceSnapshot)
+
+	if is.IsEpoch() || len(partitionIds) == 0 {
+		// for backward compatibility
+		for pid, p := range is.Partitions() {
+			for _, sl := range p.Slices() {
+				m[pid] = sl
+			}
+		}
+	} else {
+		for _, partnId := range partitionIds {
+			if partition := is.Partitions()[partnId]; partition != nil {
+				sl := partition.Slices()[0]
+				m[partnId] = sl
 			} else {
 				return nil, ErrNotMyPartition
 			}

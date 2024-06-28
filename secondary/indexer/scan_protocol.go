@@ -157,7 +157,7 @@ func (w *protoResponseWriter) Done(readUnits uint64, clientVersion uint32) error
 	defer p.PutBlock(w.encBuf)
 	defer p.PutBlock(w.rowBuf)
 
-	if (w.scanType == ScanReq || w.scanType == ScanAllReq || w.scanType == FastCountReq) && w.rowSize > 0 {
+	if (w.scanType == ScanReq || w.scanType == ScanAllReq || w.scanType == FastCountReq || w.scanType == VectorScanReq) && w.rowSize > 0 {
 		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
 		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 		if err != nil {
