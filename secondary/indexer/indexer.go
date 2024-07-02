@@ -13098,9 +13098,18 @@ func (idx *indexer) validateTrainListSize(trainlistSize uint64, nlist int, vm *c
 		// in the keyspace at the time of build
 		minCentroidsRequired := max(1<<vm.Quantizer.Nbits, nlist)
 		if trainlistSize < uint64(minCentroidsRequired) {
-			logging.Errorf("Indexer::validateTrainListSize The number of documents: %v in keyspace: %v are less than the "+
-				"minimum number of documents: %v required for training", trainlistSize, keyspaceId, minCentroidsRequired)
-			return c.ErrInsufficientItemsForTraining
+			var errStr string
+			if vm.TrainList == 0 {
+				errStr = c.ERR_TRAINING + fmt.Sprintf("The number of documents: %v in keyspace: %v are less than the "+
+					"minimum number of documents: %v required for training %v centroids", trainlistSize,
+					keyspaceId, minCentroidsRequired, minCentroidsRequired)
+			} else {
+				errStr = c.ERR_TRAINING + fmt.Sprintf("Trainlist %v is less than the number "+
+					"of documents %v required for training %v centroids", trainlistSize, minCentroidsRequired,
+					minCentroidsRequired)
+			}
+			logging.Errorf("Indexer::validateTrainListSize %v", errStr)
+			return errors.New(errStr)
 		}
 		return nil
 	} else {
@@ -13149,8 +13158,13 @@ func (idx *indexer) computeCentroids(cluster, keyspaceId, reqcid string,
 			inst.Nlist[partnId] = centroids
 		}
 
-		// In the worst case, all items in the keyspace will be considered for training
-		trainListSize := itemsCount
+		//use input trainlist by default
+		trainListSize := uint64(inst.Defn.VectorMeta.TrainList)
+		if trainListSize == 0 {
+			// In the worst case, all items in the keyspace will be considered for training
+			trainListSize = itemsCount
+		}
+
 		if err := idx.validateTrainListSize(trainListSize, centroids, inst.Defn.VectorMeta, keyspaceId); err != nil {
 			errMap[instId] = err
 			continue
@@ -13331,6 +13345,21 @@ func (idx *indexer) initiateTraining(allInsts []common.IndexInstId,
 			slices := partnInst.Sc.GetAllSlices()
 
 			for _, slice := range slices {
+
+				vm := idxInst.Defn.VectorMeta
+				minCentroids := idxInst.Nlist[partnId]
+				if vm.Quantizer.Type == c.PQ {
+					minCentroids = max(1<<vm.Quantizer.Nbits, idxInst.Nlist[partnId])
+				}
+				if len(vectors[i]) < minCentroids {
+					errStr := c.ERR_TRAINING + fmt.Sprintf("Number of qualifying/valid vectors %v are less than the number "+
+						"of vectors %v required for training %v centroids", len(vectors[i]), minCentroids,
+						minCentroids)
+
+					logging.Errorf("Indexer::initiateTraining instId: %v, partnId: %v err: %v", instId, partnId, errStr)
+					updateErrMap(instId, partnId, errors.New(errStr))
+					continue
+				}
 
 				if slice.IsTrained() {
 					logging.Infof("Indexer::initateTraining Skipping training for slice as it is already trained instId: %v, partnId: %v", instId, partnId)

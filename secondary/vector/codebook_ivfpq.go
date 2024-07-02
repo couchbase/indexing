@@ -18,6 +18,8 @@ import (
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
+const defaultOMPThreads = 1
+
 type codebookIVFPQ struct {
 	dim   int //vector dimension
 	nsub  int //number of subquantizers
@@ -68,6 +70,8 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codeboo
 	}
 
 	faissMetric := convertToFaissMetric(metric)
+
+	faiss.SetOMPThreads(defaultOMPThreads)
 
 	codebook.index, err = NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, faissMetric)
 	if err != nil || codebook.index == nil {
