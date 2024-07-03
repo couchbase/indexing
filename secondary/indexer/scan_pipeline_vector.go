@@ -9,6 +9,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/indexing/secondary/vector/codebook"
 	n1qlval "github.com/couchbase/query/value"
@@ -103,10 +104,10 @@ func (w *ScanWorker) Scanner() {
 		case <-w.stopCh:
 			return
 		case job, ok = <-w.workCh:
-			w.currJob = job
 			if !ok {
 				return
 			}
+			w.currJob = job
 		}
 
 		w.senderErrCh = make(chan error)
@@ -357,7 +358,7 @@ type WorkerPool struct {
 // NewWorkerPool creates a new WorkerPool
 func NewWorkerPool(numWorkers int) *WorkerPool {
 	wp := &WorkerPool{
-		jobs:       make(chan *ScanJob, numWorkers),
+		jobs:       make(chan *ScanJob, 0),
 		jobsWg:     sync.WaitGroup{},
 		errCh:      make(chan error),
 		numWorkers: numWorkers,
@@ -378,13 +379,17 @@ func (wp *WorkerPool) Init(r *ScanRequest) {
 }
 
 // Submit adds a job to the pool
-func (wp *WorkerPool) Submit(job *ScanJob) {
-	wp.jobsWg.Add(1)
+// Note: Submit and Wait cannot run concurrently but Stop can be run asynchronously
+func (wp *WorkerPool) Submit(job *ScanJob) error {
 	select {
 	case <-wp.stopCh:
-		wp.jobsWg.Add(-1)
 	case wp.jobs <- job:
+		wp.jobsWg.Add(1)
+	case err := <-wp.errCh:
+		wp.Stop()
+		return err
 	}
+	return nil
 }
 
 // Wait waits for submitted jobs to finish or an error to occur
@@ -533,6 +538,10 @@ func (fio *MergeOperator) Collector() {
 
 	}
 
+	if fio.req.Limit == 0 {
+		return
+	}
+
 	if logging.IsEnabled(logging.Verbose) {
 		fio.heap.PrintHeap()
 	}
@@ -586,7 +595,135 @@ type IndexScanSource2 struct {
 }
 
 func (s *IndexScanSource2) Routine() error {
-	// VECTOR_TODO: Implement pipeline for vector scans
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("IndexScanSource2 - panic detected while processing %s", s.p.req)
+			l.Fatalf("%s", l.StackTraceAll())
+			panic(r)
+		}
+	}()
+
+	var err error
+	defer s.CloseWrite()
+
+	// We can have multiple readers running on given snapshot i.e. snapshots can be
+	// accessed concurrently so we need not duplicate snapshot for every reader.
+	// As snap.Open() is done in NewSnapshotIterator ref counting is also taken care of
+	snaps, err := GetSliceSnapshotsMap(s.is, s.p.req.PartitionIds)
+	if err != nil {
+		return err
+	}
+
+	// How many readers per partition are configured and how may are needed
+	readersPerPartition := s.p.req.parallelCentroidScans
+	if s.p.req.nprobes < s.p.req.parallelCentroidScans {
+		readersPerPartition = s.p.req.nprobes
+	}
+
+	// Make map of parition to reader contexts i.e. readers per parition
+	ctxs := make(map[common.PartitionId][]IndexReaderContext)
+	for i, pid := range s.p.req.PartitionIds {
+		ctxs[pid] = make([]IndexReaderContext, 0)
+		for j := 0; j < readersPerPartition; j++ {
+			ctxs[pid] = append(ctxs[pid], s.p.req.Ctxs[i*readersPerPartition+j])
+		}
+	}
+
+	// Scans and codebooks
+	scans := s.p.req.vectorScans
+	codebooks := s.p.req.codebookMap
+
+	// Spawn Scan Workers
+	wp := NewWorkerPool(readersPerPartition * len(s.p.req.PartitionIds))
+	wp.Init(s.p.req)
+	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator
+
+	// Spawn Merge Operator
+	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, s.WriteItem)
+	if err != nil { // Stop worker pool and return
+		wp.Stop()
+		return err
+	}
+
+	// Make ScanJobs and schedule them on the WorkerPool
+	// * readersPerPartition should be launched in parallel
+	// * Run one scan on all partitions and then launch next one
+	rem := s.p.req.nprobes % readersPerPartition
+	numBatchesPerScan := s.p.req.nprobes / readersPerPartition
+	if rem != 0 {
+		numBatchesPerScan += 1
+	}
+
+	// Assigning BatchId to scan jobs in every paritition every batch will
+	// have at max readersPerPartition * numPartitions number of jobs all the jobs
+	// in the batch can be run in parallel. We have only readersPerPartition number
+	// of readers for every partition so only that many readers can run in parallel
+	// in one batch. We will be running the jobs batch wise one batch after other
+
+	// VECTOR_TODO: Fix this scheduling algorithm. Here we must wait for slowest
+	// scan in every batch to finish. If not all batches are equally sized this is
+	// not optimal. We will to have schedule every job independently and hold semaphore
+	// on number of readers per parition to ensure only a fixed number of scans per
+	// partition are running in parallel at any point of time.
+	jobMap := make(map[int][]*ScanJob, 0)
+	maxBatchId := 0
+	for _, pid := range s.p.req.PartitionIds {
+		cidScans := scans[pid]
+		c := 0
+		for cid, scanList := range cidScans {
+			for sid, scan := range scanList {
+				batchId := sid*numBatchesPerScan + (c / readersPerPartition)
+				if batchId > maxBatchId {
+					maxBatchId = batchId
+				}
+				job := &ScanJob{
+					batch:    batchId,
+					pid:      pid,
+					cid:      cid,
+					scan:     scan,
+					snap:     snaps[pid],
+					codebook: codebooks[pid],
+					ctx:      ctxs[pid][c%readersPerPartition],
+				}
+				_, ok := jobMap[batchId]
+				if !ok {
+					jobMap[batchId] = make([]*ScanJob, 0)
+				}
+				jobMap[batchId] = append(jobMap[batchId], job)
+			}
+			c++
+		}
+	}
+
+	var wpErr, fanInErr error
+	go func() {
+		defer wp.Stop()
+		for i := 0; i <= maxBatchId; i++ {
+			for _, job := range jobMap[i] {
+				wpErr := wp.Submit(job)
+				if wpErr != nil {
+					return
+				}
+			}
+			wpErr = wp.Wait()
+			if wpErr != nil {
+				return
+			}
+		}
+	}()
+
+	// Wait for Merge Operator to terminate it will happen either when we stopped worker pool
+	fanInErr = fanIn.Wait()
+	if fanInErr != nil { // If there is an error in FanIn stop worker pool
+		wp.Stop()
+		return fanInErr
+	}
+
+	// If there was workerpool error causing early closure of Merger return error from worker pool
+	if wpErr != nil {
+		return wpErr
+	}
+
 	return nil
 }
 

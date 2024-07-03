@@ -564,12 +564,11 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		for _, scan := range r.protoScans {
 			for filterPos, compFilter := range scan.Filters {
 				if filterPos == r.vectorPos {
-					// VECTOR_TODO: check and replace this encoding
-					bs, err := json.Marshal(centroidId)
+					centroidStr := fmt.Sprintf("%08x", centroidId)
+					centroidIdBytes, err := json.Marshal(centroidStr)
 					if err != nil {
 						return err
 					}
-					centroidIdBytes := bs
 
 					compFilter.Low = centroidIdBytes
 					compFilter.High = centroidIdBytes

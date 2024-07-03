@@ -1675,7 +1675,11 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
 						for j := 0; j < ctxsPerPartition; j++ {
-							ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(user, skipReadMetering)
+							ctxUser := user
+							if user == "" {
+								ctxUser = fmt.Sprintf("%v_%v", partnId, j)
+							}
+							ctx[i*ctxsPerPartition+j] = partition.Sc.GetSliceById(0).GetReaderContext(ctxUser, skipReadMetering)
 						}
 					} else {
 						found = false

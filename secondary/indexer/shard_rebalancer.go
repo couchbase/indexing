@@ -1664,6 +1664,8 @@ func (sr *ShardRebalancer) startShardRestore(ttid string, tt *c.TransferToken) {
 		doneCh:     sr.done,
 		respCh:     respCh,
 		progressCh: progressCh,
+
+		vectorInsts: getVectorIndexInsts(tt),
 	}
 
 	if sr.canMaintainShardAffinity {
@@ -4552,16 +4554,21 @@ func getCodebookPaths(tt *c.TransferToken) (codebookPaths []string) {
 	for _, idxInst := range tt.IndexInsts {
 		if idxInst.Defn.IsVectorIndex {
 			for _, partnId := range idxInst.Defn.Partitions {
-				if idxInst.CodebookPath == nil {
-					continue
-				}
-				if codebookPath, ok := idxInst.CodebookPath[partnId]; ok {
-					codebookPaths = append(codebookPaths, codebookPath)
-				}
+				codebookPaths = append(codebookPaths, CodebookPath(&idxInst, partnId, SliceId(0)))
 			}
 		}
 	}
 	return codebookPaths
+}
+
+func getVectorIndexInsts(tt *c.TransferToken) (vectorInsts []c.IndexInst) {
+
+	for _, idxInst := range tt.IndexInsts {
+		if idxInst.Defn.IsVectorIndex {
+			vectorInsts = append(vectorInsts, idxInst)
+		}
+	}
+	return vectorInsts
 }
 
 func (sr *ShardRebalancer) addTokenToActiveTransfersLOCKED(ttid string, nodeId string) {

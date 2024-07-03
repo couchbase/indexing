@@ -125,11 +125,12 @@ func (h *TopKRowHeap) Pop() (row *Row) {
 
 // PrintHeap prints all elements in the heap.
 func (h *TopKRowHeap) PrintHeap() {
+	logging.Infof("Start of Heap")
 	for i := 0; i < h.heap.Len(); i++ {
 		row := h.heap.GetRow(i)
-		logging.Infof("key: %s, value: %s, len: %d, last: %v, dist: %f\n",
-			row.key, row.value, row.len, row.last, row.dist)
+		logging.Infof("Row: %+v", row)
 	}
+	logging.Infof("End of Heap")
 }
 
 // List returns all the elements cached in the heap. When user does not need rows
