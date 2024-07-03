@@ -442,6 +442,73 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	return results, garesults, err2
 }
 
+func N1QLScan6(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
+	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr, consistency c.Consistency,
+	vector *qc.TsConsistency, indexKeyNames []string, inlineFilter string, indexVector *datastore.IndexVector,
+	indexPartionSets datastore.IndexPartitionSets) (tc.ScanResponseActual, error) {
+
+	client, err := GetOrCreateN1QLClient(server, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.SetLogLevel(logging.Error)
+
+	tctx := &testContext{}
+	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
+	if err != nil {
+		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
+	}
+	requestid := getrequestid()
+	index, err := client.IndexByName(indexName)
+
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
+
+	index6, useScan6 := index.(datastore.Index6)
+	if err != nil {
+		return nil, err
+	}
+
+	var start time.Time
+	go func() {
+		spans2 := make(datastore.Spans2, len(scans))
+		for i, scan := range scans {
+			spans2[i] = &datastore.Span2{}
+			if len(scan.Seek) != 0 {
+				spans2[i].Seek = skey2qkey(scan.Seek)
+			}
+			spans2[i].Ranges = filtertoranges2(scan.Filter)
+		}
+
+		proj := projectionton1ql(projection)
+		groupAggregates := groupAggrton1ql(groupAggr)
+
+		cons := getConsistency(consistency)
+
+		if useScan6 {
+			start = time.Now()
+			// Currently go tests do not pass timestamp vector
+			index6.Scan6(requestid, spans2, reverse, distinct, proj,
+				offset, limit, groupAggregates, nil, indexKeyNames, inlineFilter, indexVector,
+				indexPartionSets, cons, nil, conn)
+		} else {
+			log.Fatalf("Indexer does not support Index6 API. Cannot call Scan6 method.")
+		}
+	}()
+
+	var results tc.ScanResponseActual
+	var err2 error
+	results, err2 = getresultsfromsender(conn.Sender(), index.IsPrimary(), tctx)
+
+	elapsed := time.Since(start)
+	tc.LogPerfStat("Scan6", elapsed)
+	return results, err2
+}
+
 func N1QLStorageStatistics(indexName, bucketName, server string) ([]map[string]interface{}, error) {
 
 	client, err := GetOrCreateN1QLClient(server, bucketName)

@@ -116,6 +116,7 @@ func getSiftData(cfg Config, sd *SiftData, cnt *int64) (string, map[string]inter
 	}
 
 	value["phone"] = (10000000000 * (overflow % 10)) + randgen.Intn(100000000)
+	value["docnum"] = overflow*10000 + vecnum
 
 	return docid, value, nil
 }

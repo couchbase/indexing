@@ -10,6 +10,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/query/datastore"
 	"github.com/couchbase/query/value"
 )
 
@@ -519,6 +520,126 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 	} else {
 		return count, nil
 	}
+}
+
+func datastoreIndexVectorToQc(indexVector *datastore.IndexVector) *qc.IndexVector {
+	if indexVector == nil {
+		return nil
+	}
+
+	vec := &qc.IndexVector{
+		QueryVector:  make([]float32, len(indexVector.QueryVector)),
+		IndexKeyPos:  indexVector.IndexKeyPos,
+		Probes:       indexVector.Probes,
+		ActualVector: indexVector.ActualVector,
+	}
+
+	for i, o := range indexVector.QueryVector {
+		vec.QueryVector[i] = o
+	}
+
+	return vec
+}
+
+func Scan6(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool, projection *qc.IndexProjection,
+	offset, limit int64, indexOrder *qc.IndexKeyOrder, consistency c.Consistency, tsVector *qc.TsConsistency,
+	indexVector *datastore.IndexVector) (tc.ScanResponseActual, error) {
+
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		res, err := N1QLScan6(indexName, bucketName, server, scans, reverse, distinct,
+			projection, offset, limit, nil, consistency, nil, nil, "",
+			indexVector, nil)
+		return res, err
+	}
+
+	var scanErr error = nil
+
+	var previousSecKey value.Value
+
+	client, e := GetOrCreateClient(server, "2itest")
+	if e != nil {
+		return nil, e
+	}
+
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	scanResults := make(tc.ScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
+
+	var scanParams = map[string]interface{}{"skipReadMetering": true, "user": ""}
+	count := 0
+	start := time.Now()
+
+	callb := func(response qc.ResponseReader) bool {
+		if err := response.Error(); err != nil {
+			scanErr = err
+			log.Printf("ScanError = %v ", scanErr)
+			return false
+		} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
+			scanErr = err
+			log.Printf("ScanError = %v ", scanErr)
+			return false
+		} else {
+			skeys, err1, retBuf := keys.Get(tmpbuf)
+			if err1 != nil {
+				tc.HandleError(err1, "err in keys.Get")
+				return false
+			}
+			if retBuf != nil {
+				tmpbuf = retBuf
+			}
+			for i, skey := range skeys {
+				primaryKey := string(pkeys[i])
+				//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
+				count++
+				if _, keyPresent := scanResults[primaryKey]; keyPresent {
+					// Duplicate primary key found
+					dupError := errors.New("Duplicate primary key found")
+					tc.HandleError(dupError, "Duplicate primary key found in the scan results: "+primaryKey)
+				} else {
+					// Test collation only if CheckCollation is true
+					if CheckCollation == true && len(skey) > 0 {
+						secVal := skey[0]
+						if previousSecKey == nil {
+							previousSecKey = secVal
+						} else {
+							if secVal.Collate(previousSecKey) < 0 {
+								errMsg := "Collation check failed. Previous Sec key > Current Sec key"
+								scanErr = errors.New(errMsg)
+								return false
+							}
+						}
+					}
+
+					scanResults[primaryKey] = skey
+				}
+			}
+			return true
+		}
+	}
+
+	qcIndexVector := datastoreIndexVectorToQc(indexVector)
+
+	connErr := client.Scan6(defnID, "2itest", scans, reverse, distinct, projection, offset, limit,
+		nil, indexOrder, consistency, tsVector, callb, scanParams, qcIndexVector)
+
+	elapsed := time.Since(start)
+
+	if connErr != nil {
+		log.Printf("Connection error in Scan occured: %v", connErr)
+		return scanResults, connErr
+	} else if scanErr != nil {
+		return scanResults, scanErr
+	}
+
+	tc.LogPerfStat("Scan6", elapsed)
+	log.Printf("Total Scanresults = %v", count)
+
+	return scanResults, nil
 }
 
 func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
