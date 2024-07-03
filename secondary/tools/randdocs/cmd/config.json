@@ -9,5 +9,6 @@
     "Iterations": 1,
     "Threads": 8,
     "DocsNumOffset": 0,
-    "OpsPerSec": 100000
+    "OpsPerSec": 100000,
+    "UseSIFTSmall": false
 }

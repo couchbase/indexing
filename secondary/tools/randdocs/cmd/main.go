@@ -22,6 +22,9 @@ func main() {
 	OpsPerSec := flag.Int("OpsPerSec", -1, "How many ops per sec")
 	Iterations := flag.Int("Iterations", -1, "How many times to repeat")
 	GenVectors := flag.Bool("genVectors", false, "Set to true to generate vector data")
+	UseSIFTSmall := flag.Bool("useSIFTSmall", false, "Set to true to use SIFT10K dataset")
+	SIFTFVecsFile := flag.String("siftfvecsfile", "./siftsmall/siftsmall_base.fvecs", "path of fvecs file")
+	SkipNormalData := flag.Bool("skipNormalData", false, "set to true to avoid normal data like email etc..")
 	VecDim := flag.Int("dimension", 128, "Size of the vector array. Default is 128")
 	VecSeed := flag.Int("vecSeed", 1234, "Seed to be used for random number generator")
 
@@ -87,6 +90,18 @@ func main() {
 		}
 
 		cfg.VecSeed = *VecSeed
+	}
+
+	if *UseSIFTSmall == true {
+		cfg.UseSIFTSmall = true
+	}
+
+	if *SIFTFVecsFile != "" {
+		cfg.SIFTFVecsFile = *SIFTFVecsFile
+	}
+
+	if *SkipNormalData == true {
+		cfg.SkipNormalData = true
 	}
 
 	randdocs.Run(cfg)
