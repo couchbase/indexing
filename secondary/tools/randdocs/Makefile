@@ -13,3 +13,12 @@ comp:
 
 run:
 	./randdocs -config ./cmd/config.json
+
+nomodcomp:
+	env GO111MODULE=off go build -o randdocs cmd/main.go
+
+loadrandvecs:
+	./randdocs -config ./cmd/config.json -genVectors
+
+loadsiftsmall:
+	./randdocs -config ./cmd/config.json -useSIFTSmall -NumDocs 40000 -skipNormalData

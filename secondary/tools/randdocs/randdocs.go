@@ -28,8 +28,11 @@ type Config struct {
 	OpsPerSec     int
 
 	// Vectors
-	GenVectors   bool
-	VecDimension int
+	GenVectors     bool
+	VecDimension   int
+	UseSIFTSmall   bool
+	SIFTFVecsFile  string
+	SkipNormalData bool
 
 	// Seed that should be used to generate random vectors
 	// Default is 1234
@@ -80,6 +83,11 @@ func Run(cfg Config) error {
 	sleepPerOp := time.Second / opsPerSec
 	fmt.Printf("randdocs: Sleep per op = [%v]\n", sleepPerOp)
 
+	var sd *SiftData
+	if cfg.UseSIFTSmall {
+		sd = OpenSiftData(cfg.SIFTFVecsFile)
+	}
+
 	for itr := 0; itr < cfg.Iterations; itr++ {
 		var wg sync.WaitGroup
 		for thr := 0; thr < cfg.Threads; thr++ {
@@ -95,11 +103,20 @@ func Run(cfg Config) error {
 						docid = fmt.Sprintf("%x", key)[:cfg.DocIdLen]
 					}
 
-					prefix := docid[cfg.DocIdLen-PREFIX_LEN : cfg.DocIdLen]
-					suffix := randFromAlphabet(cfg.FieldSize, docid)
+					var value map[string]interface{}
+					if !cfg.SkipNormalData {
+						value = generateJson()
+						prefix := docid[cfg.DocIdLen-PREFIX_LEN : cfg.DocIdLen]
+						suffix := randFromAlphabet(cfg.FieldSize, docid)
+						value["body"] = fmt.Sprintf("%s-%s", prefix, suffix)
+					}
 
-					value := generateJson()
-					value["body"] = fmt.Sprintf("%s-%s", prefix, suffix)
+					if cfg.UseSIFTSmall {
+						docid, value, err = getSiftData(cfg, sd, &cnt)
+						if err != nil {
+							return
+						}
+					}
 
 					if cfg.GenVectors {
 						value["description"] = generateVectors(cfg.VecDimension, cfg.VecSeed)

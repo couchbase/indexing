@@ -260,6 +260,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	}
 
 	if indexDDL != "" {
+		indexDDL = strings.Trim(indexDDL, "\"")
 		stmt, err := n1ql.ParseStatement(indexDDL)
 
 		if err != nil {
@@ -855,7 +856,14 @@ func HandleCommand(
 				continue
 			}
 
-			args := strings.Fields(line)
+			// dont split any quoted text
+			isQuoted := false
+			args := strings.FieldsFunc(line, func(r rune) bool {
+				if r == '"' {
+					isQuoted = !isQuoted
+				}
+				return !isQuoted && r == ' '
+			})
 
 			if strings.Contains(line, "-auth") == false {
 				args = append([]string{"-auth", cmd.Auth}, args...)
