@@ -120,25 +120,23 @@ func (mc *MockCodebook) Marshal() ([]byte, error)                               
 func calculateDistance(a, b []float32, distanceType common.VectorSimilarity) float32 {
 	dim := len(a)
 	switch distanceType {
-	case common.EUCLIDEAN, common.L2:
+	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED:
 		var sum float32
 		for i := 0; i < dim; i++ {
 			diff := a[i] - b[i]
 			sum += diff * diff
 		}
-		if distanceType == common.EUCLIDEAN {
-			return float32(math.Sqrt(float64(sum)))
-		}
+
 		return sum
-	case common.COSINE_SIM:
+	case common.COSINE:
 		var dotProduct, normA, normB float32
 		for i := 0; i < dim; i++ {
 			dotProduct += a[i] * b[i]
 			normA += a[i] * a[i]
 			normB += b[i] * b[i]
 		}
-		return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
-	case common.DOT_PRODUCT:
+		return 1.0 - (dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))) //
+	case common.DOT:
 		var dotProduct float32
 		for i := 0; i < dim; i++ {
 			dotProduct += a[i] * b[i]

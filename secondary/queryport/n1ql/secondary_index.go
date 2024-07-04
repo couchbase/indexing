@@ -98,17 +98,17 @@ var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 }
 
 var gsi2N1QLSimilarity = map[c.VectorSimilarity]datastore.IndexDistanceType{
-	c.EUCLIDEAN:   datastore.IX_DIST_EUCLIDEAN,
-	c.L2:          datastore.IX_DIST_L2,
-	c.COSINE_SIM:  datastore.IX_DIST_COSINE_SIM,
-	c.DOT_PRODUCT: datastore.IX_DIST_DOT_PRODUCT,
+	c.EUCLIDEAN_SQUARED: datastore.IX_DIST_EUCLIDEAN_SQUARED,
+	c.L2_SQUARED:        datastore.IX_DIST_L2_SQUARED,
+	c.COSINE:            datastore.IX_DIST_COSINE,
+	c.DOT:               datastore.IX_DIST_DOT,
 }
 
 var n1ql2GSISimilarity = map[datastore.IndexDistanceType]c.VectorSimilarity{
-	datastore.IX_DIST_EUCLIDEAN:   c.EUCLIDEAN,
-	datastore.IX_DIST_L2:          c.L2,
-	datastore.IX_DIST_COSINE_SIM:  c.COSINE_SIM,
-	datastore.IX_DIST_DOT_PRODUCT: c.DOT_PRODUCT,
+	datastore.IX_DIST_EUCLIDEAN_SQUARED: c.EUCLIDEAN_SQUARED,
+	datastore.IX_DIST_L2_SQUARED:        c.L2_SQUARED,
+	datastore.IX_DIST_COSINE:            c.COSINE,
+	datastore.IX_DIST_DOT:               c.DOT,
 }
 
 //--------------------

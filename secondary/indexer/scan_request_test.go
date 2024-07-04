@@ -24,7 +24,7 @@ func compareMaps(map1, map2 interface{}) bool {
 func TestScanRequest_getNearestCentroidIDs(t *testing.T) {
 	vm := &c.VectorMetadata{
 		Dimension:  4,
-		Similarity: c.L2,
+		Similarity: c.L2_SQUARED,
 	}
 
 	cb := &codebook.MockCodebook{
