@@ -128,7 +128,7 @@ func getScanRequest1(dim, vectorKeyPos int, queryVector []float32) *ScanRequest 
 			Defn: c.IndexDefn{
 				VectorMeta: &c.VectorMetadata{
 					Dimension:  dim,
-					Similarity: common.L2,
+					Similarity: common.L2_SQUARED,
 				},
 				SecExprs: []string{"name", "age", "color"},
 			},
