@@ -82,7 +82,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 		t.Errorf("Error encoding vector %v", err)
 	}
 	validate_code_size(code, codeSize, 1)
-	t.Logf("Encode code%v", query_vec)
+	t.Logf("Encode code %v", query_vec)
 	t.Logf("Encode results %v", code)
 	t.Logf("Encode timing %v", delta)
 
@@ -102,24 +102,30 @@ func TestCodebookIVFPQ(t *testing.T) {
 	}
 
 	validate_code_size(codes, codeSize, n)
-	t.Logf("Encode results %v", codes)
+	t.Logf("Num Encodes %v", len(codes)/codeSize)
 	t.Logf("Encode timing %v", delta)
 
 	dvecs := make([]float32, n*dim)
+	t0 = time.Now()
 	err = codebook.DecodeVectors(n, codes, dvecs)
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
-	t.Logf("Decode results %v", dvecs)
+	delta = time.Now().Sub(t0)
+	t.Logf("Num Decodes %v", len(dvecs)/dim)
+	t.Logf("Decode timing %v", delta)
 
 	//find the distance between qvec and multiple decoded vecs
 	qvec := vecs[n-1]
 	dist := make([]float32, n)
+	t0 = time.Now()
 	err = codebook.ComputeDistance(qvec, dvecs, dist)
 	if err != nil {
 		t.Errorf("Error computing distance %v", err)
 	}
+	delta = time.Now().Sub(t0)
 	t.Logf("Computed distance %v", dist)
+	t.Logf("Computed distance timing %v", delta)
 
 	//check the size
 	pSize := codebook.Size()
