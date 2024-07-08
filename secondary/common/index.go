@@ -1044,6 +1044,6 @@ func (v *VectorMetadata) String() string {
 		return ""
 	}
 
-	return fmt.Sprintf("CompostieVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v, nprobes: %v",
+	return fmt.Sprintf("CompositeVector: %v, BHIVE: %v, Dimension: %v, Similarity: %v, Quantizer: %v, nprobes: %v",
 		v.IsCompositeIndex, v.IsBhive, v.Dimension, v.Similarity, v.Quantizer.String(), v.Nprobes)
 }
