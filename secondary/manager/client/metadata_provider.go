@@ -218,7 +218,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio",
-	"dimension", "similarity", "description", "nprobes", "train_list"}
+	"dimension", "similarity", "description", "scan_nprobes", "train_list"}
 
 var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
@@ -3378,21 +3378,21 @@ func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}) (int, er
 
 	nprobes := int(1) // Default value is always '1'
 
-	nprobes2, ok := plan["nprobes"].(int64)
+	nprobes2, ok := plan["scan_nprobes"].(int64)
 	if !ok {
-		nprobes2, ok := plan["nprobes"].(float64)
+		nprobes2, ok := plan["scan_nprobes"].(float64)
 		if !ok {
-			nprobes_str, ok := plan["nprobes"].(string)
+			nprobes_str, ok := plan["scan_nprobes"].(string)
 			if ok {
 				var err error
 				nprobes2, err := strconv.ParseInt(nprobes_str, 10, 64)
 				if err != nil {
-					return 0, errors.New("Parameter nprobes must be a positive integer value.")
+					return 0, errors.New("Parameter scan_nprobes must be a positive integer value.")
 				}
 				nprobes = int(nprobes2)
 
-			} else if v, ok := plan["nprobes"]; ok {
-				return 0, fmt.Errorf("Parameter nprobes must be a positive integer value (%v).", reflect.TypeOf(v))
+			} else if v, ok := plan["scan_nprobes"]; ok {
+				return 0, fmt.Errorf("Parameter scan_nprobes must be a positive integer value (%v).", reflect.TypeOf(v))
 			}
 		} else {
 			nprobes = int(nprobes2)
@@ -3402,7 +3402,7 @@ func (o *MetadataProvider) getNprobesParam(plan map[string]interface{}) (int, er
 	}
 
 	if nprobes <= 0 {
-		return 0, errors.New("Parameter nprobes must be a positive integer value.")
+		return 0, errors.New("Parameter scan_nprobes must be a positive integer value.")
 	}
 
 	return nprobes, nil
