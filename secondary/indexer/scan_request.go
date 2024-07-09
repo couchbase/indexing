@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -554,6 +555,10 @@ func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	}
 
 	return nil
+}
+
+func (r *ScanRequest) useHeapForVectorIndex() bool {
+	return r.Limit != 0 && r.Limit != math.MaxInt64
 }
 
 func (r *ScanRequest) getNearestCentroids() error {

@@ -479,7 +479,7 @@ func NewMergeOperator(recvCh <-chan *Row, r *ScanRequest, writeItem WriteItem) (
 		req:       r,
 	}
 
-	if r.Limit != 0 {
+	if r.useHeapForVectorIndex() {
 		fio.heap, err = NewTopKRowHeap(int(r.Limit), false)
 		if err != nil {
 			return nil, err
@@ -515,7 +515,7 @@ func (fio *MergeOperator) Collector() {
 
 		// VECTOR_TODO: Add OFFSET too to the LIMIT, Check if LIMIT is adjusted at client side considering OFFSET
 		// If Limit is pushed down push it to heap
-		if fio.req.Limit != 0 {
+		if fio.req.useHeapForVectorIndex() {
 			fio.heap.Push(row)
 			continue
 		}
@@ -538,7 +538,7 @@ func (fio *MergeOperator) Collector() {
 
 	}
 
-	if fio.req.Limit == 0 {
+	if !fio.req.useHeapForVectorIndex() {
 		return
 	}
 
@@ -597,7 +597,7 @@ type IndexScanSource2 struct {
 func (s *IndexScanSource2) Routine() error {
 	defer func() {
 		if r := recover(); r != nil {
-			l.Fatalf("IndexScanSource2 - panic detected while processing %s", s.p.req)
+			l.Fatalf("IndexScanSource2 - panic %v detected while processing %s", r, s.p.req)
 			l.Fatalf("%s", l.StackTraceAll())
 			panic(r)
 		}
