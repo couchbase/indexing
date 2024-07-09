@@ -861,6 +861,12 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 		return errors.New("Setting change for indexer.default.enable_shard_affinity is not allowed via /settings endpoint")
 	}
 
+	if val, ok := newConfig["indexer.scan.parallel_centroid_scans"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("Setting parallel_centroid_scans should be an integer greater than 0")
+		}
+	}
+
 	if val, ok := newConfig["indexer.settings.max_seckey_size"]; ok {
 		if val.Int() <= 0 {
 			return errors.New("Setting should be an integer greater than 0")
