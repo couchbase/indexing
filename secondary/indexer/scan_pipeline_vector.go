@@ -26,6 +26,15 @@ type ScanJob struct {
 	ctx      IndexReaderContext
 	codebook codebook.Codebook
 	doneCh   chan<- struct{}
+
+	bytesRead    uint64
+	rowsScanned  uint64
+	rowsReturned uint64
+}
+
+func (j *ScanJob) PrintStats() {
+	logging.Infof("ScanJob-pid(%v)[%s-%s]::Stats rowsScanned: %v rowsReturned: %v",
+		j.pid, logging.TagUD(j.scan.Low), logging.TagUD(j.scan.High), j.rowsScanned, j.rowsReturned)
 }
 
 // -----------
@@ -68,7 +77,7 @@ type ScanWorker struct {
 	// Buffers
 	buf *[]byte
 
-	// VECTOR_TODO: handle stats and rollback
+	// VECTOR_TODO: handle rollback
 	bytesRead    uint64
 	rowsScanned  uint64
 	rowsReturned uint64
@@ -93,6 +102,11 @@ func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- 
 	go w.Scanner()
 
 	return w
+}
+
+func (w *ScanWorker) PrintStats() {
+	logging.Infof("ScanWorker[%v]::Stats rowsScanned: %v rowsReturned: %v",
+		w.id, w.rowsScanned, w.rowsReturned)
 }
 
 func (w *ScanWorker) Scanner() {
@@ -161,12 +175,16 @@ func (w *ScanWorker) Scanner() {
 }
 
 func (w *ScanWorker) unblockJobSender(doneCh chan<- struct{}) {
+	if logging.IsEnabled(logging.Verbose) {
+		w.PrintStats()
+	}
 	if doneCh != nil {
 		close(doneCh) // Mark the job done
 	}
 	if w.jobsWg != nil {
 		w.jobsWg.Done()
 	}
+	w.currJob = nil
 }
 
 func (w *ScanWorker) Sender() {
@@ -271,6 +289,8 @@ func (w *ScanWorker) Sender() {
 			select {
 			case <-w.stopCh:
 			case w.outCh <- rows[i]:
+				w.rowsReturned++
+				w.currJob.rowsReturned++
 			}
 		}
 
@@ -289,8 +309,6 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	default:
 	}
 
-	w.rowsScanned++
-
 	entry1 := secondaryIndexEntry(entry)
 
 	var r Row
@@ -300,6 +318,15 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 
 	// Scan and send data to sender
 	w.senderCh <- &r
+
+	w.rowsScanned++
+	w.currJob.rowsScanned++
+	w.bytesRead += uint64(len(entry))
+	w.currJob.bytesRead += uint64(len(entry))
+	if value != nil {
+		w.bytesRead += uint64(len(value))
+		w.currJob.bytesRead += uint64(len(value))
+	}
 
 	return nil
 }
@@ -638,8 +665,13 @@ func (s *IndexScanSource2) Routine() error {
 	wp.Init(s.p.req)
 	wpOutCh := wp.GetOutCh() // Output of Workerpool is input of MergeOperator
 
+	writeItemAddStat := func(itm ...[]byte) error {
+		s.p.rowsReturned++
+		return s.WriteItem(itm...)
+	}
+
 	// Spawn Merge Operator
-	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, s.WriteItem)
+	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, writeItemAddStat)
 	if err != nil { // Stop worker pool and return
 		wp.Stop()
 		return err
@@ -694,6 +726,15 @@ func (s *IndexScanSource2) Routine() error {
 			c++
 		}
 	}
+
+	defer func() {
+		for i := 0; i <= maxBatchId; i++ {
+			for _, job := range jobMap[i] {
+				s.p.rowsScanned += job.rowsScanned
+				s.p.bytesRead += job.bytesRead
+			}
+		}
+	}()
 
 	var wpErr, fanInErr error
 	go func() {

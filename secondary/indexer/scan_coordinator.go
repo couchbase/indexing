@@ -653,6 +653,7 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 		stats.TotalRowsScanned.Add(int64(scanPipeline.RowsScanned()))
 
 		req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		req.Stats.numRowsScanned.Add(int64(scanPipeline.RowsScanned()))
 		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
 		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
 		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
