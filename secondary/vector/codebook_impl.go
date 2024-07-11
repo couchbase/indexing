@@ -67,7 +67,7 @@ func convertToFaissMetric(metric MetricType) int {
 
 func convertSimilarityToMetric(similarity common.VectorSimilarity) MetricType {
 	switch similarity {
-	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED:
+	case common.EUCLIDEAN_SQUARED, common.L2_SQUARED, common.EUCLIDEAN, common.L2:
 		return METRIC_L2 // Default to L2
 	case common.DOT, common.COSINE:
 		return METRIC_INNER_PRODUCT

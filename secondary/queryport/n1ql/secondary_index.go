@@ -99,7 +99,9 @@ var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 
 var gsi2N1QLSimilarity = map[c.VectorSimilarity]datastore.IndexDistanceType{
 	c.EUCLIDEAN_SQUARED: datastore.IX_DIST_EUCLIDEAN_SQUARED,
+	c.EUCLIDEAN:         datastore.IX_DIST_EUCLIDEAN_SQUARED,
 	c.L2_SQUARED:        datastore.IX_DIST_L2_SQUARED,
+	c.L2:                datastore.IX_DIST_L2_SQUARED,
 	c.COSINE:            datastore.IX_DIST_COSINE,
 	c.DOT:               datastore.IX_DIST_DOT,
 }
