@@ -1,6 +1,8 @@
 {
     "ClusterAddr": "127.0.0.1:9000",
     "Bucket": "default",
+    "Scope": "",
+    "Collection": "",
     "NumDocs": 1000,
     "DocIdLen": 25,
     "FieldSize": 256,
