@@ -481,7 +481,7 @@ func N1QLScan6(indexName, bucketName, server string, scans qc.Scans, reverse, di
 			if len(scan.Seek) != 0 {
 				spans2[i].Seek = skey2qkey(scan.Seek)
 			}
-			spans2[i].Ranges = filtertoranges2(scan.Filter)
+			spans2[i].Ranges = filtertoranges3(scan.Filter)
 		}
 
 		proj := projectionton1ql(projection)
@@ -562,6 +562,25 @@ func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
 		ranges2[i] = &datastore.Range2{}
 		ranges2[i].Low = interfaceton1qlvalue(cef.Low)
 		ranges2[i].High = interfaceton1qlvalue(cef.High)
+		ranges2[i].Inclusion = datastore.Inclusion(cef.Inclusion)
+	}
+
+	return ranges2
+}
+
+func filtertoranges3(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
+	if filters == nil || len(filters) == 0 {
+		return nil
+	}
+	ranges2 := make(datastore.Ranges2, len(filters))
+	for i, cef := range filters {
+		ranges2[i] = &datastore.Range2{}
+		if cef.Low != nil {
+			ranges2[i].Low = interfaceton1qlvalue(cef.Low)
+		}
+		if cef.High != nil {
+			ranges2[i].High = interfaceton1qlvalue(cef.High)
+		}
 		ranges2[i].Inclusion = datastore.Inclusion(cef.Inclusion)
 	}
 
