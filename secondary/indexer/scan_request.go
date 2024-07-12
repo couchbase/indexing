@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -462,7 +463,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		if r.isVectorScan {
 			r.ScanType = VectorScanReq
 			r.protoScans = req.GetScans() // Save ref to protoScans to generate vector scans later
-			if err = r.setVectorKeyPos(); err != nil {
+			if err = r.setVectorIndexParamsFromDefn(); err != nil {
 				return
 			}
 		} else {
@@ -509,7 +510,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		// VECTOR_TODO: Check if this is needed
 		if r.isVectorScan {
 			r.ScanType = VectorScanAllReq
-			if err = r.setVectorKeyPos(); err != nil {
+			if err = r.setVectorIndexParamsFromDefn(); err != nil {
 				return
 			}
 		}
@@ -529,19 +530,35 @@ func (r *ScanRequest) setVectorIndexParams(ivec *protobuf.IndexVector) {
 	r.queryVector = append(r.queryVector, qvec...)
 
 	// Set Scan type to VectorScanReq so that we can process vector req differently
+	// If r.nprobes is 0 fallback to value from index creation time after getting the definition
+	// Currently set to value from query and can be 0 its reset in setVectorIndexParamsFromDefn
 	r.nprobes = int(ivec.GetProbes())
 }
 
-// setVectorKeyPos will set vectorPos in ScanRequest and should be called after getting indexn instance
+// setVectorIndexParamsFromDefn will set vectorPos in ScanRequest and should be called after getting indexn instance
 // as this uses IndexInst in ScanRequest. Call this function after findIndexInstance
-func (r *ScanRequest) setVectorKeyPos() (err error) {
+func (r *ScanRequest) setVectorIndexParamsFromDefn() (err error) {
 	// Set vector position
 	r.vectorPos = r.IndexInst.Defn.GetVectorKeyPosExploded()
 	if r.vectorPos < 0 {
 		return ErrNotVectorIndex
 	}
 
+	// Validate nprobes and r.nprobes is 0 fallback to value from index creation time
+	scanTimeNProbes := r.nprobes
+	if scanTimeNProbes == 0 {
+		r.nprobes = r.IndexInst.Defn.VectorMeta.Nprobes
+	}
+	if r.nprobes == 0 {
+		return fmt.Errorf("nprobes value is zero. scan_probes: %v from index creation"+
+			" probes: %v from index scan", r.IndexInst.Defn.VectorMeta.Nprobes, scanTimeNProbes)
+	}
+
 	return nil
+}
+
+func (r *ScanRequest) useHeapForVectorIndex() bool {
+	return r.Limit != 0 && r.Limit != math.MaxInt64
 }
 
 func (r *ScanRequest) getNearestCentroids() error {
@@ -1341,6 +1358,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	ctxsPerPartition := 1
 	if r.isVectorScan {
 		ctxsPerPartition = r.parallelCentroidScans
+		// If r.nprobes is 0 fallback to value from index creation time
 		if ctxsPerPartition > r.nprobes {
 			ctxsPerPartition = r.nprobes
 		}

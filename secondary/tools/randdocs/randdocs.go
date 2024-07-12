@@ -15,8 +15,11 @@ import (
 )
 
 type Config struct {
-	ClusterAddr   string
-	Bucket        string
+	ClusterAddr string
+	Bucket      string
+	Scope       string
+	Collection  string
+
 	NumDocs       int
 	DocIdLen      int
 	FieldSize     int
@@ -88,6 +91,17 @@ func Run(cfg Config) error {
 		sd = OpenSiftData(cfg.SIFTFVecsFile)
 	}
 
+	var cid string
+	if cfg.Scope != "" && cfg.Collection != "" {
+		cid, err = common.GetCollectionID(cfg.ClusterAddr, cfg.Bucket, cfg.Scope, cfg.Collection)
+		if err != nil {
+			fmt.Printf("Error observed when fetching collectionID err: %v\n", err)
+			return err
+		}
+
+	}
+
+	var localErr error
 	for itr := 0; itr < cfg.Iterations; itr++ {
 		var wg sync.WaitGroup
 		for thr := 0; thr < cfg.Threads; thr++ {
@@ -136,7 +150,11 @@ func Run(cfg Config) error {
 						value["arr"] = val
 					}
 
-					localErr := b.Set(docid, 0, value)
+					if cid != "" {
+						localErr = b.SetC(docid, cid, 0, value)
+					} else {
+						localErr = b.Set(docid, 0, value)
+					}
 					if localErr != nil {
 						fmt.Println(err)
 						err = localErr

@@ -653,6 +653,7 @@ func (s *scanCoordinator) handleVectorScanRequest(req *ScanRequest, w ScanRespon
 		stats.TotalRowsScanned.Add(int64(scanPipeline.RowsScanned()))
 
 		req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		req.Stats.numRowsScanned.Add(int64(scanPipeline.RowsScanned()))
 		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
 		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
 		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
@@ -1651,7 +1652,6 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 	hasIndex := false
 	isPartition := false
 
-	ctx := make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
 	missing := make(map[common.IndexInstId][]common.PartitionId)
 
 	indexInstMap := s.indexInstMap
@@ -1659,6 +1659,18 @@ func (s *scanCoordinator) findIndexInstance(defnID uint64, partitionIds []common
 
 	// Get all instanceId's of interest
 	instIdList := s.indexDefnMap[common.IndexDefnId(defnID)]
+
+	// This can only happen in case of vector index and when value is not being set from query
+	// so we must use the value from index creation time
+	if ctxsPerPartition == 0 {
+		// Get the value from the first inst all Nprobes of given DefnId must be same
+		for _, instId := range instIdList {
+			inst := indexInstMap[instId]
+			ctxsPerPartition = inst.Defn.VectorMeta.Nprobes
+			break
+		}
+	}
+	ctx := make([]IndexReaderContext, len(partitionIds)*ctxsPerPartition)
 
 	for _, instId := range instIdList {
 		inst := indexInstMap[instId]
