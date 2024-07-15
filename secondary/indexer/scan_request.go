@@ -581,7 +581,7 @@ func (r *ScanRequest) fillVectorScans() (localErr error) {
 		for _, scan := range r.protoScans {
 			for filterPos, compFilter := range scan.Filters {
 				if filterPos == r.vectorPos {
-					centroidStr := fmt.Sprintf("%08x", centroidId)
+					centroidStr := common.GetCentroidIdStr(centroidId)
 					centroidIdBytes, err := json.Marshal(centroidStr)
 					if err != nil {
 						return err
