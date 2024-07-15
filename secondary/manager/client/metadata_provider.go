@@ -2465,13 +2465,15 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	isCompositeVectorIndex := false
-	for _, val := range hasVectorAttr {
-		if val && isCompositeVectorIndex == false {
-			isCompositeVectorIndex = true
-		} else if val && isCompositeVectorIndex {
-			return nil,
-				errors.New("Fails to create index.  Multiple VECTOR attibutes are found. Only one expression with VECTOR attribute is supported per index."),
-				false
+	if !isBhive { // Check if the index is composite vector index if it is not BHIVE vector index
+		for _, val := range hasVectorAttr {
+			if val && isCompositeVectorIndex == false {
+				isCompositeVectorIndex = true
+			} else if val && isCompositeVectorIndex {
+				return nil,
+					errors.New("Fails to create index.  Multiple VECTOR attibutes are found. Only one expression with VECTOR attribute is supported per index."),
+					false
+			}
 		}
 	}
 
@@ -2481,15 +2483,15 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			false
 	}
 
-	if isBhive == false && len(includeExprs) > 0 {
+	if isBhive && (len(secExprs) != 1 || hasVectorAttr[0] == false) {
 		return nil,
-			errors.New("Fail to create vector index. Include expressions are currently not supported"),
+			errors.New("Only one index key with VECTOR attribute is allowed for BHIVE indexes"),
 			false
 	}
 
-	if isBhive {
+	if isBhive == false && len(includeExprs) > 0 {
 		return nil,
-			errors.New("Fail to create BHIVE index. BHIVE indexes are currently not supported"),
+			errors.New("Fail to create vector index. Include expressions are currently not supported"),
 			false
 	}
 
