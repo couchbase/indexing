@@ -493,6 +493,9 @@ func (rs *randomScan) createAndSendDcpEvent(respBody []byte) {
 			event.Cas = binary.BigEndian.Uint64(respBody[i+24:])
 			event.Datatype = uint8(respBody[i+25])
 
+			//VECTOR_TODO Workaround till datatype issue is resolved (MB-62626)
+			event.TreatAsJSON()
+
 			i += 25 //increment by fixed 25 bytes metadata length
 
 			readLen := func() uint32 {

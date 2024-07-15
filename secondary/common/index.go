@@ -1005,7 +1005,9 @@ type VectorSimilarity string
 
 const (
 	EUCLIDEAN_SQUARED VectorSimilarity = "EUCLIDEAN_SQUARED"
+	EUCLIDEAN                          = "EUCLIDEAN" // Treated same as EUCLIDEAN_SQUARED internally
 	L2_SQUARED                         = "L2_SQUARED"
+	L2                                 = "L2" // Treated same as L2_SQUARED internally
 	COSINE                             = "COSINE"
 	DOT                                = "DOT"
 )

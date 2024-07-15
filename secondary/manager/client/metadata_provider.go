@@ -3591,14 +3591,14 @@ func (o *MetadataProvider) getVectorSimilarity(plan map[string]interface{}) (c.V
 	keyword := "similarity"
 	similarity, ok := plan[keyword].(string)
 	if !ok {
-		return "", fmt.Errorf("Fail to create vector index. `%v` parameter not specified. It should be one of the following strings: 'EUCLIDEAN_SQUARED', 'DOT', 'COSINE', 'L2_SQUARED'", keyword)
+		return "", fmt.Errorf("Fail to create vector index. `%v` parameter not specified. It should be one of the following strings: 'EUCLIDEAN_SQUARED', 'EUCLIDEAN', 'DOT', 'COSINE', 'L2', 'L2_SQUARED'", keyword)
 	}
 
 	switch strings.ToUpper(similarity) {
-	case string(c.EUCLIDEAN_SQUARED), string(c.L2_SQUARED), string(c.COSINE), string(c.DOT):
+	case string(c.EUCLIDEAN_SQUARED), string(c.EUCLIDEAN), string(c.L2_SQUARED), string(c.L2), string(c.COSINE), string(c.DOT):
 		return c.VectorSimilarity(similarity), nil
 	default:
-		return "", fmt.Errorf("Fail to create vector index. Invalid `%v` parameter. It should be one of the following strings:  'EUCLIDEAN_SQUARED', 'DOT', 'COSINE', 'L2_SQUARED'", keyword)
+		return "", fmt.Errorf("Fail to create vector index. Invalid `%v` parameter. It should be one of the following strings:   'EUCLIDEAN_SQUARED', 'EUCLIDEAN', 'DOT', 'COSINE', 'L2', 'L2_SQUARED'", keyword)
 	}
 }
 
