@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/iowrap"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/iowrap"
 
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -1386,6 +1387,7 @@ func (stm *ShardTransferManager) initPeerRPCServerNoLock(rebalId string) error {
 	nodeAddr := net.JoinHostPort("", port)
 
 	dir := stm.config["storage_dir"].String()
+	dir = filepath.Join(dir, plasma.RPCRootDir)
 
 	cfg := loadRPCServerConfig(stm.config)
 	cfg.RPCHttpServerCfg.DoServe = false
