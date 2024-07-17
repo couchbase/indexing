@@ -11,8 +11,9 @@ import (
 type codebookIVFSQTestCase struct {
 	name string
 
-	dim    int
-	metric MetricType
+	dim       int
+	metric    MetricType
+	useCosine bool
 
 	nlist    int
 	sqRanges common.ScalarQuantizerRange
@@ -23,11 +24,12 @@ type codebookIVFSQTestCase struct {
 
 var codebookIVFSQTestCases = []codebookIVFSQTestCase{
 
-	{"SQ4_L2", 128, METRIC_L2, 1000, common.SQ_4BIT, 10000, 10000},
-	{"SQ6_L2", 128, METRIC_L2, 1000, common.SQ_6BIT, 10000, 10000},
-	{"SQ8_L2", 128, METRIC_L2, 1000, common.SQ_8BIT, 10000, 10000},
-	{"SQFP16_L2", 128, METRIC_L2, 1000, common.SQ_FP16, 10000, 10000},
-	{"SQ8_DOT", 128, METRIC_INNER_PRODUCT, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQ4_L2", 128, METRIC_L2, false, 1000, common.SQ_4BIT, 10000, 10000},
+	{"SQ6_L2", 128, METRIC_L2, false, 1000, common.SQ_6BIT, 10000, 10000},
+	{"SQ8_L2", 128, METRIC_L2, false, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQFP16_L2", 128, METRIC_L2, false, 1000, common.SQ_FP16, 10000, 10000},
+	{"SQ8_DOT", 128, METRIC_INNER_PRODUCT, false, 1000, common.SQ_8BIT, 10000, 10000},
+	{"SQ8_COSINE", 128, METRIC_INNER_PRODUCT, true, 1000, common.SQ_8BIT, 10000, 10000},
 }
 
 // Tests for CodebookIVFSQ
@@ -36,7 +38,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 	for _, tc := range codebookIVFSQTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			codebook, err := NewCodebookIVFSQ(tc.dim, tc.nlist, tc.sqRanges, tc.metric)
+			codebook, err := NewCodebookIVFSQ(tc.dim, tc.nlist, tc.sqRanges, tc.metric, tc.useCosine)
 			if err != nil || codebook == nil {
 				t.Errorf("Unable to create index. Err %v", err)
 			}

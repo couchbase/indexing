@@ -396,7 +396,7 @@ func Test_scanCoordinator_fillCodebookMap(t *testing.T) {
 		CB: nil,
 	}
 
-	cb, err := vector.NewCodebookIVFPQ(128, 8, 8, 128, vector.METRIC_L2)
+	cb, err := vector.NewCodebookIVFPQ(128, 8, 8, 128, vector.METRIC_L2, false)
 	if err != nil || cb == nil {
 		t.Errorf("Unable to create index. Err %v", err)
 	}
@@ -404,7 +404,7 @@ func Test_scanCoordinator_fillCodebookMap(t *testing.T) {
 		CB: cb,
 	}
 
-	cb1, err := vector.NewCodebookIVFPQ(128, 8, 8, 128, vector.METRIC_L2)
+	cb1, err := vector.NewCodebookIVFPQ(128, 8, 8, 128, vector.METRIC_L2, false)
 	train_vecs := make([]float32, 0)
 	for i := 0; i < 10000*128; i++ {
 		train_vecs = append(train_vecs, float32(i))

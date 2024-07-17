@@ -30,7 +30,8 @@ type codebookIVFPQ struct {
 
 	isTrained bool
 
-	metric MetricType //metric
+	metric 		MetricType //metric
+	useCosine 	bool	//use cosine similarity
 
 	index *faiss.IndexImpl
 }
@@ -43,6 +44,7 @@ type codebookIVFPQ_IO struct {
 
 	IsTrained bool       `json:"istrained,omitempty"`
 	Metric    MetricType `json:"metric,omitempty"`
+	UseCosine bool		 `json:"usecosine,omitempty"`
 
 	Checksum    uint32      `json:"checksum,omitempty"`
 	CodebookVer CodebookVer `json:"codebookver,omitempty"`
@@ -50,11 +52,11 @@ type codebookIVFPQ_IO struct {
 	Index []byte `json:"index,omitempty"`
 }
 
-func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codebook, error) {
+func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType, useCosine bool) (c.Codebook, error) {
 
 	var err error
 
-	if metric != METRIC_L2 && metric != METRIC_INNER_PRODUCT {
+	if (useCosine && metric != METRIC_INNER_PRODUCT) || (metric != METRIC_L2 && metric != METRIC_INNER_PRODUCT) {
 		return nil, c.ErrUnsupportedMetric
 	}
 
@@ -64,6 +66,7 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codeboo
 		nbits:  nbits,
 		nlist:  nlist,
 		metric: metric,
+		useCosine: useCosine,
 	}
 
 	faissMetric := convertToFaissMetric(metric)
@@ -84,6 +87,11 @@ func (cb *codebookIVFPQ) Train(vecs []float32) error {
 
 	if cb.index == nil {
 		return c.ErrCodebookClosed
+	}
+
+	if cb.useCosine {
+		nx := len(vecs) / cb.dim
+		faiss.RenormL2(cb.dim, nx, vecs)
 	}
 
 	err := cb.index.Train(vecs)
@@ -130,6 +138,12 @@ func (cb *codebookIVFPQ) EncodeVectors(vecs []float32, codes []byte) error {
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
 	}
+
+	if cb.useCosine {
+		nx := len(vecs) / cb.dim
+		faiss.RenormL2(cb.dim, nx, vecs)
+	}
+
 	return cb.index.EncodeVectors(vecs, codes, cb.nlist)
 }
 
@@ -140,6 +154,12 @@ func (cb *codebookIVFPQ) EncodeAndAssignVectors(vecs []float32, codes []byte, la
 	if !cb.IsTrained() {
 		return c.ErrCodebookNotTrained
 	}
+
+	if cb.useCosine {
+		nx := len(vecs) / cb.dim
+		faiss.RenormL2(cb.dim, nx, vecs)
+	}
+
 	return cb.index.EncodeAndAssignPQ(vecs, codes, labels, cb.nsub, cb.nbits, cb.nlist)
 }
 
@@ -154,6 +174,12 @@ func (cb *codebookIVFPQ) FindNearestCentroids(vec []float32, k int64) ([]int64, 
 	if err != nil {
 		return nil, nil
 	}
+
+	if cb.useCosine {
+		nx := len(vec) / cb.dim
+		faiss.RenormL2(cb.dim, nx, vec)
+	}
+
 	labels, err := quantizer.Assign(vec, k)
 	if err != nil {
 		return nil, err
@@ -183,6 +209,18 @@ func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist [
 	if cb.metric == METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
 	} else if cb.metric == METRIC_INNER_PRODUCT {
+		if cb.useCosine {
+			err := faiss.CosineSimNy(dist, qvec, fvecs, cb.dim)
+			// Cosine distance is calculated as 1 - (cosine similarity).
+			// Cosine similarity ranges from -1 (exactly opposite) to 1 (exactly the same),
+			// while cosine distance ranges from 0 (exactly the same) to 2 (exactly opposite).
+			if err == nil {
+				for i := range dist{
+					dist[i] = 1 - dist[i]
+				}
+			}
+			return err
+		}
 		err := faiss.InnerProductsNy(dist, qvec, fvecs, cb.dim)
 		// InnnerProduct is a similarity measure,
 		// to convert to distance measure negate it.
@@ -240,6 +278,7 @@ func (cb *codebookIVFPQ) Marshal() ([]byte, error) {
 	cbio.Nlist = cb.nlist
 	cbio.IsTrained = cb.isTrained
 	cbio.Metric = cb.metric
+	cbio.UseCosine = cb.useCosine
 
 	data, err := faiss.WriteIndexIntoBuffer(cb.index)
 	if err != nil {
@@ -279,6 +318,8 @@ func recoverCodebookIVFPQ(data []byte) (c.Codebook, error) {
 	cb.nlist = cbio.Nlist
 	cb.isTrained = cbio.IsTrained
 	cb.metric = cbio.Metric
+	cb.useCosine = cbio.UseCosine
+
 
 	var err error
 	cb.index, err = faiss.ReadIndexFromBuffer(cbio.Index, faiss.IOFlagMmap)
