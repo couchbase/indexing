@@ -54,7 +54,7 @@ func NewCodebookIVFPQ(dim, nsub, nbits, nlist int, metric MetricType) (c.Codeboo
 
 	var err error
 
-	if metric != METRIC_L2 {
+	if metric != METRIC_L2 && metric != METRIC_INNER_PRODUCT {
 		return nil, c.ErrUnsupportedMetric
 	}
 
@@ -182,6 +182,16 @@ func (cb *codebookIVFPQ) DecodeVectors(n int, codes []byte, vecs []float32) erro
 func (cb *codebookIVFPQ) ComputeDistance(qvec []float32, fvecs []float32, dist []float32) error {
 	if cb.metric == METRIC_L2 {
 		return faiss.L2sqrNy(dist, qvec, fvecs, cb.dim)
+	} else if cb.metric == METRIC_INNER_PRODUCT {
+		err := faiss.InnerProductsNy(dist, qvec, fvecs, cb.dim)
+		// InnnerProduct is a similarity measure,
+		// to convert to distance measure negate it.
+		if err == nil {
+			for i := range dist {
+				dist[i] = -1 * dist[i]
+			}
+		}
+		return err
 	}
 	return nil
 }
