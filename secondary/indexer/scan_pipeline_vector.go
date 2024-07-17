@@ -276,7 +276,9 @@ func (w *ScanWorker) Sender() {
 
 			// VECTOR_TODO: Use buffer pools for these buffer allocations
 			// VECTOR_TODO: Try to use fixed length encoding for float64 distance replacement with centroidID
-			newBuf := make([]byte, 0, len(rows[i].key)+len(distCode))
+			// ReplaceEncodedFieldInArray encodes distCode and replaces centroidId in key so add more buffer
+			// for encoding of distCode incase it needs more space than centroidId => adding 3 * distCode size
+			newBuf := make([]byte, 0, len(rows[i].key)+(3*len(distCode)))
 			newEntry, err := codec.ReplaceEncodedFieldInArray(rows[i].key, vectorKeyPos, distCode, newBuf)
 			if err != nil {
 				w.senderErrCh <- err
