@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -31,7 +32,10 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	//train the codebook using 10000 vecs
 	train_vecs := convertTo1D(vecs)
+	t0 := time.Now()
 	err = codebook.Train(train_vecs)
+	delta := time.Now().Sub(t0)
+	t.Logf("Train timing %v", delta)
 
 	if err != nil || !codebook.IsTrained() {
 		t.Errorf("Unable to train index. Err %v", err)
@@ -50,9 +54,9 @@ func TestCodebookIVFPQ(t *testing.T) {
 
 	//find the nearest centroid
 	query_vec := convertTo1D(vecs[:1])
-	t0 := time.Now()
+	t0 = time.Now()
 	label, err := codebook.FindNearestCentroids(query_vec, 3)
-	delta := time.Now().Sub(t0)
+	delta = time.Now().Sub(t0)
 	t.Logf("Assign results %v %v", label, err)
 	t.Logf("Assign timing %v", delta)
 	for _, l := range label {
@@ -67,12 +71,6 @@ func TestCodebookIVFPQ(t *testing.T) {
 	}
 	t.Logf("CodeSize %v", codeSize)
 
-	validate_code_size := func(code []byte, codeSize int, n int) {
-		if len(code) != n*codeSize {
-			t.Errorf("Unexpected code size. Expected %v, Actual %v", n*codeSize, len(code))
-		}
-	}
-
 	//encode a single vector
 	code := make([]byte, codeSize)
 	t0 = time.Now()
@@ -81,7 +79,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
-	validate_code_size(code, codeSize, 1)
+	validate_code_size(t, code, codeSize, 1)
 	t.Logf("Encode code %v", query_vec)
 	t.Logf("Encode results %v", code)
 	t.Logf("Encode timing %v", delta)
@@ -101,7 +99,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 		t.Errorf("Error encoding vector %v", err)
 	}
 
-	validate_code_size(codes, codeSize, n)
+	validate_code_size(t, codes, codeSize, n)
 	t.Logf("Num Encodes %v", len(codes)/codeSize)
 	t.Logf("Encode timing %v", delta)
 
@@ -197,7 +195,7 @@ func TestCodebookIVFPQ(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error encoding vector %v", err)
 	}
-	validate_code_size(ncode, nCodeSize, 1)
+	validate_code_size(t, ncode, nCodeSize, 1)
 	t.Logf("Encode code%v", query_vec)
 	t.Logf("Encode results %v", code)
 
@@ -208,5 +206,103 @@ func TestCodebookIVFPQ(t *testing.T) {
 	err = newcb.Close()
 	if err != nil {
 		t.Errorf("Error closing codebook %v", err)
+	}
+}
+
+type pqEncodeTimingTestCase struct {
+	name string
+
+	dim    int
+	metric MetricType
+
+	nlist int
+	nsub  int
+	nbits int
+
+	num_vecs  int
+	trainlist int
+
+	batchSize int
+	concur    int
+	iters     int
+}
+
+var pqEncodeTimingTestCases = []pqEncodeTimingTestCase{
+
+	{"PQ8x8 Batch 1 Concur 1", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 1, 1, 10000},
+	{"PQ8x8 Batch 1 Concur 10", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 1, 10, 10000},
+	{"PQ8x8 Batch 10 Concur 1", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 10, 1, 10000},
+	{"PQ8x8 Batch 10 Concur 10", 128, METRIC_L2, 1000, 8, 8, 10000, 10000, 10, 10, 10000},
+	//	{"PQ32x8 Batch 10 Concur 20", 128, METRIC_L2, 1000, 32, 8, 10000, 10000, 10, 20, 10000},
+}
+
+func TestIVFPQEncodeTiming(t *testing.T) {
+
+	for _, tc := range pqEncodeTimingTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			codebook, err := NewCodebookIVFPQ(tc.dim, tc.nsub, tc.nbits, tc.nlist, tc.metric)
+			if err != nil || codebook == nil {
+				t.Errorf("Unable to create index. Err %v", err)
+			}
+
+			//generate random vectors
+			vecs := genRandomVecs(tc.dim, tc.num_vecs)
+
+			//train the codebook
+			train_vecs := convertTo1D(vecs[:tc.trainlist])
+			err = codebook.Train(train_vecs)
+			if err != nil || !codebook.IsTrained() {
+				t.Errorf("Unable to train index. Err %v", err)
+			}
+
+			codeSize, err := codebook.CodeSize()
+			if err != nil {
+				t.Errorf("Error fetching code size %v", err)
+			}
+
+			encode_batch := convertTo1D(vecs[:tc.batchSize])
+
+			pcodes := make([][]byte, tc.concur)
+			var timings time.Duration
+
+			for i := range pcodes {
+				pcodes[i] = make([]byte, tc.batchSize*codeSize)
+			}
+			for j := 0; j < tc.iters; j++ {
+				var wg sync.WaitGroup
+				for i := 0; i < tc.concur; i++ {
+					wg.Add(1)
+					go func(wg *sync.WaitGroup, pos int) {
+						defer wg.Done()
+						t0 := time.Now()
+						err = codebook.EncodeVectors(encode_batch, pcodes[pos])
+						delta := time.Now().Sub(t0)
+						timings += delta
+						//		t.Logf("Encode %v parallel timing %v", concur, delta)
+						if err != nil {
+							t.Errorf("Error encoding vector %v", err)
+						}
+					}(&wg, i)
+				}
+				wg.Wait()
+				var pcodes1D []byte
+				for _, pcode := range pcodes {
+					pcodes1D = append(pcodes1D, pcode...)
+				}
+				validate_code_size(t, pcodes1D, codeSize, tc.concur*tc.batchSize)
+			}
+
+			total_ops := time.Duration(tc.iters * tc.concur * tc.batchSize)
+			t.Logf("Encode average for iter %v concurrency %v batch %v is %v", tc.iters, tc.concur, tc.batchSize, timings/total_ops)
+
+		})
+	}
+
+}
+
+func validate_code_size(t *testing.T, code []byte, codeSize int, n int) {
+	if len(code) != n*codeSize {
+		t.Errorf("Unexpected code size. Expected %v, Actual %v", n*codeSize, len(code))
 	}
 }
