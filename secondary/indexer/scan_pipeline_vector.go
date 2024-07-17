@@ -71,6 +71,9 @@ type ScanWorker struct {
 	senderCh    chan *Row
 	senderErrCh chan error
 
+	senderChSize    int // Channel size from storage scanner to sender
+	senderBatchSize int // Batch size to process data in batches in sender
+
 	// Job related vars
 	jobsWg *sync.WaitGroup
 
@@ -84,18 +87,20 @@ type ScanWorker struct {
 }
 
 func NewScanWorker(id int, r *ScanRequest, workCh <-chan *ScanJob, outCh chan<- *Row,
-	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup) *ScanWorker {
-	w := &ScanWorker{
-		id:     id,
-		r:      r,
-		workCh: workCh,
-		outCh:  outCh,
-		stopCh: stopCh,
-		jobsWg: wg,
-		errCh:  errCh,
-	}
+	stopCh chan struct{}, errCh chan error, wg *sync.WaitGroup, senderChSize,
+	senderBatchSize int) *ScanWorker {
 
-	w.senderCh = make(chan *Row, 20)
+	w := &ScanWorker{
+		id:              id,
+		r:               r,
+		workCh:          workCh,
+		outCh:           outCh,
+		stopCh:          stopCh,
+		jobsWg:          wg,
+		errCh:           errCh,
+		senderChSize:    senderChSize,
+		senderBatchSize: senderBatchSize,
+	}
 
 	w.buf = r.getFromSecKeyBufPool() //Composite element filtering
 
@@ -124,6 +129,7 @@ func (w *ScanWorker) Scanner() {
 			w.currJob = job
 		}
 
+		w.senderCh = make(chan *Row, w.senderChSize)
 		w.senderErrCh = make(chan error)
 		go w.Sender()
 
@@ -132,6 +138,9 @@ func (w *ScanWorker) Scanner() {
 		ctx := job.ctx
 		handler := w.scanIteratorCallback
 
+		// VECTOR_TODO: Check if we can move this logic to another goroutine so that
+		// this main goroutine is free for error handling and check if use of row.last
+		// can be avoided
 		var err error
 		if scan.ScanType == AllReq {
 			err = snap.All(ctx, handler)
@@ -159,18 +168,28 @@ func (w *ScanWorker) Scanner() {
 		// Send last row and wait for sender
 		var r Row
 		r.last = true
-		w.senderCh <- &r
-		senderErr := <-w.senderErrCh
+
+		// If senderCh is blocked keep checking for error from sender
+		var senderErr error
+		select {
+		case w.senderCh <- &r:
+			// If last row is sent keep waiting for sender to get closed
+			senderErr = <-w.senderErrCh
+		case senderErr = <-w.senderErrCh:
+		}
+
 		if senderErr != nil {
 			select {
 			case <-w.stopCh:
 			case w.errCh <- senderErr:
 			}
 			w.unblockJobSender(job.doneCh)
+			close(w.senderCh)
 			return
 		}
 
 		w.unblockJobSender(job.doneCh)
+		close(w.senderCh)
 	}
 }
 
@@ -190,7 +209,7 @@ func (w *ScanWorker) unblockJobSender(doneCh chan<- struct{}) {
 func (w *ScanWorker) Sender() {
 	defer close(w.senderErrCh)
 
-	batchSize := 1
+	batchSize := w.senderBatchSize
 	rows := make([]*Row, batchSize)
 
 	var err error
@@ -303,14 +322,6 @@ func (w *ScanWorker) Sender() {
 }
 
 func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
-	select {
-	case <-w.stopCh:
-		return ErrScanWorkerStopped
-	case err := <-w.senderErrCh:
-		return err
-	default:
-	}
-
 	entry1 := secondaryIndexEntry(entry)
 
 	var r Row
@@ -318,8 +329,13 @@ func (w *ScanWorker) scanIteratorCallback(entry, value []byte) error {
 	r.value = value
 	r.len = entry1.lenKey()
 
-	// Scan and send data to sender
-	w.senderCh <- &r
+	select {
+	case <-w.stopCh:
+		return ErrScanWorkerStopped
+	case err := <-w.senderErrCh:
+		return err
+	case w.senderCh <- &r:
+	}
 
 	w.rowsScanned++
 	w.currJob.rowsScanned++
@@ -402,8 +418,9 @@ func (wp *WorkerPool) Init(r *ScanRequest) {
 	wp.sendCh = make(chan *Row, 20*wp.numWorkers)
 
 	for i := 0; i < wp.numWorkers; i++ {
+		// VECTOR_TODO: Tune the sender channel and batch sizes as needed
 		wp.workers[i] = NewScanWorker(i, r, wp.jobs, wp.sendCh,
-			wp.stopCh, wp.errCh, &wp.jobsWg)
+			wp.stopCh, wp.errCh, &wp.jobsWg, 20, 1)
 	}
 }
 
