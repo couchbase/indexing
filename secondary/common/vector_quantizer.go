@@ -19,13 +19,13 @@ type ScalarQuantizerRange string
 
 const (
 	NONE            ScalarQuantizerRange = ""
-	SQ_8BIT                              = "SQ_8BIT"
-	SQ_4BIT                              = "SQ_4BIT"
+	SQ_8BIT                              = "SQ8"
+	SQ_4BIT                              = "SQ4"
 	SQ_8BIT_UNIFORM                      = "SQ_8BIT_UNIFORM"
 	SQ_4BIT_UNIFORM                      = "SQ_4BIT_UNIFORM"
-	SQ_FP16                              = "SQ_FP16"
+	SQ_FP16                              = "SQfp16"
 	SQ_8BIT_DIRECT                       = "SQ_8BIT_DIRECT"
-	SQ_6BIT                              = "SQ_6BIT"
+	SQ_6BIT                              = "SQ6"
 )
 
 type VectorQuantizer struct {
@@ -162,10 +162,12 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 		quantizer.Type = SQ
 
 		switch ScalarQuantizerRange(matches[4]) {
-		case SQ_8BIT, SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_6BIT, SQ_4BIT, SQ_4BIT_UNIFORM, SQ_FP16:
+		case SQ_8BIT, SQ_6BIT, SQ_4BIT:
 			quantizer.SQRange = ScalarQuantizerRange(matches[4])
+		case SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_4BIT_UNIFORM, SQ_FP16:
+			return nil, fmt.Errorf("Currently only `SQ_4bit`,`SQ_6bit`,`SQ_8bit` are supported for scalar quantization.")
 		default:
-			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ_4bit`,`SQ_6bit`,`SQ_8bit`,`SQ_4bit_uniform`,`SQ_8bit_uniform`,`SQ_8bit_direct`,`SQ_fp16`. Observed different format")
+			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ_4bit`,`SQ_6bit`,`SQ_8bit`,`SQ_fp16`,`SQ_8bit_DIRECT`,`SQ_8bit_UNIFORM`,`SQ_4bit_UNIFORM`. Observed different format")
 		}
 	} else {
 		return nil, fmt.Errorf("Invalid format for description")

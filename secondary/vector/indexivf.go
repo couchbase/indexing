@@ -3,6 +3,7 @@ package vector
 import (
 	"fmt"
 
+	"github.com/couchbase/indexing/secondary/common"
 	faiss "github.com/couchbase/indexing/secondary/vector/faiss"
 )
 
@@ -24,3 +25,17 @@ func NewIndexIVFPQ_HNSW(dim, nlist, nsub, nbits, metric int) (*faiss.IndexImpl, 
 	return faiss.IndexFactory(dim, description, metric)
 
 }
+
+func NewIndexIVFSQ(dim, nlist, metric int, sqRange common.ScalarQuantizerRange) (*faiss.IndexImpl, error) {
+
+	description := fmt.Sprintf("IVF%v,%v", nlist, sqRange)
+	return faiss.IndexFactory(dim, description, metric)
+}
+
+func NewIndexIVFSQ_HNSW(dim, nlist, metric int, sqRange common.ScalarQuantizerRange) (*faiss.IndexImpl, error) {
+
+	description := fmt.Sprintf("IVF%v_HNSW,%v", nlist, sqRange)
+	return faiss.IndexFactory(dim, description, metric)
+
+}
+
