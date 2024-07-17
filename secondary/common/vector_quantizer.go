@@ -162,10 +162,10 @@ func ParseVectorDesciption(inp string) (*VectorQuantizer, error) {
 		quantizer.Type = SQ
 
 		switch ScalarQuantizerRange(matches[4]) {
-		case SQ_8BIT, SQ_6BIT, SQ_4BIT:
+		case SQ_8BIT, SQ_6BIT, SQ_4BIT, SQ_FP16:
 			quantizer.SQRange = ScalarQuantizerRange(matches[4])
-		case SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_4BIT_UNIFORM, SQ_FP16:
-			return nil, fmt.Errorf("Currently only `SQ_4bit`,`SQ_6bit`,`SQ_8bit` are supported for scalar quantization.")
+		case SQ_8BIT_DIRECT, SQ_8BIT_UNIFORM, SQ_4BIT_UNIFORM:
+			return nil, fmt.Errorf("Currently only `SQ_4bit`,`SQ_6bit`,`SQ_8bit`,`SQ_fp16` are supported for scalar quantization.")
 		default:
 			return nil, fmt.Errorf("Invalid format for scalar quantization. Expected one of `SQ_4bit`,`SQ_6bit`,`SQ_8bit`,`SQ_fp16`,`SQ_8bit_DIRECT`,`SQ_8bit_UNIFORM`,`SQ_4bit_UNIFORM`. Observed different format")
 		}

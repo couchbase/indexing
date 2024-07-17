@@ -15,7 +15,7 @@ func TestCodebookIVFSQ(t *testing.T) {
 	metric := METRIC_L2
 
 	nlist := 1000
-	sqRanges := []common.ScalarQuantizerRange{common.SQ_8BIT, common.SQ_4BIT, common.SQ_6BIT}
+	sqRanges := []common.ScalarQuantizerRange{common.SQ_8BIT, common.SQ_4BIT, common.SQ_6BIT, common.SQ_FP16}
 
 	//generate random vectors, train vectors and query vectors
 	num_train_vecs := 10000
