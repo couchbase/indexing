@@ -69,7 +69,7 @@ func (w *protoResponseWriter) Error(err error) error {
 		res = &protobuf.CountResponse{
 			Count: proto.Int64(0), Err: protoErr,
 		}
-	case ScanAllReq, ScanReq, FastCountReq:
+	case ScanAllReq, ScanReq, FastCountReq, VectorScanReq:
 		res = &protobuf.ResponseStream{
 			Err: protoErr,
 		}

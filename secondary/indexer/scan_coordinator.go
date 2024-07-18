@@ -1141,7 +1141,7 @@ func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err 
 		res = &protobuf.CountResponse{
 			Count: proto.Int64(0), Err: protoErr,
 		}
-	case ScanAllReq, ScanReq:
+	case ScanAllReq, ScanReq, VectorScanReq:
 		res = &protobuf.ResponseStream{
 			Err: protoErr,
 		}
