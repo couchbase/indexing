@@ -657,6 +657,7 @@ func (s *IndexScanSource2) Routine() error {
 	// As snap.Open() is done in NewSnapshotIterator ref counting is also taken care of
 	snaps, err := GetSliceSnapshotsMap(s.is, s.p.req.PartitionIds)
 	if err != nil {
+		s.CloseWithError(err)
 		return err
 	}
 
@@ -693,6 +694,7 @@ func (s *IndexScanSource2) Routine() error {
 	fanIn, err := NewMergeOperator(wpOutCh, s.p.req, writeItemAddStat)
 	if err != nil { // Stop worker pool and return
 		wp.Stop()
+		s.CloseWithError(err)
 		return err
 	}
 
@@ -776,11 +778,13 @@ func (s *IndexScanSource2) Routine() error {
 	fanInErr = fanIn.Wait()
 	if fanInErr != nil { // If there is an error in FanIn stop worker pool
 		wp.Stop()
+		s.CloseWithError(fanInErr)
 		return fanInErr
 	}
 
 	// If there was workerpool error causing early closure of Merger return error from worker pool
 	if wpErr != nil {
+		s.CloseWithError(wpErr)
 		return wpErr
 	}
 
